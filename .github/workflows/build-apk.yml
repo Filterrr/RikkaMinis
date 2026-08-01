@@ -12,6 +12,10 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Needed by the "Publish to Releases" step to create/update a GitHub Release
+    # and upload the APK asset. Everything else here only reads the repo.
+    permissions:
+      contents: write
     steps:
       # No submodules: deps/proot and deps/ish are only needed to build the
       # native sandbox from source, which this fork deliberately does not do
@@ -75,16 +79,24 @@ jobs:
           done
           ls -la jniLibs/arm64-v8a/
 
+      # Release build (not debug): runs R8 (isMinifyEnabled = true) + resource
+      # shrinking, which cuts the APK from ~39 MB to roughly the official
+      # ~14 MB — a debug APK bundles every class uncompressed with no
+      # tree-shaking. build.gradle.kts already signs release with the `debug`
+      # signingConfig, so the fixed keystore restored above still applies and
+      # upgrade-installs keep working. Release also sets BuildConfig.DEBUG=false,
+      # so the local DebugServer (127.0.0.1:5321) is compiled out entirely.
       - name: Build APK with Gradle
         run: |
           cd src/android
-          ./gradlew assembleDebug --stacktrace
+          ./gradlew assembleRelease --stacktrace
 
       # Confirm the official binaries actually landed in the APK and were not
       # replaced by anything the build produced.
       - name: Verify APK contents
         run: |
-          APK=src/android/app/build/outputs/apk/debug/app-debug.apk
+          APK=src/android/app/build/outputs/apk/release/app-release.apk
+          ls -la "$APK"
           unzip -l "$APK" | grep -E 'libproot\.so|proot-aarch64|alpine-minirootfs'
           EXPECTED=$(sha256sum src/android/app/src/main/jniLibs/arm64-v8a/libproot.so | cut -d' ' -f1)
           unzip -p "$APK" lib/arm64-v8a/libproot.so > /tmp/apk_libproot.so
@@ -101,5 +113,40 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: OpenMinis-apk
-          path: src/android/app/build/outputs/apk/debug/app-debug.apk
+          path: src/android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
+
+      # Rename to a versioned, arch-tagged filename mirroring the official
+      # release naming (OpenMinis-<versionName>-arm64-v8a.apk).
+      - name: Stage release asset
+        id: stage
+        run: |
+          VN=$(grep -oE 'versionName = "[^"]+"' src/android/app/build.gradle.kts | head -1 | cut -d'"' -f2)
+          [ -z "$VN" ] && VN="unversioned"
+          OUT="OpenMinis-${VN}-arm64-v8a.apk"
+          cp src/android/app/build/outputs/apk/release/app-release.apk "$OUT"
+          echo "version=$VN" >> "$GITHUB_OUTPUT"
+          echo "asset=$OUT" >> "$GITHUB_OUTPUT"
+          ls -la "$OUT"
+
+      # Publish the APK to a rolling Release so it can be downloaded directly
+      # from the repo's Releases page — same tag every build, asset replaced
+      # in place, so the download link is stable.
+      - name: Publish to Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-latest
+          name: "OpenMinis Android (latest build)"
+          body: |
+            Automated Android build — always the newest commit on `main`.
+
+            - Version: `${{ steps.stage.outputs.version }}`
+            - Commit: ${{ github.sha }}
+            - ABI: arm64-v8a
+            - Release build (R8-minified, signed with the fixed debug key so
+              it installs over previous builds)
+
+            Download the `.apk` below and open it on your device to install.
+          files: ${{ steps.stage.outputs.asset }}
+          prerelease: true
+          make_latest: "true"
