@@ -29,7 +29,7 @@ jobs:
         run: mkdir -p .claude/skills/debug-server
 
       - name: Restore Keystore (Optional)
-        if: "${{ secrets.DEBUG_KEYSTORE_B64 != '' }}"
+        if: ${{ secrets.DEBUG_KEYSTORE_B64 != '' }}
         run: |
           mkdir -p ~/.android
           echo "${{ secrets.DEBUG_KEYSTORE_B64 }}" | base64 -d > ~/.android/debug.keystore
