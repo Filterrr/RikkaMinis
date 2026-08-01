@@ -72,6 +72,29 @@ android {
     // To change native code, restore this block (and install the NDK in CI),
     // or rebuild the .so files by hand and re-commit them to jniLibs.
 
+    // CI signing: point the `debug` signingConfig at an explicit keystore when
+    // MINIS_KEYSTORE_PATH is set (see .github/workflows/build-apk.yml).
+    //
+    // Without this, AGP looks for $HOME/.android/debug.keystore — but
+    // actions/checkout temporarily overrides HOME on the runner, so the
+    // keystore restored from the DEBUG_KEYSTORE_B64 secret would not be found
+    // and AGP would silently generate a fresh throwaway key. The published APK
+    // then fails to install over a previous one with
+    // INSTALL_FAILED_UPDATE_INCOMPATIBLE.
+    //
+    // Local builds leave the variable unset and keep AGP's default behaviour.
+    signingConfigs {
+        getByName("debug") {
+            val keystoreFromEnv = System.getenv("MINIS_KEYSTORE_PATH")
+            if (!keystoreFromEnv.isNullOrBlank()) {
+                storeFile = file(keystoreFromEnv)
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
