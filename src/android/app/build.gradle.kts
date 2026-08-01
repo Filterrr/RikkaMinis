@@ -36,8 +36,8 @@ android {
         applicationId = "com.openminis.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 20
-        versionName = "0.20-preview"
+        versionCode = 22
+        versionName = "0.22-preview"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -52,21 +52,25 @@ android {
         ndk {
             abiFilters += listOf("arm64-v8a")
         }
-
-        externalNativeBuild {
-            cmake {
-                cppFlags += "-std=c++17"
-                arguments += "-DANDROID_STL=c++_shared"
-            }
-        }
     }
 
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
-        }
-    }
+    // NOTE: externalNativeBuild (CMake) is intentionally DISABLED in this fork.
+    //
+    // The sandbox engine (libproot.so) must carry upstream's Android 10+ W^X
+    // bypass patches; rebuilding it from source in CI produces a binary that
+    // fails at runtime with execve("/bin/sh"): Permission denied. This fork
+    // therefore ships the official prebuilt arm64-v8a binaries, extracted
+    // verbatim from the upstream 0.22-preview release APK and committed under
+    // src/main/jniLibs/arm64-v8a/ (sha256-verified against that release).
+    //
+    // Leaving the CMake block enabled would make AGP compile pty_bridge.c,
+    // crash_handler.cpp and jieba_jni.cpp and then OVERWRITE the committed
+    // libpty_bridge.so / libminis_crash_handler.so / libjieba_jni.so with
+    // locally built copies — silently defeating the point of vendoring them.
+    //
+    // Consequence: edits under src/main/cpp/ are NOT compiled by this build.
+    // To change native code, restore this block (and install the NDK in CI),
+    // or rebuild the .so files by hand and re-commit them to jniLibs.
 
     buildTypes {
         release {
@@ -95,6 +99,23 @@ android {
 
     androidResources {
         noCompress += listOf("tar.gz", "proot-aarch64")
+    }
+
+    packaging {
+        jniLibs {
+            // The committed .so files come from the official release and are
+            // already stripped/aligned. AGP would otherwise run the NDK's
+            // strip tool over them (the CI image ships an NDK even though we
+            // no longer build native code), which fails or mangles them.
+            keepDebugSymbols += "**/*.so"
+            // Must stay TRUE so libs are extracted to nativeLibraryDir at
+            // install time: RootfsManager executes libproot.so as a BINARY
+            // from that directory, which is the whole W^X bypass mechanism.
+            // (false would page-align them inside the APK and load them
+            // directly, leaving no executable file on disk.) Matches
+            // extractNativeLibs="true" in AndroidManifest.xml.
+            useLegacyPackaging = true
+        }
     }
 
     testOptions {
