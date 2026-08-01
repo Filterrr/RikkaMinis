@@ -27,8 +27,16 @@ the URL always points at the newest build. Requirements:
 - Enable "install from unknown sources" when your device prompts
 
 Builds are signed with a fixed key, so a new APK installs **over** the previous
-one — your data and settings are preserved. (Coming from the official build?
-That is signed with a different key, so you must uninstall it first.)
+one — your data and settings are preserved.
+
+```
+SHA-256  FC:0C:40:0D:B7:7E:C1:81:A3:35:18:C2:E8:13:6A:AE
+         1A:3F:6C:79:4A:1A:A7:9F:DB:67:63:8F:C6:B1:61:13
+```
+
+Verify a download with `python3 scripts/apk_cert_sha256.py <apk>`. Note this
+differs from the official build's key, so if you currently have the official
+APK installed you must uninstall it first.
 
 ---
 

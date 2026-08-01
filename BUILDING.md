@@ -137,6 +137,20 @@ manually from the Actions tab. It:
 secret, not a file in the tree** — keystores are credentials and must not be
 committed.
 
+The workflow decodes it to `$RUNNER_TEMP/ci-signing.keystore` and exports
+`MINIS_KEYSTORE_PATH`; `build.gradle.kts` reads that variable and points the
+`debug` signing config at it.
+
+That indirection is necessary, not decorative. AGP's default is
+`$HOME/.android/debug.keystore`, but `actions/checkout` temporarily overrides
+`HOME` on the runner — so a keystore written to `~/.android/` is restored to a
+path Gradle never reads, and AGP quietly generates a throwaway key instead. The
+build succeeds, the APK looks fine, and it then refuses to install over an
+existing one with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. This bit us once; the
+`Verify APK signature` step exists so it cannot happen silently again. It
+compares the certificate embedded in the built APK against the keystore, using
+`scripts/apk_cert_sha256.py`.
+
 Losing it means losing upgrade continuity: a new key produces APKs that will not
 install over existing ones, and every user has to uninstall and reinstall. Back
 it up somewhere durable.
