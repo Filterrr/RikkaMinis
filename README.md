@@ -1,33 +1,67 @@
-# OpenMinis
+# OpenMinis — Android
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
-[![Platforms](https://img.shields.io/badge/Platforms-iOS%20%7C%20Android-lightgrey.svg)](#beta-programme)
+[![Platform](https://img.shields.io/badge/Platform-Android%20arm64-brightgreen.svg)](#install)
+[![Build](https://github.com/logicflow-GYW/OpenMinis/actions/workflows/build-apk.yml/badge.svg)](https://github.com/logicflow-GYW/OpenMinis/actions/workflows/build-apk.yml)
 
 **Your private, on-device AI agent.**
+
+An **Android-only fork** of [OpenMinis](https://github.com/OpenMinis/OpenMinis)
+that builds a working APK on GitHub Actions and publishes it automatically.
 
 OpenMinis brings leading models — Claude, GPT, Gemini and more — into a native
 mobile experience, and gives them a real computer to work with: a full Linux
 shell running on your device, browser automation, extensible skills, persistent
 memory, and deep system integration.
 
-It is free, and fully open source.
+---
 
-**We believe that in the age of AI, technical design and code are no longer
-where a product's advantage lies. The best agent emerges from a tight feedback
-loop with the people who use it — their expectations and their reports are
-what converge on the product.**
+## Install
 
-Official website: **[openminis.app](https://openminis.app)**
+**→ [Download the latest APK](https://github.com/logicflow-GYW/OpenMinis/releases/tag/android-latest)**
 
-<a href="https://apps.apple.com/app/id6759188481">
-  <img alt="Download on the App Store" height="48" src="assets/badge-appstore.svg" />
-</a>
-&nbsp;
-<a href="https://github.com/OpenMinis/OpenMinis/releases">
-  <img alt="Get the APK on GitHub" height="48" src="assets/badge-android.svg" />
-</a>
+Every push to `main` builds a release APK and republishes it to that link, so
+the URL always points at the newest build. Requirements:
 
-![Minis on iOS — deep research, chat, agent runtime, integrations, iCloud sync and granular permissions](assets/screenshots.png)
+- **arm64-v8a** device (any modern phone), **Android 8.0+**
+- Enable "install from unknown sources" when your device prompts
+
+Builds are signed with a fixed key, so a new APK installs **over** the previous
+one — your data and settings are preserved. (Coming from the official build?
+That is signed with a different key, so you must uninstall it first.)
+
+---
+
+## What this fork changes
+
+Nothing about the app itself. The changes are all about making the build
+reproducible in CI:
+
+- **Native code is not compiled.** The official prebuilt `arm64-v8a` binaries
+  are committed to the repo and used as-is.
+- **CI needs no NDK.** A build is a plain `./gradlew assembleRelease`, ~5
+  minutes instead of ~40.
+- **iOS sources removed.** `src/ios/` and `deps/` are gone; this tree is Android
+  only.
+- **Automatic releases.** Successful builds publish the APK to the
+  `android-latest` release.
+
+### Why ship prebuilt binaries?
+
+The sandbox engine `libproot.so` needs upstream's Android 10+ W^X bypass
+patches. Rebuilding it from source in CI produces a binary that compiles fine
+and then fails at runtime with `execve("/bin/sh"): Permission denied` — the
+terminal never opens.
+
+So this fork extracts the binaries from the official release APK and commits
+them verbatim, sha256-verified. `externalNativeBuild` is disabled in
+`build.gradle.kts` to stop AGP from overwriting them with CI-built copies, and
+the workflow asserts the `libproot.so` inside the built APK is byte-identical to
+the committed one.
+
+**Trade-off:** edits under `src/android/app/src/main/cpp/` are not compiled.
+Changing native code means restoring the CMake block and installing the NDK in
+CI. Kotlin, UI, prompts and model integrations are unaffected — build normally.
 
 ---
 
@@ -37,152 +71,108 @@ Official website: **[openminis.app](https://openminis.app)**
 |---|---|
 | **Bring your own model** | Claude, GPT, Gemini and other providers, via your own API keys or account sign-in. |
 | **A real Linux shell** | A sandboxed Alpine Linux environment runs on-device — the agent can install packages, run scripts, and work with real files. |
-| **Device integration** | Health, Calendar, Reminders, Contacts, HomeKit, Bluetooth, Clipboard, Media, Alarms and more, exposed to the agent as tools. |
+| **Device integration** | Calendar, Contacts, Clipboard, Location, Media, Alarms, Notifications and more, exposed to the agent as tools. |
 | **Browser automation** | The agent can browse and interact with the web on your behalf. |
 | **Skills & memory** | Extensible skills plus persistent memory across sessions. |
 | **Workspaces** | Organise work into separate contexts, addressable via `minis://workspace/`. |
 | **Native offloads** | Heavy or platform-specific work is handed to native code instead of the sandbox. |
 
----
+**→ [OpenMinis/MinisSkills](https://github.com/OpenMinis/MinisSkills)** — ready-made
+skills. Skills built for Claude, Codex, OpenClaw or Hermes Agent generally run
+in Minis as-is.
 
-## What you can do with Minis
-
-A few things people actually use it for:
-
-- **Photograph a meal, log the nutrition** — Minis identifies the dishes, estimates
-  calories and macros, and writes them to Apple Health.
-- **Wake up to your timeline** — Shortcuts triggers Minis to fetch your X timeline,
-  summarise it, synthesise speech, and play it as your alarm.
-- **Turn group chatter into tasks** — pull messages from a Telegram group, extract
-  bugs and action items, deduplicate them, and file them into Apple Reminders.
-- **Mount your Obsidian vault** — research, clean up and write Markdown notes back
-  into the vault as a normal workspace.
-- **Share anything into a calendar event** — send a page or message to Minis via the
-  iOS Share Sheet and it creates the event, time and place included.
-
-**→ [OpenMinis/AwesomeMinis](https://github.com/OpenMinis/AwesomeMinis)** — a curated,
-community-contributed collection of use cases and workflows across health,
-productivity, research, finance and developer tooling.
+**→ [OpenMinis/AwesomeMinis](https://github.com/OpenMinis/AwesomeMinis)** — a
+curated collection of use cases and workflows.
 
 ---
 
-## Skills
-
-A **skill** is a folder with a `SKILL.md` file — instructions, and optionally scripts,
-references and assets — that the agent loads on demand when a request matches it.
-Metadata stays in context for triggering; the body and bundled resources load only
-when the skill is actually used.
-
-Minis has its own tool system, but it does not require skills written specifically
-for it: **skills built for Claude, Codex, OpenClaw or Hermes Agent generally run in
-Minis as-is.** Skills that have been adapted to Minis' tools simply run better —
-they can reach the Linux shell, device integrations and native offloads directly.
-
-**→ [OpenMinis/MinisSkills](https://github.com/OpenMinis/MinisSkills)** — skills
-adapted for Minis alongside ones built for it from scratch, covering TTS, search,
-media downloads, health analysis, cloud APIs and more.
-
----
-
-## Press
-
-> "the most impressive indie app I've seen in a while"
->
-> — Federico Viticci, [**Open Minis Is the iOS Agent I Wish Siri AI Could Be**](https://www.macstories.net/reviews/open-minis-is-the-ios-agent-i-wish-siri-ai-could-be/),
-> MacStories (July 2026)
-
-> "在很大程度上实现甚至局部超越了 Apple Intelligence"
->
-> — Ye Han, [**这可能是 iPhone 最强 Agent 软件，没有之一 丨Open Minis 入门指南**](https://zhuanlan.zhihu.com/p/2045570157783807562),
-> 知乎 / Zhihu (June 2026)
-
-> "可能是 iOS 端最强 AI Agent"
->
-> — [**Open Minis：可能是 iOS 端最强 AI Agent**](https://www.appinn.com/open-minis/),
-> 小众软件 / Appinn (March 2026)
-
----
-
-## Beta programme
-
-App Store releases can lag behind: every update waits on review, and we hold
-builds back when stability warrants it. The TestFlight build is where fixes
-and new features land first.
-
-**→ [Join the TestFlight beta](https://testflight.apple.com/join/3BdkA5c3)**
-
-On Android, the [releases page](https://github.com/OpenMinis/OpenMinis/releases)
-always carries the latest APK.
-
----
-
-## Building from source
-
-Minis ships a Linux sandbox inside the app, so the native dependencies (iSH on
-iOS, PRoot on Android, FFmpeg, LAME) and the Alpine rootfs are **built from
-source** rather than committed as binaries.
-
-**→ See [BUILDING.md](BUILDING.md) for the full first-build guide.**
-
-The short version:
+## Building locally
 
 ```sh
-git clone --recurse-submodules https://github.com/OpenMinis/OpenMinis.git
-cd OpenMinis
-
-# iOS  — order matters: FFmpeg links against LAME
-./deps/build_lame.sh && ./deps/build_ffmpeg.sh
-./deps/build_ish.sh && ./deps/prepare_alpine_rootfs.sh
-open src/ios/Minis.xcodeproj
-
-# Android — needs NDK r28+
-./deps/build_proot.sh && ./scripts/prepare_android_sandbox.sh
-cd src/android && ./gradlew :app:assembleDebug
+git clone https://github.com/logicflow-GYW/OpenMinis.git
+cd OpenMinis/src/android
+./gradlew assembleRelease
 ```
 
-`BUILDING.md` covers the toolchain requirements per platform, the build-time
-customization templates, and a troubleshooting section for the failure modes
-you are most likely to hit.
+Needs **JDK 17** and the Android SDK (compileSdk 36). No NDK, no submodules, no
+rootfs preparation — the binaries are already in the tree. The APK lands in
+`app/build/outputs/apk/release/`.
+
+Local builds are signed with your own `~/.android/debug.keystore`, so they will
+not install over a CI build. To match CI, put the same keystore there.
+
+See [BUILDING.md](BUILDING.md) for toolchain details and troubleshooting.
+
+---
+
+## Keeping up with upstream
+
+Upstream is a one-way mirror that does not accept pull requests, and this fork
+has diverged in a handful of files. Syncing is possible but has an order of
+operations — in particular, the vendored binaries must be refreshed whenever
+upstream's Kotlin changes, or the app breaks at runtime.
+
+```sh
+git fetch upstream
+git rebase upstream/main               # not merge
+./scripts/sync_official_binaries.sh    # refresh binaries to match
+```
+
+**→ See [docs/SYNCING_UPSTREAM.md](docs/SYNCING_UPSTREAM.md)** for the full
+procedure, the list of files that conflict, and how to recover from a bad sync.
+
+---
+
+## Privacy
+
+This fork adds no tracking, and upstream ships none. Specifically:
+
+- **No analytics or telemetry SDK.** No Firebase, Crashlytics, Sentry, or
+  similar.
+- **Crash reports stay on the device.** ACRA is included but with `acra-core`
+  only — no network sender is configured. Reports are written to local files and
+  surfaced in the app's log screen.
+- **No device identifiers are collected.** No IMEI, no advertising ID.
+- **The debug server is not in release builds.** A local JSON-RPC server on
+  `127.0.0.1:5321` exists for development, gated behind `BuildConfig.DEBUG` and
+  compiled out of the release APK published here.
+
+Network traffic goes to the model providers you configure, using your own API
+keys, plus the endpoints you explicitly ask the agent to visit.
+
+The app requests broad permissions (storage, contacts, calendar, microphone,
+location, accessibility) because they back agent tools. They are requested at
+the point of use — the agent can only use what you grant.
 
 ---
 
 ## Repository layout
 
 ```
-src/ios/          iOS app (Swift / SwiftUI) + share, widget and file-provider extensions
-src/android/      Android app (Kotlin / Compose) + JNI native code
-src/shared/       Assets shared by both platforms
-deps/             Native dependency build scripts and vendored sources
-docs/specs/       Architecture and interface specifications
-scripts/          Rootfs preparation and developer tooling
+src/android/      Android app (Kotlin / Compose)
+  app/src/main/jniLibs/arm64-v8a/   Vendored official native binaries
+  app/src/main/assets/              Alpine rootfs + proot binary
+src/shared/       Assets shared with upstream's iOS tree (bashism rules)
+docs/             Sync procedure and interface specifications
+scripts/          Binary sync and developer tooling
 ```
 
 ---
 
 ## Acknowledgements
 
-OpenMinis stands on a great deal of open-source work. Our thanks to the
-maintainers of these projects — the full inventory, with versions and license
-terms, is in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+OpenMinis stands on a great deal of open-source work — full inventory in
+[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md). This fork is derived from
+**[OpenMinis/OpenMinis](https://github.com/OpenMinis/OpenMinis)** and ships its
+compiled sandbox binaries unmodified.
 
-**The sandbox** — the heart of the product:
+**The sandbox** — [PRoot](https://github.com/termux/proot) (GPLv2), user-space
+chroot for the Android sandbox, via [OpenMinis' fork](https://github.com/OpenMinis/proot);
+**[talloc](https://talloc.samba.org)** (LGPLv3+) underpins it;
+**[Alpine Linux](https://alpinelinux.org)** — the minirootfs the sandbox boots.
 
-- **[iSH](https://github.com/ish-app/ish)** (GPLv3) — Linux usermode emulation on
-  iOS. We run [an ARM64 fork](https://github.com/OpenMinis/ish-arm64).
-- **[PRoot](https://github.com/termux/proot)** (GPLv2) — user-space chroot for the
-  Android sandbox, via [our fork](https://github.com/OpenMinis/proot);
-  **[talloc](https://talloc.samba.org)** (LGPLv3+) underpins it.
-- **[Alpine Linux](https://alpinelinux.org)** — the minirootfs the sandbox boots.
-
-**Media & text** — [FFmpeg](https://ffmpeg.org) (LGPL-2.1+),
-[LAME](https://lame.sourceforge.io) (LGPL), [cppjieba](https://github.com/yanyiwu/cppjieba) (MIT),
+**Text & rendering** — [cppjieba](https://github.com/yanyiwu/cppjieba) (MIT),
 [KaTeX](https://katex.org) (MIT).
-
-**iOS** — [SwiftAnthropic](https://github.com/jamesrochabrun/SwiftAnthropic),
-[SwiftMath](https://github.com/mgriebling/SwiftMath),
-[RealTimeCutVADLibrary](https://github.com/helloooideeeeea/RealTimeCutVADLibrary) (all MIT),
-[swift-cmark](https://github.com/swiftlang/swift-cmark) (BSD-2-Clause), and the
-Apple / Swift Server Workgroup packages (Apache-2.0).
 
 **Android** — [AndroidX & Jetpack Compose](https://developer.android.com/jetpack),
 [OkHttp](https://square.github.io/okhttp/), [Coil](https://coil-kt.github.io/coil/),
@@ -197,21 +187,19 @@ Apple / Swift Server Workgroup packages (Apache-2.0).
 
 OpenMinis is licensed under the **[GNU General Public License v3.0](LICENSE)**.
 
-The app links GPL-licensed components — [iSH](https://github.com/OpenMinis/ish-arm64)
-(GPLv3) and [PRoot](https://github.com/OpenMinis/proot) (GPLv2) — so the combined
-work is distributed under GPLv3. Bundled third-party licenses are listed in
-[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+The app links GPL-licensed components — [PRoot](https://github.com/OpenMinis/proot)
+(GPLv2) — so the combined work is distributed under GPLv3. Bundled third-party
+licenses are listed in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
 
 ---
 
-## Community
+## Upstream
 
-- **Telegram**: [Join the group](https://t.me/+2NzhOJuzRyI1YmM1)
-- **Issues**: Bug reports, feature requests and discussion via
-  [GitHub Issues](https://github.com/OpenMinis/OpenMinis/issues)
+For the original project, the iOS app, issues and community:
 
-This repository is a mirror of a private development tree, so it **does not
-accept pull requests** — there is nowhere for them to land. Issues are the way
-to shape the product, and [AwesomeMinis](https://github.com/OpenMinis/AwesomeMinis)
-and [MinisSkills](https://github.com/OpenMinis/MinisSkills) both do take
-contributions. See [CONTRIBUTING.md](CONTRIBUTING.md).
+**→ [OpenMinis/OpenMinis](https://github.com/OpenMinis/OpenMinis)** ·
+[openminis.app](https://openminis.app) ·
+[Telegram](https://t.me/+2NzhOJuzRyI1YmM1)
+
+Report bugs in the app itself upstream, not here — this fork changes only the
+build. Issues specific to the build or the published APK belong here.
