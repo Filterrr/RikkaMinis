@@ -3,17 +3,21 @@ name: Build OpenMinis Android APK
 on:
   push:
     branches: [ main ]
+    paths:
+      - 'src/android/**'
+      - 'src/shared/**'
+      - '.github/workflows/build-apk.yml'
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code (with submodules)
+      # No submodules: deps/proot and deps/ish are only needed to build the
+      # native sandbox from source, which this fork deliberately does not do
+      # (see src/android/app/build.gradle.kts). Skipping them keeps checkout fast.
+      - name: Checkout Code
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 0
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -25,23 +29,77 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      # build.gradle.kts wires `stageDebugSkillAssets` into every debug asset
+      # merge. The script is `onlyIf { script.exists() }`, but it reads
+      # .claude/skills/debug-server/ which is private and absent from this
+      # public mirror — create it so the Exec task has an input dir.
       - name: Stub missing private directories
         run: mkdir -p .claude/skills/debug-server
 
-      - name: Restore Keystore (Optional)
-        if: ${{ secrets.DEBUG_KEYSTORE_B64 != '' }}
+      # Fixed debug signing key, so every CI build installs OVER the previous
+      # one instead of forcing an uninstall/reinstall.
+      # SHA-256: FC:0C:40:0D:B7:7E:C1:81:A3:35:18:C2:E8:13:6A:AE:
+      #          1A:3F:6C:79:4A:1A:A7:9F:DB:67:63:8F:C6:B1:61:13
+      - name: Restore debug keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_B64 }}
         run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "::error::DEBUG_KEYSTORE_B64 secret is not set. Builds would get a" \
+                 "random throwaway signing key and could not be installed as an upgrade."
+            exit 1
+          fi
           mkdir -p ~/.android
-          echo "${{ secrets.DEBUG_KEYSTORE_B64 }}" | base64 -d > ~/.android/debug.keystore
-          echo "Keystore restored."
+          printf '%s' "$KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
+          keytool -list -v \
+            -keystore ~/.android/debug.keystore \
+            -storepass android -alias androiddebugkey \
+            | grep -E 'SHA256:|Valid from'
+
+      # Sanity-check the vendored binaries survived checkout. A truncated or
+      # LFS-pointer libproot.so builds fine and then fails on-device with
+      # execve(): Permission denied, which is painful to diagnose later.
+      - name: Verify prebuilt sandbox binaries
+        run: |
+          cd src/android/app/src/main
+          test -s jniLibs/arm64-v8a/libproot.so
+          test -s assets/proot-aarch64
+          test -s assets/alpine-minirootfs.tar
+          echo "7f454c46" > /tmp/elf_magic
+          for so in jniLibs/arm64-v8a/*.so; do
+            magic=$(head -c 4 "$so" | od -A n -t x1 | tr -d ' \n')
+            if [ "$magic" != "$(cat /tmp/elf_magic)" ]; then
+              echo "::error::$so is not a valid ELF file (magic=$magic)"
+              exit 1
+            fi
+          done
+          ls -la jniLibs/arm64-v8a/
 
       - name: Build APK with Gradle
         run: |
           cd src/android
           ./gradlew assembleDebug --stacktrace
 
+      # Confirm the official binaries actually landed in the APK and were not
+      # replaced by anything the build produced.
+      - name: Verify APK contents
+        run: |
+          APK=src/android/app/build/outputs/apk/debug/app-debug.apk
+          unzip -l "$APK" | grep -E 'libproot\.so|proot-aarch64|alpine-minirootfs'
+          EXPECTED=$(sha256sum src/android/app/src/main/jniLibs/arm64-v8a/libproot.so | cut -d' ' -f1)
+          unzip -p "$APK" lib/arm64-v8a/libproot.so > /tmp/apk_libproot.so
+          ACTUAL=$(sha256sum /tmp/apk_libproot.so | cut -d' ' -f1)
+          echo "expected=$EXPECTED"
+          echo "actual  =$ACTUAL"
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "::error::libproot.so in the APK differs from the committed official binary."
+            exit 1
+          fi
+          echo "libproot.so matches the official prebuilt binary."
+
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: OpenMinis-apk
           path: src/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
