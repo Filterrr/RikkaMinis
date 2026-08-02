@@ -5,8 +5,10 @@ import com.openminis.app.config.ConfigAccess
 import com.openminis.app.config.ConfigRegistry
 import com.openminis.app.config.ConfigValue
 import com.openminis.app.data.model.FallbackStrategy
+import com.openminis.app.data.model.ModelGroup
 import com.openminis.app.data.model.RoutingStrategy
 import com.openminis.app.data.model.ThinkingLevel
+import com.openminis.app.data.repository.EnvVarRepository
 import com.openminis.app.data.repository.ProviderRepository
 import org.json.JSONArray
 import org.json.JSONObject
@@ -66,6 +68,9 @@ object ConfigBackup {
         val providersImported: Int,
         /** Model groups recreated (with member entry ids remapped to this install). */
         val groupsImported: Int,
+        /** Environment variables restored (keys + notes; values if the
+         *  backup carried secrets, empty-value stub otherwise). */
+        val envVarsImported: Int,
         /** Human-readable "path: why" lines for anything deliberately not applied. */
         val skipped: List<String>,
         /** True when the payload carried credentials (affects the post-import hint). */
@@ -83,6 +88,7 @@ object ConfigBackup {
     fun export(
         providerRepo: ProviderRepository,
         includeSecrets: Boolean = true,
+        envVarRepo: EnvVarRepository? = null,
     ): String {
         val registry = ConfigRegistry.get()
 
@@ -160,6 +166,25 @@ object ConfigBackup {
             })
         }
 
+        // Environment variables live in EnvVarRepository (metadata in a JSON
+        // file, values in encrypted prefs) — NOT in the flat ConfigRegistry
+        // field space, so they need their own export pass much like providers.
+        // Values are credentials, so they ride the same includeSecrets gate as
+        // provider apiKeys: without secrets we carry key+note only and the user
+        // refills the value after import.
+        val envVars = JSONArray()
+        if (envVarRepo != null) {
+            for (entry in envVarRepo.entries.value) {
+                envVars.put(JSONObject().apply {
+                    put("key", entry.key)
+                    put("note", entry.note)
+                    if (includeSecrets) {
+                        envVarRepo.getValue(entry.key)?.let { put("value", it) }
+                    }
+                })
+            }
+        }
+
         return JSONObject().apply {
             put("format", "openminis.config.backup")
             put("version", FORMAT_VERSION)
@@ -168,6 +193,7 @@ object ConfigBackup {
             put("fields", fields)
             put("providers", providers)
             put("groups", groups)
+            put("envVars", envVars)
             if (readFailures > 0) put("readFailures", readFailures)
         }.toString(2)
     }
@@ -217,6 +243,7 @@ object ConfigBackup {
     fun import(
         providerRepo: ProviderRepository,
         json: String,
+        envVarRepo: EnvVarRepository? = null,
     ): ImportResult {
         val root = try {
             JSONTokener(json).nextValue() as? JSONObject
@@ -338,7 +365,7 @@ object ConfigBackup {
                     resolvedName = "$name ($suffix)"
                 }
                 try {
-                    val group = com.openminis.app.data.model.ModelGroup(
+                    val group = ModelGroup(
                         id = newId,
                         name = resolvedName,
                         memberEntryIds = members,
@@ -424,10 +451,44 @@ object ConfigBackup {
             }
         }
 
+        // -- Stage 4: environment variables (own repository, secret-gated) --
+        var envVarsImported = 0
+        val envVarsArr = root.optJSONArray("envVars")
+        if (envVarsArr != null && envVarRepo != null) {
+            for (i in 0 until envVarsArr.length()) {
+                val ev = envVarsArr.optJSONObject(i) ?: continue
+                val key = ev.optString("key", "").trim()
+                if (key.isEmpty()) {
+                    skipped.add("env var #${i + 1}: missing key")
+                    continue
+                }
+                if (envVarRepo.isDuplicateKey(key)) {
+                    skipped.add("env var \"$key\": already exists, left as-is")
+                    continue
+                }
+                // A backup taken without secrets carries no value; add the key
+                // with an empty value so the metadata/note survive and the user
+                // only has to refill the secret rather than recreate the entry.
+                val value = ev.optString("value", "")
+                val note = ev.optString("note", "")
+                if (envVarRepo.add(key, value, note)) {
+                    envVarsImported++
+                    if (value.isEmpty()) {
+                        skipped.add("env var \"$key\": restored without value — re-enter it")
+                    }
+                } else {
+                    skipped.add("env var \"$key\": rejected (invalid key)")
+                }
+            }
+        } else if (envVarsArr != null && envVarsArr.length() > 0 && envVarRepo == null) {
+            skipped.add("${envVarsArr.length()} env var(s): not restorable here")
+        }
+
         return ImportResult(
             fieldsApplied = applied,
             providersImported = providersImported,
             groupsImported = groupsImported,
+            envVarsImported = envVarsImported,
             skipped = skipped,
             hadSecrets = root.optBoolean("includesSecrets", false),
         ).also { result ->
@@ -439,8 +500,8 @@ object ConfigBackup {
             Log.i(
                 TAG,
                 "import: applied=$applied providers=$providersImported " +
-                    "groups=$groupsImported skipped=${result.skipped.size} " +
-                    "hadSecrets=${result.hadSecrets}"
+                    "groups=$groupsImported envVars=$envVarsImported " +
+                    "skipped=${result.skipped.size} hadSecrets=${result.hadSecrets}"
             )
             for (line in result.skipped) Log.w(TAG, "import skipped — $line")
         }
