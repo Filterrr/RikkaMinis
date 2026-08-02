@@ -464,6 +464,7 @@
     <string name="backup_err_import">匯入失敗</string>
     <string name="backup_err_title">發生錯誤</string>
     <string name="backup_done_summary">已匯入 %1$d 項設定、%2$d 個提供商。</string>
+    <string name="backup_done_groups">已還原 %1$d 個模型分組。</string>
     <string name="backup_done_skipped">\n以下 %1$d 項已略過：</string>
     <string name="backup_done_no_keys">\n此備份不含金鑰，匯入的提供商需要重新填寫 API 金鑰。</string>
     <string name="backup_done_restart">\n部分設定需重新啟動應用程式後生效。</string>

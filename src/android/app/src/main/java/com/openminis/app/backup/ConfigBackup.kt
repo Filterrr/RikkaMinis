@@ -4,6 +4,9 @@ import android.util.Log
 import com.openminis.app.config.ConfigAccess
 import com.openminis.app.config.ConfigRegistry
 import com.openminis.app.config.ConfigValue
+import com.openminis.app.data.model.FallbackStrategy
+import com.openminis.app.data.model.RoutingStrategy
+import com.openminis.app.data.model.ThinkingLevel
 import com.openminis.app.data.repository.ProviderRepository
 import org.json.JSONArray
 import org.json.JSONObject
@@ -45,16 +48,24 @@ object ConfigBackup {
         "chat",         // composer + rendering preferences
         "background",   // background image / effect settings
         "defaults",     // default model group, agent-loop entries and groups
-        "session",      // per-session defaults (not the sessions themselves)
         "soul",         // SOUL.md persona fields
         "memory",       // memory feature toggles
         "logs",         // log retention preferences
     )
+    // NOTE: `session.*` is deliberately NOT backed up. Despite the dot-path
+    // prefix it is not a persisted preference — session.primaryModel /
+    // session.thinkingLevel read and write the *currently foregrounded chat*
+    // via ChatViewModelStore.activeSessionId. On the settings screen where a
+    // backup is taken or restored there is no active session, so the writer
+    // throws "No active session" and the reader returns empty/null. Carrying
+    // them only produced guaranteed skip entries on every restore.
 
     /** Outcome of an import: what landed, and what needs the user's attention. */
     data class ImportResult(
         val fieldsApplied: Int,
         val providersImported: Int,
+        /** Model groups recreated (with member entry ids remapped to this install). */
+        val groupsImported: Int,
         /** Human-readable "path: why" lines for anything deliberately not applied. */
         val skipped: List<String>,
         /** True when the payload carried credentials (affects the post-import hint). */
@@ -112,7 +123,41 @@ object ConfigBackup {
             if (!includeSecrets) {
                 for (key in SECRET_PROVIDER_KEYS) obj.remove(key)
             }
+            // [T-backup-group-idmap] exportInstanceJSON serializes model entries
+            // by (modelId, displayName) but drops their uuids, and importInstance
+            // JSON re-mints a fresh uuid for every entry. Model groups reference
+            // entries by uuid, and defaults.primaryGroup references a group by
+            // id — so without a mapping those references dangle on restore and
+            // every group-typed default is rejected. Carry the source entry
+            // uuids here, in the SAME order exportInstanceJSON emits its `models`
+            // array (visible entries, then hidden), so import can pair old→new
+            // uuid positionally. `_`-prefixed to signal a backup-layer annotation;
+            // importInstanceJSON ignores unknown keys, so the provider wire
+            // format is untouched.
+            val entryIds = JSONArray()
+            for (id in orderedEntryIds(providerRepo, instance.id)) entryIds.put(id)
+            obj.put("_entryIds", entryIds)
             providers.put(obj)
+        }
+
+        // [T-backup-group-idmap] Model groups are NOT part of a single provider's
+        // export (they span providers), so they are backed up here as a distinct
+        // top-level array. member entry ids are the SOURCE uuids; import remaps
+        // them through the per-provider old→new entry map before creating groups.
+        val groups = JSONArray()
+        for (group in providerRepo.config.value.modelGroups) {
+            groups.put(JSONObject().apply {
+                put("id", group.id)
+                put("name", group.name)
+                put("memberEntryIds", JSONArray().apply {
+                    for (eid in group.memberEntryIds) put(eid)
+                })
+                put("strategy", group.strategy.name)
+                put("fallbackStrategy", group.fallbackStrategy.name)
+                group.defaultThinkingLevel?.let { put("defaultThinkingLevel", it.name) }
+                group.contextLimitTokens?.let { put("contextLimitTokens", it) }
+                group.lastContextLimitTokens?.let { put("lastContextLimitTokens", it) }
+            })
         }
 
         return JSONObject().apply {
@@ -122,8 +167,27 @@ object ConfigBackup {
             put("includesSecrets", includeSecrets)
             put("fields", fields)
             put("providers", providers)
+            put("groups", groups)
             if (readFailures > 0) put("readFailures", readFailures)
         }.toString(2)
+    }
+
+    /**
+     * Entry uuids for [instanceId] in the exact order
+     * [ProviderRepository.exportInstanceJSON] serializes its `models` array:
+     * visible entries first, then hidden ones. Keeping this in lock-step with
+     * that method is what makes positional old→new uuid pairing correct on
+     * import; if exportInstanceJSON's ordering ever changes, this must follow.
+     */
+    private fun orderedEntryIds(
+        providerRepo: ProviderRepository,
+        instanceId: String,
+    ): List<String> {
+        val visible = providerRepo.visibleEntries(instanceId)
+        val hidden = providerRepo.config.value.modelEntries.filter {
+            it.providerInstanceId == instanceId && it.isHidden
+        }
+        return (visible + hidden).map { it.id }
     }
 
     /**
@@ -176,6 +240,140 @@ object ConfigBackup {
         val skipped = ArrayList<String>()
         val registry = ConfigRegistry.get()
 
+        // [T-backup-group-idmap] Order matters. Providers create the model
+        // entries that groups reference; groups create the ids that
+        // defaults.primaryGroup / agentLoopGroups reference. So the sequence is
+        // providers → groups → fields, and each stage publishes an old→new id
+        // map the next stage rewrites through. Doing fields first (the old
+        // order) meant defaults.primaryGroup was validated against groups that
+        // did not exist yet and was always rejected.
+        val entryIdMap = HashMap<String, String>()   // source entry uuid → restored uuid
+        val groupIdMap = HashMap<String, String>()    // source group id  → restored id
+
+        // -- Stage 1: providers (also builds the entry-id map) --
+        var providersImported = 0
+        val providers = root.optJSONArray("providers")
+        if (providers != null) {
+            for (i in 0 until providers.length()) {
+                val obj = providers.optJSONObject(i) ?: continue
+                val label = obj.optString("label", "provider #${i + 1}")
+                // Pull our backup-layer annotation out before handing the object
+                // to importInstanceJSON (which ignores it anyway, but keeping the
+                // wire payload clean avoids surprises).
+                val srcEntryIds = obj.optJSONArray("_entryIds")
+                val instancesBefore = providerRepo.instances.map { it.id }.toSet()
+                try {
+                    val resolvedLabel = providerRepo.importInstanceJSON(obj.toString())
+                    if (resolvedLabel == null) {
+                        skipped.add("provider \"$label\": import rejected")
+                        continue
+                    }
+                    providersImported++
+                    // Identify the instance importInstanceJSON just created (the
+                    // one id that wasn't present before) and pair its entries to
+                    // the source uuids positionally — orderedEntryIds mirrors the
+                    // export ordering exactly.
+                    val newId = providerRepo.instances
+                        .map { it.id }
+                        .firstOrNull { it !in instancesBefore }
+                    if (newId != null && srcEntryIds != null) {
+                        val newEntryIds = orderedEntryIds(providerRepo, newId)
+                        val n = minOf(srcEntryIds.length(), newEntryIds.size)
+                        for (k in 0 until n) {
+                            val oldEid = srcEntryIds.optString(k, "")
+                            if (oldEid.isNotEmpty()) entryIdMap[oldEid] = newEntryIds[k]
+                        }
+                        if (srcEntryIds.length() != newEntryIds.size) {
+                            // Non-fatal: model set differs from when the backup
+                            // was taken (a model was hidden/added since). Groups
+                            // referencing the unmapped entries will report them.
+                            Log.w(
+                                TAG,
+                                "import: provider \"$resolvedLabel\" entry count " +
+                                    "${srcEntryIds.length()}→${newEntryIds.size}; " +
+                                    "some group members may not remap"
+                            )
+                        }
+                    }
+                } catch (t: Throwable) {
+                    skipped.add("provider \"$label\": ${t.message ?: "import failed"}")
+                }
+            }
+        }
+
+        // -- Stage 2: model groups (remaps member entry ids, builds group map) --
+        var groupsImported = 0
+        val groups = root.optJSONArray("groups")
+        if (groups != null) {
+            val existingGroupIds = providerRepo.config.value.modelGroups.map { it.id }.toSet()
+            val existingGroupNames = providerRepo.config.value.modelGroups.map { it.name }.toSet()
+            for (i in 0 until groups.length()) {
+                val g = groups.optJSONObject(i) ?: continue
+                val srcId = g.optString("id", "")
+                val name = g.optString("name", "group #${i + 1}")
+                // Remap member entries through the entry map; drop members whose
+                // source entry never made it in (missing provider/model).
+                val srcMembers = g.optJSONArray("memberEntryIds")
+                val members = ArrayList<String>()
+                var droppedMembers = 0
+                if (srcMembers != null) {
+                    for (j in 0 until srcMembers.length()) {
+                        val old = srcMembers.optString(j, "")
+                        val mapped = entryIdMap[old]
+                        if (mapped != null) members.add(mapped) else droppedMembers++
+                    }
+                }
+                // Fresh id unless the source id is somehow free on this install;
+                // renaming on name-collision keeps a restore from silently
+                // merging into an existing group.
+                val newId = if (srcId.isNotEmpty() && srcId !in existingGroupIds) {
+                    srcId
+                } else {
+                    java.util.UUID.randomUUID().toString()
+                }
+                var resolvedName = name
+                if (resolvedName in existingGroupNames) {
+                    var suffix = 2
+                    while ("$name ($suffix)" in existingGroupNames) suffix++
+                    resolvedName = "$name ($suffix)"
+                }
+                try {
+                    val group = com.openminis.app.data.model.ModelGroup(
+                        id = newId,
+                        name = resolvedName,
+                        memberEntryIds = members,
+                        strategy = enumOrDefault(
+                            g.optString("strategy"),
+                            com.openminis.app.data.model.RoutingStrategy.fallback,
+                        ),
+                        fallbackStrategy = enumOrDefault(
+                            g.optString("fallbackStrategy"),
+                            com.openminis.app.data.model.FallbackStrategy.default,
+                        ),
+                        defaultThinkingLevel = g.optString("defaultThinkingLevel")
+                            .takeIf { it.isNotEmpty() }
+                            ?.let { runCatching { ThinkingLevel.valueOf(it) }.getOrNull() },
+                        contextLimitTokens = if (g.has("contextLimitTokens"))
+                            g.optInt("contextLimitTokens").takeIf { it > 0 } else null,
+                        lastContextLimitTokens = if (g.has("lastContextLimitTokens"))
+                            g.optInt("lastContextLimitTokens").takeIf { it > 0 } else null,
+                    )
+                    providerRepo.addGroup(group)
+                    if (srcId.isNotEmpty()) groupIdMap[srcId] = newId
+                    groupsImported++
+                    if (droppedMembers > 0) {
+                        skipped.add(
+                            "group \"$name\": $droppedMembers member(s) skipped " +
+                                "(their model/provider isn't in this backup)"
+                        )
+                    }
+                } catch (t: Throwable) {
+                    skipped.add("group \"$name\": ${t.message ?: "import failed"}")
+                }
+            }
+        }
+
+        // -- Stage 3: scalar fields (defaults.* group/entry ids remapped) --
         var applied = 0
         val fields = root.optJSONObject("fields")
         if (fields != null) {
@@ -203,11 +401,16 @@ object ConfigBackup {
                 }
 
                 val raw = fields.optString(path, "")
-                val value = ConfigValue.decode(raw)
-                if (value == null) {
+                val decoded = ConfigValue.decode(raw)
+                if (decoded == null) {
                     skipped.add("$path: unreadable value in backup")
                     continue
                 }
+                // Rewrite the group/entry ids these fields carry from source ids
+                // to the ids just minted above. An id with no mapping is left
+                // as-is so the field's own writer reports it as unknown rather
+                // than this layer swallowing it.
+                val value = remapDefaultsIds(path, decoded, groupIdMap, entryIdMap)
                 try {
                     // Validate against the field's own schema before writing so
                     // a stale enum / out-of-range number is reported instead of
@@ -221,30 +424,62 @@ object ConfigBackup {
             }
         }
 
-        var providersImported = 0
-        val providers = root.optJSONArray("providers")
-        if (providers != null) {
-            for (i in 0 until providers.length()) {
-                val obj = providers.optJSONObject(i) ?: continue
-                val label = obj.optString("label", "provider #${i + 1}")
-                try {
-                    if (providerRepo.importInstanceJSON(obj.toString()) != null) {
-                        providersImported++
-                    } else {
-                        skipped.add("provider \"$label\": import rejected")
-                    }
-                } catch (t: Throwable) {
-                    skipped.add("provider \"$label\": ${t.message ?: "import failed"}")
-                }
-            }
-        }
-
         return ImportResult(
             fieldsApplied = applied,
             providersImported = providersImported,
+            groupsImported = groupsImported,
             skipped = skipped,
             hadSecrets = root.optBoolean("includesSecrets", false),
-        )
+        ).also { result ->
+            // Mirror the outcome into the diagnostic log. The result dialog
+            // only shows the first few skipped lines (screen budget), and the
+            // whole import otherwise leaves no trace — so when a restore comes
+            // back half-applied there is nothing to look at after dismissing
+            // the sheet. One summary line plus one line per skip fixes that.
+            Log.i(
+                TAG,
+                "import: applied=$applied providers=$providersImported " +
+                    "groups=$groupsImported skipped=${result.skipped.size} " +
+                    "hadSecrets=${result.hadSecrets}"
+            )
+            for (line in result.skipped) Log.w(TAG, "import skipped — $line")
+        }
+    }
+
+    /** [enumValueOf] that falls back to [default] instead of throwing on a
+     *  token this build doesn't know (forward-compat with newer backups). */
+    private inline fun <reified T : Enum<T>> enumOrDefault(name: String, default: T): T =
+        runCatching { enumValueOf<T>(name) }.getOrDefault(default)
+
+    /**
+     * Rewrite the source group/entry ids embedded in a `defaults.*` field to the
+     * ids minted during this import. Group-typed fields
+     * (primaryGroup / subGroup / agentLoopGroups) map through [groupIdMap];
+     * agentLoopEntries maps through [entryIdMap]. Everything else is returned
+     * unchanged. Unmapped ids are passed through so the field's own writer can
+     * report them as unknown rather than this layer silently dropping them.
+     */
+    private fun remapDefaultsIds(
+        path: String,
+        value: ConfigValue,
+        groupIdMap: Map<String, String>,
+        entryIdMap: Map<String, String>,
+    ): ConfigValue {
+        val map = when (path) {
+            "defaults.primaryGroup", "defaults.subGroup", "defaults.agentLoopGroups" -> groupIdMap
+            "defaults.agentLoopEntries" -> entryIdMap
+            else -> return value
+        }
+        if (map.isEmpty()) return value
+        return when (value) {
+            is ConfigValue.Str -> ConfigValue.Str(map[value.value] ?: value.value)
+            is ConfigValue.Arr -> ConfigValue.Arr(
+                value.value.map { el ->
+                    if (el is ConfigValue.Str) ConfigValue.Str(map[el.value] ?: el.value) else el
+                }
+            )
+            else -> value
+        }
     }
 
     /** Default filename for a fresh export, e.g. `openminis-backup-20260802.json`. */
