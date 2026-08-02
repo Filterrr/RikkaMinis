@@ -21,6 +21,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import com.openminis.app.R
 import com.openminis.app.backup.ConfigBackup
+import com.openminis.app.data.repository.EnvVarRepository
 import com.openminis.app.data.repository.ProviderRepository
 
 /**
@@ -35,6 +36,7 @@ import com.openminis.app.data.repository.ProviderRepository
 @Composable
 fun BackupSettingsScreen(
     providerRepository: ProviderRepository,
+    envVarRepository: EnvVarRepository? = null,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -77,7 +79,11 @@ fun BackupSettingsScreen(
             val json = context.contentResolver.openInputStream(uri)
                 ?.bufferedReader()?.readText()
                 ?: throw IllegalStateException(errRead)
-            importReport = ConfigBackup.import(providerRepository, json)
+            importReport = ConfigBackup.import(
+                providerRepo = providerRepository,
+                json = json,
+                envVarRepo = envVarRepository,
+            )
         } catch (t: Throwable) {
             errorMessage = t.message ?: errImport
         }
@@ -114,6 +120,7 @@ fun BackupSettingsScreen(
                 pendingExport = ConfigBackup.export(
                     providerRepo = providerRepository,
                     includeSecrets = withSecrets,
+                    envVarRepo = envVarRepository,
                 )
                 exportLauncher.launch(ConfigBackup.suggestedFileName())
             } catch (t: Throwable) {
@@ -155,6 +162,12 @@ fun BackupSettingsScreen(
                     if (report.groupsImported > 0) {
                         Text(
                             stringResource(R.string.backup_done_groups, report.groupsImported),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                    if (report.envVarsImported > 0) {
+                        Text(
+                            stringResource(R.string.backup_done_env_vars, report.envVarsImported),
                             style = MaterialTheme.typography.bodyMedium,
                         )
                     }

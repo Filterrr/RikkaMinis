@@ -1186,6 +1186,7 @@
     <string name="backup_err_title">Something went wrong</string>
     <string name="backup_done_summary">Imported %1$d settings and %2$d providers.</string>
     <string name="backup_done_groups">Restored %1$d model group(s).</string>
+    <string name="backup_done_env_vars">Restored %1$d environment variable(s).</string>
     <string name="backup_done_skipped">\n%1$d items were skipped:</string>
     <string name="backup_done_no_keys">\nThis backup contains no keys — imported providers need their API keys re-entered.</string>
     <string name="backup_done_restart">\nSome settings take effect after restarting the app.</string>

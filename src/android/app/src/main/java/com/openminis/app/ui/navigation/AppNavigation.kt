@@ -637,6 +637,7 @@ fun AppNavigation(
         composable(Routes.BACKUP) {
             com.openminis.app.ui.settings.BackupSettingsScreen(
                 providerRepository = providerRepository,
+                envVarRepository = envVarRepository,
                 onBack = { navController.safePopBackStack() },
             )
         }
