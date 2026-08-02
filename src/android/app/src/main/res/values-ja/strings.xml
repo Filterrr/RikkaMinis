@@ -815,6 +815,8 @@
     <!-- T219-2 — 外部フォルダのマウント -->
     <string name="settings_mount_external_folders">外部フォルダをマウント</string>
     <string name="settings_mount_external_folders_subtitle">選択したフォルダを /var/minis/mounts/ にバインド</string>
+    <string name="settings_backup">バックアップと復元</string>
+    <string name="settings_backup_subtitle">設定とプロバイダーをエクスポート／インポート</string>
     <string name="mount_folders_title">マウント済みフォルダ</string>
     <string name="mount_folders_info_banner">選択したフォルダは /var/minis/mounts/&lt;name&gt; にバインドマウントされます。同時に最大 10 個までマウントできます。</string>
     <string name="mount_folders_empty_title">マウント済みフォルダはありません</string>

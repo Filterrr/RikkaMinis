@@ -815,6 +815,8 @@
     <!-- T219-2 — Externe Ordner einbinden -->
     <string name="settings_mount_external_folders">Externe Ordner einbinden</string>
     <string name="settings_mount_external_folders_subtitle">Ausgewählte Ordner in /var/minis/mounts/ einbinden</string>
+    <string name="settings_backup">Sichern &amp; Wiederherstellen</string>
+    <string name="settings_backup_subtitle">Einstellungen und Anbieter exportieren oder importieren</string>
     <string name="mount_folders_title">Eingebundene Ordner</string>
     <string name="mount_folders_info_banner">Ausgewählte Ordner werden in /var/minis/mounts/&lt;name&gt; eingebunden. Es können bis zu 10 Ordner gleichzeitig eingebunden werden.</string>
     <string name="mount_folders_empty_title">Keine eingebundenen Ordner</string>

@@ -933,6 +933,8 @@
     <string name="shared_folder_browse_files">Просмотр файлов</string>
     <string name="settings_mount_external_folders">Подключить внешние папки</string>
     <string name="settings_mount_external_folders_subtitle">Привязать выбранные папки к /var/minis/mounts/</string>
+    <string name="settings_backup">Резервное копирование</string>
+    <string name="settings_backup_subtitle">Экспорт и импорт настроек и провайдеров</string>
     <string name="mount_folders_title">Подключённые папки</string>
     <string name="mount_folders_info_banner">Выбранные папки монтируются по привязке в /var/minis/mounts/&lt;name&gt;. Одновременно можно подключить до 10 папок.</string>
     <string name="mount_folders_empty_title">Нет подключённых папок</string>
