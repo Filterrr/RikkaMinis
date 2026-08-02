@@ -427,12 +427,6 @@ fun AppNavigation(
     // its first LaunchedEffect tick. Mirrors the htmlShortcut path —
     // avoids a sessions-list flash and a duplicate back-stack entry.
     val quickActionStart: String? = when (initialDeepLink) {
-        is DeepLinkAction.NewVoiceChat -> {
-            DeepLinkCoordinator.setPendingChatAction(
-                DeepLinkCoordinator.ChatAction.START_VOICE,
-            )
-            Routes.chat("__new__${java.util.UUID.randomUUID()}")
-        }
         is DeepLinkAction.NewCameraChat -> {
             DeepLinkCoordinator.setPendingChatAction(
                 DeepLinkCoordinator.ChatAction.OPEN_CAMERA,

@@ -56,15 +56,16 @@ sealed class DeepLinkAction {
      * App-icon long-press quick actions (mirrors iOS QuickActionRouter).
      *
      *  - [NewChat] — plain new draft chat
-     *  - [NewVoiceChat] — new chat + auto-trigger voice input mic on first compose
      *  - [NewCameraChat] — new chat + auto-launch camera attachment on first compose
+     *
+     * (NewVoiceChat was removed together with the in-composer mic button —
+     * it had no landing UI left to trigger.)
      *
      * Encoded as `minis://action/<name>` so the static shortcuts XML can
      * point to them via plain Intent.data without any custom extras —
      * matches the existing minis:// deep-link conventions.
      */
     data object NewChat : DeepLinkAction()
-    data object NewVoiceChat : DeepLinkAction()
     data object NewCameraChat : DeepLinkAction()
 
     /**
@@ -116,7 +117,9 @@ object DeepLinkHandler {
             // QuickActionRouter.swift action ids 1:1.
             "action" -> when (path.removePrefix("/")) {
                 "new_chat" -> DeepLinkAction.NewChat
-                "voice_chat" -> DeepLinkAction.NewVoiceChat
+                // "voice_chat" removed with the mic button; a stale pinned
+                // shortcut now resolves to Unknown (no-op) rather than a
+                // dangling voice action.
                 "camera_chat" -> DeepLinkAction.NewCameraChat
                 else -> DeepLinkAction.Unknown
             }
