@@ -309,16 +309,25 @@ internal object ConfigBuiltins {
     // -- Chat / input --
 
     private fun registerChat(r: ConfigRegistry, context: Context) {
-        // Default app prefs — Android persists most chat preferences in
-        // the default SharedPreferences for the package.
-        val prefs = context.getSharedPreferences("minis_settings", Context.MODE_PRIVATE)
+        // [T-backup-dead-key-fix] These two fields previously wrote to a
+        // `minis_settings` file with keys `return_key_behavior` /
+        // `keep_screen_awake_during_tasks` that NOTHING reads: AppearanceScreen
+        // and the runtime read `appearance_prefs` with the iOS-aligned keys
+        // `returnKeyBehavior` / `keepScreenAwakeDuringTasks`. A minis-config
+        // write or a backup-restore therefore landed in a dead file and never
+        // took effect. Repoint to the same SharedPreferences file+keys the UI
+        // uses, via the shared constants so the two can't drift apart again.
+        val prefs = context.getSharedPreferences(
+            com.openminis.app.ui.settings.PREF_APPEARANCE,
+            Context.MODE_PRIVATE,
+        )
         r.register(
             PrefsIntCodedEnumField(
                 path = "chat.returnKey",
                 displayName = "Return key behavior",
                 description = "What the on-screen Return key does in the chat box.",
                 prefs = prefs,
-                key = "return_key_behavior",
+                key = com.openminis.app.ui.settings.KEY_RETURN_KEY_BEHAVIOR,
                 cases = listOf("newline", "send"),
                 defaultIndex = 0,
             )
@@ -329,7 +338,7 @@ internal object ConfigBuiltins {
                 displayName = "Keep screen awake during tasks",
                 description = "Prevents auto-lock while the agent is busy.",
                 prefs = prefs,
-                key = "keep_screen_awake_during_tasks",
+                key = com.openminis.app.ui.settings.KEY_KEEP_SCREEN_AWAKE,
                 defaultValue = false,
             )
         )
