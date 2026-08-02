@@ -42,13 +42,37 @@ APK installed you must uninstall it first.
 
 ## What this fork changes
 
-Nothing about the app itself. The changes are all about making the build
-reproducible in CI:
+This started as a build-only fork, but it now also carries a small set of
+Android-specific product changes that are not present upstream.
+
+### App changes
+
+- **Complete local backup and restore.** Settings → Storage → Backup & Restore
+  exports a portable JSON file and imports it on another installation. It
+  covers provider/model configuration and groups, optional API keys,
+  environment variables, app/agent/chat defaults, Soul, complete skills
+  (SKILL.md plus bundled scripts, references and assets), persistent memory,
+  MCP server configuration, and scheduled tasks.
+- **Honest exclusions.** Chat history is not part of a configuration backup.
+  Mounted-folder permissions cannot be transferred between Android devices,
+  MCP OAuth client secrets/tokens are never exported, and scheduled-task run
+  history is intentionally discarded. OAuth-backed MCP servers must be
+  re-authorized after restore.
+- **Chat UI refinements.** Message links can focus and highlight a specific
+  message; navigation titles are left-aligned; the active model selector lives
+  in the composer; attachment and command actions are arranged more compactly.
+- **Simpler composer.** The dedicated voice-chat shortcut and its inline UI
+  have been removed. Android's agent-facing speech tools are unaffected.
+- **Settings consistency fixes.** Restored preferences refresh the live
+  settings UI, and previously disconnected/missing settings keys are now
+  registered and included in backups.
+
+### Build and release changes
 
 - **Native code is not compiled.** The official prebuilt `arm64-v8a` binaries
   are committed to the repo and used as-is.
 - **CI needs no NDK.** A build is a plain `./gradlew assembleRelease`, ~5
-  minutes instead of ~40.
+  minutes instead of ~40. The backup payload tests run before the APK build.
 - **iOS sources removed.** `src/ios/` and `deps/` are gone; this tree is Android
   only.
 - **Automatic releases.** Successful builds publish the APK to the
@@ -81,7 +105,8 @@ CI. Kotlin, UI, prompts and model integrations are unaffected — build normally
 | **A real Linux shell** | A sandboxed Alpine Linux environment runs on-device — the agent can install packages, run scripts, and work with real files. |
 | **Device integration** | Calendar, Contacts, Clipboard, Location, Media, Alarms, Notifications and more, exposed to the agent as tools. |
 | **Browser automation** | The agent can browse and interact with the web on your behalf. |
-| **Skills & memory** | Extensible skills plus persistent memory across sessions. |
+| **Skills & memory** | Extensible skills plus persistent memory across sessions. Complete skill bundles and memory files are included in local backups. |
+| **Local backup & restore** | Export configuration, credentials (optional), skills, memory, MCP servers and scheduled tasks to one portable JSON file. |
 | **Workspaces** | Organise work into separate contexts, addressable via `minis://workspace/`. |
 | **Native offloads** | Heavy or platform-specific work is handed to native code instead of the sandbox. |
 
@@ -146,7 +171,11 @@ This fork adds no tracking, and upstream ships none. Specifically:
   compiled out of the release APK published here.
 
 Network traffic goes to the model providers you configure, using your own API
-keys, plus the endpoints you explicitly ask the agent to visit.
+keys, plus the endpoints you explicitly ask the agent to visit. Local backup
+files never leave the device unless you share or copy them yourself. If you
+choose "include secrets", the JSON contains API keys and environment-variable
+values in recoverable form; store that file like a password. MCP OAuth tokens
+and client secrets are excluded even from secret-inclusive backups.
 
 The app requests broad permissions (storage, contacts, calendar, microphone,
 location, accessibility) because they back agent tools. They are requested at
@@ -209,5 +238,6 @@ For the original project, the iOS app, issues and community:
 [openminis.app](https://openminis.app) ·
 [Telegram](https://t.me/+2NzhOJuzRyI1YmM1)
 
-Report bugs in the app itself upstream, not here — this fork changes only the
-build. Issues specific to the build or the published APK belong here.
+For general app bugs, check whether they also occur in the official upstream
+build. Upstream issues belong at OpenMinis/OpenMinis; problems with this fork's
+build, APK, backup/restore flow, or Android UI changes belong in this repository.
