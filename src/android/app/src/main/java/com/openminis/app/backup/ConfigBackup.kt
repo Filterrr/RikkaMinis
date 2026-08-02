@@ -9,10 +9,17 @@ import com.openminis.app.data.model.ModelGroup
 import com.openminis.app.data.model.RoutingStrategy
 import com.openminis.app.data.model.ThinkingLevel
 import com.openminis.app.data.repository.EnvVarRepository
+import com.openminis.app.data.repository.MCPRepository
+import com.openminis.app.data.repository.MemoryRepository
 import com.openminis.app.data.repository.ProviderRepository
+import com.openminis.app.data.repository.SkillRepository
+import com.openminis.app.scheduled.ScheduledTask
+import com.openminis.app.scheduled.ScheduledTaskManager
+import com.openminis.app.scheduled.ScheduledTaskStore
 import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
+import java.io.ByteArrayInputStream
 
 /**
  * Local export/import of app configuration.
@@ -71,6 +78,14 @@ object ConfigBackup {
         /** Environment variables restored (keys + notes; values if the
          *  backup carried secrets, empty-value stub otherwise). */
         val envVarsImported: Int,
+        /** Skills restored, including their bundled files. */
+        val skillsImported: Int,
+        /** Memory files restored (GLOBAL.md + daily logs). */
+        val memoryFilesImported: Int,
+        /** MCP servers restored (OAuth credentials always need re-auth). */
+        val mcpServersImported: Int,
+        /** Scheduled tasks restored and re-armed. */
+        val scheduledTasksImported: Int,
         /** Human-readable "path: why" lines for anything deliberately not applied. */
         val skipped: List<String>,
         /** True when the payload carried credentials (affects the post-import hint). */
@@ -89,6 +104,10 @@ object ConfigBackup {
         providerRepo: ProviderRepository,
         includeSecrets: Boolean = true,
         envVarRepo: EnvVarRepository? = null,
+        skillRepo: SkillRepository? = null,
+        memoryRepo: MemoryRepository? = null,
+        mcpRepo: MCPRepository? = null,
+        scheduledStore: ScheduledTaskStore? = null,
     ): String {
         val registry = ConfigRegistry.get()
 
@@ -185,6 +204,99 @@ object ConfigBackup {
             }
         }
 
+        // Skills are a directory tree per skill (SKILL.md plus bundled
+        // scripts/, references/, assets/), mirrored by a row in skills.db. The
+        // registry models none of it, so — like providers — they need a
+        // dedicated pass. We embed the whole directory as a base64 zip rather
+        // than SKILL.md alone: a skill whose scripts are missing still *looks*
+        // installed but fails the moment it runs, which is a worse outcome than
+        // a larger backup file. [T-backup-skills]
+        val skills = JSONArray()
+        if (skillRepo != null) {
+            for (skill in skillRepo.skills.value) {
+                val entry = JSONObject().apply {
+                    put("id", skill.id)
+                    put("name", skill.name)
+                    put("description", skill.description)
+                    put("version", skill.version)
+                    put("importSource", skill.importSource.value)
+                    skill.sourceURL?.let { put("sourceURL", it) }
+                    put("isEnabled", skill.isEnabled)
+                    put("installedAt", skill.installedAt)
+                    put("updatedAt", skill.updatedAt)
+                    put("useCount", skill.useCount)
+                }
+                // Prefer the full archive; fall back to SKILL.md text so a skill
+                // whose zip could not be produced is still recoverable in part.
+                val zip = runCatching { skillRepo.exportSkillToZip(skill.id) }.getOrNull()
+                val zipBytes = zip?.let { f -> runCatching { f.readBytes() }.getOrNull() }
+                if (zipBytes != null && zipBytes.isNotEmpty()) {
+                    entry.put(
+                        "archive",
+                        android.util.Base64.encodeToString(zipBytes, android.util.Base64.NO_WRAP),
+                    )
+                    entry.put("archiveBytes", zipBytes.size)
+                    entry.put("fileCount", skillRepo.listSkillFiles(skill.id).size)
+                } else {
+                    entry.put("body", skill.body)
+                    Log.w(TAG, "export: no archive for skill ${skill.id}, carrying SKILL.md only")
+                }
+                // Clean up the cache artifact immediately — exportSkillToZip is
+                // designed for the share sheet (TTL-swept), but here the bytes
+                // are already in the payload and the file is dead weight. The
+                // name check pins the contract that the zip sits in its own
+                // per-export dir, so this can never widen into a shared cache.
+                zip?.parentFile
+                    ?.takeIf { it.name.startsWith("skill-export-") }
+                    ?.let { dir -> runCatching { dir.deleteRecursively() } }
+                skills.put(entry)
+            }
+        }
+
+        // Memory: `memory.enabled` in the registry is only the *toggle*. The
+        // actual content is GLOBAL.md + the YYYY-MM-DD.md daily logs owned by
+        // MemoryRepository, which is why restoring a backup used to come back
+        // with the switch in the right position and nothing behind it.
+        val memoryFiles = JSONArray()
+        if (memoryRepo != null) {
+            for (info in runCatching { memoryRepo.listAllFiles() }.getOrDefault(emptyList())) {
+                val content = runCatching { memoryRepo.readFile(info.name) }.getOrNull() ?: continue
+                memoryFiles.put(JSONObject().apply {
+                    put("name", info.name)
+                    put("content", content)
+                })
+            }
+        }
+
+        // MCP servers live in their own servers.json. Note their client secrets
+        // and issued OAuth tokens are in MCPOAuthStore, NOT here — those stay
+        // out of the payload entirely and are reported on import as needing
+        // re-authorization.
+        val mcpServers = JSONArray()
+        if (mcpRepo != null) {
+            for (server in mcpRepo.servers.value) {
+                val raw = runCatching { mcpRepo.exportServerJSON(server) }.getOrNull() ?: continue
+                val obj = runCatching { JSONObject(raw) }.getOrNull() ?: continue
+                mcpServers.put(obj)
+            }
+        }
+
+        // Scheduled tasks (SharedPreferences-backed). Run history is dropped on
+        // purpose: it points at session ids that will not exist on the target
+        // install, and a restored task's job is to fire in future, not to carry
+        // a log of past firings.
+        val scheduledTasks = JSONArray()
+        if (scheduledStore != null) {
+            for (task in runCatching { scheduledStore.all() }.getOrDefault(emptyList())) {
+                val obj = runCatching { task.toJson() }.getOrNull() ?: continue
+                obj.remove("runs")
+                obj.remove("lastFiredAt")
+                obj.remove("lastResultPreview")
+                obj.remove("lastResultSessionId")
+                scheduledTasks.put(obj)
+            }
+        }
+
         return JSONObject().apply {
             put("format", "openminis.config.backup")
             put("version", FORMAT_VERSION)
@@ -194,6 +306,10 @@ object ConfigBackup {
             put("providers", providers)
             put("groups", groups)
             put("envVars", envVars)
+            put("skills", skills)
+            put("memoryFiles", memoryFiles)
+            put("mcpServers", mcpServers)
+            put("scheduledTasks", scheduledTasks)
             if (readFailures > 0) put("readFailures", readFailures)
         }.toString(2)
     }
@@ -244,6 +360,11 @@ object ConfigBackup {
         providerRepo: ProviderRepository,
         json: String,
         envVarRepo: EnvVarRepository? = null,
+        skillRepo: SkillRepository? = null,
+        memoryRepo: MemoryRepository? = null,
+        mcpRepo: MCPRepository? = null,
+        scheduledStore: ScheduledTaskStore? = null,
+        scheduledManager: ScheduledTaskManager? = null,
     ): ImportResult {
         val root = try {
             JSONTokener(json).nextValue() as? JSONObject
@@ -484,11 +605,172 @@ object ConfigBackup {
             skipped.add("${envVarsArr.length()} env var(s): not restorable here")
         }
 
+        // -- Stage 5: skills (db row + full directory from the embedded zip) --
+        // Skill ids are slugify(name), not random uuids, so they are stable
+        // across installs — no id remapping needed here, unlike providers.
+        var skillsImported = 0
+        val skillsArr = root.optJSONArray("skills")
+        if (skillsArr != null && skillRepo != null) {
+            for (i in 0 until skillsArr.length()) {
+                val s = skillsArr.optJSONObject(i) ?: continue
+                val name = s.optString("name", "skill #${i + 1}")
+                val archive = s.optString("archive", "")
+                try {
+                    // importFromContent/importFromArchive replace an existing
+                    // skill of the same id in place, which is what we want:
+                    // restoring should refresh, not create "skill (2)".
+                    val imported = if (archive.isNotEmpty()) {
+                        val bytes = android.util.Base64.decode(archive, android.util.Base64.NO_WRAP)
+                        skillRepo.importFromArchive(ByteArrayInputStream(bytes))
+                    } else {
+                        val body = s.optString("body", "")
+                        if (body.isBlank()) null
+                        else skillRepo.importFromContent(
+                            body,
+                            SkillRepository.ImportSource.from(s.optString("importSource", "file")),
+                            s.optString("sourceURL", "").takeIf { it.isNotEmpty() },
+                        )
+                    }
+                    if (imported == null) {
+                        skipped.add("skill \"$name\": archive unreadable or SKILL.md invalid")
+                        continue
+                    }
+                    // The enabled flag is user intent, not part of SKILL.md, so
+                    // it has to be reapplied after the content import.
+                    if (!s.optBoolean("isEnabled", true)) {
+                        runCatching { skillRepo.setEnabled(imported.id, false) }
+                    }
+                    skillsImported++
+                    if (archive.isEmpty()) {
+                        skipped.add(
+                            "skill \"$name\": restored SKILL.md only — bundled scripts were " +
+                                "not in the backup"
+                        )
+                    }
+                } catch (t: Throwable) {
+                    skipped.add("skill \"$name\": ${t.message ?: "import failed"}")
+                }
+            }
+            runCatching { skillRepo.reloadFromDisk() }
+        } else if (skillsArr != null && skillsArr.length() > 0 && skillRepo == null) {
+            skipped.add("${skillsArr.length()} skill(s): not restorable here")
+        }
+
+        // -- Stage 6: memory files (GLOBAL.md + daily logs) --
+        var memoryFilesImported = 0
+        val memArr = root.optJSONArray("memoryFiles")
+        if (memArr != null && memoryRepo != null) {
+            for (i in 0 until memArr.length()) {
+                val m = memArr.optJSONObject(i) ?: continue
+                val name = m.optString("name", "").trim()
+                if (name.isEmpty()) {
+                    skipped.add("memory file #${i + 1}: missing name")
+                    continue
+                }
+                // Defence in depth: these names become file names under the
+                // memory dir, so anything with a path separator is rejected
+                // outright rather than trusted from the payload.
+                if (name.contains('/') || name.contains('\\') || name.contains("..")) {
+                    skipped.add("memory file \"$name\": unsafe name, skipped")
+                    continue
+                }
+                val content = m.optString("content", "")
+                try {
+                    memoryRepo.saveFile(name, content)
+                    memoryFilesImported++
+                } catch (t: Throwable) {
+                    skipped.add("memory file \"$name\": ${t.message ?: "write failed"}")
+                }
+            }
+        } else if (memArr != null && memArr.length() > 0 && memoryRepo == null) {
+            skipped.add("${memArr.length()} memory file(s): not restorable here")
+        }
+
+        // -- Stage 7: MCP servers --
+        var mcpServersImported = 0
+        val mcpArr = root.optJSONArray("mcpServers")
+        if (mcpArr != null && mcpRepo != null) {
+            var needsReauth = 0
+            for (i in 0 until mcpArr.length()) {
+                val srv = mcpArr.optJSONObject(i) ?: continue
+                // exportServerJSON emits the importable wrapper shape
+                // {"mcpServers":{"<id>":{…}}} — the id is the *key*, and
+                // "oauth" sits on the inner object, not the root.
+                val inner = srv.optJSONObject("mcpServers")
+                val id = inner?.keys()?.asSequence()?.firstOrNull()
+                    ?: srv.optString("id", "").ifEmpty { "server #${i + 1}" }
+                val entry = inner?.optJSONObject(id) ?: srv
+                try {
+                    val imported = mcpRepo.importJSON(srv.toString())
+                    if (imported.isEmpty()) {
+                        skipped.add("MCP server \"$id\": import rejected")
+                        continue
+                    }
+                    mcpServersImported += imported.size
+                    if (entry.has("oauth")) needsReauth++
+                } catch (t: Throwable) {
+                    skipped.add("MCP server \"$id\": ${t.message ?: "import failed"}")
+                }
+            }
+            if (needsReauth > 0) {
+                // Client secrets and issued tokens live in MCPOAuthStore and are
+                // deliberately never exported — reconnecting is interactive.
+                skipped.add(
+                    "$needsReauth MCP server(s) use OAuth — reconnect them to sign in again"
+                )
+            }
+        } else if (mcpArr != null && mcpArr.length() > 0 && mcpRepo == null) {
+            skipped.add("${mcpArr.length()} MCP server(s): not restorable here")
+        }
+
+        // -- Stage 8: scheduled tasks (restored AND re-armed with AlarmManager) --
+        // Writing the rows without registering alarms would produce tasks that
+        // are visible in the list but never fire, which is worse than not
+        // restoring them at all.
+        var scheduledTasksImported = 0
+        val schedArr = root.optJSONArray("scheduledTasks")
+        val effectiveStore = scheduledStore ?: scheduledManager?.store()
+        if (schedArr != null && effectiveStore != null) {
+            val existingIds = runCatching { effectiveStore.all().map { it.id }.toSet() }
+                .getOrDefault(emptySet())
+            for (i in 0 until schedArr.length()) {
+                val t = schedArr.optJSONObject(i) ?: continue
+                val label = t.optString("label", "task #${i + 1}")
+                try {
+                    val task = ScheduledTask.fromJson(t)
+                    if (task.id in existingIds) {
+                        skipped.add("scheduled task \"$label\": already exists, left as-is")
+                        continue
+                    }
+                    if (scheduledManager != null) {
+                        scheduledManager.create(task)
+                    } else {
+                        effectiveStore.upsert(task)
+                    }
+                    scheduledTasksImported++
+                } catch (t2: Throwable) {
+                    skipped.add("scheduled task \"$label\": ${t2.message ?: "import failed"}")
+                }
+            }
+            if (scheduledTasksImported > 0 && scheduledManager == null) {
+                skipped.add(
+                    "$scheduledTasksImported scheduled task(s) restored but not re-armed — " +
+                        "reopen the app to schedule them"
+                )
+            }
+        } else if (schedArr != null && schedArr.length() > 0 && effectiveStore == null) {
+            skipped.add("${schedArr.length()} scheduled task(s): not restorable here")
+        }
+
         return ImportResult(
             fieldsApplied = applied,
             providersImported = providersImported,
             groupsImported = groupsImported,
             envVarsImported = envVarsImported,
+            skillsImported = skillsImported,
+            memoryFilesImported = memoryFilesImported,
+            mcpServersImported = mcpServersImported,
+            scheduledTasksImported = scheduledTasksImported,
             skipped = skipped,
             hadSecrets = root.optBoolean("includesSecrets", false),
         ).also { result ->
@@ -501,6 +783,8 @@ object ConfigBackup {
                 TAG,
                 "import: applied=$applied providers=$providersImported " +
                     "groups=$groupsImported envVars=$envVarsImported " +
+                    "skills=$skillsImported memoryFiles=$memoryFilesImported " +
+                    "mcpServers=$mcpServersImported scheduledTasks=$scheduledTasksImported " +
                     "skipped=${result.skipped.size} hadSecrets=${result.hadSecrets}"
             )
             for (line in result.skipped) Log.w(TAG, "import skipped — $line")

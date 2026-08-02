@@ -1168,9 +1168,9 @@
     <string name="settings_backup">Backup &amp; Restore</string>
     <string name="settings_backup_subtitle">Export or import settings and providers</string>
     <string name="backup_section_local">Local backup</string>
-    <string name="backup_section_footer">Includes providers, appearance and agent runtime defaults. Chat history is not included.</string>
+    <string name="backup_section_footer">Includes providers, appearance, agent runtime defaults, environment variables, skills, memory, MCP servers and scheduled tasks. Chat history is not included.</string>
     <string name="backup_export">Export backup</string>
-    <string name="backup_export_sub">Save as a JSON file on this device</string>
+    <string name="backup_export_sub">Save as a JSON file on this device (skills are embedded, so the file may be several MB)</string>
     <string name="backup_import">Restore from backup</string>
     <string name="backup_import_sub">Pick a backup file and import its settings</string>
     <string name="backup_saved">Backup saved</string>
@@ -1187,6 +1187,10 @@
     <string name="backup_done_summary">Imported %1$d settings and %2$d providers.</string>
     <string name="backup_done_groups">Restored %1$d model group(s).</string>
     <string name="backup_done_env_vars">Restored %1$d environment variable(s).</string>
+    <string name="backup_done_skills">Restored %1$d skill(s).</string>
+    <string name="backup_done_memory_files">Restored %1$d memory file(s).</string>
+    <string name="backup_done_mcp_servers">Restored %1$d MCP server(s).</string>
+    <string name="backup_done_scheduled_tasks">Restored %1$d scheduled task(s).</string>
     <string name="backup_done_skipped">\n%1$d items were skipped:</string>
     <string name="backup_done_no_keys">\nThis backup contains no keys — imported providers need their API keys re-entered.</string>
     <string name="backup_done_restart">\nSome settings take effect after restarting the app.</string>

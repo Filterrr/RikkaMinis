@@ -279,6 +279,17 @@ internal object ConfigBuiltins {
                 defaultIndex = 0,
             )
         )
+        r.register(
+            PrefsIntCodedEnumField(
+                path = "appearance.launchSession",
+                displayName = "Launch behaviour",
+                description = "What the app opens on cold start: auto, the last session, a new chat, or the home screen.",
+                prefs = prefs,
+                key = com.openminis.app.ui.settings.KEY_LAUNCH_SESSION,
+                cases = listOf("auto", "lastSession", "newChat", "home"),
+                defaultIndex = 0,
+            )
+        )
         // T-chat-title-pill: sticky session-title pill on the chat screen.
         // Default ON; key string deliberately matches iOS so a future
         // cross-platform settings sync round-trips identically.
@@ -398,6 +409,26 @@ internal object ConfigBuiltins {
             prefs = appearancePrefs,
             key = com.openminis.app.ui.settings.KEY_FONT_MESSAGE,
         ))
+        // The three below were settable in AppearanceScreen but never
+        // registered, so they were invisible to minis-config AND silently
+        // absent from every backup (ConfigBackup walks the registry).
+        r.register(fontScaleField(
+            path = "appearance.appFontSize",
+            displayName = "App font size",
+            description = "Base font size for app chrome outside message bodies (lists, settings, labels).",
+            prefs = appearancePrefs,
+            key = com.openminis.app.ui.settings.KEY_FONT_APP_BASE,
+        ))
+        r.register(
+            PrefsBoolField(
+                path = "chat.autoExpandThinking",
+                displayName = "Auto-expand thinking",
+                description = "When ON, a model's reasoning block starts expanded instead of collapsed.",
+                prefs = appearancePrefs,
+                key = com.openminis.app.ui.settings.KEY_AUTO_EXPAND_THINKING,
+                defaultValue = true,
+            )
+        )
     }
 
     /** Mirrors iOS `fontScaleField` — exposes the integer scale level

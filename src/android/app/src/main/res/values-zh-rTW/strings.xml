@@ -447,9 +447,9 @@
     <string name="settings_backup">備份與還原</string>
     <string name="settings_backup_subtitle">匯出或匯入設定與提供商</string>
     <string name="backup_section_local">本機備份</string>
-    <string name="backup_section_footer">備份包含提供商、外觀設定與 Agent 執行階段預設值。不含聊天記錄。</string>
+    <string name="backup_section_footer">備份包含提供商、外觀設定、Agent 執行階段預設值、環境變數、技能、記憶、MCP 伺服器與定時任務。不含聊天記錄。</string>
     <string name="backup_export">匯出備份</string>
-    <string name="backup_export_sub">儲存為裝置上的 JSON 檔案</string>
+    <string name="backup_export_sub">儲存為裝置上的 JSON 檔案（技能檔案會一併嵌入，檔案可能有數 MB）</string>
     <string name="backup_import">從備份還原</string>
     <string name="backup_import_sub">選擇備份檔案並匯入設定</string>
     <string name="backup_saved">備份已儲存</string>
@@ -466,6 +466,10 @@
     <string name="backup_done_summary">已匯入 %1$d 項設定、%2$d 個提供商。</string>
     <string name="backup_done_groups">已還原 %1$d 個模型分組。</string>
     <string name="backup_done_env_vars">已還原 %1$d 個環境變數。</string>
+    <string name="backup_done_skills">已還原 %1$d 個技能。</string>
+    <string name="backup_done_memory_files">已還原 %1$d 個記憶檔案。</string>
+    <string name="backup_done_mcp_servers">已還原 %1$d 個 MCP 伺服器。</string>
+    <string name="backup_done_scheduled_tasks">已還原 %1$d 個定時任務。</string>
     <string name="backup_done_skipped">\n以下 %1$d 項已略過：</string>
     <string name="backup_done_no_keys">\n此備份不含金鑰，匯入的提供商需要重新填寫 API 金鑰。</string>
     <string name="backup_done_restart">\n部分設定需重新啟動應用程式後生效。</string>
