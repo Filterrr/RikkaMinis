@@ -152,6 +152,12 @@ fun BackupSettingsScreen(
                             report.providersImported,
                         )
                     )
+                    if (report.groupsImported > 0) {
+                        Text(
+                            stringResource(R.string.backup_done_groups, report.groupsImported),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
                     if (report.skipped.isNotEmpty()) {
                         Text(
                             stringResource(R.string.backup_done_skipped, report.skipped.size),
