@@ -2059,53 +2059,59 @@ fun ChatScreen(
                                     .clickable { showModelPicker = true }
                                     .padding(horizontal = 4.dp, vertical = 1.dp),
                             ) {
-                                // Line 1: green dot + group name + dropdown arrow (iOS: "● Default ⌄")
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(3.dp),
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(6.dp)
-                                            .background(
-                                                if (modelName.isNotEmpty()) Color(0xFF34C759) else Color(0xFFFF9500),
-                                                CircleShape,
-                                            ),
-                                    )
-                                    // T-android-topbar-group-name-fallback:
-                                    // _selectedGroupName is empty during the
-                                    // brief window before loadSession's group
-                                    // resolve runs, or whenever a binding
-                                    // resolve fails. Falling straight to the
-                                    // "Default" badge string masks the
-                                    // active group's real name (e.g. the
-                                    // onboarding-created "Default Models" or
-                                    // any user-renamed group). Insert a real
-                                    // fallback chain: collected VM value →
-                                    // active/default group name from the live
-                                    // config → terminal badge string. Mirrors
-                                    // the #476 TopBar title fallback pattern
-                                    // (commit b4c88775).
-                                    val groupNameDisplay = selectedGroupName.ifEmpty {
-                                        val defaultGroupId = providerRepository.defaultPrimaryGroupId
-                                        availableGroups.firstOrNull { it.id == defaultGroupId }?.name
-                                            ?: stringResource(R.string.model_picker_default_badge)
+                                // Line 1: green dot + group name + dropdown
+                                // arrow (iOS: "● Default ⌄"). Only shown when a
+                                // GROUP is the active binding. When the user
+                                // picked a single concrete model instead
+                                // (selectEntry → selectedGroupId = null), this
+                                // row is hidden entirely rather than falling
+                                // back to the default group name — the old
+                                // fallback made every single-model selection
+                                // read as "Default group", which looked like
+                                // the picker wasn't switching at all. Line 2
+                                // below still shows the concrete provider·model,
+                                // so no information is lost.
+                                if (selectedGroupId != null) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(3.dp),
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(6.dp)
+                                                .background(
+                                                    if (modelName.isNotEmpty()) Color(0xFF34C759) else Color(0xFFFF9500),
+                                                    CircleShape,
+                                                ),
+                                        )
+                                        // selectedGroupName can still be briefly
+                                        // empty in the window before loadSession
+                                        // resolves the group; fall back to the
+                                        // live config's name for selectedGroupId,
+                                        // then to the badge string. This is the
+                                        // group-resolve race only — it no longer
+                                        // fires for single-model selections,
+                                        // which don't enter this branch.
+                                        val groupNameDisplay = selectedGroupName.ifEmpty {
+                                            availableGroups.firstOrNull { it.id == selectedGroupId }?.name
+                                                ?: stringResource(R.string.model_picker_default_badge)
+                                        }
+                                        Text(
+                                            text = groupNameDisplay,
+                                            fontSize = 12.sp,
+                                            lineHeight = 14.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            color = ChatColors.secondaryText,
+                                            maxLines = 1,
+                                            style = noFontPad,
+                                        )
+                                        Icon(
+                                            Icons.Default.KeyboardArrowDown,
+                                            contentDescription = null,
+                                            tint = ChatColors.tertiaryText,
+                                            modifier = Modifier.size(14.dp),
+                                        )
                                     }
-                                    Text(
-                                        text = groupNameDisplay,
-                                        fontSize = 12.sp,
-                                        lineHeight = 14.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        color = ChatColors.secondaryText,
-                                        maxLines = 1,
-                                        style = noFontPad,
-                                    )
-                                    Icon(
-                                        Icons.Default.KeyboardArrowDown,
-                                        contentDescription = null,
-                                        tint = ChatColors.tertiaryText,
-                                        modifier = Modifier.size(14.dp),
-                                    )
                                 }
                                 // Line 2: "provider · model" (iOS: "MiniMax ·
                                 // MiniMax-M2.7") + the thinking-level badge laid
@@ -4969,34 +4975,12 @@ fun ChatScreen(
                                     singleLine = false,
                                     visualTransformation = androidx.compose.ui.text.input.VisualTransformation.None,
                                     interactionSource = interactionSource,
-                                    placeholder = {
-                                        // [T-android-placeholder-single-line, port iOS 19e1d61f]
-                                        // Single-line composer placeholder. The
-                                        // parenthetical "(@ to mention files)"
-                                        // is folded into the same line as
-                                        // "Message <SoulName>" at the same font
-                                        // size and color — iOS collapsed the
-                                        // two-line variant (#421/#425/#426) into
-                                        // a single hint because users read the
-                                        // smaller hint row as a separate UI
-                                        // element rather than placeholder text.
-                                        // SoulStore.cachedMetadata stays the
-                                        // source for the Soul-customized name
-                                        // so renames in Soul Settings reflect
-                                        // here live.
-                                        val soulName by com.openminis.app.agent.SoulStore
-                                            .cachedMetadata.collectAsState()
-                                        Text(
-                                            stringResource(
-                                                R.string.chat_input_placeholder,
-                                                soulName.name,
-                                            ),
-                                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f),
-                                            fontSize = 16.5.sp * chatInputFontScale,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                    },
+                                    // Placeholder removed per user request: the
+                                    // "Message <SoulName>" hint was dropped so
+                                    // the composer starts visually empty. No
+                                    // placeholder param = no hint text; the "@
+                                    // to mention files" affordance is still
+                                    // discoverable by typing "@".
                                     colors = OutlinedTextFieldDefaults.colors(
                                         focusedBorderColor = Color.Transparent,
                                         unfocusedBorderColor = Color.Transparent,
@@ -5069,20 +5053,40 @@ fun ChatScreen(
                                         ),
                                 )
                                 Text(
-                                    text = selectedGroupName.ifEmpty {
-                                        val defaultGroupId = providerRepository.defaultPrimaryGroupId
-                                        availableGroups.firstOrNull { it.id == defaultGroupId }?.name
-                                            ?: stringResource(R.string.model_picker_default_badge)
+                                    // Show the CONCRETE model actually being
+                                    // called, not the group name. `modelName`
+                                    // is entry.model.displayName, resolved the
+                                    // same way for both paths: picking a group
+                                    // resolves through its routing/fallback
+                                    // strategy to a concrete entry and sets
+                                    // modelName to that; picking a single model
+                                    // sets it directly. Either way this chip
+                                    // names what the next turn will hit. The
+                                    // group name still lives in the nav-bar
+                                    // subtitle for people who want to see which
+                                    // group is active. Fall back to provider,
+                                    // then to the group name, only when no
+                                    // model has resolved yet (brief window
+                                    // during loadSession, or an unresolved
+                                    // binding).
+                                    text = modelName.ifEmpty {
+                                        providerName.ifEmpty {
+                                            selectedGroupName.ifEmpty {
+                                                val defaultGroupId = providerRepository.defaultPrimaryGroupId
+                                                availableGroups.firstOrNull { it.id == defaultGroupId }?.name
+                                                    ?: stringResource(R.string.model_picker_default_badge)
+                                            }
+                                        }
                                     },
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Medium,
                                     color = ChatColors.secondaryText,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
-                                    // Cap the chip so a long group name can't
+                                    // Cap the chip so a long model name can't
                                     // starve the mic/send cluster on a narrow
                                     // screen.
-                                    modifier = Modifier.widthIn(max = 132.dp),
+                                    modifier = Modifier.widthIn(max = 150.dp),
                                 )
                                 Icon(
                                     Icons.Default.KeyboardArrowDown,
