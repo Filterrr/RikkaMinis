@@ -1,9 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   T-android-app-icon-shortcuts: app-icon long-press quick actions.
-  Mirrors iOS Shared/QuickActionRouter.swift 1:1 (newChat / voiceChat / cameraChat).
+  Android ships newChat / cameraChat. iOS (Shared/QuickActionRouter.swift)
+  additionally ships voiceChat — no longer mirrored 1:1 by design, see the
+  removal note below.
   Each shortcut launches MainActivity via a minis://action/<name> deep-link
-  parsed by DeepLinkHandler → DeepLinkAction.{NewChat,NewVoiceChat,NewCameraChat}.
+  parsed by DeepLinkHandler → DeepLinkAction.{NewChat,NewCameraChat}.
 -->
 <shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
     <shortcut

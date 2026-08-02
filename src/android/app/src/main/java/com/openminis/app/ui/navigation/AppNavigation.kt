@@ -303,12 +303,11 @@ fun AppNavigation(
             // (see below) so the NavHost mounts directly into the right
             // chat — no safeNavigate dance, no sessions-list flash.
             is DeepLinkAction.OpenHtmlPreview -> {}
-            // App-icon quick actions: all three open a fresh draft chat.
-            // Voice/camera additionally seed DeepLinkCoordinator.pendingChatAction
+            // App-icon quick actions: both open a fresh draft chat.
+            // Camera additionally seeds DeepLinkCoordinator.pendingChatAction
             // (done up-front in startDestination block below so the seed
             // lands before ChatScreen's first compose).
             is DeepLinkAction.NewChat,
-            is DeepLinkAction.NewVoiceChat,
             is DeepLinkAction.NewCameraChat -> {
                 // Navigation handled by startDestination = chat/<__new__…>
                 // when the launch intent carries one of these actions.
