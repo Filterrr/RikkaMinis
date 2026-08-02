@@ -1968,10 +1968,16 @@ fun ChatScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    // iOS-style centered layout: "Minis" + group row + provider·model row
+                    // RikkaHub-style LEFT-aligned nav title, sitting directly
+                    // beside the hamburger instead of floating in the centre.
+                    // Previously this was centre-aligned with 32dp horizontal
+                    // padding, which left the title visually detached from both
+                    // the nav icon and the overflow button. Left alignment gives
+                    // the title the full remaining width (long session names
+                    // truncate later) and reads as "this drawer -> this chat".
                     Box(
                         modifier = Modifier.fillMaxWidth(),
-                        contentAlignment = Alignment.Center,
+                        contentAlignment = Alignment.CenterStart,
                     ) {
                         val noFontPad = androidx.compose.ui.text.TextStyle(
                             platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false),
@@ -1987,19 +1993,22 @@ fun ChatScreen(
                             }
                         }
                         Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
+                            horizontalAlignment = Alignment.Start,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(10.dp))
                                 .background(Color.Red.copy(alpha = 0.35f * fallbackPulseAlpha.value))
-                                // [T-android-topbar-shrink] vertical 4dp→2dp.
-                                // Combined with the expandedHeight drop below,
+                                // [T-android-topbar-shrink] vertical 4dp→2dp
                                 // closes the dead-space gap between the model
-                                // name row and the TopAppBar bottom edge that
-                                // T-topbar-model-row-clip's 76dp overshoot left
-                                // behind. Horizontal 32dp keeps the fallback
-                                // pulse highlight comfortably padded around
-                                // the longest title.
-                                .padding(horizontal = 32.dp, vertical = 2.dp),
+                                // row and the TopAppBar bottom edge.
+                                //
+                                // Horizontal was 32dp to pad the fallback pulse
+                                // around a centred title; now that the block is
+                                // left-aligned that much inset would push the
+                                // title away from the hamburger, so it drops to
+                                // 4dp — the pulse highlight still has room
+                                // because the Column no longer spans the full
+                                // width.
+                                .padding(horizontal = 4.dp, vertical = 2.dp),
                         ) {
                             // Nav title: current session title when one
                             // exists and the toggle is on, else fall back to
@@ -2044,7 +2053,7 @@ fun ChatScreen(
                             // separated from the title above so tapping the
                             // title rows opens the rename sheet instead.
                             Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
+                                horizontalAlignment = Alignment.Start,
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(6.dp))
                                     .clickable { showModelPicker = true }
@@ -5027,7 +5036,101 @@ fun ChatScreen(
                             .padding(horizontal = 12.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        // Left: + button (iOS: 34×34 circle, secondary bg)
+                        // Left slot: model picker. Occupies the space the "+"
+                        // and "/" buttons used to hold. Rationale: choosing a
+                        // model is a per-turn decision made WHILE composing, so
+                        // it belongs next to the text you are about to send,
+                        // not in the nav bar where it competed with the session
+                        // title for the same tap target. The nav bar keeps a
+                        // read-only echo of the group name; this is the control.
+                        //
+                        // Same `showModelPicker` state as the nav-bar subtitle,
+                        // so either entry point opens the identical sheet.
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = ChatColors.inputBg,
+                            modifier = Modifier.clickable { showModelPicker = true },
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(3.dp),
+                                modifier = Modifier.padding(start = 8.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+                            ) {
+                                // Green = a model resolved for this session,
+                                // orange = binding unresolved. Mirrors the dot
+                                // in the nav-bar subtitle so the two entry
+                                // points can't disagree.
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .background(
+                                            if (modelName.isNotEmpty()) Color(0xFF34C759) else Color(0xFFFF9500),
+                                            CircleShape,
+                                        ),
+                                )
+                                Text(
+                                    text = selectedGroupName.ifEmpty {
+                                        val defaultGroupId = providerRepository.defaultPrimaryGroupId
+                                        availableGroups.firstOrNull { it.id == defaultGroupId }?.name
+                                            ?: stringResource(R.string.model_picker_default_badge)
+                                    },
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = ChatColors.secondaryText,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    // Cap the chip so a long group name can't
+                                    // starve the mic/send cluster on a narrow
+                                    // screen.
+                                    modifier = Modifier.widthIn(max = 132.dp),
+                                )
+                                Icon(
+                                    Icons.Default.KeyboardArrowDown,
+                                    contentDescription = null,
+                                    tint = ChatColors.tertiaryText,
+                                    modifier = Modifier.size(14.dp),
+                                )
+                            }
+                        }
+
+                        // The "/" slash-command circle button used to sit here.
+                        // Moved into the top-right chat menu (above Token Usage)
+                        // to reclaim composer width; typing "/" still opens the
+                        // same sheet, so no functionality was removed.
+
+                        // T187: Exit Edit Mode pill, only while editingMessageId
+                        // is non-null. Tap clears the edit flag + composer text
+                        // without truncating history. iOS parity:
+                        // AIChatView.swift L1586 editExitButton.
+                        val editingId by viewModel.editingMessageId.collectAsState()
+                        if (editingId != null) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Surface(
+                                shape = RoundedCornerShape(16.dp),
+                                color = ChatColors.inputBg,
+                                modifier = Modifier.clickable {
+                                    viewModel.cancelEdit()
+                                    viewModel.setInputText("")
+                                },
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.chat_edit_exit_button),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = ChatColors.secondaryText,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.weight(1f))
+
+                        // Attach (+): moved from the left edge to sit
+                        // directly beside mic/send. The three actions
+                        // here (photos, file, camera) all produce
+                        // something that gets SENT, so grouping them
+                        // with the send affordance keeps the
+                        // "compose -> attach -> send" gesture inside one
+                        // thumb arc instead of spanning the full width.
                         Box {
                             InputCircleButton(
                                 onClick = { showAttachMenu = true },
@@ -5094,36 +5197,7 @@ fun ChatScreen(
                             }
                         }
 
-                        // The "/" slash-command circle button used to sit here.
-                        // Moved into the top-right chat menu (above Token Usage)
-                        // to reclaim composer width; typing "/" still opens the
-                        // same sheet, so no functionality was removed.
-
-                        // T187: Exit Edit Mode pill, only while editingMessageId
-                        // is non-null. Tap clears the edit flag + composer text
-                        // without truncating history. iOS parity:
-                        // AIChatView.swift L1586 editExitButton.
-                        val editingId by viewModel.editingMessageId.collectAsState()
-                        if (editingId != null) {
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Surface(
-                                shape = RoundedCornerShape(16.dp),
-                                color = ChatColors.inputBg,
-                                modifier = Modifier.clickable {
-                                    viewModel.cancelEdit()
-                                    viewModel.setInputText("")
-                                },
-                            ) {
-                                Text(
-                                    text = stringResource(R.string.chat_edit_exit_button),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = ChatColors.secondaryText,
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                )
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.weight(1f))
+                        Spacer(modifier = Modifier.width(8.dp))
 
                         // Right: Mic button — only renders when a speech engine
                         // is actually available on this device (handles the
