@@ -183,6 +183,7 @@ object Routes {
     fun mountedFoldersDetail(mountId: String) = "mounted_folders_detail/$mountId"
     /** T235: Shared folders (Shared / Skills / Memory) — fixed list. */
     const val SHARED_FOLDERS = "shared_folders"
+    const val BACKUP = "backup"
     const val SHARED_FOLDERS_DETAIL = "shared_folders_detail/{folderId}"
     fun sharedFoldersDetail(folderId: String) = "shared_folders_detail/$folderId"
     /** [T-android-scheduled-tasks-design] Scheduled tasks list + editor. */
@@ -627,6 +628,7 @@ fun AppNavigation(
                 onAboutClick = { navController.safeNavigate(Routes.ABOUT) },
                 onMountedFoldersClick = { navController.safeNavigate(Routes.MOUNTED_FOLDERS) },
                 onSharedFoldersClick = { navController.safeNavigate(Routes.SHARED_FOLDERS) },
+                onBackupClick = { navController.safeNavigate(Routes.BACKUP) },
             )
         }
 
@@ -636,6 +638,13 @@ fun AppNavigation(
                 onFolderClick = { folderId ->
                     navController.safeNavigate(Routes.sharedFoldersDetail(folderId))
                 },
+            )
+        }
+
+        composable(Routes.BACKUP) {
+            com.openminis.app.ui.settings.BackupSettingsScreen(
+                providerRepository = providerRepository,
+                onBack = { navController.safePopBackStack() },
             )
         }
 

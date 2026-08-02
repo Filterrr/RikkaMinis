@@ -815,6 +815,8 @@
     <!-- T219-2 — 외부 폴더 마운트 -->
     <string name="settings_mount_external_folders">외부 폴더 마운트</string>
     <string name="settings_mount_external_folders_subtitle">선택한 폴더를 /var/minis/mounts/ 에 바인드</string>
+    <string name="settings_backup">백업 및 복원</string>
+    <string name="settings_backup_subtitle">설정과 제공업체 내보내기 또는 가져오기</string>
     <string name="mount_folders_title">마운트된 폴더</string>
     <string name="mount_folders_info_banner">선택한 폴더는 /var/minis/mounts/&lt;name&gt; 에 바인드 마운트됩니다. 한 번에 최대 10개까지 마운트할 수 있습니다.</string>
     <string name="mount_folders_empty_title">마운트된 폴더 없음</string>
