@@ -780,6 +780,7 @@
     <string name="chat_menu_browse_chat_files">Chat-Dateien durchsuchen</string>
     <string name="chat_menu_enhanced_cache">Erweiterter Cache</string>
     <string name="chat_menu_fast_mode">Schnellmodus aktivieren</string>
+    <string name="chat_menu_slash_commands">Slash-Befehle</string>
     <string name="enhanced_cache_dialog_body">Der erweiterte Cache verlängert den Prompt-Cache von Anthropic von 5 Minuten auf 1 Stunde und hält den Kontext bei langen Sitzungen bereit. Dies kann zusätzliche Cache-Schreibkosten verursachen. Aktivieren?</string>
     <string name="enhanced_cache_dialog_confirm">Aktivieren</string>
 

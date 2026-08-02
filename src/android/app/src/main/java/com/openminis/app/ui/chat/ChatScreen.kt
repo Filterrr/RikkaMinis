@@ -92,7 +92,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -2194,8 +2194,14 @@ fun ChatScreen(
                     }
                 },
                 navigationIcon = {
+                    // Hamburger instead of a back arrow: this navigates to the
+                    // session list, which is a sibling top-level surface rather
+                    // than a parent, and RikkaHub-style drawer navigation is the
+                    // target pattern. onBack is unchanged — only the glyph and
+                    // its content description differ, so system back and
+                    // predictive-back behaviour are untouched.
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.Default.Menu, contentDescription = "Sessions")
                     }
                 },
                 actions = {
@@ -2319,6 +2325,43 @@ fun ChatScreen(
                                 )
                             }
                             MinisMenuDivider()
+                            // Slash commands. Moved here from the dedicated "/"
+                            // circle button that used to sit next to "+" in the
+                            // composer: the button occupied permanent space in
+                            // the input row for an action most users invoke by
+                            // simply typing "/", and the row is the most
+                            // contended horizontal space on the screen. The
+                            // menu keeps it discoverable for people who don't
+                            // know the typed shortcut. Placed directly above
+                            // Token Usage per the requested ordering.
+                            //
+                            // Behaviour is unchanged from the old button: it
+                            // toggles, so opening the menu while the slash
+                            // sheet is already up dismisses it.
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.chat_menu_slash_commands)) },
+                                onClick = {
+                                    showChatMenu = false
+                                    if (viewModel.showSlashMenu.value) {
+                                        viewModel.setInputText(viewModel.dismissSlashMenu(inputText))
+                                    } else {
+                                        viewModel.setInputText(viewModel.showSlashMenuOverInput(inputText))
+                                    }
+                                },
+                                leadingIcon = {
+                                    // Match the old button's italic-bold "/"
+                                    // glyph rather than substituting a generic
+                                    // icon, so the entry reads as the same
+                                    // affordance that moved.
+                                    Text(
+                                        "/",
+                                        fontSize = 20.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        fontStyle = FontStyle.Italic,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                },
+                            )
                             // Token Usage (iOS parity)
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.settings_token_usage)) },
@@ -5000,23 +5043,16 @@ fun ChatScreen(
                                 expanded = showAttachMenu,
                                 onDismissRequest = { showAttachMenu = false },
                             ) {
-                                // iOS parity: Take Photo / Choose Photos & Videos / Add File
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.chat_attach_take_photo)) },
-                                    leadingIcon = { Icon(Icons.Default.CameraAlt, contentDescription = null) },
-                                    onClick = {
-                                        showAttachMenu = false
-                                        val granted = ContextCompat.checkSelfPermission(
-                                            context,
-                                            android.Manifest.permission.CAMERA,
-                                        ) == PackageManager.PERMISSION_GRANTED
-                                        if (granted) {
-                                            launchCamera()
-                                        } else {
-                                            cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA)
-                                        }
-                                    },
-                                )
+                                // Order: Choose Photos & Videos / Add File / Take
+                                // Photo. Diverges from the iOS ordering on
+                                // purpose — picking existing media is by far the
+                                // most frequent attach action, so it takes the
+                                // first slot (closest to the thumb, and the
+                                // default highlighted row), while Take Photo is
+                                // the rarest and also the only destructive-ish
+                                // one (it opens the camera and can lose the
+                                // draft on some OEM camera apps), so it sits
+                                // last where it can't be hit by accident.
                                 DropdownMenuItem(
                                     text = { Text(stringResource(R.string.chat_attach_choose_photos_videos)) },
                                     leadingIcon = { Icon(Icons.Default.PhotoLibrary, contentDescription = null) },
@@ -5039,27 +5075,29 @@ fun ChatScreen(
                                         filePickerLauncher.launch(arrayOf("*/*"))
                                     },
                                 )
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.chat_attach_take_photo)) },
+                                    leadingIcon = { Icon(Icons.Default.CameraAlt, contentDescription = null) },
+                                    onClick = {
+                                        showAttachMenu = false
+                                        val granted = ContextCompat.checkSelfPermission(
+                                            context,
+                                            android.Manifest.permission.CAMERA,
+                                        ) == PackageManager.PERMISSION_GRANTED
+                                        if (granted) {
+                                            launchCamera()
+                                        } else {
+                                            cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA)
+                                        }
+                                    },
+                                )
                             }
                         }
 
-                        Spacer(modifier = Modifier.width(8.dp))
-
-                        // Left: "/" slash command button (iOS: italic /, bold)
-                        InputCircleButton(onClick = {
-                            if (viewModel.showSlashMenu.value) {
-                                viewModel.setInputText(viewModel.dismissSlashMenu(inputText))
-                            } else {
-                                viewModel.setInputText(viewModel.showSlashMenuOverInput(inputText))
-                            }
-                        }) {
-                            Text(
-                                "/",
-                                fontSize = 20.sp,
-                                fontWeight = FontWeight.Bold,
-                                fontStyle = FontStyle.Italic,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
+                        // The "/" slash-command circle button used to sit here.
+                        // Moved into the top-right chat menu (above Token Usage)
+                        // to reclaim composer width; typing "/" still opens the
+                        // same sheet, so no functionality was removed.
 
                         // T187: Exit Edit Mode pill, only while editingMessageId
                         // is non-null. Tap clears the edit flag + composer text

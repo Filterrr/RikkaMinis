@@ -667,6 +667,7 @@
     <string name="chat_menu_browse_chat_files">Parcourir les fichiers du chat</string>
     <string name="chat_menu_enhanced_cache">Cache amélioré</string>
     <string name="chat_menu_fast_mode">Activer le mode rapide</string>
+    <string name="chat_menu_slash_commands">Commandes slash</string>
     <string name="enhanced_cache_dialog_body">Le cache amélioré étend le cache de prompt d’Anthropic de 5 minutes à 1 heure, gardant le contexte actif lors des longues sessions. Cela peut entraîner des frais d’écriture de cache supplémentaires. L’activer ?</string>
     <string name="enhanced_cache_dialog_confirm">Activer</string>
 

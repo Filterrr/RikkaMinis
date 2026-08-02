@@ -780,6 +780,7 @@
     <string name="chat_menu_browse_chat_files">チャットファイルを閲覧</string>
     <string name="chat_menu_enhanced_cache">拡張キャッシュ</string>
     <string name="chat_menu_fast_mode">高速モードを有効化</string>
+    <string name="chat_menu_slash_commands">スラッシュコマンド</string>
     <string name="enhanced_cache_dialog_body">拡張キャッシュは Anthropic のプロンプトキャッシュを 5 分から 1 時間に延長し、長いセッションでコンテキストを保持します。追加のキャッシュ書き込み料金が発生する場合があります。有効にしますか？</string>
     <string name="enhanced_cache_dialog_confirm">有効にする</string>
 

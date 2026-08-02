@@ -905,6 +905,7 @@
     <string name="chat_menu_browse_chat_files">Файлы чата</string>
     <string name="chat_menu_enhanced_cache">Расширенный кэш</string>
     <string name="chat_menu_fast_mode">Включить быстрый режим</string>
+    <string name="chat_menu_slash_commands">Слэш-команды</string>
     <string name="enhanced_cache_dialog_body">Расширенный кэш продлевает кэш промптов Anthropic с 5 минут до 1 часа, сохраняя контекст в длинных сессиях. Это может привести к дополнительной плате за запись в кэш. Включить?</string>
     <string name="enhanced_cache_dialog_confirm">Включить</string>
     <string name="chat_longpress_copy">Копировать</string>

@@ -1129,6 +1129,7 @@
     <string name="chat_menu_browse_chat_files">Browse Chat Files</string>
     <string name="chat_menu_enhanced_cache">Enhanced Cache</string>
     <string name="chat_menu_fast_mode">Enable Fast Mode</string>
+    <string name="chat_menu_slash_commands">Slash Commands</string>
     <string name="enhanced_cache_dialog_body">Enhanced Cache extends Anthropic\'s prompt cache from 5 minutes to 1 hour, keeping context warm for longer sessions. This may add extra cache-write charges. Enable it?</string>
     <string name="enhanced_cache_dialog_confirm">Enable</string>
     <string name="chat_longpress_copy">Copy</string>
