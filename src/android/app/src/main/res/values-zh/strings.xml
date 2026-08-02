@@ -1001,9 +1001,9 @@
     <string name="settings_backup">备份与恢复</string>
     <string name="settings_backup_subtitle">导出或导入设置与提供商</string>
     <string name="backup_section_local">本地备份</string>
-    <string name="backup_section_footer">备份包含提供商、外观设置和 Agent 运行时默认值。不含聊天记录。</string>
+    <string name="backup_section_footer">备份包含提供商、外观设置、Agent 运行时默认值、环境变量、技能、记忆、MCP 服务器和定时任务。不含聊天记录。</string>
     <string name="backup_export">导出备份</string>
-    <string name="backup_export_sub">保存为设备上的 JSON 文件</string>
+    <string name="backup_export_sub">保存为设备上的 JSON 文件（技能文件会一并嵌入，文件可能有数 MB）</string>
     <string name="backup_import">从备份恢复</string>
     <string name="backup_import_sub">选择备份文件并导入设置</string>
     <string name="backup_saved">备份已保存</string>
@@ -1020,6 +1020,10 @@
     <string name="backup_done_summary">已导入 %1$d 项设置、%2$d 个提供商。</string>
     <string name="backup_done_groups">已恢复 %1$d 个模型分组。</string>
     <string name="backup_done_env_vars">已恢复 %1$d 个环境变量。</string>
+    <string name="backup_done_skills">已恢复 %1$d 个技能。</string>
+    <string name="backup_done_memory_files">已恢复 %1$d 个记忆文件。</string>
+    <string name="backup_done_mcp_servers">已恢复 %1$d 个 MCP 服务器。</string>
+    <string name="backup_done_scheduled_tasks">已恢复 %1$d 个定时任务。</string>
     <string name="backup_done_skipped">\n以下 %1$d 项已跳过：</string>
     <string name="backup_done_no_keys">\n该备份不含密钥，导入的提供商需要重新填写 API 密钥。</string>
     <string name="backup_done_restart">\n部分设置需要重启应用后生效。</string>

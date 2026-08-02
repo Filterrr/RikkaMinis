@@ -638,6 +638,9 @@ fun AppNavigation(
             com.openminis.app.ui.settings.BackupSettingsScreen(
                 providerRepository = providerRepository,
                 envVarRepository = envVarRepository,
+                skillRepository = skillRepository,
+                memoryRepository = memoryRepository,
+                mcpRepository = mcpRepository,
                 onBack = { navController.safePopBackStack() },
             )
         }
