@@ -409,6 +409,7 @@
     <string name="chat_menu_browse_chat_files">瀏覽對話文件</string>
     <string name="chat_menu_enhanced_cache">增強快取</string>
     <string name="chat_menu_fast_mode">啟用高速模式</string>
+    <string name="chat_menu_slash_commands">斜線命令</string>
     <string name="enhanced_cache_dialog_body">增強快取會將 Anthropic 提示快取從 5 分鐘延長至 1 小時，在長對話中保持上下文，可能產生額外的快取寫入費用。是否開啟？</string>
     <string name="enhanced_cache_dialog_confirm">開啟</string>
 

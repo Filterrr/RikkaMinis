@@ -960,6 +960,7 @@
     <string name="chat_menu_browse_chat_files">浏览对话文件</string>
     <string name="chat_menu_enhanced_cache">增强缓存</string>
     <string name="chat_menu_fast_mode">启用高速模式</string>
+    <string name="chat_menu_slash_commands">斜杠命令</string>
     <string name="enhanced_cache_dialog_body">增强缓存将 Anthropic 提示缓存从 5 分钟延长到 1 小时，在长会话中保持上下文，可能产生额外的缓存写入费用。是否开启？</string>
     <string name="enhanced_cache_dialog_confirm">开启</string>
 
