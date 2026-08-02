@@ -484,6 +484,32 @@ internal sealed class FlatChatItem {
 }
 
 /**
+ * [P0-0] The owning message id for any flat row.
+ *
+ * Deliberately an extension rather than an `abstract val` on [FlatChatItem]:
+ * nine subclasses already expose a `messageId` property, but [UserBubble]
+ * carries the id inside `message.id`. Adding an abstract member would force a
+ * rename there for no behavioural gain, so the mapping lives here instead.
+ *
+ * Note one message flattens into MANY rows (header + text blocks + tools + …),
+ * so this is intentionally many-to-one: focusing a message matches every row
+ * belonging to it, which is what makes whole-message highlighting fall out for
+ * free.
+ */
+internal fun FlatChatItem.owningMessageId(): String = when (this) {
+    is FlatChatItem.UserBubble -> message.id
+    is FlatChatItem.AssistantHeader -> messageId
+    is FlatChatItem.AssistantText -> messageId
+    is FlatChatItem.AssistantMarkdownBlock -> messageId
+    is FlatChatItem.AssistantThinking -> messageId
+    is FlatChatItem.AssistantToolUse -> messageId
+    is FlatChatItem.AssistantInfo -> messageId
+    is FlatChatItem.AssistantTyping -> messageId
+    is FlatChatItem.AssistantError -> messageId
+    is FlatChatItem.AssistantLegacyContent -> messageId
+}
+
+/**
  * T-streaming-side-channel: overlay any active [StreamingDelta]s on top of
  * the canonical [messages] list, producing the snapshot
  * [buildFlatChatItems] should fold over. The original [messages] list is

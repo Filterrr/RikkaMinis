@@ -15,6 +15,7 @@ import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -379,6 +380,17 @@ private data class ScrollFollowKey(
 @Composable
 fun ChatScreen(
     sessionId: String,
+    /**
+     * [P0-0] When non-null, scroll to this message once after the list is
+     * populated and briefly highlight it. Null (the default) reproduces the
+     * pre-P0-0 behaviour exactly — no extra scroll is issued, so the existing
+     * follow/anchor state machine is untouched for ordinary chat opens.
+     *
+     * Consumed once: after the jump the local target is cleared so returning
+     * to this screen (config change, back-from-terminal) does not re-jump and
+     * fight the user's own scrolling.
+     */
+    focusMessageId: String? = null,
     chatRepository: ChatRepository,
     providerRepository: ProviderRepository,
     memoryRepository: MemoryRepository? = null,
@@ -2880,6 +2892,73 @@ fun ChatScreen(
                 }
                 fun originalMessageId(id: String): String =
                     id.substringBefore('#')
+
+                // ─── [P0-0] focus-a-message: scroll + transient highlight ───
+                //
+                // Shared primitive for "open this session AND land on this
+                // message" (search results, bookmarks, translation, range
+                // export). Three constraints came out of the source audit and
+                // each one is load-bearing:
+                //
+                //   1. flatItems is published ASYNCHRONOUSLY (frozenRows +
+                //      liveRows). Scrolling on first composition would search
+                //      an empty list, get -1 and silently do nothing — the
+                //      exact race the trailing-row pin above documents. So the
+                //      effect keys on flatItems and waits for a non-empty list.
+                //   2. The LazyColumn is reverseLayout=true and renders
+                //      `flatItems.asReversed()`, so the index handed to
+                //      scrollToItem must be computed in REVERSED space.
+                //      Using the oldest-first index would jump to the mirror
+                //      position at the other end of the conversation.
+                //   3. buildFlatChatItems disambiguates duplicate ids with a
+                //      `#n` suffix, so matching goes through
+                //      originalMessageId() on both sides.
+                //
+                // The target is consumed once (cleared after the jump) so a
+                // config change or back-from-terminal recomposition does not
+                // re-yank a user who has since scrolled elsewhere.
+                var pendingFocusId by remember(sessionId, focusMessageId) {
+                    mutableStateOf(focusMessageId?.takeIf { it.isNotBlank() })
+                }
+                var highlightedMessageId by remember(sessionId) { mutableStateOf<String?>(null) }
+                LaunchedEffect(pendingFocusId, flatItems) {
+                    val target = pendingFocusId ?: return@LaunchedEffect
+                    if (flatItems.isEmpty()) return@LaunchedEffect
+                    val rendered = flatItems.asReversed()
+                    val idx = rendered.indexOfFirst {
+                        originalMessageId(it.owningMessageId()) == originalMessageId(target)
+                    }
+                    if (idx < 0) {
+                        // Message not in this session (deleted, or a stale
+                        // link). Consume the request so we don't re-scan on
+                        // every subsequent flatten publish, and leave the list
+                        // at its default anchor rather than guessing.
+                        AppLogger.debug(
+                            "ChatFocus",
+                            "focus target not found session=$sessionId target=$target rows=${flatItems.size}",
+                        )
+                        pendingFocusId = null
+                        return@LaunchedEffect
+                    }
+                    tracedScrollToItem("FOCUS-MESSAGE", idx, 0)
+                    highlightedMessageId = originalMessageId(target)
+                    // Clearing pendingFocusId cancels THIS coroutine (it is a
+                    // key of the enclosing LaunchedEffect), so the highlight
+                    // fade-out must not live here — it gets its own effect
+                    // below keyed on highlightedMessageId.
+                    pendingFocusId = null
+                }
+                // [P0-0] Auto-expire the highlight. Separate from the jump
+                // effect on purpose: see the note above about the jump's
+                // coroutine being cancelled the moment it consumes the target.
+                LaunchedEffect(highlightedMessageId) {
+                    if (highlightedMessageId == null) return@LaunchedEffect
+                    // Long enough for the eye to catch the row after the jump
+                    // settles, short enough that it doesn't read as permanent
+                    // selection state.
+                    kotlinx.coroutines.delay(1_600L)
+                    highlightedMessageId = null
+                }
                 fun FlatChatItem.isCompacted(): Boolean = when (this) {
                     is FlatChatItem.UserBubble -> grayedMap[originalMessageId(message.id)] == true
                     is FlatChatItem.AssistantHeader -> grayedMap[originalMessageId(messageId)] == true
@@ -3186,9 +3265,32 @@ fun ChatScreen(
                             }
                         }
                         val isNewestItem = item == flatItems.lastOrNull()
+                        // [P0-0] Transient focus highlight. Matching on the
+                        // owning message id (not item.key) means every row of
+                        // a multi-row message — header, text blocks, tool
+                        // pills — lights up as one unit, which is what reads
+                        // as "this message" to the user.
+                        //
+                        // Drawn as a background tint on the existing row Box
+                        // rather than a border/scale so it cannot shift layout
+                        // (a size change here would perturb the very scroll
+                        // anchor we just positioned) and cannot interfere with
+                        // text selection.
+                        val isFocusHighlighted = highlightedMessageId != null &&
+                            originalMessageId(item.owningMessageId()) == highlightedMessageId
+                        val focusTint by animateColorAsState(
+                            targetValue = if (isFocusHighlighted) {
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                            } else {
+                                Color.Transparent
+                            },
+                            animationSpec = tween(durationMillis = if (isFocusHighlighted) 180 else 520),
+                            label = "focusHighlight",
+                        )
                         Box(
                             modifier = Modifier
                                 .alpha(rowAlpha)
+                                .background(focusTint)
                                 .then(
                                     if (isNewestItem) {
                                         Modifier.onPlaced {
