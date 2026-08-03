@@ -37,23 +37,6 @@
     <string name="memory_save_toast">Enregistré</string>
     <string name="memory_save_error">Échec de l\'enregistrement : %1$s</string>
     <string name="memory_global_footer">Instructions et préférences persistantes visibles par l\'agent dans chaque session. L\'agent ne peut pas modifier ce fichier.</string>
-    <string name="check_update_section_header">Mise à jour de l\'application</string>
-    <string name="check_update_current_version">Version actuelle : %1$s</string>
-    <string name="check_update_check_button">Vérifier les mises à jour</string>
-    <string name="check_update_checking">Vérification…</string>
-    <string name="check_update_up_to_date">Vous utilisez la dernière version.</string>
-    <string name="check_update_no_release">Aucune version publiée pour le moment.</string>
-    <string name="check_update_error">Échec de la vérification : %1$s</string>
-    <string name="check_update_available_title">Mise à jour disponible</string>
-    <string name="check_update_available_subtitle">%1$s → %2$s</string>
-    <string name="check_update_changelog_header">Nouveautés</string>
-    <string name="check_update_download_button">Télécharger et installer</string>
-    <string name="check_update_downloading">Téléchargement… %1$d%%</string>
-    <string name="check_update_download_failed">Échec du téléchargement : %1$s</string>
-    <string name="check_update_install_perm_required">Autorisez les installations depuis cette application pour continuer.</string>
-    <string name="check_update_install_launch_failed">Échec du lancement de l\'installateur. Vérifiez l\'autorisation \"installer des applications inconnues\" ou ouvrez l\'APK téléchargé manuellement.</string>
-    <string name="check_update_install_hint">Astuce : si l\'installation ne donne aucun retour, la signature peut ne pas correspondre — désinstallez d\'abord la version précédente, puis téléchargez à nouveau.</string>
-    <string name="check_update_open_install_settings">Ouvrir les paramètres</string>
     <string name="permissions_title">Autorisations</string>
     <string name="permissions_reset_all">Tout réinitialiser</string>
     <string name="permissions_reset_dialog_title">Réinitialiser toutes les autorisations ?</string>
@@ -124,19 +107,6 @@
     <string name="settings_permissions_subtitle">Contrôler l\'accès de l\'agent aux fonctions sensibles</string>
     <string name="settings_section_logs">Journaux</string>
     <string name="settings_logs_subtitle">Voir et exporter les journaux de l\'application</string>
-    <string name="settings_section_about">À propos</string>
-    <string name="settings_about_minis">À propos de Minis</string>
-    <string name="settings_about_subtitle">Version et informations sur le projet</string>
-    <string name="settings_privacy_policy">Politique de confidentialité</string>
-    <string name="settings_feedback">Commentaires</string>
-    <string name="settings_submit_github_issues">Soumettre un GitHub Issue</string>
-    <string name="settings_feedback_telegram">Retour (Telegram)</string>
-    <string name="settings_feedback_email">Retour (e-mail)</string>
-    <string name="about_title">À propos</string>
-    <string name="about_minis_tagline">Minis est votre agent on-device entièrement local et entièrement privé.</string>
-    <string name="about_links">Liens</string>
-    <string name="about_github_repository">Dépôt GitHub</string>
-    <string name="about_version_format">Version %1$s (%2$s)</string>
 
     <!-- T172 — chat sheets i18n -->
     <string name="move_to_sheet_title">Déplacer vers…</string>

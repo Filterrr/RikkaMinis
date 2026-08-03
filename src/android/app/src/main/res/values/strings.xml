@@ -40,26 +40,6 @@
     <string name="memory_save_error">Save failed: %1$s</string>
     <string name="memory_global_footer">Persistent instructions and preferences visible to the agent in every session. The agent cannot modify this file.</string>
 
-    <!-- Check Update -->
-    <string name="check_update_section_header">App Update</string>
-    <string name="check_update_current_version">Current version: %1$s</string>
-    <string name="check_update_check_button">Check for Updates</string>
-    <string name="check_update_checking">Checking…</string>
-    <string name="check_update_up_to_date">You\'re on the latest version.</string>
-    <string name="check_update_no_release">No release published yet.</string>
-    <string name="check_update_no_apk_asset">Release %1$s is published but doesn\'t include an APK.</string>
-    <string name="check_update_error">Check failed: %1$s</string>
-    <string name="check_update_available_title">Update Available</string>
-    <string name="check_update_available_subtitle">%1$s → %2$s</string>
-    <string name="check_update_changelog_header">What\'s New</string>
-    <string name="check_update_download_button">Download &amp; Install</string>
-    <string name="check_update_downloading">Downloading… %1$d%%</string>
-    <string name="check_update_download_failed">Download failed: %1$s</string>
-    <string name="check_update_install_perm_required">Allow installs from this app to continue.</string>
-    <string name="check_update_install_launch_failed">Failed to launch installer. Check \"install unknown apps\" permission or open the downloaded APK manually.</string>
-    <string name="check_update_install_hint">Tip: If installation gives no feedback, the signature may not match — uninstall the previous version first, then download again.</string>
-    <string name="check_update_open_install_settings">Open Settings</string>
-
     <!-- Permissions (Settings → Permissions) -->
     <string name="permissions_title">Permissions</string>
     <string name="permissions_reset_all">Reset All</string>
@@ -282,19 +262,6 @@
     <string name="settings_permissions_subtitle">Control agent access to privacy-sensitive features</string>
     <string name="settings_section_logs">Logs</string>
     <string name="settings_logs_subtitle">View and export app logs</string>
-    <string name="settings_section_about">About</string>
-    <string name="settings_about_minis">About Minis</string>
-    <string name="settings_about_subtitle">Version and project info</string>
-    <string name="settings_privacy_policy">Privacy Policy</string>
-    <string name="settings_feedback">Feedback</string>
-    <string name="settings_submit_github_issues">Submit GitHub Issues</string>
-    <string name="settings_feedback_telegram">Feedback (Telegram)</string>
-    <string name="settings_feedback_email">Feedback (Email)</string>
-    <string name="about_title">About</string>
-    <string name="about_minis_tagline">Minis is Your Fully Local, Fully Private On-Device Agent.</string>
-    <string name="about_links">Links</string>
-    <string name="about_github_repository">GitHub Repository</string>
-    <string name="about_version_format">Version %1$s (%2$s)</string>
 
     <!-- T172 — chat sheets i18n (MoveToSessionSheet / OffloadPermissionDialog /
          SessionSkillsSheet / SpeechLanguagePickerSheet / StandardChatSheet /
