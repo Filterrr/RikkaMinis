@@ -108,7 +108,7 @@ fun ProviderListScreen(
 
     SettingsScaffold(
         title = stringResource(R.string.provider_list_providers),
-        onBack = onBack,
+        onBack = null, // top-level page: rely on system back gesture / bottom nav
         actions = {
             IconButton(onClick = { showMenu = true }) {
                 Icon(Icons.Default.Add, contentDescription = stringResource(R.string.provider_list_add_provider))

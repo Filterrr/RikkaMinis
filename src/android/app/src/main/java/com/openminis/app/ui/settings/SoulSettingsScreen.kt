@@ -104,7 +104,7 @@ fun SoulSettingsScreen(onBack: () -> Unit) {
 
     SettingsScaffold(
         title = stringResource(R.string.soul_settings_title),
-        onBack = onBack,
+        onBack = null, // top-level page: rely on system back gesture / bottom nav
     ) {
         SettingsSection(
             header = stringResource(R.string.soul_section_preview),

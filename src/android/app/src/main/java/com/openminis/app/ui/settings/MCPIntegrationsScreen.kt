@@ -90,7 +90,7 @@ fun MCPIntegrationsScreen(
 
     SettingsScaffold(
         title = stringResource(R.string.mcp_title),
-        onBack = onBack,
+        onBack = null, // top-level page: rely on system back gesture / bottom nav
         actions = {
             IconButton(onClick = { showAddSheet = true }) {
                 Icon(Icons.Default.Add, contentDescription = stringResource(R.string.mcp_add))

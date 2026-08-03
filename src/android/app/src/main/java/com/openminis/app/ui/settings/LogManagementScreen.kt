@@ -125,7 +125,7 @@ fun LogManagementScreen(
 
     SettingsScaffold(
         title = stringResource(R.string.log_title),
-        onBack = onBack,
+        onBack = null, // top-level page: rely on system back gesture / bottom nav
         scrollable = false,
     ) {
         // Segmented selector lives outside the scrolling content so the

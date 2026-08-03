@@ -135,7 +135,8 @@ fun UsageStatsScreen(
         isLoaded = true
     }
 
-    SettingsScaffold(title = stringResource(R.string.usage_title), onBack = onBack) {
+    // top-level page: rely on system back gesture / bottom nav (no back arrow)
+    SettingsScaffold(title = stringResource(R.string.usage_title), onBack = null) {
         if (!isLoaded) return@SettingsScaffold
 
         SettingsSection(header = stringResource(R.string.usage_section_total)) {

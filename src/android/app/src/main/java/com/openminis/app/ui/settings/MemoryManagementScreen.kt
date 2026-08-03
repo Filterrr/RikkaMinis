@@ -77,7 +77,8 @@ fun MemoryManagementScreen(
         files = memoryRepository.listAllFiles()
     }
 
-    SettingsScaffold(title = stringResource(R.string.memory_title), onBack = onBack) {
+    // top-level page: rely on system back gesture / bottom nav (no back arrow)
+    SettingsScaffold(title = stringResource(R.string.memory_title), onBack = null) {
         // Always-visible global toggle — sits above the file list so the
         // user finds it whether or not any memory files exist yet.
         SettingsSection(
