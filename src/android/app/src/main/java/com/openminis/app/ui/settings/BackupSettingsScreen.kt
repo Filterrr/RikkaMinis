@@ -116,7 +116,8 @@ fun BackupSettingsScreen(
         }
     }
 
-    SettingsScaffold(title = stringResource(R.string.settings_backup), onBack = onBack) {
+    // top-level page: rely on system back gesture / bottom nav (no back arrow)
+    SettingsScaffold(title = stringResource(R.string.settings_backup), onBack = null) {
         SettingsSection(
             header = stringResource(R.string.backup_section_local),
             footer = stringResource(R.string.backup_section_footer),
