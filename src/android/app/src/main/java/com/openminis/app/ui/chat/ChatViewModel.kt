@@ -3545,7 +3545,19 @@ class ChatViewModel(
         val enabledMembers = providerRepository.enabledMemberEntries(group)
         if (enabledMembers.isEmpty()) return false
         val targetEntry = if (preferredEntryId != null) {
+            // Respect the session binding / explicit pick: the conversation
+            // stays on the member it is already bound to.
             enabledMembers.firstOrNull { it.id == preferredEntryId } ?: enabledMembers.first()
+        } else if (group.strategy == com.openminis.app.data.model.RoutingStrategy.loadBalance) {
+            // [loadBalance] No bound member (fresh session): distribute sessions
+            // across members round-robin instead of always taking the head. The
+            // rotation base is the globally last-used entry, so distribution
+            // survives app restarts. Mirrors iOS ModelGroupRouter's per-session
+            // rotation and the voice path's per-session seed. A manual pick
+            // inside the group still wins via preferredEntryId above; the NEXT
+            // fresh session rotates onward.
+            val lastIdx = enabledMembers.indexOfFirst { it.id == providerRepository.lastUsedEntryId }
+            enabledMembers[(lastIdx + 1) % enabledMembers.size]
         } else {
             enabledMembers.first()
         }
@@ -6377,7 +6389,7 @@ class ChatViewModel(
                     val actual = unwrapFlowException(e)
                     val isRateLimit = actual is com.openminis.app.data.model.LLMError.RateLimited
                     val is5xx = actual is com.openminis.app.data.model.LLMError.ProviderError &&
-                        actual.detail.contains(Regex("[5][0-9]{2}"))
+                        actual.detail.contains(Regex("\\b[5][0-9]{2}\\b"))
                     // Auto-retry on transient network/5xx/transient errors on the SAME provider
                     // before considering a fallback (mirrors iOS streamWithAutoRetry).
                     // Rate limits are provider-level signals that should trigger fallback immediately,
@@ -6463,7 +6475,13 @@ class ChatViewModel(
                     // makes the intent explicit and avoids a one-frame
                     // flash of the stale banner.
                     withContext(Dispatchers.Main) { clearInlineError() }
-                    val shouldFallback = isRateLimit || is5xx ||
+                    // Fallback classification mirrors iOS and the model layer's
+                    // LLMError.isFallbackable contract: anything that says "this
+                    // member can't help" falls back to the next member of the
+                    // group immediately — rate limits (429), bad/expired API keys
+                    // (401) and provider errors (4xx/5xx, incl. per-provider 403
+                    // quota). `always` additionally falls back on every error.
+                    val shouldFallback = actual.isFallbackable ||
                         fallbackStrategy == com.openminis.app.data.model.FallbackStrategy.always
                     val next = if (shouldFallback) remainingFallbacks.removeFirstOrNull() else null
                     if (next != null) {
