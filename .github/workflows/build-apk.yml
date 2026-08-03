@@ -37,8 +37,17 @@ jobs:
       # merge. The script is `onlyIf { script.exists() }`, but it reads
       # .claude/skills/debug-server/ which is private and absent from this
       # public mirror — create it so the Exec task has an input dir.
-      - name: Stub missing private directories
-        run: mkdir -p .claude/skills/debug-server
+      #
+      # The Anthropic OAuth identifier prompt is private for the same reason.
+      # Unit tests need only a non-empty deterministic value; they never assert
+      # or ship this placeholder. Production OAuth builds must still provide the
+      # real private value via app/provider-customization.properties.
+      - name: Stub missing private inputs
+        run: |
+          mkdir -p .claude/skills/debug-server
+          cat > src/android/app/provider-customization.properties <<'EOF'
+          ANTHROPIC_OAUTH_IDENTIFIER_PROMPT=CI_TEST_IDENTIFIER_PROMPT_NOT_FOR_PRODUCTION
+          EOF
 
       # Fixed signing key, so every CI build installs OVER the previous one
       # instead of forcing an uninstall/reinstall.
