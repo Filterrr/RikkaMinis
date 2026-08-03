@@ -851,7 +851,7 @@ private fun parseInlineMarkdown(
 // [T-android-split-chat] internal (was private) — referenced from ChatScreen.kt
 // after the move.
 internal val LocalBrowserTabPool = compositionLocalOf<com.openminis.app.browser.BrowserTabPool?> { null }
-internal val LocalToolPreviewEnabled = compositionLocalOf { true }
+internal val LocalToolPreviewEnabled = compositionLocalOf { false }
 
 @Composable
 internal fun rememberBrowserLiveSnapshot(

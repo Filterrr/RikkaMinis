@@ -620,6 +620,7 @@
     <string name="export_progress_running">正在导出 %1$d / %2$d…</string>
     <string name="export_progress_done">导出完成</string>
     <string name="export_progress_failed">导出失败</string>
+    <string name="export_empty_hint">这个对话还没有内容可以导出</string>
     <string name="sessionlist_edit_title_category">编辑标题和分类</string>
     <string name="sessionlist_regenerate_title">重新生成标题</string>
     <string name="sessionlist_regenerating_title">正在重新生成标题…</string>

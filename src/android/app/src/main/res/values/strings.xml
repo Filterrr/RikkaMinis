@@ -440,6 +440,7 @@
     <string name="export_progress_running">Exporting %1$d / %2$d…</string>
     <string name="export_progress_done">Export complete</string>
     <string name="export_progress_failed">Export failed</string>
+    <string name="export_empty_hint">This conversation has no content to export yet</string>
     <string name="sessionlist_edit_title_category">Edit Title &amp; Category</string>
     <string name="sessionlist_regenerate_title">Regenerate Title</string>
     <string name="sessionlist_regenerating_title">Regenerating title…</string>

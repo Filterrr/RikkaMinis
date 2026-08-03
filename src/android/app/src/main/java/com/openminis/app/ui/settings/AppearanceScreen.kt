@@ -82,7 +82,7 @@ const val KEY_LAUNCH_SESSION = "launch_session"    // 0=Auto, 1=LastSession, 2=N
 // future cross-platform sync (if it ever lands) reads the same values.
 const val KEY_RETURN_KEY_BEHAVIOR = "returnKeyBehavior"  // Int 0=Newline (default), 1=Send
 const val KEY_KEEP_SCREEN_AWAKE = "keepScreenAwakeDuringTasks"  // Boolean, default false
-const val KEY_TOOL_PREVIEW = "tool_preview"        // Boolean, default true
+const val KEY_TOOL_PREVIEW = "tool_preview"        // Boolean, default false
 // [T-keyboard-auto-pop default flip] Default ON — most users want the
 // composer ready for a follow-up immediately after the model finishes.
 // Key name mirrors iOS `@AppStorage("chat.autoFocusAfterReply")` so a
@@ -170,7 +170,7 @@ fun AppearanceScreen(
     var launchSession by remember { mutableIntStateOf(prefs.getInt(KEY_LAUNCH_SESSION, 0)) }
     var returnKeyBehavior by remember { mutableIntStateOf(prefs.getInt(KEY_RETURN_KEY_BEHAVIOR, 0)) }
     var keepScreenAwake by remember { mutableStateOf(prefs.getBoolean(KEY_KEEP_SCREEN_AWAKE, false)) }
-    var toolPreview by remember { mutableStateOf(prefs.getBoolean(KEY_TOOL_PREVIEW, true)) }
+    var toolPreview by remember { mutableStateOf(prefs.getBoolean(KEY_TOOL_PREVIEW, false)) }
     var autoFocusAfterReply by remember { mutableStateOf(prefs.getBoolean(KEY_AUTO_FOCUS_AFTER_REPLY, true)) }
     var autoExpandThinking by remember { mutableStateOf(prefs.getBoolean(KEY_AUTO_EXPAND_THINKING, true)) }
     var showChatTitle by remember { mutableStateOf(prefs.getBoolean(KEY_SHOW_CHAT_TITLE, true)) }
@@ -194,7 +194,7 @@ fun AppearanceScreen(
                 KEY_LAUNCH_SESSION -> launchSession = prefs.getInt(key, 0)
                 KEY_RETURN_KEY_BEHAVIOR -> returnKeyBehavior = prefs.getInt(key, 0)
                 KEY_KEEP_SCREEN_AWAKE -> keepScreenAwake = prefs.getBoolean(key, false)
-                KEY_TOOL_PREVIEW -> toolPreview = prefs.getBoolean(key, true)
+                KEY_TOOL_PREVIEW -> toolPreview = prefs.getBoolean(key, false)
                 KEY_AUTO_FOCUS_AFTER_REPLY -> autoFocusAfterReply = prefs.getBoolean(key, true)
                 KEY_AUTO_EXPAND_THINKING -> autoExpandThinking = prefs.getBoolean(key, true)
                 KEY_SHOW_CHAT_TITLE -> showChatTitle = prefs.getBoolean(key, true)
