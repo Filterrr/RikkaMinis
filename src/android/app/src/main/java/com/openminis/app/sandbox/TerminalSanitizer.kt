@@ -40,8 +40,12 @@ object TerminalSanitizer {
             .joinToString("\n")
             .replace(Regex("(?:null){2,}"), "") // Remove runs of 2+ consecutive "null"
 
-        // Pass 5: Collapse excessive blank lines (3+ consecutive → 2)
-        return noNullLines.replace(Regex("\n{3,}"), "\n\n").trim()
+        // Pass 5: Collapse excessive blank lines (3+ consecutive → 2).
+        // Deliberately no .trim() here: leading whitespace (progress-bar
+        // prefixes like " 100%[...]") and trailing whitespace (padding that
+        // erases a previously longer overwritten line) are semantically
+        // meaningful, and sanitize must preserve them.
+        return noNullLines.replace(Regex("\n{3,}"), "\n\n")
     }
 
     /**
@@ -58,10 +62,14 @@ object TerminalSanitizer {
     }
 
     /**
-     * Simulate CR (\r) behavior: when a line contains \r (without \n),
-     * the text after \r overwrites from the beginning of the line.
-     * Each \r resets the cursor to position 0, so only the last segment's
-     * content (up to its length) is visible.
+     * Simulate CR (\r) behavior with real terminal column semantics: each \r
+     * resets the write cursor to column 0 and subsequent characters overwrite
+     * in place. This matters when a shorter line overwrites a longer one —
+     * "AAAA\rBB" must yield "BBAA", not "BB" (the last-segment shortcut would
+     * drop the tail that a real terminal keeps).
+     *
+     * \r\n is handled naturally: lines are split on \n first, so a trailing
+     * \r in "line1\r" just resets the cursor with nothing following it.
      */
     private fun foldCarriageReturns(text: String): String {
         val lines = text.split('\n')
@@ -75,15 +83,27 @@ object TerminalSanitizer {
                 continue
             }
 
-            // Split on CR and simulate overwriting.
-            // Each CR resets cursor to column 0. The last non-empty segment wins.
-            val segments = line.split('\r')
-            val lastNonEmpty = segments.lastOrNull { it.isNotEmpty() }
-            if (lastNonEmpty != null) {
-                result.append(lastNonEmpty)
-            }
+            result.append(foldLineWithCarriageReturns(line))
         }
 
         return result.toString()
+    }
+
+    private fun foldLineWithCarriageReturns(line: String): String {
+        val buffer = StringBuilder()
+        var cursor = 0
+        for (ch in line) {
+            if (ch == '\r') {
+                cursor = 0
+            } else {
+                if (cursor == buffer.length) {
+                    buffer.append(ch)
+                } else {
+                    buffer.setCharAt(cursor, ch)
+                }
+                cursor++
+            }
+        }
+        return buffer.toString()
     }
 }
