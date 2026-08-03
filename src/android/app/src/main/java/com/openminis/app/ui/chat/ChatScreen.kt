@@ -2274,47 +2274,6 @@ fun ChatScreen(
                                     Icon(Icons.Default.Description, contentDescription = null)
                                 },
                             )
-                            // Export conversation (JSON / Plain Text) — the
-                            // session list's long-press Export, surfaced from
-                            // inside the chat. Same streaming ChatExporter, so
-                            // long chats stay bounded-memory.
-                            var showExportSub by remember { mutableStateOf(false) }
-                            DropdownMenuItem(
-                                text = {
-                                    Row(
-                                        Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        Text(stringResource(R.string.sessionlist_export))
-                                        Icon(
-                                            Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(16.dp),
-                                        )
-                                    }
-                                },
-                                onClick = { showExportSub = !showExportSub },
-                                leadingIcon = {
-                                    Icon(Icons.Default.Share, contentDescription = null)
-                                },
-                            )
-                            if (showExportSub) {
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.sessionlist_export_json), modifier = Modifier.padding(start = 24.dp)) },
-                                    onClick = {
-                                        showChatMenu = false
-                                        exportCurrentChat(context, viewModel, chatRepository, coroutineScope, "json")
-                                    },
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.sessionlist_export_plain), modifier = Modifier.padding(start = 24.dp)) },
-                                    onClick = {
-                                        showChatMenu = false
-                                        exportCurrentChat(context, viewModel, chatRepository, coroutineScope, "text")
-                                    },
-                                )
-                            }
                             MinisMenuDivider()
                             // Session Skills (iOS parity)
                             if (skillRepository != null) {
@@ -2393,6 +2352,49 @@ fun ChatScreen(
                                     )
                                 },
                             )
+                            // Export conversation (JSON / Plain Text) — the
+                            // session list's long-press Export, surfaced from
+                            // inside the chat. Same streaming ChatExporter, so
+                            // long chats stay bounded-memory. Placed between
+                            // Slash Commands and Token Usage per the requested
+                            // ordering.
+                            var showExportSub by remember { mutableStateOf(false) }
+                            DropdownMenuItem(
+                                text = {
+                                    Row(
+                                        Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(stringResource(R.string.sessionlist_export))
+                                        Icon(
+                                            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp),
+                                        )
+                                    }
+                                },
+                                onClick = { showExportSub = !showExportSub },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Share, contentDescription = null)
+                                },
+                            )
+                            if (showExportSub) {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.sessionlist_export_json), modifier = Modifier.padding(start = 24.dp)) },
+                                    onClick = {
+                                        showChatMenu = false
+                                        exportCurrentChat(context, viewModel, chatRepository, coroutineScope, "json")
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.sessionlist_export_plain), modifier = Modifier.padding(start = 24.dp)) },
+                                    onClick = {
+                                        showChatMenu = false
+                                        exportCurrentChat(context, viewModel, chatRepository, coroutineScope, "text")
+                                    },
+                                )
+                            }
                             // Token Usage (iOS parity)
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.settings_token_usage)) },
