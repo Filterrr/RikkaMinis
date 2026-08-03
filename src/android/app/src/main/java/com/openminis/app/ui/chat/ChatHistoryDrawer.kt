@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -102,7 +101,6 @@ fun ChatHistoryDrawer(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .statusBarsPadding()
                     .padding(start = 20.dp, end = 8.dp, top = 12.dp, bottom = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
