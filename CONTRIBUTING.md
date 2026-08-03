@@ -14,7 +14,7 @@ users and would be overwritten at the next sync.
 
 **Issues with the build or the published APK** belong here. For example:
 
-- The APK from [Releases](https://github.com/logicflow-GYW/OpenMinis/releases/tag/android-latest)
+- The APK from [Releases](https://github.com/logicflow-GYW/RikkaMinis/releases/tag/android-latest)
   fails to install or crashes on launch
 - The workflow fails, or a build succeeds but produces a broken APK
 - The terminal reports `execve("/bin/sh"): Permission denied` — this points at

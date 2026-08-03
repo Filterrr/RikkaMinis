@@ -1,21 +1,20 @@
 <!--
-  Please read before submitting.
+  Thanks for contributing to RikkaMinis!
 
-  This repository does not accept pull requests. It is a mirror: development
-  happens in a private tree and is published here on each release, so there is
-  nowhere for a PR to land — it would be overwritten by the next sync.
+  This is a personal Android-only fork that hybridizes two projects:
+  the codebase comes from OpenMinis, the UI design is inspired by RikkaHub.
 
-  This is not about the quality of your work. If you open one anyway, we will
-  close it with a link to CONTRIBUTING.md.
+  What helps:
 
-  What helps instead:
+    • Bugs and feature requests → open an issue here:
+      https://github.com/logicflow-GYW/RikkaMinis/issues
 
-    • Bugs and feature requests → open an issue
-      https://github.com/OpenMinis/OpenMinis/issues
+    • Upstream issues (things that exist in the original app too)
+      → https://github.com/OpenMinis/OpenMinis/issues
 
-    • Use cases and workflows   → OpenMinis/AwesomeMinis  (accepts PRs)
-    • Skills                    → OpenMinis/MinisSkills   (accepts PRs)
-    • Questions and discussion  → the Telegram group, linked in the README
+    • Skills → OpenMinis/MinisSkills  (accepts PRs)
+    • Use cases and workflows → OpenMinis/AwesomeMinis  (accepts PRs)
 
-  See CONTRIBUTING.md for the full picture.
+  PRs are welcome. Please run `git diff --check` and make sure the CI
+  build (build-apk.yml) stays green — it auto-publishes android-latest.
 -->

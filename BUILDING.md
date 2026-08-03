@@ -5,15 +5,15 @@ preparation.** The native sandbox binaries are committed to the repository, so a
 build is a plain Gradle run.
 
 ```sh
-git clone https://github.com/logicflow-GYW/OpenMinis.git
-cd OpenMinis/src/android
+git clone https://github.com/logicflow-GYW/RikkaMinis.git
+cd RikkaMinis/src/android
 ./gradlew assembleRelease
 ```
 
 The APK lands in `src/android/app/build/outputs/apk/release/app-release.apk`.
 
 If you only want to *install* the app, you do not need any of this — grab the
-[latest APK](https://github.com/logicflow-GYW/OpenMinis/releases/tag/android-latest).
+[latest APK](https://github.com/logicflow-GYW/RikkaMinis/releases/tag/android-latest).
 
 ---
 

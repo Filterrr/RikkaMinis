@@ -411,7 +411,7 @@ object ConfigBackup {
         }
 
         if (root.optString("format") != "openminis.config.backup") {
-            throw InvalidBackupException("Not an OpenMinis backup file")
+            throw InvalidBackupException("Not a RikkaMinis backup file")
         }
         val version = root.optInt("version", 0)
         if (version > FORMAT_VERSION) {
