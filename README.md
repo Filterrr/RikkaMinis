@@ -42,34 +42,32 @@ APK installed you must uninstall it first.
 
 ## What this fork changes
 
-Nothing about the app itself. The changes are all about making the build
-reproducible in CI:
+The app itself is upstream OpenMinis. The changes here are about the build:
 
-- **Native code is not compiled.** The official prebuilt `arm64-v8a` binaries
-  are committed to the repo and used as-is.
-- **CI needs no NDK.** A build is a plain `./gradlew assembleRelease`, ~5
-  minutes instead of ~40.
-- **iOS sources removed.** `src/ios/` and `deps/` are gone; this tree is Android
-  only.
+- **proot is built from source.** The sandbox engine comes from the
+  `deps/proot` submodule + `deps/build_proot.sh` + vendored `deps/talloc`,
+  compiled with NDK r28 in CI — no committed binary blobs, fully reproducible.
+- **Other native libs stay vendored.** `libpty_bridge.so`,
+  `libminis_crash_handler.so` and `libjieba_jni.so` are committed as-is.
+- **iOS sources removed.** `src/ios/` is gone; this tree is Android only.
 - **Automatic releases.** Successful builds publish the APK to the
   `android-latest` release.
 
-### Why ship prebuilt binaries?
+### Why build proot from source?
 
 The sandbox engine `libproot.so` needs upstream's Android 10+ W^X bypass
-patches. Rebuilding it from source in CI produces a binary that compiles fine
-and then fails at runtime with `execve("/bin/sh"): Permission denied` — the
-terminal never opens.
+patches. Building it through AGP's CMake block produces a binary that compiles
+fine and then fails at runtime with `execve("/bin/sh"): Permission denied` —
+the terminal never opens. This fork therefore builds it with
+`deps/build_proot.sh` (the upstream-supported path — same source, same NDK
+toolchain the official binary is built with) instead of CMake.
+`externalNativeBuild` stays disabled so AGP never overwrites the vendored
+pty_bridge / crash_handler / jieba libraries with unpatched CI-built copies.
 
-So this fork extracts the binaries from the official release APK and commits
-them verbatim, sha256-verified. `externalNativeBuild` is disabled in
-`build.gradle.kts` to stop AGP from overwriting them with CI-built copies, and
-the workflow asserts the `libproot.so` inside the built APK is byte-identical to
-the committed one.
-
-**Trade-off:** edits under `src/android/app/src/main/cpp/` are not compiled.
-Changing native code means restoring the CMake block and installing the NDK in
-CI. Kotlin, UI, prompts and model integrations are unaffected — build normally.
+**Trade-off:** edits under `src/android/app/src/main/cpp/` are not compiled —
+only `deps/proot` is built, via `build_proot.sh`. Changing the other native
+code means restoring the CMake block and installing the NDK in CI. Kotlin, UI,
+prompts and model integrations are unaffected — build normally.
 
 ---
 
