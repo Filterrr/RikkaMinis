@@ -71,6 +71,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.res.stringResource
+import com.openminis.app.data.model.DEFAULT_GROUP_CONTEXT_LIMIT_TOKENS
 import com.openminis.app.data.model.ModelGroup
 import com.openminis.app.data.model.RoutingStrategy
 import com.openminis.app.data.repository.ProviderRepository
@@ -326,7 +327,15 @@ fun ModelGroupsScreen(
                 MinisTextButton(
                     onClick = {
                         if (newGroupName.isNotBlank()) {
-                            val newGroup = ModelGroup(name = newGroupName.trim())
+                            val newGroup = ModelGroup(
+                                name = newGroupName.trim(),
+                                // [T-context-new-group-default] Start user-created
+                                // groups with a sane context limit (128K) instead of
+                                // null/unlimited, so they get context-pressure
+                                // signals like the default group does. Users can
+                                // raise or clear it in the group detail screen.
+                                contextLimitTokens = DEFAULT_GROUP_CONTEXT_LIMIT_TOKENS,
+                            )
                             providerRepository.addGroup(newGroup)
                             // Auto-set as primary default if it's the first group
                             if (config.modelGroups.size == 1 && config.defaultPrimaryGroupId == null) {

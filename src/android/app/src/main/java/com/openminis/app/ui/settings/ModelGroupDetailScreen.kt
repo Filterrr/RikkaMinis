@@ -57,6 +57,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.graphics.Color
+import com.openminis.app.data.model.DEFAULT_GROUP_CONTEXT_LIMIT_TOKENS
 import com.openminis.app.data.model.FallbackStrategy
 import com.openminis.app.data.model.RoutingStrategy
 import com.openminis.app.data.model.ThinkingLevel
@@ -491,7 +492,8 @@ fun ModelGroupDetailScreen(
                             if (on) {
                                 // Restore last user-selected value verbatim,
                                 // defaulting to 128K for first-time activation.
-                                val restored = group.lastContextLimitTokens ?: 128_000
+                                val restored = group.lastContextLimitTokens
+                                    ?: DEFAULT_GROUP_CONTEXT_LIMIT_TOKENS
                                 contextLimitTokens = restored
                                 providerRepository.updateGroup(
                                     group.copy(

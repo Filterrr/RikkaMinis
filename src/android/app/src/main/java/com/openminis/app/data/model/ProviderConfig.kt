@@ -132,6 +132,15 @@ data class ModelGroup(
     var lastContextLimitTokens: Int? = null,
 )
 
+/**
+ * Default context-window limit for a newly created model group. Keeps
+ * user-created groups from silently growing to the full (often 1M+ token)
+ * model window before any context-pressure signal appears — matching the
+ * behaviour of the default group. Users can raise/clear it per group in the
+ * group detail screen.
+ */
+const val DEFAULT_GROUP_CONTEXT_LIMIT_TOKENS: Int = 128_000
+
 @Serializable
 data class ProviderInstance(
     val id: String,
