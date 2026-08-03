@@ -56,15 +56,16 @@ android {
 
     // NOTE: externalNativeBuild (CMake) is intentionally DISABLED in this fork.
     //
-    // The sandbox engine (libproot.so) must carry upstream's Android 10+ W^X
-    // bypass patches; rebuilding it from source in CI produces a binary that
-    // fails at runtime with execve("/bin/sh"): Permission denied. This fork
-    // therefore ships the official prebuilt arm64-v8a binaries, extracted
-    // verbatim from the upstream 0.22-preview release APK and committed under
-    // src/main/jniLibs/arm64-v8a/ (sha256-verified against that release).
+    // The sandbox engine (libproot.so) is built FROM SOURCE in CI via
+    // deps/build_proot.sh (deps/proot submodule + vendored deps/talloc), which
+    // carries upstream's Android 10+ W^X bypass patches. Building it through
+    // AGP's CMake block instead would produce a binary that fails at runtime
+    // with execve("/bin/sh"): Permission denied — so the supported source path
+    // is build_proot.sh, not CMake. It regenerates jniLibs/arm64-v8a/libproot.so
+    // and assets/proot-aarch64 on every CI run.
     //
-    // Leaving the CMake block enabled would make AGP compile pty_bridge.c,
-    // crash_handler.cpp and jieba_jni.cpp and then OVERWRITE the committed
+    // Leaving the CMake block enabled would also make AGP compile pty_bridge.c,
+    // crash_handler.cpp and jieba_jni.cpp and then OVERWRITE the vendored
     // libpty_bridge.so / libminis_crash_handler.so / libjieba_jni.so with
     // locally built copies — silently defeating the point of vendoring them.
     //
