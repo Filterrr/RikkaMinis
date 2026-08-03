@@ -52,33 +52,38 @@ signing keys differ. Uninstall first, or install the same keystore CI uses.
 
 ---
 
-## Why there is no native build step
+## Sandbox binaries are built from source
 
 The app runs a Linux sandbox via PRoot. Its engine, `libproot.so`, needs
-upstream's Android 10+ W^X bypass patches; a version rebuilt from source
-compiles cleanly and then fails at runtime the moment the terminal opens:
+upstream's Android 10+ W^X bypass patches plus OpenMinis' private extensions
+(native offloads, ashmem-backed memory). A plain recompile — e.g. the AGP
+CMake path — builds cleanly and then fails the moment the terminal opens:
 
 ```
 execve("/bin/sh"): Permission denied
 ```
 
-Rather than reproduce that patched toolchain in CI, this fork commits the
-official prebuilt `arm64-v8a` binaries, extracted verbatim from an upstream
-release APK and verified by sha256:
+So this fork builds PRoot from the correct source, using the same makefile
+pipeline as upstream's private builds:
 
 ```
-src/android/app/src/main/jniLibs/arm64-v8a/*.so     9 libraries
-src/android/app/src/main/assets/alpine-minirootfs.tar
-src/android/app/src/main/assets/proot-aarch64
+deps/proot/          OpenMinis' PRoot fork (git submodule, patches included)
+deps/talloc/         vendored talloc sources
+deps/build_proot.sh  NDK r28 build script (verbatim from upstream's repo)
 ```
 
-Two settings in `app/build.gradle.kts` protect them:
+CI runs `./deps/build_proot.sh clean` before Gradle on every build, producing
+`libproot.so` plus the independent loaders (`libproot-loader.so` /
+`libproot-loader32.so`) into `src/android/app/src/main/jniLibs/arm64-v8a/`.
+**No prebuilt sandbox binaries are committed to the repository.**
+
+Three settings in `app/build.gradle.kts` protect the setup:
 
 - `externalNativeBuild` is **removed**. Left enabled, AGP would compile
   `src/main/cpp/` and overwrite `libpty_bridge.so`, `libjieba_jni.so` and
   `libminis_crash_handler.so` with locally built copies.
 - `packaging { jniLibs { keepDebugSymbols += "**/*.so" } }` stops AGP running
-  the NDK's `strip` over already-stripped official binaries.
+  the NDK's `strip` over the proot build products.
 - `useLegacyPackaging = true` keeps the libraries extracted to
   `nativeLibraryDir` at install time. This is load-bearing: `RootfsManager`
   executes `libproot.so` as a **binary** from that directory, and that is
@@ -91,17 +96,40 @@ install NDK r28+.
 
 ---
 
-## Refreshing the vendored binaries
+## Upgrading PRoot
+
+The `deps/proot` submodule pins the exact PRoot revision the app is built
+from. To upgrade:
+
+```sh
+git -C deps/proot fetch origin
+git -C deps/proot checkout <new-tag-or-commit>
+git add deps/proot && git commit
+```
+
+Pushing that commit triggers a full rebuild — `deps/**` is part of the CI
+trigger set, and `build_proot.sh` runs on every build. If upstream's build
+script changes, mirror it into `deps/build_proot.sh` as well.
+
+---
+
+## Refreshing the vendored helper libraries
+
+PRoot is the only sandbox binary built from source. A handful of other native
+libraries — `libpty_bridge.so`, `libminis_crash_handler.so`, `libjieba_jni.so`
+and their C++ runtime dependencies — are still committed to the repository,
+extracted verbatim from an official upstream release APK:
 
 ```sh
 ./scripts/sync_official_binaries.sh              # newest upstream Android release
 ./scripts/sync_official_binaries.sh 0.22-preview # a specific tag
 ```
 
-This downloads the official APK, replaces the committed binaries, prints
-sha256s, and aligns `versionName` / `versionCode`. Run it after every rebase
-onto upstream — see [docs/SYNCING_UPSTREAM.md](docs/SYNCING_UPSTREAM.md) for why
-that is mandatory rather than optional.
+The script downloads the official APK, replaces those `.so` files, prints
+sha256s, and aligns `versionName` / `versionCode`. It deliberately does **not**
+touch `libproot.so` — that comes from `deps/build_proot.sh`. Run it after every
+rebase onto upstream; see [docs/SYNCING_UPSTREAM.md](docs/SYNCING_UPSTREAM.md)
+for why that is mandatory.
 
 ---
 
@@ -122,14 +150,15 @@ missing value is actually required.
 ## Continuous integration
 
 `.github/workflows/build-apk.yml` runs on every push to `main` that touches
-`src/android/`, `src/shared/` or the workflow itself, and can be triggered
-manually from the Actions tab. It:
+`src/android/`, `src/shared/`, `deps/` or the workflow itself, and can be
+triggered manually from the Actions tab. It:
 
 1. Restores the signing keystore from the `DEBUG_KEYSTORE_B64` secret
-2. Verifies each vendored `.so` is a valid ELF file
-3. Runs `assembleRelease`
-4. Asserts the `libproot.so` inside the APK matches the committed binary
-5. Publishes the APK to the `android-latest` release
+2. Installs NDK r28 and builds PRoot from source via `./deps/build_proot.sh clean`
+3. Verifies the build products (`libproot.so`, `libproot-loader.so`) exist
+4. Runs the full unit-test suite (`testReleaseUnitTest`) — red means red
+5. Runs `assembleRelease`
+6. Publishes the APK to the `android-latest` release
 
 ### Signing in CI
 
@@ -183,14 +212,21 @@ debug key vs. CI's). Uninstall it first.
 **`INSTALL_FAILED_VERSION_DOWNGRADE`** — the APK's `versionCode` is lower than
 what is installed. Uninstall, or bump `versionCode` in `build.gradle.kts`.
 
-**Terminal opens then immediately reports `Permission denied`** — the vendored
-binaries do not match the Kotlin source, usually after a rebase onto upstream
-without re-running `sync_official_binaries.sh`. Re-run it, or pin the release
-the source came from.
+**Terminal opens then immediately reports `Permission denied`** — the proot
+build products are missing or incomplete, usually because the build ran
+without `deps/build_proot.sh` (plain AGP CMake compiles PRoot without the
+W^X patches and fails at runtime), or the independent loader files
+(`libproot-loader.so` / `libproot-loader32.so`) were not produced — without
+them PRoot falls back to extracting its embedded loader into the app's
+noexec cache directory and dies within ~20 ms. Re-run
+`./deps/build_proot.sh clean`; CI's verify step (`test -s libproot-loader.so`)
+guards against this on the release path.
 
 **App builds but crashes on launch after a sync** — likely a JNI signature
-mismatch between new Kotlin and old `.so` files. Same fix as above. `adb logcat`
-will name the missing method.
+mismatch between new Kotlin and the committed native libs (`libpty_bridge.so`,
+`libjieba_jni.so`, …). `adb logcat` will name the missing method; if the
+mismatch is in a vendored lib, rebuild it from its source or wait for an
+upstream release that matches.
 
 **Gradle runs out of memory** — raise the heap in `src/android/gradle.properties`:
 `org.gradle.jvmargs=-Xmx4096m`.

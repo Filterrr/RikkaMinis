@@ -196,9 +196,11 @@ the point of use — the agent can only use what you grant.
 
 ```
 src/android/      Android app (Kotlin / Compose)
-  app/src/main/jniLibs/arm64-v8a/   Vendored official native binaries
-  app/src/main/assets/              Alpine rootfs + proot binary
+  app/src/main/jniLibs/arm64-v8a/   Native libs (jieba, pty bridge, crash handler);
+                                    libproot.so is a CI build artifact, not vendored
+  app/src/main/assets/              Alpine minirootfs
 src/shared/       Assets shared with upstream's iOS tree (bashism rules)
+deps/             proot source (submodule) + build_proot.sh (NDK r28 build)
 docs/             Sync procedure and interface specifications
 scripts/          Binary sync and developer tooling
 ```
@@ -209,8 +211,11 @@ scripts/          Binary sync and developer tooling
 
 OpenMinis stands on a great deal of open-source work — full inventory in
 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md). This fork is derived from
-**[OpenMinis/OpenMinis](https://github.com/OpenMinis/OpenMinis)** and ships its
-compiled sandbox binaries unmodified.
+**[OpenMinis/OpenMinis](https://github.com/OpenMinis/OpenMinis)** and builds its
+sandbox binaries from source: the `deps/proot` submodule (OpenMinis' PRoot
+fork, including its native-offload and W^X extensions) is compiled on every CI
+run via `deps/build_proot.sh` with NDK r28. No prebuilt sandbox binaries are
+committed to this repository.
 
 **The sandbox** — [PRoot](https://github.com/termux/proot) (GPLv2), user-space
 chroot for the Android sandbox, via [OpenMinis' fork](https://github.com/OpenMinis/proot);
