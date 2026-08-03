@@ -495,11 +495,32 @@ class ProviderRepository(private val context: Context) {
         }
     }
 
+    /**
+     * Make a private, writable snapshot for a mutation. Published
+     * [ProviderConfig] values must never be modified in place: StateFlow and
+     * Compose can be structurally comparing the previous value on the main
+     * thread while a model-refresh coroutine returns on IO. Mutating one of
+     * its ArrayLists in that window throws ConcurrentModificationException
+     * from ArrayList.equalsArrayList (see crash-2026-08-02_20-56-28).
+     *
+     * ModelEntry and its nested model/overrides are immutable; ProviderInstance
+     * and ModelGroup carry vars / mutable member ids and therefore need copies.
+     */
+    private fun mutationSnapshot(source: ProviderConfig): ProviderConfig = source.copy(
+        instances = source.instances.map { it.copy() }.toMutableList(),
+        modelEntries = source.modelEntries.toMutableList(),
+        modelGroups = source.modelGroups.map { group ->
+            group.copy(memberEntryIds = group.memberEntryIds.toMutableList())
+        }.toMutableList(),
+        agentLoopModelEntryIds = source.agentLoopModelEntryIds.toMutableList(),
+        agentLoopGroupIds = source.agentLoopGroupIds.toMutableList(),
+    )
+
     val instances: List<ProviderInstance> get() = _config.value.instances
 
-    fun addInstance(instance: ProviderInstance) {
+    fun addInstance(instance: ProviderInstance) = synchronized(configLock) {
         ensureConfigLoaded()
-        val config = _config.value
+        val config = mutationSnapshot(_config.value)
         config.instances.add(instance)
         // Seed built-in model entries ONLY when the seed is appropriate for this
         // instance. Mirrors iOS ProviderConfigStore.addInstance:
@@ -571,7 +592,10 @@ class ProviderRepository(private val context: Context) {
      */
     fun ensureVoiceTemplateModels() = synchronized(configLock) {
         ensureConfigLoaded()
-        val config = _config.value
+        // Runs on Dispatchers.IO from the init block's loadScope while Compose
+        // may be structurally comparing the published config on Main — mutate a
+        // detached snapshot, never `_config.value`. See [mutationSnapshot].
+        val config = mutationSnapshot(_config.value)
         var changed = false
         for (instance in config.instances) {
             val tpl = VoiceProviderTemplate.template(instance.customBaseURL) ?: continue
@@ -634,43 +658,48 @@ class ProviderRepository(private val context: Context) {
         return officialHosts.none { custom.contains(it) }
     }
 
-    fun updateInstance(instance: ProviderInstance) {
+    fun updateInstance(instance: ProviderInstance) = synchronized(configLock) {
         ensureConfigLoaded()
-        val config = _config.value
+        val config = mutationSnapshot(_config.value)
         val idx = config.instances.indexOfFirst { it.id == instance.id }
         if (idx >= 0) {
             val prior = config.instances[idx]
+            // Store a private copy: `instance` is caller-owned and carries
+            // `var` fields, so keeping the caller's reference in the published
+            // config would let a later caller-side edit mutate live state (the
+            // same class of race as the in-place list mutation above).
+            var next = instance.copy()
             // [T-android-image-endpoint-mode] If the base URL or v1-suffix
             // changed, the previously probed image endpoint may not exist on the
             // new upstream — drop the cached resolution so auto mode re-probes.
             // Mirrors iOS ProviderConfigStore.updateInstance. Only touch it when
             // the caller didn't already set it (e.g. the UI clears it itself when
             // the user forces a non-auto mode).
-            if ((prior.customBaseURL != instance.customBaseURL ||
-                    prior.appendV1Suffix != instance.appendV1Suffix) &&
-                instance.imageEndpointResolved != null
+            if ((prior.customBaseURL != next.customBaseURL ||
+                    prior.appendV1Suffix != next.appendV1Suffix) &&
+                next.imageEndpointResolved != null
             ) {
-                instance.imageEndpointResolved = null
+                next = next.copy(imageEndpointResolved = null)
             }
-            config.instances[idx] = instance
+            config.instances[idx] = next
             saveConfig(config)
             // Any change that could move the model list (base URL, credential
             // swap, enabled flag, API format) invalidates the cache. Cheap to
             // over-invalidate.
-            if (prior.effectiveBaseURL != instance.effectiveBaseURL ||
-                prior.credentialType != instance.credentialType ||
-                prior.isEnabled != instance.isEnabled ||
-                prior.useResponsesAPI != instance.useResponsesAPI
+            if (prior.effectiveBaseURL != next.effectiveBaseURL ||
+                prior.credentialType != next.credentialType ||
+                prior.isEnabled != next.isEnabled ||
+                prior.useResponsesAPI != next.useResponsesAPI
             ) {
-                invalidateModelCache(instance.id)
+                invalidateModelCache(next.id)
             }
         }
     }
 
-    fun removeInstance(instanceId: String) {
+    fun removeInstance(instanceId: String) = synchronized(configLock) {
         ensureConfigLoaded()
         invalidateModelCache(instanceId)
-        val config = _config.value
+        val config = mutationSnapshot(_config.value)
         val removedEntryIds = config.modelEntries
             .filter { it.providerInstanceId == instanceId }
             .map { it.id }
@@ -704,12 +733,16 @@ class ProviderRepository(private val context: Context) {
      * iCloud sync on every image call. Does not invalidate the model cache —
      * the endpoint choice never moves the model list.
      */
-    fun setImageEndpointResolved(instanceId: String, endpoint: ImageEndpointMode) {
+    fun setImageEndpointResolved(instanceId: String, endpoint: ImageEndpointMode) = synchronized(configLock) {
         ensureConfigLoaded()
-        val config = _config.value
+        // Called from ModelUseOffloadHandler on the sandbox offload path (not
+        // Main). Snapshot before writing: this mutates a ProviderInstance `var`,
+        // which on the published config would be visible mid-comparison to a
+        // Compose collector. See [mutationSnapshot].
+        val config = mutationSnapshot(_config.value)
         val idx = config.instances.indexOfFirst { it.id == instanceId }
-        if (idx < 0) return
-        if (config.instances[idx].imageEndpointResolved == endpoint) return
+        if (idx < 0) return@synchronized
+        if (config.instances[idx].imageEndpointResolved == endpoint) return@synchronized
         config.instances[idx].imageEndpointResolved = endpoint
         saveConfig(config)
     }
@@ -845,7 +878,11 @@ class ProviderRepository(private val context: Context) {
         // Hot path for concurrent autoRefreshModels coroutines (one per
         // enabled instance) — without this lock, two replaceEntries() calls
         // race on the shared config.modelEntries ArrayList.
-        val config = _config.value
+        // Never mutate `_config.value` itself. Parallel model refreshes complete
+        // on IO while Compose compares the last published ProviderConfig on
+        // Main; changing its ArrayLists in place is the exact CME in the crash
+        // report above. All edits below happen on this detached snapshot.
+        val config = mutationSnapshot(_config.value)
         val existing = config.modelEntries.filter { it.providerInstanceId == instanceId }
         val existingEntryIds = existing.map { it.id }.toSet()
 
@@ -953,22 +990,22 @@ class ProviderRepository(private val context: Context) {
 
     // --- Model Entry management ---
 
-    fun addEntry(entry: ModelEntry) {
+    fun addEntry(entry: ModelEntry) = synchronized(configLock) {
         ensureConfigLoaded()
-        val config = _config.value
+        val config = mutationSnapshot(_config.value)
         if (!entry.isCustom) {
             val exists = config.modelEntries.any {
                 it.providerInstanceId == entry.providerInstanceId && it.baseModel.id == entry.baseModel.id
             }
-            if (exists) return
+            if (exists) return@synchronized
         }
         config.modelEntries.add(entry)
         saveConfig(config)
     }
 
-    fun updateEntry(entry: ModelEntry) {
+    fun updateEntry(entry: ModelEntry) = synchronized(configLock) {
         ensureConfigLoaded()
-        val config = _config.value
+        val config = mutationSnapshot(_config.value)
         val idx = config.modelEntries.indexOfFirst { it.id == entry.id }
         if (idx >= 0) {
             config.modelEntries[idx] = entry.copy(userModifiedAt = System.currentTimeMillis())
@@ -976,9 +1013,9 @@ class ProviderRepository(private val context: Context) {
         }
     }
 
-    fun removeEntry(entryId: String) {
+    fun removeEntry(entryId: String) = synchronized(configLock) {
         ensureConfigLoaded()
-        val config = _config.value
+        val config = mutationSnapshot(_config.value)
         config.modelEntries.removeAll { it.id == entryId }
         config.modelGroups.forEach { group ->
             group.memberEntryIds.removeAll { it == entryId }
@@ -993,26 +1030,28 @@ class ProviderRepository(private val context: Context) {
 
     // --- Model Group management ---
 
-    fun addGroup(group: ModelGroup) {
+    fun addGroup(group: ModelGroup) = synchronized(configLock) {
         ensureConfigLoaded()
-        val config = _config.value
-        config.modelGroups.add(group)
+        val config = mutationSnapshot(_config.value)
+        // Detach the caller's group: `memberEntryIds` is a MutableList the
+        // caller still holds a reference to.
+        config.modelGroups.add(group.copy(memberEntryIds = group.memberEntryIds.toMutableList()))
         saveConfig(config)
     }
 
-    fun updateGroup(group: ModelGroup) {
+    fun updateGroup(group: ModelGroup) = synchronized(configLock) {
         ensureConfigLoaded()
-        val config = _config.value
+        val config = mutationSnapshot(_config.value)
         val idx = config.modelGroups.indexOfFirst { it.id == group.id }
         if (idx >= 0) {
-            config.modelGroups[idx] = group
+            config.modelGroups[idx] = group.copy(memberEntryIds = group.memberEntryIds.toMutableList())
             saveConfig(config)
         }
     }
 
-    fun removeGroup(groupId: String) {
+    fun removeGroup(groupId: String) = synchronized(configLock) {
         ensureConfigLoaded()
-        val config = _config.value
+        val config = mutationSnapshot(_config.value)
         config.modelGroups.removeAll { it.id == groupId }
         if (config.defaultPrimaryGroupId == groupId) {
             config.defaultPrimaryGroupId = null
@@ -1031,9 +1070,9 @@ class ProviderRepository(private val context: Context) {
     }
 
     /** Set the agent-loop-visible entry ID list (individual model entries). */
-    fun setAgentLoopEntryIds(ids: List<String>) {
+    fun setAgentLoopEntryIds(ids: List<String>) = synchronized(configLock) {
         ensureConfigLoaded()
-        val config = _config.value
+        val config = mutationSnapshot(_config.value)
         config.agentLoopModelEntryIds.clear()
         // [T-android-agentloop-dup-key-crash] Dedup at the sink (preserving
         // first-seen order). addAgentLoopEntry guards against dups, but any
@@ -1046,9 +1085,9 @@ class ProviderRepository(private val context: Context) {
     }
 
     /** Set the agent-loop-visible group ID list. */
-    fun setAgentLoopGroupIds(ids: List<String>) {
+    fun setAgentLoopGroupIds(ids: List<String>) = synchronized(configLock) {
         ensureConfigLoaded()
-        val config = _config.value
+        val config = mutationSnapshot(_config.value)
         config.agentLoopGroupIds.clear()
         // [T-android-agentloop-dup-key-crash] Dedup at the sink (see above) so
         // no write path can persist duplicate group ids → duplicate LazyColumn
@@ -1146,16 +1185,18 @@ class ProviderRepository(private val context: Context) {
 
     var defaultPrimaryGroupId: String?
         get() = _config.value.defaultPrimaryGroupId
-        set(value) {
-            val config = _config.value
+        set(value) = synchronized(configLock) {
+            ensureConfigLoaded()
+            val config = mutationSnapshot(_config.value)
             config.defaultPrimaryGroupId = value
             saveConfig(config)
         }
 
     var defaultSubGroupId: String?
         get() = _config.value.defaultSubGroupId
-        set(value) {
-            val config = _config.value
+        set(value) = synchronized(configLock) {
+            ensureConfigLoaded()
+            val config = mutationSnapshot(_config.value)
             config.defaultSubGroupId = value
             saveConfig(config)
         }
@@ -1164,18 +1205,18 @@ class ProviderRepository(private val context: Context) {
 
     var voiceInputGroupId: String?
         get() = _config.value.voiceInputGroupId
-        set(value) {
+        set(value) = synchronized(configLock) {
             ensureConfigLoaded()
-            val config = _config.value
+            val config = mutationSnapshot(_config.value)
             config.voiceInputGroupId = value
             saveConfig(config)
         }
 
     var voiceOutputGroupId: String?
         get() = _config.value.voiceOutputGroupId
-        set(value) {
+        set(value) = synchronized(configLock) {
             ensureConfigLoaded()
-            val config = _config.value
+            val config = mutationSnapshot(_config.value)
             config.voiceOutputGroupId = value
             saveConfig(config)
         }
@@ -1188,11 +1229,11 @@ class ProviderRepository(private val context: Context) {
      * when a valid binding already exists. Mirrors iOS
      * ProviderConfigStore.ensureDefaultVoiceInputGroup.
      */
-    fun ensureDefaultVoiceInputGroup(): String? {
+    fun ensureDefaultVoiceInputGroup(): String? = synchronized(configLock) {
         ensureConfigLoaded()
-        val config = _config.value
+        val config = mutationSnapshot(_config.value)
         config.voiceInputGroupId?.let { gid ->
-            if (config.modelGroups.any { it.id == gid }) return gid
+            if (config.modelGroups.any { it.id == gid }) return@synchronized gid
         }
         val sentinel = SystemVoiceIds.BUILTIN_PROVIDER_ID
         val group = ModelGroup(
@@ -1206,7 +1247,7 @@ class ProviderRepository(private val context: Context) {
         config.voiceInputGroupId = group.id
         saveConfig(config)
         android.util.Log.i("ProviderRepo", "[Voice] auto-created default Voice Input group ${group.id.take(8)} [System ASR online+offline]")
-        return group.id
+        return@synchronized group.id
     }
 
     /**
@@ -1214,11 +1255,11 @@ class ProviderRepository(private val context: Context) {
      * "Voice Output" with the System TTS auto sentinel (device TextToSpeech,
      * best voice per reply language). Mirrors iOS ensureDefaultVoiceOutputGroup.
      */
-    fun ensureDefaultVoiceOutputGroup(): String? {
+    fun ensureDefaultVoiceOutputGroup(): String? = synchronized(configLock) {
         ensureConfigLoaded()
-        val config = _config.value
+        val config = mutationSnapshot(_config.value)
         config.voiceOutputGroupId?.let { gid ->
-            if (config.modelGroups.any { it.id == gid }) return gid
+            if (config.modelGroups.any { it.id == gid }) return@synchronized gid
         }
         val sentinel = SystemVoiceIds.BUILTIN_PROVIDER_ID
         val group = ModelGroup(
@@ -1229,7 +1270,7 @@ class ProviderRepository(private val context: Context) {
         config.voiceOutputGroupId = group.id
         saveConfig(config)
         android.util.Log.i("ProviderRepo", "[Voice] auto-created default Voice Output group ${group.id.take(8)} [System Voice (Auto)]")
-        return group.id
+        return@synchronized group.id
     }
 
     /**
@@ -1475,9 +1516,12 @@ class ProviderRepository(private val context: Context) {
 
     fun setVoiceShadowDisabled(instanceId: String, disabled: Boolean) {
         prefs.edit().putBoolean("voiceShadowDisabled.$instanceId", disabled).apply()
-        // Bump revision so Compose collectors re-read the shadow list.
-        val config = _config.value
+        // Bump revision so Compose collectors re-read the shadow list. Read
+        // `_config.value` INSIDE the lock — reading it outside could pick up a
+        // value a concurrent writer is about to replace, publishing a stale
+        // config with only its revision advanced.
         synchronized(configLock) {
+            val config = _config.value
             _config.value = config.copy(revision = config.revision + 1)
         }
     }
@@ -2065,10 +2109,12 @@ class ProviderRepository(private val context: Context) {
                 ))
             }
             // Import replaces built-in entries directly (not via replaceEntries which takes LLMModel list)
-            val cfg = _config.value
-            cfg.modelEntries.removeAll { it.providerInstanceId == instance.id }
-            cfg.modelEntries.addAll(entries)
-            saveConfig(cfg)
+            synchronized(configLock) {
+                val cfg = mutationSnapshot(_config.value)
+                cfg.modelEntries.removeAll { it.providerInstanceId == instance.id }
+                cfg.modelEntries.addAll(entries)
+                saveConfig(cfg)
+            }
         }
 
         return resolvedLabel

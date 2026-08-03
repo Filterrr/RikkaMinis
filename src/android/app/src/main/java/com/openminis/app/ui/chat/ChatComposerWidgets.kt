@@ -386,64 +386,8 @@ internal fun InputCircleButton(
         content()
     }
 }
+// MicButton removed with the voice-input feature (had no callers left).
 
-/**
- * Mic button with a two-state appearance — mirrors iOS `MicButton`.
- *
- * Idle: outlined mic, neutral bg.
- * Recording: filled mic, red-tinted bg, optional 2-letter locale badge
- * overlayed on the top-right (e.g. "EN", "ZH").
- */
-@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
-@Composable
-internal fun MicButton(
-    isRecording: Boolean,
-    localeBadge: String?,
-    onClick: () -> Unit,
-    onLongClick: (() -> Unit)? = null,
-    // [T-android-voice-panel] While the inline voice panel is active the same
-    // slot switches back to text input — keyboard glyph (mirrors iOS "T").
-    isVoiceActive: Boolean = false,
-) {
-    val bg = if (isRecording) Color.Red.copy(alpha = 0.15f)
-             else ChatColors.inputIconBg
-    val tint = if (isRecording) Color.Red
-               else MaterialTheme.colorScheme.onSurfaceVariant
-    val borderColor = if (isRecording) Color.Transparent else ChatColors.inputIconBorder
-    Box(
-        modifier = Modifier
-            .size(38.dp)
-            .background(bg, CircleShape)
-            .border(0.5.dp, borderColor, CircleShape)
-            .clip(CircleShape)
-            .combinedClickable(
-                onClick = onClick,
-                onLongClick = onLongClick,
-            ),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            if (isVoiceActive) Icons.Default.Keyboard else Icons.Default.Mic,
-            contentDescription = if (isVoiceActive) "Switch to keyboard"
-            else if (isRecording) "Stop recording" else "Voice input",
-            tint = tint,
-            modifier = Modifier.size(20.dp),
-        )
-        if (!localeBadge.isNullOrEmpty()) {
-            Text(
-                text = localeBadge,
-                fontSize = 8.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.Red,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 2.dp, end = 2.dp)
-                    .background(Color.White, CircleShape)
-                    .padding(horizontal = 3.dp, vertical = 1.dp),
-            )
-        }
-    }
-}
 
 // ─── Tool Preview Thumbnail (iOS: ToolPreviewThumbnail — tool-specific preview) ──
 

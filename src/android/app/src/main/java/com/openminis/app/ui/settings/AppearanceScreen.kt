@@ -54,6 +54,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -180,6 +181,32 @@ fun AppearanceScreen(
     var selectedAppIcon by remember { mutableStateOf(AppIconRepository.current(context)) }
 
     val fontsModified = chatInputLevel != 0 || messageLevel != 0 || appBaseLevel != 0
+
+    // [T-backup-import-refresh] OnSharedPreferenceChangeListener drives the
+    // Compose state back from SharedPreferences after a write outside this
+    // composable (minis-config `set`, backup-restore). Without this, the
+    // remember{} snapshot is stale forever and the UI shows the old value
+    // even though the underlying prefs have changed.
+    DisposableEffect(prefs) {
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            when (key) {
+                KEY_THEME_MODE -> themeMode = prefs.getInt(key, 0)
+                KEY_LAUNCH_SESSION -> launchSession = prefs.getInt(key, 0)
+                KEY_RETURN_KEY_BEHAVIOR -> returnKeyBehavior = prefs.getInt(key, 0)
+                KEY_KEEP_SCREEN_AWAKE -> keepScreenAwake = prefs.getBoolean(key, false)
+                KEY_TOOL_PREVIEW -> toolPreview = prefs.getBoolean(key, true)
+                KEY_AUTO_FOCUS_AFTER_REPLY -> autoFocusAfterReply = prefs.getBoolean(key, true)
+                KEY_AUTO_EXPAND_THINKING -> autoExpandThinking = prefs.getBoolean(key, true)
+                KEY_SHOW_CHAT_TITLE -> showChatTitle = prefs.getBoolean(key, true)
+                KEY_FONT_CHAT_INPUT -> chatInputLevel = prefs.getInt(key, 0)
+                KEY_FONT_MESSAGE -> messageLevel = prefs.getInt(key, 0)
+                KEY_FONT_APP_BASE -> appBaseLevel = prefs.getInt(key, 0)
+                KEY_LANGUAGE -> selectedLanguage = prefs.getString(key, "") ?: ""
+            }
+        }
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+        onDispose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
 
     val tilePurple = Color(0xFF5856D6)
     val tileBlue = Color(0xFF007AFF)

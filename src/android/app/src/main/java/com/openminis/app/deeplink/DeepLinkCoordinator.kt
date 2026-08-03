@@ -66,11 +66,12 @@ object DeepLinkCoordinator {
      * trigger on first compose. Mirrors iOS `pendingChatAction` on
      * AIChatViewModel. Set by [com.openminis.app.MainActivity] /
      * [com.openminis.app.ui.navigation.AppNavigation] when the launch
-     * intent carries `minis://action/voice_chat` or
-     * `minis://action/camera_chat`; consumed exactly once by ChatScreen
-     * so re-entering the same chat later doesn't fire the action again.
+     * intent carries `minis://action/camera_chat`; consumed exactly once
+     * by ChatScreen so re-entering the same chat later doesn't fire the
+     * action again. (voice_chat / START_VOICE were removed together with
+     * the in-composer mic button.)
      */
-    enum class ChatAction { START_VOICE, OPEN_CAMERA }
+    enum class ChatAction { OPEN_CAMERA }
 
     private val _pendingChatAction = MutableStateFlow<ChatAction?>(null)
     val pendingChatAction: StateFlow<ChatAction?> = _pendingChatAction.asStateFlow()

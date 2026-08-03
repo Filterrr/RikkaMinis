@@ -42,16 +42,44 @@ APK installed you must uninstall it first.
 
 ## What this fork changes
 
-The app itself is upstream OpenMinis. The changes here are about the build:
+This started as a build-only fork, but it now also carries a small set of
+Android-specific product changes that are not present upstream.
+
+### App changes
+
+- **Complete local backup and restore.** Settings → Storage → Backup & Restore
+  exports a portable JSON file and imports it on another installation. It
+  covers provider/model configuration and groups, optional API keys,
+  environment variables, app/agent/chat defaults, Soul, complete skills
+  (SKILL.md plus bundled scripts, references and assets), persistent memory,
+  MCP server configuration, and scheduled tasks.
+- **Honest exclusions.** Chat history is not part of a configuration backup.
+  Mounted-folder permissions cannot be transferred between Android devices,
+  MCP OAuth client secrets/tokens are never exported, and scheduled-task run
+  history is intentionally discarded. OAuth-backed MCP servers must be
+  re-authorized after restore.
+- **Chat UI refinements.** Message links can focus and highlight a specific
+  message; navigation titles are left-aligned; the active model selector lives
+  in the composer; attachment and command actions are arranged more compactly.
+- **Simpler composer.** The dedicated voice-chat shortcut and its inline UI
+  have been removed. Android's agent-facing speech tools are unaffected.
+- **Settings consistency fixes.** Restored preferences refresh the live
+  settings UI, and previously disconnected/missing settings keys are now
+  registered and included in backups.
+
+### Build and release changes
 
 - **proot is built from source.** The sandbox engine comes from the
   `deps/proot` submodule + `deps/build_proot.sh` + vendored `deps/talloc`,
   compiled with NDK r28 in CI — no committed binary blobs, fully reproducible.
 - **Other native libs stay vendored.** `libpty_bridge.so`,
   `libminis_crash_handler.so` and `libjieba_jni.so` are committed as-is.
+- **Backup tests run in CI.** The backup payload tests run before the APK
+  build.
 - **iOS sources removed.** `src/ios/` is gone; this tree is Android only.
 - **Automatic releases.** Successful builds publish the APK to the
   `android-latest` release.
+
 
 ### Why build proot from source?
 
@@ -79,7 +107,8 @@ prompts and model integrations are unaffected — build normally.
 | **A real Linux shell** | A sandboxed Alpine Linux environment runs on-device — the agent can install packages, run scripts, and work with real files. |
 | **Device integration** | Calendar, Contacts, Clipboard, Location, Media, Alarms, Notifications and more, exposed to the agent as tools. |
 | **Browser automation** | The agent can browse and interact with the web on your behalf. |
-| **Skills & memory** | Extensible skills plus persistent memory across sessions. |
+| **Skills & memory** | Extensible skills plus persistent memory across sessions. Complete skill bundles and memory files are included in local backups. |
+| **Local backup & restore** | Export configuration, credentials (optional), skills, memory, MCP servers and scheduled tasks to one portable JSON file. |
 | **Workspaces** | Organise work into separate contexts, addressable via `minis://workspace/`. |
 | **Native offloads** | Heavy or platform-specific work is handed to native code instead of the sandbox. |
 
@@ -95,14 +124,16 @@ curated collection of use cases and workflows.
 ## Building locally
 
 ```sh
-git clone https://github.com/logicflow-GYW/OpenMinis.git
+git clone --recurse-submodules https://github.com/logicflow-GYW/OpenMinis.git
 cd OpenMinis/src/android
+../../deps/build_proot.sh        # build the proot sandbox engine from source
 ./gradlew assembleRelease
 ```
 
-Needs **JDK 17** and the Android SDK (compileSdk 36). No NDK, no submodules, no
-rootfs preparation — the binaries are already in the tree. The APK lands in
-`app/build/outputs/apk/release/`.
+Needs **JDK 17**, the Android SDK (compileSdk 36) and **NDK r28** — the latter
+for `deps/build_proot.sh`, which compiles the proot sandbox engine from the
+`deps/proot` submodule (the other native libs are vendored in the tree). The APK
+lands in `app/build/outputs/apk/release/`.
 
 Local builds are signed with your own `~/.android/debug.keystore`, so they will
 not install over a CI build. To match CI, put the same keystore there.
@@ -115,13 +146,16 @@ See [BUILDING.md](BUILDING.md) for toolchain details and troubleshooting.
 
 Upstream is a one-way mirror that does not accept pull requests, and this fork
 has diverged in a handful of files. Syncing is possible but has an order of
-operations — in particular, the vendored binaries must be refreshed whenever
-upstream's Kotlin changes, or the app breaks at runtime.
+operations — in particular, the vendored pty_bridge / crash_handler / jieba
+libraries must be refreshed whenever upstream's Kotlin changes, or the app
+breaks at runtime. proot is **not** vendored any more: it is built from source
+in CI via `deps/build_proot.sh`, so the only thing to refresh for it is the
+`deps/proot` submodule when upstream bumps it.
 
 ```sh
 git fetch upstream
 git rebase upstream/main               # not merge
-./scripts/sync_official_binaries.sh    # refresh binaries to match
+./scripts/sync_official_binaries.sh    # refresh the vendored pty_bridge/crash_handler/jieba libs
 ```
 
 **→ See [docs/SYNCING_UPSTREAM.md](docs/SYNCING_UPSTREAM.md)** for the full
@@ -144,7 +178,11 @@ This fork adds no tracking, and upstream ships none. Specifically:
   compiled out of the release APK published here.
 
 Network traffic goes to the model providers you configure, using your own API
-keys, plus the endpoints you explicitly ask the agent to visit.
+keys, plus the endpoints you explicitly ask the agent to visit. Local backup
+files never leave the device unless you share or copy them yourself. If you
+choose "include secrets", the JSON contains API keys and environment-variable
+values in recoverable form; store that file like a password. MCP OAuth tokens
+and client secrets are excluded even from secret-inclusive backups.
 
 The app requests broad permissions (storage, contacts, calendar, microphone,
 location, accessibility) because they back agent tools. They are requested at
@@ -207,5 +245,6 @@ For the original project, the iOS app, issues and community:
 [openminis.app](https://openminis.app) ·
 [Telegram](https://t.me/+2NzhOJuzRyI1YmM1)
 
-Report bugs in the app itself upstream, not here — this fork changes only the
-build. Issues specific to the build or the published APK belong here.
+For general app bugs, check whether they also occur in the official upstream
+build. Upstream issues belong at OpenMinis/OpenMinis; problems with this fork's
+build, APK, backup/restore flow, or Android UI changes belong in this repository.

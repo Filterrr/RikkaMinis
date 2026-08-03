@@ -585,15 +585,13 @@ class MainActivity : ComponentActivity() {
                 nav.navigate(Routes.chat(action.sessionId))
             }
             // App-icon quick actions (mirrors iOS QuickActionRouter). All
-            // three open a fresh draft chat; voice/camera additionally seed
+            // both open a fresh draft chat; camera additionally seeds
             // DeepLinkCoordinator.pendingChatAction so ChatScreen auto-fires
-            // the corresponding UI on first compose.
+            // the camera on first compose. (Voice shortcut removed with the
+            // mic button.)
             is DeepLinkAction.NewChat,
-            is DeepLinkAction.NewVoiceChat,
             is DeepLinkAction.NewCameraChat -> {
                 when (action) {
-                    is DeepLinkAction.NewVoiceChat -> DeepLinkCoordinator
-                        .setPendingChatAction(DeepLinkCoordinator.ChatAction.START_VOICE)
                     is DeepLinkAction.NewCameraChat -> DeepLinkCoordinator
                         .setPendingChatAction(DeepLinkCoordinator.ChatAction.OPEN_CAMERA)
                     else -> {}
