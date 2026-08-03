@@ -69,6 +69,12 @@ Android-specific product changes that are not present upstream.
   the current chat. The drawer mirrors the session list: same grouping,
   category icons and relative timestamps, current chat highlighted, and
   long-press to delete a conversation.
+- **UX polish.** Entering the app no longer pops the keyboard — the composer
+  only focuses when you tap it. Tool-result thumbnail previews in the
+  composer are off by default (toggle in Settings → Appearance). The chat
+  "…" menu exports the current conversation (JSON or plain text) and no
+  longer lists Clear Chat, which duplicated New Chat and could strand an
+  empty ghost conversation.
 - **Simpler composer.** The dedicated voice-chat shortcut and its inline UI
   have been removed. Android's agent-facing speech tools are unaffected.
 - **Settings consistency fixes.** Restored preferences refresh the live
