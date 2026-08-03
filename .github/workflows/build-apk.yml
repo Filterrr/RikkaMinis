@@ -111,6 +111,12 @@ jobs:
         run: |
           cd src/android/app/src/main
           test -s jniLibs/arm64-v8a/libproot.so
+          # The standalone loader MUST ship alongside libproot.so. The app
+          # points PROOT_LOADER at it to bypass proot's extract_loader()
+          # fallback, which writes the embedded loader to an app cache dir and
+          # execs it — fatal on Android because those dirs are mounted noexec
+          # (dead terminal, status=1, no output). Missing loader => broken APK.
+          test -s jniLibs/arm64-v8a/libproot-loader.so
           test -s assets/proot-aarch64
           test -s assets/alpine-minirootfs.tar
           echo "7f454c46" > /tmp/elf_magic

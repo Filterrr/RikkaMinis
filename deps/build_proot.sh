@@ -36,6 +36,18 @@ OUTPUT_BIN="$ASSETS_DIR/proot-aarch64"
 # app's nativeLibraryDir at install time). Keep both in sync.
 JNILIBS_DIR="$PROJECT_ROOT/src/android/app/src/main/jniLibs/arm64-v8a"
 JNILIBS_BIN="$JNILIBS_DIR/libproot.so"
+# Standalone PRoot loaders, shipped as native libs alongside libproot.so.
+# CRITICAL: the app sets PROOT_LOADER / PROOT_LOADER_32 to these files so that
+# proot's extract_loader() fallback is NEVER taken. That fallback writes the
+# embedded loader into PROOT_TMP_DIR (an app cache dir) and then does
+# access(path, X_OK) — which FAILS on Android because app cache/tmp dirs are
+# mounted noexec under SELinux/W^X. Without these files proot aborts in ~20ms
+# with status=1 and no output (dead terminal / dead shell). nativeLibraryDir
+# is the only app-owned directory Android allows to be executed from, so the
+# loaders must live here. Keep libproot-loader.so (64-bit) and
+# libproot-loader32.so (32-bit) in sync with libproot.so on every build.
+JNILIBS_LOADER="$JNILIBS_DIR/libproot-loader.so"
+JNILIBS_LOADER32="$JNILIBS_DIR/libproot-loader32.so"
 
 # talloc version pinned to a known-good release. Single-file build avoids
 # Samba's waf-based build system entirely (we just compile talloc.c).
@@ -284,6 +296,25 @@ build_proot() {
 
     log_success "proot built: $built ($(du -h "$built" | awk '{print $1}'))"
     BUILT_PROOT="$built"
+
+    # Capture the standalone loaders too. The makefile builds loader/loader
+    # (and loader/loader-m32 where HAS_LOADER_32BIT) as intermediates before
+    # embedding them into the proot binary, so they exist in src/loader/ after
+    # a successful build. The app ships these as libproot-loader.so /
+    # libproot-loader32.so and points PROOT_LOADER[_32] at them to bypass the
+    # noexec extract_loader() fallback (see JNILIBS_LOADER comment above).
+    BUILT_LOADER="$PROOT_DIR/src/loader/loader"
+    BUILT_LOADER32="$PROOT_DIR/src/loader/loader-m32"
+    if [ ! -f "$BUILT_LOADER" ]; then
+        log_error "Build finished but standalone loader $BUILT_LOADER is missing"
+    fi
+    "$STRIP" "$BUILT_LOADER" 2>/dev/null || true
+    if [ -f "$BUILT_LOADER32" ]; then
+        "$STRIP" "$BUILT_LOADER32" 2>/dev/null || true
+    else
+        log_info "No 32-bit loader built (HAS_LOADER_32BIT off); shipping 64-bit only"
+        BUILT_LOADER32=""
+    fi
 }
 
 # ----------------------------------------------------------------------------
@@ -306,6 +337,20 @@ install_asset() {
     mkdir -p "$JNILIBS_DIR"
     install -m 0755 "$BUILT_PROOT" "$JNILIBS_BIN"
     log_success "Installed: $JNILIBS_BIN ($(du -h "$JNILIBS_BIN" | awk '{print $1}'))"
+
+    # Ship the standalone loaders next to libproot.so. Without these the
+    # terminal/shell dies instantly on-device (noexec extract_loader path).
+    if [ -z "${BUILT_LOADER:-}" ] || [ ! -f "$BUILT_LOADER" ]; then
+        log_error "Standalone loader missing; refusing to ship a broken proot"
+    fi
+    install -m 0755 "$BUILT_LOADER" "$JNILIBS_LOADER"
+    log_success "Installed: $JNILIBS_LOADER ($(du -h "$JNILIBS_LOADER" | awk '{print $1}'))"
+    if [ -n "${BUILT_LOADER32:-}" ] && [ -f "$BUILT_LOADER32" ]; then
+        install -m 0755 "$BUILT_LOADER32" "$JNILIBS_LOADER32"
+        log_success "Installed: $JNILIBS_LOADER32 ($(du -h "$JNILIBS_LOADER32" | awk '{print $1}'))"
+    else
+        rm -f "$JNILIBS_LOADER32"
+    fi
 }
 
 # ----------------------------------------------------------------------------
