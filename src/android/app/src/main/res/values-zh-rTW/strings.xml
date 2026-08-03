@@ -446,11 +446,16 @@
     <string name="settings_backup">備份與還原</string>
     <string name="settings_backup_subtitle">匯出或匯入設定與提供商</string>
     <string name="backup_section_local">本機備份</string>
-    <string name="backup_section_footer">備份包含提供商、外觀設定、Agent 執行階段預設值、環境變數、技能、記憶、MCP 伺服器。不含聊天記錄。</string>
+    <string name="backup_section_footer">備份包含提供商、外觀設定、Agent 執行階段預設值、環境變數、技能、記憶、MCP 伺服器，以及聊天記錄（僅文字，不含媒體）。</string>
     <string name="backup_export">匯出備份</string>
     <string name="backup_export_sub">儲存為裝置上的 JSON 檔案（技能檔案會一併嵌入，檔案可能有數 MB）</string>
     <string name="backup_import">從備份還原</string>
     <string name="backup_import_sub">選擇備份檔案並匯入設定</string>
+    <string name="backup_chat_window_title">聊天記錄範圍</string>
+    <string name="backup_chat_window_sub">備份最近 %1$d 天的活躍會話，僅文字</string>
+    <string name="backup_chat_window_off">關閉（不備份聊天記錄）</string>
+    <string name="backup_chat_window_days">%1$d 天</string>
+    <string name="backup_done_chat">已還原 %1$d 個會話、%2$d 條訊息</string>
     <string name="backup_saved">備份已儲存</string>
     <string name="backup_secret_title">備份將包含 API 金鑰</string>
     <string name="backup_secret_body">匯出的檔案含有提供商的 API 金鑰與登入憑證，任何取得該檔案的人都能使用。請妥善保管，勿分享。</string>

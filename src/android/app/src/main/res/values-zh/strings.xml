@@ -971,11 +971,16 @@
     <string name="settings_backup">备份与恢复</string>
     <string name="settings_backup_subtitle">导出或导入设置与提供商</string>
     <string name="backup_section_local">本地备份</string>
-    <string name="backup_section_footer">备份包含提供商、外观设置、Agent 运行时默认值、环境变量、技能、记忆、MCP 服务器。不含聊天记录。</string>
+    <string name="backup_section_footer">备份包含提供商、外观设置、Agent 运行时默认值、环境变量、技能、记忆、MCP 服务器，以及聊天记录（仅文本，不含媒体）。</string>
     <string name="backup_export">导出备份</string>
     <string name="backup_export_sub">保存为设备上的 JSON 文件（技能文件会一并嵌入，文件可能有数 MB）</string>
     <string name="backup_import">从备份恢复</string>
     <string name="backup_import_sub">选择备份文件并导入设置</string>
+    <string name="backup_chat_window_title">聊天记录范围</string>
+    <string name="backup_chat_window_sub">备份最近 %1$d 天的活跃会话，仅文本</string>
+    <string name="backup_chat_window_off">关闭（不备份聊天记录）</string>
+    <string name="backup_chat_window_days">%1$d 天</string>
+    <string name="backup_done_chat">已恢复 %1$d 个会话、%2$d 条消息</string>
     <string name="backup_saved">备份已保存</string>
     <string name="backup_secret_title">备份将包含 API 密钥</string>
     <string name="backup_secret_body">导出的文件含有提供商的 API 密钥和登录凭据，可被任何拿到该文件的人使用。请妥善保管，不要分享。</string>

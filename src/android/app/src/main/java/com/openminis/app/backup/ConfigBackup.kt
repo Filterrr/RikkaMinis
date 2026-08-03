@@ -8,6 +8,9 @@ import com.openminis.app.data.model.FallbackStrategy
 import com.openminis.app.data.model.ModelGroup
 import com.openminis.app.data.model.RoutingStrategy
 import com.openminis.app.data.model.ThinkingLevel
+import com.openminis.app.data.db.ChatSessionEntity
+import com.openminis.app.data.db.MessageEntity
+import com.openminis.app.data.repository.ChatRepository
 import com.openminis.app.data.repository.EnvVarRepository
 import com.openminis.app.data.repository.MCPRepository
 import com.openminis.app.data.repository.MemoryRepository
@@ -81,6 +84,10 @@ object ConfigBackup {
         val memoryFilesImported: Int,
         /** MCP servers restored (OAuth credentials always need re-auth). */
         val mcpServersImported: Int,
+        /** Chat sessions restored (metadata + text-only parts). */
+        val chatSessionsImported: Int,
+        /** Chat messages restored (text-only parts). */
+        val chatMessagesImported: Int,
         /** Human-readable "path: why" lines for anything deliberately not applied. */
         val skipped: List<String>,
         /** True when the payload carried credentials (affects the post-import hint). */
@@ -102,6 +109,8 @@ object ConfigBackup {
         skillRepo: SkillRepository? = null,
         memoryRepo: MemoryRepository? = null,
         mcpRepo: MCPRepository? = null,
+        chatRepo: ChatRepository? = null,
+        chatWindowDays: Int = 90,
     ): String {
         val registry = ConfigRegistry.get()
 
@@ -275,6 +284,54 @@ object ConfigBackup {
             }
         }
 
+        // Chat history: session metadata + text-only message parts, limited to
+        // the last chatWindowDays of activity and the most recent
+        // MAX_CHAT_MESSAGES_PER_SESSION messages per session. Media parts
+        // (images/videos/files) are dropped — they dominate the size and point
+        // at payloads that will not exist on the target device. The result is
+        // small enough to embed directly in this JSON document.
+        val chatSessions = JSONArray()
+        val chatMessages = JSONArray()
+        if (chatRepo != null && chatWindowDays > 0) {
+            val cutoff = System.currentTimeMillis() - chatWindowDays * 24L * 3600 * 1000
+            val sessions = runCatching {
+                kotlinx.coroutines.runBlocking { chatRepo.dao.sessionsUpdatedSince(cutoff) }
+            }.getOrDefault(emptyList())
+            for (session in sessions) {
+                chatSessions.put(JSONObject().apply {
+                    put("id", session.id)
+                    put("title", session.title)
+                    put("modelId", session.modelId)
+                    put("createdAt", session.createdAt)
+                    put("updatedAt", session.updatedAt)
+                    put("category", session.category)
+                    put("lastMessage", session.lastMessage)
+                    put("modelBinding", session.modelBinding)
+                    put("source", session.source)
+                    put("memoryEnabled", session.memoryEnabled)
+                    put("pinnedAt", session.pinnedAt)
+                    put("editCount", session.editCount)
+                    put("thinkingOverride", session.thinkingOverride)
+                })
+                for (message in runCatching {
+                    kotlinx.coroutines.runBlocking {
+                        chatRepo.dao.messagesLast(session.id, MAX_CHAT_MESSAGES_PER_SESSION)
+                    }
+                }.getOrDefault(emptyList()).reversed()) {
+                    val cleaned = sanitizeChatParts(message.partsJson) ?: continue
+                    chatMessages.put(JSONObject().apply {
+                        put("id", message.id)
+                        put("sessionId", message.sessionId)
+                        put("role", message.role)
+                        put("partsJson", cleaned)
+                        put("createdAt", message.createdAt)
+                        put("sortOrder", message.sortOrder)
+                        put("reasoningContent", message.reasoningContent)
+                    })
+                }
+            }
+        }
+
         return JSONObject().apply {
             put("format", "openminis.config.backup")
             put("version", FORMAT_VERSION)
@@ -287,6 +344,8 @@ object ConfigBackup {
             put("skills", skills)
             put("memoryFiles", memoryFiles)
             put("mcpServers", mcpServers)
+            put("chatSessions", chatSessions)
+            put("chatMessages", chatMessages)
             if (readFailures > 0) put("readFailures", readFailures)
         }.toString(2)
     }
@@ -340,6 +399,7 @@ object ConfigBackup {
         skillRepo: SkillRepository? = null,
         memoryRepo: MemoryRepository? = null,
         mcpRepo: MCPRepository? = null,
+        chatRepo: ChatRepository? = null,
     ): ImportResult {
         val root = try {
             JSONTokener(json).nextValue() as? JSONObject
@@ -698,6 +758,64 @@ object ConfigBackup {
             skipped.add("${mcpArr.length()} MCP server(s): not restorable here")
         }
 
+        // -- Stage 8: chat history (session metadata + text-only parts) --
+        // Sessions go in first — messages reference them via FK. REPLACE
+        // conflict strategy makes re-imports idempotent. Message ids are
+        // preserved so later references to a restored session stay valid.
+        var chatSessionsImported = 0
+        var chatMessagesImported = 0
+        val chatSessionsArr = root.optJSONArray("chatSessions")
+        val chatMessagesArr = root.optJSONArray("chatMessages")
+        if (chatSessionsArr != null && chatRepo != null) {
+            for (i in 0 until chatSessionsArr.length()) {
+                val s = chatSessionsArr.optJSONObject(i) ?: continue
+                val label = s.optString("title", "session #${i + 1}").ifEmpty { "session #${i + 1}" }
+                try {
+                    val session = ChatSessionEntity(
+                        id = s.optString("id"),
+                        title = s.optString("title").ifEmpty { null },
+                        modelId = s.optString("modelId"),
+                        createdAt = s.optLong("createdAt"),
+                        updatedAt = s.optLong("updatedAt"),
+                        category = s.optString("category").ifEmpty { null },
+                        lastMessage = s.optString("lastMessage").ifEmpty { null },
+                        modelBinding = s.optString("modelBinding").ifEmpty { null },
+                        source = s.optString("source").ifEmpty { null },
+                        memoryEnabled = s.optInt("memoryEnabled", 1),
+                        pinnedAt = if (s.has("pinnedAt")) s.optLong("pinnedAt") else null,
+                        editCount = s.optInt("editCount", 0),
+                        thinkingOverride = if (s.has("thinkingOverride")) s.optString("thinkingOverride") else null,
+                    )
+                    kotlinx.coroutines.runBlocking { chatRepo.dao.insertSession(session) }
+                    chatSessionsImported++
+                } catch (t: Throwable) {
+                    skipped.add("chat session \"$label\": ${t.message ?: "import failed"}")
+                }
+            }
+            if (chatMessagesArr != null) {
+                for (i in 0 until chatMessagesArr.length()) {
+                    val m = chatMessagesArr.optJSONObject(i) ?: continue
+                    try {
+                        val message = MessageEntity(
+                            id = m.optString("id"),
+                            sessionId = m.optString("sessionId"),
+                            role = m.optString("role"),
+                            partsJson = m.optString("partsJson"),
+                            createdAt = m.optLong("createdAt"),
+                            sortOrder = m.optInt("sortOrder", i),
+                            reasoningContent = if (m.has("reasoningContent")) m.optString("reasoningContent") else null,
+                        )
+                        kotlinx.coroutines.runBlocking { chatRepo.dao.insertMessage(message) }
+                        chatMessagesImported++
+                    } catch (t: Throwable) {
+                        skipped.add("chat message #${i + 1}: ${t.message ?: "import failed"}")
+                    }
+                }
+            }
+        } else if (chatSessionsArr != null && chatSessionsArr.length() > 0 && chatRepo == null) {
+            skipped.add("${chatSessionsArr.length()} chat session(s): not restorable here")
+        }
+
 
         return ImportResult(
             fieldsApplied = applied,
@@ -707,6 +825,8 @@ object ConfigBackup {
             skillsImported = skillsImported,
             memoryFilesImported = memoryFilesImported,
             mcpServersImported = mcpServersImported,
+            chatSessionsImported = chatSessionsImported,
+            chatMessagesImported = chatMessagesImported,
             skipped = skipped,
             hadSecrets = root.optBoolean("includesSecrets", false),
         ).also { result ->
@@ -721,6 +841,7 @@ object ConfigBackup {
                     "groups=$groupsImported envVars=$envVarsImported " +
                     "skills=$skillsImported memoryFiles=$memoryFilesImported " +
                     "mcpServers=$mcpServersImported " +
+                    "chatSessions=$chatSessionsImported chatMessages=$chatMessagesImported " +
                     "skipped=${result.skipped.size} hadSecrets=${result.hadSecrets}"
             )
             for (line in result.skipped) Log.w(TAG, "import skipped — $line")
@@ -761,6 +882,46 @@ object ConfigBackup {
             )
             else -> value
         }
+    }
+
+    /** Hard cap on messages carried per session in a chat-history backup. */
+    internal const val MAX_CHAT_MESSAGES_PER_SESSION = 200
+
+    private val ATTACHED_FILES_REGEX =
+        Regex("<user-attached-files>.*?</user-attached-files>", RegexOption.DOT_MATCHES_ALL)
+
+    /**
+     * Strips media payloads from a stored parts_json document so chat
+     * history stays light in backups. Keeps text / thinking / tool_use
+     * parts; drops image and video entries (their base64 payloads dominate
+     * size and are useless on another device); removes the
+     * <user-attached-files> inventory, which references local paths.
+     * Returns null when nothing textual survives.
+     */
+    internal fun sanitizeChatParts(partsJson: String?): String? {
+        if (partsJson.isNullOrBlank()) return null
+        val arr = try {
+            JSONArray(partsJson)
+        } catch (t: Throwable) {
+            return null
+        }
+        val kept = JSONArray()
+        for (i in 0 until arr.length()) {
+            val el = arr.optJSONObject(i) ?: continue
+            val type = el.optString("type")
+            if (type == "image" || type == "image_url" || type == "video" || type == "video_url") {
+                continue
+            }
+            if (type == "text") {
+                val v = el.optString("value")
+                if (v.isBlank()) continue
+                val cleaned = v.replace(ATTACHED_FILES_REGEX, "").trim()
+                if (cleaned.isBlank()) continue
+                el.put("value", cleaned)
+            }
+            kept.put(el)
+        }
+        return if (kept.length() == 0) null else kept.toString()
     }
 
     /** Default filename for a fresh export, e.g. `openminis-backup-20260802.json`. */

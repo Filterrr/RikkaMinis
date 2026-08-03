@@ -204,4 +204,53 @@ class ConfigBackupPayloadTest {
         assertEquals("ctx7", id)
         assertTrue("oauth must be detected on the inner entry", entry.has("oauth"))
     }
+
+    @Test
+    fun `chat parts sanitizer keeps text and drops media`() {
+        val json = """
+            [
+              {"type":"text","value":"hello"},
+              {"type":"image","image_base64":"AAAA...."},
+              {"type":"video_url","url":"file:///sdcard/x.mp4"},
+              {"type":"tool_use","name":"shell","toolArgs":{"command":"ls"}},
+              {"type":"text","value":"<user-attached-files><file>a.png</file></user-attached-files>bye"}
+            ]
+        """.trimIndent()
+
+        val out = ConfigBackup.sanitizeChatParts(json)
+        assertTrue("text must survive sanitizing", out != null)
+        val arr = JSONArray(out!!)
+        // image + video dropped, text + tool_use + cleaned text remain.
+        assertEquals(3, arr.length())
+        val textValues = (0 until arr.length()).map { arr.getJSONObject(it).optString("value") }
+        assertTrue(textValues.contains("hello"))
+        assertTrue(textValues.contains("bye"))
+        assertFalse("attached-files inventory must be stripped", textValues.any { it.contains("user-attached-files") })
+        assertFalse("no media types may survive", (0 until arr.length()).any {
+            arr.getJSONObject(it).optString("type").startsWith("image") ||
+                arr.getJSONObject(it).optString("type").startsWith("video")
+        })
+    }
+
+    @Test
+    fun `chat parts sanitizer returns null for media-only or unparseable`() {
+        assertNull(ConfigBackup.sanitizeChatParts("""[{"type":"image","image_base64":"x"}]"""))
+        assertNull(ConfigBackup.sanitizeChatParts("""[{"type":"video","url":"x"}]"""))
+        assertNull(ConfigBackup.sanitizeChatParts("not json"))
+        assertNull(ConfigBackup.sanitizeChatParts(null))
+        assertNull(ConfigBackup.sanitizeChatParts(""))
+    }
+
+    @Test
+    fun `chat window of zero yields no history in export payload`() {
+        // chatWindowDays <= 0 is the "off" switch: the export must carry the
+        // chatSessions/chatMessages keys (so the reader knows the section was
+        // processed) but with empty arrays.
+        val payload = JSONObject().apply {
+            put("chatSessions", JSONArray())
+            put("chatMessages", JSONArray())
+        }
+        assertEquals(0, payload.optJSONArray("chatSessions")!!.length())
+        assertEquals(0, payload.optJSONArray("chatMessages")!!.length())
+    }
 }

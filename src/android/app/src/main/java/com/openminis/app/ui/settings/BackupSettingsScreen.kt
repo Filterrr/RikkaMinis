@@ -4,10 +4,16 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Upload
+import androidx.compose.material.icons.outlined.History
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -17,8 +23,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
 import com.openminis.app.R
 import com.openminis.app.backup.ConfigBackup
 import com.openminis.app.data.repository.EnvVarRepository
@@ -32,9 +40,11 @@ import com.openminis.app.data.repository.SkillRepository
  * agent-runtime defaults. Scope is intentionally a plain file on the device:
  * no cloud, no WebDAV, nothing that needs an account.
  *
- * Chat history is NOT included. It lives in Room and is a different (much
- * larger) problem than settings; mixing the two would make a "restore my setup"
- * action unpredictably heavy.
+ * Chat history is included, but deliberately kept LIGHT: only the last
+ * `chatWindowDays` of activity, text-only message parts (media/attachments are
+ * dropped), capped per session. This keeps "restore my setup" from becoming an
+ * unpredictably heavy operation while still carrying conversations across
+ * devices. The window is user-adjustable; 0 disables chat history entirely.
  */
 @Composable
 fun BackupSettingsScreen(
@@ -43,9 +53,17 @@ fun BackupSettingsScreen(
     skillRepository: SkillRepository? = null,
     memoryRepository: MemoryRepository? = null,
     mcpRepository: MCPRepository? = null,
+    chatRepository: com.openminis.app.data.repository.ChatRepository? = null,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
+    val chatPrefs = remember {
+        context.getSharedPreferences("backup_prefs", android.content.Context.MODE_PRIVATE)
+    }
+    var chatWindowDays by remember {
+        mutableStateOf(chatPrefs.getInt("chat_window_days", 90))
+    }
+    var showWindowDialog by remember { mutableStateOf(false) }
     // Payload is built BEFORE the file picker opens, then written in the
     // callback: SAF gives us a write handle, not a chance to compute content.
     var pendingExport by remember { mutableStateOf<String?>(null) }
@@ -91,6 +109,7 @@ fun BackupSettingsScreen(
                 skillRepo = skillRepository,
                 memoryRepo = memoryRepository,
                 mcpRepo = mcpRepository,
+                chatRepo = chatRepository,
             )
         } catch (t: Throwable) {
             errorMessage = t.message ?: errImport
@@ -107,6 +126,12 @@ fun BackupSettingsScreen(
                 subtitle = stringResource(R.string.backup_export_sub),
                 icon = Icons.Default.Download,
                 onClick = { showSecretWarning = true },
+            )
+            SettingsRow(
+                title = stringResource(R.string.backup_chat_window_title),
+                subtitle = stringResource(R.string.backup_chat_window_sub, chatWindowDays),
+                icon = Icons.Outlined.History,
+                onClick = { showWindowDialog = true },
             )
             SettingsRow(
                 title = stringResource(R.string.backup_import),
@@ -132,6 +157,8 @@ fun BackupSettingsScreen(
                     skillRepo = skillRepository,
                     memoryRepo = memoryRepository,
                     mcpRepo = mcpRepository,
+                    chatRepo = chatRepository,
+                    chatWindowDays = chatWindowDays,
                 )
                 exportLauncher.launch(ConfigBackup.suggestedFileName())
             } catch (t: Throwable) {
@@ -206,6 +233,16 @@ fun BackupSettingsScreen(
                             style = MaterialTheme.typography.bodyMedium,
                         )
                     }
+                    if (report.chatSessionsImported > 0 || report.chatMessagesImported > 0) {
+                        Text(
+                            stringResource(
+                                R.string.backup_done_chat,
+                                report.chatSessionsImported,
+                                report.chatMessagesImported,
+                            ),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
                     if (report.skipped.isNotEmpty()) {
                         Text(
                             stringResource(R.string.backup_done_skipped, report.skipped.size),
@@ -238,6 +275,43 @@ fun BackupSettingsScreen(
                     Text(stringResource(R.string.backup_ok))
                 }
             },
+        )
+    }
+
+    if (showWindowDialog) {
+        AlertDialog(
+            onDismissRequest = { showWindowDialog = false },
+            title = { Text(stringResource(R.string.backup_chat_window_title)) },
+            text = {
+                Column {
+                    listOf(0, 30, 90, 180, 365).forEach { days ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    chatWindowDays = days
+                                    chatPrefs.edit().putInt("chat_window_days", days).apply()
+                                    showWindowDialog = false
+                                }
+                                .padding(vertical = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Text(
+                                if (days == 0) {
+                                    stringResource(R.string.backup_chat_window_off)
+                                } else {
+                                    stringResource(R.string.backup_chat_window_days, days)
+                                },
+                                style = MaterialTheme.typography.bodyLarge,
+                            )
+                            if (days == chatWindowDays) {
+                                Text("✓", style = MaterialTheme.typography.bodyLarge)
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
         )
     }
 
