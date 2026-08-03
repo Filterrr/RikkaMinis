@@ -1,5 +1,6 @@
 package com.openminis.app.data.model
 
+import java.io.IOException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
