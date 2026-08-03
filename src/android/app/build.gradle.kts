@@ -22,6 +22,16 @@ val appCustomization = Properties().apply {
 fun customizationValue(key: String): String =
     (appCustomization.getProperty(key) ?: "").replace("\"", "\\\"")
 
+// CI-injected build version (see .github/workflows/build-apk.yml):
+//   MINIS_VERSION_CODE       — monotonically increasing int (base + run number),
+//                              so every published build is upgrade-installable
+//                              and distinguishable by versionCode.
+//   MINIS_VERSION_NAME_SUFFIX — per-build tag, e.g. "-beta.42", so sideloaders
+//                              can tell builds apart without opening the APK.
+// Local builds fall back to the base values (22 / "0.22-preview").
+val ciVersionCode: Int? = System.getenv("MINIS_VERSION_CODE")?.toIntOrNull()
+val ciVersionSuffix: String? = System.getenv("MINIS_VERSION_NAME_SUFFIX")
+
 android {
     namespace = "com.openminis.app"
     // [T-android-dynamic-island] Bumped 35→36 so the Android 16 (Baklava)
@@ -36,8 +46,9 @@ android {
         applicationId = "com.openminis.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 22
-        versionName = "0.22-preview"
+        versionCode = ciVersionCode ?: 22
+        versionName =
+            if (ciVersionSuffix.isNullOrBlank()) "0.22-preview" else "0.22-preview$ciVersionSuffix"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

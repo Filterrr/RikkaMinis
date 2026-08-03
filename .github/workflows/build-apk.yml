@@ -136,26 +136,39 @@ jobs:
       # signingConfig, which picks up MINIS_KEYSTORE_PATH exported above, so
       # upgrade-installs keep working. Release also sets BuildConfig.DEBUG=false,
       # so the local DebugServer (127.0.0.1:5321) is compiled out entirely.
-      # JVM unit tests. Two scopes on purpose:
-      #   - com.openminis.app.backup.*  — the backup/restore payload suite.
-      #   - ProviderConfigSnapshotTest  — locks the snapshot-on-write invariant
-      #     in ProviderRepository (guards against the ConcurrentModificationException
-      #     regression); without an explicit entry the backup-only filter skips it.
       #
-      # Not yet the whole suite: it still has 15 pre-existing failures unrelated
-      # to these areas — OpenAIProviderTest (11, MockWebServer returns an empty
-      # response under CI) and TerminalSanitizerTest (4, genuine stale CR-folding
-      # assertions). Both need their own fix; gating the build on them today
-      # would just mean nobody runs any test at all. Add new suites here
-      # explicitly until that backlog is cleared.
-      - name: Run unit tests (scoped)
+      # The APK's version is CI-injected (see build.gradle.kts):
+      #   - MINIS_VERSION_CODE: base 220_000_000 + workflow run number —
+      #     monotonically increasing, so every published build is
+      #     upgrade-installable over the previous one AND distinguishable.
+      #   - MINIS_VERSION_NAME_SUFFIX: "-beta.<run>" so sideloaders can tell
+      #     builds apart from the version shown in the app's About page.
+      # Local builds keep the hardcoded 22 / "0.22-preview".
+      - name: Inject build version
+        run: |
+          VC=$((220000000 + GITHUB_RUN_NUMBER))
+          echo "MINIS_VERSION_CODE=$VC" >> "$GITHUB_ENV"
+          echo "MINIS_VERSION_NAME_SUFFIX=-beta.$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          echo "versionCode=$VC  versionNameSuffix=-beta.$GITHUB_RUN_NUMBER"
+
+      # JVM unit tests — the full suite. The test backlog that used to force a
+      # scoped filter here is cleared:
+      #   - OpenAIProviderTest: 11 failures were stale non-streaming mock
+      #     contracts (sendMessage has always streamed internally); tests now
+      #     speak SSE. (commit "test: align OpenAIProviderTest with the
+      #     always-streaming contract")
+      #   - TerminalSanitizerTest: 4 failures were real bugs — the CR fold only
+      #     kept the last segment instead of proper column-overwrite semantics,
+      #     and a final trim() destroyed meaningful leading/trailing whitespace
+      #     (progress bars). Fixed in the implementation.
+      #   - AnthropicProviderTest: 24 failures shared one root cause — the OAuth
+      #     identifier prompt getter threw when BuildConfig was empty. The stub
+      #     step above makes it non-empty, so they pass again.
+      # If any suite is red, the build fails — no silent scoping.
+      - name: Run unit tests (full suite)
         run: |
           cd src/android
-          ./gradlew testReleaseUnitTest --stacktrace \
-            --tests 'com.openminis.app.backup.*' \
-            --tests 'com.openminis.app.data.repository.ProviderConfigSnapshotTest' \
-            --tests 'com.openminis.app.data.repository.ChatRepositoryTest' \
-            --tests 'com.openminis.app.data.model.LLMErrorTest'
+          ./gradlew testReleaseUnitTest --stacktrace
 
       - name: Build APK with Gradle
         run: |
@@ -211,15 +224,20 @@ jobs:
           if-no-files-found: error
 
       # Rename to a versioned, arch-tagged filename mirroring the official
-      # release naming (OpenMinis-<versionName>-arm64-v8a.apk).
+      # release naming (OpenMinis-<versionName>-arm64-v8a.apk). The filename is
+      # FIXED (base version only, no -beta suffix): the rolling android-latest
+      # release must keep exactly one asset, and a suffix would make the name
+      # change every build, accumulating stale assets. The full per-build
+      # version is reported in the release body instead.
       - name: Stage release asset
         id: stage
         run: |
-          VN=$(grep -oE 'versionName = "[^"]+"' src/android/app/build.gradle.kts | head -1 | cut -d'"' -f2)
-          [ -z "$VN" ] && VN="unversioned"
-          OUT="OpenMinis-${VN}-arm64-v8a.apk"
+          VN="0.22-preview${MINIS_VERSION_NAME_SUFFIX:-}"
+          VC="${MINIS_VERSION_CODE:-22}"
+          OUT="OpenMinis-0.22-preview-arm64-v8a.apk"
           cp src/android/app/build/outputs/apk/release/app-release.apk "$OUT"
           echo "version=$VN" >> "$GITHUB_OUTPUT"
+          echo "versionCode=$VC" >> "$GITHUB_OUTPUT"
           echo "asset=$OUT" >> "$GITHUB_OUTPUT"
           ls -la "$OUT"
 
@@ -234,7 +252,7 @@ jobs:
           body: |
             Automated Android build — always the newest commit on `main`.
 
-            - Version: `${{ steps.stage.outputs.version }}`
+            - Version: `${{ steps.stage.outputs.version }}` (versionCode `${{ steps.stage.outputs.versionCode }}`)
             - Commit: ${{ github.sha }}
             - ABI: arm64-v8a
             - Release build (R8-minified, signed with the fixed debug key so
