@@ -1,0 +1,118 @@
+# Sync with the official upstream mirror (OpenMinis/OpenMinis).
+#
+# This fork intentionally deleted the iOS tree, so a naive `git merge
+# upstream/main` always collides on src/ios (upstream modifies files this fork
+# deleted → modify/delete conflicts). This workflow runs a *selective* merge:
+# every modify/delete conflict on any path is auto-resolved as "keep this
+# fork's deletion" (the Android-only intent), everything else is merged
+# normally, and real content conflicts are left for you to review in the PR.
+#
+# Nothing is ever pushed to upstream — this only reads it. Run manually from
+# the Actions tab whenever you want to check for drift:
+#   https://github.com/logicflow-GYW/OpenMinis/actions/workflows/sync-upstream.yml
+name: Sync upstream
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # Full history + submodules: the drift report needs rev-list, and
+      # deps/proot is a submodule.
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Fetch upstream and report drift
+        id: drift
+        run: |
+          git fetch https://github.com/OpenMinis/OpenMinis.git main
+          BEHIND=$(git rev-list --count HEAD..FETCH_HEAD)
+          AHEAD=$(git rev-list --count FETCH_HEAD..HEAD)
+          echo "behind=$BEHIND" >> "$GITHUB_OUTPUT"
+          echo "ahead=$AHEAD" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Upstream drift"
+            echo ""
+            echo "- Behind: **$BEHIND** commits"
+            echo "- Ahead: **$AHEAD** commits"
+            if [ "$BEHIND" -gt 0 ]; then
+              echo ""
+              echo "New upstream commits (oldest first):"
+              echo '```'
+              git log --oneline --reverse HEAD..FETCH_HEAD | head -60
+              echo '```'
+            else
+              echo ""
+              echo "Fork is up to date with upstream."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build sync branch (selective merge)
+        if: steps.drift.outputs.behind > 0
+        run: |
+          set -e
+          # Rebuild the sync branch from current main (overwrites any previous
+          # sync attempt — a stale open PR gets updated in place).
+          git checkout -B sync/upstream-main origin/main
+
+          if git merge FETCH_HEAD --no-edit; then
+            echo "Clean merge, no conflicts."
+          else
+            echo "Merge conflicts — resolving fork-known ones (iOS deletions)."
+            # modify/delete conflicts, resolved in favor of THIS fork's intent:
+            #   DU = deleted by us, modified by them  -> keep our deletion (git rm)
+            #   UD = modified by us, deleted by them  -> keep our version (git add)
+            git status --porcelain | while IFS= read -r line; do
+              code="${line:0:2}"
+              path="${line:3}"
+              case "$code" in
+                DU|D) git rm -f --quiet "$path" 2>/dev/null || true ;;
+                UD|AU) git add "$path" 2>/dev/null || true ;;
+              esac
+            done
+            if ! git commit --no-edit 2>/dev/null; then
+              echo "::error::Merge has conflicts that cannot be auto-resolved."
+              echo "::error::Resolve manually: git fetch upstream && git merge upstream/main"
+              echo "Remaining unmerged paths:"
+              git status --porcelain
+              exit 1
+            fi
+            echo "Auto-resolved all conflicts (iOS-tree deletions kept)."
+          fi
+
+          git push -u origin sync/upstream-main
+
+      - name: Open or update sync PR
+        if: steps.drift.outputs.behind > 0
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BEHIND=${{ steps.drift.outputs.behind }}
+          if gh pr view sync/upstream-main --json number >/dev/null 2>&1; then
+            gh pr edit sync/upstream-main \
+              --title "chore: sync with upstream ($BEHIND commits)" \
+              --body "Automated drift sync — $BEHIND new upstream commits.
+
+            See the workflow run summary for the commit list.
+
+            iOS-tree changes are auto-resolved as deletions (this fork is Android-only);
+            any other conflicts are preserved for review."
+          else
+            gh pr create --base main --head sync/upstream-main \
+              --title "chore: sync with upstream ($BEHIND commits)" \
+              --body "Automated drift sync — $BEHIND new upstream commits.
+
+            See the workflow run summary for the commit list.
+
+            iOS-tree changes are auto-resolved as deletions (this fork is Android-only);
+            any other conflicts are preserved for review."
+          fi
