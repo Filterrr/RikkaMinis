@@ -65,6 +65,9 @@ interface ChatDao {
     @Query("SELECT * FROM sessions WHERE id = :id")
     suspend fun getSession(id: String): ChatSessionEntity?
 
+    @Query("SELECT * FROM sessions WHERE updated_at >= :cutoff ORDER BY updated_at DESC")
+    suspend fun sessionsUpdatedSince(cutoff: Long): List<ChatSessionEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSession(session: ChatSessionEntity)
 
@@ -101,6 +104,9 @@ interface ChatDao {
     // Messages
     @Query("SELECT * FROM messages WHERE session_id = :sessionId ORDER BY sort_order ASC")
     suspend fun loadMessages(sessionId: String): List<MessageEntity>
+
+    @Query("SELECT * FROM messages WHERE session_id = :sessionId ORDER BY sort_order DESC LIMIT :limit")
+    suspend fun messagesLast(sessionId: String, limit: Int): List<MessageEntity>
 
     @Query("SELECT * FROM messages WHERE session_id = :sessionId ORDER BY sort_order ASC")
     fun observeMessages(sessionId: String): Flow<List<MessageEntity>>

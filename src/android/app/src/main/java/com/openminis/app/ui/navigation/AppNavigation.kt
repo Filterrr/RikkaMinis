@@ -626,6 +626,7 @@ fun AppNavigation(
                 skillRepository = skillRepository,
                 memoryRepository = memoryRepository,
                 mcpRepository = mcpRepository,
+                chatRepository = chatRepository,
                 onBack = { navController.safePopBackStack() },
             )
         }
