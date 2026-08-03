@@ -104,6 +104,7 @@ import androidx.compose.material.icons.filled.ArrowCircleUp
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Check
@@ -128,7 +129,7 @@ import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.StopCircle
 import androidx.compose.material.icons.filled.Terminal
-import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.RadioButtonChecked
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
@@ -1618,30 +1619,17 @@ fun ChatScreen(
             }
     }
 
-    // Auto-focus input on new sessions so keyboard pops up immediately.
+    // [T-android-no-auto-focus] Entering the app / opening a new chat no
+    // longer auto-focuses the composer, so the keyboard stays hidden until
+    // the user actually taps the input field (RikkaHub-style: no implicit
+    // focus requests anywhere). The old block below requested focus 300 ms
+    // after mounting any "__new__" draft session, which popped the keyboard
+    // on every cold start.
     //
-    // T176: theme switch (Activity recreate) re-enters this LE before the
-    // composer's `Modifier.focusRequester(inputFocusRequester)` has been
-    // attached for the new composition. requestFocus() then throws
-    // `FocusRequester is not initialized` and the process crashes. Guard
-    // with try/catch — we lose nothing if the focus call is a no-op on
-    // the recreated activity (the user wasn't typing anyway), and the
-    // common new-session path still works because the 300 ms delay lets
-    // the Modifier attach.
-    LaunchedEffect(Unit) {
-        if (sessionId.startsWith("__new__")) {
-            // Small delay to let the layout settle before requesting focus
-            kotlinx.coroutines.delay(300)
-            try {
-                inputFocusRequester.requestFocus()
-            } catch (e: IllegalStateException) {
-                AppLogger.debug(
-                    tagScroll,
-                    "auto-focus skipped: FocusRequester not attached (likely activity recreate / theme switch): ${e.message}",
-                )
-            }
-        }
-    }
+    // T176 note (kept for history): theme switch (Activity recreate) used to
+    // re-enter that LaunchedEffect before the composer's focusRequester was
+    // attached, so requestFocus() threw `FocusRequester is not initialized`.
+    // With auto-focus removed the crash path is gone too.
 
     // Show top-level error in snackbar (only for errors without an assistant message)
     LaunchedEffect(error) {
@@ -1690,7 +1678,7 @@ fun ChatScreen(
     val appearancePrefs = remember { com.openminis.app.ui.settings.getAppearancePrefs(context) }
     var messageFontLevel by remember { mutableStateOf(appearancePrefs.getInt(com.openminis.app.ui.settings.KEY_FONT_MESSAGE, 0)) }
     var chatInputLevel by remember { mutableStateOf(appearancePrefs.getInt(com.openminis.app.ui.settings.KEY_FONT_CHAT_INPUT, 0)) }
-    var toolPreviewEnabled by remember { mutableStateOf(appearancePrefs.getBoolean(com.openminis.app.ui.settings.KEY_TOOL_PREVIEW, true)) }
+    var toolPreviewEnabled by remember { mutableStateOf(appearancePrefs.getBoolean(com.openminis.app.ui.settings.KEY_TOOL_PREVIEW, false)) }
     // T-chat-title-pill: live-toggled by Settings → Appearance and by
     // `minis-config set appearance.show_chat_title …`. Default ON.
     var showChatTitlePill by remember { mutableStateOf(appearancePrefs.getBoolean(com.openminis.app.ui.settings.KEY_SHOW_CHAT_TITLE, true)) }
@@ -1704,7 +1692,7 @@ fun ChatScreen(
             when (key) {
                 com.openminis.app.ui.settings.KEY_FONT_MESSAGE -> messageFontLevel = sp.getInt(key, 0)
                 com.openminis.app.ui.settings.KEY_FONT_CHAT_INPUT -> chatInputLevel = sp.getInt(key, 0)
-                com.openminis.app.ui.settings.KEY_TOOL_PREVIEW -> toolPreviewEnabled = sp.getBoolean(key, true)
+                com.openminis.app.ui.settings.KEY_TOOL_PREVIEW -> toolPreviewEnabled = sp.getBoolean(key, false)
                 com.openminis.app.ui.settings.KEY_SHOW_CHAT_TITLE -> showChatTitlePill = sp.getBoolean(key, true)
             }
         }
@@ -2253,18 +2241,6 @@ fun ChatScreen(
                                 },
                             )
                             MinisMenuDivider()
-                            // Clear Chat (iOS parity, red)
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.chat_menu_clear_chat), color = MaterialTheme.colorScheme.error) },
-                                onClick = {
-                                    showChatMenu = false
-                                    showClearChatDialog = true
-                                },
-                                leadingIcon = {
-                                    Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error)
-                                },
-                            )
-                            MinisMenuDivider()
                             // Open Terminal (iOS parity) — session-bound, starts in /var/minis
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.chat_menu_open_terminal)) },
@@ -2298,6 +2274,47 @@ fun ChatScreen(
                                     Icon(Icons.Default.Description, contentDescription = null)
                                 },
                             )
+                            // Export conversation (JSON / Plain Text) — the
+                            // session list's long-press Export, surfaced from
+                            // inside the chat. Same streaming ChatExporter, so
+                            // long chats stay bounded-memory.
+                            var showExportSub by remember { mutableStateOf(false) }
+                            DropdownMenuItem(
+                                text = {
+                                    Row(
+                                        Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(stringResource(R.string.sessionlist_export))
+                                        Icon(
+                                            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp),
+                                        )
+                                    }
+                                },
+                                onClick = { showExportSub = !showExportSub },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Share, contentDescription = null)
+                                },
+                            )
+                            if (showExportSub) {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.sessionlist_export_json), modifier = Modifier.padding(start = 24.dp)) },
+                                    onClick = {
+                                        showChatMenu = false
+                                        exportCurrentChat(context, viewModel, chatRepository, coroutineScope, "json")
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.sessionlist_export_plain), modifier = Modifier.padding(start = 24.dp)) },
+                                    onClick = {
+                                        showChatMenu = false
+                                        exportCurrentChat(context, viewModel, chatRepository, coroutineScope, "text")
+                                    },
+                                )
+                            }
                             MinisMenuDivider()
                             // Session Skills (iOS parity)
                             if (skillRepository != null) {
@@ -5765,4 +5782,65 @@ private fun ThinkingLevelSheet(
     }
 }
 
+// ─── Export Current Conversation ────────────────────────────────────────────
 
+/**
+ * Export the active conversation via the streaming [com.openminis.app.share.ChatExporter]
+ * — the same pipeline the session list's long-press Export uses (paginated
+ * reads, staged zip, FileProvider share sheet), so long chats stay
+ * bounded-memory. Draft sessions ("__new__" aliases, no DB row yet) get a
+ * toast instead of an empty archive.
+ */
+private fun exportCurrentChat(
+    context: android.content.Context,
+    viewModel: ChatViewModel,
+    chatRepository: ChatRepository,
+    scope: kotlinx.coroutines.CoroutineScope,
+    format: String,
+) {
+    scope.launch {
+        val sid = viewModel.activeSessionId
+        if (sid.startsWith("__new__")) {
+            android.widget.Toast.makeText(
+                context,
+                context.getString(R.string.export_empty_hint),
+                android.widget.Toast.LENGTH_SHORT,
+            ).show()
+            return@launch
+        }
+        val session = chatRepository.observeSessions().first().firstOrNull { it.id == sid }
+        if (session == null) {
+            android.widget.Toast.makeText(
+                context,
+                context.getString(R.string.export_progress_failed),
+                android.widget.Toast.LENGTH_LONG,
+            ).show()
+            return@launch
+        }
+        try {
+            val (uri, _) = com.openminis.app.share.ChatExporter.exportToZip(
+                context = context,
+                session = session,
+                repository = chatRepository,
+                format = format,
+            )
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = "application/zip"
+                putExtra(Intent.EXTRA_SUBJECT, session.title ?: "Conversation")
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            val chooser = Intent.createChooser(
+                intent,
+                context.getString(R.string.sessionlist_export),
+            ).apply { addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+            context.startActivity(chooser)
+        } catch (t: Throwable) {
+            android.widget.Toast.makeText(
+                context,
+                context.getString(R.string.export_progress_failed),
+                android.widget.Toast.LENGTH_LONG,
+            ).show()
+        }
+    }
+}

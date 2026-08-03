@@ -375,7 +375,7 @@ internal object ConfigBuiltins {
                 description = "Show live preview during agent tool execution.",
                 prefs = appearancePrefs,
                 key = com.openminis.app.ui.settings.KEY_TOOL_PREVIEW,
-                defaultValue = true,
+                defaultValue = false,
             )
         )
         // [T-keyboard-auto-pop default flip] On by default — iOS gates

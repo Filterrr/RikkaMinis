@@ -2,6 +2,7 @@ package com.openminis.app.ui.chat
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,11 +19,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.Text
@@ -67,7 +67,10 @@ import kotlinx.coroutines.launch
  *
  * @param currentSessionId the chat currently displayed, highlighted in the list.
  * @param onSessionClick open another conversation (caller closes the drawer).
- * @param onNewChat start a fresh draft chat.
+ * @param onNewChat start a fresh draft chat — used only as the fallback when
+ *        the user deletes the chat they are currently viewing from the drawer
+ *        (no visible button: creating a chat lives in the "..." menu and the
+ *        session list).
  * @param onSettings open Settings.
  */
 @OptIn(ExperimentalFoundationApi::class)
@@ -97,11 +100,11 @@ fun ChatHistoryDrawer(
         modifier = Modifier.width(300.dp),
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
-            // Header: title + New Chat + Settings
+            // Header: bare app title — all actions live at the bottom.
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 20.dp, end = 8.dp, top = 12.dp, bottom = 4.dp),
+                    .padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
@@ -111,18 +114,6 @@ fun ChatHistoryDrawer(
                     color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.weight(1f),
                 )
-                IconButton(onClick = onNewChat) {
-                    Icon(
-                        imageVector = Icons.Default.Add,
-                        contentDescription = stringResource(R.string.chat_menu_new_chat),
-                    )
-                }
-                IconButton(onClick = onSettings) {
-                    Icon(
-                        imageVector = Icons.Outlined.Settings,
-                        contentDescription = stringResource(R.string.settings),
-                    )
-                }
             }
 
             if (visibleSessions.isEmpty()) {
@@ -157,8 +148,42 @@ fun ChatHistoryDrawer(
                             )
                         }
                     }
-                    item { Spacer(modifier = Modifier.height(24.dp)) }
+                    item { Spacer(modifier = Modifier.height(8.dp)) }
                 }
+            }
+
+            // Footer: Settings — the drawer's only action. Browsing history
+            // is gesture-driven and creating a chat lives in the "..." menu /
+            // session list, so the footer holds just the settings exit.
+            // RikkaHub pins actions to the drawer bottom; with a single
+            // action a full-width row beats a lone corner icon (bigger hit
+            // target, no empty space).
+            HorizontalDivider(
+                modifier = Modifier.padding(horizontal = 12.dp),
+                thickness = 0.5.dp,
+                color = MaterialTheme.colorScheme.outlineVariant,
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable(onClick = onSettings)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Settings,
+                    contentDescription = stringResource(R.string.settings),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp),
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    text = stringResource(R.string.settings),
+                    fontSize = 15.sp,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
             }
         }
     }
