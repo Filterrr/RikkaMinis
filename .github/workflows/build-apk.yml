@@ -147,7 +147,8 @@ jobs:
           cd src/android
           ./gradlew testReleaseUnitTest --stacktrace \
             --tests 'com.openminis.app.backup.*' \
-            --tests 'com.openminis.app.data.repository.ProviderConfigSnapshotTest'
+            --tests 'com.openminis.app.data.repository.ProviderConfigSnapshotTest' \
+            --tests 'com.openminis.app.data.model.LLMErrorTest'
 
       - name: Build APK with Gradle
         run: |
