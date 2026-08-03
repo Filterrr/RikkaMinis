@@ -85,10 +85,14 @@ class OpenAIProviderTest {
         server.enqueue(MockResponse().setBody(responseBody).setHeader("Content-Type", "text/event-stream"))
         val response = provider.sendMessage(listOf(LLMMessage(LLMMessage.Role.USER, "Hi")), null, 1024)
 
-        assertEquals(100, response.usage?.inputTokens)
+        // inputTokens is fresh-only (prompt_tokens minus cached), matching the
+        // Anthropic convention — see parseChatCompletionsUsage. The full prompt
+        // stays available as latestContextTokens.
+        assertEquals(50, response.usage?.inputTokens)
         assertEquals(10, response.usage?.outputTokens)
         assertEquals(50, response.usage?.cacheReadInputTokens)
         assertNull(response.usage?.cacheCreationInputTokens)
+        assertEquals(100, response.usage?.latestContextTokens)
     }
 
     @Test
