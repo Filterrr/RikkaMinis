@@ -75,6 +75,10 @@ Android-specific product changes that are not present upstream.
   "…" menu exports the current conversation (JSON or plain text, listed
   between Slash Commands and Token Usage) and no longer lists Clear Chat,
   which duplicated New Chat and could strand an empty ghost conversation.
+  Settings and its top-level sub-pages (Appearance, Backup, Env Vars, Logs,
+  MCP, Memory, Providers, Skills, Soul, Storage, Usage) drop the redundant
+  top-bar back arrow — system back gesture / bottom nav handle returning;
+  edit, wizard and permission-flow screens keep theirs.
 - **Simpler composer.** The dedicated voice-chat shortcut and its inline UI
   have been removed. Android's agent-facing speech tools are unaffected.
 - **Settings consistency fixes.** Restored preferences refresh the live
