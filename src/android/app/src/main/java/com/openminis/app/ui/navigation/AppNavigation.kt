@@ -598,7 +598,8 @@ fun AppNavigation(
 
         composable(Routes.SETTINGS) {
             SettingsScreen(
-                onBack = { navController.safePopBackStack() },
+                // Settings is a top-level page: no onBack passed — system back
+                // gesture / bottom nav handle returning to the chat.
                 onProvidersClick = { navController.safeNavigate(Routes.PROVIDER_LIST) },
                 onModelGroupsClick = { navController.safeNavigate(Routes.MODEL_GROUPS) },
                 onRootfsClick = { navController.safeNavigate(Routes.STORAGE) },

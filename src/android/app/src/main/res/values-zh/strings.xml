@@ -92,7 +92,6 @@
     <string name="rom_autostart_row_subtitle">在 %1$s 上启用 Minis</string>
     <string name="browser_settings_ua_not_set">未设置</string>
     <!-- T135 — Settings + About i18n keys -->
-    <string name="settings_back">返回</string>
     <string name="settings_title">设置</string>
     <string name="settings_section_llm_providers">LLM 提供商</string>
     <string name="settings_section_llm_providers_footer">配置 agent 使用的模型,管理每个提供商的 API key 与 OAuth,并创建模型组用于回退或负载均衡。</string>

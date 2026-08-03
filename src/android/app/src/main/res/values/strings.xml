@@ -112,7 +112,6 @@
     <!-- T68: Browser settings — UA list "Not set" placeholder for empty Custom UA -->
     <string name="browser_settings_ua_not_set">Not set</string>
     <!-- T135 — Settings + About i18n keys -->
-    <string name="settings_back">Back</string>
     <string name="settings_title">Settings</string>
     <string name="settings_section_llm_providers">LLM Providers</string>
     <string name="settings_section_llm_providers_footer">Configure which models the agent uses, manage API keys &amp; OAuth for each provider, and create model groups for fallback or load balancing.</string>

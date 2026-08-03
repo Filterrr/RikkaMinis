@@ -92,7 +92,6 @@
     <string name="rom_autostart_row_title">Открыть настройки автозапуска</string>
     <string name="rom_autostart_row_subtitle">Включите Minis на %1$s</string>
     <string name="browser_settings_ua_not_set">Не задано</string>
-    <string name="settings_back">Назад</string>
     <string name="settings_title">Настройки</string>
     <string name="settings_section_llm_providers">Провайдеры LLM</string>
     <string name="settings_section_llm_providers_footer">Настройте, какие модели использует агент, управляйте ключами API и OAuth для каждого провайдера и создавайте группы моделей для резервирования или балансировки нагрузки.</string>

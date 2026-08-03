@@ -82,7 +82,6 @@
     <string name="rom_autostart_row_subtitle">Activer Minis sur %1$s</string>
     <string name="browser_settings_ua_not_set">Non défini</string>
     <!-- T135 — Settings + About i18n keys -->
-    <string name="settings_back">Retour</string>
     <string name="settings_title">Réglages</string>
     <string name="settings_section_llm_providers">Fournisseurs LLM</string>
     <string name="settings_section_llm_providers_footer">Configurez les modèles utilisés par l\'agent, gérez les clés API et OAuth de chaque fournisseur, et créez des groupes de modèles pour le repli ou la répartition de charge.</string>
