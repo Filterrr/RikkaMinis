@@ -189,8 +189,7 @@ class TerminalSanitizerTest {
     @Test
     fun `sanitize handles only CR`() {
         val input = "\r"
-        // split("\r") = ["", ""], both empty → buffer stays 1-char default
-        // but bufLen is 0, so append(buffer, 0, 0) = ""
+        // Cursor resets to column 0 with nothing following it — empty line.
         assertEquals("", TerminalSanitizer.sanitize(input))
     }
 
