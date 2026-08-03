@@ -37,21 +37,33 @@ class OpenAIProviderTest {
         server.shutdown()
     }
 
+    /**
+     * Builds an SSE stream body from raw JSON events, terminated by [DONE].
+     *
+     * sendMessage has always streamed internally ("some providers reject
+     * stream=false outright"), so every mock response on this path must be
+     * SSE-shaped: the stream parser skips any line that does not start with
+     * `data:`, and a plain JSON body would surface as an empty-stream
+     * TransientError instead of being parsed.
+     */
+    private fun sseBody(vararg events: String): String = buildString {
+        for (event in events) {
+            append("data: $event")
+            append("\n\n")
+        }
+        append("data: [DONE]")
+        append("\n\n")
+    }
+
     // -- sendMessage response parsing --
 
     @Test
     fun `sendMessage parses ChatCompletions response`() = runBlocking {
-        val responseBody = """
-        {
-            "choices": [{
-                "message": {"role": "assistant", "content": "Hello from GPT!"},
-                "finish_reason": "stop"
-            }],
-            "usage": {"prompt_tokens": 10, "completion_tokens": 5}
-        }
-        """.trimIndent()
+        val responseBody = sseBody(
+            """{"choices":[{"delta":{"content":"Hello from GPT!"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5}}"""
+        )
 
-        server.enqueue(MockResponse().setBody(responseBody))
+        server.enqueue(MockResponse().setBody(responseBody).setHeader("Content-Type", "text/event-stream"))
 
         val response = provider.sendMessage(
             listOf(LLMMessage(LLMMessage.Role.USER, "Hi")),
@@ -66,18 +78,11 @@ class OpenAIProviderTest {
 
     @Test
     fun `sendMessage parses cached tokens from prompt_tokens_details`() = runBlocking {
-        val responseBody = """
-        {
-            "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
-            "usage": {
-                "prompt_tokens": 100,
-                "completion_tokens": 10,
-                "prompt_tokens_details": {"cached_tokens": 50}
-            }
-        }
-        """.trimIndent()
+        val responseBody = sseBody(
+            """{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":10,"prompt_tokens_details":{"cached_tokens":50}}}"""
+        )
 
-        server.enqueue(MockResponse().setBody(responseBody))
+        server.enqueue(MockResponse().setBody(responseBody).setHeader("Content-Type", "text/event-stream"))
         val response = provider.sendMessage(listOf(LLMMessage(LLMMessage.Role.USER, "Hi")), null, 1024)
 
         assertEquals(100, response.usage?.inputTokens)
@@ -88,36 +93,45 @@ class OpenAIProviderTest {
 
     @Test
     fun `sendMessage returns null cacheReadInputTokens when zero`() = runBlocking {
-        val responseBody = """
-        {
-            "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
-            "usage": {
-                "prompt_tokens": 10,
-                "completion_tokens": 5,
-                "prompt_tokens_details": {"cached_tokens": 0}
-            }
-        }
-        """.trimIndent()
+        val responseBody = sseBody(
+            """{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"prompt_tokens_details":{"cached_tokens":0}}}"""
+        )
 
-        server.enqueue(MockResponse().setBody(responseBody))
+        server.enqueue(MockResponse().setBody(responseBody).setHeader("Content-Type", "text/event-stream"))
         val response = provider.sendMessage(listOf(LLMMessage(LLMMessage.Role.USER, "Hi")), null, 1024)
         assertNull(response.usage?.cacheReadInputTokens)
     }
 
     @Test
-    fun `sendMessage handles empty choices`() = runBlocking {
-        server.enqueue(MockResponse().setBody("""{"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":0}}"""))
+    fun `sendMessage treats empty-choices stream as transient failure`() = runBlocking {
+        // A 200 stream that ends with no content and no finish_reason is
+        // treated as a dropped/upstream failure (failOnSilentEmptyCompletion) —
+        // real OpenAI streams always carry finish_reason before [DONE]. This
+        // locks in the current always-streaming contract; the old non-streaming
+        // "return empty text" behavior no longer exists.
+        server.enqueue(
+            MockResponse()
+                .setBody(sseBody("""{"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":0}}"""))
+                .setHeader("Content-Type", "text/event-stream")
+        )
 
-        val response = provider.sendMessage(listOf(LLMMessage(LLMMessage.Role.USER, "Hi")), null, 1024)
-        assertEquals("", response.text)
-        assertNull(response.stopReason)
+        try {
+            provider.sendMessage(listOf(LLMMessage(LLMMessage.Role.USER, "Hi")), null, 1024)
+        } catch (e: LLMError.TransientError) {
+            return@runBlocking
+        }
+        throw AssertionError("Expected TransientError for empty-choices stream")
     }
 
     // -- Request construction --
 
     @Test
     fun `sendMessage includes Bearer auth header`() = runBlocking {
-        server.enqueue(MockResponse().setBody("""{"choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":0,"completion_tokens":0}}"""))
+        server.enqueue(
+            MockResponse()
+                .setBody(sseBody("""{"choices":[{"delta":{"content":"ok"}}]}"""))
+                .setHeader("Content-Type", "text/event-stream")
+        )
 
         provider.sendMessage(listOf(LLMMessage(LLMMessage.Role.USER, "test")), null, 100)
 
@@ -128,7 +142,11 @@ class OpenAIProviderTest {
 
     @Test
     fun `sendMessage includes system prompt as system message`() = runBlocking {
-        server.enqueue(MockResponse().setBody("""{"choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":0,"completion_tokens":0}}"""))
+        server.enqueue(
+            MockResponse()
+                .setBody(sseBody("""{"choices":[{"delta":{"content":"ok"}}]}"""))
+                .setHeader("Content-Type", "text/event-stream")
+        )
 
         provider.sendMessage(
             listOf(LLMMessage(LLMMessage.Role.USER, "test")),
@@ -147,7 +165,11 @@ class OpenAIProviderTest {
 
     @Test
     fun `sendMessage omits system message when null`() = runBlocking {
-        server.enqueue(MockResponse().setBody("""{"choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":0,"completion_tokens":0}}"""))
+        server.enqueue(
+            MockResponse()
+                .setBody(sseBody("""{"choices":[{"delta":{"content":"ok"}}]}"""))
+                .setHeader("Content-Type", "text/event-stream")
+        )
 
         provider.sendMessage(listOf(LLMMessage(LLMMessage.Role.USER, "test")), null, 100)
 
@@ -160,7 +182,11 @@ class OpenAIProviderTest {
 
     @Test
     fun `sendMessage includes temperature when set`() = runBlocking {
-        server.enqueue(MockResponse().setBody("""{"choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":0,"completion_tokens":0}}"""))
+        server.enqueue(
+            MockResponse()
+                .setBody(sseBody("""{"choices":[{"delta":{"content":"ok"}}]}"""))
+                .setHeader("Content-Type", "text/event-stream")
+        )
 
         provider.sendMessage(listOf(LLMMessage(LLMMessage.Role.USER, "test")), null, 100, temperature = 0.8)
 
@@ -171,7 +197,11 @@ class OpenAIProviderTest {
 
     @Test
     fun `sendMessage omits temperature when null`() = runBlocking {
-        server.enqueue(MockResponse().setBody("""{"choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":0,"completion_tokens":0}}"""))
+        server.enqueue(
+            MockResponse()
+                .setBody(sseBody("""{"choices":[{"delta":{"content":"ok"}}]}"""))
+                .setHeader("Content-Type", "text/event-stream")
+        )
 
         provider.sendMessage(listOf(LLMMessage(LLMMessage.Role.USER, "test")), null, 100, temperature = null)
 
@@ -182,7 +212,11 @@ class OpenAIProviderTest {
 
     @Test
     fun `sendMessage uses max_completion_tokens for OpenAI`() = runBlocking {
-        server.enqueue(MockResponse().setBody("""{"choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":0,"completion_tokens":0}}"""))
+        server.enqueue(
+            MockResponse()
+                .setBody(sseBody("""{"choices":[{"delta":{"content":"ok"}}]}"""))
+                .setHeader("Content-Type", "text/event-stream")
+        )
 
         provider.sendMessage(listOf(LLMMessage(LLMMessage.Role.USER, "test")), null, 2048)
 
@@ -193,22 +227,30 @@ class OpenAIProviderTest {
     }
 
     @Test
-    fun `sendMessage sets stream false for non-streaming`() = runBlocking {
-        server.enqueue(MockResponse().setBody("""{"choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":0,"completion_tokens":0}}"""))
+    fun `sendMessage issues a streaming request internally`() = runBlocking {
+        server.enqueue(
+            MockResponse()
+                .setBody(sseBody("""{"choices":[{"delta":{"content":"ok"}}]}"""))
+                .setHeader("Content-Type", "text/event-stream")
+        )
 
         provider.sendMessage(listOf(LLMMessage(LLMMessage.Role.USER, "test")), null, 100)
 
         val request = server.takeRequest()
         val body = JSONObject(request.body.readUtf8())
-        assertEquals(false, body.getBoolean("stream"))
-        assertTrue(!body.has("stream_options"))
+        // sendMessage has always streamed internally since the "some providers
+        // reject stream=false outright" change: the request must say
+        // stream=true and carry stream_options.include_usage (OpenAI only).
+        assertEquals(true, body.getBoolean("stream"))
+        assertTrue(body.has("stream_options"))
+        assertTrue(body.getJSONObject("stream_options").getBoolean("include_usage"))
     }
 
     // -- Streaming --
 
     @Test
     fun `streamMessage parses SSE events with DONE`() = runBlocking {
-        val sseBody = buildString {
+        val streamBody = buildString {
             appendLine("data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}")
             appendLine()
             appendLine("data: {\"choices\":[{\"delta\":{\"content\":\" world\"}}]}")
@@ -221,7 +263,7 @@ class OpenAIProviderTest {
 
         server.enqueue(
             MockResponse()
-                .setBody(sseBody)
+                .setBody(streamBody)
                 .setHeader("Content-Type", "text/event-stream")
         )
 
@@ -245,13 +287,13 @@ class OpenAIProviderTest {
 
     @Test
     fun `streamMessage includes stream_options with include_usage`() = runBlocking {
-        val sseBody = buildString {
+        val streamBody = buildString {
             appendLine("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}")
             appendLine()
             appendLine("data: [DONE]")
             appendLine()
         }
-        server.enqueue(MockResponse().setBody(sseBody).setHeader("Content-Type", "text/event-stream"))
+        server.enqueue(MockResponse().setBody(streamBody).setHeader("Content-Type", "text/event-stream"))
 
         provider.streamMessage(listOf(LLMMessage(LLMMessage.Role.USER, "Hi")), null, 1024).toList()
 
@@ -264,13 +306,13 @@ class OpenAIProviderTest {
 
     @Test
     fun `streamMessage includes temperature in request`() = runBlocking {
-        val sseBody = buildString {
+        val streamBody = buildString {
             appendLine("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}")
             appendLine()
             appendLine("data: [DONE]")
             appendLine()
         }
-        server.enqueue(MockResponse().setBody(sseBody).setHeader("Content-Type", "text/event-stream"))
+        server.enqueue(MockResponse().setBody(streamBody).setHeader("Content-Type", "text/event-stream"))
 
         provider.streamMessage(listOf(LLMMessage(LLMMessage.Role.USER, "Hi")), null, 1024, temperature = 1.0).toList()
 
@@ -281,7 +323,7 @@ class OpenAIProviderTest {
 
     @Test
     fun `streamMessage parses cached tokens in usage`() = runBlocking {
-        val sseBody = buildString {
+        val streamBody = buildString {
             appendLine("""data: {"choices":[{"delta":{"content":"ok"}}]}""")
             appendLine()
             appendLine("""data: {"choices":[{"delta":{}}],"usage":{"prompt_tokens":100,"completion_tokens":10,"prompt_tokens_details":{"cached_tokens":50}}}""")
@@ -290,7 +332,7 @@ class OpenAIProviderTest {
             appendLine()
         }
 
-        server.enqueue(MockResponse().setBody(sseBody).setHeader("Content-Type", "text/event-stream"))
+        server.enqueue(MockResponse().setBody(streamBody).setHeader("Content-Type", "text/event-stream"))
 
         val chunks = provider.streamMessage(listOf(LLMMessage(LLMMessage.Role.USER, "Hi")), null, 1024).toList()
 
