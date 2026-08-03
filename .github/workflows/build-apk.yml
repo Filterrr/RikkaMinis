@@ -104,18 +104,24 @@ jobs:
       # signingConfig, which picks up MINIS_KEYSTORE_PATH exported above, so
       # upgrade-installs keep working. Release also sets BuildConfig.DEBUG=false,
       # so the local DebugServer (127.0.0.1:5321) is compiled out entirely.
-      # JVM unit tests. Scoped to the backup suite on purpose: enabling the
-      # whole suite surfaced 39 pre-existing failures unrelated to backup
-      # (AnthropicProviderTest/OpenAIProviderTest need an Android Context —
-      # ClaudeOAuthManager.kt:56 throws on the JVM — and TerminalSanitizerTest
-      # has genuine stale assertions). Those need their own fix; gating the
-      # build on them today would just mean nobody runs any test at all.
-      # Widen this filter once that backlog is cleared.
-      - name: Run backup unit tests
+      # JVM unit tests. Two scopes on purpose:
+      #   - com.openminis.app.backup.*  — the backup/restore payload suite.
+      #   - ProviderConfigSnapshotTest  — locks the snapshot-on-write invariant
+      #     in ProviderRepository (guards against the ConcurrentModificationException
+      #     regression); without an explicit entry the backup-only filter skips it.
+      #
+      # Not yet the whole suite: it still has 15 pre-existing failures unrelated
+      # to these areas — OpenAIProviderTest (11, MockWebServer returns an empty
+      # response under CI) and TerminalSanitizerTest (4, genuine stale CR-folding
+      # assertions). Both need their own fix; gating the build on them today
+      # would just mean nobody runs any test at all. Add new suites here
+      # explicitly until that backlog is cleared.
+      - name: Run unit tests (scoped)
         run: |
           cd src/android
           ./gradlew testReleaseUnitTest --stacktrace \
-            --tests 'com.openminis.app.backup.*'
+            --tests 'com.openminis.app.backup.*' \
+            --tests 'com.openminis.app.data.repository.ProviderConfigSnapshotTest'
 
       - name: Build APK with Gradle
         run: |
