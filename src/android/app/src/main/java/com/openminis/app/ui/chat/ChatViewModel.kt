@@ -3579,7 +3579,18 @@ class ChatViewModel(
             // inside the group still wins via preferredEntryId above; the NEXT
             // fresh session rotates onward.
             val lastIdx = enabledMembers.indexOfFirst { it.id == providerRepository.lastUsedEntryId }
-            enabledMembers[(lastIdx + 1) % enabledMembers.size]
+            val rotated = enabledMembers[(lastIdx + 1) % enabledMembers.size]
+            // [T-loadbalance-rotation-advance] Advance the rotation cursor to
+            // the member we just resolved. Without this write-back,
+            // lastUsedEntryId is only ever set by manual picks (selectGroupEntry
+            // / selectEntry) and the auto-rotation never moves — every fresh
+            // session lands on the same member and loadBalance degenerates into
+            // fallback. Writing it here makes each new session advance one
+            // member (round-robin across enabled members, persisted across app
+            // restarts via SharedPreferences), which is the intended
+            // "per-session rotation" behaviour.
+            providerRepository.lastUsedEntryId = rotated.id
+            rotated
         } else {
             enabledMembers.first()
         }
