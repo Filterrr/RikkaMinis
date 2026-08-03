@@ -52,12 +52,14 @@ Android-specific product changes that are not present upstream.
   covers provider/model configuration and groups, optional API keys,
   environment variables, app/agent/chat defaults, Soul, complete skills
   (SKILL.md plus bundled scripts, references and assets), persistent memory,
-  MCP server configuration, and scheduled tasks.
-- **Honest exclusions.** Chat history is not part of a configuration backup.
+  MCP server configuration, and chat history (text-only, last 90 days by
+  default, window adjustable in Backup settings).
+- **Honest exclusions.** Chat history is carried as text only: media
+  (images/videos) and attached files are dropped, and only the last N days of
+  activity are included (0–365, default 90; 0 disables chat history). 
   Mounted-folder permissions cannot be transferred between Android devices,
-  MCP OAuth client secrets/tokens are never exported, and scheduled-task run
-  history is intentionally discarded. OAuth-backed MCP servers must be
-  re-authorized after restore.
+  and MCP OAuth client secrets/tokens are never exported — OAuth-backed MCP
+  servers must be re-authorized after restore.
 - **Chat UI refinements.** Message links can focus and highlight a specific
   message; navigation titles are left-aligned; the active model selector lives
   in the composer; attachment and command actions are arranged more compactly.
@@ -108,7 +110,7 @@ prompts and model integrations are unaffected — build normally.
 | **Device integration** | Calendar, Contacts, Clipboard, Location, Media, Alarms, Notifications and more, exposed to the agent as tools. |
 | **Browser automation** | The agent can browse and interact with the web on your behalf. |
 | **Skills & memory** | Extensible skills plus persistent memory across sessions. Complete skill bundles and memory files are included in local backups. |
-| **Local backup & restore** | Export configuration, credentials (optional), skills, memory, MCP servers and scheduled tasks to one portable JSON file. |
+| **Local backup & restore** | Export configuration, credentials (optional), skills, memory, MCP servers and chat history (text, last N days) to one portable JSON file. |
 | **Workspaces** | Organise work into separate contexts, addressable via `minis://workspace/`. |
 | **Native offloads** | Heavy or platform-specific work is handed to native code instead of the sandbox. |
 
