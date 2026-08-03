@@ -455,14 +455,6 @@
             android:name=".offload.ScheduledNotificationReceiver"
             android:exported="false" />
 
-        <!-- [T-android-scheduled-tasks-design] AlarmManager target for
-             user-defined scheduled tasks (Settings → home top-right
-             schedule icon). The receiver dispatches to ScheduledAgentRunner
-             which drives the agent loop headlessly. -->
-        <receiver
-            android:name=".scheduled.ScheduledTaskAlarmReceiver"
-            android:exported="false" />
-
         <!-- Notification listener — lets android-notification read active notifications.
              User must enable this manually in Settings → Notifications → Device &
              app notifications → Notification access. -->

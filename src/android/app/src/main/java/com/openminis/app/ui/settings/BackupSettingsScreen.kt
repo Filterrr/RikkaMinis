@@ -26,7 +26,6 @@ import com.openminis.app.data.repository.MCPRepository
 import com.openminis.app.data.repository.MemoryRepository
 import com.openminis.app.data.repository.ProviderRepository
 import com.openminis.app.data.repository.SkillRepository
-import com.openminis.app.scheduled.ScheduledTaskManager
 
 /**
  * Local backup / restore of app configuration — providers, appearance, and the
@@ -47,13 +46,6 @@ fun BackupSettingsScreen(
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
-    // ScheduledTaskManager is a stateless wrapper over its own store +
-    // AlarmManager (every other call site constructs one on demand), so it is
-    // built here rather than threaded through the navigation graph. Restoring
-    // through the manager — not the raw store — is what actually re-arms the
-    // alarms; writing rows alone would leave tasks that are visible but dead.
-    val scheduledManager = remember(context) { ScheduledTaskManager(context) }
-
     // Payload is built BEFORE the file picker opens, then written in the
     // callback: SAF gives us a write handle, not a chance to compute content.
     var pendingExport by remember { mutableStateOf<String?>(null) }
@@ -99,7 +91,6 @@ fun BackupSettingsScreen(
                 skillRepo = skillRepository,
                 memoryRepo = memoryRepository,
                 mcpRepo = mcpRepository,
-                scheduledManager = scheduledManager,
             )
         } catch (t: Throwable) {
             errorMessage = t.message ?: errImport
@@ -141,7 +132,6 @@ fun BackupSettingsScreen(
                     skillRepo = skillRepository,
                     memoryRepo = memoryRepository,
                     mcpRepo = mcpRepository,
-                    scheduledStore = scheduledManager.store(),
                 )
                 exportLauncher.launch(ConfigBackup.suggestedFileName())
             } catch (t: Throwable) {
@@ -212,15 +202,6 @@ fun BackupSettingsScreen(
                             stringResource(
                                 R.string.backup_done_mcp_servers,
                                 report.mcpServersImported,
-                            ),
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                    }
-                    if (report.scheduledTasksImported > 0) {
-                        Text(
-                            stringResource(
-                                R.string.backup_done_scheduled_tasks,
-                                report.scheduledTasksImported,
                             ),
                             style = MaterialTheme.typography.bodyMedium,
                         )

@@ -16,7 +16,7 @@ import java.util.zip.ZipOutputStream
 /**
  * [T-backup-skills] Payload-level coverage for the parts of a backup that are
  * NOT plain registry scalars: skills (embedded as a zip), memory files, MCP
- * servers and scheduled tasks.
+ * servers.
  *
  * ConfigBackup.export/import need Android repositories, so they can't be driven
  * from a JVM unit test. What is testable here — and what actually broke — is the
@@ -144,7 +144,7 @@ class ConfigBackupPayloadTest {
 
     @Test
     fun `a version 1 backup without the new sections stays importable`() {
-        // Backups written before skills/memory/MCP/scheduled were covered have
+        // Backups written before skills/memory/MCP were covered have
         // no such keys. Import reads them with optJSONArray, which returns null
         // and skips the stage — so an old file must NOT look malformed.
         val old = JSONObject(
@@ -156,39 +156,12 @@ class ConfigBackupPayloadTest {
         assertNull(old.optJSONArray("skills"))
         assertNull(old.optJSONArray("memoryFiles"))
         assertNull(old.optJSONArray("mcpServers"))
-        assertNull(old.optJSONArray("scheduledTasks"))
         assertEquals("openminis.config.backup", old.optString("format"))
 
         // Adding sections is additive, so the format major must not move —
         // bumping it would make new files unreadable by older builds for no
         // reason.
         assertEquals(1, ConfigBackup.FORMAT_VERSION)
-    }
-
-    @Test
-    fun `scheduled task payload drops device-local run history`() {
-        // Run records point at session ids that don't exist on the target
-        // install; a restored task should fire in future, not carry a log.
-        val task = JSONObject()
-            .put("id", "t1")
-            .put("label", "morning brief")
-            .put("prompt", "summarize")
-            .put("runs", JSONArray().put(JSONObject().put("firedAt", 123L)))
-            .put("lastFiredAt", 123L)
-            .put("lastResultPreview", "…")
-            .put("lastResultSessionId", "sess-local")
-
-        for (k in listOf("runs", "lastFiredAt", "lastResultPreview", "lastResultSessionId")) {
-            task.remove(k)
-        }
-
-        assertFalse(task.has("runs"))
-        assertFalse(task.has("lastFiredAt"))
-        assertFalse(task.has("lastResultSessionId"))
-        // The scheduling definition itself must survive.
-        assertEquals("t1", task.optString("id"))
-        assertEquals("morning brief", task.optString("label"))
-        assertEquals("summarize", task.optString("prompt"))
     }
 
     @Test
