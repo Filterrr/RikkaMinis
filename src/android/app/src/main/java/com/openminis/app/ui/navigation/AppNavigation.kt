@@ -584,6 +584,15 @@ fun AppNavigation(
                     navController.safeNavigate(Routes.FILE_PREVIEW)
                 },
                 onModelGroupsClick = { navController.safeNavigate(Routes.MODEL_GROUPS) },
+                // Chat-history drawer: open another conversation (same funnel
+                // as the session list's onSessionClick) or jump to Settings.
+                onOpenSession = { targetId ->
+                    navController.safeNavigate(Routes.chat(targetId)) {
+                        popUpTo(Routes.SESSION_LIST) { inclusive = false }
+                        launchSingleTop = true
+                    }
+                },
+                onOpenSettings = { navController.safeNavigate(Routes.SETTINGS) },
             )
         }
 
