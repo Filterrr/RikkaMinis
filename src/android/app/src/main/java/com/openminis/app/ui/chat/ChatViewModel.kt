@@ -6481,7 +6481,8 @@ class ChatViewModel(
                     // group immediately — rate limits (429), bad/expired API keys
                     // (401) and provider errors (4xx/5xx, incl. per-provider 403
                     // quota). `always` additionally falls back on every error.
-                    val shouldFallback = actual.isFallbackable ||
+                    val shouldFallback =
+                        (actual as? com.openminis.app.data.model.LLMError)?.isFallbackable == true ||
                         fallbackStrategy == com.openminis.app.data.model.FallbackStrategy.always
                     val next = if (shouldFallback) remainingFallbacks.removeFirstOrNull() else null
                     if (next != null) {
