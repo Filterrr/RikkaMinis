@@ -9,7 +9,7 @@
 #
 # Nothing is ever pushed to upstream — this only reads it. Run manually from
 # the Actions tab whenever you want to check for drift:
-#   https://github.com/logicflow-GYW/OpenMinis/actions/workflows/sync-upstream.yml
+#   https://github.com/logicflow-GYW/RikkaMinis/actions/workflows/sync-upstream.yml
 name: Sync upstream
 
 on:

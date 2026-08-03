@@ -1,4 +1,4 @@
-name: Build OpenMinis Android APK
+name: Build RikkaMinis Android APK
 
 on:
   push:
@@ -219,12 +219,12 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: OpenMinis-apk
+          name: RikkaMinis-apk
           path: src/android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
 
       # Rename to a versioned, arch-tagged filename mirroring the official
-      # release naming (OpenMinis-<versionName>-arm64-v8a.apk). The filename is
+      # release naming (RikkaMinis-<versionName>-arm64-v8a.apk). The filename is
       # FIXED (base version only, no -beta suffix): the rolling android-latest
       # release must keep exactly one asset, and a suffix would make the name
       # change every build, accumulating stale assets. The full per-build
@@ -234,7 +234,7 @@ jobs:
         run: |
           VN="0.22-preview${MINIS_VERSION_NAME_SUFFIX:-}"
           VC="${MINIS_VERSION_CODE:-22}"
-          OUT="OpenMinis-0.22-preview-arm64-v8a.apk"
+          OUT="RikkaMinis-0.22-preview-arm64-v8a.apk"
           cp src/android/app/build/outputs/apk/release/app-release.apk "$OUT"
           echo "version=$VN" >> "$GITHUB_OUTPUT"
           echo "versionCode=$VC" >> "$GITHUB_OUTPUT"
@@ -248,7 +248,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: android-latest
-          name: "OpenMinis Android (latest build)"
+          name: "RikkaMinis Android (latest build)"
           body: |
             Automated Android build — always the newest commit on `main`.
 

@@ -1,24 +1,28 @@
-# OpenMinis — Android
+# RikkaMinis — Android
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Android%20arm64-brightgreen.svg)](#install)
-[![Build](https://github.com/logicflow-GYW/OpenMinis/actions/workflows/build-apk.yml/badge.svg)](https://github.com/logicflow-GYW/OpenMinis/actions/workflows/build-apk.yml)
+[![Build](https://github.com/logicflow-GYW/RikkaMinis/actions/workflows/build-apk.yml/badge.svg)](https://github.com/logicflow-GYW/RikkaMinis/actions/workflows/build-apk.yml)
 
 **Your private, on-device AI agent.**
 
-An **Android-only fork** of [OpenMinis](https://github.com/OpenMinis/OpenMinis)
-that builds a working APK on GitHub Actions and publishes it automatically.
+RikkaMinis is a personal **Android-only** build that hybridizes two projects:
+the engine and codebase come from [OpenMinis](https://github.com/OpenMinis/OpenMinis),
+while the interaction design (chat history drawer, minimal top bar, simplified
+settings) is inspired by [RikkaHub](https://github.com/rikkahub/rikkahub).
 
-OpenMinis brings leading models — Claude, GPT, Gemini and more — into a native
-mobile experience, and gives them a real computer to work with: a full Linux
-shell running on your device, browser automation, extensible skills, persistent
-memory, and deep system integration.
+It builds a working APK on GitHub Actions and publishes it automatically.
+
+The OpenMinis core brings leading models — Claude, GPT, Gemini and more — into
+a native mobile experience, and gives them a real computer to work with: a full
+Linux shell running on your device, browser automation, extensible skills,
+persistent memory, and deep system integration.
 
 ---
 
 ## Install
 
-**→ [Download the latest APK](https://github.com/logicflow-GYW/OpenMinis/releases/tag/android-latest)**
+**→ [Download the latest APK](https://github.com/logicflow-GYW/RikkaMinis/releases/tag/android-latest)**
 
 Every push to `main` builds a release APK and republishes it to that link, so
 the URL always points at the newest build. Requirements:
@@ -142,8 +146,8 @@ curated collection of use cases and workflows.
 ## Building locally
 
 ```sh
-git clone --recurse-submodules https://github.com/logicflow-GYW/OpenMinis.git
-cd OpenMinis/src/android
+git clone --recurse-submodules https://github.com/logicflow-GYW/RikkaMinis.git
+cd RikkaMinis/src/android
 ../../deps/build_proot.sh        # build the proot sandbox engine from source
 ./gradlew assembleRelease
 ```
