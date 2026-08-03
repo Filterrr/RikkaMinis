@@ -155,6 +155,9 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.LocalTextStyle
@@ -418,6 +421,11 @@ fun ChatScreen(
      *  management screen — wired to the "Edit" button on the model picker's
      *  Model Groups section header. */
     onModelGroupsClick: () -> Unit = {},
+    /** Open another conversation from the chat-history drawer. The caller
+     *  navigates to that chat (same funnel as the session list's onSessionClick). */
+    onOpenSession: (String) -> Unit = {},
+    /** Open Settings from the chat-history drawer footer. */
+    onOpenSettings: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -1913,6 +1921,42 @@ fun ChatScreen(
         // map (which is last-writer-wins across sessions).
         LocalMarkdownSessionId provides sessionId,
     ) {
+    // RikkaHub-style left-swipe drawer: the chat is wrapped in a
+    // ModalNavigationDrawer whose sheet is the conversation history. A left
+    // edge-swipe (or the hamburger) opens it; tapping a session, New Chat, or
+    // Settings navigates and closes it. gesturesEnabled is on so the swipe
+    // works anywhere the chat body would otherwise not consume a horizontal
+    // drag.
+    val historyDrawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    // Reuse the screen's existing coroutineScope (declared above) to drive
+    // open/close animations.
+    val historyDrawerScope = coroutineScope
+    // Close the drawer with system back before it falls through to onBack.
+    androidx.activity.compose.BackHandler(enabled = historyDrawerState.isOpen) {
+        historyDrawerScope.launch { historyDrawerState.close() }
+    }
+    ModalNavigationDrawer(
+        drawerState = historyDrawerState,
+        gesturesEnabled = true,
+        drawerContent = {
+            ChatHistoryDrawer(
+                chatRepository = chatRepository,
+                currentSessionId = sessionId,
+                onSessionClick = { id ->
+                    historyDrawerScope.launch { historyDrawerState.close() }
+                    if (id != sessionId) onOpenSession(id)
+                },
+                onNewChat = {
+                    historyDrawerScope.launch { historyDrawerState.close() }
+                    onNewChat()
+                },
+                onSettings = {
+                    historyDrawerScope.launch { historyDrawerState.close() }
+                    onOpenSettings()
+                },
+            )
+        },
+    ) {
     Scaffold(
         containerColor = ChatColors.background,
         contentWindowInsets = WindowInsets(0),
@@ -2160,13 +2204,17 @@ fun ChatScreen(
                     }
                 },
                 navigationIcon = {
-                    // Hamburger instead of a back arrow: this navigates to the
-                    // session list, which is a sibling top-level surface rather
-                    // than a parent, and RikkaHub-style drawer navigation is the
-                    // target pattern. onBack is unchanged — only the glyph and
-                    // its content description differ, so system back and
-                    // predictive-back behaviour are untouched.
-                    IconButton(onClick = onBack) {
+                    // Hamburger opens the RikkaHub-style chat-history drawer
+                    // (ModalNavigationDrawer wrapping this Scaffold). A left
+                    // edge-swipe opens the same drawer. onBack is still used by
+                    // system/predictive back to leave the chat; only the glyph
+                    // and this tap target changed.
+                    IconButton(onClick = {
+                        historyDrawerScope.launch {
+                            if (historyDrawerState.isOpen) historyDrawerState.close()
+                            else historyDrawerState.open()
+                        }
+                    }) {
                         Icon(Icons.Default.Menu, contentDescription = "Sessions")
                     }
                 },
@@ -5273,6 +5321,7 @@ fun ChatScreen(
                 )
         )
         }
+    }
     }
 
     // Browser bottom sheet

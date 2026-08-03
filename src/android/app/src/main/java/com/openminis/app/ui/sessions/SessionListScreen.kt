@@ -152,10 +152,10 @@ import com.openminis.app.ui.components.MinisTextButton
 
 // FAB color — use shared theme values
 
-private data class CategoryStyle(val icon: ImageVector, val color: Color)
+internal data class CategoryStyle(val icon: ImageVector, val color: Color)
 
 // 16 categories matching iOS (ContentView.swift:1897-1916)
-private fun categoryStyle(category: String?): CategoryStyle {
+internal fun categoryStyle(category: String?): CategoryStyle {
     return when (category?.lowercase()) {
         "code"         -> CategoryStyle(Icons.Outlined.Code, Color(0xFFF09A37))
         "writing"      -> CategoryStyle(Icons.Outlined.Description, Color(0xFF3478F6))
@@ -178,7 +178,7 @@ private fun categoryStyle(category: String?): CategoryStyle {
 }
 
 // Date period for section grouping (matching iOS)
-private enum class DatePeriod(val label: String) {
+internal enum class DatePeriod(val label: String) {
     PINNED("Pinned"),     // labels are i18n'd at render time via sectionLabelFor
     TODAY("Today"),
     YESTERDAY("Yesterday"),
@@ -195,7 +195,7 @@ private enum class DatePeriod(val label: String) {
  *   - This Month: within the last 30 days (rolling window, NOT current calendar month)
  *   - Earlier: everything else
  */
-private fun datePeriod(timestamp: Long): DatePeriod {
+internal fun datePeriod(timestamp: Long): DatePeriod {
     val now = Calendar.getInstance()
     val cal = Calendar.getInstance().apply { time = Date(timestamp) }
 
@@ -220,7 +220,7 @@ private fun datePeriod(timestamp: Long): DatePeriod {
     return DatePeriod.EARLIER
 }
 
-private fun groupSessionsByDate(sessions: List<ChatSessionEntity>): List<Pair<DatePeriod, List<ChatSessionEntity>>> {
+internal fun groupSessionsByDate(sessions: List<ChatSessionEntity>): List<Pair<DatePeriod, List<ChatSessionEntity>>> {
     val pinned = sessions.filter { it.pinnedAt != null }.sortedByDescending { it.pinnedAt }
     val unpinned = sessions.filter { it.pinnedAt == null }
     val grouped = unpinned.groupBy { datePeriod(it.updatedAt) }
@@ -235,7 +235,7 @@ private fun groupSessionsByDate(sessions: List<ChatSessionEntity>): List<Pair<Da
     return result
 }
 
-private fun relativeDate(context: Context, timestamp: Long): String {
+internal fun relativeDate(context: Context, timestamp: Long): String {
     val now = System.currentTimeMillis()
     val diff = now - timestamp
     val seconds = TimeUnit.MILLISECONDS.toSeconds(diff)
