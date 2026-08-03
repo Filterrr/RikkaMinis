@@ -63,6 +63,12 @@ Android-specific product changes that are not present upstream.
 - **Chat UI refinements.** Message links can focus and highlight a specific
   message; navigation titles are left-aligned; the active model selector lives
   in the composer; attachment and command actions are arranged more compactly.
+- **Left-swipe chat history drawer.** The chat screen opens a slide-out
+  conversation list from the left edge (or via the hamburger button), so you
+  can switch between past conversations — or start a new one — without leaving
+  the current chat. The drawer mirrors the session list: same grouping,
+  category icons and relative timestamps, current chat highlighted, and
+  long-press to delete a conversation.
 - **Simpler composer.** The dedicated voice-chat shortcut and its inline UI
   have been removed. Android's agent-facing speech tools are unaffected.
 - **Settings consistency fixes.** Restored preferences refresh the live
