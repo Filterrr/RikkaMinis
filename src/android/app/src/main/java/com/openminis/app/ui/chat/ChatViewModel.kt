@@ -2512,10 +2512,14 @@ class ChatViewModel(
             }
             ContextPolicy.CheckResult.EXHAUSTED -> {
                 appendSystemInfo(
-                    text = "Context is near the model's limit ($tokens / $window tokens). Start a new chat or /compact to continue reliably.",
+                    text = "Context is near the model's limit ($tokens / $window tokens). Send blocked — start a new chat or /compact to continue.",
                     iconKind = "compact",
                 )
-                true
+                // [T-context-enforce-exhausted] Mirror iOS: block the send at the
+                // exhausted boundary instead of letting the context grow past the
+                // window. The user can /compact (folds older turns into a summary)
+                // or start a new chat to continue.
+                false
             }
         }
     }
@@ -4821,10 +4825,10 @@ class ChatViewModel(
             )
             return
         }
-        // Non-blocking context pressure check — emits a system notice at the
-        // needsCompact / exhausted thresholds but still lets the send proceed.
-        // The user invokes /compact explicitly to fold history when warned.
-        checkContextBeforeSend()
+        // Context pressure check — warns at the needsCompact threshold but
+        // BLOCKS the send at the exhausted threshold (mirroring iOS's
+        // compact-before-send dialog). /compact folds history to continue.
+        if (!checkContextBeforeSend()) return
         // A fresh send supersedes any pending resume — mirror iOS which clears
         // canResume at the top of send().
         _canResume.value = false
