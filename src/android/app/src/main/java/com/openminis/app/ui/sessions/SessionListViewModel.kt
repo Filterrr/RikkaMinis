@@ -161,6 +161,28 @@ class SessionListViewModel(
                 started.await()
                 runCatching { unsub() }
             }
+            // [T-empty-session-residue] Sweep message-less sessions before the
+            // list is observed, so residue from a previous run never renders.
+            //
+            // cleanupIfEmptyOnExit() (ChatViewModel) covers the graceful-exit
+            // case, but it hangs off Compose onDispose: process death, task
+            // swipe, a crash, or a configuration change all skip it and strand
+            // the row forever. That intermittency is exactly the reported
+            // "sometimes auto-delete works, sometimes it doesn't". Running here
+            // depends on no lifecycle callback at all.
+            //
+            // Deliberately after the safe-mode gate: in safe mode we avoid
+            // touching potentially-malformed rows until the user acknowledges.
+            runCatching {
+                val removed = chatRepository.deleteEmptySessions(
+                    activeIds = ChatViewModelStore.activeSessionIds(),
+                )
+                if (removed > 0) {
+                    android.util.Log.i(TAG, "Swept $removed empty session(s) on start")
+                }
+            }.onFailure {
+                android.util.Log.w(TAG, "Empty-session sweep failed", it)
+            }
             chatRepository.observeSessions().collect {
                 _allSessions.value = it
                 if (!_isInitialLoadComplete.value) _isInitialLoadComplete.value = true

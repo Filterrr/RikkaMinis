@@ -298,4 +298,33 @@ interface ChatDao {
      *  alongside the paginated slice so callers can compute `hasMore`. */
     @Query("SELECT COUNT(*) FROM messages WHERE session_id = :sessionId")
     suspend fun messageCountForSession(sessionId: String): Int
+
+    /**
+     * [T-empty-session-residue] Startup sweep for message-less sessions.
+     *
+     * Sessions are meant to be materialised lazily (first real message), but
+     * `ensureSession()` also runs for session-scoped settings toggles
+     * (/memory, /thinking), so a user who opens a new chat, flips a toggle and
+     * leaves ends up with a row that has zero messages.
+     *
+     * `cleanupIfEmptyOnExit()` handles the common case, but it hangs off
+     * Compose's `onDispose`, which never runs on process death, task-swipe or
+     * a crash — and is deliberately skipped across configuration changes. Any
+     * of those paths strands the empty row forever, which is why users saw
+     * "sometimes it disappears, sometimes it doesn't".
+     *
+     * This sweep is the backstop: it does not depend on any lifecycle callback
+     * firing. Guarded so it can never eat live data:
+     *  - only rows with no rows in `messages` at all,
+     *  - excluding anything currently open (`activeIds`),
+     *  - excluding rows touched within [graceMillis] so a chat that is mid
+     *    first-send (row inserted, message not yet committed) is never hit.
+     */
+    @Query("""
+        DELETE FROM sessions
+        WHERE id NOT IN (SELECT DISTINCT session_id FROM messages)
+          AND id NOT IN (:activeIds)
+          AND updated_at < :staleBefore
+    """)
+    suspend fun deleteEmptySessions(activeIds: List<String>, staleBefore: Long): Int
 }

@@ -89,6 +89,20 @@ object ChatViewModelStore {
         activeSessionIdInternal = sessionId
     }
 
+    /**
+     * [T-empty-session-residue] Every session id that still has a live VM,
+     * plus the foregrounded one and any draft aliases pointing at them.
+     *
+     * Used by the startup empty-session sweep as an exclusion list. A cached
+     * store means the agent loop may still be running (streaming survives
+     * leaving the chat screen by design), so those rows must never be swept
+     * even while they momentarily have zero messages.
+     */
+    @Synchronized
+    fun activeSessionIds(): List<String> =
+        (stores.keys + aliases.keys + aliases.values + listOfNotNull(activeSessionIdInternal))
+            .toList()
+
     @Synchronized
     fun rename(fromSessionId: String, toSessionId: String) {
         if (fromSessionId == toSessionId) return
