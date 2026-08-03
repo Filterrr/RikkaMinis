@@ -23,27 +23,35 @@ The divergence is intentionally small, so conflicts stay manageable:
 |---|---|---|
 | `src/android/app/build.gradle.kts` | CMake/`externalNativeBuild` disabled, packaging options, version fields | **Likely** — the one file to watch |
 | `.github/workflows/build-apk.yml` | Added by this fork | No — upstream has no such file |
-| `src/android/app/src/main/jniLibs/arm64-v8a/*.so` | Vendored official binaries | No — upstream does not commit these |
-| `src/android/app/src/main/assets/{alpine-minirootfs.tar,proot-aarch64}` | Vendored official binaries | No — same reason |
+| `src/android/app/src/main/jniLibs/arm64-v8a/*.so` | Vendored official binaries (pty_bridge, crash_handler, jieba, c++_shared, datastore, androidx.graphics.path) | No — upstream does not commit these |
+| `src/android/app/src/main/assets/alpine-minirootfs.tar` | Vendored official asset | No — same reason |
 | `.gitignore` | Un-ignores the vendored binaries | Minor, easy to resolve |
 | `scripts/sync_official_binaries.sh` | Added by this fork | No |
-| iOS sources, `deps/` | Deleted | Deletions may reappear; re-delete |
+| iOS sources | Deleted | Deletions may reappear; re-delete |
+
+`deps/` (the `deps/proot` submodule, vendored `deps/talloc` and
+`deps/build_proot.sh`) matches upstream and should be kept as-is. proot itself
+is **built from source** in CI, so it is not part of the sync procedure below.
 
 So in practice **only `build.gradle.kts` needs real attention** during a rebase.
 
-## Why the binaries must be refreshed every time
+## Why the other binaries must be refreshed every time
 
-This fork does not compile native code. `externalNativeBuild` is disabled in
-`build.gradle.kts` because a self-built `libproot.so` lacks upstream's Android
-10+ W^X bypass and fails on-device with `execve("/bin/sh"): Permission denied`.
-The official `.so` files are committed instead.
+This fork does not compile native code through AGP: `externalNativeBuild` is
+disabled in `build.gradle.kts`. proot is the exception — it is built from source
+in CI via `deps/build_proot.sh` (the `deps/proot` submodule carries upstream's
+Android 10+ W^X bypass patches, so the result works on-device). The *other*
+native libraries (pty_bridge, crash_handler, jieba, c++_shared, datastore,
+androidx.graphics.path) are the official `.so` files, committed as-is.
 
 That means the committed binaries and the Kotlin source **must be kept as a
 matched pair**. If upstream changes a JNI method signature — say a parameter is
 added to `PtyBridge.forkExec` — the old `.so` no longer matches the new Kotlin
 declaration, and the app crashes at runtime.
 
-Never rebase onto new upstream Kotlin without also refreshing the binaries.
+Never rebase onto new upstream Kotlin without also refreshing the vendored
+libraries. proot needs no refresh: it rebuilds from source; bump the
+`deps/proot` submodule only when upstream's build inputs change.
 
 ## Procedure
 
@@ -63,37 +71,43 @@ git rebase upstream/main
 #      - our versionCode / versionName
 #    Then: git add <file> && git rebase --continue
 
-# 3. Refresh the vendored binaries to match the new source
+# 3. Refresh the vendored libraries to match the new source.
+#    proot needs no refresh here: it is built from source in CI
+#    (deps/build_proot.sh + deps/proot submodule). Only bump deps/proot
+#    when upstream changes proot's build inputs.
 ./scripts/sync_official_binaries.sh
 
 # 4. Review, commit, push
 git diff --stat
 git add -A
-git commit -m "chore: sync with upstream + refresh prebuilt binaries"
+git commit -m "chore: sync with upstream + refresh vendored binaries"
 git push --force-with-lease
 ```
 
 `--force-with-lease` is required because rebasing rewrites commits; it refuses
 the push if someone else changed the branch meanwhile, unlike a bare `--force`.
 
-Pushing to `main` triggers `.github/workflows/build-apk.yml`, which builds a
-release APK and publishes it to the `android-latest` release.
+Pushing to `main` triggers `.github/workflows/build-apk.yml`, which compiles
+proot from source (NDK r28 + `deps/build_proot.sh`), runs the backup tests,
+builds a release APK and publishes it to the `android-latest` release.
 
 ## After syncing: verify
 
-The workflow already checks that the APK's `libproot.so` matches the committed
-official binary, and that every vendored `.so` is a valid ELF. It cannot catch a
-JNI signature mismatch — that only shows up at runtime. So after a sync that
-pulled in Kotlin changes, install the APK and confirm:
+The workflow checks that every vendored `.so` is a valid ELF and that the
+APK's `libproot.so` matches the freshly compiled one. It cannot catch a JNI
+signature mismatch — that only shows up at runtime. So after a sync that pulled
+in Kotlin changes, install the APK and confirm:
 
 1. The app starts (rules out a bad `libminis_crash_handler.so` / early JNI load).
-2. The terminal opens and runs a command — this is the real `libproot.so` +
-   `libpty_bridge.so` smoke test, and the thing most likely to break.
+2. The terminal opens and runs a command — this is the source-built
+   `libproot.so` + `libpty_bridge.so` smoke test, and the thing most likely to break.
 3. Chinese text input still segments correctly (exercises `libjieba_jni.so`).
 
-If the terminal reports `Permission denied`, the binaries and source are out of
-sync — re-run `sync_official_binaries.sh`, or pin an older upstream tag:
-`./scripts/sync_official_binaries.sh 0.22-preview`.
+If the terminal reports `Permission denied`, the proot build is broken: check
+that `deps/build_proot.sh` ran in CI and that `deps/proot` is at the right
+commit — do **not** reach for an extracted binary, that reintroduces the
+unpatched build. For the other libs, re-run `sync_official_binaries.sh`, or pin
+an older upstream tag: `./scripts/sync_official_binaries.sh 0.22-preview`.
 
 ## If a sync goes badly wrong
 

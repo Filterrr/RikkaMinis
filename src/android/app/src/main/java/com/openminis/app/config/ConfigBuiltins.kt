@@ -279,6 +279,17 @@ internal object ConfigBuiltins {
                 defaultIndex = 0,
             )
         )
+        r.register(
+            PrefsIntCodedEnumField(
+                path = "appearance.launchSession",
+                displayName = "Launch behaviour",
+                description = "What the app opens on cold start: auto, the last session, a new chat, or the home screen.",
+                prefs = prefs,
+                key = com.openminis.app.ui.settings.KEY_LAUNCH_SESSION,
+                cases = listOf("auto", "lastSession", "newChat", "home"),
+                defaultIndex = 0,
+            )
+        )
         // T-chat-title-pill: sticky session-title pill on the chat screen.
         // Default ON; key string deliberately matches iOS so a future
         // cross-platform settings sync round-trips identically.
@@ -309,16 +320,25 @@ internal object ConfigBuiltins {
     // -- Chat / input --
 
     private fun registerChat(r: ConfigRegistry, context: Context) {
-        // Default app prefs — Android persists most chat preferences in
-        // the default SharedPreferences for the package.
-        val prefs = context.getSharedPreferences("minis_settings", Context.MODE_PRIVATE)
+        // [T-backup-dead-key-fix] These two fields previously wrote to a
+        // `minis_settings` file with keys `return_key_behavior` /
+        // `keep_screen_awake_during_tasks` that NOTHING reads: AppearanceScreen
+        // and the runtime read `appearance_prefs` with the iOS-aligned keys
+        // `returnKeyBehavior` / `keepScreenAwakeDuringTasks`. A minis-config
+        // write or a backup-restore therefore landed in a dead file and never
+        // took effect. Repoint to the same SharedPreferences file+keys the UI
+        // uses, via the shared constants so the two can't drift apart again.
+        val prefs = context.getSharedPreferences(
+            com.openminis.app.ui.settings.PREF_APPEARANCE,
+            Context.MODE_PRIVATE,
+        )
         r.register(
             PrefsIntCodedEnumField(
                 path = "chat.returnKey",
                 displayName = "Return key behavior",
                 description = "What the on-screen Return key does in the chat box.",
                 prefs = prefs,
-                key = "return_key_behavior",
+                key = com.openminis.app.ui.settings.KEY_RETURN_KEY_BEHAVIOR,
                 cases = listOf("newline", "send"),
                 defaultIndex = 0,
             )
@@ -329,7 +349,7 @@ internal object ConfigBuiltins {
                 displayName = "Keep screen awake during tasks",
                 description = "Prevents auto-lock while the agent is busy.",
                 prefs = prefs,
-                key = "keep_screen_awake_during_tasks",
+                key = com.openminis.app.ui.settings.KEY_KEEP_SCREEN_AWAKE,
                 defaultValue = false,
             )
         )
@@ -389,6 +409,26 @@ internal object ConfigBuiltins {
             prefs = appearancePrefs,
             key = com.openminis.app.ui.settings.KEY_FONT_MESSAGE,
         ))
+        // The three below were settable in AppearanceScreen but never
+        // registered, so they were invisible to minis-config AND silently
+        // absent from every backup (ConfigBackup walks the registry).
+        r.register(fontScaleField(
+            path = "appearance.appFontSize",
+            displayName = "App font size",
+            description = "Base font size for app chrome outside message bodies (lists, settings, labels).",
+            prefs = appearancePrefs,
+            key = com.openminis.app.ui.settings.KEY_FONT_APP_BASE,
+        ))
+        r.register(
+            PrefsBoolField(
+                path = "chat.autoExpandThinking",
+                displayName = "Auto-expand thinking",
+                description = "When ON, a model's reasoning block starts expanded instead of collapsed.",
+                prefs = appearancePrefs,
+                key = com.openminis.app.ui.settings.KEY_AUTO_EXPAND_THINKING,
+                defaultValue = true,
+            )
+        )
     }
 
     /** Mirrors iOS `fontScaleField` — exposes the integer scale level

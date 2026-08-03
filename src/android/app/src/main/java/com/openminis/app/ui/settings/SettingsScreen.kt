@@ -23,6 +23,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.BarChart
+import androidx.compose.material.icons.outlined.Backup
 import androidx.compose.material.icons.outlined.BatteryFull
 import androidx.compose.material.icons.outlined.BugReport
 import androidx.compose.material.icons.outlined.Dashboard
@@ -90,6 +91,7 @@ fun SettingsScreen(
     onUsageClick: () -> Unit = {},
     onAppearanceClick: () -> Unit = {},
     onLogsClick: () -> Unit = {},
+    onBackupClick: () -> Unit = {},
     // T219-2: Mount External Folders entry. Default no-op for any caller
     // that hasn't wired the route yet.
     onMountedFoldersClick: () -> Unit = {},
@@ -236,6 +238,17 @@ fun SettingsScreen(
                     title = stringResource(R.string.settings_mount_external_folders),
                     subtitle = stringResource(R.string.settings_mount_external_folders_subtitle),
                     onClick = onMountedFoldersClick,
+                )
+                // Backup lives under Storage rather than getting its own
+                // section: it is a file-in / file-out operation on the same
+                // local storage the rows above manage, and a one-item section
+                // would just add vertical noise to the settings list.
+                SettingsItem(
+                    icon = Icons.Outlined.Backup,
+                    iconColor = Color(0xFF5AC8FA),
+                    title = stringResource(R.string.settings_backup),
+                    subtitle = stringResource(R.string.settings_backup_subtitle),
+                    onClick = onBackupClick,
                     showDivider = false,
                 )
             }

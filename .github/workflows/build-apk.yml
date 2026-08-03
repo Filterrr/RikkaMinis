@@ -53,8 +53,17 @@ jobs:
       # merge. The script is `onlyIf { script.exists() }`, but it reads
       # .claude/skills/debug-server/ which is private and absent from this
       # public mirror — create it so the Exec task has an input dir.
-      - name: Stub missing private directories
-        run: mkdir -p .claude/skills/debug-server
+      #
+      # The Anthropic OAuth identifier prompt is private for the same reason.
+      # Unit tests need only a non-empty deterministic value; they never assert
+      # or ship this placeholder. Production OAuth builds must still provide the
+      # real private value via app/provider-customization.properties.
+      - name: Stub missing private inputs
+        run: |
+          mkdir -p .claude/skills/debug-server
+          cat > src/android/app/provider-customization.properties <<'EOF'
+          ANTHROPIC_OAUTH_IDENTIFIER_PROMPT=CI_TEST_IDENTIFIER_PROMPT_NOT_FOR_PRODUCTION
+          EOF
 
       # Fixed signing key, so every CI build installs OVER the previous one
       # instead of forcing an uninstall/reinstall.
@@ -121,6 +130,25 @@ jobs:
       # signingConfig, which picks up MINIS_KEYSTORE_PATH exported above, so
       # upgrade-installs keep working. Release also sets BuildConfig.DEBUG=false,
       # so the local DebugServer (127.0.0.1:5321) is compiled out entirely.
+      # JVM unit tests. Two scopes on purpose:
+      #   - com.openminis.app.backup.*  — the backup/restore payload suite.
+      #   - ProviderConfigSnapshotTest  — locks the snapshot-on-write invariant
+      #     in ProviderRepository (guards against the ConcurrentModificationException
+      #     regression); without an explicit entry the backup-only filter skips it.
+      #
+      # Not yet the whole suite: it still has 15 pre-existing failures unrelated
+      # to these areas — OpenAIProviderTest (11, MockWebServer returns an empty
+      # response under CI) and TerminalSanitizerTest (4, genuine stale CR-folding
+      # assertions). Both need their own fix; gating the build on them today
+      # would just mean nobody runs any test at all. Add new suites here
+      # explicitly until that backlog is cleared.
+      - name: Run unit tests (scoped)
+        run: |
+          cd src/android
+          ./gradlew testReleaseUnitTest --stacktrace \
+            --tests 'com.openminis.app.backup.*' \
+            --tests 'com.openminis.app.data.repository.ProviderConfigSnapshotTest'
+
       - name: Build APK with Gradle
         run: |
           cd src/android

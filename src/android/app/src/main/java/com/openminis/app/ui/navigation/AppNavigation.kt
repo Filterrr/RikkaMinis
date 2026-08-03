@@ -87,7 +87,21 @@ private val EmphasizedAccelerate = CubicBezierEasing(0.3f, 0.0f, 0.8f, 0.15f)
 
 object Routes {
     const val SESSION_LIST = "sessions"
-    const val CHAT = "chat/{sessionId}"
+    /**
+     * [P0-0] `focusMessageId` is an OPTIONAL query arg: any caller that just
+     * wants "open this session" keeps calling [chat] with one argument and
+     * gets the exact pre-P0-0 behaviour (nav supplies null via defaultValue).
+     * When present, ChatScreen scrolls to that message once and briefly
+     * highlights it — the shared primitive behind search results, bookmarks,
+     * translation and range export.
+     *
+     * Declared as a query param rather than a second path segment so
+     * `destination.route` string comparisons elsewhere (e.g. MainActivity's
+     * SessionActivityTracker hook, which matches on the route TEMPLATE) keep
+     * working, and so all 20+ existing `Routes.chat(id)` call sites compile
+     * untouched.
+     */
+    const val CHAT = "chat/{sessionId}?focusMessageId={focusMessageId}"
     const val SETTINGS = "settings"
     const val PROVIDER_LIST = "providers"
     const val ADD_PROVIDER = "add_provider"
@@ -169,6 +183,7 @@ object Routes {
     fun mountedFoldersDetail(mountId: String) = "mounted_folders_detail/$mountId"
     /** T235: Shared folders (Shared / Skills / Memory) — fixed list. */
     const val SHARED_FOLDERS = "shared_folders"
+    const val BACKUP = "backup"
     const val SHARED_FOLDERS_DETAIL = "shared_folders_detail/{folderId}"
     fun sharedFoldersDetail(folderId: String) = "shared_folders_detail/$folderId"
     /** [T-android-scheduled-tasks-design] Scheduled tasks list + editor. */
@@ -183,7 +198,19 @@ object Routes {
     fun logDetail(fileName: String) = "log_detail/$fileName"
     fun sessionStorageDetail(sessionId: String) = "session_storage/$sessionId"
     fun memoryFileEdit(fileName: String, isGlobal: Boolean) = "memory_file/$fileName/$isGlobal"
-    fun chat(sessionId: String) = "chat/$sessionId"
+    /**
+     * [P0-0] `focusMessageId` defaults to null so every existing single-arg
+     * caller is unchanged. Encoded the same way as [terminal]: URLEncoder
+     * emits `+` for spaces but Nav only %-decodes, so `+` is rewritten to
+     * `%20`. Message ids are UUID-ish today, but encoding costs nothing and
+     * protects against ids that ever carry reserved characters.
+     */
+    fun chat(sessionId: String, focusMessageId: String? = null): String {
+        val base = "chat/$sessionId"
+        if (focusMessageId.isNullOrBlank()) return base
+        val enc = java.net.URLEncoder.encode(focusMessageId, "UTF-8").replace("+", "%20")
+        return "$base?focusMessageId=$enc"
+    }
     fun providerDetail(instanceId: String) = "provider/$instanceId"
     fun shadowVoiceDetail(instanceId: String) = "voice_service/$instanceId"
     fun modelGroupDetail(groupId: String) = "model_group/$groupId"
@@ -276,12 +303,11 @@ fun AppNavigation(
             // (see below) so the NavHost mounts directly into the right
             // chat — no safeNavigate dance, no sessions-list flash.
             is DeepLinkAction.OpenHtmlPreview -> {}
-            // App-icon quick actions: all three open a fresh draft chat.
-            // Voice/camera additionally seed DeepLinkCoordinator.pendingChatAction
+            // App-icon quick actions: both open a fresh draft chat.
+            // Camera additionally seeds DeepLinkCoordinator.pendingChatAction
             // (done up-front in startDestination block below so the seed
             // lands before ChatScreen's first compose).
             is DeepLinkAction.NewChat,
-            is DeepLinkAction.NewVoiceChat,
             is DeepLinkAction.NewCameraChat -> {
                 // Navigation handled by startDestination = chat/<__new__…>
                 // when the launch intent carries one of these actions.
@@ -400,12 +426,6 @@ fun AppNavigation(
     // its first LaunchedEffect tick. Mirrors the htmlShortcut path —
     // avoids a sessions-list flash and a duplicate back-stack entry.
     val quickActionStart: String? = when (initialDeepLink) {
-        is DeepLinkAction.NewVoiceChat -> {
-            DeepLinkCoordinator.setPendingChatAction(
-                DeepLinkCoordinator.ChatAction.START_VOICE,
-            )
-            Routes.chat("__new__${java.util.UUID.randomUUID()}")
-        }
         is DeepLinkAction.NewCameraChat -> {
             DeepLinkCoordinator.setPendingChatAction(
                 DeepLinkCoordinator.ChatAction.OPEN_CAMERA,
@@ -519,11 +539,25 @@ fun AppNavigation(
 
         composable(
             route = Routes.CHAT,
-            arguments = listOf(navArgument("sessionId") { type = NavType.StringType }),
+            arguments = listOf(
+                navArgument("sessionId") { type = NavType.StringType },
+                // [P0-0] Optional focus target. nullable + defaultValue=null is
+                // what makes the 20+ existing `Routes.chat(id)` navigations
+                // resolve against this route unchanged.
+                navArgument("focusMessageId") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                },
+            ),
         ) { backStackEntry ->
             val sessionId = backStackEntry.arguments?.getString("sessionId") ?: return@composable
+            val focusMessageId = backStackEntry.arguments
+                ?.getString("focusMessageId")
+                ?.takeIf { it.isNotBlank() }
             ChatScreen(
                 sessionId = sessionId,
+                focusMessageId = focusMessageId,
                 chatRepository = chatRepository,
                 providerRepository = providerRepository,
                 memoryRepository = memoryRepository,
@@ -587,6 +621,7 @@ fun AppNavigation(
                 onAboutClick = { navController.safeNavigate(Routes.ABOUT) },
                 onMountedFoldersClick = { navController.safeNavigate(Routes.MOUNTED_FOLDERS) },
                 onSharedFoldersClick = { navController.safeNavigate(Routes.SHARED_FOLDERS) },
+                onBackupClick = { navController.safeNavigate(Routes.BACKUP) },
             )
         }
 
@@ -596,6 +631,17 @@ fun AppNavigation(
                 onFolderClick = { folderId ->
                     navController.safeNavigate(Routes.sharedFoldersDetail(folderId))
                 },
+            )
+        }
+
+        composable(Routes.BACKUP) {
+            com.openminis.app.ui.settings.BackupSettingsScreen(
+                providerRepository = providerRepository,
+                envVarRepository = envVarRepository,
+                skillRepository = skillRepository,
+                memoryRepository = memoryRepository,
+                mcpRepository = mcpRepository,
+                onBack = { navController.safePopBackStack() },
             )
         }
 

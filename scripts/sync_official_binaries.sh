@@ -1,15 +1,22 @@
 #!/usr/bin/env bash
 #
-# Refresh the vendored prebuilt sandbox binaries from an official upstream
+# Refresh the vendored prebuilt native libraries from an official upstream
 # release APK.
 #
 # WHY THIS EXISTS
 # ---------------
-# This fork does not build native code (see src/android/app/build.gradle.kts —
-# externalNativeBuild is disabled). It ships the official arm64-v8a binaries
-# committed under src/android/app/src/main/{jniLibs,assets}/ instead, because a
-# self-built libproot.so lacks upstream's Android 10+ W^X bypass and dies at
-# runtime with execve("/bin/sh"): Permission denied.
+# This fork does not compile native code through AGP's CMake block (see
+# src/android/app/build.gradle.kts — externalNativeBuild is disabled). It ships
+# the official arm64-v8a helper libraries (pty_bridge, crash_handler, jieba, the
+# c++/androidx/datastore support libs) committed under
+# src/android/app/src/main/jniLibs/ instead, and this script refreshes them from
+# an upstream release APK.
+#
+# NOTE: proot is NOT handled here any more. The sandbox engine (libproot.so, its
+# loaders and assets/proot-aarch64) is built from source in CI via
+# deps/build_proot.sh (deps/proot submodule + vendored deps/talloc), so it must
+# never be overwritten with an extracted binary — doing so would defeat the
+# reproducible build. Refresh proot by bumping the deps/proot submodule instead.
 #
 # The consequence: after every `git rebase upstream/main` you MUST re-run this
 # script. Upstream's Kotlin may have changed a JNI method signature, and the
@@ -35,20 +42,18 @@ ASSETS_DIR="$MAIN_DIR/assets"
 GRADLE_FILE="$REPO_ROOT/src/android/app/build.gradle.kts"
 
 # The exact set this fork vendors. Keep in sync with build.gradle.kts.
+# proot (libproot.so, libproot-loader*.so, assets/proot-aarch64) is NOT here:
+# it is built from source via deps/build_proot.sh, not extracted.
 JNI_LIBS="
 libandroidx.graphics.path.so
 libc++_shared.so
 libdatastore_shared_counter.so
 libjieba_jni.so
 libminis_crash_handler.so
-libproot-loader.so
-libproot-loader32.so
-libproot.so
 libpty_bridge.so
 "
 ASSET_FILES="
 alpine-minirootfs.tar
-proot-aarch64
 "
 
 auth_header() {
@@ -145,13 +150,6 @@ for f in $ASSET_FILES; do
   cp -f "$WORK_DIR/x/assets/$f" "$ASSETS_DIR/$f"
   printf '    %s  %s\n' "$(sha256sum "$ASSETS_DIR/$f" | cut -c1-16)" "assets/$f"
 done
-
-# libproot.so and assets/proot-aarch64 are the same binary shipped twice; a
-# mismatch means the release was assembled oddly and the sandbox may misbehave.
-if [ "$(sha256sum "$JNI_DIR/libproot.so" | cut -d' ' -f1)" \
-   != "$(sha256sum "$ASSETS_DIR/proot-aarch64" | cut -d' ' -f1)" ]; then
-  echo "WARNING: libproot.so and assets/proot-aarch64 differ in this release." >&2
-fi
 
 # --- 4. Align versionName / versionCode with the binaries -------------------
 # Keeps "which upstream release is this built from" answerable from the app's
