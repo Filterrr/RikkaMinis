@@ -31,7 +31,6 @@ import com.openminis.app.data.repository.ChatRepository
 import com.openminis.app.data.repository.ProviderRepository
 import com.openminis.app.ui.chat.ChatScreen
 import com.openminis.app.ui.sessions.SessionListScreen
-import com.openminis.app.ui.settings.AboutScreen
 import com.openminis.app.ui.settings.AddAgentLoopGroupsScreen
 import com.openminis.app.ui.settings.AddAgentLoopModelsScreen
 import com.openminis.app.ui.settings.AddCustomModelScreen
@@ -175,7 +174,6 @@ object Routes {
     const val LOG_DETAIL = "log_detail/{fileName}"
     const val APPEARANCE = "appearance"
     const val BACKGROUND = "background"
-    const val ABOUT = "about"
     const val ONBOARDING_MODELS = "onboarding_models"
     /** T219-2: Mount external folders settings + detail. */
     const val MOUNTED_FOLDERS = "mounted_folders"
@@ -618,7 +616,6 @@ fun AppNavigation(
                 onAppearanceClick = { navController.safeNavigate(Routes.APPEARANCE) },
                 onBackgroundClick = { navController.safeNavigate(Routes.BACKGROUND) },
                 onLogsClick = { navController.safeNavigate(Routes.LOGS) },
-                onAboutClick = { navController.safeNavigate(Routes.ABOUT) },
                 onMountedFoldersClick = { navController.safeNavigate(Routes.MOUNTED_FOLDERS) },
                 onSharedFoldersClick = { navController.safeNavigate(Routes.SHARED_FOLDERS) },
                 onBackupClick = { navController.safeNavigate(Routes.BACKUP) },
@@ -1213,10 +1210,6 @@ fun AppNavigation(
             BackgroundSettingsScreen(
                 onBack = { navController.safePopBackStack() },
             )
-        }
-
-        composable(Routes.ABOUT) {
-            AboutScreen(onBack = { navController.safePopBackStack() })
         }
 
         composable(Routes.LOGS) {

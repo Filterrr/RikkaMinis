@@ -37,23 +37,6 @@
     <string name="memory_save_toast">Gesichert</string>
     <string name="memory_save_error">Speichern fehlgeschlagen: %1$s</string>
     <string name="memory_global_footer">Dauerhafte Anweisungen und Einstellungen, die dem Agenten in jeder Sitzung angezeigt werden. Der Agent kann diese Datei nicht ändern.</string>
-    <string name="check_update_section_header">App-Update</string>
-    <string name="check_update_current_version">Aktuelle Version: %1$s</string>
-    <string name="check_update_check_button">Nach Updates suchen</string>
-    <string name="check_update_checking">Suche läuft…</string>
-    <string name="check_update_up_to_date">Du verwendest die aktuellste Version.</string>
-    <string name="check_update_no_release">Bisher keine Version veröffentlicht.</string>
-    <string name="check_update_error">Suche fehlgeschlagen: %1$s</string>
-    <string name="check_update_available_title">Update verfügbar</string>
-    <string name="check_update_available_subtitle">%1$s → %2$s</string>
-    <string name="check_update_changelog_header">Neuigkeiten</string>
-    <string name="check_update_download_button">Herunterladen &amp; Installieren</string>
-    <string name="check_update_downloading">Wird heruntergeladen… %1$d%%</string>
-    <string name="check_update_download_failed">Download fehlgeschlagen: %1$s</string>
-    <string name="check_update_install_perm_required">Erlaube Installationen aus dieser App, um fortzufahren.</string>
-    <string name="check_update_install_launch_failed">Installer konnte nicht gestartet werden. Prüfe die Berechtigung \"Apps aus unbekannten Quellen installieren\" oder öffne das heruntergeladene APK manuell.</string>
-    <string name="check_update_install_hint">Tipp: Wenn die Installation keinerlei Rückmeldung gibt, stimmt möglicherweise die Signatur nicht — deinstalliere zuerst die vorherige Version und lade dann erneut herunter.</string>
-    <string name="check_update_open_install_settings">Einstellungen öffnen</string>
     <string name="permissions_title">Berechtigungen</string>
     <string name="permissions_reset_all">Alles zurücksetzen</string>
     <string name="permissions_reset_dialog_title">Alle Berechtigungen zurücksetzen?</string>
@@ -124,19 +107,6 @@
     <string name="settings_permissions_subtitle">Zugriff des Agents auf datenschutzrelevante Funktionen steuern</string>
     <string name="settings_section_logs">Logs</string>
     <string name="settings_logs_subtitle">App-Logs ansehen und exportieren</string>
-    <string name="settings_section_about">Über</string>
-    <string name="settings_about_minis">Über Minis</string>
-    <string name="settings_about_subtitle">Version und Projekt-Info</string>
-    <string name="settings_privacy_policy">Datenschutzrichtlinie</string>
-    <string name="settings_feedback">Feedback</string>
-    <string name="settings_submit_github_issues">GitHub Issue einreichen</string>
-    <string name="settings_feedback_telegram">Feedback (Telegram)</string>
-    <string name="settings_feedback_email">Feedback (E-Mail)</string>
-    <string name="about_title">Über</string>
-    <string name="about_minis_tagline">Minis ist dein vollständig lokaler, vollständig privater On-Device-Agent.</string>
-    <string name="about_links">Links</string>
-    <string name="about_github_repository">GitHub-Repository</string>
-    <string name="about_version_format">Version %1$s (%2$s)</string>
 
     <!-- T172 — chat sheets i18n -->
     <string name="move_to_sheet_title">Verschieben nach…</string>

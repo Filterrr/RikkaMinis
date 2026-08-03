@@ -37,23 +37,6 @@
     <string name="memory_save_toast">已保存</string>
     <string name="memory_save_error">保存失败：%1$s</string>
     <string name="memory_global_footer">每个会话中对智能体可见的持久指令和偏好。智能体无法修改此文件。</string>
-    <string name="check_update_section_header">应用更新</string>
-    <string name="check_update_current_version">当前版本：%1$s</string>
-    <string name="check_update_check_button">检查更新</string>
-    <string name="check_update_checking">检查中…</string>
-    <string name="check_update_up_to_date">已经是最新版本。</string>
-    <string name="check_update_no_release">暂未发布任何版本。</string>
-    <string name="check_update_error">检查失败：%1$s</string>
-    <string name="check_update_available_title">发现新版本</string>
-    <string name="check_update_available_subtitle">%1$s → %2$s</string>
-    <string name="check_update_changelog_header">更新内容</string>
-    <string name="check_update_download_button">下载并安装</string>
-    <string name="check_update_downloading">下载中… %1$d%%</string>
-    <string name="check_update_download_failed">下载失败：%1$s</string>
-    <string name="check_update_install_perm_required">请允许此应用安装更新以继续。</string>
-    <string name="check_update_install_launch_failed">启动安装程序失败。请检查\"安装未知应用\"权限或手动打开下载的 APK。</string>
-    <string name="check_update_install_hint">提示：如果安装时无任何反馈，可能是签名不匹配，请先卸载旧版本再重新点击下载。</string>
-    <string name="check_update_open_install_settings">打开设置</string>
     <string name="permissions_title">权限</string>
     <string name="permissions_reset_all">全部重置</string>
     <string name="permissions_reset_dialog_title">重置全部权限？</string>
@@ -157,19 +140,6 @@
     <string name="settings_permissions_subtitle">控制 agent 对隐私敏感功能的访问</string>
     <string name="settings_section_logs">日志</string>
     <string name="settings_logs_subtitle">查看与导出应用日志</string>
-    <string name="settings_section_about">关于</string>
-    <string name="settings_about_minis">关于 Minis</string>
-    <string name="settings_about_subtitle">版本与项目信息</string>
-    <string name="settings_privacy_policy">隐私政策</string>
-    <string name="settings_feedback">反馈问题</string>
-    <string name="settings_submit_github_issues">提交 GitHub Issue</string>
-    <string name="settings_feedback_telegram">反馈 (Telegram)</string>
-    <string name="settings_feedback_email">反馈 (邮件)</string>
-    <string name="about_title">关于</string>
-    <string name="about_minis_tagline">Minis 是完全本地、完全私密的设备端 Agent。</string>
-    <string name="about_links">链接</string>
-    <string name="about_github_repository">GitHub 仓库</string>
-    <string name="about_version_format">版本 %1$s (%2$s)</string>
 
     <!-- T172 — chat sheets i18n -->
     <string name="move_to_sheet_title">移动到…</string>

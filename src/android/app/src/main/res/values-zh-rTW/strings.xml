@@ -353,7 +353,6 @@
     <string name="model_groups_none">無</string>
     <string name="add_models_to_group_search_models">搜索模型</string>
     <string name="add_models_to_group_clear">清除</string>
-    <string name="settings_feedback">意見回饋</string>
     <string name="settings_agent_loop_models">智慧型代理循環模型</string>    <string name="agent_loop_models_groups">分組</string>
     <string name="agent_loop_models_picking_a_group_pins_every_model_in_it_a">選取群組會固定其中所有模型。在模型群組裡新增或移除成員。</string>
     <string name="agent_loop_models_add_a_provider_and_refresh_its_model_lis">新增供應商並重新整理其模型列表以填入此選擇器。</string>

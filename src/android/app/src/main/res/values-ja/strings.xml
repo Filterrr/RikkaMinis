@@ -37,23 +37,6 @@
     <string name="memory_save_toast">保存済み</string>
     <string name="memory_save_error">保存に失敗しました: %1$s</string>
     <string name="memory_global_footer">すべてのセッションでエージェントに表示される永続的な指示と設定です。エージェントはこのファイルを変更できません。</string>
-    <string name="check_update_section_header">アプリ更新</string>
-    <string name="check_update_current_version">現在のバージョン: %1$s</string>
-    <string name="check_update_check_button">更新を確認</string>
-    <string name="check_update_checking">確認中…</string>
-    <string name="check_update_up_to_date">最新バージョンです。</string>
-    <string name="check_update_no_release">まだリリースが公開されていません。</string>
-    <string name="check_update_error">確認に失敗しました: %1$s</string>
-    <string name="check_update_available_title">更新があります</string>
-    <string name="check_update_available_subtitle">%1$s → %2$s</string>
-    <string name="check_update_changelog_header">新着情報</string>
-    <string name="check_update_download_button">ダウンロードしてインストール</string>
-    <string name="check_update_downloading">ダウンロード中… %1$d%%</string>
-    <string name="check_update_download_failed">ダウンロードに失敗しました: %1$s</string>
-    <string name="check_update_install_perm_required">このアプリからのインストールを許可してください。</string>
-    <string name="check_update_install_launch_failed">インストーラーの起動に失敗しました。\"提供元不明のアプリ\"の許可を確認するか、ダウンロードした APK を手動で開いてください。</string>
-    <string name="check_update_install_hint">ヒント：インストール時に何も反応がない場合、署名が一致しない可能性があります。まず以前のバージョンをアンインストールしてから再度ダウンロードしてください。</string>
-    <string name="check_update_open_install_settings">設定を開く</string>
     <string name="permissions_title">アクセス許可</string>
     <string name="permissions_reset_all">すべてリセット</string>
     <string name="permissions_reset_dialog_title">すべての権限をリセットしますか？</string>
@@ -124,19 +107,6 @@
     <string name="settings_permissions_subtitle">プライバシーに関わる機能へのエージェントのアクセスを制御</string>
     <string name="settings_section_logs">ログ</string>
     <string name="settings_logs_subtitle">アプリのログを表示・エクスポート</string>
-    <string name="settings_section_about">情報</string>
-    <string name="settings_about_minis">Minis について</string>
-    <string name="settings_about_subtitle">バージョンとプロジェクト情報</string>
-    <string name="settings_privacy_policy">プライバシーポリシー</string>
-    <string name="settings_feedback">フィードバック</string>
-    <string name="settings_submit_github_issues">GitHub に Issue を提出</string>
-    <string name="settings_feedback_telegram">フィードバック (Telegram)</string>
-    <string name="settings_feedback_email">フィードバック (メール)</string>
-    <string name="about_title">情報</string>
-    <string name="about_minis_tagline">Minis は完全にローカルで完全にプライベートなオンデバイスエージェントです。</string>
-    <string name="about_links">リンク</string>
-    <string name="about_github_repository">GitHub リポジトリ</string>
-    <string name="about_version_format">バージョン %1$s (%2$s)</string>
 
     <!-- T172 — chat sheets i18n -->
     <string name="move_to_sheet_title">移動先…</string>
