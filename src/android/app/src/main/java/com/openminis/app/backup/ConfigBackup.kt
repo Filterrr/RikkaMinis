@@ -13,9 +13,6 @@ import com.openminis.app.data.repository.MCPRepository
 import com.openminis.app.data.repository.MemoryRepository
 import com.openminis.app.data.repository.ProviderRepository
 import com.openminis.app.data.repository.SkillRepository
-import com.openminis.app.scheduled.ScheduledTask
-import com.openminis.app.scheduled.ScheduledTaskManager
-import com.openminis.app.scheduled.ScheduledTaskStore
 import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
@@ -84,8 +81,6 @@ object ConfigBackup {
         val memoryFilesImported: Int,
         /** MCP servers restored (OAuth credentials always need re-auth). */
         val mcpServersImported: Int,
-        /** Scheduled tasks restored and re-armed. */
-        val scheduledTasksImported: Int,
         /** Human-readable "path: why" lines for anything deliberately not applied. */
         val skipped: List<String>,
         /** True when the payload carried credentials (affects the post-import hint). */
@@ -107,7 +102,6 @@ object ConfigBackup {
         skillRepo: SkillRepository? = null,
         memoryRepo: MemoryRepository? = null,
         mcpRepo: MCPRepository? = null,
-        scheduledStore: ScheduledTaskStore? = null,
     ): String {
         val registry = ConfigRegistry.get()
 
@@ -281,22 +275,6 @@ object ConfigBackup {
             }
         }
 
-        // Scheduled tasks (SharedPreferences-backed). Run history is dropped on
-        // purpose: it points at session ids that will not exist on the target
-        // install, and a restored task's job is to fire in future, not to carry
-        // a log of past firings.
-        val scheduledTasks = JSONArray()
-        if (scheduledStore != null) {
-            for (task in runCatching { scheduledStore.all() }.getOrDefault(emptyList())) {
-                val obj = runCatching { task.toJson() }.getOrNull() ?: continue
-                obj.remove("runs")
-                obj.remove("lastFiredAt")
-                obj.remove("lastResultPreview")
-                obj.remove("lastResultSessionId")
-                scheduledTasks.put(obj)
-            }
-        }
-
         return JSONObject().apply {
             put("format", "openminis.config.backup")
             put("version", FORMAT_VERSION)
@@ -309,7 +287,6 @@ object ConfigBackup {
             put("skills", skills)
             put("memoryFiles", memoryFiles)
             put("mcpServers", mcpServers)
-            put("scheduledTasks", scheduledTasks)
             if (readFailures > 0) put("readFailures", readFailures)
         }.toString(2)
     }
@@ -363,8 +340,6 @@ object ConfigBackup {
         skillRepo: SkillRepository? = null,
         memoryRepo: MemoryRepository? = null,
         mcpRepo: MCPRepository? = null,
-        scheduledStore: ScheduledTaskStore? = null,
-        scheduledManager: ScheduledTaskManager? = null,
     ): ImportResult {
         val root = try {
             JSONTokener(json).nextValue() as? JSONObject
@@ -723,44 +698,6 @@ object ConfigBackup {
             skipped.add("${mcpArr.length()} MCP server(s): not restorable here")
         }
 
-        // -- Stage 8: scheduled tasks (restored AND re-armed with AlarmManager) --
-        // Writing the rows without registering alarms would produce tasks that
-        // are visible in the list but never fire, which is worse than not
-        // restoring them at all.
-        var scheduledTasksImported = 0
-        val schedArr = root.optJSONArray("scheduledTasks")
-        val effectiveStore = scheduledStore ?: scheduledManager?.store()
-        if (schedArr != null && effectiveStore != null) {
-            val existingIds = runCatching { effectiveStore.all().map { it.id }.toSet() }
-                .getOrDefault(emptySet())
-            for (i in 0 until schedArr.length()) {
-                val t = schedArr.optJSONObject(i) ?: continue
-                val label = t.optString("label", "task #${i + 1}")
-                try {
-                    val task = ScheduledTask.fromJson(t)
-                    if (task.id in existingIds) {
-                        skipped.add("scheduled task \"$label\": already exists, left as-is")
-                        continue
-                    }
-                    if (scheduledManager != null) {
-                        scheduledManager.create(task)
-                    } else {
-                        effectiveStore.upsert(task)
-                    }
-                    scheduledTasksImported++
-                } catch (t2: Throwable) {
-                    skipped.add("scheduled task \"$label\": ${t2.message ?: "import failed"}")
-                }
-            }
-            if (scheduledTasksImported > 0 && scheduledManager == null) {
-                skipped.add(
-                    "$scheduledTasksImported scheduled task(s) restored but not re-armed — " +
-                        "reopen the app to schedule them"
-                )
-            }
-        } else if (schedArr != null && schedArr.length() > 0 && effectiveStore == null) {
-            skipped.add("${schedArr.length()} scheduled task(s): not restorable here")
-        }
 
         return ImportResult(
             fieldsApplied = applied,
@@ -770,7 +707,6 @@ object ConfigBackup {
             skillsImported = skillsImported,
             memoryFilesImported = memoryFilesImported,
             mcpServersImported = mcpServersImported,
-            scheduledTasksImported = scheduledTasksImported,
             skipped = skipped,
             hadSecrets = root.optBoolean("includesSecrets", false),
         ).also { result ->
@@ -784,7 +720,7 @@ object ConfigBackup {
                 "import: applied=$applied providers=$providersImported " +
                     "groups=$groupsImported envVars=$envVarsImported " +
                     "skills=$skillsImported memoryFiles=$memoryFilesImported " +
-                    "mcpServers=$mcpServersImported scheduledTasks=$scheduledTasksImported " +
+                    "mcpServers=$mcpServersImported " +
                     "skipped=${result.skipped.size} hadSecrets=${result.hadSecrets}"
             )
             for (line in result.skipped) Log.w(TAG, "import skipped — $line")

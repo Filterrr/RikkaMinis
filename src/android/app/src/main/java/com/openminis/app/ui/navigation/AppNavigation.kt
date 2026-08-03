@@ -184,15 +184,6 @@ object Routes {
     const val BACKUP = "backup"
     const val SHARED_FOLDERS_DETAIL = "shared_folders_detail/{folderId}"
     fun sharedFoldersDetail(folderId: String) = "shared_folders_detail/$folderId"
-    /** [T-android-scheduled-tasks-design] Scheduled tasks list + editor. */
-    const val SCHEDULED_TASKS = "scheduled_tasks"
-    const val SCHEDULED_TASK_EDIT = "scheduled_tasks/edit?taskId={taskId}"
-    fun scheduledTaskEdit(taskId: String? = null): String =
-        if (taskId == null) "scheduled_tasks/edit" else "scheduled_tasks/edit?taskId=$taskId"
-    // [T-android-scheduled-tasks-run-records] per-task execution log.
-    const val SCHEDULED_TASK_RUNS = "scheduled_tasks/runs/{taskId}"
-    fun scheduledTaskRuns(taskId: String): String = "scheduled_tasks/runs/$taskId"
-
     fun logDetail(fileName: String) = "log_detail/$fileName"
     fun sessionStorageDetail(sessionId: String) = "session_storage/$sessionId"
     fun memoryFileEdit(fileName: String, isGlobal: Boolean) = "memory_file/$fileName/$isGlobal"
@@ -528,9 +519,6 @@ fun AppNavigation(
                 },
                 onRootfsClick = {
                     navController.safeNavigate(Routes.ROOTFS_MANAGEMENT)
-                },
-                onScheduledTasksClick = {
-                    navController.safeNavigate(Routes.SCHEDULED_TASKS)
                 },
             )
         }
@@ -1239,53 +1227,5 @@ fun AppNavigation(
             )
         }
 
-        // [T-android-scheduled-tasks-design] Scheduled tasks list + editor.
-        composable(Routes.SCHEDULED_TASKS) {
-            com.openminis.app.ui.scheduled.ScheduledTasksScreen(
-                onBack = { navController.safePopBackStack() },
-                onEditTask = { taskId ->
-                    navController.safeNavigate(Routes.scheduledTaskEdit(taskId))
-                },
-                onViewRuns = { taskId ->
-                    navController.safeNavigate(Routes.scheduledTaskRuns(taskId))
-                },
-                onOpenSession = { sessionId ->
-                    navController.safeNavigate(Routes.chat(sessionId))
-                },
-            )
-        }
-        // [T-android-scheduled-tasks-run-records] per-task run records.
-        composable(
-            route = Routes.SCHEDULED_TASK_RUNS,
-            arguments = listOf(navArgument("taskId") { type = NavType.StringType }),
-        ) { backStackEntry ->
-            val taskId = backStackEntry.arguments?.getString("taskId") ?: return@composable
-            com.openminis.app.ui.scheduled.ScheduledTaskRunsScreen(
-                taskId = taskId,
-                onBack = { navController.safePopBackStack() },
-                onOpenSession = { sessionId ->
-                    navController.safeNavigate(Routes.chat(sessionId))
-                },
-            )
-        }
-        composable(
-            route = Routes.SCHEDULED_TASK_EDIT,
-            arguments = listOf(
-                navArgument("taskId") {
-                    type = NavType.StringType
-                    nullable = true
-                    defaultValue = null
-                },
-            ),
-        ) { backStackEntry ->
-            val taskId = backStackEntry.arguments?.getString("taskId")
-            com.openminis.app.ui.scheduled.ScheduledTaskEditScreen(
-                taskId = taskId,
-                onBack = { navController.safePopBackStack() },
-                onOpenSession = { sessionId ->
-                    navController.safeNavigate(Routes.chat(sessionId))
-                },
-            )
-        }
     }
 }

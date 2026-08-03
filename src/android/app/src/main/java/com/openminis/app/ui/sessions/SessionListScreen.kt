@@ -278,8 +278,6 @@ fun SessionListScreen(
     onSelectModelsClick: () -> Unit = {},
     onTerminalClick: () -> Unit = {},
     onRootfsClick: () -> Unit = {},
-    // [T-android-scheduled-tasks-design] Entry to the scheduled-tasks list.
-    onScheduledTasksClick: () -> Unit = {},
 ) {
     val context = LocalContext.current
     // T46: hoist VM ownership to the NavBackStackEntry's ViewModelStore so
@@ -373,17 +371,6 @@ fun SessionListScreen(
         }
     }
 
-    // [T-android-scheduled-tasks-full] Live count of scheduled tasks for the
-    // toolbar clock-icon badge. Observes the SharedPreferences-backed store so
-    // the badge updates when tasks are added / removed without a manual refresh.
-    // [T-android-scheduled-badge-enabled-only] Count only enabled tasks so the
-    // badge reflects what's actually active — disabled tasks don't contribute,
-    // and with none enabled the count is 0 (badge hidden by the >0 gate below).
-    val scheduledTaskCount by remember {
-        com.openminis.app.scheduled.ScheduledTaskStore(context).observe()
-            .map { list -> list.count { it.enabled } }
-    }.collectAsState(initial = 0)
-
     Scaffold(
         topBar = {
             TopAppBar(
@@ -427,26 +414,6 @@ fun SessionListScreen(
                             )
                         }
                     } else {
-                        // [T-android-scheduled-tasks-design] Scheduled-tasks entry,
-                        // sits to the left of the Shell button on the home toolbar.
-                        // [T-android-scheduled-tasks-full] Badge shows the count of
-                        // scheduled tasks so the user can see at a glance how many
-                        // are configured without opening the list.
-                        IconButton(onClick = onScheduledTasksClick) {
-                            if (scheduledTaskCount > 0) {
-                                BadgedBox(badge = { Badge { Text("$scheduledTaskCount") } }) {
-                                    Icon(
-                                        Icons.Outlined.Schedule,
-                                        contentDescription = stringResource(R.string.sessionlist_scheduled_tasks),
-                                    )
-                                }
-                            } else {
-                                Icon(
-                                    Icons.Outlined.Schedule,
-                                    contentDescription = stringResource(R.string.sessionlist_scheduled_tasks),
-                                )
-                            }
-                        }
                         // Shell menu (matching iOS trailing shell button: Terminal, Rootfs, Browser)
                         Box {
                             IconButton(onClick = { showOverflowMenu = true }) {
