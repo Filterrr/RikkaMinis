@@ -1346,12 +1346,17 @@ class ChatViewModel(
         val newValue = !_memoryEnabled.value
         _memoryEnabled.value = newValue
         viewModelScope.launch {
-            // Toggling before the first message means the row doesn't exist
-            // yet — materialize the session row so the preference lands on
-            // the persisted id instead of silently updating zero rows under
-            // the draft key.
-            val sid = ensureSession()
-            chatRepository.dao.updateMemoryEnabled(sid, if (newValue) 1 else 0)
+            // [T-empty-session-residue] Don't materialise a row just to store
+            // this toggle. On a draft chat (no message yet) realSessionId is
+            // empty and the value already lives in _memoryEnabled, which
+            // ensureSession() folds into the row at insert time
+            // (createSession(memoryEnabled = …)). Forcing ensureSession() here
+            // was a root cause of message-less "ghost" sessions. Only write
+            // through when the row already exists.
+            val sid = realSessionId
+            if (sid.isNotEmpty()) {
+                chatRepository.dao.updateMemoryEnabled(sid, if (newValue) 1 else 0)
+            }
         }
         appendSystemInfo(
             text = "Memory writes ${if (newValue) "enabled" else "disabled"}. Reads are unaffected.",
@@ -1408,7 +1413,16 @@ class ChatViewModel(
      */
     private fun persistThinkingOverride(level: ThinkingLevel) {
         viewModelScope.launch {
-            val sid = ensureSession()
+            // [T-empty-session-residue] Do NOT materialise a row just to store
+            // a thinking preference. On a draft chat (no message sent yet)
+            // realSessionId is empty; the choice already lives in
+            // _thinkingLevel and ensureSession() folds it into the row at
+            // insert time (createSession(thinkingLevel = …)). Forcing
+            // ensureSession() here was a root cause of message-less "ghost"
+            // sessions: flip /thinking, leave, and a persisted empty row
+            // remained. Only write through when the row already exists.
+            val sid = realSessionId
+            if (sid.isEmpty()) return@launch
             chatRepository.dao.updateThinkingOverride(sid, level.name)
         }
     }
@@ -2774,6 +2788,10 @@ class ChatViewModel(
         val session = chatRepository.createSession(
             modelId = modelId,
             memoryEnabled = _memoryEnabled.value,
+            // [T-empty-session-residue] Same reasoning for the thinking
+            // override: fold it into the insert so flipping /thinking on a
+            // draft no longer needs a pre-materialising write of its own.
+            thinkingLevel = _thinkingLevel.value.name,
         )
         realSessionId = session.id
         // Move our cached VM from the draft key ("__new__...") to the real
@@ -3621,8 +3639,15 @@ class ChatViewModel(
         if (_thinkingLevel.value == level) return
         _thinkingLevel.value = level
         viewModelScope.launch {
-            val sid = ensureSession()
-            chatRepository.dao.updateThinkingOverride(sid, level.name)
+            // [T-empty-session-residue] Don't materialise a row just to copy a
+            // group default onto a draft chat. The value now lives in
+            // _thinkingLevel and ensureSession() folds it in at insert time.
+            // Binding a draft to a group and leaving without sending must not
+            // strand a message-less session. Write through only if it exists.
+            val sid = realSessionId
+            if (sid.isNotEmpty()) {
+                chatRepository.dao.updateThinkingOverride(sid, level.name)
+            }
         }
     }
 

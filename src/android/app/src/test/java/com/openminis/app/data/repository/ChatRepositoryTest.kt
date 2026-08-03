@@ -1,6 +1,7 @@
 package com.openminis.app.data.repository
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Test
 
 /**
@@ -59,5 +60,36 @@ class ChatRepositoryTest {
     fun `stripSystemReminders leaves markdown unchanged`() {
         val raw = "# Heading\n**bold** and `code` and a [link](https://example.com)"
         assertEquals(raw, ChatRepository.stripSystemReminders(raw))
+    }
+
+    // [T-empty-session-residue] guardActiveIds feeds the empty-session sweep's
+    // SQL `IN (:activeIds)` clause. Room throws on an empty IN list, so an
+    // empty active-set MUST become a non-empty sentinel list, and a populated
+    // set MUST pass through untouched (otherwise the sweep could delete a
+    // session that is currently open / mid first-send).
+
+    @Test
+    fun `guardActiveIds substitutes a sentinel for an empty active set`() {
+        val guarded = ChatRepository.guardActiveIds(emptyList())
+        // Never empty (would crash Room's IN clause)...
+        assertEquals(1, guarded.size)
+        // ...and the sentinel is the empty string, which cannot equal a real
+        // session id (UUIDs / "__new__…" drafts are always non-empty).
+        assertEquals("", guarded[0])
+    }
+
+    @Test
+    fun `guardActiveIds passes a populated active set through unchanged`() {
+        val active = listOf("sess-a", "__new__abc", "sess-b")
+        assertEquals(active, ChatRepository.guardActiveIds(active))
+    }
+
+    @Test
+    fun `guardActiveIds sentinel never collides with a real session id`() {
+        // Defensive: the sweep excludes ids present in this list, so the
+        // sentinel must match nothing. A real id is never the empty string.
+        val sentinel = ChatRepository.guardActiveIds(emptyList()).single()
+        assertNotEquals(sentinel, java.util.UUID.randomUUID().toString())
+        assertNotEquals(sentinel, "__new__" + java.util.UUID.randomUUID())
     }
 }

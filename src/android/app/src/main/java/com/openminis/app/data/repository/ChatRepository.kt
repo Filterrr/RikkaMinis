@@ -20,6 +20,13 @@ class ChatRepository(internal val dao: ChatDao) {
         // here; existing call sites that omit it keep the prior
         // memoryEnabled=1 behavior (legacy default).
         memoryEnabled: Boolean = true,
+        // [T-empty-session-residue] Persist the thinking override together with
+        // the row so a user who flipped /thinking on a draft chat (before the
+        // first message) doesn't need a separate pre-materialisation write that
+        // would spawn a message-less session. ensureSession() passes the
+        // in-memory value here; the standalone update (persistThinkingOverride)
+        // only runs once the session already exists.
+        thinkingLevel: String? = null,
     ): ChatSessionEntity {
         val now = System.currentTimeMillis()
         val session = ChatSessionEntity(
@@ -30,6 +37,9 @@ class ChatRepository(internal val dao: ChatDao) {
             updatedAt = now,
             memoryEnabled = if (memoryEnabled) 1 else 0,
         )
+        if (thinkingLevel != null) {
+            dao.updateThinkingOverride(id = session.id, value = thinkingLevel, updatedAt = now)
+        }
         dao.insertSession(session)
         return session
     }
@@ -107,6 +117,29 @@ class ChatRepository(internal val dao: ChatDao) {
     suspend fun deleteSession(id: String) {
         dao.deleteMessages(id)
         dao.deleteSession(id)
+    }
+
+    /**
+     * [T-empty-session-residue] Delete sessions that never received a message.
+     *
+     * Backstop for the empty-chat residue bug: `cleanupIfEmptyOnExit()` only
+     * runs from Compose's `onDispose`, so process death / task-swipe / crash /
+     * configuration changes leave message-less rows behind permanently. This
+     * runs on app start, where no lifecycle callback is required.
+     *
+     * @param activeIds sessions currently open — never swept, even if empty.
+     * @param graceMillis rows updated more recently than this are left alone,
+     *   so a chat mid first-send (row inserted, message not yet committed) is
+     *   never deleted out from under the sender.
+     * @return number of rows removed.
+     */
+    suspend fun deleteEmptySessions(
+        activeIds: List<String> = emptyList(),
+        graceMillis: Long = 60_000L,
+    ): Int {
+        val guarded = guardActiveIds(activeIds)
+        val staleBefore = System.currentTimeMillis() - graceMillis
+        return dao.deleteEmptySessions(guarded, staleBefore)
     }
 
     suspend fun searchSessions(query: String): List<ChatSessionEntity> =
@@ -667,6 +700,16 @@ class ChatRepository(internal val dao: ChatDao) {
     }
 
     companion object {
+        /**
+         * [T-empty-session-residue] Room rejects an empty `IN ()` list, so an
+         * empty active-set must be replaced with a sentinel that can never
+         * match a real session id. Extracted for unit testing the guard —
+         * getting this wrong means either a crash (empty IN) or, if the
+         * sentinel ever equalled a real id, deleting a live session.
+         */
+        internal fun guardActiveIds(activeIds: List<String>): List<String> =
+            if (activeIds.isEmpty()) listOf("") else activeIds
+
         // <system-reminder>...</system-reminder> blocks are runtime nudges
         // injected into user-role messages by the harness (e.g. task-tracker
         // reminders). They never represent what the user actually typed, so
