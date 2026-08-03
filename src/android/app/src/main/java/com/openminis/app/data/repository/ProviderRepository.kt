@@ -495,6 +495,27 @@ class ProviderRepository(private val context: Context) {
         }
     }
 
+    /**
+     * Make a private, writable snapshot for a mutation. Published
+     * [ProviderConfig] values must never be modified in place: StateFlow and
+     * Compose can be structurally comparing the previous value on the main
+     * thread while a model-refresh coroutine returns on IO. Mutating one of
+     * its ArrayLists in that window throws ConcurrentModificationException
+     * from ArrayList.equalsArrayList (see crash-2026-08-02_20-56-28).
+     *
+     * ModelEntry and its nested model/overrides are immutable; ProviderInstance
+     * and ModelGroup carry vars / mutable member ids and therefore need copies.
+     */
+    private fun mutationSnapshot(source: ProviderConfig): ProviderConfig = source.copy(
+        instances = source.instances.map { it.copy() }.toMutableList(),
+        modelEntries = source.modelEntries.toMutableList(),
+        modelGroups = source.modelGroups.map { group ->
+            group.copy(memberEntryIds = group.memberEntryIds.toMutableList())
+        }.toMutableList(),
+        agentLoopModelEntryIds = source.agentLoopModelEntryIds.toMutableList(),
+        agentLoopGroupIds = source.agentLoopGroupIds.toMutableList(),
+    )
+
     val instances: List<ProviderInstance> get() = _config.value.instances
 
     fun addInstance(instance: ProviderInstance) {
@@ -845,7 +866,11 @@ class ProviderRepository(private val context: Context) {
         // Hot path for concurrent autoRefreshModels coroutines (one per
         // enabled instance) — without this lock, two replaceEntries() calls
         // race on the shared config.modelEntries ArrayList.
-        val config = _config.value
+        // Never mutate `_config.value` itself. Parallel model refreshes complete
+        // on IO while Compose compares the last published ProviderConfig on
+        // Main; changing its ArrayLists in place is the exact CME in the crash
+        // report above. All edits below happen on this detached snapshot.
+        val config = mutationSnapshot(_config.value)
         val existing = config.modelEntries.filter { it.providerInstanceId == instanceId }
         val existingEntryIds = existing.map { it.id }.toSet()
 
