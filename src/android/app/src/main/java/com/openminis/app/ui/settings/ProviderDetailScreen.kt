@@ -84,7 +84,6 @@ fun ProviderDetailScreen(
     onBack: () -> Unit,
     onModelEntryClick: (String) -> Unit = {},
     onAddCustomModel: () -> Unit = {},
-    onVoiceServiceClick: (String) -> Unit = {},
 ) {
     val config by providerRepository.config.collectAsState()
     val instance = config.instances.find { it.id == instanceId }
@@ -483,33 +482,6 @@ fun ProviderDetailScreen(
                 },
                 showDivider = false,
             )
-        }
-
-        // ─── Voice Service (dual visibility) ────────────────────────
-        // [T-android-provider-voice] When this instance owns audio-modality
-        // models, link to its shadow Voice Service detail — the only path back
-        // to the "Show in Voice Services" toggle once the shadow row is hidden
-        // (mirrors iOS ProviderInstanceDetailView's Voice Service link with a
-        // "Hidden" badge).
-        if (providerRepository.hasVoiceModels(instance.id)) {
-            SettingsSection(header = null) {
-                SettingsRow(
-                    title = stringResource(R.string.voice_services_section),
-                    onClick = { onVoiceServiceClick(instance.id) },
-                    showDivider = false,
-                    trailing = if (providerRepository.isVoiceShadowDisabled(instance.id)) {
-                        {
-                            Text(
-                                text = stringResource(R.string.voice_service_hidden_badge),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    } else {
-                        null
-                    },
-                )
-            }
         }
 
         // ─── Models ─────────────────────────────────────────────────

@@ -19,9 +19,6 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import sh.calvin.reorderable.ReorderableItem
-import sh.calvin.reorderable.ReorderableLazyListState
-import sh.calvin.reorderable.rememberReorderableLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -31,25 +28,21 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MovieCreation
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.MenuAnchorType
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
@@ -66,7 +59,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -90,55 +82,18 @@ fun ModelGroupsScreen(
     providerRepository: ProviderRepository,
     onBack: () -> Unit,
     onGroupClick: (String) -> Unit,
-    /** T185: navigate to the entries picker for the agent-loop set.
-     *  Replaces T182's in-screen ModalBottomSheet so the picker shape
-     *  matches AddModelsToGroupScreen (shared composable). */
-    onAddAgentLoopModels: () -> Unit = {},
-    /** T185: navigate to the groups picker for the agent-loop set. */
-    onAddAgentLoopGroups: () -> Unit = {},
+    /** [model-groups-simplify] Navigate to the standalone Agent Loop
+     *  Models screen (Routes.AGENT_LOOP_MODELS). The inline
+     *  AgentLoopModelsSection (T182/T185/T186) moved out of this page
+     *  so the model-group list stays compact. */
+    onAgentLoopClick: () -> Unit = {},
 ) {
     val config by providerRepository.config.collectAsState()
     val groups = config.modelGroups
     var showNewGroupDialog by remember { mutableStateOf(false) }
     var newGroupName by remember { mutableStateOf("") }
 
-    // T186: parent LazyListState shared with rememberReorderableLazyListState
-    // so each agent-loop pinned row (rendered as its own LazyColumn item)
-    // can carry a Modifier.draggableHandle and reorder live. The reorder
-    // callback resolves the dragged row by its key (entry id / group id),
-    // permutes our local copy, then commits via ProviderRepository.
     val lazyListState = rememberLazyListState()
-    val reorderState = rememberReorderableLazyListState(lazyListState) { from, to ->
-        val fromKey = from.key as? String ?: return@rememberReorderableLazyListState
-        val toKey = to.key as? String ?: return@rememberReorderableLazyListState
-        // Two reorder zones share the same lazyListState — entries
-        // (key prefix "agent_entry:") and groups ("agent_group:").
-        // Refuse cross-zone drags so a user can't accidentally drop an
-        // entry into the groups zone (the data shape would reject it
-        // anyway, but a no-op is friendlier than a snap-back).
-        when {
-            fromKey.startsWith("agent_entry:") && toKey.startsWith("agent_entry:") -> {
-                val fromId = fromKey.removePrefix("agent_entry:")
-                val toId = toKey.removePrefix("agent_entry:")
-                val cur = providerRepository.config.value.agentLoopModelEntryIds.toList()
-                val fromIdx = cur.indexOf(fromId)
-                val toIdx = cur.indexOf(toId)
-                if (fromIdx < 0 || toIdx < 0) return@rememberReorderableLazyListState
-                val newOrder = cur.toMutableList().apply { add(toIdx, removeAt(fromIdx)) }
-                providerRepository.reorderAgentLoopEntries(newOrder)
-            }
-            fromKey.startsWith("agent_group:") && toKey.startsWith("agent_group:") -> {
-                val fromId = fromKey.removePrefix("agent_group:")
-                val toId = toKey.removePrefix("agent_group:")
-                val cur = providerRepository.config.value.agentLoopGroupIds.toList()
-                val fromIdx = cur.indexOf(fromId)
-                val toIdx = cur.indexOf(toId)
-                if (fromIdx < 0 || toIdx < 0) return@rememberReorderableLazyListState
-                val newOrder = cur.toMutableList().apply { add(toIdx, removeAt(fromIdx)) }
-                providerRepository.reorderAgentLoopGroups(newOrder)
-            }
-        }
-    }
 
     Scaffold(
         topBar = {
@@ -222,6 +177,10 @@ fun ModelGroupsScreen(
                                     group = group,
                                     config = config,
                                     onClick = { onGroupClick(group.id) },
+                                    onSetPrimary = { providerRepository.defaultPrimaryGroupId = group.id },
+                                    onSetSub = { providerRepository.defaultSubGroupId = group.id },
+                                    onClearPrimary = { providerRepository.defaultPrimaryGroupId = null },
+                                    onClearSub = { providerRepository.defaultSubGroupId = null },
                                 )
                             }
                             if (index != groups.lastIndex) SectionDivider()
@@ -229,75 +188,34 @@ fun ModelGroupsScreen(
                     }
                 }
 
-                // T313 — Section 2 (Defaults). Two dropdown rows in one card
-                // with SectionDivider between them, footer caption outside.
-                item("defaults_section_spacer") {
-                    Spacer(modifier = Modifier.height(SectionDesign.SectionTopGap))
-                }
-                item("defaults_section_header") {
-                    SectionHeader(text = "Defaults")
-                }
-                item("defaults_section_card") {
-                    SectionCard {
-                        GroupDropdown(
-                            label = "Default Primary",
-                            groups = groups,
-                            selectedId = config.defaultPrimaryGroupId,
-                            onSelect = { providerRepository.defaultPrimaryGroupId = it },
-                        )
-                        SectionDivider()
-                        GroupDropdown(
-                            label = "Default Sub",
-                            groups = groups,
-                            selectedId = config.defaultSubGroupId,
-                            onSelect = { providerRepository.defaultSubGroupId = it },
-                        )
-                        // [T-android-provider-voice] Voice group bindings —
-                        // mirrors iOS voiceInputGroupId / voiceOutputGroupId.
-                        SectionDivider()
-                        GroupDropdown(
-                            label = stringResource(R.string.model_groups_voice_input),
-                            groups = groups,
-                            selectedId = config.voiceInputGroupId,
-                            onSelect = { providerRepository.voiceInputGroupId = it },
-                        )
-                        SectionDivider()
-                        GroupDropdown(
-                            label = stringResource(R.string.model_groups_voice_output),
-                            groups = groups,
-                            selectedId = config.voiceOutputGroupId,
-                            onSelect = { providerRepository.voiceOutputGroupId = it },
-                        )
-                    }
-                }
-                item("defaults_section_footer") {
-                    SectionFooter(
-                        text = stringResource(R.string.model_groups_primary_is_used_for_main_agent_tasks_sub),
-                    )
-                }
+                // [model-groups-simplify] The old "Defaults" section (two
+                // full-width dropdowns for Default Primary / Default Sub,
+                // plus the voice bindings) is gone. Setting a default is now
+                // a per-row ⋮ menu action on each group row below.
             }
 
-            // T182 / T185 / T186: Agent Loop Models section. Mirrors iOS
-            // ModelGroupsView.swift L77-79's inline AgentLoopModelsSection
-            // — header + curated rows + add-row + footer all directly in
-            // this LazyColumn so the rows can participate in the parent's
-            // ReorderableLazyListState (T186 drag-to-reorder).
-            agentLoopModelsSectionItems(
-                providerRepository = providerRepository,
-                config = config,
-                reorderState = reorderState,
-                onAddModelsTap = onAddAgentLoopModels,
-                onAddGroupsTap = onAddAgentLoopGroups,
-            )
+            // [model-groups-simplify] Agent Loop section collapsed into a
+            // single entry row that navigates to the standalone
+            // AgentLoopModelsScreen (Routes.AGENT_LOOP_MODELS). Rendered
+            // whether or not groups exist.
+            item("agent_loop_entry_spacer") {
+                Spacer(modifier = Modifier.height(SectionDesign.SectionTopGap))
+            }
+            item("agent_loop_entry_header") {
+                SectionHeader(text = stringResource(R.string.agent_loop_section_entry_title))
+            }
+            item("agent_loop_entry_row") {
+                SectionCard {
+                    AgentLoopEntryRow(onClick = onAgentLoopClick)
+                }
+            }
+            item("agent_loop_entry_footer") {
+                SectionFooter(text = stringResource(R.string.agent_loop_section_footer))
+            }
+
+            item("bottom_gap") { Spacer(modifier = Modifier.height(SectionDesign.SectionTopGap)) }
         }
     }
-
-    // T185: the in-screen ModalBottomSheet was replaced by full-screen
-    // navigated picker screens (AddAgentLoopModelsScreen /
-    // AddAgentLoopGroupsScreen). The "Add Models" / "Add Groups"
-    // buttons inside AgentLoopModelsSection now invoke
-    // onAddAgentLoopModels / onAddAgentLoopGroups passed from
-    // AppNavigation, mirroring how AddModelsToGroupScreen is reached.
 
     if (showNewGroupDialog) {
         AlertDialog(
@@ -383,352 +301,42 @@ private fun BadgeLabel(text: String, color: androidx.compose.ui.graphics.Color) 
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun GroupDropdown(
-    label: String,
-    groups: List<ModelGroup>,
-    selectedId: String?,
-    onSelect: (String?) -> Unit,
-) {
-    var expanded by remember { mutableStateOf(false) }
-    val selectedName = groups.find { it.id == selectedId }?.name ?: stringResource(R.string.model_groups_none)
-
-    ExposedDropdownMenuBox(
-        expanded = expanded,
-        onExpandedChange = { expanded = it },
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-    ) {
-        OutlinedTextField(
-            value = selectedName,
-            onValueChange = {},
-            readOnly = true,
-            label = { Text(label) },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
-            modifier = Modifier
-                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
-                .fillMaxWidth(),
-        )
-        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            DropdownMenuItem(
-                text = { Text(stringResource(R.string.model_groups_none)) },
-                onClick = {
-                    onSelect(null)
-                    expanded = false
-                },
-            )
-            groups.forEach { group ->
-                DropdownMenuItem(
-                    text = { Text(group.name) },
-                    onClick = {
-                        onSelect(group.id)
-                        expanded = false
-                    },
-                )
-            }
-        }
-    }
-}
-
-/**
- * T182 — inline section embedded at the bottom of ModelGroupsScreen.
- * Mirrors iOS `AgentLoopModelsSection` from
- * `src/ios/Views/Providers/AgentLoopModelsView.swift` L1-72. Renders
- * the user's curated agent-loop usable set: pinned groups (rendered
- * first, since picking a group implicitly pins all its members) then
- * pinned individual entries. Each row carries a × icon to remove the
- * pin; the section footer hosts two add-sheet trigger buttons.
- *
- * The picker layouts behind those triggers live in
- * `AgentLoopAddSheets.kt` and use `LazyColumn` so a user with a 369-
- * entry OpenRouter instance doesn't freeze Compose the way the pre-
- * T182 `AgentLoopModelsScreen` did when it materialised every entry
- * in a single `Column`.
- */
-@OptIn(ExperimentalMaterial3Api::class)
-private fun LazyListScope.agentLoopModelsSectionItems(
-    providerRepository: ProviderRepository,
-    config: com.openminis.app.data.model.ProviderConfig,
-    reorderState: ReorderableLazyListState,
-    onAddModelsTap: () -> Unit,
-    onAddGroupsTap: () -> Unit,
-) {
-    // [T-android-agentloop-dup-key-crash] distinctBy id (belt-and-suspenders
-    // alongside the data-layer sink dedup). A config that's ALREADY corrupted
-    // with a duplicate id (persisted before the sink fix) would otherwise yield
-    // two rows sharing the same LazyColumn/Reorderable key and crash on scroll
-    // (IllegalArgumentException: Key "..." was already used). Deduping here
-    // makes the screen render so the user can even reach a state where the
-    // persisted list gets rewritten clean. totalRows / absIndex below derive
-    // from these deduped lists, so the row math stays consistent.
-    val pinnedGroups = config.agentLoopGroupIds
-        .mapNotNull { gid -> config.modelGroups.find { it.id == gid } }
-        .distinctBy { it.id }
-    val pinnedEntries = config.agentLoopModelEntryIds
-        .mapNotNull { eid -> config.modelEntries.find { it.id == eid } }
-        .distinctBy { it.id }
-    val isEmpty = pinnedGroups.isEmpty() && pinnedEntries.isEmpty()
-
-    // T313 — agent-loop section. Reorder rows MUST stay as top-level
-    // LazyColumn items (ReorderableLazyListState only sees direct child
-    // items), so the card visual is built per-row via SectionDesign
-    // tokens: every row is wrapped with cardRow(isFirst, isLast) which
-    // applies horizontal insets, surface fill, and rounded corners only
-    // on the first/last row. SectionDivider is emitted as its own item
-    // between rows so the inner card reads as one continuous panel.
-    item("agent_loop_section_spacer") {
-        Spacer(modifier = Modifier.height(SectionDesign.SectionTopGap))
-    }
-    item("agent_loop_section_header") {
-        SectionHeader(text = stringResource(R.string.agent_loop_section_title))
-    }
-
-    if (isEmpty) {
-        item("agent_loop_section_empty") {
-            Box(modifier = Modifier.cardRow(isFirst = true, isLast = true)) {
-                Text(
-                    text = stringResource(R.string.agent_loop_section_empty_hint),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp),
-                )
-            }
-        }
-    } else {
-        val totalRows = pinnedGroups.size + pinnedEntries.size
-        itemsIndexed(pinnedGroups, key = { _, g -> "agent_group:${g.id}" }) { index, group ->
-            ReorderableItem(
-                state = reorderState,
-                key = "agent_group:${group.id}",
-            ) { _ ->
-                val resolvedCount = group.memberEntryIds.count { mid ->
-                    config.modelEntries.any { it.id == mid }
-                }
-                val subtitle = if (resolvedCount == 1) {
-                    stringResource(R.string.agent_loop_models_model_count_singular)
-                } else {
-                    stringResource(R.string.agent_loop_models_model_count_plural, resolvedCount)
-                }
-                Column {
-                    if (index != 0) SectionDividerInsetCard()
-                    Box(
-                        modifier = Modifier.cardRow(
-                            isFirst = index == 0,
-                            isLast = index == totalRows - 1,
-                        ),
-                    ) {
-                        AgentLoopRow(
-                            title = group.name,
-                            subtitle = subtitle,
-                            badge = stringResource(R.string.agent_loop_section_group_badge),
-                            onRemove = { providerRepository.removeAgentLoopGroup(group.id) },
-                            dragHandleModifier = Modifier.then(
-                                with(this@ReorderableItem) {
-                                    Modifier.draggableHandle()
-                                }
-                            ),
-                        )
-                    }
-                }
-            }
-        }
-
-        itemsIndexed(pinnedEntries, key = { _, e -> "agent_entry:${e.id}" }) { index, entry ->
-            ReorderableItem(
-                state = reorderState,
-                key = "agent_entry:${entry.id}",
-            ) { _ ->
-                val instanceLabel = config.instances
-                    .find { it.id == entry.providerInstanceId }
-                    ?.label
-                val absIndex = pinnedGroups.size + index
-                Column {
-                    if (absIndex != 0) SectionDividerInsetCard()
-                    Box(
-                        modifier = Modifier.cardRow(
-                            isFirst = absIndex == 0,
-                            isLast = absIndex == totalRows - 1,
-                        ),
-                    ) {
-                        AgentLoopRow(
-                            title = entry.model.displayName,
-                            subtitle = instanceLabel,
-                            badge = null,
-                            onRemove = { providerRepository.removeAgentLoopEntry(entry.id) },
-                            dragHandleModifier = Modifier.then(
-                                with(this@ReorderableItem) {
-                                    Modifier.draggableHandle()
-                                }
-                            ),
-                        )
-                    }
-                }
-            }
-        }
-    }
-
-    item("agent_loop_section_add_buttons") {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            MinisOutlinedButton(
-                onClick = onAddModelsTap,
-                modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(50),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-            ) {
-                Icon(
-                    Icons.Default.Add,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(stringResource(R.string.agent_loop_section_add_models))
-            }
-            MinisOutlinedButton(
-                onClick = onAddGroupsTap,
-                modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(50),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-            ) {
-                Icon(
-                    Icons.Default.Add,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(stringResource(R.string.agent_loop_section_add_groups))
-            }
-        }
-    }
-
-    item("agent_loop_section_footer") {
-        SectionFooter(text = stringResource(R.string.agent_loop_section_footer))
-    }
-
-    item("bottom_gap") { Spacer(modifier = Modifier.height(SectionDesign.SectionTopGap)) }
-}
-
-/** Single row inside the agent-loop section. Drag handle on the left
- *  (T186), title + optional subtitle + optional "Group" badge in the
- *  middle, × to unpin on the right. The drag-handle modifier is built
- *  by the parent (since ReorderableItemScope.draggableHandle() is
- *  scope-bound) and threaded in here to keep the row composable
- *  scope-agnostic. */
-@Composable
-private fun AgentLoopRow(
-    title: String,
-    subtitle: String?,
-    badge: String?,
-    onRemove: () -> Unit,
-    dragHandleModifier: Modifier = Modifier,
-) {
+private fun AgentLoopEntryRow(onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 6.dp),
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // T198: drag handle must be wrapped in IconButton — Icon is raw
-        // vector graphics with no pointer consumer, so reorderable v2.4.0's
-        // draggableHandle() never sees ACTION_DOWN/MOVE on a bare Icon.
-        // IconButton is Compose's clickable container and consumes pointer
-        // events, letting the dragHandleModifier route gestures correctly.
-        IconButton(
-            onClick = {},
-            modifier = dragHandleModifier.size(36.dp),
-        ) {
-            Icon(
-                imageVector = Icons.Default.DragHandle,
-                contentDescription = stringResource(R.string.model_group_detail_drag_to_reorder),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                modifier = Modifier.size(20.dp),
-            )
-        }
-        Column(modifier = Modifier.weight(1f).padding(start = 4.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    fontWeight = FontWeight.Medium,
-                )
-                if (badge != null) {
-                    Spacer(modifier = Modifier.width(8.dp))
-                    BadgeLabel(badge, MaterialTheme.colorScheme.primary)
-                }
-            }
-            if (!subtitle.isNullOrEmpty()) {
-                Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        IconButton(
-            onClick = onRemove,
-            modifier = Modifier.size(36.dp),
-        ) {
-            Icon(
-                imageVector = Icons.Default.Close,
-                contentDescription = stringResource(R.string.agent_loop_section_remove),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(18.dp),
-            )
-        }
-    }
-}
-
-// ── T313 LazyList card helpers ────────────────────────────────────────────
-//
-// SectionCard / SectionDivider from SectionDesign are designed for
-// Column-scoped sections, but the agent-loop section needs each row to
-// stay a top-level LazyColumn item so ReorderableLazyListState (T186) can
-// see it. These helpers paint the SectionDesign card visual on a per-row
-// basis: cardRow() applies horizontal insets + surface fill + per-row
-// corner clipping; SectionDividerInsetCard() draws the inner divider
-// between consecutive rows so the painted run reads as one panel.
-
-@Composable
-private fun Modifier.cardRow(isFirst: Boolean, isLast: Boolean): Modifier {
-    val shape = when {
-        isFirst && isLast -> SectionDesign.CardShape
-        isFirst -> RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp)
-        isLast -> RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp)
-        else -> RectangleShape
-    }
-    // Match SectionCard's inner Column vertical padding so first/last rows
-    // get the same breathing room from the card edge as Sections 1 & 2.
-    return this
-        .padding(horizontal = SectionDesign.ScreenHorizontalPadding)
-        .clip(shape)
-        .background(SectionDesign.cardColor())
-        .padding(
-            top = if (isFirst) SectionDesign.CardInnerVerticalPadding else 0.dp,
-            bottom = if (isLast) SectionDesign.CardInnerVerticalPadding else 0.dp,
+        Icon(
+            imageVector = Icons.AutoMirrored.Filled.Article,
+            contentDescription = null,
+            modifier = Modifier.size(20.dp),
+            tint = MaterialTheme.colorScheme.primary,
         )
-}
-
-/** Divider between two cardRow rows. Painted on the same surface fill so
- *  it reads as an inset divider inside the card panel rather than a hard
- *  line floating on the page background. */
-@Composable
-private fun SectionDividerInsetCard() {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = SectionDesign.ScreenHorizontalPadding)
-            .background(SectionDesign.cardColor()),
-    ) {
-        HorizontalDivider(
-            modifier = Modifier.padding(start = SectionDesign.DividerStartInset),
-            thickness = SectionDesign.DividerThickness,
-            color = SectionDesign.dividerColor(),
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = stringResource(R.string.agent_loop_section_entry_title),
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = stringResource(R.string.agent_loop_section_entry_subtitle),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Icon(
+            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
         )
     }
 }
+
 
 /**
  * [T-android-modelgroup-modality-icons] One modality marker shown after a Model
@@ -815,7 +423,12 @@ private fun GroupRow(
     group: ModelGroup,
     config: com.openminis.app.data.model.ProviderConfig,
     onClick: () -> Unit,
+    onSetPrimary: () -> Unit,
+    onSetSub: () -> Unit,
+    onClearPrimary: () -> Unit,
+    onClearSub: () -> Unit,
 ) {
+    var menuExpanded by remember { mutableStateOf(false) }
     val memberNames = group.memberEntryIds.mapNotNull { entryId ->
         config.modelEntries.find { it.id == entryId }?.model?.displayName
     }
@@ -870,8 +483,8 @@ private fun GroupRow(
                 groupTopModalities(group, config).forEach { marker ->
                     GroupModalityIcon(marker)
                 }
-                if (isPrimary) BadgeLabel("Primary", MaterialTheme.colorScheme.primary)
-                if (isSub) BadgeLabel("Sub", MaterialTheme.colorScheme.tertiary)
+                if (isPrimary) BadgeLabel(stringResource(R.string.model_groups_primary_badge), MaterialTheme.colorScheme.primary)
+                if (isSub) BadgeLabel(stringResource(R.string.model_groups_sub_badge), MaterialTheme.colorScheme.tertiary)
                 if (allDisabled) {
                     BadgeLabel(
                         stringResource(R.string.model_group_no_usable_models_badge),
@@ -906,10 +519,41 @@ private fun GroupRow(
                 )
             }
         }
-        Icon(
-            Icons.AutoMirrored.Filled.KeyboardArrowRight,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Box {
+            IconButton(onClick = { menuExpanded = true }) {
+                Icon(
+                    Icons.Filled.MoreVert,
+                    contentDescription = stringResource(R.string.model_groups_row_menu),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            DropdownMenu(
+                expanded = menuExpanded,
+                onDismissRequest = { menuExpanded = false },
+            ) {
+                if (isPrimary) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.model_groups_clear_default_primary)) },
+                        onClick = { onClearPrimary(); menuExpanded = false },
+                    )
+                } else {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.model_groups_set_default_primary)) },
+                        onClick = { onSetPrimary(); menuExpanded = false },
+                    )
+                }
+                if (isSub) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.model_groups_clear_default_sub)) },
+                        onClick = { onClearSub(); menuExpanded = false },
+                    )
+                } else {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.model_groups_set_default_sub)) },
+                        onClick = { onSetSub(); menuExpanded = false },
+                    )
+                }
+            }
+        }
     }
 }

@@ -33,10 +33,10 @@ import com.openminis.app.ui.chat.ChatScreen
 import com.openminis.app.ui.sessions.SessionListScreen
 import com.openminis.app.ui.settings.AddAgentLoopGroupsScreen
 import com.openminis.app.ui.settings.AddAgentLoopModelsScreen
+import com.openminis.app.ui.settings.AgentLoopModelsScreen
 import com.openminis.app.ui.settings.AddCustomModelScreen
 import com.openminis.app.ui.settings.BackgroundSettingsScreen
 import com.openminis.app.ui.settings.AddModelsToGroupScreen
-import com.openminis.app.ui.settings.ShadowVoiceDetailScreen
 import com.openminis.app.ui.settings.AddProviderScreen
 import com.openminis.app.ui.settings.ModelEntryDetailScreen
 import com.openminis.app.ui.settings.ModelGroupDetailScreen
@@ -107,7 +107,6 @@ object Routes {
     const val ADD_PROVIDER = "add_provider"
     const val PROVIDER_DETAIL = "provider/{instanceId}"
     /** [T-android-provider-voice] Read-only shadow Voice Service detail. */
-    const val SHADOW_VOICE_DETAIL = "voice_service/{instanceId}"
     const val MODEL_GROUPS = "model_groups"
     const val MODEL_GROUP_DETAIL = "model_group/{groupId}"
     const val ADD_MODELS_TO_GROUP = "add_models_to_group/{groupId}"
@@ -115,10 +114,8 @@ object Routes {
     const val ADD_MODELS_TO_AGENT_LOOP = "add_models_to_agent_loop"
     /** T185: picker that adds model *groups* to the agent-loop set. */
     const val ADD_GROUPS_TO_AGENT_LOOP = "add_groups_to_agent_loop"
-    /** T171→T182: AGENT_LOOP_MODELS deprecated (the screen lived inside
-     *  Settings, now the picker is a section inside ModelGroupsScreen).
-     *  Route declared so any back-compat deep-link string from preview
-     *  builds pops back instead of crashing. */
+    /** [model-groups-simplify] Agent Loop Models — standalone screen reached
+     *  from the entry row on ModelGroupsScreen. */
     const val AGENT_LOOP_MODELS = "agent_loop_models"
     const val MODEL_ENTRY_DETAIL = "model_entry/{instanceId}/{entryId}"
     const val ADD_CUSTOM_MODEL = "add_custom_model/{instanceId}"
@@ -203,7 +200,6 @@ object Routes {
         return "$base?focusMessageId=$enc"
     }
     fun providerDetail(instanceId: String) = "provider/$instanceId"
-    fun shadowVoiceDetail(instanceId: String) = "voice_service/$instanceId"
     fun modelGroupDetail(groupId: String) = "model_group/$groupId"
     fun addModelsToGroup(groupId: String) = "add_models_to_group/$groupId"
     // [T-android-model-entry-route-slash-crash] entryId is a composite key
@@ -726,21 +722,6 @@ fun AppNavigation(
                 onProviderClick = { instanceId ->
                     navController.safeNavigate(Routes.providerDetail(instanceId))
                 },
-                onVoiceServiceClick = { instanceId ->
-                    navController.safeNavigate(Routes.shadowVoiceDetail(instanceId))
-                },
-            )
-        }
-
-        composable(
-            route = Routes.SHADOW_VOICE_DETAIL,
-            arguments = listOf(navArgument("instanceId") { type = NavType.StringType }),
-        ) { backStackEntry ->
-            val instanceId = backStackEntry.arguments?.getString("instanceId") ?: return@composable
-            ShadowVoiceDetailScreen(
-                instanceId = instanceId,
-                providerRepository = providerRepository,
-                onBack = { navController.safePopBackStack() },
             )
         }
 
@@ -767,9 +748,6 @@ fun AppNavigation(
                 onAddCustomModel = {
                     navController.safeNavigate(Routes.addCustomModel(instanceId))
                 },
-                onVoiceServiceClick = { id ->
-                    navController.safeNavigate(Routes.shadowVoiceDetail(id))
-                },
             )
         }
 
@@ -780,11 +758,8 @@ fun AppNavigation(
                 onGroupClick = { groupId ->
                     navController.safeNavigate(Routes.modelGroupDetail(groupId))
                 },
-                onAddAgentLoopModels = {
-                    navController.safeNavigate(Routes.ADD_MODELS_TO_AGENT_LOOP)
-                },
-                onAddAgentLoopGroups = {
-                    navController.safeNavigate(Routes.ADD_GROUPS_TO_AGENT_LOOP)
+                onAgentLoopClick = {
+                    navController.safeNavigate(Routes.AGENT_LOOP_MODELS)
                 },
             )
         }
@@ -837,17 +812,21 @@ fun AppNavigation(
             )
         }
 
-        // T182: AgentLoopModels is no longer a standalone screen. The
-        // picker now lives as the last section inside ModelGroupsScreen
-        // (mirrors iOS Views/Providers/ModelGroupsView.swift L77-79's
-        // `AgentLoopModelsSection`). Routes.AGENT_LOOP_MODELS is left
-        // declared for back-compat with any deep-link string we may
-        // have shipped to early users; safePopBackStack lands them on
-        // the prior screen if it ever fires.
+        // [model-groups-simplify] Agent Loop Models is a standalone screen
+        // again (reached via the entry row on ModelGroupsScreen). Routes
+        // AGENT_LOOP_MODELS now renders it; the old inline AgentLoopModelsSection
+        // inside ModelGroupsScreen was extracted here.
         composable(Routes.AGENT_LOOP_MODELS) {
-            androidx.compose.runtime.LaunchedEffect(Unit) {
-                navController.safePopBackStack()
-            }
+            AgentLoopModelsScreen(
+                providerRepository = providerRepository,
+                onBack = { navController.safePopBackStack() },
+                onAddModelsTap = {
+                    navController.safeNavigate(Routes.ADD_MODELS_TO_AGENT_LOOP)
+                },
+                onAddGroupsTap = {
+                    navController.safeNavigate(Routes.ADD_GROUPS_TO_AGENT_LOOP)
+                },
+            )
         }
 
         composable(

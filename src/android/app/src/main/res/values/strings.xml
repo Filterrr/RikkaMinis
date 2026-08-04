@@ -160,32 +160,12 @@
     <!-- [T-mcp-startup-timeout] Optional STDIO startup/handshake timeout (seconds) -->
     <string name="mcp_form_startup_timeout">Startup timeout (seconds)</string>
     <string name="mcp_form_startup_timeout_placeholder">Default 60</string>
-    <!-- [T-android-provider-voice] Voice Services (shadow voice providers) -->
-    <string name="voice_services_section">Voice Services</string>
-    <string name="voice_services_duplicate_hint">A voice service is configured more than once. Voice is merged into a single row here; you can delete the extra provider above if you want.</string>
-    <string name="voice_services_stt_count">%1$d speech-to-text</string>
-    <string name="voice_services_tts_count">%1$d text-to-speech</string>
-    <string name="voice_service_source">Source</string>
-    <string name="voice_service_credential_from">Credential from</string>
-    <string name="voice_service_endpoint">Endpoint</string>
-    <string name="voice_service_speech_to_text">Speech to Text</string>
-    <string name="voice_service_text_to_speech">Text to Speech</string>
-    <string name="voice_service_show_in_voice_services">Show in Voice Services</string>
-    <string name="voice_service_shared_credential_note">This voice service shares the API key and endpoint of its provider. To change them, edit that provider.</string>
-    <string name="voice_service_hidden_badge">Hidden</string>
-    <string name="add_provider_voice_chat_providers">Voice Chat Providers</string>
-    <string name="add_provider_voice_templates_footer">Speech-to-text and text-to-speech vendors. The provider type and base URL are prefilled — just add your API key.</string>
-    <string name="add_provider_voice_capability_tts">Speech synthesis (TTS)</string>
-    <string name="add_provider_voice_capability_asr">Speech recognition (ASR)</string>
-    <string name="add_provider_voice_capability_both">Recognition + synthesis</string>
     <string name="quicktest_no_audio">No audio was returned.</string>
     <string name="quicktest_voice_unsupported">This model\'s provider can\'t serve this voice direction.</string>
     <string name="quicktest_audio_play">Play</string>
     <string name="quicktest_audio_replay">Replay</string>
     <string name="quicktest_transcript_result">Spoken: "%1$s"\nHeard: "%2$s"</string>
     <string name="quicktest_clip_failed">Couldn\'t synthesize the local test clip.</string>
-    <string name="model_groups_voice_input">Voice Input</string>
-    <string name="model_groups_voice_output">Voice Output</string>
     <!-- [T-mcp-env-var-picker-android] Insert a reference to an App env var as $$VAR -->
     <string name="mcp_form_env_insert_app_var">Insert app var</string>
     <!-- [T-mcp-env-var-delete-confirm-android] Clear-all env vars affordance + confirm -->
@@ -992,6 +972,18 @@
     <string name="model_groups_group_name">Group name</string>
     <string name="model_groups_create">Create</string>
     <string name="model_groups_none">None</string>
+    <!-- [model-groups-simplify] Row-menu entries that replace the old
+         full-width Defaults dropdown section. -->
+    <string name="model_groups_set_default_primary">Set as Default Primary</string>
+    <string name="model_groups_set_default_sub">Set as Default Sub</string>
+    <string name="model_groups_clear_default_primary">Clear Default Primary</string>
+    <string name="model_groups_clear_default_sub">Clear Default Sub</string>
+    <string name="model_groups_row_menu">Group options</string>
+    <string name="model_groups_primary_badge">Primary</string>
+    <string name="model_groups_sub_badge">Sub</string>
+    <string name="model_groups_defaults_hint">Primary is used for main agent tasks. Sub is used for lightweight tasks like title generation. If Sub is not set, it inherits from Primary. Use the ⋮ menu on a group to set these.</string>
+    <string name="agent_loop_section_entry_title">Agent Loop Models</string>
+    <string name="agent_loop_section_entry_subtitle">Models and groups usable by the agent via minis-model-use</string>
     <string name="add_models_to_group_search_models">Search models</string>
     <string name="add_models_to_group_clear">Clear</string>
     <string name="settings_agent_loop_models">Agent Loop Models</string>    <string name="agent_loop_models_groups">Groups</string>
@@ -1279,35 +1271,10 @@
     <string name="model_picker_modality_audio">audio</string>
     <string name="model_picker_modality_video">video</string>
 
-    <!-- [T-android-voice-panel] Inline voice input panel (mirrors iOS InlineVoiceInputView) -->
-    <string name="voice_panel_collapse">Collapse voice panel</string>
-    <string name="voice_panel_expand">Expand voice panel</string>
-    <string name="voice_panel_language">Recognition language</string>
-    <string name="voice_panel_tap_to_speak">Tap to speak</string>
-    <string name="voice_panel_tip_tap_to_transcribe">Tap to transcribe</string>
-    <string name="voice_panel_tip_listening">Listening…</string>
-    <string name="voice_panel_tip_double_tap_edit">Double-tap text to edit</string>
-    <string name="voice_panel_tip_tap_to_continue">Tap mic to continue</string>
-    <string name="voice_panel_tip_hold_delete">Hold ⌫ to delete</string>
-    <string name="voice_panel_recognizing">Recognizing…</string>
-    <string name="voice_panel_editing">Editing — tap mic to resume</string>
-    <string name="voice_panel_exit_edit">Exit</string>
-    <string name="voice_panel_permission_denied">Microphone access denied — enable it in Settings</string>
-    <string name="voice_panel_buffered_chars">… %1$d chars …</string>
-    <string name="voice_panel_cancel_transcription">Cancel transcription</string>
-    <string name="voice_panel_toggle_recording">Toggle recording</string>
-    <string name="voice_panel_delete">Delete dictated text</string>
-    <string name="voice_panel_read_replies">Read replies</string>
     <string name="voice_system_recognition_online">System Recognition (Online)</string>
     <string name="voice_system_recognition_offline">System Recognition (Offline)</string>
     <string name="voice_system_online_subtitle">Android built-in, needs network</string>
     <string name="voice_system_offline_subtitle">Android built-in, works offline</string>
-    <string name="voice_input_picker_title">Voice Input</string>
-    <string name="voice_input_picker_done">Done</string>
-    <string name="voice_input_picker_groups">Model Groups</string>
-    <string name="voice_input_picker_system">System</string>
-    <string name="voice_input_picker_group_models">%1$d models</string>
-    <string name="voice_input_picker_group_footer">Pick a group whose audio-capable models drive this direction.</string>
     <string name="model_picker_non_text_warning_title">This model may not work as an Agent</string>
     <string name="model_picker_non_text_warning_body">%1$s outputs %2$s and usually can\'t drive an Agent task. Pick a text-output model for the session, or add this model to an Agent loop as a tool so the agent can call it on demand to generate %3$s.</string>
     <string name="model_picker_non_text_warning_use_anyway">Use anyway</string>
@@ -1450,8 +1417,6 @@
          the launcher popup; longLabel is read by TalkBack. -->
     <string name="shortcut_new_chat_short">New Chat</string>
     <string name="shortcut_new_chat_long">New Chat</string>
-    <string name="shortcut_voice_chat_short">Chat with Voice</string>
-    <string name="shortcut_voice_chat_long">Chat with Voice</string>
     <string name="shortcut_camera_chat_short">Chat with Camera</string>
     <string name="shortcut_camera_chat_long">Chat with Camera</string>
 

@@ -22,7 +22,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.FileDownload
-import androidx.compose.material.icons.outlined.GraphicEq
 import androidx.compose.material.icons.outlined.VpnKey
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -57,7 +56,6 @@ fun ProviderListScreen(
     onBack: () -> Unit,
     onAddProvider: () -> Unit,
     onProviderClick: (String) -> Unit,
-    onVoiceServiceClick: (String) -> Unit = {},
 ) {
     val config by providerRepository.config.collectAsState()
     val instances = config.instances
@@ -185,38 +183,10 @@ fun ProviderListScreen(
             }
         }
 
-        // [T-android-provider-voice] Voice Services: runtime shadow mirror of
-        // every enabled instance that owns audio-modality models (mirrors iOS
-        // ProviderInstancesView's Voice Services section). Rows are read-only
-        // views onto the underlying instance — no stored entity.
-        val shadows = remember(config) { providerRepository.shadowVoiceProviders() }
-        if (shadows.isNotEmpty()) {
-            SettingsSection(
-                header = stringResource(R.string.voice_services_section),
-                footer = if (providerRepository.hasFoldedShadowDuplicates()) {
-                    stringResource(R.string.voice_services_duplicate_hint)
-                } else {
-                    null
-                },
-            ) {
-                shadows.forEachIndexed { index, shadow ->
-                    ShadowVoiceRow(
-                        shadow = shadow,
-                        onClick = { onVoiceServiceClick(shadow.instanceId) },
-                    )
-                    if (index < shadows.size - 1) {
-                        val divider = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(start = 38.dp, end = 14.dp)
-                                .height(0.5.dp)
-                                .background(divider),
-                        )
-                    }
-                }
-            }
-        }
+        // [voice-removed] The runtime "Voice Services" shadow section was
+        // removed along with the rest of the in-app voice UI. The underlying
+        // voice provider engine still exists for agent-facing tools; it just no
+        // longer surfaces as its own provider-list section here.
         Spacer(Modifier.height(80.dp))
     }
 
@@ -361,59 +331,4 @@ private fun ProviderInstanceRow(
 private fun maskKey(key: String): String {
     if (key.length <= 8) return "****"
     return key.take(6) + "..." + key.takeLast(4)
-}
-
-/** One shadow Voice Service row: name + ASR/TTS model counts. */
-@Composable
-private fun ShadowVoiceRow(
-    shadow: ProviderRepository.ShadowVoiceProvider,
-    onClick: () -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(
-            imageVector = Icons.Outlined.GraphicEq,
-            contentDescription = null,
-            modifier = Modifier.size(20.dp),
-            tint = MaterialTheme.colorScheme.primary,
-        )
-        Spacer(Modifier.width(12.dp))
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            Text(
-                text = shadow.displayName,
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            val parts = buildList {
-                if (shadow.inputModels.isNotEmpty()) {
-                    add(stringResource(R.string.voice_services_stt_count, shadow.inputModels.size))
-                }
-                if (shadow.outputModels.isNotEmpty()) {
-                    add(stringResource(R.string.voice_services_tts_count, shadow.outputModels.size))
-                }
-            }
-            if (parts.isNotEmpty()) {
-                Text(
-                    text = parts.joinToString(" · "),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        Icon(
-            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-            modifier = Modifier.size(20.dp),
-        )
-    }
 }

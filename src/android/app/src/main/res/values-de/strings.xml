@@ -677,6 +677,15 @@
     <string name="model_groups_group_name">Gruppenname</string>
     <string name="model_groups_create">Erstellen</string>
     <string name="model_groups_none">Keine</string>
+    <string name="model_groups_set_default_primary">Set as Default Primary</string>
+    <string name="model_groups_set_default_sub">Set as Default Sub</string>
+    <string name="model_groups_clear_default_primary">Clear Default Primary</string>
+    <string name="model_groups_clear_default_sub">Clear Default Sub</string>
+    <string name="model_groups_row_menu">Group options</string>
+    <string name="model_groups_primary_badge">Primary</string>
+    <string name="model_groups_sub_badge">Sub</string>
+    <string name="agent_loop_section_entry_title">Agent Loop Models</string>
+    <string name="agent_loop_section_entry_subtitle">Models and groups usable by the agent via minis-model-use</string>
     <string name="add_models_to_group_search_models">Modelle suchen</string>
     <string name="add_models_to_group_clear">Löschen</string>
     <string name="settings_agent_loop_models">Agent-Loop-Modelle</string>    <string name="agent_loop_models_groups">Gruppen</string>
