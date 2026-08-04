@@ -1,4 +1,4 @@
-package com.openminis.app.ui.settings
+package com.openminis.app.sandbox
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue

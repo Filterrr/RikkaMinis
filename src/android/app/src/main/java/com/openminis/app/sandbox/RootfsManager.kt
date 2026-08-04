@@ -212,7 +212,7 @@ class RootfsManager private constructor(private val context: Context) {
      */
     suspend fun getRootfsSize(): Long = withContext(Dispatchers.IO) {
         if (!rootfsDir.exists()) return@withContext 0L
-        calculateDirSize(rootfsDir)
+        RootfsUsageScanner.scan(rootfsDir, RootfsUsageScanner.androidStat()).totalBytes
     }
 
     /**
@@ -225,19 +225,6 @@ class RootfsManager private constructor(private val context: Context) {
         backupDir.copyRecursively(rootHome, overwrite = true)
         backupDir.deleteRecursively()
         Log.i(TAG, "User data restored from $backupDir")
-    }
-
-    private fun calculateDirSize(dir: File): Long {
-        var total = 0L
-        val files = dir.listFiles() ?: return 0L
-        for (file in files) {
-            total += if (file.isDirectory) {
-                calculateDirSize(file)
-            } else {
-                file.length()
-            }
-        }
-        return total
     }
 
     /**
