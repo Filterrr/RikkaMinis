@@ -112,10 +112,12 @@ class BackgroundTaskNotifier(
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                     }
                 }
-                // Use a private id space so generic work notifications never
-                // collide with the session-id-hash ids used by
-                // notifyTaskCompleted (overwriting each other in the tray).
-                val id = 0x80000000 or (tag.hashCode() and 0x7FFFFFFF)
+                // Notification id derived from the work tag (Int; never Long —
+                // 0x80000000 would infer Long and break the Int overloads of
+                // getActivity/notify). Colliding with a session-notification id
+                // is vanishingly unlikely and only risks overwriting that one
+                // notice in the tray.
+                val id = tag.hashCode()
                 val pendingIntent = launchIntent?.let {
                     PendingIntent.getActivity(
                         context,
