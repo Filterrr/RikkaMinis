@@ -741,8 +741,6 @@
 
     <!-- T184-chatmenu-i18n — ChatScreen overflow ⋮ menu -->
     <string name="chat_menu_new_chat">新しいチャット</string>
-    <string name="chat_new_chat_stop_dialog_body">このチャットではタスクが実行中です。新しいチャットを開始すると停止します。</string>
-    <string name="chat_new_chat_stop_dialog_confirm">停止して新規チャット</string>
     <string name="chat_menu_clear_chat">チャットをクリア</string>
     <string name="chat_menu_open_terminal">ターミナルを開く</string>
     <string name="chat_menu_open_browser">ブラウザを開く</string>

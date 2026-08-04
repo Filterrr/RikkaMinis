@@ -741,8 +741,6 @@
 
     <!-- T184-chatmenu-i18n — ChatScreen overflow ⋮ menu -->
     <string name="chat_menu_new_chat">Neuer Chat</string>
-    <string name="chat_new_chat_stop_dialog_body">In diesem Chat läuft gerade eine Aufgabe. Ein neuer Chat wird sie stoppen.</string>
-    <string name="chat_new_chat_stop_dialog_confirm">Stoppen &amp; neuer Chat</string>
     <string name="chat_menu_clear_chat">Chat leeren</string>
     <string name="chat_menu_open_terminal">Terminal öffnen</string>
     <string name="chat_menu_open_browser">Browser öffnen</string>

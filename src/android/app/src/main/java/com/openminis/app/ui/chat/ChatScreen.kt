@@ -668,10 +668,6 @@ fun ChatScreen(
     // backing state without needing fragile scope wiring.
     var showMoveSheet by remember { mutableStateOf(false) }
     var showClearChatDialog by remember { mutableStateOf(false) }
-    // [T-new-chat-menu-entry] Confirmation gate for "New Chat" while the
-    // current session is still streaming — stopping the running task needs
-    // an explicit confirm; idle sessions skip the dialog entirely.
-    var showNewChatStopDialog by remember { mutableStateOf(false) }
     // [T-android-enhanced-cache] First-enable confirmation dialog visibility.
     var showEnhancedCacheDialog by remember { mutableStateOf(false) }
 
@@ -2210,14 +2206,16 @@ fun ChatScreen(
                     // New Chat — promoted from the "..." menu to a persistent
                     // top-bar button beside "..." (iOS parity: square.and.pencil
                     // sits next to the overflow, one tap instead of two).
-                    // Streaming sessions confirm first, same as before.
-                    IconButton(onClick = {
-                        if (isStreaming) {
-                            showNewChatStopDialog = true
-                        } else {
-                            onNewChat()
-                        }
-                    }) {
+                    // Always creates the draft directly — even while streaming.
+                    // Leaving the chat does NOT stop the running task: the VM
+                    // lives in the process-level ChatViewModelStore, so the
+                    // agent loop keeps streaming in the background and the
+                    // finished response lands in this session's history (the
+                    // sessions list shows a spinner meanwhile). This matches
+                    // session switching via the drawer, which never confirms
+                    // either; a "stop the task" prompt here would be both
+                    // inconsistent and factually wrong.
+                    IconButton(onClick = { onNewChat() }) {
                         Icon(Icons.Filled.Edit, contentDescription = stringResource(R.string.chat_menu_new_chat))
                     }
                     // iOS: "..." circle button → dropdown menu
@@ -5316,23 +5314,6 @@ fun ChatScreen(
                         viewModel.clearChat()
                         viewModel.setInputText("")
                         showClearChatDialog = false
-                    },
-                )
-            }
-            // [T-new-chat-menu-entry] Streaming guard for the menu's New Chat:
-            // confirm → stop the running task, then navigate to a fresh draft;
-            // dismiss → stay in the current chat.
-            if (showNewChatStopDialog) {
-                MinisAlertDialog(
-                    onDismissRequest = { showNewChatStopDialog = false },
-                    title = stringResource(R.string.chat_menu_new_chat),
-                    text = stringResource(R.string.chat_new_chat_stop_dialog_body),
-                    confirmText = stringResource(R.string.chat_new_chat_stop_dialog_confirm),
-                    isDestructive = true,
-                    onConfirm = {
-                        showNewChatStopDialog = false
-                        viewModel.cancelStream()
-                        onNewChat()
                     },
                 )
             }
