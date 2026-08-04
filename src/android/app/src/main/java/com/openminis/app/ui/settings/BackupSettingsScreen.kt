@@ -54,6 +54,7 @@ import com.openminis.app.data.repository.MCPRepository
 import com.openminis.app.data.repository.MemoryRepository
 import com.openminis.app.data.repository.ProviderRepository
 import com.openminis.app.data.repository.SkillRepository
+import java.io.File
 import java.io.IOException
 import java.time.Instant
 import java.time.ZoneId
@@ -115,6 +116,7 @@ fun BackupSettingsScreen(
     var remoteLoading by remember { mutableStateOf(false) }
     var remoteError by remember { mutableStateOf<String?>(null) }
     var deletePending by remember { mutableStateOf<WebDavBackupItem?>(null) }
+    var snapshotNote by remember { mutableStateOf<String?>(null) }
 
     val savedToast = stringResource(R.string.backup_saved)
     val errWriteFmt = stringResource(R.string.backup_err_write)
@@ -147,17 +149,64 @@ fun BackupSettingsScreen(
             val json = context.contentResolver.openInputStream(uri)
                 ?.bufferedReader()?.readText()
                 ?: throw IllegalStateException(errRead)
-            importReport = ConfigBackup.import(
-                providerRepo = providerRepository,
-                json = json,
-                envVarRepo = envVarRepository,
-                skillRepo = skillRepository,
-                memoryRepo = memoryRepository,
-                mcpRepo = mcpRepository,
-                chatRepo = chatRepository,
-            )
+            restoreWithSnapshot(json)
         } catch (t: Throwable) {
             errorMessage = t.message ?: errImport
+        }
+    }
+
+    // Restore-with-safety-net: before applying an imported config (local file
+    // or WebDAV) snapshot the CURRENT config so the user can always roll back
+    // after a mistaken restore. Best-effort: a failed snapshot never blocks
+    // the restore, it only reports via snapshotNote.
+    val restoreWithSnapshot: (String) -> Unit = { json ->
+        snapshotNote = null
+        webDavBusy = true
+        scope.launch {
+            try {
+                val payload = withContext(Dispatchers.Default) {
+                    ConfigBackup.export(
+                        providerRepo = providerRepository,
+                        includeSecrets = true,
+                        envVarRepo = envVarRepository,
+                        skillRepo = skillRepository,
+                        memoryRepo = memoryRepository,
+                        mcpRepo = mcpRepository,
+                        chatRepo = chatRepository,
+                        chatWindowDays = chatWindowDays,
+                    )
+                }
+                val cfg = webDavConfig
+                if (cfg != null && cfg.isConfigured) {
+                    withContext(Dispatchers.IO) {
+                        WebDavSync.backup(cfg, payload, webDavHttpClient)
+                    }
+                    snapshotNote = context.getString(R.string.backup_snapshot_webdav)
+                } else {
+                    val dir = File(context.filesDir, "backup-snapshots").apply { mkdirs() }
+                    File(dir, ConfigBackup.suggestedFileName()).writeText(payload)
+                    snapshotNote = context.getString(R.string.backup_snapshot_local)
+                }
+            } catch (t: Throwable) {
+                snapshotNote = context.getString(R.string.backup_snapshot_failed)
+            }
+            try {
+                importReport = withContext(Dispatchers.Default) {
+                    ConfigBackup.import(
+                        providerRepo = providerRepository,
+                        json = json,
+                        envVarRepo = envVarRepository,
+                        skillRepo = skillRepository,
+                        memoryRepo = memoryRepository,
+                        mcpRepo = mcpRepository,
+                        chatRepo = chatRepository,
+                    )
+                }
+            } catch (t: Throwable) {
+                errorMessage = t.message ?: errImport
+            } finally {
+                webDavBusy = false
+            }
         }
     }
 
@@ -343,26 +392,15 @@ fun BackupSettingsScreen(
                 onRefresh = openRemoteList,
                 onRestore = { item ->
                     if (!webDavBusy) {
-                        webDavBusy = true
                         scope.launch {
                             try {
                                 val json = withContext(Dispatchers.IO) {
                                     WebDavSync.restore(cfg, item, webDavHttpClient)
                                 }
-                                importReport = ConfigBackup.import(
-                                    providerRepo = providerRepository,
-                                    json = json,
-                                    envVarRepo = envVarRepository,
-                                    skillRepo = skillRepository,
-                                    memoryRepo = memoryRepository,
-                                    mcpRepo = mcpRepository,
-                                    chatRepo = chatRepository,
-                                )
                                 showRemoteList = false
+                                restoreWithSnapshot(json)
                             } catch (t: Throwable) {
                                 errorMessage = webDavErrorMessage(context, t)
-                            } finally {
-                                webDavBusy = false
                             }
                         }
                     }
@@ -420,10 +458,18 @@ fun BackupSettingsScreen(
     // NOT land — otherwise a partially-restored setup looks like a full one.
     importReport?.let { report ->
         AlertDialog(
-            onDismissRequest = { importReport = null },
+            onDismissRequest = { importReport = null; snapshotNote = null },
             title = { Text(stringResource(R.string.backup_done_title)) },
             text = {
                 Column {
+                    snapshotNote?.let { note ->
+                        Text(
+                            text = note,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.tertiary,
+                            modifier = Modifier.padding(bottom = 8.dp),
+                        )
+                    }
                     Text(
                         stringResource(
                             R.string.backup_done_summary,
@@ -505,7 +551,7 @@ fun BackupSettingsScreen(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { importReport = null }) {
+                TextButton(onClick = { importReport = null; snapshotNote = null }) {
                     Text(stringResource(R.string.backup_ok))
                 }
             },

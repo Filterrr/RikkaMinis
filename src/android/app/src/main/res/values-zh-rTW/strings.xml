@@ -807,4 +807,7 @@
     <string name="browser_downloads_cancel">取消下載</string>
     <string name="browser_downloads_failed">失敗</string>
     <string name="browser_downloads_open">開啟</string>
+    <string name="backup_snapshot_webdav">還原前已將目前設定快照推送到 WebDAV 伺服器。</string>
+    <string name="backup_snapshot_local">還原前已將目前設定快照儲存到應用程式檔案中。</string>
+    <string name="backup_snapshot_failed">警告：還原前無法儲存目前設定快照。</string>
 </resources>

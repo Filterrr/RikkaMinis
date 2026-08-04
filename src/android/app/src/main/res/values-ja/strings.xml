@@ -1076,4 +1076,7 @@
     <string name="webdav_err_network">ネットワークエラー：%1$s</string>
     <string name="webdav_err_server">サーバーエラー（HTTP %1$d）</string>
     <string name="webdav_err_unknown">不明なエラー</string>
+    <string name="backup_snapshot_webdav">復元前に現在の設定のスナップショットを WebDAV サーバーへアップロードしました。</string>
+    <string name="backup_snapshot_local">復元前に現在の設定のスナップショットをアプリのファイルに保存しました。</string>
+    <string name="backup_snapshot_failed">警告：復元前のスナップショットを作成できませんでした。</string>
 </resources>

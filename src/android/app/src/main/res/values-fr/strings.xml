@@ -959,4 +959,7 @@
     <string name="webdav_err_network">Erreur réseau : %1$s</string>
     <string name="webdav_err_server">Erreur serveur (HTTP %1$d)</string>
     <string name="webdav_err_unknown">Erreur inconnue</string>
+    <string name="backup_snapshot_webdav">Un instantané de votre configuration actuelle a été envoyé sur le serveur WebDAV avant la restauration.</string>
+    <string name="backup_snapshot_local">Un instantané de votre configuration actuelle a été enregistré dans les fichiers de l'application avant la restauration.</string>
+    <string name="backup_snapshot_failed">Attention : impossible de créer un instantané de la configuration actuelle avant la restauration.</string>
 </resources>

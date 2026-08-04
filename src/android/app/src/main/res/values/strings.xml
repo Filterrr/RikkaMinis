@@ -1175,6 +1175,9 @@
     <string name="webdav_err_server">Server error (HTTP %1$d)</string>
     <string name="webdav_err_unknown">Unknown error</string>
     <string name="backup_export">Export backup</string>
+    <string name="backup_snapshot_webdav">A snapshot of your current config was pushed to the WebDAV server before restoring.</string>
+    <string name="backup_snapshot_local">A snapshot of your current config was saved to the app\'s files before restoring.</string>
+    <string name="backup_snapshot_failed">Warning: could not snapshot the current config before restoring.</string>
     <string name="backup_export_sub">Save as a JSON file on this device (skills are embedded, so the file may be several MB)</string>
     <string name="backup_import">Restore from backup</string>
     <string name="backup_import_sub">Pick a backup file and import its settings</string>
