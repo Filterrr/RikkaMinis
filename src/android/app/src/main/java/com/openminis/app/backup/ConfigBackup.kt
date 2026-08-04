@@ -977,9 +977,9 @@ object ConfigBackup {
         return if (kept.length() == 0) null else kept.toString()
     }
 
-    /** Default filename for a fresh export, e.g. `openminis-backup-20260802.json`. */
+    /** Default filename for a fresh export, e.g. `rikkaminis-backup-20260802.json`. */
     fun suggestedFileName(now: Long = System.currentTimeMillis()): String {
         val fmt = java.text.SimpleDateFormat("yyyyMMdd-HHmm", java.util.Locale.US)
-        return "openminis-backup-${fmt.format(java.util.Date(now))}.json"
+        return "rikkaminis-backup-${fmt.format(java.util.Date(now))}.json"
     }
 }

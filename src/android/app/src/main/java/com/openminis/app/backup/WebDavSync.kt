@@ -19,7 +19,12 @@ object WebDavSync {
      *  [ConfigBackup.suggestedFileName]. Only files matching this prefix are
      *  shown in the remote list, so unrelated files in the user's WebDAV
      *  folder never surface as backups. */
-    const val BACKUP_PREFIX = "openminis-backup-"
+    const val BACKUP_PREFIX = "rikkaminis-backup-"
+
+    /** Pre-rename convention (openminis-backup-*). Still matched so copies
+     *  pushed before the rename remain visible and restorable. */
+    const val LEGACY_BACKUP_PREFIX = "openminis-backup-"
+
     const val BACKUP_SUFFIX = ".json"
 
     /** Verify the server + credentials. Throws on failure. */
@@ -27,15 +32,13 @@ object WebDavSync {
         WebDavClient(config, client).testConnection()
     }
 
-    /** Push [payload] (a ConfigBackup JSON document) to the server as
-     *  [filename]. Creates the backup directory on first use. */
     /**
      * Uploads [payload] as a new timestamped file into the configured backup
      * folder. The file name uses second precision (yyyyMMdd-HHmmss) rather
      * than [ConfigBackup.suggestedFileName]'s minute precision: a local
      * export and a WebDAV push within the same minute would otherwise
      * silently overwrite each other on the server. The shared
-     * `openminis-backup-*.json` convention is kept so local files dropped
+     * `rikkaminis-backup-*.json` convention is kept so local files dropped
      * into the folder manually are still picked up by [listBackupFiles].
      */
     fun backup(
@@ -45,7 +48,7 @@ object WebDavSync {
     ) {
         val dav = WebDavClient(config, client)
         dav.ensureCollectionExists()
-        val name = "openminis-backup-${
+        val name = "rikkaminis-backup-${
             java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
                 .format(java.util.Date())
         }.json"
@@ -62,7 +65,8 @@ object WebDavSync {
         return dav.list()
             .filter {
                 !it.isCollection &&
-                    it.displayName.startsWith(BACKUP_PREFIX) &&
+                    (it.displayName.startsWith(BACKUP_PREFIX) ||
+                        it.displayName.startsWith(LEGACY_BACKUP_PREFIX)) &&
                     it.displayName.endsWith(BACKUP_SUFFIX)
             }
             .map {
