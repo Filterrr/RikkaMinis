@@ -2,7 +2,6 @@ package com.openminis.app.ui.chat
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,9 +19,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.outlined.DataUsage
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.Text
@@ -72,6 +73,7 @@ import kotlinx.coroutines.launch
  *        (no visible button: creating a chat lives in the "..." menu and the
  *        session list).
  * @param onSettings open Settings.
+ * @param onTokenUsage open the Token Usage sheet (global usage stats).
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -81,6 +83,7 @@ fun ChatHistoryDrawer(
     onSessionClick: (String) -> Unit,
     onNewChat: () -> Unit,
     onSettings: () -> Unit,
+    onTokenUsage: () -> Unit,
 ) {
     val sessions by chatRepository.observeSessions()
         .collectAsState(initial = emptyList())
@@ -152,12 +155,13 @@ fun ChatHistoryDrawer(
                 }
             }
 
-            // Footer: Settings — the drawer's only action. Browsing history
-            // is gesture-driven and creating a chat lives in the "..." menu /
-            // session list, so the footer holds just the settings exit.
-            // RikkaHub pins actions to the drawer bottom; with a single
-            // action a full-width row beats a lone corner icon (bigger hit
-            // target, no empty space).
+            // Footer: a slim bottom bar with actions pinned to opposite ends
+            // (RikkaHub-style) — Token Usage (global usage stats) on the left,
+            // Settings on the right. Icon-only keeps the 300dp sheet
+            // uncluttered; two labelled rows stacked vertically read heavier
+            // and leave the corners empty. Browsing history is gesture-driven
+            // and New Chat lives in the top bar, so the footer holds just these
+            // two global exits.
             HorizontalDivider(
                 modifier = Modifier.padding(horizontal = 12.dp),
                 thickness = 0.5.dp,
@@ -166,24 +170,26 @@ fun ChatHistoryDrawer(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 6.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .clickable(onClick = onSettings)
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(
-                    imageVector = Icons.Outlined.Settings,
-                    contentDescription = stringResource(R.string.settings),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(20.dp),
-                )
-                Spacer(modifier = Modifier.width(12.dp))
-                Text(
-                    text = stringResource(R.string.settings),
-                    fontSize = 15.sp,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
+                IconButton(onClick = onTokenUsage) {
+                    Icon(
+                        imageVector = Icons.Outlined.DataUsage,
+                        contentDescription = stringResource(R.string.settings_token_usage),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+                Spacer(modifier = Modifier.weight(1f))
+                IconButton(onClick = onSettings) {
+                    Icon(
+                        imageVector = Icons.Outlined.Settings,
+                        contentDescription = stringResource(R.string.settings),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
             }
         }
     }
