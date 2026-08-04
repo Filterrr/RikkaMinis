@@ -1151,7 +1151,7 @@
     <string name="webdav_url_placeholder">https://dav.example.com/dav</string>
     <string name="webdav_username_label">Username</string>
     <string name="webdav_password_label">Password</string>
-    <string name="webdav_password_hint">Keep the saved password</string>
+    <string name="webdav_password_placeholder">Password</string>
     <string name="webdav_path_label">Backup folder</string>
     <string name="webdav_path_hint">Created automatically if missing</string>
     <string name="webdav_test">Test connection</string>

@@ -936,7 +936,7 @@
     <string name="webdav_url_placeholder">https://dav.example.com/dav</string>
     <string name="webdav_username_label">Nom d\'utilisateur</string>
     <string name="webdav_password_label">Mot de passe</string>
-    <string name="webdav_password_hint">Conserver le mot de passe enregistré</string>
+    <string name="webdav_password_placeholder">Mot de passe</string>
     <string name="webdav_path_label">Dossier de sauvegarde</string>
     <string name="webdav_path_hint">Créé automatiquement si absent</string>
     <string name="webdav_test">Tester la connexion</string>

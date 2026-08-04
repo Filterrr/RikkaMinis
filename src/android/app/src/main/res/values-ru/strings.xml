@@ -1214,7 +1214,7 @@
     <string name="webdav_url_placeholder">https://dav.example.com/dav</string>
     <string name="webdav_username_label">Имя пользователя</string>
     <string name="webdav_password_label">Пароль</string>
-    <string name="webdav_password_hint">Оставить сохранённый пароль</string>
+    <string name="webdav_password_placeholder">Пароль</string>
     <string name="webdav_path_label">Папка резервных копий</string>
     <string name="webdav_path_hint">Создаётся автоматически при отсутствии</string>
     <string name="webdav_test">Проверить соединение</string>
