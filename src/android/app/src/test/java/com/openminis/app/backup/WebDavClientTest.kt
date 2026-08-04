@@ -316,10 +316,14 @@ class WebDavClientTest {
     fun `sync backup pushes the json payload and sorts multiple files`() {
         server.enqueue(MockResponse().setResponseCode(207).setBody("""<?xml version="1.0"?><d:multistatus xmlns:d="DAV:"/>"""))
         server.enqueue(MockResponse().setResponseCode(201))
-        WebDavSync.backup(config, "{}", "openminis-backup-20260804-1000.json", client)
+        WebDavSync.backup(config, "{}", client)
         assertEquals("PROPFIND", server.takeRequest().method)
         val put = server.takeRequest()
         assertEquals("PUT", put.method)
+        val path = put.path ?: ""
+        // Second-precision name keeps same-minute local exports from being
+        // overwritten; convention stays openminis-backup-*.json.
+        assertTrue("unexpected PUT path: $path", path.matches(Regex("^/dav/RikkaMinis_backups/openminis-backup-\\d{8}-\\d{6}\\.json$")))
         assertEquals("{}", put.body.readUtf8())
     }
 
