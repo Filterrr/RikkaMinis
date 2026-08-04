@@ -449,11 +449,6 @@ private fun SectionDividerInsetCard() {
     }
 }
 
-/**
- * [T-android-modelgroup-modality-icons] One modality marker shown after a Model
- * Group title. `kind` is the modality string ("image"/"audio"/"video"/"pdf"/
- * "text") and `isOutput` distinguishes a generation output from an accepted
-
 @Composable
 private fun BadgeLabel(text: String, color: androidx.compose.ui.graphics.Color) {
     Box(
