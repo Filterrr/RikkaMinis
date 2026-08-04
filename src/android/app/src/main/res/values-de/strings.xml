@@ -1069,4 +1069,7 @@
     <string name="webdav_err_network">Netzwerkfehler: %1$s</string>
     <string name="webdav_err_server">Serverfehler (HTTP %1$d)</string>
     <string name="webdav_err_unknown">Unbekannter Fehler</string>
+    <string name="backup_snapshot_webdav">Vor dem Wiederherstellen wurde ein Schnappschuss der aktuellen Konfiguration auf den WebDAV-Server übertragen.</string>
+    <string name="backup_snapshot_local">Vor dem Wiederherstellen wurde ein Schnappschuss der aktuellen Konfiguration in den App-Dateien gespeichert.</string>
+    <string name="backup_snapshot_failed">Warnung: Der Schnappschuss der aktuellen Konfiguration konnte nicht erstellt werden.</string>
 </resources>

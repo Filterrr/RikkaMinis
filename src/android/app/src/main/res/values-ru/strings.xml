@@ -1237,4 +1237,7 @@
     <string name="webdav_err_network">Ошибка сети: %1$s</string>
     <string name="webdav_err_server">Ошибка сервера (HTTP %1$d)</string>
     <string name="webdav_err_unknown">Неизвестная ошибка</string>
+    <string name="backup_snapshot_webdav">Перед восстановлением снимок текущей конфигурации отправлен на сервер WebDAV.</string>
+    <string name="backup_snapshot_local">Перед восстановлением снимок текущей конфигурации сохранён в файлах приложения.</string>
+    <string name="backup_snapshot_failed">Предупреждение: не удалось создать снимок текущей конфигурации перед восстановлением.</string>
 </resources>

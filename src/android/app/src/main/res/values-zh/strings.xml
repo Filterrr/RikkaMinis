@@ -1353,4 +1353,7 @@
     <string name="browser_downloads_cancel">取消下载</string>
     <string name="browser_downloads_failed">失败</string>
     <string name="browser_downloads_open">打开</string>
+    <string name="backup_snapshot_webdav">恢复前已将当前配置快照推送到 WebDAV 服务器。</string>
+    <string name="backup_snapshot_local">恢复前已将当前配置快照保存到应用文件中。</string>
+    <string name="backup_snapshot_failed">警告：恢复前无法保存当前配置快照。</string>
 </resources>
