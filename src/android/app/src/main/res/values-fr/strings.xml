@@ -630,6 +630,10 @@
     <string name="chat_menu_new_chat">Nouveau chat</string>
     <string name="chat_menu_clear_chat">Effacer le chat</string>
     <string name="chat_menu_open_terminal">Ouvrir le terminal</string>
+    <string name="appearance_section_chat_menu">Menu du chat</string>
+    <string name="appearance_chat_menu_summary">Afficher, masquer et réorganiser les entrées du menu « … » du chat</string>
+    <string name="appearance_chat_menu_footer">Choisissez les entrées affichées dans le menu « … » du chat et leur ordre. Masquer une entrée ne touche ni à ses données ni à la fonctionnalité — elle disparaît simplement du menu et vous pouvez la réactiver à tout moment.</string>
+    <string name="chat_menu_drag_handle">Faites glisser pour réorganiser</string>
     <string name="chat_menu_open_browser">Ouvrir le navigateur</string>
     <string name="chat_menu_browse_chat_files">Parcourir les fichiers du chat</string>
     <string name="chat_menu_enhanced_cache">Cache amélioré</string>

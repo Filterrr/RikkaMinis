@@ -743,6 +743,10 @@
     <string name="chat_menu_new_chat">新しいチャット</string>
     <string name="chat_menu_clear_chat">チャットをクリア</string>
     <string name="chat_menu_open_terminal">ターミナルを開く</string>
+    <string name="appearance_section_chat_menu">チャットメニュー</string>
+    <string name="appearance_chat_menu_summary">チャット「…」メニューの項目を表示・非表示・並べ替えます</string>
+    <string name="appearance_chat_menu_footer">チャット「…」メニューに表示する項目とその順序を選択します。項目を非表示にしてもデータや機能には一切影響しません。メニューから消えるだけで、いつでも再度表示できます。</string>
+    <string name="chat_menu_drag_handle">ドラッグして並べ替え</string>
     <string name="chat_menu_open_browser">ブラウザを開く</string>
     <string name="chat_menu_browse_chat_files">チャットファイルを閲覧</string>
     <string name="chat_menu_enhanced_cache">拡張キャッシュ</string>

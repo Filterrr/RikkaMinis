@@ -402,6 +402,10 @@
     <string name="chat_menu_new_chat">新建對話</string>
     <string name="chat_menu_clear_chat">清空對話</string>
     <string name="chat_menu_open_terminal">打開終端</string>
+    <string name="appearance_section_chat_menu">聊天選單</string>
+    <string name="appearance_chat_menu_summary">顯示、隱藏並重新排列聊天「…」選單中的項目</string>
+    <string name="appearance_chat_menu_footer">選擇聊天「…」選單中顯示的項目及其順序。隱藏某個項目不會影響它的資料或功能——它只是從選單中移除，隨時可以重新開啟。</string>
+    <string name="chat_menu_drag_handle">拖曳以重新排序</string>
     <string name="chat_menu_open_browser">打開瀏覽器</string>
     <string name="chat_menu_browse_chat_files">瀏覽對話文件</string>
     <string name="chat_menu_enhanced_cache">增強快取</string>

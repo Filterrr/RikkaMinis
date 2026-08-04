@@ -743,6 +743,10 @@
     <string name="chat_menu_new_chat">Neuer Chat</string>
     <string name="chat_menu_clear_chat">Chat leeren</string>
     <string name="chat_menu_open_terminal">Terminal öffnen</string>
+    <string name="appearance_section_chat_menu">Chat-Menü</string>
+    <string name="appearance_chat_menu_summary">Einträge des Chat-"…"-Menüs ein- und ausblenden und neu anordnen</string>
+    <string name="appearance_chat_menu_footer">Wählen Sie, welche Einträge im Chat-"…"-Menü erscheinen und in welcher Reihenfolge. Ein ausgeblendeter Eintrag verliert weder Daten noch Funktion – er verschwindet nur aus dem Menü und lässt sich jederzeit wieder aktivieren.</string>
+    <string name="chat_menu_drag_handle">Zum Neuanordnen ziehen</string>
     <string name="chat_menu_open_browser">Browser öffnen</string>
     <string name="chat_menu_browse_chat_files">Chat-Dateien durchsuchen</string>
     <string name="chat_menu_enhanced_cache">Erweiterter Cache</string>
