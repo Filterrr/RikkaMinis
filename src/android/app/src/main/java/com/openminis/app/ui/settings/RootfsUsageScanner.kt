@@ -75,9 +75,8 @@ object RootfsUsageScanner {
                 if (node.isDirectory) {
                     stack.addLast(child to (if (top.isEmpty()) child.name else top))
                 } else {
-                    node.dedupeKey?.let { key ->
-                        if (!seen.add(key)) continue
-                    }
+                    val key = node.dedupeKey
+                    if (key != null && !seen.add(key)) continue
                     val bucket = if (top.isEmpty()) child.name else top
                     totals[bucket] = (totals[bucket] ?: 0L) + node.bytes
                     total += node.bytes

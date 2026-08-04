@@ -21,7 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.outlined.DataUsage
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material.icons.automirrored.filled.Edit
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -144,7 +144,7 @@ fun ChatHistoryDrawer(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Icon(
-                        imageVector = Icons.AutoMirrored.Filled.Edit,
+                        imageVector = Icons.Default.Edit,
                         contentDescription = null,
                         modifier = Modifier.size(14.dp),
                         tint = MaterialTheme.colorScheme.primary,
@@ -172,14 +172,15 @@ fun ChatHistoryDrawer(
             }
             if (discardDraft) {
                 MinisAlertDialog(
+                    onDismissRequest = { discardDraft = false },
                     title = stringResource(R.string.draft_label),
-                    text = stringResource(R.string.draft_discard_confirm),
-                    confirmLabel = stringResource(R.string.delete),
+                    confirmText = stringResource(R.string.delete),
                     onConfirm = {
                         onDiscardDraft()
                         discardDraft = false
                     },
-                    onDismiss = { discardDraft = false },
+                    text = stringResource(R.string.draft_discard_confirm),
+                    isDestructive = true,
                 )
             }
 
