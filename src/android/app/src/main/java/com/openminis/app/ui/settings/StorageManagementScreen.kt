@@ -90,7 +90,14 @@ fun StorageManagementScreen(
                     com.openminis.app.ui.settings.RootfsUsageScanner.androidStat(),
                 )
                 shellSize = report.totalBytes
+                // Only surface buckets that can actually explain a large
+                // footprint. A rootfs has ~15 top-level dirs and most are
+                // filesystem scaffolding (/bin, /etc, /run, /srv … a few KB
+                // to 1 MB); listing them all buries the two that matter
+                // (/tmp scratch files and /usr installed packages).
                 shellBreakdown = report.entries
+                    .filter { it.bytes >= 8L * 1024 * 1024 }
+                    .take(8)
                 dbSize = databaseSize(context)
 
                 val allSessions = chatDao.listSessions()
