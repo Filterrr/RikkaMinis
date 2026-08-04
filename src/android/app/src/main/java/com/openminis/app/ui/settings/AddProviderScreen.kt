@@ -33,7 +33,6 @@ import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Key
-import androidx.compose.material.icons.outlined.GraphicEq
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -96,12 +95,6 @@ fun AddProviderScreen(
     var step by remember { mutableStateOf(AddProviderStep.CHOOSE_TYPE) }
     var selectedType by remember { mutableStateOf<ProviderType?>(null) }
     var selectedCredential by remember { mutableStateOf<ProviderCredential?>(null) }
-    // [T-android-provider-voice] Non-null when the flow was entered from a
-    // Voice Chat Provider template row — preseeds type/base URL/label/appendV1
-    // on the configure step (mirrors iOS applyVoiceTemplate).
-    var selectedVoiceTemplate by remember {
-        mutableStateOf<com.openminis.app.data.model.VoiceProviderTemplate?>(null)
-    }
 
     // Unified back handler: reuse each step's onBack so predictive-back gesture
     // and the top-bar arrow behave identically (go back to prior step, not exit).
@@ -113,20 +106,12 @@ fun AddProviderScreen(
                 selectedType = null
             }
             AddProviderStep.CONFIGURE -> {
-                // Voice-template entry skipped the credential step entirely —
-                // back returns straight to the type/template list.
-                if (selectedVoiceTemplate != null) {
+                val creds = availableCredentials(selectedType!!)
+                if (creds.size == 1) {
                     step = AddProviderStep.CHOOSE_TYPE
                     selectedType = null
-                    selectedVoiceTemplate = null
                 } else {
-                    val creds = availableCredentials(selectedType!!)
-                    if (creds.size == 1) {
-                        step = AddProviderStep.CHOOSE_TYPE
-                        selectedType = null
-                    } else {
-                        step = AddProviderStep.CHOOSE_CREDENTIAL
-                    }
+                    step = AddProviderStep.CHOOSE_CREDENTIAL
                 }
                 selectedCredential = null
             }
@@ -150,14 +135,6 @@ fun AddProviderScreen(
                     step = AddProviderStep.CHOOSE_CREDENTIAL
                 }
             },
-            onSelectVoiceTemplate = { template ->
-                // Mirror iOS applyVoiceTemplate: pick the underlying protocol,
-                // force API-key credential, jump straight to configure.
-                selectedVoiceTemplate = template
-                selectedType = template.providerType
-                selectedCredential = ProviderCredential.apiKey
-                step = AddProviderStep.CONFIGURE
-            },
         )
         AddProviderStep.CHOOSE_CREDENTIAL -> ChooseCredentialScreen(
             providerType = selectedType!!,
@@ -171,7 +148,6 @@ fun AddProviderScreen(
             providerType = selectedType!!,
             credentialType = selectedCredential!!,
             providerRepository = providerRepository,
-            voiceTemplate = selectedVoiceTemplate,
             onBack = handleBack,
             onSaved = onSaved,
         )
@@ -224,7 +200,6 @@ private fun availableCredentials(type: ProviderType): List<ProviderCredential> {
 private fun ChooseProviderScreen(
     onBack: () -> Unit,
     onSelect: (ProviderType) -> Unit,
-    onSelectVoiceTemplate: (com.openminis.app.data.model.VoiceProviderTemplate) -> Unit = {},
 ) {
     SettingsScaffold(
         title = stringResource(R.string.provider_list_add_provider),
@@ -265,35 +240,9 @@ private fun ChooseProviderScreen(
             }
         }
 
-        // [T-android-provider-voice] Voice Chat Providers — one row per voice
-        // vendor template. Tapping prefills the underlying protocol + base URL
-        // and jumps to configure (mirrors iOS voiceProviderSection).
-        val templates = com.openminis.app.data.model.VoiceProviderTemplate.all
-        val templateNotes = templates.mapNotNull { it.note }
-        SettingsSection(
-            header = stringResource(R.string.add_provider_voice_chat_providers),
-            footer = (
-                listOf(stringResource(R.string.add_provider_voice_templates_footer)) + templateNotes
-                ).joinToString("\n"),
-        ) {
-            templates.forEachIndexed { index, template ->
-                val capabilityRes = when (template.capability) {
-                    com.openminis.app.data.model.VoiceProviderTemplate.Capability.TTS ->
-                        R.string.add_provider_voice_capability_tts
-                    com.openminis.app.data.model.VoiceProviderTemplate.Capability.ASR ->
-                        R.string.add_provider_voice_capability_asr
-                    com.openminis.app.data.model.VoiceProviderTemplate.Capability.BOTH ->
-                        R.string.add_provider_voice_capability_both
-                }
-                SettingsRow(
-                    title = template.name,
-                    subtitle = stringResource(capabilityRes),
-                    icon = Icons.Outlined.GraphicEq,
-                    onClick = { onSelectVoiceTemplate(template) },
-                    showDivider = index < templates.size - 1,
-                )
-            }
-        }
+        // [voice-removed] The Voice Chat Providers template section was removed
+        // with the rest of the in-app voice UI. Voice-capable providers can
+        // still be added as regular OpenAI/Anthropic-compatible instances.
         Spacer(Modifier.height(24.dp))
     }
 }
@@ -369,15 +318,13 @@ private fun ConfigureProviderScreen(
     providerType: ProviderType,
     credentialType: ProviderCredential,
     providerRepository: ProviderRepository,
-    voiceTemplate: com.openminis.app.data.model.VoiceProviderTemplate? = null,
     onBack: () -> Unit,
     onSaved: () -> Unit,
 ) {
     // Compute default label with auto-increment (e.g. "OpenAI", "OpenAI 2", ...)
-    // A voice template preseeds its vendor name instead of the protocol name.
     val config by providerRepository.config.collectAsState()
     val defaultLabel = remember(config) {
-        val baseName = voiceTemplate?.name ?: providerType.displayName
+        val baseName = providerType.displayName
         val existingLabels = config.instances.map { it.label }.toSet()
         if (baseName !in existingLabels) baseName
         else {
@@ -405,7 +352,7 @@ private fun ConfigureProviderScreen(
         if (!labelEdited) label = defaultLabel
     }
     var apiKey by remember { mutableStateOf("") }
-    var customBaseURL by remember { mutableStateOf(voiceTemplate?.baseURL ?: "") }
+    var customBaseURL by remember { mutableStateOf("") }
 
     SettingsScaffold(
         title = stringResource(R.string.add_provider_configure_provider, providerType.displayName),
@@ -440,7 +387,6 @@ private fun ConfigureProviderScreen(
                 customBaseURL = customBaseURL,
                 onCustomBaseURLChange = { customBaseURL = it },
                 providerRepository = providerRepository,
-                initialAppendV1 = voiceTemplate?.appendV1,
                 onSaved = onSaved,
             )
             ProviderCredential.oauth -> OAuthConfigSection(

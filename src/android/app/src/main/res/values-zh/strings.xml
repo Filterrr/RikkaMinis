@@ -831,6 +831,15 @@
     <string name="model_groups_group_name">分组名称</string>
     <string name="model_groups_create">创建</string>
     <string name="model_groups_none">无</string>
+    <string name="model_groups_set_default_primary">设为主模型</string>
+    <string name="model_groups_set_default_sub">设为副模型</string>
+    <string name="model_groups_clear_default_primary">取消主模型</string>
+    <string name="model_groups_clear_default_sub">取消副模型</string>
+    <string name="model_groups_row_menu">模型组选项</string>
+    <string name="model_groups_primary_badge">主</string>
+    <string name="model_groups_sub_badge">副</string>
+    <string name="agent_loop_section_entry_title">智能体循环模型</string>
+    <string name="agent_loop_section_entry_subtitle">智能体可通过 minis-model-use 调用的模型与模型组</string>
     <string name="add_models_to_group_search_models">搜索模型</string>
     <string name="add_models_to_group_clear">清除</string>
     <string name="settings_agent_loop_models">智能体循环模型</string>    <string name="agent_loop_models_groups">分组</string>
