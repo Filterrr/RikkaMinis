@@ -547,7 +547,9 @@
     <string name="appearance_auto_expand_thinking_footer">When on, a new thinking block expands automatically while the model is reasoning and collapses when it finishes. When off, thinking blocks stay collapsed — tap one to read it.</string>
     <string name="appearance_section_font_size">Font Size</string>
     <string name="appearance_section_chat_menu">Chat Menu</string>
+    <string name="appearance_chat_menu_summary">Show, hide and reorder the entries of the chat "…" menu</string>
     <string name="appearance_chat_menu_footer">Choose which entries appear in the chat "…" menu and their order. Hiding an entry never touches its data or the feature — it just removes it from the menu, and you can turn it back on any time.</string>
+    <string name="chat_menu_drag_handle">Drag to reorder</string>
     <string name="appearance_font_size_footer">Scale fonts for chat input, message content, and general app text. Changes apply immediately.</string>
     <string name="appearance_font_scale_title">Font Scale</string>
     <string name="appearance_font_scale_subtitle">Adjust sizes below</string>

@@ -1,7 +1,6 @@
 package com.openminis.app.ui.settings
 
 import com.openminis.app.R
-import com.openminis.app.config.ChatMenuPrefs
 import com.openminis.app.data.repository.AppIconRepository
 import com.openminis.app.ui.components.MinisTextButton
 
@@ -34,31 +33,20 @@ import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.BrightnessAuto
-import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.DarkMode
-import androidx.compose.material.icons.outlined.Description
-import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material.icons.outlined.FormatSize
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Home
-import androidx.compose.material.icons.outlined.Keyboard
-import androidx.compose.material.icons.outlined.KeyboardArrowDown
-import androidx.compose.material.icons.outlined.KeyboardArrowUp
-import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Launch
 import androidx.compose.material.icons.outlined.LightMode
-import androidx.compose.material.icons.outlined.Psychology
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.ScreenLockPortrait
-import androidx.compose.material.icons.outlined.Share
-import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -172,6 +160,7 @@ fun fontScaleForLevel(level: Int): Float {
 @Composable
 fun AppearanceScreen(
     onBack: () -> Unit,
+    onChatMenuClick: () -> Unit = {},
     onThemeChanged: (Int) -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -190,13 +179,6 @@ fun AppearanceScreen(
     var appBaseLevel by remember { mutableIntStateOf(prefs.getInt(KEY_FONT_APP_BASE, 0)) }
     var selectedLanguage by remember { mutableStateOf(prefs.getString(KEY_LANGUAGE, "") ?: "") }
     var selectedAppIcon by remember { mutableStateOf(AppIconRepository.current(context)) }
-
-    // [T-chat-menu-customize] Chat "..." menu customization state.
-    // chatMenuOrder is the persisted, resolved display order; visibility is
-    // read from the same prefs via ChatMenuPrefs. A single tick state forces
-    // recomposition after a visibility toggle so the row switches update live.
-    var chatMenuOrder by remember { mutableStateOf(ChatMenuPrefs.resolveOrder(prefs)) }
-    var chatMenuTick by remember { mutableStateOf(0) }
 
     val fontsModified = chatInputLevel != 0 || messageLevel != 0 || appBaseLevel != 0
 
@@ -220,13 +202,6 @@ fun AppearanceScreen(
                 KEY_FONT_MESSAGE -> messageLevel = prefs.getInt(key, 0)
                 KEY_FONT_APP_BASE -> appBaseLevel = prefs.getInt(key, 0)
                 KEY_LANGUAGE -> selectedLanguage = prefs.getString(key, "") ?: ""
-                ChatMenuPrefs.ORDER_KEY -> {
-                    chatMenuOrder = ChatMenuPrefs.resolveOrder(prefs)
-                    chatMenuTick++
-                }
-                else -> if (key != null && key.startsWith("chatMenu.") && key.endsWith(".visible")) {
-                    chatMenuTick++
-                }
             }
         }
         prefs.registerOnSharedPreferenceChangeListener(listener)
@@ -459,81 +434,23 @@ fun AppearanceScreen(
         }
 
         // [T-chat-menu-customize] -- Chat Menu --
-        // Customize which entries appear in the chat "..." (overflow) menu and
-        // in what order. Hiding an entry never touches its underlying data or
-        // feature — it just removes it from the menu (re-enable any time).
-        // Order is persisted as a comma-separated key list; visibility as
-        // booleans — both in appearance_prefs, so they round-trip through
-        // minis-config and every local backup automatically.
+        // One entry point to the dedicated Chat Menu screen where the user can
+        // hide unused entries and drag-reorder the rest. Hiding an entry never
+        // touches its underlying data or feature — it just removes it from the
+        // chat "..." menu (re-enable any time). Prefs live in appearance_prefs,
+        // so they round-trip through minis-config and every local backup.
         SettingsSection(
             header = stringResource(R.string.appearance_section_chat_menu),
-            footer = stringResource(R.string.appearance_chat_menu_footer),
         ) {
-            chatMenuOrder.forEachIndexed { index, entryKey ->
-                // The tick read keeps the Switch in sync when prefs change
-                // outside this composable (backup restore / minis-config).
-                @Suppress("UNUSED_EXPRESSION")
-                chatMenuTick
-                val visible = ChatMenuPrefs.isVisible(prefs, entryKey)
-                SettingsRow(
-                    icon = chatMenuIcon(entryKey),
-                    iconColor = tileTeal,
-                    title = stringResource(chatMenuTitleRes(entryKey)),
-                    onClick = null,
-                    showChevron = false,
-                    showDivider = index != chatMenuOrder.lastIndex,
-                    trailing = {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(0.dp),
-                        ) {
-                            IconButton(
-                                onClick = {
-                                    val next = chatMenuOrder.toMutableList()
-                                    val tmp = next[index]
-                                    next[index] = next[index - 1]
-                                    next[index - 1] = tmp
-                                    chatMenuOrder = next
-                                    ChatMenuPrefs.writeOrder(prefs, next)
-                                },
-                                enabled = index > 0,
-                            ) {
-                                Icon(
-                                    Icons.Outlined.KeyboardArrowUp,
-                                    contentDescription = null,
-                                    tint = if (index > 0) MaterialTheme.colorScheme.onSurfaceVariant
-                                    else MaterialTheme.colorScheme.outlineVariant,
-                                )
-                            }
-                            IconButton(
-                                onClick = {
-                                    val next = chatMenuOrder.toMutableList()
-                                    val tmp = next[index]
-                                    next[index] = next[index + 1]
-                                    next[index + 1] = tmp
-                                    chatMenuOrder = next
-                                    ChatMenuPrefs.writeOrder(prefs, next)
-                                },
-                                enabled = index < chatMenuOrder.lastIndex,
-                            ) {
-                                Icon(
-                                    Icons.Outlined.KeyboardArrowDown,
-                                    contentDescription = null,
-                                    tint = if (index < chatMenuOrder.lastIndex) MaterialTheme.colorScheme.onSurfaceVariant
-                                    else MaterialTheme.colorScheme.outlineVariant,
-                                )
-                            }
-                            Switch(
-                                checked = visible,
-                                onCheckedChange = { newValue ->
-                                    ChatMenuPrefs.setVisible(prefs, entryKey, newValue)
-                                    chatMenuTick++
-                                },
-                            )
-                        }
-                    },
-                )
-            }
+            SettingsRow(
+                icon = Icons.Outlined.MoreVert,
+                iconColor = tileTeal,
+                title = stringResource(R.string.appearance_section_chat_menu),
+                subtitle = stringResource(R.string.appearance_chat_menu_summary),
+                onClick = onChatMenuClick,
+                showChevron = true,
+                showDivider = false,
+            )
         }
 
         // -- Font Size --
@@ -827,31 +744,4 @@ private fun FontScaleSliderRow(
                 .background(dividerColor),
         )
     }
-}
-
-// [T-chat-menu-customize] Shared mapping between a chat menu entry key and the
-// icon shown in the Appearance → Chat Menu customization list.
-private fun chatMenuIcon(entryKey: String): ImageVector? = when (entryKey) {
-    ChatMenuPrefs.TERMINAL -> Icons.Outlined.Terminal
-    ChatMenuPrefs.BROWSER -> Icons.Outlined.Language
-    ChatMenuPrefs.CHAT_FILES -> Icons.Outlined.Description
-    ChatMenuPrefs.SLASH_COMMANDS -> Icons.Outlined.Keyboard
-    ChatMenuPrefs.EXPORT -> Icons.Outlined.Share
-    ChatMenuPrefs.SESSION_SKILLS -> Icons.Outlined.Build
-    ChatMenuPrefs.SESSION_MCPS -> Icons.Outlined.Extension
-    ChatMenuPrefs.SESSION_MEMORY -> Icons.Outlined.Psychology
-    else -> null
-}
-
-// Shared mapping between a chat menu entry key and its display title string.
-private fun chatMenuTitleRes(entryKey: String): Int = when (entryKey) {
-    ChatMenuPrefs.TERMINAL -> R.string.chat_menu_open_terminal
-    ChatMenuPrefs.BROWSER -> R.string.chat_menu_open_browser
-    ChatMenuPrefs.CHAT_FILES -> R.string.chat_menu_browse_chat_files
-    ChatMenuPrefs.SLASH_COMMANDS -> R.string.chat_menu_slash_commands
-    ChatMenuPrefs.EXPORT -> R.string.sessionlist_export
-    ChatMenuPrefs.SESSION_SKILLS -> R.string.session_skills_title
-    ChatMenuPrefs.SESSION_MCPS -> R.string.session_mcps_title
-    ChatMenuPrefs.SESSION_MEMORY -> R.string.session_memory_title
-    else -> R.string.appearance_section_chat_menu
 }
