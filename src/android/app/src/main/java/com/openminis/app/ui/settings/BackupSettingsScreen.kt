@@ -125,40 +125,11 @@ fun BackupSettingsScreen(
     val errImport = stringResource(R.string.backup_err_import)
     val errUnknown = stringResource(R.string.backup_err_unknown)
 
-    val exportLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("application/json"),
-    ) { uri: Uri? ->
-        val payload = pendingExport
-        pendingExport = null
-        if (uri == null || payload == null) return@rememberLauncherForActivityResult
-        try {
-            context.contentResolver.openOutputStream(uri)?.use { out ->
-                out.write(payload.toByteArray())
-            }
-            Toast.makeText(context, savedToast, Toast.LENGTH_SHORT).show()
-        } catch (t: Throwable) {
-            errorMessage = String.format(errWriteFmt, t.message ?: errUnknown)
-        }
-    }
-
-    val importLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument(),
-    ) { uri: Uri? ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        try {
-            val json = context.contentResolver.openInputStream(uri)
-                ?.bufferedReader()?.readText()
-                ?: throw IllegalStateException(errRead)
-            restoreWithSnapshot(json)
-        } catch (t: Throwable) {
-            errorMessage = t.message ?: errImport
-        }
-    }
-
     // Restore-with-safety-net: before applying an imported config (local file
     // or WebDAV) snapshot the CURRENT config so the user can always roll back
     // after a mistaken restore. Best-effort: a failed snapshot never blocks
     // the restore, it only reports via snapshotNote.
+    // Declared before the launchers below because their callbacks invoke it.
     val restoreWithSnapshot: (String) -> Unit = { json ->
         snapshotNote = null
         webDavBusy = true
@@ -210,8 +181,38 @@ fun BackupSettingsScreen(
         }
     }
 
+    val exportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri: Uri? ->
+        val payload = pendingExport
+        pendingExport = null
+        if (uri == null || payload == null) return@rememberLauncherForActivityResult
+        try {
+            context.contentResolver.openOutputStream(uri)?.use { out ->
+                out.write(payload.toByteArray())
+            }
+            Toast.makeText(context, savedToast, Toast.LENGTH_SHORT).show()
+        } catch (t: Throwable) {
+            errorMessage = String.format(errWriteFmt, t.message ?: errUnknown)
+        }
+    }
+
+    val importLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri: Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        try {
+            val json = context.contentResolver.openInputStream(uri)
+                ?.bufferedReader()?.readText()
+                ?: throw IllegalStateException(errRead)
+            restoreWithSnapshot(json)
+        } catch (t: Throwable) {
+            errorMessage = t.message ?: errImport
+        }
+    }
+
     // Fetch the remote backup list and open the management sheet.
-    val openRemoteList: () -> Unit = {
+    val openRemoteList: () -> Unit = openRemoteList@{
         val cfg = webDavConfig
         if (cfg == null) {
             errorMessage = context.getString(R.string.webdav_configure_first)
@@ -297,7 +298,7 @@ fun BackupSettingsScreen(
     // as the local file. An export with keys goes through the same flow; only
     // the destination differs (SAF picker vs. WebDAV PUT).
     if (showSecretWarning) {
-        val runExport: (Boolean) -> Unit = { withSecrets ->
+        val runExport: (Boolean) -> Unit = runExport@{ withSecrets ->
             showSecretWarning = false
             val toWebDav = webDavUploadPending
             webDavUploadPending = false
@@ -632,7 +633,7 @@ private fun WebDavConfigDialog(
     var testing by remember { mutableStateOf(false) }
     var testResult by remember { mutableStateOf<String?>(null) }
 
-    val runTest: () -> Unit = {
+    val runTest: () -> Unit = runTest@{
         val cfg = WebDavConfig(
             url = url,
             username = username,
