@@ -1996,23 +1996,19 @@ fun ChatScreen(
                                 .padding(horizontal = 4.dp, vertical = 2.dp),
                         ) {
                             // Nav title: current session title when one
-                            // exists and the toggle is on, else fall back to
-                            // the Soul name (matches the input placeholder
-                            // "Message <SoulName>"), then to app_name
-                            // ("Minis") as the terminal fallback.
+                            // exists and the toggle is on, else the app name
+                            // ("RikkaMinis"). A fresh draft shows the app
+                            // name — the Soul name stays in the input
+                            // placeholder, where it belongs; app_name was
+                            // chosen over the Soul name so the top bar reads
+                            // as the app, not the assistant persona.
                             // Tap opens the same SessionEditSheet used from
                             // the session list — drafts return null from
                             // loadSessionEntity so the sheet stays closed.
-                            // SoulStore.cachedMetadata is the same source the
-                            // input placeholder uses (see ~line 3581), so
-                            // soul renames in Soul Settings reflect here live.
-                            val topBarSoul by com.openminis.app.agent.SoulStore
-                                .cachedMetadata.collectAsState()
                             val displayTitle = when {
                                 showChatTitlePill
                                     && sessionTitle.isNotBlank()
                                     && sessionTitle != "New Chat" -> sessionTitle
-                                topBarSoul.name.isNotBlank() -> topBarSoul.name
                                 else -> stringResource(R.string.app_name)
                             }
                             Text(
