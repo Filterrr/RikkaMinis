@@ -55,9 +55,20 @@ object ComposerDraftStore {
         return fresh
     }
 
-    /** Persists text for the active draft; no-ops for stale ids. */
+    /**
+     * Persists text for [draftId].
+     *
+     * The slot is claimed when it is FREE (no id stored) so that typing again
+     * after blanking the composer re-arms persistence — [clearDraft] releases
+     * the slot on every blank, and without re-claiming here the second round
+     * of text would silently not be saved.
+     *
+     * Writes are ignored when the slot belongs to a DIFFERENT draft, so a
+     * stale route can never overwrite the live draft.
+     */
     fun saveText(kv: KV, draftId: String, text: String) {
-        if (kv.getString(KEY_ID) != draftId) return
+        val current = kv.getString(KEY_ID)
+        if (current != null && current != draftId) return
         kv.putString(KEY_ID, draftId)
         kv.putString(KEY_TEXT, text)
         kv.putString(KEY_UPDATED_AT, System.currentTimeMillis().toString())

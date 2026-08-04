@@ -97,4 +97,38 @@ class ComposerDraftStoreTest {
         assertNotEquals(draftA, draftB)
         assertEquals("", ComposerDraftStore.restoreText(kv, draftB))
     }
+
+    @Test
+    fun `saveText re-claims a free slot after the composer was blanked`() {
+        val kv = FakeKV()
+        val draft = ComposerDraftStore.nextDraftId(kv) { nextGen() }
+        ComposerDraftStore.saveText(kv, draft, "hello")
+
+        // User selects-all + deletes: the composer goes blank and the slot is
+        // released so "New Chat" can hand out a genuinely new draft.
+        ComposerDraftStore.clearDraft(kv, draft)
+        assertNull(kv.map[ComposerDraftStore.KEY_ID])
+
+        // ...but the user is still ON that draft route and types again. If
+        // saveText refused to write to a free slot, this second round of text
+        // would be silently lost on the next session switch.
+        ComposerDraftStore.saveText(kv, draft, "world")
+        assertEquals("world", ComposerDraftStore.restoreText(kv, draft))
+        assertEquals(draft, ComposerDraftStore.nextDraftId(kv) { nextGen() })
+    }
+
+    @Test
+    fun `an occupied slot is never hijacked by another draft route`() {
+        val kv = FakeKV()
+        val live = ComposerDraftStore.nextDraftId(kv) { nextGen() }
+        ComposerDraftStore.saveText(kv, live, "live text")
+
+        // A different draft route (an already-sent chat still mounted under
+        // its __new__ alias, or a group draft) must not take the slot over —
+        // otherwise "New Chat" would resolve straight back into that chat.
+        ComposerDraftStore.saveText(kv, "__new__other__grp__g1", "hijack")
+        assertEquals(live, kv.map[ComposerDraftStore.KEY_ID])
+        assertEquals("live text", ComposerDraftStore.restoreText(kv, live))
+        assertEquals("", ComposerDraftStore.restoreText(kv, "__new__other__grp__g1"))
+    }
 }
