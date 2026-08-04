@@ -865,8 +865,6 @@
     <string name="agent_loop_section_remove">Убрать из цикла агента</string>
     <string name="agent_loop_section_group_badge">Группа</string>
     <string name="chat_menu_new_chat">Новый чат</string>
-    <string name="chat_new_chat_stop_dialog_body">В этом чате выполняется задача. Новый чат остановит её.</string>
-    <string name="chat_new_chat_stop_dialog_confirm">Остановить и создать чат</string>
     <string name="chat_menu_clear_chat">Очистить чат</string>
     <string name="chat_menu_open_terminal">Открыть Терминал</string>
     <string name="chat_menu_open_browser">Открыть браузер</string>
