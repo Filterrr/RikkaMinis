@@ -1236,8 +1236,6 @@
     <!-- T-android-app-icon-shortcuts: 长按应用图标的快捷操作（对齐 iOS QuickActionRouter）。 -->
     <string name="shortcut_new_chat_short">新建对话</string>
     <string name="shortcut_new_chat_long">新建对话</string>
-    <string name="shortcut_voice_chat_short">语音对话</string>
-    <string name="shortcut_voice_chat_long">语音对话</string>
     <string name="shortcut_camera_chat_short">拍照对话</string>
     <string name="shortcut_camera_chat_long">拍照对话</string>
     <string name="image_action_copy">复制</string>
