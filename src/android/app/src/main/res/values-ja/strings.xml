@@ -1061,6 +1061,10 @@
     <string name="webdav_test_ok">接続に成功しました</string>
     <string name="webdav_saved">サーバー設定を保存しました</string>
     <string name="webdav_uploaded">バックアップをアップロードしました</string>
+    <string name="backup_restored_notify_body">%1$d 個のプロバイダーと %2$d 個のグループを復元しました。</string>
+    <string name="webdav_notify_title_failed">WebDAV 操作に失敗しました</string>
+    <string name="webdav_notify_title_restored">WebDAV 復元</string>
+    <string name="webdav_notify_title">WebDAV バックアップ</string>
     <string name="webdav_loading">バックアップを読み込み中…</string>
     <string name="webdav_remote_empty">サーバーにバックアップがありません</string>
     <string name="webdav_restore">復元</string>
@@ -1076,7 +1080,6 @@
     <string name="webdav_err_network">ネットワークエラー：%1$s</string>
     <string name="webdav_err_server">サーバーエラー（HTTP %1$d）</string>
     <string name="webdav_err_unknown">不明なエラー</string>
-    <string name="backup_snapshot_webdav">復元前に現在の設定のスナップショットを WebDAV サーバーへアップロードしました。</string>
     <string name="backup_snapshot_local">復元前に現在の設定のスナップショットをアプリのファイルに保存しました。</string>
     <string name="backup_snapshot_failed">警告：復元前のスナップショットを作成できませんでした。</string>
 </resources>

@@ -944,6 +944,10 @@
     <string name="webdav_test_ok">Connexion OK</string>
     <string name="webdav_saved">Paramètres du serveur enregistrés</string>
     <string name="webdav_uploaded">Sauvegarde téléversée</string>
+    <string name="backup_restored_notify_body">%1$d fournisseurs et %2$d groupes restaurés.</string>
+    <string name="webdav_notify_title_failed">Échec de l&apos;opération WebDAV</string>
+    <string name="webdav_notify_title_restored">Restauration WebDAV</string>
+    <string name="webdav_notify_title">Sauvegarde WebDAV</string>
     <string name="webdav_loading">Chargement des sauvegardes…</string>
     <string name="webdav_remote_empty">Aucune sauvegarde sur le serveur</string>
     <string name="webdav_restore">Restaurer</string>
@@ -959,7 +963,6 @@
     <string name="webdav_err_network">Erreur réseau : %1$s</string>
     <string name="webdav_err_server">Erreur serveur (HTTP %1$d)</string>
     <string name="webdav_err_unknown">Erreur inconnue</string>
-    <string name="backup_snapshot_webdav">Un instantané de votre configuration actuelle a été envoyé sur le serveur WebDAV avant la restauration.</string>
     <string name="backup_snapshot_local">Un instantané de votre configuration actuelle a été enregistré dans les fichiers de l\'application avant la restauration.</string>
     <string name="backup_snapshot_failed">Attention : impossible de créer un instantané de la configuration actuelle avant la restauration.</string>
 </resources>

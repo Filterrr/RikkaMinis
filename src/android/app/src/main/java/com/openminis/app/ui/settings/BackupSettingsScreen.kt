@@ -41,6 +41,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.openminis.app.MinisApp
 import com.openminis.app.R
 import com.openminis.app.backup.ConfigBackup
 import com.openminis.app.backup.WebDavBackupItem
@@ -105,6 +106,12 @@ fun BackupSettingsScreen(
     val webDavStore = remember { WebDavConfigStore(context) }
     val webDavHttpClient = remember { WebDavClient.defaultClient() }
     val scope = rememberCoroutineScope()
+    // Transfers that MUST complete even if the user leaves this screen
+    // (WebDAV backup upload / restore) run on the app-scoped scope instead,
+    // so navigating away cannot cancel them mid-flight. Completion is
+    // reported via a system notification if the screen is gone by then.
+    val application = remember { context.applicationContext as MinisApp }
+    val notifier = remember { application.backgroundTaskNotifier }
     var webDavConfig by remember { mutableStateOf(webDavStore.load()) }
     var showWebDavConfig by remember { mutableStateOf(false) }
     var showRemoteList by remember { mutableStateOf(false) }
@@ -133,7 +140,9 @@ fun BackupSettingsScreen(
     val restoreWithSnapshot: (String) -> Unit = { json ->
         snapshotNote = null
         webDavBusy = true
-        scope.launch {
+        // Restore must complete even if the user navigates away; run on the
+        // app scope and fall back to a tray notification once done.
+        application.applicationScope.launch {
             try {
                 val payload = withContext(Dispatchers.Default) {
                     ConfigBackup.export(
@@ -147,20 +156,21 @@ fun BackupSettingsScreen(
                         chatWindowDays = chatWindowDays,
                     )
                 }
-                val cfg = webDavConfig
-                if (cfg != null && cfg.isConfigured) {
-                    withContext(Dispatchers.IO) {
-                        WebDavSync.backup(cfg, payload, webDavHttpClient)
-                    }
-                    snapshotNote = context.getString(R.string.backup_snapshot_webdav)
-                } else {
-                    val dir = File(context.filesDir, "backup-snapshots").apply { mkdirs() }
-                    File(dir, ConfigBackup.suggestedFileName()).writeText(payload)
-                    snapshotNote = context.getString(R.string.backup_snapshot_local)
-                }
+                // Keep the safety snapshot LOCAL only. Uploading it to the
+                // WebDAV server on every restore made it look like the restore
+                // was actually performing a backup, and -- worse -- it created a
+                // real backup file on the server (same rikkaminis-backup-*
+                // naming) that pollutes the remote list. The snapshot's only
+                // job is rolling back THIS device if the restore goes wrong, so
+                // it belongs in local storage, never on the remote.
+                val dir = File(context.filesDir, "backup-snapshots").apply { mkdirs() }
+                File(dir, ConfigBackup.suggestedFileName()).writeText(payload)
+                snapshotNote = context.getString(R.string.backup_snapshot_local)
             } catch (t: Throwable) {
                 snapshotNote = context.getString(R.string.backup_snapshot_failed)
             }
+            var restoredOk = true
+            var restoredMsg: String? = null
             try {
                 importReport = withContext(Dispatchers.Default) {
                     ConfigBackup.import(
@@ -173,11 +183,28 @@ fun BackupSettingsScreen(
                         chatRepo = chatRepository,
                     )
                 }
+                restoredMsg = context.getString(
+                    R.string.backup_restored_notify_body,
+                    importReport?.providersImported ?: 0,
+                    importReport?.groupsImported ?: 0,
+                )
             } catch (t: Throwable) {
                 errorMessage = t.message ?: errImport
+                restoredOk = false
+                restoredMsg = t.message ?: errImport
             } finally {
                 webDavBusy = false
             }
+            // Always notify completion from the tray; harmless if the screen is
+            // still foregrounded (Toast + inline report already covered it).
+            notifier.notifyWorkCompleted(
+                tag = "webdav-restore",
+                title = context.getString(
+                    if (restoredOk) R.string.webdav_notify_title_restored
+                    else R.string.webdav_notify_title_failed,
+                ),
+                body = restoredMsg ?: "",
+            )
         }
     }
 
@@ -316,7 +343,10 @@ fun BackupSettingsScreen(
                 if (toWebDav) {
                     val cfg = webDavConfig ?: return@runExport
                     webDavBusy = true
-                    scope.launch {
+                    // Run on the app scope so the upload finishes even if the
+                    // user navigates away mid-transfer; notify via the system
+                    // tray when the settings screen is no longer visible.
+                    application.applicationScope.launch {
                         try {
                             withContext(Dispatchers.IO) {
                                 WebDavSync.backup(
@@ -325,13 +355,20 @@ fun BackupSettingsScreen(
                                     client = webDavHttpClient,
                                 )
                             }
-                            Toast.makeText(
-                                context,
-                                context.getString(R.string.webdav_uploaded),
-                                Toast.LENGTH_SHORT,
-                            ).show()
+                            val msg = context.getString(R.string.webdav_uploaded)
+                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                            notifier.notifyWorkCompleted(
+                                tag = "webdav-upload",
+                                title = context.getString(R.string.webdav_notify_title),
+                                body = msg,
+                            )
                         } catch (t: Throwable) {
                             errorMessage = webDavErrorMessage(context, t)
+                            notifier.notifyWorkCompleted(
+                                tag = "webdav-upload",
+                                title = context.getString(R.string.webdav_notify_title_failed),
+                                body = webDavErrorMessage(context, t),
+                            )
                         } finally {
                             webDavBusy = false
                         }
@@ -401,7 +438,10 @@ fun BackupSettingsScreen(
                     // (idempotent) and clears it in its finally on the happy path.
                     if (!webDavBusy) {
                         webDavBusy = true
-                        scope.launch {
+                        // The download must survive navigation away too — the
+                        // whole restore (download → snapshot → import) runs on
+                        // the app scope so leaving the screen cannot abort it.
+                        application.applicationScope.launch {
                             try {
                                 val json = withContext(Dispatchers.IO) {
                                     WebDavSync.restore(cfg, item, webDavHttpClient)
@@ -413,6 +453,11 @@ fun BackupSettingsScreen(
                                 // Download failed before restoreWithSnapshot ran,
                                 // so its finally won't reset us — do it here.
                                 webDavBusy = false
+                                notifier.notifyWorkCompleted(
+                                    tag = "webdav-restore",
+                                    title = context.getString(R.string.webdav_notify_title_failed),
+                                    body = webDavErrorMessage(context, t),
+                                )
                             }
                         }
                     }

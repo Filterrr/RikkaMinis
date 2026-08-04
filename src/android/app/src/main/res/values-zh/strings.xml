@@ -994,6 +994,10 @@
     <string name="webdav_test_ok">连接成功</string>
     <string name="webdav_saved">服务器设置已保存</string>
     <string name="webdav_uploaded">备份已上传</string>
+    <string name="backup_restored_notify_body">已恢复 %1$d 个提供方和 %2$d 个分组。</string>
+    <string name="webdav_notify_title_failed">WebDAV 操作失败</string>
+    <string name="webdav_notify_title_restored">WebDAV 恢复</string>
+    <string name="webdav_notify_title">WebDAV 备份</string>
     <string name="webdav_loading">正在加载备份…</string>
     <string name="webdav_remote_empty">服务器上没有备份</string>
     <string name="webdav_restore">恢复</string>
@@ -1353,7 +1357,6 @@
     <string name="browser_downloads_cancel">取消下载</string>
     <string name="browser_downloads_failed">失败</string>
     <string name="browser_downloads_open">打开</string>
-    <string name="backup_snapshot_webdav">恢复前已将当前配置快照推送到 WebDAV 服务器。</string>
     <string name="backup_snapshot_local">恢复前已将当前配置快照保存到应用文件中。</string>
     <string name="backup_snapshot_failed">警告：恢复前无法保存当前配置快照。</string>
 </resources>
