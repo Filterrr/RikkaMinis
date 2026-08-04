@@ -47,6 +47,10 @@ import com.openminis.app.ui.theme.ChatColors
  * [TokenUsageSheet] passes 0.5f to match iOS's `.medium` detent
  * (AIChatView.swift:508). The fraction is clamped to (0, 1] so callers can't
  * accidentally collapse the sheet to nothing.
+ *
+ * [showClose] toggles the header's close button. Sheets that rely on
+ * swipe-down / scrim-tap dismissal alone (e.g. [TokenUsageSheet]) pass false;
+ * the reserved 48dp slot stays on both sides so the title remains centered.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -55,6 +59,7 @@ fun StandardChatSheet(
     onDismiss: () -> Unit,
     leadingAction: (@Composable () -> Unit)? = null,
     heightFraction: Float = 0.9f,
+    showClose: Boolean = true,
     content: @Composable () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -76,6 +81,7 @@ fun StandardChatSheet(
                 title = title,
                 onDismiss = onDismiss,
                 leadingAction = leadingAction,
+                showClose = showClose,
             )
             HorizontalDivider(thickness = 0.5.dp, color = ChatColors.separator)
             Box(modifier = Modifier.fillMaxSize()) {
@@ -111,15 +117,17 @@ private fun CompactDragHandle() {
 }
 
 /**
- * Shared header row used by all chat sheets — close button on the right,
- * centered title, and an optional leading slot. Reserving a 48.dp slot on the
- * left when [leadingAction] is null keeps the title optically centered.
+ * Shared header row used by all chat sheets — optional close button on the
+ * right, centered title, and an optional leading slot. When [showClose] is
+ * false the right side keeps a 48dp spacer so the title stays optically
+ * centered, mirroring the left slot reserved when [leadingAction] is null.
  */
 @Composable
 fun StandardChatSheetHeader(
     title: String,
     onDismiss: () -> Unit,
     leadingAction: (@Composable () -> Unit)? = null,
+    showClose: Boolean = true,
 ) {
     Row(
         modifier = Modifier
@@ -140,12 +148,16 @@ fun StandardChatSheetHeader(
             color = ChatColors.primaryText,
         )
         Spacer(modifier = Modifier.weight(1f))
-        IconButton(onClick = onDismiss) {
-            Icon(
-                imageVector = Icons.Default.Close,
-                contentDescription = stringResource(R.string.standard_sheet_close),
-                tint = ChatColors.secondaryText,
-            )
+        if (showClose) {
+            IconButton(onClick = onDismiss) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = stringResource(R.string.standard_sheet_close),
+                    tint = ChatColors.secondaryText,
+                )
+            }
+        } else {
+            Spacer(modifier = Modifier.size(48.dp))
         }
     }
 }
