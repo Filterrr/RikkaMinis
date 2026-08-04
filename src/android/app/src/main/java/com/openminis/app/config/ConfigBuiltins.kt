@@ -429,6 +429,36 @@ internal object ConfigBuiltins {
                 defaultValue = true,
             )
         )
+        // Chat "..." menu customization (Settings → Appearance → Chat Menu).
+        // Each entry's visibility is a bool field; the display order is a
+        // comma-separated string field. Both live in appearance_prefs so they
+        // round-trip through minis-config AND every local backup automatically
+        // (ConfigBackup walks the registry). Defaults keep the full menu
+        // visible in its natural order — nothing is hidden until the user
+        // declutters.
+        for (entryKey in ChatMenuPrefs.DEFAULT_ORDER) {
+            r.register(
+                PrefsBoolField(
+                    path = ChatMenuPrefs.visibilityPath(entryKey),
+                    displayName = "Chat menu: show $entryKey",
+                    description = "When ON, the \"$entryKey\" entry is shown in the chat \"...\" menu.",
+                    prefs = appearancePrefs,
+                    key = ChatMenuPrefs.visibilityKey(entryKey),
+                    defaultValue = ChatMenuPrefs.defaultVisible(entryKey),
+                )
+            )
+        }
+        r.register(
+            PrefsStringField(
+                path = ChatMenuPrefs.ORDER_PATH,
+                displayName = "Chat menu order",
+                description = "Comma-separated stable keys defining the display order of customizable chat \"...\" menu entries. Unknown keys are ignored; missing keys fall back to their default position.",
+                prefs = appearancePrefs,
+                key = ChatMenuPrefs.ORDER_KEY,
+                defaultValue = ChatMenuPrefs.DEFAULT_ORDER.joinToString(","),
+                maxLength = 512,
+            )
+        )
     }
 
     /** Mirrors iOS `fontScaleField` — exposes the integer scale level
