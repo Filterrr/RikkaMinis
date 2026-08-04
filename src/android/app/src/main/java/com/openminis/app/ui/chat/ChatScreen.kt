@@ -2218,22 +2218,51 @@ fun ChatScreen(
                     IconButton(onClick = { onNewChat() }) {
                         Icon(Icons.Filled.Edit, contentDescription = stringResource(R.string.chat_menu_new_chat))
                     }
-                    // iOS: "..." circle button → dropdown menu
-                    Box {
-                        IconButton(onClick = { showChatMenu = true }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "More")
+                    // [T-chat-menu-empty] The "..." button is only worth
+                    // rendering when it has at least one entry to show. If the
+                    // user switches off every customizable entry (Settings →
+                    // Appearance → Chat Menu) AND no model-conditional toggle
+                    // (Enhanced Cache / Fast Mode) currently applies AND this
+                    // isn't a DEBUG build, the menu would open empty — a dead
+                    // control. Hide the button entirely; the New Chat pencil
+                    // beside it then becomes the last action on the bar. The
+                    // runtime gates below mirror the ones applied while
+                    // rendering the items, so button visibility and menu
+                    // content can never disagree.
+                    val chatMenuPrefs = ChatMenuPrefs.prefs(context)
+                    val menuOrder = ChatMenuPrefs.resolveOrder(chatMenuPrefs)
+                    val menuMemoryEnabled by viewModel.memoryEnabled.collectAsState()
+                    val menuHasCustomEntries = menuOrder.any { key ->
+                        ChatMenuPrefs.isVisible(chatMenuPrefs, key) && when (key) {
+                            ChatMenuPrefs.SESSION_SKILLS -> skillRepository != null
+                            ChatMenuPrefs.SESSION_MCPS -> mcpRepository != null
+                            ChatMenuPrefs.SESSION_MEMORY -> memoryRepository != null && menuMemoryEnabled
+                            else -> true
                         }
-                        MinisMenu(
-                            expanded = showChatMenu,
-                            onDismissRequest = { showChatMenu = false },
-                        ) {
+                    }
+                    val showEnhancedCache by viewModel.showEnhancedCacheToggle.collectAsState()
+                    val enhancedCacheOn by viewModel.enhancedCacheEnabled.collectAsState()
+                    val showFastMode by viewModel.showFastModeToggle.collectAsState()
+                    val fastModeOn by viewModel.fastModeEnabled.collectAsState()
+                    val hasAnyMenuItems = menuHasCustomEntries || showEnhancedCache || showFastMode || BuildConfig.DEBUG
+                    // iOS: "..." circle button → dropdown menu
+                    if (hasAnyMenuItems) {
+                        Box {
+                            IconButton(onClick = { showChatMenu = true }) {
+                                Icon(Icons.Default.MoreVert, contentDescription = "More")
+                            }
+                            MinisMenu(
+                                expanded = showChatMenu,
+                                onDismissRequest = { showChatMenu = false },
+                            ) {
                             // [T-android-memory-enabled-minisconfig] Gate the
                             // "Memories in Session" item below on the session's
                             // live memoryEnabled — when memory is off the entry
                             // disappears, consistent with the per-session gating
                             // of the memory_get / memory_write tools and the
-                            // system-prompt injection.
-                            val menuMemoryEnabled by viewModel.memoryEnabled.collectAsState()
+                            // system-prompt injection. (menuMemoryEnabled is
+                            // collected above, next to the "..." visibility
+                            // check, so the two stay in sync.)
                             // Export conversation (JSON / Plain Text) — the
                             // session list's long-press Export, surfaced from
                             // inside the chat. Same streaming ChatExporter, so
@@ -2256,8 +2285,8 @@ fun ChatScreen(
                             // Model-invocation toggles (Enhanced Cache, Fast
                             // Mode) and the DEBUG crash trigger are NOT part
                             // of this list — they stay pinned at the bottom.
-                            val chatMenuPrefs = ChatMenuPrefs.prefs(context)
-                            val menuOrder = ChatMenuPrefs.resolveOrder(chatMenuPrefs)
+                            // (chatMenuPrefs / menuOrder are resolved above,
+                            // next to the "..." visibility check.)
                             for (entryKey in menuOrder) {
                                 if (!ChatMenuPrefs.isVisible(chatMenuPrefs, entryKey)) continue
                                 key(entryKey) {
@@ -2437,9 +2466,9 @@ fun ChatScreen(
                             // official Anthropic API (not relays / other
                             // providers) — showEnhancedCacheToggle recomputes on
                             // model/provider switch. First enable prompts a
-                            // one-time extra-billing confirmation.
-                            val showEnhancedCache by viewModel.showEnhancedCacheToggle.collectAsState()
-                            val enhancedCacheOn by viewModel.enhancedCacheEnabled.collectAsState()
+                            // one-time extra-billing confirmation. (These
+                            // flags are collected above, next to the "..."
+                            // visibility check.)
                             if (showEnhancedCache) {
                                 DropdownMenuItem(
                                     text = { Text(stringResource(R.string.chat_menu_enhanced_cache)) },
@@ -2483,8 +2512,6 @@ fun ChatScreen(
                             // subscription) and the nav model row shows a ⚡
                             // badge. Sits next to Enhanced Cache — both are
                             // model-invocation controls (iOS 09944220 grouping).
-                            val showFastMode by viewModel.showFastModeToggle.collectAsState()
-                            val fastModeOn by viewModel.fastModeEnabled.collectAsState()
                             if (showFastMode) {
                                 DropdownMenuItem(
                                     text = { Text(stringResource(R.string.chat_menu_fast_mode)) },
@@ -2531,6 +2558,7 @@ fun ChatScreen(
                             }
                         }
                     }
+                    } // [T-chat-menu-empty] end if (hasAnyMenuItems)
                 },
                 windowInsets = WindowInsets.statusBars,
                 colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
