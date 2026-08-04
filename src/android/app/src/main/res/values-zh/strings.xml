@@ -924,6 +924,10 @@
     <string name="chat_menu_new_chat">新建对话</string>
     <string name="chat_menu_clear_chat">清空对话</string>
     <string name="chat_menu_open_terminal">打开终端</string>
+    <string name="appearance_section_chat_menu">聊天菜单</string>
+    <string name="appearance_chat_menu_summary">显示、隐藏并重新排列聊天"…"菜单中的条目</string>
+    <string name="appearance_chat_menu_footer">选择聊天"…"菜单中显示的条目及其顺序。隐藏某个条目不会影响它的数据或功能——它只是从菜单中移除，随时可以重新开启。</string>
+    <string name="chat_menu_drag_handle">拖拽以重新排序</string>
     <string name="chat_menu_open_browser">打开浏览器</string>
     <string name="chat_menu_browse_chat_files">浏览对话文件</string>
     <string name="chat_menu_enhanced_cache">增强缓存</string>

@@ -867,6 +867,10 @@
     <string name="chat_menu_new_chat">Новый чат</string>
     <string name="chat_menu_clear_chat">Очистить чат</string>
     <string name="chat_menu_open_terminal">Открыть Терминал</string>
+    <string name="appearance_section_chat_menu">Меню чата</string>
+    <string name="appearance_chat_menu_summary">Показывать, скрывать и менять порядок пунктов меню чата «…»</string>
+    <string name="appearance_chat_menu_footer">Выберите, какие пункты отображаются в меню чата «…» и в каком порядке. Скрытие пункта не затрагивает ни данные, ни функциональность — он просто исчезает из меню, и его можно снова включить в любое время.</string>
+    <string name="chat_menu_drag_handle">Перетащите, чтобы изменить порядок</string>
     <string name="chat_menu_open_browser">Открыть браузер</string>
     <string name="chat_menu_browse_chat_files">Файлы чата</string>
     <string name="chat_menu_enhanced_cache">Расширенный кэш</string>

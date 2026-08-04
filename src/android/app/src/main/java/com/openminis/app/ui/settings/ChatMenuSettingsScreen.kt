@@ -26,8 +26,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -64,9 +64,20 @@ fun ChatMenuSettingsScreen(
     val rowHeightPx = with(LocalDensity.current) { rowHeight.toPx() }
 
     var order by remember { mutableStateOf(ChatMenuPrefs.resolveOrder(prefs)) }
-    // Index currently being dragged, plus its live pixel offset.
-    var draggingIndex by remember { mutableIntStateOf(-1) }
+    // The entry currently being dragged (tracked by its stable key, NOT a list
+    // index: a pointerInput coroutine freezes its captured locals until the
+    // modifier's key changes, so an index captured at launch would go stale as
+    // soon as the first swap reorders the list — the next drag would grab the
+    // wrong row).
+    var draggingEntry by remember { mutableStateOf<String?>(null) }
     var dragOffset by remember { mutableFloatStateOf(0f) }
+    // SharedPreferences is not observable, so a visibility Switch can't re-read
+    // its `checked` value on its own — without this counter the toggle would
+    // persist the pref but never repaint until the screen is re-entered. Each
+    // bump forces a recomposition that re-reads the persisted value (same
+    // mechanism the old inline AppearanceScreen list used). It also picks up
+    // external changes (backup restore / minis-config) on the next toggle.
+    var chatMenuTick by remember { mutableStateOf(0) }
 
     fun commitOrder(newOrder: List<String>) {
         order = newOrder
@@ -87,86 +98,104 @@ fun ChatMenuSettingsScreen(
                     .fillMaxWidth(),
             ) {
                 order.forEachIndexed { index, entryKey ->
-                    val isDragging = index == draggingIndex
-                    val visible = ChatMenuPrefs.isVisible(prefs, entryKey)
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(rowHeight)
-                            .offset {
-                                IntOffset(0, if (isDragging) dragOffset.roundToInt() else 0)
-                            }
-                            .pointerInput(entryKey) {
-                                // Long-press anywhere on the row to lift it, then
-                                // drag vertically. While dragging, crossing the
-                                // half-row boundary swaps the entry with its
-                                // neighbour — live, with the offset corrected so
-                                // the gesture stays 1:1 with the finger.
-                                detectDragGesturesAfterLongPress(
-                                    onDragStart = {
-                                        draggingIndex = index
-                                        dragOffset = 0f
-                                    },
-                                    onDrag = { change, amount ->
-                                        change.consume()
-                                        dragOffset += amount.y
-                                        val currentIndex = draggingIndex
-                                        if (currentIndex < 0) return@detectDragGesturesAfterLongPress
-                                        val delta = (dragOffset / rowHeightPx).roundToInt()
-                                        if (delta != 0) {
-                                            val targetIndex = (currentIndex + delta)
-                                                .coerceIn(0, order.lastIndex)
-                                            val next = order.toMutableList()
-                                            val tmp = next[currentIndex]
-                                            next[currentIndex] = next[targetIndex]
-                                            next[targetIndex] = tmp
-                                            draggingIndex = targetIndex
-                                            dragOffset -= (targetIndex - currentIndex) * rowHeightPx
-                                            commitOrder(next)
-                                        }
-                                    },
-                                    onDragEnd = {
-                                        draggingIndex = -1
-                                        dragOffset = 0f
-                                    },
-                                    onDragCancel = {
-                                        draggingIndex = -1
-                                        dragOffset = 0f
-                                    },
-                                )
-                            },
-                    ) {
-                        SettingsRow(
-                            icon = chatMenuIcon(entryKey),
-                            iconColor = MaterialTheme.colorScheme.primary,
-                            title = stringResource(chatMenuTitleRes(entryKey)),
-                            onClick = null,
-                            showChevron = false,
-                            showDivider = index != order.lastIndex,
-                            trailing = {
-                                androidx.compose.foundation.layout.Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    // Drag handle (grab affordance; the whole row
-                                    // is draggable after a long press).
-                                    Icon(
-                                        Icons.Outlined.DragHandle,
-                                        contentDescription = stringResource(R.string.chat_menu_drag_handle),
-                                        modifier = Modifier
-                                            .padding(end = 4.dp)
-                                            .size(28.dp),
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                    // Visibility switch.
-                                    Switch(
-                                        checked = visible,
-                                        onCheckedChange = { newValue ->
-                                            ChatMenuPrefs.setVisible(prefs, entryKey, newValue)
+                    // key(entryKey) makes Compose reconcile children by entry
+                    // identity instead of list position. Without it, the first
+                    // swap reorders the list, the Box at this slot gets a NEW
+                    // pointerInput key (the entry that used to be here is gone)
+                    // and the in-flight drag coroutine is cancelled — the row
+                    // would only ever move ONE position per long-press drag.
+                    key(entryKey) {
+                        val isDragging = draggingEntry == entryKey
+                        // The tick read keeps the Switch in sync after a toggle
+                        // and after external prefs changes.
+                        @Suppress("UNUSED_EXPRESSION")
+                        chatMenuTick
+                        val visible = ChatMenuPrefs.isVisible(prefs, entryKey)
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(rowHeight)
+                                .offset {
+                                    IntOffset(0, if (isDragging) dragOffset.roundToInt() else 0)
+                                }
+                                .pointerInput(entryKey) {
+                                    // Long-press anywhere on the row to lift it, then
+                                    // drag vertically. While dragging, crossing the
+                                    // half-row boundary swaps the entry with its
+                                    // neighbour — live, with the offset corrected so
+                                    // the gesture stays 1:1 with the finger.
+                                    detectDragGesturesAfterLongPress(
+                                        onDragStart = {
+                                            draggingEntry = entryKey
+                                            dragOffset = 0f
+                                        },
+                                        onDrag = { change, amount ->
+                                            change.consume()
+                                            dragOffset += amount.y
+                                            // `order` and `draggingEntry` are backed by
+                                            // State, so reading them here always yields
+                                            // the CURRENT value — the dragged entry's
+                                            // position is re-derived after every swap.
+                                            val currentIndex = order.indexOf(draggingEntry)
+                                            if (currentIndex < 0) return@detectDragGesturesAfterLongPress
+                                            val delta = (dragOffset / rowHeightPx).roundToInt()
+                                            if (delta != 0) {
+                                                val targetIndex = (currentIndex + delta)
+                                                    .coerceIn(0, order.lastIndex)
+                                                if (targetIndex != currentIndex) {
+                                                    val next = order.toMutableList()
+                                                    val tmp = next[currentIndex]
+                                                    next[currentIndex] = next[targetIndex]
+                                                    next[targetIndex] = tmp
+                                                    dragOffset -= (targetIndex - currentIndex) * rowHeightPx
+                                                    commitOrder(next)
+                                                }
+                                            }
+                                        },
+                                        onDragEnd = {
+                                            draggingEntry = null
+                                            dragOffset = 0f
+                                        },
+                                        onDragCancel = {
+                                            draggingEntry = null
+                                            dragOffset = 0f
                                         },
                                     )
-                                }
-                            },
-                        )
+                                },
+                        ) {
+                            SettingsRow(
+                                icon = chatMenuIcon(entryKey),
+                                iconColor = MaterialTheme.colorScheme.primary,
+                                title = stringResource(chatMenuTitleRes(entryKey)),
+                                onClick = null,
+                                showChevron = false,
+                                showDivider = index != order.lastIndex,
+                                trailing = {
+                                    androidx.compose.foundation.layout.Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        // Drag handle (grab affordance; the whole row
+                                        // is draggable after a long press).
+                                        Icon(
+                                            Icons.Outlined.DragHandle,
+                                            contentDescription = stringResource(R.string.chat_menu_drag_handle),
+                                            modifier = Modifier
+                                                .padding(end = 4.dp)
+                                                .size(28.dp),
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                        // Visibility switch.
+                                        Switch(
+                                            checked = visible,
+                                            onCheckedChange = { newValue ->
+                                                ChatMenuPrefs.setVisible(prefs, entryKey, newValue)
+                                                chatMenuTick++
+                                            },
+                                        )
+                                    }
+                                },
+                            )
+                        }
                     }
                 }
             }
