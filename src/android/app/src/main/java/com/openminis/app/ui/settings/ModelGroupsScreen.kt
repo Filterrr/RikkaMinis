@@ -10,16 +10,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListScope
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Article
@@ -27,7 +23,6 @@ import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddPhotoAlternate
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Mic
@@ -41,7 +36,6 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -59,23 +53,21 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.res.stringResource
 import com.openminis.app.data.model.DEFAULT_GROUP_CONTEXT_LIMIT_TOKENS
 import com.openminis.app.data.model.ModelGroup
 import com.openminis.app.data.model.RoutingStrategy
 import com.openminis.app.data.repository.ProviderRepository
 import com.openminis.app.R
-import com.openminis.app.ui.components.MinisOutlinedButton
 import com.openminis.app.ui.components.MinisTextButton
 import com.openminis.app.ui.components.SectionCard
 import com.openminis.app.ui.components.SectionDesign
-import com.openminis.app.ui.components.SectionDivider
 import com.openminis.app.ui.components.SectionFooter
 import com.openminis.app.ui.components.SectionHeader
+import sh.calvin.reorderable.ReorderableItem
+import sh.calvin.reorderable.rememberReorderableLazyListState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -95,6 +87,44 @@ fun ModelGroupsScreen(
     var newGroupName by remember { mutableStateOf("") }
 
     val lazyListState = rememberLazyListState()
+
+    // [reorder-groups] Defend against an already-corrupted config holding two
+    // groups with the same id: duplicate LazyColumn/Reorderable keys throw
+    // ("Key ... was already used"), which would crash this screen on scroll and
+    // leave the user no way in to fix the data. Same belt-and-suspenders as the
+    // agent-loop section. Row index math below derives from this list, so
+    // first/last card rounding stays consistent with what's rendered.
+    //
+    // Note the deliberate asymmetry with the reorder path: rendering tolerates
+    // duplicates by hiding them, but ProviderRepository.permuteById REFUSES to
+    // reorder a list holding duplicate ids (it can't be done unambiguously).
+    // So on a corrupted config the screen still opens and stays usable — drags
+    // just no-op until the duplicate is gone.
+    val reorderableGroups = remember(groups) { groups.distinctBy { it.id } }
+
+    // Drag-to-reorder the group list. Order here is presentation-only — which
+    // group is the default primary/sub is tracked by explicit ids
+    // (defaultPrimaryGroupId / defaultSubGroupId), NOT by list position — so a
+    // reorder never changes routing behaviour. Contrast with the agent-loop
+    // list, where order IS the priority order.
+    val reorderState = rememberReorderableLazyListState(lazyListState) { from, to ->
+        val fromKey = from.key as? String ?: return@rememberReorderableLazyListState
+        val toKey = to.key as? String ?: return@rememberReorderableLazyListState
+        // The list also contains non-group items (headers, the agent-loop entry
+        // row, spacers). Only "group:"-keyed rows participate; anything else is
+        // a no-op, which reads better than a snap-back.
+        if (!fromKey.startsWith("group:") || !toKey.startsWith("group:")) {
+            return@rememberReorderableLazyListState
+        }
+        val fromId = fromKey.removePrefix("group:")
+        val toId = toKey.removePrefix("group:")
+        val cur = providerRepository.config.value.modelGroups.map { it.id }
+        val fromIdx = cur.indexOf(fromId)
+        val toIdx = cur.indexOf(toId)
+        if (fromIdx < 0 || toIdx < 0) return@rememberReorderableLazyListState
+        val newOrder = cur.toMutableList().apply { add(toIdx, removeAt(fromIdx)) }
+        providerRepository.reorderGroups(newOrder)
+    }
 
     Scaffold(
         topBar = {
@@ -154,37 +184,63 @@ fun ModelGroupsScreen(
                     }
                 }
             } else {
-                // T313 — Section 1 (Groups). One LazyColumn item wraps the
-                // whole card; SectionCard + SectionDivider compose normally
-                // because no reorder happens inside this section.
+                // [reorder-groups] Section 1 (Groups), drag-reorderable.
+                //
+                // Each group row MUST be its own top-level LazyColumn item:
+                // ReorderableLazyListState only observes direct children of the
+                // list, so the pre-existing "one item wrapping SectionCard"
+                // shape can't reorder. The iOS-style card panel is instead
+                // repainted per row via cardRow(isFirst, isLast) +
+                // SectionDividerInsetCard() between rows — the same helpers the
+                // agent-loop section uses (now shared in ReorderableCardRow.kt).
                 item("groups_section_header") {
                     SectionHeader(text = stringResource(R.string.agent_loop_models_groups))
                 }
-                item("groups_section_card") {
-                    SectionCard {
-                        groups.forEachIndexed { index, group ->
-                            val dismissState = rememberSwipeToDismissBoxState()
-                            LaunchedEffect(dismissState.currentValue) {
-                                if (dismissState.currentValue == SwipeToDismissBoxValue.EndToStart) {
-                                    providerRepository.removeGroup(group.id)
+                itemsIndexed(
+                    items = reorderableGroups,
+                    key = { _, g -> "group:${g.id}" },
+                ) { index, group ->
+                    ReorderableItem(state = reorderState, key = "group:${group.id}") { _ ->
+                        // Swipe-to-delete state is scoped per row here (keyed by
+                        // the item key) rather than per composition slot, so a
+                        // reorder can't carry a half-swiped state onto whichever
+                        // group lands in that position.
+                        val dismissState = rememberSwipeToDismissBoxState()
+                        LaunchedEffect(dismissState.currentValue) {
+                            if (dismissState.currentValue == SwipeToDismissBoxValue.EndToStart) {
+                                providerRepository.removeGroup(group.id)
+                            }
+                        }
+                        Column {
+                            if (index != 0) SectionDividerInsetCard()
+                            Box(
+                                modifier = Modifier.cardRow(
+                                    isFirst = index == 0,
+                                    isLast = index == reorderableGroups.lastIndex,
+                                ),
+                            ) {
+                                SwipeToDismissBox(
+                                    state = dismissState,
+                                    backgroundContent = {},
+                                    enableDismissFromStartToEnd = false,
+                                ) {
+                                    GroupRow(
+                                        group = group,
+                                        config = config,
+                                        onClick = { onGroupClick(group.id) },
+                                        onSetPrimary = { providerRepository.defaultPrimaryGroupId = group.id },
+                                        onSetSub = { providerRepository.defaultSubGroupId = group.id },
+                                        onClearPrimary = { providerRepository.defaultPrimaryGroupId = null },
+                                        onClearSub = { providerRepository.defaultSubGroupId = null },
+                                        // Drag only from the explicit handle. The row is
+                                        // clickable AND horizontally swipe-to-delete, so a
+                                        // whole-row drag would fight both gestures.
+                                        dragHandleModifier = Modifier.then(
+                                            with(this@ReorderableItem) { Modifier.draggableHandle() },
+                                        ),
+                                    )
                                 }
                             }
-                            SwipeToDismissBox(
-                                state = dismissState,
-                                backgroundContent = {},
-                                enableDismissFromStartToEnd = false,
-                            ) {
-                                GroupRow(
-                                    group = group,
-                                    config = config,
-                                    onClick = { onGroupClick(group.id) },
-                                    onSetPrimary = { providerRepository.defaultPrimaryGroupId = group.id },
-                                    onSetSub = { providerRepository.defaultSubGroupId = group.id },
-                                    onClearPrimary = { providerRepository.defaultPrimaryGroupId = null },
-                                    onClearSub = { providerRepository.defaultSubGroupId = null },
-                                )
-                            }
-                            if (index != groups.lastIndex) SectionDivider()
                         }
                     }
                 }
@@ -277,25 +333,6 @@ fun ModelGroupsScreen(
                     Text(stringResource(R.string.common_cancel))
                 }
             },
-        )
-    }
-}
-
-/** Small colored badge label (e.g. "Primary", "Sub"). */
-@Composable
-private fun BadgeLabel(text: String, color: androidx.compose.ui.graphics.Color) {
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(4.dp))
-            .background(color.copy(alpha = 0.12f))
-            .padding(horizontal = 6.dp, vertical = 2.dp),
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelSmall,
-            color = color,
-            fontWeight = FontWeight.SemiBold,
-            fontSize = 11.sp,
         )
     }
 }
@@ -428,6 +465,11 @@ private fun GroupRow(
     onSetSub: () -> Unit,
     onClearPrimary: () -> Unit,
     onClearSub: () -> Unit,
+    /** [reorder-groups] Built by the caller from
+     *  `ReorderableItemScope.draggableHandle()` (scope-bound), so this row
+     *  stays scope-agnostic. Defaults to a no-op modifier, which renders an
+     *  inert handle — fine for previews/non-reorderable hosts. */
+    dragHandleModifier: Modifier = Modifier,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     val memberNames = group.memberEntryIds.mapNotNull { entryId ->
@@ -460,13 +502,20 @@ private fun GroupRow(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
+            // [reorder-groups] Left padding tightened from RowHorizontalPadding
+            // to 8dp because the drag handle now occupies that gutter (its
+            // 36dp IconButton carries its own optical inset). Trailing padding
+            // is unchanged.
             .padding(
-                horizontal = SectionDesign.RowHorizontalPadding,
-                vertical = SectionDesign.RowVerticalPadding,
+                start = 8.dp,
+                end = SectionDesign.RowHorizontalPadding,
+                top = SectionDesign.RowVerticalPadding,
+                bottom = SectionDesign.RowVerticalPadding,
             ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(modifier = Modifier.weight(1f)) {
+        DragHandleButton(handleModifier = dragHandleModifier)
+        Column(modifier = Modifier.weight(1f).padding(start = 4.dp)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
