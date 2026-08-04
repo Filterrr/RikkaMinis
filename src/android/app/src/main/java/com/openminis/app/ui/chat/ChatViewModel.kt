@@ -547,7 +547,16 @@ class ChatViewModel(
      * Blanking the composer (manual clear or send) frees the draft slot.
      */
     private fun syncComposerDraft(value: String) {
-        if (!sessionId.startsWith("__new__")) return
+        // Only the plain, still-unsent draft owns the persistent slot:
+        //  - isDraft: real sessions keep the in-memory composer behavior.
+        //  - realSessionId empty: after the first send this route is an alias
+        //    of a real conversation. Re-claiming the slot here would make the
+        //    next "New Chat" resolve back into the sent chat instead of a
+        //    fresh draft.
+        //  - no __grp__ suffix: group-bound drafts stay transient (v1 scope);
+        //    letting them claim the slot would bind the next "New Chat" to
+        //    that group.
+        if (!isDraft || realSessionId.isNotEmpty() || sessionId.contains("__grp__")) return
         if (value.isBlank()) {
             com.openminis.app.data.ComposerDraftStore.clearDraft(context, sessionId)
         } else {
@@ -2607,7 +2616,7 @@ class ChatViewModel(
         // keep the in-memory behavior (their VM survives in the store while
         // the process lives). The stale-id guard inside restoreText means a
         // draft whose slot was freed (sent / discarded) never resurrects.
-        if (sessionId.startsWith("__new__")) {
+        if (isDraft) {
             val restored = com.openminis.app.data.ComposerDraftStore.restoreText(context, sessionId)
             if (restored.isNotEmpty()) _inputText.value = restored
         }
