@@ -392,7 +392,15 @@ fun BackupSettingsScreen(
                 onDismiss = { showRemoteList = false },
                 onRefresh = openRemoteList,
                 onRestore = { item ->
+                    // Set busy synchronously on entry, BEFORE the async gap that
+                    // downloads the payload — otherwise the restore button stays
+                    // enabled during the network window and a fast double-tap
+                    // launches two concurrent restores (each triggers its own
+                    // pre-restore snapshot export and the two imports then
+                    // clobber each other). restoreWithSnapshot() sets busy again
+                    // (idempotent) and clears it in its finally on the happy path.
                     if (!webDavBusy) {
+                        webDavBusy = true
                         scope.launch {
                             try {
                                 val json = withContext(Dispatchers.IO) {
@@ -402,6 +410,9 @@ fun BackupSettingsScreen(
                                 restoreWithSnapshot(json)
                             } catch (t: Throwable) {
                                 errorMessage = webDavErrorMessage(context, t)
+                                // Download failed before restoreWithSnapshot ran,
+                                // so its finally won't reset us — do it here.
+                                webDavBusy = false
                             }
                         }
                     }
