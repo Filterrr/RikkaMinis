@@ -29,15 +29,27 @@ object WebDavSync {
 
     /** Push [payload] (a ConfigBackup JSON document) to the server as
      *  [filename]. Creates the backup directory on first use. */
+    /**
+     * Uploads [payload] as a new timestamped file into the configured backup
+     * folder. The file name uses second precision (yyyyMMdd-HHmmss) rather
+     * than [ConfigBackup.suggestedFileName]'s minute precision: a local
+     * export and a WebDAV push within the same minute would otherwise
+     * silently overwrite each other on the server. The shared
+     * `openminis-backup-*.json` convention is kept so local files dropped
+     * into the folder manually are still picked up by [listBackupFiles].
+     */
     fun backup(
         config: WebDavConfig,
         payload: String,
-        filename: String,
         client: OkHttpClient = WebDavClient.defaultClient(),
     ) {
         val dav = WebDavClient(config, client)
         dav.ensureCollectionExists()
-        dav.put(filename, payload.toByteArray(Charsets.UTF_8), "application/json")
+        val name = "openminis-backup-${
+            java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
+                .format(java.util.Date())
+        }.json"
+        dav.put(name, payload.toByteArray(Charsets.UTF_8), "application/json")
     }
 
     /** Remote backups, newest first. */

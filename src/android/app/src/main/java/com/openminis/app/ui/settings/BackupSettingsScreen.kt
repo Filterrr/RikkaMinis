@@ -272,7 +272,6 @@ fun BackupSettingsScreen(
                                 WebDavSync.backup(
                                     config = cfg,
                                     payload = payload,
-                                    filename = ConfigBackup.suggestedFileName(),
                                     client = webDavHttpClient,
                                 )
                             }
