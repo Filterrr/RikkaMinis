@@ -63,8 +63,13 @@ class RootfsUsageScannerTest {
         Files.createSymbolicLink(File(root, "link").toPath(), File(root, "big.bin").toPath())
 
         val report = RootfsUsageScanner.scan(root, nioStat())
-        // The symlink itself is counted as a tiny node, the target once.
-        assertTrue("expected ~1,000,000 but got ${report.totalBytes}", report.totalBytes in 1_000_000..1_000_300)
+        // The symlink itself is counted as a tiny node (its path length), the
+        // target exactly once: total must stay near 1,000,000 and NOT reach
+        // ~2,000,000 (which following the link would produce).
+        assertTrue(
+            "expected ~1,000,000 but got ${report.totalBytes}",
+            report.totalBytes > 1_000_000 && report.totalBytes < 1_100_000,
+        )
     }
 
     @Test
@@ -75,7 +80,9 @@ class RootfsUsageScannerTest {
         Files.createSymbolicLink(File(root, "dlink").toPath(), File(root, "real").toPath())
 
         val report = RootfsUsageScanner.scan(root, nioStat())
-        assertEquals(500L, report.totalBytes)
+        // 500 (target) + link overhead (< 500); following the dir symlink
+        // would push the total to ~1000.
+        assertTrue("expected ~500 but got ${report.totalBytes}", report.totalBytes in 500..999)
     }
 
     @Test
