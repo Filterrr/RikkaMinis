@@ -469,6 +469,10 @@
     <string name="webdav_test_ok">連線成功</string>
     <string name="webdav_saved">伺服器設定已儲存</string>
     <string name="webdav_uploaded">備份已上傳</string>
+    <string name="backup_restored_notify_body">已還原 %1$d 個提供方和 %2$d 個分組。</string>
+    <string name="webdav_notify_title_failed">WebDAV 操作失敗</string>
+    <string name="webdav_notify_title_restored">WebDAV 還原</string>
+    <string name="webdav_notify_title">WebDAV 備份</string>
     <string name="webdav_loading">正在載入備份…</string>
     <string name="webdav_remote_empty">伺服器上沒有備份</string>
     <string name="webdav_restore">還原</string>
@@ -807,7 +811,6 @@
     <string name="browser_downloads_cancel">取消下載</string>
     <string name="browser_downloads_failed">失敗</string>
     <string name="browser_downloads_open">開啟</string>
-    <string name="backup_snapshot_webdav">還原前已將目前設定快照推送到 WebDAV 伺服器。</string>
     <string name="backup_snapshot_local">還原前已將目前設定快照儲存到應用程式檔案中。</string>
     <string name="backup_snapshot_failed">警告：還原前無法儲存目前設定快照。</string>
 </resources>

@@ -88,6 +88,65 @@ class BackgroundTaskNotifier(
         }
     }
 
+    /**
+     * Generic "background work finished" notification, used by WebDAV
+     * backup/restore when the user left the settings screen while the
+     * transfer was still running. Unlike [notifyTaskCompleted] it is not
+     * tied to a chat session, so the caller supplies the title/body and a
+     * notification tag directly; the optional deep-link is opened on tap.
+     * Posted off the main thread; silently no-ops when notifications are
+     * disabled.
+     */
+    fun notifyWorkCompleted(
+        tag: String,
+        title: String,
+        body: String,
+        deepLink: String? = null,
+    ) {
+        if (!backgroundSettings.taskNotificationsEnabled.value) return
+
+        scope.launch {
+            try {
+                val launchIntent = deepLink?.let {
+                    Intent(Intent.ACTION_VIEW, Uri.parse(it)).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    }
+                }
+                // Use a private id space so generic work notifications never
+                // collide with the session-id-hash ids used by
+                // notifyTaskCompleted (overwriting each other in the tray).
+                val id = 0x80000000 or (tag.hashCode() and 0x7FFFFFFF)
+                val pendingIntent = launchIntent?.let {
+                    PendingIntent.getActivity(
+                        context,
+                        id,
+                        it,
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                    )
+                }
+
+                val nm = NotificationManagerCompat.from(context)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !nm.areNotificationsEnabled()) {
+                    return@launch
+                }
+                val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+                    .setSmallIcon(R.mipmap.ic_launcher)
+                    .setContentTitle(title)
+                    .setContentText(body)
+                    .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+                    .setContentIntent(pendingIntent)
+                    .setAutoCancel(true)
+                    .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                    .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+                    .build()
+
+                nm.notify(id, notification)
+            } catch (t: Throwable) {
+                AppLogger.warning(TAG, "notifyWorkCompleted failed: ${t.message}")
+            }
+        }
+    }
+
     private fun postNotification(sessionId: String, title: String, body: String) {
         // Pre-Tiramisu: we don't need the runtime permission, just post.
         // Tiramisu+: NotificationManagerCompat.areNotificationsEnabled

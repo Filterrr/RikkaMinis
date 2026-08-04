@@ -1054,6 +1054,10 @@
     <string name="webdav_test_ok">Verbindung OK</string>
     <string name="webdav_saved">Servereinstellungen gespeichert</string>
     <string name="webdav_uploaded">Backup hochgeladen</string>
+    <string name="backup_restored_notify_body">%1$d Anbieter und %2$d Gruppen wiederhergestellt.</string>
+    <string name="webdav_notify_title_failed">WebDAV-Vorgang fehlgeschlagen</string>
+    <string name="webdav_notify_title_restored">WebDAV-Wiederherstellung</string>
+    <string name="webdav_notify_title">WebDAV-Backup</string>
     <string name="webdav_loading">Lade Backups…</string>
     <string name="webdav_remote_empty">Keine Backups auf dem Server</string>
     <string name="webdav_restore">Wiederherstellen</string>
@@ -1069,7 +1073,6 @@
     <string name="webdav_err_network">Netzwerkfehler: %1$s</string>
     <string name="webdav_err_server">Serverfehler (HTTP %1$d)</string>
     <string name="webdav_err_unknown">Unbekannter Fehler</string>
-    <string name="backup_snapshot_webdav">Vor dem Wiederherstellen wurde ein Schnappschuss der aktuellen Konfiguration auf den WebDAV-Server übertragen.</string>
     <string name="backup_snapshot_local">Vor dem Wiederherstellen wurde ein Schnappschuss der aktuellen Konfiguration in den App-Dateien gespeichert.</string>
     <string name="backup_snapshot_failed">Warnung: Der Schnappschuss der aktuellen Konfiguration konnte nicht erstellt werden.</string>
 </resources>

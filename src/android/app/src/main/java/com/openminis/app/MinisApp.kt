@@ -55,9 +55,23 @@ import com.openminis.app.sandbox.offload.SpeechOffloadHandler
 import com.openminis.app.sandbox.offload.WeatherOffloadHandler
 import com.openminis.app.service.SessionActivityTracker
 import com.openminis.app.ui.MinisImageFetcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 class MinisApp : Application(), ImageLoaderFactory {
+    /**
+     * App-scoped coroutine scope that survives UI composition. Network /
+     * file work that MUST complete even if the user leaves the current
+     * screen (e.g. WebDAV backup upload / restore) launches here instead of
+     * on a rememberCoroutineScope, whose cancellation would abort the
+     * transfer the moment the composable leaves the hierarchy. SupervisorJob
+     * so a failing child never cancels siblings. Property access is safe from
+     * any thread (initialised in the constructor, read-only thereafter).
+     */
+    val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     lateinit var database: AppDatabase
         private set
     lateinit var chatRepository: ChatRepository

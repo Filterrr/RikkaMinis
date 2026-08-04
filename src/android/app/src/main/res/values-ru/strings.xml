@@ -1222,6 +1222,10 @@
     <string name="webdav_test_ok">Соединение установлено</string>
     <string name="webdav_saved">Настройки сервера сохранены</string>
     <string name="webdav_uploaded">Резервная копия загружена</string>
+    <string name="backup_restored_notify_body">Восстановлено %1$d провайдеров и %2$d групп.</string>
+    <string name="webdav_notify_title_failed">Ошибка операции WebDAV</string>
+    <string name="webdav_notify_title_restored">Восстановление WebDAV</string>
+    <string name="webdav_notify_title">Резервная копия WebDAV</string>
     <string name="webdav_loading">Загрузка резервных копий…</string>
     <string name="webdav_remote_empty">На сервере нет резервных копий</string>
     <string name="webdav_restore">Восстановить</string>
@@ -1237,7 +1241,6 @@
     <string name="webdav_err_network">Ошибка сети: %1$s</string>
     <string name="webdav_err_server">Ошибка сервера (HTTP %1$d)</string>
     <string name="webdav_err_unknown">Неизвестная ошибка</string>
-    <string name="backup_snapshot_webdav">Перед восстановлением снимок текущей конфигурации отправлен на сервер WebDAV.</string>
     <string name="backup_snapshot_local">Перед восстановлением снимок текущей конфигурации сохранён в файлах приложения.</string>
     <string name="backup_snapshot_failed">Предупреждение: не удалось создать снимок текущей конфигурации перед восстановлением.</string>
 </resources>
