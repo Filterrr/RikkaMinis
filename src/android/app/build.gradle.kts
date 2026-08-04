@@ -298,6 +298,9 @@ dependencies {
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     testImplementation("org.json:json:20231013")
+    // XmlPullParser implementation for JVM unit tests only; on Android the
+    // framework provides org.xmlpull.v1 via android.util.Xml.
+    testImplementation("net.sf.kxml:kxml2:2.3.0")
 
     // Testing — Instrumented (on-device) tests
     androidTestImplementation("androidx.test:runner:1.6.2")
