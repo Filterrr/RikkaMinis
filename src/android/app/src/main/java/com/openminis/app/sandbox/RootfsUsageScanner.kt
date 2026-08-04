@@ -1,4 +1,4 @@
-package com.openminis.app.ui.settings
+package com.openminis.app.sandbox
 
 import android.system.Os
 import android.system.OsConstants

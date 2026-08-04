@@ -72,7 +72,7 @@ fun StorageManagementScreen(
 
     var isLoading by remember { mutableStateOf(true) }
     var shellSize by remember { mutableLongStateOf(0L) }
-    var shellBreakdown by remember { mutableStateOf<List<com.openminis.app.ui.settings.RootfsUsageScanner.Entry>>(emptyList()) }
+    var shellBreakdown by remember { mutableStateOf<List<com.openminis.app.sandbox.RootfsUsageScanner.Entry>>(emptyList()) }
     var dbSize by remember { mutableLongStateOf(0L) }
     var sessions by remember { mutableStateOf<List<SessionStorageInfo>>(emptyList()) }
 
@@ -85,9 +85,9 @@ fun StorageManagementScreen(
                 // walkTopDown()+length() double-counted versioned .so symlinks
                 // and followed symlinked dirs (e.g. default-jvm), overstating
                 // the "Terminal Shell" row by ~50%+.
-                val report = com.openminis.app.ui.settings.RootfsUsageScanner.scan(
+                val report = com.openminis.app.sandbox.RootfsUsageScanner.scan(
                     File(context.filesDir, "alpine-rootfs"),
-                    com.openminis.app.ui.settings.RootfsUsageScanner.androidStat(),
+                    com.openminis.app.sandbox.RootfsUsageScanner.androidStat(),
                 )
                 shellSize = report.totalBytes
                 // Only surface buckets that can actually explain a large
