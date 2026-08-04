@@ -329,56 +329,70 @@ fun BackupSettingsScreen(
             showSecretWarning = false
             val toWebDav = webDavUploadPending
             webDavUploadPending = false
-            try {
-                val payload = ConfigBackup.export(
-                    providerRepo = providerRepository,
-                    includeSecrets = withSecrets,
-                    envVarRepo = envVarRepository,
-                    skillRepo = skillRepository,
-                    memoryRepo = memoryRepository,
-                    mcpRepo = mcpRepository,
-                    chatRepo = chatRepository,
-                    chatWindowDays = chatWindowDays,
-                )
-                if (toWebDav) {
-                    val cfg = webDavConfig ?: return@runExport
-                    webDavBusy = true
-                    // Run on the app scope so the upload finishes even if the
-                    // user navigates away mid-transfer; notify via the system
-                    // tray when the settings screen is no longer visible.
-                    application.applicationScope.launch {
-                        try {
-                            withContext(Dispatchers.IO) {
-                                WebDavSync.backup(
-                                    config = cfg,
-                                    payload = payload,
-                                    client = webDavHttpClient,
+            // Payload generation is expensive: it walks the whole config
+            // registry, zips every skill and base64-encodes the archives,
+            // reads memory files and up to chatWindowDays of chat history,
+            // then serializes the lot into one JSON document. It used to run
+            // on the main thread — the backup button froze the UI for seconds
+            // (hang detector fired, 180 frames skipped). Generate off-thread,
+            // exactly like the restore/snapshot path does.
+            application.applicationScope.launch {
+                try {
+                    val payload = withContext(Dispatchers.Default) {
+                        ConfigBackup.export(
+                            providerRepo = providerRepository,
+                            includeSecrets = withSecrets,
+                            envVarRepo = envVarRepository,
+                            skillRepo = skillRepository,
+                            memoryRepo = memoryRepository,
+                            mcpRepo = mcpRepository,
+                            chatRepo = chatRepository,
+                            chatWindowDays = chatWindowDays,
+                        )
+                    }
+                    // Back on Main for state writes, the SAF picker and toasts
+                    // (ActivityResultLauncher.launch requires the main thread).
+                    withContext(Dispatchers.Main) {
+                        if (toWebDav) {
+                            val cfg = webDavConfig ?: return@withContext
+                            webDavBusy = true
+                            try {
+                                // Run off-thread so the upload finishes even if
+                                // the user navigates away mid-transfer; notify
+                                // via the system tray when the settings screen
+                                // is no longer visible.
+                                withContext(Dispatchers.IO) {
+                                    WebDavSync.backup(
+                                        config = cfg,
+                                        payload = payload,
+                                        client = webDavHttpClient,
+                                    )
+                                }
+                                val msg = context.getString(R.string.webdav_uploaded)
+                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                notifier.notifyWorkCompleted(
+                                    tag = "webdav-upload",
+                                    title = context.getString(R.string.webdav_notify_title),
+                                    body = msg,
                                 )
+                            } catch (t: Throwable) {
+                                errorMessage = webDavErrorMessage(context, t)
+                                notifier.notifyWorkCompleted(
+                                    tag = "webdav-upload",
+                                    title = context.getString(R.string.webdav_notify_title_failed),
+                                    body = webDavErrorMessage(context, t),
+                                )
+                            } finally {
+                                webDavBusy = false
                             }
-                            val msg = context.getString(R.string.webdav_uploaded)
-                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                            notifier.notifyWorkCompleted(
-                                tag = "webdav-upload",
-                                title = context.getString(R.string.webdav_notify_title),
-                                body = msg,
-                            )
-                        } catch (t: Throwable) {
-                            errorMessage = webDavErrorMessage(context, t)
-                            notifier.notifyWorkCompleted(
-                                tag = "webdav-upload",
-                                title = context.getString(R.string.webdav_notify_title_failed),
-                                body = webDavErrorMessage(context, t),
-                            )
-                        } finally {
-                            webDavBusy = false
+                        } else {
+                            pendingExport = payload
+                            exportLauncher.launch(ConfigBackup.suggestedFileName())
                         }
                     }
-                } else {
-                    pendingExport = payload
-                    exportLauncher.launch(ConfigBackup.suggestedFileName())
+                } catch (t: Throwable) {
+                    errorMessage = String.format(errGenerateFmt, t.message ?: errUnknown)
                 }
-            } catch (t: Throwable) {
-                errorMessage = String.format(errGenerateFmt, t.message ?: errUnknown)
             }
         }
         AlertDialog(
