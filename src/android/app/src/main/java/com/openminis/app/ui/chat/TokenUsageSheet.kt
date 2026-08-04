@@ -66,6 +66,9 @@ fun TokenUsageSheet(
         // half-screen feel is consistent — the token-usage view holds maybe
         // a screenful of stat rows max and looked overgrown at 90%.
         heightFraction = 0.5f,
+        // Read-only stats sheet: swipe-down and scrim tap already dismiss it,
+        // so the header close button is redundant — drop it.
+        showClose = false,
     ) {
         Column(
             modifier = Modifier
