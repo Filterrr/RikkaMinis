@@ -945,7 +945,7 @@
     <string name="webdav_saved">Paramètres du serveur enregistrés</string>
     <string name="webdav_uploaded">Sauvegarde téléversée</string>
     <string name="backup_restored_notify_body">%1$d fournisseurs et %2$d groupes restaurés.</string>
-    <string name="webdav_notify_title_failed">Échec de l&apos;opération WebDAV</string>
+    <string name="webdav_notify_title_failed">Échec de l\'opération WebDAV</string>
     <string name="webdav_notify_title_restored">Restauration WebDAV</string>
     <string name="webdav_notify_title">Sauvegarde WebDAV</string>
     <string name="webdav_loading">Chargement des sauvegardes…</string>
