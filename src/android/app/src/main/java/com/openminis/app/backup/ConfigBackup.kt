@@ -388,9 +388,12 @@ object ConfigBackup {
      * rest still lands. An all-or-nothing import would make backups useless
      * across versions.
      *
-     * Providers are appended, not merged — [ProviderRepository.importInstanceJSON]
-     * already auto-renames on label conflict, so restoring onto a non-empty
-     * install duplicates rather than clobbering the user's existing setup.
+     * Providers restore by *merging* when an instance with the same
+     * (providerType, label) already exists — [ProviderRepository.mergeImportInstanceJSON]
+     * reuses it and upserts missing models, so restoring onto a non-empty
+     * install no longer produces "OpenAI (2)" duplicates. A genuinely new
+     * provider is still appended via [ProviderRepository.importInstanceJSON]
+     * (which itself auto-renames on label conflict as a last resort).
      */
     fun import(
         providerRepo: ProviderRepository,
@@ -441,43 +444,64 @@ object ConfigBackup {
                 val obj = providers.optJSONObject(i) ?: continue
                 val label = obj.optString("label", "provider #${i + 1}")
                 // Pull our backup-layer annotation out before handing the object
-                // to importInstanceJSON (which ignores it anyway, but keeping the
+                // to the repository (which ignores it anyway, but keeping the
                 // wire payload clean avoids surprises).
                 val srcEntryIds = obj.optJSONArray("_entryIds")
-                val instancesBefore = providerRepo.instances.map { it.id }.toSet()
+                    ?.let { arr -> (0 until arr.length()).map { arr.optString(it) } }
+                    ?: emptyList()
                 try {
-                    val resolvedLabel = providerRepo.importInstanceJSON(obj.toString())
+                    // [T-backup-dedup] Restore onto an install that already has
+                    // this provider (same type + label) by merging into it —
+                    // no more "OpenAI (2)" duplicates. The merge returns the
+                    // source entry uuid → restored entry uuid map directly;
+                    // otherwise fall back to the classic append-and-pair.
+                    val merged = providerRepo.mergeImportInstanceJSON(obj.toString(), srcEntryIds)
+                    val resolvedLabel: String?
+                    if (merged != null) {
+                        resolvedLabel = label
+                        val (_, mergedMap) = merged
+                        for ((oldEid, newEid) in mergedMap) {
+                            if (oldEid.isNotEmpty()) entryIdMap[oldEid] = newEid
+                        }
+                    } else {
+                        val instancesBefore = providerRepo.instances.map { it.id }.toSet()
+                        resolvedLabel = providerRepo.importInstanceJSON(obj.toString())
+                        if (resolvedLabel != null) {
+                            // Identify the instance importInstanceJSON just
+                            // created (the one id that wasn't present before)
+                            // and pair its entries to the source uuids
+                            // positionally — orderedEntryIds mirrors the export
+                            // ordering exactly.
+                            val newId = providerRepo.instances
+                                .map { it.id }
+                                .firstOrNull { it !in instancesBefore }
+                            if (newId != null && srcEntryIds.isNotEmpty()) {
+                                val newEntryIds = orderedEntryIds(providerRepo, newId)
+                                val n = minOf(srcEntryIds.size, newEntryIds.size)
+                                for (k in 0 until n) {
+                                    val oldEid = srcEntryIds[k]
+                                    if (oldEid.isNotEmpty()) entryIdMap[oldEid] = newEntryIds[k]
+                                }
+                                if (srcEntryIds.size != newEntryIds.size) {
+                                    // Non-fatal: model set differs from when the
+                                    // backup was taken (a model was
+                                    // hidden/added since). Groups referencing
+                                    // the unmapped entries will report them.
+                                    Log.w(
+                                        TAG,
+                                        "import: provider \"$resolvedLabel\" entry count " +
+                                            "${srcEntryIds.size}→${newEntryIds.size}; " +
+                                            "some group members may not remap"
+                                    )
+                                }
+                            }
+                        }
+                    }
                     if (resolvedLabel == null) {
                         skipped.add("provider \"$label\": import rejected")
                         continue
                     }
                     providersImported++
-                    // Identify the instance importInstanceJSON just created (the
-                    // one id that wasn't present before) and pair its entries to
-                    // the source uuids positionally — orderedEntryIds mirrors the
-                    // export ordering exactly.
-                    val newId = providerRepo.instances
-                        .map { it.id }
-                        .firstOrNull { it !in instancesBefore }
-                    if (newId != null && srcEntryIds != null) {
-                        val newEntryIds = orderedEntryIds(providerRepo, newId)
-                        val n = minOf(srcEntryIds.length(), newEntryIds.size)
-                        for (k in 0 until n) {
-                            val oldEid = srcEntryIds.optString(k, "")
-                            if (oldEid.isNotEmpty()) entryIdMap[oldEid] = newEntryIds[k]
-                        }
-                        if (srcEntryIds.length() != newEntryIds.size) {
-                            // Non-fatal: model set differs from when the backup
-                            // was taken (a model was hidden/added since). Groups
-                            // referencing the unmapped entries will report them.
-                            Log.w(
-                                TAG,
-                                "import: provider \"$resolvedLabel\" entry count " +
-                                    "${srcEntryIds.length()}→${newEntryIds.size}; " +
-                                    "some group members may not remap"
-                            )
-                        }
-                    }
                 } catch (t: Throwable) {
                     skipped.add("provider \"$label\": ${t.message ?: "import failed"}")
                 }
@@ -506,9 +530,38 @@ object ConfigBackup {
                         if (mapped != null) members.add(mapped) else droppedMembers++
                     }
                 }
-                // Fresh id unless the source id is somehow free on this install;
-                // renaming on name-collision keeps a restore from silently
-                // merging into an existing group.
+                // [T-backup-dedup] A group with the same name already exists on
+                // this install → merge the backup's members into it instead of
+                // creating "name (2)". Local members are kept (union), so a
+                // restore is additive rather than destructive.
+                val existingGroup = providerRepo.config.value.modelGroups
+                    .firstOrNull { it.name == name }
+                if (existingGroup != null) {
+                    val mergedMembers = existingGroup.memberEntryIds.toMutableList()
+                    var addedAny = false
+                    for (m in members) {
+                        if (m !in mergedMembers) {
+                            mergedMembers.add(m)
+                            addedAny = true
+                        }
+                    }
+                    if (addedAny) {
+                        providerRepo.updateGroup(existingGroup.copy(memberEntryIds = mergedMembers))
+                    }
+                    if (srcId.isNotEmpty()) groupIdMap[srcId] = existingGroup.id
+                    groupsImported++
+                    if (droppedMembers > 0) {
+                        skipped.add(
+                            "group \"$name\": $droppedMembers member(s) skipped " +
+                                "(their model/provider isn't in this backup)"
+                        )
+                    }
+                    continue
+                }
+                // No existing group with this name: create a fresh one. Fresh
+                // id unless the source id is somehow free on this install; the
+                // name-rename path is a safety net for duplicate names inside a
+                // single backup, since cross-install collisions now merge.
                 val newId = if (srcId.isNotEmpty() && srcId !in existingGroupIds) {
                     srcId
                 } else {
