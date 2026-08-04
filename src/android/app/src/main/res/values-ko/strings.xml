@@ -1045,7 +1045,7 @@
     <string name="webdav_url_placeholder">https://dav.example.com/dav</string>
     <string name="webdav_username_label">사용자 이름</string>
     <string name="webdav_password_label">비밀번호</string>
-    <string name="webdav_password_hint">저장된 비밀번호 유지</string>
+    <string name="webdav_password_placeholder">비밀번호</string>
     <string name="webdav_path_label">백업 폴더</string>
     <string name="webdav_path_hint">없으면 자동 생성</string>
     <string name="webdav_test">연결 테스트</string>

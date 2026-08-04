@@ -626,7 +626,7 @@ private fun WebDavConfigDialog(
     val scope = rememberCoroutineScope()
     var url by remember { mutableStateOf(initial?.url.orEmpty()) }
     var username by remember { mutableStateOf(initial?.username.orEmpty()) }
-    var password by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf(initial?.password.orEmpty()) }
     var path by remember {
         mutableStateOf(initial?.path ?: WebDavConfig.DEFAULT_BACKUP_DIR)
     }
@@ -689,9 +689,7 @@ private fun WebDavConfigDialog(
                     onValueChange = { password = it },
                     label = { Text(stringResource(R.string.webdav_password_label)) },
                     placeholder = {
-                        if (initial?.password.isNullOrEmpty().not()) {
-                            Text(stringResource(R.string.webdav_password_hint))
-                        }
+                        Text(stringResource(R.string.webdav_password_placeholder))
                     },
                     visualTransformation = PasswordVisualTransformation(),
                     singleLine = true,

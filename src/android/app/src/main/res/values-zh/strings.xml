@@ -986,7 +986,7 @@
     <string name="webdav_url_placeholder">https://dav.example.com/dav</string>
     <string name="webdav_username_label">用户名</string>
     <string name="webdav_password_label">密码</string>
-    <string name="webdav_password_hint">保留已保存的密码</string>
+    <string name="webdav_password_placeholder">密码</string>
     <string name="webdav_path_label">备份文件夹</string>
     <string name="webdav_path_hint">缺失时自动创建</string>
     <string name="webdav_test">测试连接</string>
