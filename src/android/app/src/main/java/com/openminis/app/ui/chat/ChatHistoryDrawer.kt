@@ -21,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.outlined.DataUsage
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.automirrored.filled.Edit
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -67,6 +68,11 @@ import kotlinx.coroutines.launch
  * helpers exported by SessionListScreen so there is a single source of truth.
  *
  * @param currentSessionId the chat currently displayed, highlighted in the list.
+ * @param draft the persisted unsent-draft snapshot (id + text) to surface as a
+ *        "Draft" row; null hides the row. The row is hidden while the user is
+ *        already inside that draft.
+ * @param onOpenDraft resume the draft session (caller closes the drawer).
+ * @param onDiscardDraft drop the persisted draft (user confirms in the dialog).
  * @param onSessionClick open another conversation (caller closes the drawer).
  * @param onNewChat start a fresh draft chat — used only as the fallback when
  *        the user deletes the chat they are currently viewing from the drawer
@@ -80,6 +86,9 @@ import kotlinx.coroutines.launch
 fun ChatHistoryDrawer(
     chatRepository: ChatRepository,
     currentSessionId: String,
+    draft: com.openminis.app.data.ComposerDraftStore.DraftSnapshot? = null,
+    onOpenDraft: () -> Unit = {},
+    onDiscardDraft: () -> Unit = {},
     onSessionClick: (String) -> Unit,
     onNewChat: () -> Unit,
     onSettings: () -> Unit,
@@ -116,6 +125,61 @@ fun ChatHistoryDrawer(
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.weight(1f),
+                )
+            }
+
+            // [composer-draft-v1] Persistent unsent-draft entry. Click resumes
+            // the draft session; long-press discards it. Shown above the
+            // session list, even when there are no sessions yet.
+            var discardDraft by remember { mutableStateOf(false) }
+            draft?.let { d ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .combinedClickable(
+                            onClick = onOpenDraft,
+                            onLongClick = { discardDraft = true },
+                        )
+                        .padding(start = 20.dp, end = 20.dp, top = 2.dp, bottom = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Edit,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp),
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = d.text.trim(),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        text = stringResource(R.string.draft_label),
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                HorizontalDivider(
+                    modifier = Modifier.padding(horizontal = 20.dp),
+                    thickness = 0.5.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant,
+                )
+            }
+            if (discardDraft) {
+                MinisAlertDialog(
+                    title = stringResource(R.string.draft_label),
+                    text = stringResource(R.string.draft_discard_confirm),
+                    confirmLabel = stringResource(R.string.delete),
+                    onConfirm = {
+                        onDiscardDraft()
+                        discardDraft = false
+                    },
+                    onDismiss = { discardDraft = false },
                 )
             }
 

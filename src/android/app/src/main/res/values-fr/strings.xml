@@ -974,4 +974,7 @@
     <string name="webdav_err_unknown">Erreur inconnue</string>
     <string name="backup_snapshot_local">Un instantané de votre configuration actuelle a été enregistré dans les fichiers de l\'application avant la restauration.</string>
     <string name="backup_snapshot_failed">Attention : impossible de créer un instantané de la configuration actuelle avant la restauration.</string>
+    <string name="draft_label">Brouillon</string>
+    <string name="draft_discard_confirm">Supprimer ce brouillon non envoyé ? Cette action est irréversible.</string>
+    <string name="storage_section_shell_detail">Détail du shell</string>
 </resources>

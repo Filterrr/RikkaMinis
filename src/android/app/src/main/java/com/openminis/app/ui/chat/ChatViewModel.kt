@@ -536,6 +536,23 @@ class ChatViewModel(
 
     fun setInputText(value: String) {
         _inputText.value = value
+        syncComposerDraft(value)
+    }
+
+    /**
+     * [composer-draft-v1] Mirror the composer text of a draft session
+     * (__new__<id>) into [ComposerDraftStore] so it survives session switches
+     * and process death. A draft has NO row in the sessions table (that was
+     * the empty-session residue bug), so the store is its only durable copy.
+     * Blanking the composer (manual clear or send) frees the draft slot.
+     */
+    private fun syncComposerDraft(value: String) {
+        if (!sessionId.startsWith("__new__")) return
+        if (value.isBlank()) {
+            com.openminis.app.data.ComposerDraftStore.clearDraft(context, sessionId)
+        } else {
+            com.openminis.app.data.ComposerDraftStore.saveText(context, sessionId, value)
+        }
     }
 
     /**
@@ -557,7 +574,7 @@ class ChatViewModel(
         } else {
             current.trimEnd() + " " + cleaned + " "
         }
-        _inputText.value = joined
+        setInputText(joined)
     }
 
     private val _isStreaming = MutableStateFlow(false)
@@ -2585,6 +2602,15 @@ class ChatViewModel(
 
     init {
         loadSession()
+        // [composer-draft-v1] Restore the persisted unsent text of a resumed
+        // draft session (__new__<id>) after a cold start. Non-draft sessions
+        // keep the in-memory behavior (their VM survives in the store while
+        // the process lives). The stale-id guard inside restoreText means a
+        // draft whose slot was freed (sent / discarded) never resurrects.
+        if (sessionId.startsWith("__new__")) {
+            val restored = com.openminis.app.data.ComposerDraftStore.restoreText(context, sessionId)
+            if (restored.isNotEmpty()) _inputText.value = restored
+        }
         // [T-session-paused-badge-active-false-positive] Drive the session-list
         // PAUSED badge directly off canResume — the authoritative "this session
         // is interrupted (tap Resume)" flag. This is the single chokepoint over

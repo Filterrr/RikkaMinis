@@ -47,6 +47,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.snapshotFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.flow.collectLatest
@@ -1919,13 +1920,42 @@ fun ChatScreen(
     androidx.activity.compose.BackHandler(enabled = historyDrawerState.isOpen) {
         historyDrawerScope.launch { historyDrawerState.close() }
     }
+    // [composer-draft-v1/ime] Dismiss the IME the moment the history drawer
+    // starts opening (targetValue, not isOpen) so the sheet is never covered
+    // by the keyboard: the drawer sheet sits OUTSIDE the chat's imePadding(),
+    // so an open keyboard would otherwise overlap its bottom rows (session
+    // entries + footer buttons).
+    LaunchedEffect(historyDrawerState) {
+        snapshotFlow { historyDrawerState.targetValue }
+            .distinctUntilChanged()
+            .collect { target ->
+                if (target == DrawerValue.Open) {
+                    keyboardController?.hide()
+                    focusManager.clearFocus()
+                }
+            }
+    }
     ModalNavigationDrawer(
         drawerState = historyDrawerState,
         gesturesEnabled = true,
         drawerContent = {
+            // [composer-draft-v1] Live snapshot of the persisted draft slot,
+            // surfaced as a "Draft" row at the top of the history drawer.
+            val draftSnapshot by com.openminis.app.data.ComposerDraftStore
+                .observeDraftSnapshot(context)
+                .collectAsState()
             ChatHistoryDrawer(
                 chatRepository = chatRepository,
                 currentSessionId = sessionId,
+                draft = draftSnapshot
+                    ?.takeIf { it.text.isNotBlank() && it.id != sessionId },
+                onOpenDraft = {
+                    historyDrawerScope.launch { historyDrawerState.close() }
+                    draftSnapshot?.let { if (it.id != sessionId) onOpenSession(it.id) }
+                },
+                onDiscardDraft = {
+                    draftSnapshot?.let { com.openminis.app.data.ComposerDraftStore.clearDraft(context, it.id) }
+                },
                 onSessionClick = { id ->
                     historyDrawerScope.launch { historyDrawerState.close() }
                     if (id != sessionId) onOpenSession(id)
