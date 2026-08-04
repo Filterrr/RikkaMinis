@@ -1476,4 +1476,7 @@
     <string name="browser_downloads_cancel">Cancel download</string>
     <string name="browser_downloads_failed">Failed</string>
     <string name="browser_downloads_open">Open</string>
+    <string name="draft_label">Draft</string>
+    <string name="draft_discard_confirm">Discard this unsent draft? This cannot be undone.</string>
+    <string name="storage_section_shell_detail">Shell breakdown</string>
 </resources>

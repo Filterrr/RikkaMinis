@@ -1083,4 +1083,7 @@
     <string name="webdav_err_unknown">알 수 없는 오류</string>
     <string name="backup_snapshot_local">복원 전에 현재 설정 스냅샷을 앱 파일에 저장했습니다.</string>
     <string name="backup_snapshot_failed">경고: 복원 전에 현재 설정 스냅샷을 만들 수 없습니다.</string>
+    <string name="draft_label">임시 보관</string>
+    <string name="draft_discard_confirm">전송하지 않은 임시 보관을 삭제할까요? 이 작업은 취소할 수 없습니다.</string>
+    <string name="storage_section_shell_detail">셸 상세</string>
 </resources>

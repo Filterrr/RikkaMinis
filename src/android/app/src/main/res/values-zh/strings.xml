@@ -1366,4 +1366,7 @@
     <string name="browser_downloads_open">打开</string>
     <string name="backup_snapshot_local">恢复前已将当前配置快照保存到应用文件中。</string>
     <string name="backup_snapshot_failed">警告：恢复前无法保存当前配置快照。</string>
+    <string name="draft_label">草稿</string>
+    <string name="draft_discard_confirm">丢弃这条未发送的草稿？此操作无法撤销。</string>
+    <string name="storage_section_shell_detail">终端占用明细</string>
 </resources>

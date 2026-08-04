@@ -72,6 +72,7 @@ fun StorageManagementScreen(
 
     var isLoading by remember { mutableStateOf(true) }
     var shellSize by remember { mutableLongStateOf(0L) }
+    var shellBreakdown by remember { mutableStateOf<List<com.openminis.app.ui.settings.RootfsUsageScanner.Entry>>(emptyList()) }
     var dbSize by remember { mutableLongStateOf(0L) }
     var sessions by remember { mutableStateOf<List<SessionStorageInfo>>(emptyList()) }
 
@@ -79,7 +80,17 @@ fun StorageManagementScreen(
         scope.launch {
             isLoading = true
             withContext(Dispatchers.IO) {
-                shellSize = directorySize(File(context.filesDir, "alpine-rootfs"))
+                // [rootfs-usage-v1] Real on-disk footprint (lstat + st_blocks,
+                // no symlink following, hardlink dedupe). The old recursive
+                // walkTopDown()+length() double-counted versioned .so symlinks
+                // and followed symlinked dirs (e.g. default-jvm), overstating
+                // the "Terminal Shell" row by ~50%+.
+                val report = com.openminis.app.ui.settings.RootfsUsageScanner.scan(
+                    File(context.filesDir, "alpine-rootfs"),
+                    com.openminis.app.ui.settings.RootfsUsageScanner.androidStat(),
+                )
+                shellSize = report.totalBytes
+                shellBreakdown = report.entries
                 dbSize = databaseSize(context)
 
                 val allSessions = chatDao.listSessions()
@@ -128,6 +139,19 @@ fun StorageManagementScreen(
                 value = Formatter.formatFileSize(context, totalSessionSize),
                 showDivider = false,
             )
+        }
+
+        if (shellBreakdown.isNotEmpty()) {
+            SettingsSection(header = stringResource(R.string.storage_section_shell_detail)) {
+                shellBreakdown.forEachIndexed { index, entry ->
+                    StorageOverviewRow(
+                        color = Color(0xFF34C759),
+                        label = "/${entry.name}",
+                        value = Formatter.formatFileSize(context, entry.bytes),
+                        showDivider = index != shellBreakdown.lastIndex,
+                    )
+                }
+            }
         }
 
         SettingsSection(header = stringResource(R.string.storage_section_sessions)) {

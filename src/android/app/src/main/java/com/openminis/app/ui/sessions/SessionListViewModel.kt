@@ -526,7 +526,15 @@ class SessionListViewModel(
      */
     fun createNewSession(groupId: String? = null): String? {
         if (providerRepository.allVisibleEntries().isEmpty()) return null
-        val base = "__new__${java.util.UUID.randomUUID()}"
+        // [composer-draft-v1] Ungrouped "New Chat" resolves through the draft
+        // store so an unsent draft is RESUMED instead of being replaced by a
+        // fresh uuid. Group-bound drafts keep a fresh id (they are a
+        // per-group transient, not the single global draft slot).
+        val base = if (groupId != null) {
+            "__new__${java.util.UUID.randomUUID()}"
+        } else {
+            com.openminis.app.data.ComposerDraftStore.nextDraftId(context)
+        }
         return if (groupId != null) "${base}__grp__${groupId}" else base
     }
 

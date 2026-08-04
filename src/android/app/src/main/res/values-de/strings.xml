@@ -1084,4 +1084,7 @@
     <string name="webdav_err_unknown">Unbekannter Fehler</string>
     <string name="backup_snapshot_local">Vor dem Wiederherstellen wurde ein Schnappschuss der aktuellen Konfiguration in den App-Dateien gespeichert.</string>
     <string name="backup_snapshot_failed">Warnung: Der Schnappschuss der aktuellen Konfiguration konnte nicht erstellt werden.</string>
+    <string name="draft_label">Entwurf</string>
+    <string name="draft_discard_confirm">Diesen ungesendeten Entwurf verwerfen? Das kann nicht rückgängig gemacht werden.</string>
+    <string name="storage_section_shell_detail">Shell-Aufschlüsselung</string>
 </resources>

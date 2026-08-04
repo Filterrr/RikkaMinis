@@ -354,14 +354,14 @@ fun AppNavigation(
             // ChatScreen consumer never mounts and the buffer expires —
             // exactly the symptom from the bug report. Force a new draft
             // chat so the share lands in a composer.
-            hasPendingShare && mode == 3 -> Routes.chat("__new__${java.util.UUID.randomUUID()}")
+            hasPendingShare && mode == 3 -> Routes.chat(com.openminis.app.data.ComposerDraftStore.nextDraftId(context))
             mode == 1 -> chatRepository.dao.listSessions().firstOrNull()?.let { Routes.chat(it.id) }
-            mode == 2 -> Routes.chat("__new__${java.util.UUID.randomUUID()}")
+            mode == 2 -> Routes.chat(com.openminis.app.data.ComposerDraftStore.nextDraftId(context))
             mode == 3 -> null
             else -> {
                 val latest = chatRepository.dao.listSessions().firstOrNull()
                 val fresh = latest != null && System.currentTimeMillis() - latest.updatedAt < autoThresholdMs
-                if (fresh) Routes.chat(latest!!.id) else Routes.chat("__new__${java.util.UUID.randomUUID()}")
+                if (fresh) Routes.chat(latest!!.id) else Routes.chat(com.openminis.app.data.ComposerDraftStore.nextDraftId(context))
             }
         }
         if (target != null) {
@@ -395,7 +395,7 @@ fun AppNavigation(
         if (shareBufferVersion == 0) return@LaunchedEffect
         val current = navController.currentDestination?.route ?: return@LaunchedEffect
         if (current == Routes.SESSION_LIST) {
-            navController.safeNavigate(Routes.chat("__new__${java.util.UUID.randomUUID()}")) {
+            navController.safeNavigate(Routes.chat(com.openminis.app.data.ComposerDraftStore.nextDraftId(context))) {
                 popUpTo(Routes.SESSION_LIST) { inclusive = false }
             }
         }
@@ -417,9 +417,9 @@ fun AppNavigation(
             DeepLinkCoordinator.setPendingChatAction(
                 DeepLinkCoordinator.ChatAction.OPEN_CAMERA,
             )
-            Routes.chat("__new__${java.util.UUID.randomUUID()}")
+            Routes.chat(com.openminis.app.data.ComposerDraftStore.nextDraftId(context))
         }
-        is DeepLinkAction.NewChat -> Routes.chat("__new__${java.util.UUID.randomUUID()}")
+        is DeepLinkAction.NewChat -> Routes.chat(com.openminis.app.data.ComposerDraftStore.nextDraftId(context))
         else -> null
     }
     val startDestination = when {
@@ -556,7 +556,7 @@ fun AppNavigation(
                 // a double-fire just replaces one unpersisted draft with
                 // another instead of stacking two chats.
                 onNewChat = {
-                    navController.safeNavigate(Routes.chat("__new__${java.util.UUID.randomUUID()}")) {
+                    navController.safeNavigate(Routes.chat(com.openminis.app.data.ComposerDraftStore.nextDraftId(context))) {
                         popUpTo(Routes.SESSION_LIST) { inclusive = false }
                         launchSingleTop = true
                     }

@@ -1250,4 +1250,7 @@
     <string name="webdav_err_unknown">Неизвестная ошибка</string>
     <string name="backup_snapshot_local">Перед восстановлением снимок текущей конфигурации сохранён в файлах приложения.</string>
     <string name="backup_snapshot_failed">Предупреждение: не удалось создать снимок текущей конфигурации перед восстановлением.</string>
+    <string name="draft_label">Черновик</string>
+    <string name="draft_discard_confirm">Удалить этот неотправленный черновик? Это действие нельзя отменить.</string>
+    <string name="storage_section_shell_detail">Состав Shell</string>
 </resources>
