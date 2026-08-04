@@ -60,6 +60,13 @@ Android-specific product changes that are not present upstream.
   (SKILL.md plus bundled scripts, references and assets), persistent memory,
   MCP server configuration, and chat history (text-only, last 90 days by
   default, window adjustable in Backup settings).
+- **WebDAV remote backup.** Settings → Storage → Backup & Restore also lets
+  you push backups to any WebDAV server (Nextcloud, 坚果云, Synology, …) —
+  configure once and sync your backups across devices, with upload, list,
+  restore and delete for remote copies. Backup/restore runs on an app-scoped
+  persistent scope (it completes even if you leave the settings screen),
+  gives you a system tray notification when a long task finishes, and is
+  guarded against accidental double-firing.
 - **Honest exclusions.** Chat history is carried as text only: media
   (images/videos) and attached files are dropped, and only the last N days of
   activity are included (0–365, default 90; 0 disables chat history). 
