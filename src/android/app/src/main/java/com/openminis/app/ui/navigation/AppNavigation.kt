@@ -50,6 +50,7 @@ import com.openminis.app.ui.sandbox.FilePreviewScreen
 import com.openminis.app.ui.sandbox.RootfsManagementScreen
 import com.openminis.app.ui.settings.EnvironmentVariablesScreen
 import com.openminis.app.ui.settings.AppearanceScreen
+import com.openminis.app.ui.settings.ChatMenuSettingsScreen
 import com.openminis.app.ui.settings.SettingsScreen
 import com.openminis.app.ui.settings.SystemPermissionsScreen
 import com.openminis.app.ui.settings.SessionStorageDetailScreen
@@ -173,6 +174,7 @@ object Routes {
     const val LOGS = "logs"
     const val LOG_DETAIL = "log_detail/{fileName}"
     const val APPEARANCE = "appearance"
+    const val CHAT_MENU = "appearance/chat_menu"
     const val BACKGROUND = "background"
     const val ONBOARDING_MODELS = "onboarding_models"
     /** T219-2: Mount external folders settings + detail. */
@@ -1201,6 +1203,13 @@ fun AppNavigation(
 
         composable(Routes.APPEARANCE) {
             AppearanceScreen(
+                onBack = { navController.safePopBackStack() },
+                onChatMenuClick = { navController.safeNavigate(Routes.CHAT_MENU) },
+            )
+        }
+
+        composable(Routes.CHAT_MENU) {
+            ChatMenuSettingsScreen(
                 onBack = { navController.safePopBackStack() },
             )
         }
