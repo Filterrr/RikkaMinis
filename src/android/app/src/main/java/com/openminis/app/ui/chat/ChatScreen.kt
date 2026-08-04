@@ -113,7 +113,6 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.DataUsage
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Image
@@ -238,7 +237,6 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
@@ -1942,6 +1940,10 @@ fun ChatScreen(
                     historyDrawerScope.launch { historyDrawerState.close() }
                     onOpenSettings()
                 },
+                onTokenUsage = {
+                    historyDrawerScope.launch { historyDrawerState.close() }
+                    showTokenUsageSheet = true
+                },
             )
         },
     ) {
@@ -2207,6 +2209,19 @@ fun ChatScreen(
                     }
                 },
                 actions = {
+                    // New Chat — promoted from the "..." menu to a persistent
+                    // top-bar button beside "..." (iOS parity: square.and.pencil
+                    // sits next to the overflow, one tap instead of two).
+                    // Streaming sessions confirm first, same as before.
+                    IconButton(onClick = {
+                        if (isStreaming) {
+                            showNewChatStopDialog = true
+                        } else {
+                            onNewChat()
+                        }
+                    }) {
+                        Icon(Icons.Filled.Edit, contentDescription = stringResource(R.string.chat_menu_new_chat))
+                    }
                     // iOS: "..." circle button → dropdown menu
                     Box {
                         IconButton(onClick = { showChatMenu = true }) {
@@ -2223,24 +2238,6 @@ fun ChatScreen(
                             // of the memory_get / memory_write tools and the
                             // system-prompt injection.
                             val menuMemoryEnabled by viewModel.memoryEnabled.collectAsState()
-                            // [T-new-chat-menu-entry] New Chat — first item
-                            // (iOS parity: square.and.pencil at the top of the
-                            // "..." menu). Streaming sessions confirm first.
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.chat_menu_new_chat)) },
-                                onClick = {
-                                    showChatMenu = false
-                                    if (isStreaming) {
-                                        showNewChatStopDialog = true
-                                    } else {
-                                        onNewChat()
-                                    }
-                                },
-                                leadingIcon = {
-                                    Icon(Icons.Outlined.Forum, contentDescription = null)
-                                },
-                            )
-                            MinisMenuDivider()
                             // Open Terminal (iOS parity) — session-bound, starts in /var/minis
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.chat_menu_open_terminal)) },
@@ -2395,17 +2392,6 @@ fun ChatScreen(
                                     },
                                 )
                             }
-                            // Token Usage (iOS parity)
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.settings_token_usage)) },
-                                onClick = {
-                                    showChatMenu = false
-                                    showTokenUsageSheet = true
-                                },
-                                leadingIcon = {
-                                    Icon(Icons.Default.DataUsage, contentDescription = null)
-                                },
-                            )
                             // Enhanced Cache (iOS parity, commit 57aaf122):
                             // 1-hour Anthropic cache TTL. Only shown for the
                             // official Anthropic API (not relays / other
