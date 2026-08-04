@@ -113,6 +113,50 @@ class ProviderRepository(private val context: Context) {
             while (s.endsWith("/")) s = s.dropLast(1)
             return s
         }
+
+        /**
+         * [reorder-unify] Reorder [current] to match the id sequence in
+         * [newOrder], or return null if [newOrder] isn't a faithful
+         * permutation of it.
+         *
+         * Every drag-reorder mutator routes through here. A UI drag reports
+         * "id A moved to where id B was", and the resulting order is computed
+         * against a snapshot the UI read earlier — which may already be stale
+         * (a cascade cleanup, a background model refresh, or a second screen
+         * could have removed or added an element mid-gesture). Applying a
+         * stale permutation blindly would silently drop or duplicate the
+         * user's data, so a rejected reorder (null) is the safe outcome: the
+         * caller keeps the persisted order and the row snaps back.
+         *
+         * Rejects, in order:
+         *  - a length mismatch (something was added/removed mid-drag),
+         *  - duplicate ids on either side. An already-corrupted [current]
+         *    holding two elements with the same id cannot be reordered by id
+         *    unambiguously, and a [newOrder] naming an id twice would
+         *    duplicate one element while dropping another. Note this case is
+         *    NOT caught by the set comparison below: current ids [A, B, B]
+         *    against newOrder [B, A, B] matches on both length and id-set,
+         *    yet applying it would lose one of the two B elements. Refuse.
+         *  - an id-set mismatch (same count, different membership).
+         *
+         * Reordering is by id lookup rather than by index, so the elements
+         * themselves are carried across untouched.
+         */
+        fun <T> permuteById(
+            current: List<T>,
+            newOrder: List<String>,
+            idOf: (T) -> String,
+        ): List<T>? {
+            if (newOrder.size != current.size) return null
+            val currentIds = current.map(idOf)
+            val currentIdSet = currentIds.toSet()
+            if (currentIdSet.size != currentIds.size) return null
+            val newOrderSet = newOrder.toSet()
+            if (newOrderSet.size != newOrder.size) return null
+            if (newOrderSet != currentIdSet) return null
+            val byId = current.associateBy(idOf)
+            return newOrder.mapNotNull { byId[it] }
+        }
     }
 
     /** Record the time of a successful model fetch for [instanceId]. */
@@ -1136,16 +1180,58 @@ class ProviderRepository(private val context: Context) {
     // that [newOrder] is a permutation of the current list to defend
     // against a stale dragged-from-different-snapshot reorder slipping
     // in mid-write (e.g. a cascade-cleanup raced with the drag).
+    //
+    // [reorder-unify] Validation now goes through [permuteById] — the same
+    // guard the Model Groups reorder uses. That's stricter than the previous
+    // `toSet() != cur` check, which compared sets only: a list holding a
+    // duplicate id (possible in configs persisted before the agent-loop
+    // dedup fix) has a set equal to a shorter deduped newOrder, so the old
+    // check would accept an order that silently dropped an element. Length
+    // and duplicate-collapse are now both rejected.
+    // The `.toList()` copies are deliberate: [permuteById] walks `current`
+    // more than once (map + associateBy), and these are the live
+    // MutableLists inside the published config. Reading them directly while
+    // a background writer publishes a new config is the exact
+    // ConcurrentModificationException class that mutationSnapshot() and
+    // ProviderConfigSnapshotTest exist to prevent.
     fun reorderAgentLoopEntries(newOrder: List<String>) {
-        val cur = _config.value.agentLoopModelEntryIds.toSet()
-        if (newOrder.toSet() != cur) return
-        setAgentLoopEntryIds(newOrder)
+        val cur = _config.value.agentLoopModelEntryIds.toList()
+        val reordered = permuteById(cur, newOrder) { it } ?: return
+        setAgentLoopEntryIds(reordered)
     }
 
     fun reorderAgentLoopGroups(newOrder: List<String>) {
-        val cur = _config.value.agentLoopGroupIds.toSet()
-        if (newOrder.toSet() != cur) return
-        setAgentLoopGroupIds(newOrder)
+        val cur = _config.value.agentLoopGroupIds.toList()
+        val reordered = permuteById(cur, newOrder) { it } ?: return
+        setAgentLoopGroupIds(reordered)
+    }
+
+    /**
+     * [reorder-unify] Persist a user-arranged order for the Model Groups list.
+     *
+     * Unlike [reorderAgentLoopGroups], this order is presentation-only: which
+     * group is the default primary/sub is decided by the explicit
+     * [defaultPrimaryGroupId] / [defaultSubGroupId] ids, and routing inside a
+     * group is decided by its own strategy. Nothing reads `modelGroups`
+     * positionally to make a decision — so reordering here only changes what
+     * the user sees, never behaviour. It's still worth persisting: the list is
+     * hand-curated and grows, and users want their common groups on top.
+     *
+     * [newOrder] is a list of group ids. As with the agent-loop reorders, it
+     * must be a permutation of the currently persisted set; anything else is
+     * a stale snapshot (e.g. a cascade cleanup removed a group mid-drag) and
+     * is dropped rather than applied, so a race can't silently delete or
+     * duplicate a group. Reordering is done by lookup (not by index) so the
+     * ModelGroup objects themselves are carried over untouched.
+     */
+    fun reorderGroups(newOrder: List<String>) = synchronized(configLock) {
+        ensureConfigLoaded()
+        val config = mutationSnapshot(_config.value)
+        val reordered = permuteById(config.modelGroups, newOrder) { it.id }
+            ?: return@synchronized
+        config.modelGroups.clear()
+        config.modelGroups.addAll(reordered)
+        saveConfig(config)
     }
 
     /**

@@ -1,7 +1,5 @@
 package com.openminis.app.ui.settings
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,9 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -37,12 +33,9 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.openminis.app.R
 import com.openminis.app.data.model.ProviderConfig
 import com.openminis.app.data.repository.ProviderRepository
@@ -350,22 +343,10 @@ private fun AgentLoopRow(
             .padding(horizontal = 8.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // T198: drag handle must be wrapped in IconButton — Icon is raw
-        // vector graphics with no pointer consumer, so reorderable v2.4.0's
-        // draggableHandle() never sees ACTION_DOWN/MOVE on a bare Icon.
-        // IconButton is Compose's clickable container and consumes pointer
-        // events, letting the dragHandleModifier route gestures correctly.
-        IconButton(
-            onClick = {},
-            modifier = dragHandleModifier.size(36.dp),
-        ) {
-            Icon(
-                imageVector = Icons.Default.DragHandle,
-                contentDescription = stringResource(R.string.model_group_detail_drag_to_reorder),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                modifier = Modifier.size(20.dp),
-            )
-        }
+        // [reorder-unify] Shared with the Model Groups list; see
+        // DragHandleButton in ReorderableCardRow.kt for why the handle has to
+        // be an IconButton (T198) rather than a bare Icon.
+        DragHandleButton(handleModifier = dragHandleModifier)
         Column(modifier = Modifier.weight(1f).padding(start = 4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
@@ -398,71 +379,5 @@ private fun AgentLoopRow(
                 modifier = Modifier.size(18.dp),
             )
         }
-    }
-}
-// ── T313 LazyList card helpers ────────────────────────────────────────────
-//
-// SectionCard / SectionDivider from SectionDesign are designed for
-// Column-scoped sections, but the agent-loop section needs each row to
-// stay a top-level LazyColumn item so ReorderableLazyListState (T186) can
-// see it. These helpers paint the SectionDesign card visual on a per-row
-// basis: cardRow() applies horizontal insets + surface fill + per-row
-// corner clipping; SectionDividerInsetCard() draws the inner divider
-// between consecutive rows so the painted run reads as one panel.
-
-@Composable
-private fun Modifier.cardRow(isFirst: Boolean, isLast: Boolean): Modifier {
-    val shape = when {
-        isFirst && isLast -> SectionDesign.CardShape
-        isFirst -> RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp)
-        isLast -> RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp)
-        else -> RectangleShape
-    }
-    // Match SectionCard's inner Column vertical padding so first/last rows
-    // get the same breathing room from the card edge as Sections 1 & 2.
-    return this
-        .padding(horizontal = SectionDesign.ScreenHorizontalPadding)
-        .clip(shape)
-        .background(SectionDesign.cardColor())
-        .padding(
-            top = if (isFirst) SectionDesign.CardInnerVerticalPadding else 0.dp,
-            bottom = if (isLast) SectionDesign.CardInnerVerticalPadding else 0.dp,
-        )
-}
-
-/** Divider between two cardRow rows. Painted on the same surface fill so
- *  it reads as an inset divider inside the card panel rather than a hard
- *  line floating on the page background. */
-@Composable
-private fun SectionDividerInsetCard() {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = SectionDesign.ScreenHorizontalPadding)
-            .background(SectionDesign.cardColor()),
-    ) {
-        HorizontalDivider(
-            modifier = Modifier.padding(start = SectionDesign.DividerStartInset),
-            thickness = SectionDesign.DividerThickness,
-            color = SectionDesign.dividerColor(),
-        )
-    }
-}
-
-@Composable
-private fun BadgeLabel(text: String, color: androidx.compose.ui.graphics.Color) {
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(4.dp))
-            .background(color.copy(alpha = 0.12f))
-            .padding(horizontal = 6.dp, vertical = 2.dp),
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelSmall,
-            color = color,
-            fontWeight = FontWeight.SemiBold,
-            fontSize = 11.sp,
-        )
     }
 }
