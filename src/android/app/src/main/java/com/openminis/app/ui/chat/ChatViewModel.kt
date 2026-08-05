@@ -3092,24 +3092,22 @@ class ChatViewModel(
                     "db.query.end",
                     "count=${rows.size}",
                 )
-                val chatUi = rows.toChatMessages()
+                // Parse partsJson once, then build both UI and LLM representations
+                // from the parsed data. Eliminates the duplicate JSONArray/JSONObject
+                // allocations that were the second contributor to the GC storm
+                // (see T-android-gc-storm-hang-crash).
+                val parsed = parseRows(rows)
+                val chatUi = buildChatMessages(parsed)
                 val tIoAfterTransform = System.currentTimeMillis()
                 com.openminis.app.diagnostics.PerfLongCtx.step(
                     sessionId,
                     "toChatMessages.end",
                     "count=${chatUi.size}",
                 )
-                // Pre-build the LLM history list off-Main too — toLLMMessage
-                // re-parses partsJson for every row, which is the second
-                // contributor to the GC storm. Build into a local list and
-                // bulk-append to `agentHistory` on Main below; loadSession
-                // runs once at init before any other writer touches
-                // agentHistory, so a bulk addAll is race-free.
-                val llm = ArrayList<LLMMessage>(rows.size)
+                val llm = buildLlmMessages(parsed)
                 var totalPartsChars = 0L
-                for (entity in rows) {
-                    totalPartsChars += entity.partsJson.length
-                    llm.add(entity.toLLMMessage())
+                for (row in parsed) {
+                    totalPartsChars += row.sourceChars
                 }
                 com.openminis.app.diagnostics.PerfLongCtx.step(
                     sessionId,
@@ -9525,44 +9523,32 @@ Environment variables:
         }
     }
 
-    private fun List<MessageEntity>.toChatMessages(): List<ChatMessage> {
-        // First pass: extract all toolResult data keyed by toolUseId
+    private fun buildChatMessages(parsed: List<ParsedRow>): List<ChatMessage> {
+        // First pass: extract all toolResult data keyed by toolUseId.
+        // No JSON parsing — parts are already parsed.
         val toolResultMap = mutableMapOf<String, ToolResultData>()
-        for (entity in this) {
-            if (entity.role != "user") continue
-            try {
-                val array = org.json.JSONArray(entity.partsJson)
-                for (i in 0 until array.length()) {
-                    val obj = array.getJSONObject(i)
-                    if (obj.optString("type") == "toolResult") {
-                        val value = obj.getJSONObject("value")
-                        val toolUseId = value.optString("toolUseId", "")
-                        if (toolUseId.isNotEmpty()) {
-                            toolResultMap[toolUseId] = ToolResultData(
-                                output = value.optString("output", ""),
-                                success = value.optBoolean("success", true),
-                            )
-                        }
+        for (row in parsed) {
+            if (row.entity.role != "user") continue
+            for (part in row.parts) {
+                if (part is ParsedPart.ToolResult) {
+                    if (part.toolUseId.isNotEmpty()) {
+                        toolResultMap[part.toolUseId] = ToolResultData(
+                            output = part.output,
+                            success = part.success,
+                        )
                     }
                 }
-            } catch (_: Exception) { /* skip malformed */ }
+            }
         }
 
-        // Second pass: convert messages, merging tool results into blocks
-        // Filter out user messages that only contain toolResult parts (no visible text)
-        return mapNotNull { entity ->
+        // Second pass: convert messages, merging tool results into blocks.
+        // Filter out user messages that only contain toolResult parts (no visible text).
+        return mapNotNull(parsed) { row ->
+            val entity = row.entity
             var text = ""
             val blocks = mutableListOf<AssistantBlock>()
-            // T128: media attachments persisted under user messages as `mediaRef`
-            // parts. Restored to file:// URIs (stable across app restarts) and
-            // their original filenames so UserAttachmentList renders the same
-            // tiles after a session reload.
             val restoredImageUris = mutableListOf<Uri>()
             val restoredAttachmentNames = mutableListOf<String>()
-            // T150: file:// URIs of restored non-image attachments, in the
-            // same order as the non-image suffix of restoredAttachmentNames.
-            // Powers the user-bubble file chip → FilePreviewScreen tap after
-            // a session reload.
             val restoredAttachmentUris = mutableListOf<Uri>()
 
             if (entity.role == "assistant" && !entity.reasoningContent.isNullOrEmpty()) {
@@ -9575,34 +9561,30 @@ Environment variables:
                 ))
             }
 
-            try {
-                val array = org.json.JSONArray(entity.partsJson)
+            if (row.malformed) {
+                // T-PARTS-FALLBACK: short placeholder so the row still appears
+                // (so the user can delete or scroll past it) but no longer
+                // pulls megabytes through the layout pass.
+                Log.w(
+                    TAG,
+                    "buildChatMessages: failed to parse partsJson for id=${entity.id} " +
+                        "len=${row.sourceChars} role=${entity.role}",
+                )
+                text = "(message could not be parsed: ${row.sourceChars} bytes)"
+            } else {
                 var textBlockCounter = 0
-                for (i in 0 until array.length()) {
-                    val obj = array.getJSONObject(i)
-                    when (obj.optString("type")) {
-                        "text" -> {
-                            val raw = obj.optString("value", "")
-                            // Strip <system-reminder>...</system-reminder> blocks
-                            // here only — agentHistory in memory and the DB row
-                            // both keep the raw text, so the LLM still sees the
-                            // reminder on subsequent turns. UI just hides it.
-                            // If a part was *only* a reminder, the cleaned
-                            // string is empty and we skip it so we don't render
-                            // a phantom blank text block.
-                            // [T-android-retry-attachment-loss] Also strip the
-                            // now-persisted <user-attached-files> XML so it
-                            // doesn't render in the user bubble (file chips come
-                            // from mediaRef parts). The DB row + agentHistory
-                            // keep the raw XML so the model still sees paths.
+                for (part in row.parts) {
+                    when (part) {
+                        is ParsedPart.Text -> {
+                            val raw = part.value
+                            // Strip <system-reminder> and <user-attached-files>
+                            // from UI display only. The DB row + agentHistory
+                            // keep the raw text so the LLM still sees it.
                             val t = stripAttachedFilesXml(stripSystemReminders(raw)).let {
                                 if (it != raw) it.trim() else it
                             }
                             if (t.isEmpty()) continue
                             text += t
-                            // For assistant messages, also push the text as a block so
-                            // the renderer can preserve the original text↔tool ordering.
-                            // For user messages we keep using the `text` field only.
                             if (entity.role == "assistant") {
                                 blocks.add(AssistantBlock(
                                     id = "text_restored_${entity.id}_${textBlockCounter++}",
@@ -9611,21 +9593,16 @@ Environment variables:
                                 ))
                             }
                         }
-                        "toolUse" -> {
-                            val value = obj.getJSONObject("value")
-                            val toolId = value.optString("toolUseId", "")
+                        is ParsedPart.ToolUse -> {
+                            val toolId = part.id
                             if (toolId.startsWith("thinking_")) continue
-                            val toolInput = value.optString("input", "")
-                            // Merge tool result output (iOS: block.content = tr.output)
                             val result = toolResultMap[toolId]
-                            val pageURL = value.optString("pageURL", "").ifEmpty { null }
-                            val imgPath = value.optString("imageFilePath", "").ifEmpty { null }
                             blocks.add(AssistantBlock(
                                 id = toolId,
                                 kind = "tool_use",
-                                toolName = value.optString("name", ""),
-                                toolTitle = value.optString("description", ""),
-                                toolArgs = toolInput,
+                                toolName = part.name,
+                                toolTitle = part.description,
+                                toolArgs = part.input,
                                 content = result?.output?.lines()?.takeLast(80)?.joinToString("\n") ?: "",
                                 toolStatus = when {
                                     result == null -> ToolBlockStatus.SUCCESS
@@ -9636,60 +9613,36 @@ Environment variables:
                                     result.success -> ToolBlockStatus.SUCCESS
                                     else -> ToolBlockStatus.FAILED
                                 },
-                                browserURL = pageURL,
-                                imageFilePath = imgPath,
+                                browserURL = part.pageURL,
+                                imageFilePath = part.imageFilePath,
                             ))
                         }
-                        "mediaRef" -> {
+                        is ParsedPart.MediaRef -> {
+                            // T128: restore persisted media file:// URIs so images and
+                            // attachments survive a session reload.
+                            // T150: non-image attachments are streamed separately;
+                            // only image files are inlined below.
                             if (entity.role != "user") continue
-                            val value = obj.optJSONObject("value") ?: continue
-                            val rel = value.optString("relativePath", "")
+                            val rel = part.relativePath
                             if (rel.isEmpty()) continue
                             val file = java.io.File(mediaStore.mediaBaseDir, rel)
                             if (!file.exists()) continue
-                            val mime = value.optString("mimeType", "")
-                            val name = value.optString("originalFileName", "").ifEmpty { file.name }
-                            // T150: branch on mime so non-image mediaRefs land
-                            // in the file-chip column instead of polluting
-                            // imageUris (which feeds the image gallery).
-                            if (mime.startsWith("image/")) {
+                            val name = part.originalFileName.ifEmpty { file.name }
+                            if (part.mimeType.startsWith("image/")) {
                                 restoredImageUris.add(Uri.fromFile(file))
                             } else {
                                 restoredAttachmentUris.add(Uri.fromFile(file))
                             }
                             restoredAttachmentNames.add(name)
                         }
-                        // toolResult in user messages handled in first pass above
+                        // ParsedPart.ToolResult handled in first pass above
                     }
                 }
-            } catch (e: Exception) {
-                // T-PARTS-FALLBACK: previously this catch dumped the entire
-                // partsJson into `text` as a degraded fallback. That meant
-                // any malformed (or unexpectedly large) row rendered its
-                // raw JSON — including any inlined base64 — as a plain
-                // user/assistant bubble, which then locked up Compose's
-                // StaticLayout for tens of seconds (see HangDetector report
-                // for session e84882d7 / 820 KB partsJson). Replace with a
-                // short, fixed-size placeholder so the row still appears
-                // (so the user can delete or scroll past it) but no longer
-                // pulls megabytes through the layout pass.
-                Log.w(
-                    TAG,
-                    "toChatMessages: failed to parse partsJson for id=${entity.id} " +
-                        "len=${entity.partsJson.length} role=${entity.role}: ${e.javaClass.simpleName}: ${e.message}",
-                )
-                text = "(message could not be parsed: ${e.javaClass.simpleName}, " +
-                    "${entity.partsJson.length} bytes)"
             }
 
-            // Skip user messages with no visible content (toolResult-only internal messages,
-            // or messages that were entirely a system-reminder). A user message that is
-            // *only* an image attachment (no caption) still has visible content and must
-            // not be skipped — restoredImageUris carries it.
+            // Skip user messages with no visible content
             if (entity.role == "user" && text.isBlank() && restoredImageUris.isEmpty()) return@mapNotNull null
-            // Skip assistant messages that became empty after stripping system-reminders
-            // and have no tool / thinking blocks to fall back on — would otherwise
-            // render as a phantom blank assistant bubble.
+            // Skip assistant messages that became empty
             if (entity.role == "assistant" && text.isBlank() && blocks.isEmpty()) return@mapNotNull null
             ChatMessage(
                 id = entity.id,
@@ -9700,26 +9653,14 @@ Environment variables:
                 attachmentUris = restoredAttachmentUris,
                 toolBlocks = blocks,
                 sourceDbIds = listOf(entity.id),
-                // [T-error-persist-android] Restore the persisted terminal error
-                // so the inline error banner + Retry button survive a reload.
-                // Coalesce a blank value to null: the UI gate is `error?.let`, so
-                // a non-null "" would render an empty banner. Defends against any
-                // legacy/other-writer "" row.
                 error = entity.errorInfo?.takeIf { it.isNotBlank() },
             )
         }.let { messages ->
             // Merge consecutive assistant messages into one:
-            // agent loop persists each turn separately, but UI should show them as a single message.
             val merged = mutableListOf<ChatMessage>()
             for (msg in messages) {
                 val prev = merged.lastOrNull()
                 if (msg.role == "assistant" && prev?.role == "assistant") {
-                    // Merge: combine tool blocks, append text, keep the last id.
-                    // Deduplicate by block.id — the agent loop may persist the same tool
-                    // use in multiple consecutive turns (as it carries tool state across),
-                    // and duplicated ids would crash LazyColumn's key uniqueness check.
-                    // Keep the LAST occurrence so the most recent status (e.g. SUCCESS with
-                    // output) wins over an earlier STREAMING placeholder.
                     val seen = mutableSetOf<String>()
                     val combinedBlocks = (prev.toolBlocks + msg.toolBlocks)
                         .asReversed()
@@ -9734,15 +9675,7 @@ Environment variables:
                         id = msg.id,
                         content = combinedText,
                         toolBlocks = combinedBlocks,
-                        // T126-marker: keep every source dbId so Phase 2.5
-                        // can resolve markers that point at any of the
-                        // pre-merge rows (lastCompactedMessageId is often
-                        // an assistant row that gets folded into a later
-                        // assistant turn).
                         sourceDbIds = prev.sourceDbIds + msg.sourceDbIds,
-                        // [T-error-persist-android] The error sticker is written
-                        // to the LAST assistant row of the turn, so the later row
-                        // (`msg`) wins; fall back to `prev` if only it carried one.
                         error = msg.error ?: prev.error,
                     )
                 } else {
@@ -9756,93 +9689,92 @@ Environment variables:
     private data class ToolResultData(val output: String, val success: Boolean)
 
     private fun MessageEntity.toLLMMessage(): LLMMessage {
-        val r = if (role == "user") LLMMessage.Role.USER else LLMMessage.Role.ASSISTANT
+        val parts = parsePartsJson(partsJson)
+        val malformed = parts.isEmpty() && partsJson.isNotBlank()
+        return buildSingleLlmMessage(this, partsJson, parts, malformed)
+    }
+
+    private fun buildLlmMessages(parsed: List<ParsedRow>): List<LLMMessage> {
+        val result = ArrayList<LLMMessage>(parsed.size)
+        for (row in parsed) {
+            result.add(buildSingleLlmMessage(row.entity, row.entity.partsJson, row.parts, row.malformed))
+        }
+        return result
+    }
+
+    private fun buildSingleLlmMessage(
+        entity: MessageEntity,
+        partsJson: String,
+        parts: List<ParsedPart>,
+        malformed: Boolean,
+    ): LLMMessage {
+        val r = if (entity.role == "user") LLMMessage.Role.USER else LLMMessage.Role.ASSISTANT
         val contentParts = mutableListOf<AgentContentPart>()
         val imageParts = mutableListOf<LLMMessage.ImagePart>()
-        var textContent = ""
+        val textContent = StringBuilder()
 
-        try {
-            val array = org.json.JSONArray(partsJson)
-            for (i in 0 until array.length()) {
-                val obj = array.getJSONObject(i)
-                when (obj.optString("type")) {
-                    "text" -> {
-                        val value = obj.optString("value", "")
-                        // [T-android-retry-attachment-loss] The persisted
-                        // <user-attached-files> XML must reach the model via a
-                        // contentPart (provider prefers contentParts), but it
-                        // must NOT fold into `content`. On a FRESH send the
-                        // `content` field is the clean caption (`trimmed`) and
-                        // the XML lives only in contentParts; keep restored
-                        // messages byte-identical so `.content` consumers
-                        // (summary, title fallback, edit) see the same string
-                        // as a fresh turn and don't get the XML twice.
+        if (malformed) {
+            textContent.append(partsJson)
+            contentParts.add(AgentContentPart.Text(partsJson))
+        } else {
+            for (part in parts) {
+                when (part) {
+                    is ParsedPart.Text -> {
+                        val value = part.value
                         if (value.contains("<user-attached-files>")) {
                             contentParts.add(AgentContentPart.Text(value))
                         } else {
-                            textContent += value
+                            textContent.append(value)
                             contentParts.add(AgentContentPart.Text(value))
                         }
                     }
-                    "toolUse" -> {
-                        val v = obj.getJSONObject("value")
-                        val inputStr = v.optString("input", "{}")
+                    is ParsedPart.ToolUse -> {
                         val inputJson = try {
-                            JSONObject(inputStr)
+                            org.json.JSONObject(part.input)
                         } catch (_: Exception) {
-                            JSONObject()
+                            org.json.JSONObject()
                         }
                         contentParts.add(AgentContentPart.ToolUse(
-                            id = v.optString("toolUseId", ""),
-                            name = v.optString("name", ""),
+                            id = part.id,
+                            name = part.name,
                             input = inputJson,
                         ))
                     }
-                    "toolResult" -> {
-                        val v = obj.getJSONObject("value")
+                    is ParsedPart.ToolResult -> {
                         contentParts.add(AgentContentPart.ToolResult(
-                            id = v.optString("toolUseId", ""),
-                            name = v.optString("name", ""),
-                            content = v.optString("output", ""),
-                            isError = !v.optBoolean("success", true),
+                            id = part.toolUseId,
+                            name = part.name,
+                            content = part.output,
+                            isError = !part.success,
                         ))
                     }
-                    "mediaRef" -> {
-                        // T128: load persisted user-message images so the model
-                        // sees them on subsequent turns after a session reload.
-                        // T150: skip non-image mediaRefs here — their bytes
-                        // shouldn't be re-inlined into the LLM payload (parity
-                        // with the on-send path, which only inlines images).
-                        // The original turn's <user-attached-files> XML stayed
-                        // in the persisted text part, and the file is still
-                        // on disk under attachments/uploads, so the agent can
-                        // re-fetch via shell tools.
-                        val v = obj.optJSONObject("value") ?: continue
-                        val rel = v.optString("relativePath", "")
+                    is ParsedPart.MediaRef -> {
+                        // T128: restore persisted image files so they survive a
+                        // session reload; only image mediaRefs are inlined into the
+                        // model request (T150: non-image attachments are streamed
+                        // to disk and never re-inlined into contentParts).
+                        val rel = part.relativePath
                         if (rel.isEmpty()) continue
-                        val mime = v.optString("mimeType", "image/jpeg")
+                        val mime = part.mimeType
                         if (!mime.startsWith("image/")) continue
                         val file = java.io.File(mediaStore.mediaBaseDir, rel)
                         if (!file.exists()) continue
                         val bytes = try { file.readBytes() } catch (_: Exception) { continue }
-                        val restoredPath = v.optString("linuxPath", "").ifEmpty { null }
+                        val restoredPath = part.linuxPath
                         imageParts.add(LLMMessage.ImagePart(bytes, mime, linuxPath = restoredPath))
                         contentParts.add(AgentContentPart.ImageData(bytes, mime, linuxPath = restoredPath))
                     }
                 }
             }
-        } catch (_: Exception) {
-            textContent = partsJson
-            contentParts.add(AgentContentPart.Text(partsJson))
         }
 
         return LLMMessage(
             role = r,
-            content = textContent,
+            content = textContent.toString(),
             imageParts = imageParts,
             contentParts = contentParts,
-            dbMessageId = id,
-            reasoningContent = reasoningContent,
+            dbMessageId = entity.id,
+            reasoningContent = entity.reasoningContent,
         )
     }
 
