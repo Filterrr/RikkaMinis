@@ -45,6 +45,7 @@
     <string name="token_usage_cache_write">緩存寫入</string>
     <string name="token_usage_section_agent_loop">Agent 循環</string>
     <string name="token_usage_total_loops">總循環次數</string>
+    <string name="usage_label_cache_hit_rate">緩存命中率</string>
     <string name="common_on">開</string>
     <string name="common_off">關</string>
     <string name="common_yes">是</string>
