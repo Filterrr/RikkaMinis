@@ -983,7 +983,7 @@
     <string name="input_history_search_hint">Rechercher des messages…</string>
     <string name="input_history_search">Rechercher</string>
     <string name="input_history_done">Terminé</string>
-    <string name="input_history_empty">Aucun message pour l'instant</string>
+    <string name="input_history_empty">Aucun message pour l\'instant</string>
     <string name="input_history_no_match">Aucun message correspondant</string>
     <string name="appearance_chat_menu_section_menu">Top-right menu</string>
     <string name="appearance_chat_menu_section_footer">History drawer footer</string>
