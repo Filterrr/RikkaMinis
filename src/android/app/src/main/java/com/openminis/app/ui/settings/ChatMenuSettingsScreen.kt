@@ -114,22 +114,18 @@ fun ChatMenuSettingsScreen(
     ) {
         // Section 0: Top bar pinned buttons — high-frequency actions always
         // visible in the top bar (alongside New Chat), independent of the "..."
-        // menu pool. Currently only one: Input History.
+        // menu pool.
         SettingsSection(
             header = stringResource(R.string.appearance_chat_menu_section_topbar),
             footer = null,
         ) {
-            SettingsItem(
+            SettingsSwitchRow(
                 title = stringResource(R.string.input_history_title),
-                description = stringResource(R.string.input_history_topbar_description),
-                trailingContent = {
-                    Switch(
-                        checked = ChatMenuPrefs.isTopBarInputHistoryVisible(prefs),
-                        onCheckedChange = { newValue ->
-                            ChatMenuPrefs.setTopBarInputHistoryVisible(prefs, newValue)
-                            prefsTick++
-                        },
-                    )
+                subtitle = stringResource(R.string.input_history_topbar_description),
+                checked = ChatMenuPrefs.isTopBarInputHistoryVisible(prefs),
+                onCheckedChange = { newValue ->
+                    ChatMenuPrefs.setTopBarInputHistoryVisible(prefs, newValue)
+                    prefsTick++
                 },
             )
         }
