@@ -2039,14 +2039,26 @@ fun ChatScreen(
                 // [bottom-toolbar-customizable] Footer: resolved action list +
                 // single dispatcher. The drawer no longer owns Settings/Token
                 // Usage semantics — the caller (dispatchChatAction) does, so
-                // footer taps behave exactly like their "..." menu twins. Taps
-                // close the drawer (suspending inside historyDrawerScope, so
-                // the slash-menu focus restore below runs only after the
-                // drawer is fully closed) and then fire the action.
+                // footer taps behave exactly like their "..." menu twins.
+                //
+                // dispatch order mirrors the pre-refactor drawer (onSettings /
+                // onTokenUsage): fire the action immediately and let the drawer
+                // close in a parallel launch. Suspending close()-then-dispatch
+                // was NOT equivalent and broke footer taps on device — a
+                // ModalNavigationDrawer AnchoredDraggable close() can suspend
+                // until the sheet settles, and the trailing dispatch then never
+                // runs (footer buttons "did nothing"). Only SLASH_COMMANDS
+                // genuinely needs the drawer closed first (it re-focuses the
+                // composer underneath), so it alone waits on close().
                 footerActions = footerSpecs,
                 onAction = { key ->
-                    historyDrawerScope.launch {
-                        historyDrawerState.close()
+                    if (key == ChatMenuPrefs.SLASH_COMMANDS) {
+                        historyDrawerScope.launch {
+                            historyDrawerState.close()
+                            dispatchChatAction(key)
+                        }
+                    } else {
+                        historyDrawerScope.launch { historyDrawerState.close() }
                         dispatchChatAction(key)
                     }
                 },
