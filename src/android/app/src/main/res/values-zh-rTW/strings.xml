@@ -825,6 +825,14 @@
     <string name="draft_label">草稿</string>
     <string name="draft_discard_confirm">丟棄這條未傳送的草稿？此操作無法復原。</string>
     <string name="storage_section_shell_detail">終端佔用明細</string>
+    <string name="appearance_chat_menu_section_topbar">頂欄按鈕</string>
+    <string name="input_history_title">歷史輸入</string>
+    <string name="input_history_topbar_description">在頂欄顯示可搜尋的訊息清單。點選任意條目可直接跳轉至該訊息。</string>
+    <string name="input_history_search_hint">搜尋訊息…</string>
+    <string name="input_history_search">搜尋</string>
+    <string name="input_history_done">完成</string>
+    <string name="input_history_empty">尚無訊息</string>
+    <string name="input_history_no_match">無符合訊息</string>
     <string name="appearance_chat_menu_section_menu">右上角選單</string>
     <string name="appearance_chat_menu_section_footer">歷史抽屜底欄</string>
     <string name="chat_menu_pin_to_footer">置於底欄</string>

@@ -46,6 +46,8 @@ class ChatActionState internal constructor(prefs: SharedPreferences) {
         ChatMenuPrefs.ALL_ENTRIES.associateWith { ChatMenuPrefs.isVisible(prefs, it) }
     private val pinned: Map<String, Boolean> =
         ChatMenuPrefs.ALL_ENTRIES.associateWith { ChatMenuPrefs.isPinned(prefs, it) }
+    /** Whether the "Input History" top-bar icon is shown. Defaults to true. */
+    val topBarInputHistoryVisible: Boolean = ChatMenuPrefs.isTopBarInputHistoryVisible(prefs)
 
     fun isVisible(key: String): Boolean =
         visible[key] ?: ChatMenuPrefs.defaultVisible(key)

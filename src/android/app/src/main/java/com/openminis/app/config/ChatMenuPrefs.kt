@@ -203,6 +203,25 @@ object ChatMenuPrefs {
             isPinned(prefs, SETTINGS),
         )
 
+    // -- Top-bar pinned-button visibility (independent of "..." menu entries) --
+
+    /**
+     * Key for the "Input History" top-bar icon (the always-visible list-bullet
+     * button alongside New Chat). Unlike the ten [ALL_ENTRIES] items it does
+     * NOT participate in the overflow menu or footer — it has a fixed top-bar
+     * slot. The preference only controls whether the icon is rendered at all.
+     * Default: true (visible).
+     */
+    const val TOP_BAR_INPUT_HISTORY = "topBar.inputHistory"
+    private const val TOP_BAR_INPUT_HISTORY_PREF = "topBar.inputHistory.visible"
+
+    fun isTopBarInputHistoryVisible(prefs: SharedPreferences): Boolean =
+        prefs.getBoolean(TOP_BAR_INPUT_HISTORY_PREF, true)
+
+    fun setTopBarInputHistoryVisible(prefs: SharedPreferences, visible: Boolean) {
+        prefs.edit().putBoolean(TOP_BAR_INPUT_HISTORY_PREF, visible).apply()
+    }
+
     // -- Persist helpers --
 
     /** Persist a new "..." menu order (comma-separated, sanitized). */

@@ -1369,6 +1369,14 @@
     <string name="draft_label">草稿</string>
     <string name="draft_discard_confirm">丢弃这条未发送的草稿？此操作无法撤销。</string>
     <string name="storage_section_shell_detail">终端占用明细</string>
+    <string name="appearance_chat_menu_section_topbar">顶栏按钮</string>
+    <string name="input_history_title">历史输入</string>
+    <string name="input_history_topbar_description">在顶栏显示可搜索的消息列表。点击任意条目可直接跳转到该消息。</string>
+    <string name="input_history_search_hint">搜索消息…</string>
+    <string name="input_history_search">搜索</string>
+    <string name="input_history_done">完成</string>
+    <string name="input_history_empty">暂无消息</string>
+    <string name="input_history_no_match">无匹配消息</string>
     <string name="appearance_chat_menu_section_menu">右上角菜单</string>
     <string name="appearance_chat_menu_section_footer">历史抽屉底栏</string>
     <string name="chat_menu_pin_to_footer">置于底栏</string>

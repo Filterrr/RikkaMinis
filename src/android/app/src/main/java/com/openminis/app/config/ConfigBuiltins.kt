@@ -484,6 +484,19 @@ internal object ConfigBuiltins {
                 maxLength = 512,
             )
         )
+        // Top-bar pinned-button visibility (independent of the "..." menu pool).
+        r.register(
+            PrefsBoolField(
+                path = "appearance.topBar.inputHistory",
+                displayName = "Top bar: show Input History button",
+                description = "When ON, a list-bullet icon appears in the top bar alongside New Chat, " +
+                    "giving one-tap access to a searchable history of all messages in the session. " +
+                    "Hiding it does not disable the feature — it can still be re-enabled here.",
+                prefs = appearancePrefs,
+                key = "topBar.inputHistory.visible",
+                defaultValue = true,
+            )
+        )
     }
 
     /** Mirrors iOS `fontScaleField` — exposes the integer scale level
