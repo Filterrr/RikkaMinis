@@ -55,7 +55,7 @@ fun ExportFormatSheet(
             )
             ExportFormatRow(
                 title = stringResource(R.string.sessionlist_export_plain),
-                subtitle = "Plain Text",
+                subtitle = stringResource(R.string.sessionlist_export_plain),
                 onClick = { onExport("text") },
             )
             Spacer(modifier = Modifier.height(8.dp))
