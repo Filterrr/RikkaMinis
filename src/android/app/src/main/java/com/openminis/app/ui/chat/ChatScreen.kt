@@ -667,12 +667,6 @@ fun ChatScreen(
     // [bottom-toolbar-customizable] Export format picker shared by the "..." menu
     // and the history-drawer footer (replaces the old inline submenu).
     var showExportFormatSheet by remember { mutableStateOf(false) }
-    // [bottom-toolbar-customizable] Action id awaiting dispatch after the history
-    // drawer is fully closed (footer taps). Actions like the slash-menu focus
-    // restore must run only once the drawer's close animation has finished,
-    // otherwise the drawer is still covering the composer when we try to hand it
-    // focus. Footer taps are therefore deferred here instead of firing inline.
-    var pendingChatAction by remember { mutableStateOf<String?>(null) }
     // T185: Move-to-session sheet visibility. Hoisted to the top of
     // ChatScreen so the trigger (capsule inside the composer) and the
     // sheet body (rendered later in the layout tree) share the same
@@ -2003,16 +1997,16 @@ fun ChatScreen(
         }
     }
 
-    // [bottom-toolbar-customizable] Footer taps are deferred until the drawer's
-    // close animation has actually finished — some actions (slash-menu focus
-    // restore) need the composer visible and focusable, which it isn't while
-    // the drawer sheet is still covering it.
-    LaunchedEffect(pendingChatAction) {
-        val key = pendingChatAction ?: return@LaunchedEffect
-        pendingChatAction = null
-        historyDrawerState.close()
-        dispatchChatAction(key)
-    }
+    // [bottom-toolbar-customizable] Footer taps dispatch directly via
+    // historyDrawerScope. We deliberately do NOT drive them through a keyed
+    // LaunchedEffect: a footer tap that sets a state key and then suspends on
+    // historyDrawerState.close() would be the LaunchedEffect's own key, so the
+    // effect would cancel its own coroutine the moment that state is written,
+    // killing close() and dropping the dispatch (footer buttons appeared to
+    // "do nothing"). Launching into historyDrawerScope (the un-keyed, shared
+    // scope, same as onNewChat / onOpenDraft) keeps the launch alive across
+    // recomposition; suspending close() inside it also makes sure the slash-menu
+    // focus restore runs only after the drawer fully closed.
     ModalNavigationDrawer(
         drawerState = historyDrawerState,
         gesturesEnabled = true,
@@ -2046,10 +2040,16 @@ fun ChatScreen(
                 // single dispatcher. The drawer no longer owns Settings/Token
                 // Usage semantics — the caller (dispatchChatAction) does, so
                 // footer taps behave exactly like their "..." menu twins. Taps
-                // set pendingChatAction; the LaunchedEffect above closes the
-                // drawer first and only then fires the action.
+                // close the drawer (suspending inside historyDrawerScope, so
+                // the slash-menu focus restore below runs only after the
+                // drawer is fully closed) and then fire the action.
                 footerActions = footerSpecs,
-                onAction = { key -> pendingChatAction = key },
+                onAction = { key ->
+                    historyDrawerScope.launch {
+                        historyDrawerState.close()
+                        dispatchChatAction(key)
+                    }
+                },
             )
         },
     ) {
