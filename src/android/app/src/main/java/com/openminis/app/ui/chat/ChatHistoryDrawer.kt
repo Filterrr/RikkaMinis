@@ -6,6 +6,8 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -18,10 +20,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.PushPin
-import androidx.compose.material.icons.outlined.DataUsage
-import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -44,6 +44,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.openminis.app.R
+import com.openminis.app.config.ChatActionSpec
 import com.openminis.app.data.db.ChatSessionEntity
 import com.openminis.app.data.repository.ChatRepository
 import com.openminis.app.service.SessionActivityTracker
@@ -78,10 +79,14 @@ import kotlinx.coroutines.launch
  *        the user deletes the chat they are currently viewing from the drawer
  *        (no visible button: creating a chat lives in the "..." menu and the
  *        session list).
- * @param onSettings open Settings.
- * @param onTokenUsage open the Token Usage sheet (global usage stats).
+ * @param footerActions the resolved, availability-filtered list of actions to
+ *        render in the bottom bar. Empty list hides the footer entirely
+ *        (divider + bar). Each spec carries the key, icon and title.
+ * @param onAction single dispatcher for footer action taps — the caller
+ *        resolves the key into the actual side effect (open sheet, navigate,
+ *        toggle state).
  */
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
 fun ChatHistoryDrawer(
     chatRepository: ChatRepository,
@@ -91,8 +96,8 @@ fun ChatHistoryDrawer(
     onDiscardDraft: () -> Unit = {},
     onSessionClick: (String) -> Unit,
     onNewChat: () -> Unit,
-    onSettings: () -> Unit,
-    onTokenUsage: () -> Unit,
+    footerActions: List<ChatActionSpec> = emptyList(),
+    onAction: (String) -> Unit = {},
 ) {
     val sessions by chatRepository.observeSessions()
         .collectAsState(initial = emptyList())
@@ -220,40 +225,36 @@ fun ChatHistoryDrawer(
                 }
             }
 
-            // Footer: a slim bottom bar with actions pinned to opposite ends
-            // (RikkaHub-style) — Token Usage (global usage stats) on the left,
-            // Settings on the right. Icon-only keeps the 300dp sheet
-            // uncluttered; two labelled rows stacked vertically read heavier
-            // and leave the corners empty. Browsing history is gesture-driven
-            // and New Chat lives in the top bar, so the footer holds just these
-            // two global exits.
-            HorizontalDivider(
-                modifier = Modifier.padding(horizontal = 12.dp),
-                thickness = 0.5.dp,
-                color = MaterialTheme.colorScheme.outlineVariant,
-            )
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                IconButton(onClick = onTokenUsage) {
-                    Icon(
-                        imageVector = Icons.Outlined.DataUsage,
-                        contentDescription = stringResource(R.string.settings_token_usage),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(22.dp),
-                    )
-                }
-                Spacer(modifier = Modifier.weight(1f))
-                IconButton(onClick = onSettings) {
-                    Icon(
-                        imageVector = Icons.Outlined.Settings,
-                        contentDescription = stringResource(R.string.settings),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(22.dp),
-                    )
+            // Footer: a configurable action bar rendered from the resolved pin
+            // order, filtered by availability (Skills / MCPs / Memory only show
+            // when their backing repository is present). FlowRow right-aligned
+            // lets the icons wrap naturally when the user pins many actions,
+            // while keeping the standard IconButton touch target. Empty list
+            // (nothing pinned) hides the footer entirely — divider + bar both
+            // gone — so the history list fills the drawer.
+            if (footerActions.isNotEmpty()) {
+                HorizontalDivider(
+                    modifier = Modifier.padding(horizontal = 12.dp),
+                    thickness = 0.5.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant,
+                )
+                FlowRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.End,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    footerActions.forEach { spec ->
+                        IconButton(onClick = { onAction(spec.key) }) {
+                            Icon(
+                                imageVector = spec.icon,
+                                contentDescription = stringResource(spec.titleRes),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(22.dp),
+                            )
+                        }
+                    }
                 }
             }
         }

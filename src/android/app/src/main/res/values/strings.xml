@@ -1479,4 +1479,8 @@
     <string name="draft_label">Draft</string>
     <string name="draft_discard_confirm">Discard this unsent draft? This cannot be undone.</string>
     <string name="storage_section_shell_detail">Shell breakdown</string>
+    <string name="appearance_chat_menu_section_menu">Top-right menu</string>
+    <string name="appearance_chat_menu_section_footer">History drawer footer</string>
+    <string name="chat_menu_pin_to_footer">Pin to footer</string>
+    <string name="chat_menu_settings_always_last">Always last</string>
 </resources>

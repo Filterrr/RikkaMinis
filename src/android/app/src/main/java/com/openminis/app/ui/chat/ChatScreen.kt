@@ -105,7 +105,6 @@ import androidx.compose.material.icons.filled.ArrowCircleUp
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.BugReport
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Check
@@ -139,7 +138,9 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Switch
 import com.openminis.app.BuildConfig
 import com.openminis.app.R
+import com.openminis.app.config.ChatActionCatalog
 import com.openminis.app.config.ChatMenuPrefs
+import com.openminis.app.config.isChatActionAvailable
 import com.openminis.app.data.FileMentionIndex
 import com.openminis.app.logging.AppLogger
 import com.openminis.app.ui.components.MinisAlertDialog
@@ -663,6 +664,15 @@ fun ChatScreen(
     // [T-mcp-integration-android] MCPs-in-Session sheet visibility.
     var showMcpsSheet by remember { mutableStateOf(false) }
     var showTokenUsageSheet by remember { mutableStateOf(false) }
+    // [bottom-toolbar-customizable] Export format picker shared by the "..." menu
+    // and the history-drawer footer (replaces the old inline submenu).
+    var showExportFormatSheet by remember { mutableStateOf(false) }
+    // [bottom-toolbar-customizable] Action id awaiting dispatch after the history
+    // drawer is fully closed (footer taps). Actions like the slash-menu focus
+    // restore must run only once the drawer's close animation has finished,
+    // otherwise the drawer is still covering the composer when we try to hand it
+    // focus. Footer taps are therefore deferred here instead of firing inline.
+    var pendingChatAction by remember { mutableStateOf<String?>(null) }
     // T185: Move-to-session sheet visibility. Hoisted to the top of
     // ChatScreen so the trigger (capsule inside the composer) and the
     // sheet body (rendered later in the layout tree) share the same
@@ -681,6 +691,45 @@ fun ChatScreen(
         if (clearChatRequested) {
             showClearChatDialog = true
             viewModel.ackClearChatConfirmRequest()
+        }
+    }
+
+    // [bottom-toolbar-customizable] Live resolved order + visibility/pin state
+    // for the customizable action pool (top-right "..." menu + history-drawer
+    // footer). Re-read on every appearance_prefs change (Chat Menu settings
+    // screen, minis-config write, backup restore) so this screen never needs a
+    // restart to pick up a new arrangement.
+    val chatActions = rememberChatActionState(context)
+    // [bottom-toolbar-customizable] Session memory toggle, hoisted to the top of
+    // the composable so both the menu gate and the footer availability filter
+    // (footerSpecs below) read the same live value.
+    val menuMemoryEnabled by viewModel.memoryEnabled.collectAsState()
+
+    // [bottom-toolbar-customizable] Single dispatch point shared by the "..."
+    // menu and the history-drawer footer. Each action resolves to exactly one
+    // side effect here, so the same feature can never open a different sheet
+    // depending on which entry point triggered it (see ExportFormatSheet for
+    // why EXPORT in particular needed this).
+    fun dispatchChatAction(key: String) {
+        when (key) {
+            ChatMenuPrefs.TERMINAL -> onOpenTerminal()
+            ChatMenuPrefs.BROWSER -> viewModel.toggleBrowserSheet()
+            ChatMenuPrefs.CHAT_FILES -> onBrowseChatFiles()
+            ChatMenuPrefs.SESSION_SKILLS -> showSkillsSheet = true
+            ChatMenuPrefs.SESSION_MCPS -> showMcpsSheet = true
+            ChatMenuPrefs.SESSION_MEMORY -> viewModel.toggleMemorySheet()
+            ChatMenuPrefs.SLASH_COMMANDS -> {
+                if (viewModel.showSlashMenu.value) {
+                    viewModel.setInputText(viewModel.dismissSlashMenu(inputText))
+                } else {
+                    viewModel.setInputText(viewModel.showSlashMenuOverInput(inputText))
+                }
+                runCatching { inputFocusRequester.requestFocus() }
+                keyboardController?.show()
+            }
+            ChatMenuPrefs.EXPORT -> showExportFormatSheet = true
+            ChatMenuPrefs.TOKEN_USAGE -> showTokenUsageSheet = true
+            ChatMenuPrefs.SETTINGS -> onOpenSettings()
         }
     }
 
@@ -1935,6 +1984,35 @@ fun ChatScreen(
                 }
             }
     }
+    // [bottom-toolbar-customizable] Footer actions resolved from the pin order,
+    // filtered by runtime availability so a hidden Skills/MCPs/Memory
+    // repository never leaves a dead button in the footer.
+    val footerSpecs = remember(chatActions.footerOrder, skillRepository, mcpRepository, memoryRepository, menuMemoryEnabled) {
+        chatActions.footerOrder.mapNotNull { key ->
+            if (!isChatActionAvailable(
+                    key,
+                    skillsAvailable = skillRepository != null,
+                    mcpsAvailable = mcpRepository != null,
+                    memoryAvailable = memoryRepository != null && menuMemoryEnabled,
+                )
+            ) {
+                null
+            } else {
+                ChatActionCatalog.spec(key)
+            }
+        }
+    }
+
+    // [bottom-toolbar-customizable] Footer taps are deferred until the drawer's
+    // close animation has actually finished — some actions (slash-menu focus
+    // restore) need the composer visible and focusable, which it isn't while
+    // the drawer sheet is still covering it.
+    LaunchedEffect(pendingChatAction) {
+        val key = pendingChatAction ?: return@LaunchedEffect
+        pendingChatAction = null
+        historyDrawerState.close()
+        dispatchChatAction(key)
+    }
     ModalNavigationDrawer(
         drawerState = historyDrawerState,
         gesturesEnabled = true,
@@ -1964,14 +2042,14 @@ fun ChatScreen(
                     historyDrawerScope.launch { historyDrawerState.close() }
                     onNewChat()
                 },
-                onSettings = {
-                    historyDrawerScope.launch { historyDrawerState.close() }
-                    onOpenSettings()
-                },
-                onTokenUsage = {
-                    historyDrawerScope.launch { historyDrawerState.close() }
-                    showTokenUsageSheet = true
-                },
+                // [bottom-toolbar-customizable] Footer: resolved action list +
+                // single dispatcher. The drawer no longer owns Settings/Token
+                // Usage semantics — the caller (dispatchChatAction) does, so
+                // footer taps behave exactly like their "..." menu twins. Taps
+                // set pendingChatAction; the LaunchedEffect above closes the
+                // drawer first and only then fires the action.
+                footerActions = footerSpecs,
+                onAction = { key -> pendingChatAction = key },
             )
         },
     ) {
@@ -2259,16 +2337,13 @@ fun ChatScreen(
                     // runtime gates below mirror the ones applied while
                     // rendering the items, so button visibility and menu
                     // content can never disagree.
-                    val chatMenuPrefs = ChatMenuPrefs.prefs(context)
-                    val menuOrder = ChatMenuPrefs.resolveOrder(chatMenuPrefs)
-                    val menuMemoryEnabled by viewModel.memoryEnabled.collectAsState()
-                    val menuHasCustomEntries = menuOrder.any { key ->
-                        ChatMenuPrefs.isVisible(chatMenuPrefs, key) && when (key) {
-                            ChatMenuPrefs.SESSION_SKILLS -> skillRepository != null
-                            ChatMenuPrefs.SESSION_MCPS -> mcpRepository != null
-                            ChatMenuPrefs.SESSION_MEMORY -> memoryRepository != null && menuMemoryEnabled
-                            else -> true
-                        }
+                    val menuHasCustomEntries = chatActions.menuOrder.any { key ->
+                        chatActions.isVisible(key) && isChatActionAvailable(
+                            key,
+                            skillsAvailable = skillRepository != null,
+                            mcpsAvailable = mcpRepository != null,
+                            memoryAvailable = memoryRepository != null && menuMemoryEnabled,
+                        )
                     }
                     val showEnhancedCache by viewModel.showEnhancedCacheToggle.collectAsState()
                     val enhancedCacheOn by viewModel.enhancedCacheEnabled.collectAsState()
@@ -2291,22 +2366,16 @@ fun ChatScreen(
                             // disappears, consistent with the per-session gating
                             // of the memory_get / memory_write tools and the
                             // system-prompt injection. (menuMemoryEnabled is
-                            // collected above, next to the "..." visibility
-                            // check, so the two stay in sync.)
-                            // Export conversation (JSON / Plain Text) — the
-                            // session list's long-press Export, surfaced from
-                            // inside the chat. Same streaming ChatExporter, so
-                            // long chats stay bounded-memory. Sub-menu state is
-                            // hoisted above the customizable loop below so it
-                            // survives reordering.
-                            var showExportSub by remember { mutableStateOf(false) }
+                            // collected at the top of ChatScreen, next to
+                            // chatActions, so the menu and the drawer footer
+                            // stay in sync.)
                             // [T-customizable-chat-menu] The eight action /
                             // session entries below are driven by
                             // ChatMenuPrefs (Settings → Appearance → Chat
                             // Menu): the user can hide entries and reorder
-                            // them. Rendering follows resolveOrder() (missing
-                            // keys appended in default order, unknown keys
-                            // dropped) and skips entries whose visibility
+                            // them. Rendering follows chatActions.menuOrder
+                            // (missing keys appended in default order, unknown
+                            // keys dropped) and skips entries whose visibility
                             // switch is OFF. Conditional entries (Skills /
                             // MCPs / Memory) additionally keep their runtime
                             // gate: an entry only shows when BOTH the user
@@ -2315,10 +2384,13 @@ fun ChatScreen(
                             // Model-invocation toggles (Enhanced Cache, Fast
                             // Mode) and the DEBUG crash trigger are NOT part
                             // of this list — they stay pinned at the bottom.
-                            // (chatMenuPrefs / menuOrder are resolved above,
-                            // next to the "..." visibility check.)
-                            for (entryKey in menuOrder) {
-                                if (!ChatMenuPrefs.isVisible(chatMenuPrefs, entryKey)) continue
+                            // Taps funnel through dispatchChatAction() (hoisted
+                            // near the top of ChatScreen) so the "..." menu and
+                            // the history-drawer footer share one implementation
+                            // per action. EXPORT opens ExportFormatSheet instead
+                            // of the old inline JSON/Plain submenu.
+                            for (entryKey in chatActions.menuOrder) {
+                                if (!chatActions.isVisible(entryKey)) continue
                                 key(entryKey) {
                                     when (entryKey) {
                                         ChatMenuPrefs.TERMINAL -> {
@@ -2327,7 +2399,7 @@ fun ChatScreen(
                                                 text = { Text(stringResource(R.string.chat_menu_open_terminal)) },
                                                 onClick = {
                                                     showChatMenu = false
-                                                    onOpenTerminal()
+                                                    dispatchChatAction(ChatMenuPrefs.TERMINAL)
                                                 },
                                                 leadingIcon = {
                                                     Icon(Icons.Default.Terminal, contentDescription = null)
@@ -2340,7 +2412,7 @@ fun ChatScreen(
                                                 text = { Text(stringResource(R.string.chat_menu_open_browser)) },
                                                 onClick = {
                                                     showChatMenu = false
-                                                    viewModel.toggleBrowserSheet()
+                                                    dispatchChatAction(ChatMenuPrefs.BROWSER)
                                                 },
                                                 leadingIcon = {
                                                     Icon(Icons.Default.Language, contentDescription = null)
@@ -2353,7 +2425,7 @@ fun ChatScreen(
                                                 text = { Text(stringResource(R.string.chat_menu_browse_chat_files)) },
                                                 onClick = {
                                                     showChatMenu = false
-                                                    onBrowseChatFiles()
+                                                    dispatchChatAction(ChatMenuPrefs.CHAT_FILES)
                                                 },
                                                 leadingIcon = {
                                                     Icon(Icons.Default.Description, contentDescription = null)
@@ -2373,16 +2445,14 @@ fun ChatScreen(
                                             //
                                             // Behaviour is unchanged from the old button: it
                                             // toggles, so opening the menu while the slash
-                                            // sheet is already up dismisses it.
+                                            // sheet is already up dismisses it. (Toggle logic
+                                            // lives in dispatchChatAction so the footer entry
+                                            // behaves identically.)
                                             DropdownMenuItem(
                                                 text = { Text(stringResource(R.string.chat_menu_slash_commands)) },
                                                 onClick = {
                                                     showChatMenu = false
-                                                    if (viewModel.showSlashMenu.value) {
-                                                        viewModel.setInputText(viewModel.dismissSlashMenu(inputText))
-                                                    } else {
-                                                        viewModel.setInputText(viewModel.showSlashMenuOverInput(inputText))
-                                                    }
+                                                    dispatchChatAction(ChatMenuPrefs.SLASH_COMMANDS)
                                                 },
                                                 leadingIcon = {
                                                     // Match the old button's italic-bold "/"
@@ -2406,42 +2476,22 @@ fun ChatScreen(
                                             // long chats stay bounded-memory. Placed between
                                             // Slash Commands and Token Usage per the requested
                                             // ordering.
+                                            //
+                                            // [bottom-toolbar-customizable] The old inline
+                                            // JSON/Plain submenu is gone: both the "..." menu
+                                            // and the history-drawer footer now open the same
+                                            // shared ExportFormatSheet, so the format choice
+                                            // lives in exactly one implementation.
                                             DropdownMenuItem(
-                                                text = {
-                                                    Row(
-                                                        Modifier.fillMaxWidth(),
-                                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                                        verticalAlignment = Alignment.CenterVertically,
-                                                    ) {
-                                                        Text(stringResource(R.string.sessionlist_export))
-                                                        Icon(
-                                                            Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                                            contentDescription = null,
-                                                            modifier = Modifier.size(16.dp),
-                                                        )
-                                                    }
+                                                text = { Text(stringResource(R.string.sessionlist_export)) },
+                                                onClick = {
+                                                    showChatMenu = false
+                                                    showExportFormatSheet = true
                                                 },
-                                                onClick = { showExportSub = !showExportSub },
                                                 leadingIcon = {
                                                     Icon(Icons.Default.Share, contentDescription = null)
                                                 },
                                             )
-                                            if (showExportSub) {
-                                                DropdownMenuItem(
-                                                    text = { Text(stringResource(R.string.sessionlist_export_json), modifier = Modifier.padding(start = 24.dp)) },
-                                                    onClick = {
-                                                        showChatMenu = false
-                                                        exportCurrentChat(context, viewModel, chatRepository, coroutineScope, "json")
-                                                    },
-                                                )
-                                                DropdownMenuItem(
-                                                    text = { Text(stringResource(R.string.sessionlist_export_plain), modifier = Modifier.padding(start = 24.dp)) },
-                                                    onClick = {
-                                                        showChatMenu = false
-                                                        exportCurrentChat(context, viewModel, chatRepository, coroutineScope, "text")
-                                                    },
-                                                )
-                                            }
                                         }
                                         ChatMenuPrefs.SESSION_SKILLS -> {
                                             // Session Skills (iOS parity)
@@ -2450,7 +2500,7 @@ fun ChatScreen(
                                                     text = { Text(stringResource(R.string.session_skills_title)) },
                                                     onClick = {
                                                         showChatMenu = false
-                                                        showSkillsSheet = true
+                                                        dispatchChatAction(ChatMenuPrefs.SESSION_SKILLS)
                                                     },
                                                     leadingIcon = {
                                                         Icon(Icons.Default.Build, contentDescription = null)
@@ -2465,7 +2515,7 @@ fun ChatScreen(
                                                     text = { Text(stringResource(R.string.session_mcps_title)) },
                                                     onClick = {
                                                         showChatMenu = false
-                                                        showMcpsSheet = true
+                                                        dispatchChatAction(ChatMenuPrefs.SESSION_MCPS)
                                                     },
                                                     leadingIcon = {
                                                         Icon(Icons.Default.Extension, contentDescription = null)
@@ -2480,7 +2530,7 @@ fun ChatScreen(
                                                     text = { Text(stringResource(R.string.session_memory_title)) },
                                                     onClick = {
                                                         showChatMenu = false
-                                                        viewModel.toggleMemorySheet()
+                                                        dispatchChatAction(ChatMenuPrefs.SESSION_MEMORY)
                                                     },
                                                     leadingIcon = {
                                                         Icon(Icons.Default.Psychology, contentDescription = null)
@@ -5423,6 +5473,20 @@ fun ChatScreen(
         TokenUsageSheet(
             viewModel = viewModel,
             onDismiss = { showTokenUsageSheet = false },
+        )
+    }
+
+    // [bottom-toolbar-customizable] Export format picker — shared by the "..."
+    // menu EXPORT entry and the history-drawer footer EXPORT action. The old
+    // inline JSON/Plain submenu lived only in the menu; the sheet keeps the
+    // format choice reachable from both entry points with one implementation.
+    if (showExportFormatSheet) {
+        ExportFormatSheet(
+            onDismiss = { showExportFormatSheet = false },
+            onExport = { format ->
+                showExportFormatSheet = false
+                exportCurrentChat(context, viewModel, chatRepository, coroutineScope, format)
+            },
         )
     }
 
