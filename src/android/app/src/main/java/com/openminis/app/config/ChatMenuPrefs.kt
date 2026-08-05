@@ -182,6 +182,17 @@ object ChatMenuPrefs {
     }
 
     /**
+     * The order shown in the Chat Menu settings screen's footer section: all
+     * ten entries with SETTINGS anchored last regardless of its pin state.
+     * Unlike [anchorSettingsLast] (render semantics — an unpinned SETTINGS is
+     * dropped), the settings list must always keep the SETTINGS row visible so
+     * an unpinned settings button can always be re-pinned from the UI; a row
+     * that vanishes on unpin would leave no way back.
+     */
+    fun settingsPinOrder(prefs: SharedPreferences): List<String> =
+        resolvePinOrder(prefs).filterNot { it == SETTINGS } + SETTINGS
+
+    /**
      * The order actually rendered in the footer: pinned entries in resolved
      * order, SETTINGS anchored last when pinned. Empty list = nothing pinned
      * (the caller then hides the footer bar and its divider entirely).

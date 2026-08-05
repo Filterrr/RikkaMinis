@@ -44,18 +44,20 @@ import kotlin.math.roundToInt
  * Settings → Appearance → Chat Menu.
  *
  * Two independent sections:
- *   (A) Top-right menu — every action has a visibility Switch; the order
- *       defines the "..." menu rendering.
- *   (B) History drawer footer — every action has a pin Switch; the order
+ *   (A) Top-right menu — the eight menu-renderable actions each have a
+ *       visibility Switch; the order defines the "..." menu rendering. The
+ *       two footer-only actions (Token Usage, Settings) are intentionally
+ *       absent: the menu's rendering loop has no branch for them, so a
+ *       switch would be a dead control.
+ *   (B) History drawer footer — all ten actions have a pin Switch; the order
  *       defines the footer FlowRow rendering. SETTINGS, when pinned, is
  *       always anchored last (its row is non-draggable + shows a "fixed
- *       right" hint).
+ *       right" hint); the row is always listed so it can always be re-pinned.
  *
- * Both sections list all ten actions. Each row has a drag handle (≡) to
- * grab and reorder (long-press + drag, live swap as you cross the half-row
- * boundary). Order and visibility / pin are persisted to appearance_prefs via
- * ChatMenuPrefs, so they round-trip through minis-config and every local
- * backup automatically.
+ * Each row has a drag handle (≡) to grab and reorder (long-press + drag,
+ * live swap as you cross the half-row boundary). Order and visibility / pin
+ * are persisted to appearance_prefs via ChatMenuPrefs, so they round-trip
+ * through minis-config and every local backup automatically.
  */
 @Composable
 fun ChatMenuSettingsScreen(
@@ -66,15 +68,28 @@ fun ChatMenuSettingsScreen(
     val rowHeight = 56.dp
     val rowHeightPx = with(LocalDensity.current) { rowHeight.toPx() }
 
-    // Section A: top-right menu order (all 10 entries)
-    var menuOrder by remember { mutableStateOf(ChatMenuPrefs.resolveOrder(prefs)) }
+    // Section A: top-right menu order — only the eight menu-renderable
+    // actions. TOKEN_USAGE / SETTINGS are footer-only: the "..." menu's
+    // rendering loop (ChatScreen) has no branch for them, so a visibility
+    // switch would be a dead control that silently does nothing AND could
+    // resurrect the empty-"..."-button bug (menu visible while its content
+    // list stays empty). Filtering here keeps the section and the rendering
+    // loop in lock-step; writeOrder's sanitizeForWrite re-appends the two
+    // footer-only keys at their default (trailing) position on save.
+    var menuOrder by remember {
+        mutableStateOf(
+            ChatMenuPrefs.resolveOrder(prefs)
+                .filter { ChatActionCatalog.spec(it)?.defaultMenuVisible != false },
+        )
+    }
     // Section B: footer pin order (all 10 entries, with SETTINGS anchored)
+    // via settingsPinOrder — the settings list must always contain all ten
+    // rows so SETTINGS stays re-pinnable even after it was unpinned (an
+    // anchorSettingsLast-filtered list would drop the row and leave no way
+    // back).
     var footerOrder by remember {
         mutableStateOf(
-            ChatMenuPrefs.anchorSettingsLast(
-                ChatMenuPrefs.resolvePinOrder(prefs),
-                ChatMenuPrefs.isPinned(prefs, ChatMenuPrefs.SETTINGS),
-            ),
+            ChatMenuPrefs.settingsPinOrder(prefs),
         )
     }
     var draggingEntry by remember { mutableStateOf<String?>(null) }
@@ -190,11 +205,10 @@ fun ChatMenuSettingsScreen(
                                     onCheckedChange = { newValue ->
                                         ChatMenuPrefs.setPinned(prefs, entryKey, newValue)
                                         prefsTick++
-                                        // Re-anchor SETTINGS after pin state change
-                                        footerOrder = ChatMenuPrefs.anchorSettingsLast(
-                                            ChatMenuPrefs.resolvePinOrder(prefs),
-                                            ChatMenuPrefs.isPinned(prefs, ChatMenuPrefs.SETTINGS),
-                                        )
+                                        // Re-anchor SETTINGS after pin state change:
+                                        // always keep all ten rows listed (settingsPinOrder),
+                                        // never let the SETTINGS row disappear.
+                                        footerOrder = ChatMenuPrefs.settingsPinOrder(prefs)
                                     },
                                 )
                             }
