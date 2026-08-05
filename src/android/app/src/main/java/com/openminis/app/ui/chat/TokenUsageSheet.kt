@@ -37,7 +37,7 @@ import com.openminis.app.R
  *   - Context: Context Used / Context Window / Max Output
  *   - Thinking (only when the model supports reasoning): On/Off / Level / Supported
  *   - Tokens (Session Total): Input (incl. cache) / Output
- *   - Cache (Session Total): Cache Read / Cache Write
+ *   - Cache (Session Total): Cache Read / Cache Write / Cache Hit Rate
  *   - Agent Loop: Total Loops
  *
  * Data loads asynchronously via [ChatViewModel.loadSessionTokenStats] when the
@@ -106,6 +106,11 @@ fun TokenUsageSheet(
             StatSection(title = stringResource(R.string.token_usage_section_cache)) {
                 StatRow(stringResource(R.string.token_usage_cache_read), formatTokens(s?.cacheRead ?: 0L))
                 StatRow(stringResource(R.string.token_usage_cache_write), formatTokens(s?.cacheWrite ?: 0L))
+                val totalInput = (s?.input ?: 0L) + (s?.cacheRead ?: 0L) + (s?.cacheWrite ?: 0L)
+                if (totalInput > 0L && (s?.cacheRead ?: 0L) > 0L) {
+                    val rate = (s!!.cacheRead.toDouble() / totalInput) * 100
+                    StatRow(stringResource(R.string.usage_label_cache_hit_rate), String.format("%.1f%%", rate))
+                }
             }
 
             StatSection(title = stringResource(R.string.token_usage_section_agent_loop)) {
