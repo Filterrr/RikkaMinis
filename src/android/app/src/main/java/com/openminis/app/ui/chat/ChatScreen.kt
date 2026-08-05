@@ -1485,6 +1485,13 @@ fun ChatScreen(
                 if (listState.isScrollInProgress) return@collect
                 val sinceInterrupt = System.currentTimeMillis() - lastInterruptMs
                 if (sinceInterrupt < 1000L) return@collect
+                // [P0-0-jump-fix] When content insertion pushes the viewport
+                // from index 0 to 1+ (new typing/tool row), the glide would
+                // drag the user back to the newest row — same root cause as
+                // the trailing-row pin yank. The trailing-row pin (T304)
+                // handles new-item insertion separately; the glide should only
+                // handle drift within the same item (firstIdx=0, firstOff>0).
+                if (listState.firstVisibleItemIndex > 0) return@collect
                 // [T-android-stream-grow-anim] Frame-driven glide to the bottom.
                 // animateScrollToItem(0) was the problem: when the viewport had
                 // fallen >= 1 item behind (diagnostics showed fIdx=1..5 during
@@ -1498,9 +1505,7 @@ fun ChatScreen(
                 // stutter) — we just step toward the bottom and stop when the
                 // pin condition is met. In reverseLayout, the bottom (newest,
                 // index 0) is the NEGATIVE scroll direction.
-                if (listState.firstVisibleItemIndex != 0 ||
-                    listState.firstVisibleItemScrollOffset != 0
-                ) {
+                if (listState.firstVisibleItemScrollOffset != 0) {
                     // [T-android-stream-grow-anim review] Cold start: item sizes
                     // not measured yet → avgItemSize==0 → the distance estimate
                     // is bogus and the glide would under-scroll. Snap instead;
@@ -1573,6 +1578,11 @@ fun ChatScreen(
         // worse — see commits cd08a334 and 9873a3ed for the analysis.
         kotlinx.coroutines.delay(220)
         if (userScrolledAway || listState.isScrollInProgress) return@LaunchedEffect
+        // [P0-0-jump-fix] Same guard as trailing-row pin: content insertion
+        // can push the viewport from index 0 to 1 without user drag, leaving
+        // userScrolledAway=false. Without isNearBottom the re-pin yanks the
+        // user to the newest row even though they are reading pushed-up content.
+        if (!isNearBottom.value) return@LaunchedEffect
         val sinceInterrupt = System.currentTimeMillis() - lastInterruptMs
         if (sinceInterrupt < 1000L) return@LaunchedEffect
         // At-bottom settle: user was following the stream; re-pin to
@@ -1583,6 +1593,10 @@ fun ChatScreen(
         withFrameNanos { }
         kotlinx.coroutines.delay(900)
         if (userScrolledAway || listState.isScrollInProgress) return@LaunchedEffect
+        // [P0-0-jump-fix] Re-check isNearBottom: content insertion during the
+        // 900ms settle window can push the viewport from index 0 to 1, and
+        // the LATE-REPIN would yank the user back to the newest row.
+        if (!isNearBottom.value) return@LaunchedEffect
         if (listState.firstVisibleItemIndex != 0) {
             val sinceDrag = System.currentTimeMillis() - lastInterruptMs
             if (sinceDrag > 1500L) tracedScrollToItem("stream-end/LATE-REPIN", 0, 0)
@@ -3187,6 +3201,13 @@ fun ChatScreen(
                     ) return@LaunchedEffect
                     if (newest.key == lastTrailingPinKey) return@LaunchedEffect
                     if (userScrolledAway) return@LaunchedEffect
+                    // [P0-0-jump-fix] Gate on isNearBottom too: content
+                    // insertion (new typing/tool row at index 0) pushes the
+                    // visible viewport from index 0 to index 1 WITHOUT the
+                    // user dragging, so userScrolledAway stays false. Without
+                    // this check the pin fires and yanks the user to the new
+                    // row even though they are no longer at the bottom.
+                    if (!isNearBottom.value) return@LaunchedEffect
                     if (listState.isScrollInProgress) return@LaunchedEffect
                     val sinceInterrupt = System.currentTimeMillis() - lastInterruptMs
                     if (sinceInterrupt < 1000L) return@LaunchedEffect
