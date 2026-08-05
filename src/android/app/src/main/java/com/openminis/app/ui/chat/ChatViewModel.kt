@@ -9635,7 +9635,9 @@ Environment variables:
                             }
                             restoredAttachmentNames.add(name)
                         }
-                        // ParsedPart.ToolResult handled in first pass above
+                        is ParsedPart.ToolResult -> {
+                            // handled in first pass (toolResultMap)
+                        }
                     }
                 }
             }
