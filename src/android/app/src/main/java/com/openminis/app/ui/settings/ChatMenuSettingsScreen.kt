@@ -119,6 +119,12 @@ fun ChatMenuSettingsScreen(
             header = stringResource(R.string.appearance_chat_menu_section_topbar),
             footer = null,
         ) {
+            // Read prefsTick to establish re-composition dependency when prefs
+            // change (same technique DraggableActionRow uses) — otherwise
+            // toggling the switch below updates the value but the switch's
+            // checked state would not re-render after the callback fires.
+            @Suppress("UNUSED_EXPRESSION")
+            prefsTick
             SettingsSwitchRow(
                 title = stringResource(R.string.input_history_title),
                 subtitle = stringResource(R.string.input_history_topbar_description),
