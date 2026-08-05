@@ -9543,7 +9543,7 @@ Environment variables:
 
         // Second pass: convert messages, merging tool results into blocks.
         // Filter out user messages that only contain toolResult parts (no visible text).
-        return mapNotNull(parsed) { row ->
+        return parsed.mapNotNull { row ->
             val entity = row.entity
             var text = ""
             val blocks = mutableListOf<AssistantBlock>()
