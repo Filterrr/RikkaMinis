@@ -244,7 +244,15 @@ jobs:
       # Publish the APK to a rolling Release so it can be downloaded directly
       # from the repo's Releases page — same tag every build, asset replaced
       # in place, so the download link is stable.
+      #
+      # IMPORTANT: publishing is gated to the default branch. Without the gate
+      # a `workflow_dispatch` run against a feature branch (used to validate
+      # branch builds in CI) would overwrite android-latest with a test
+      # build — exactly how the rolling release got polluted on 2026-08-05.
+      # Feature-branch builds still surface the APK in the run's Artifacts
+      # tab; only `main` may replace the official download asset.
       - name: Publish to Releases
+        if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v3
         with:
           tag_name: android-latest
