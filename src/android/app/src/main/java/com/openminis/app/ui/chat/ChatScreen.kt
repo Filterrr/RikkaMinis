@@ -660,6 +660,21 @@ fun ChatScreen(
     var showThinkingLevelSheet by remember { mutableStateOf(false) }
     var showAttachMenu by remember { mutableStateOf(false) }
     var showChatMenu by remember { mutableStateOf(false) }
+    // [T-input-history] "Input History" sheet visibility, mirrors rikkahub's
+    // top-bar Chat Options preview. Treated as a pinned, always-visible
+    // top-bar action (like New Chat) rather than a "..." menu entry — both
+    // are high-frequency actions the user wants immune to the "hide empty
+    // menu" collapse.
+    var showInputHistorySheet by remember { mutableStateOf(false) }
+    // [T-input-history] Focus-jump target and highlight anchor. Hoisted from
+    // inside the Scaffold content lambda so the top-bar "input history" button
+    // (rendered before the content lambda) can write pendingFocusId and
+    // trigger a scroll + highlight without needing a separate channel.
+    // Semantics mirror iOS ChatView.focusMessageId nav param.
+    var pendingFocusId by remember(sessionId, focusMessageId) {
+        mutableStateOf(focusMessageId?.takeIf { it.isNotBlank() })
+    }
+    var highlightedMessageId by remember(sessionId) { mutableStateOf<String?>(null) }
     var showSkillsSheet by remember { mutableStateOf(false) }
     // [T-mcp-integration-android] MCPs-in-Session sheet visibility.
     var showMcpsSheet by remember { mutableStateOf(false) }
@@ -2338,6 +2353,22 @@ fun ChatScreen(
                     IconButton(onClick = { onNewChat() }) {
                         Icon(Icons.Filled.Edit, contentDescription = stringResource(R.string.chat_menu_new_chat))
                     }
+                    // [T-input-history] Always-visible history button (pinned
+                    // like New Chat) — shows a searchable list of all messages
+                    // in the current session so the user can jump back to any
+                    // earlier input in one tap. Intentionally NOT inside the
+                    // hasAnyMenuItems gate: both high-frequency actions (New
+                    // Chat and Input History) are immune to the "hide empty
+                    // menu" collapse that governs "...". However the user CAN
+                    // opt-out via Settings → Appearance → Chat Menu.
+                    if (chatActions.topBarInputHistoryVisible) {
+                        IconButton(onClick = { showInputHistorySheet = true }) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.FormatListBulleted,
+                                contentDescription = stringResource(R.string.input_history_title),
+                            )
+                        }
+                    }
                     // [T-chat-menu-empty] The "..." button is only worth
                     // rendering when it has at least one entry to show. If the
                     // user switches off every customizable entry (Settings →
@@ -3139,10 +3170,6 @@ fun ChatScreen(
                 // The target is consumed once (cleared after the jump) so a
                 // config change or back-from-terminal recomposition does not
                 // re-yank a user who has since scrolled elsewhere.
-                var pendingFocusId by remember(sessionId, focusMessageId) {
-                    mutableStateOf(focusMessageId?.takeIf { it.isNotBlank() })
-                }
-                var highlightedMessageId by remember(sessionId) { mutableStateOf<String?>(null) }
                 LaunchedEffect(pendingFocusId, flatItems) {
                     val target = pendingFocusId ?: return@LaunchedEffect
                     if (flatItems.isEmpty()) return@LaunchedEffect
@@ -5485,6 +5512,21 @@ fun ChatScreen(
         TokenUsageSheet(
             viewModel = viewModel,
             onDismiss = { showTokenUsageSheet = false },
+        )
+    }
+
+    // Input history sheet — lists all messages in the current session so the
+    // user can jump back to a specific prior input (or reply). Reuses the
+    // same pendingFocusId + highlightedMessageId mechanism as session-switch
+    // deep links, so selecting an entry scrolls to it and briefly highlights it.
+    if (showInputHistorySheet) {
+        InputHistorySheet(
+            messages = messages,
+            onSelect = { messageId ->
+                showInputHistorySheet = false
+                pendingFocusId = messageId
+            },
+            onDismiss = { showInputHistorySheet = false },
         )
     }
 

@@ -1087,6 +1087,14 @@
     <string name="draft_label">Entwurf</string>
     <string name="draft_discard_confirm">Diesen ungesendeten Entwurf verwerfen? Das kann nicht rückgängig gemacht werden.</string>
     <string name="storage_section_shell_detail">Shell-Aufschlüsselung</string>
+    <string name="appearance_chat_menu_section_topbar">Symbolleiste</string>
+    <string name="input_history_title">Eingabeverlauf</string>
+    <string name="input_history_topbar_description">Zeigt eine durchsuchbare Nachrichtenliste in der Symbolleiste. Tippe auf einen Eintrag, um direkt zur Nachricht zu springen.</string>
+    <string name="input_history_search_hint">Nachrichten suchen…</string>
+    <string name="input_history_search">Suchen</string>
+    <string name="input_history_done">Fertig</string>
+    <string name="input_history_empty">Noch keine Nachrichten</string>
+    <string name="input_history_no_match">Keine passenden Nachrichten</string>
     <string name="appearance_chat_menu_section_menu">Top-right menu</string>
     <string name="appearance_chat_menu_section_footer">History drawer footer</string>
     <string name="chat_menu_pin_to_footer">Pin to footer</string>

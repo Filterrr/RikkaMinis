@@ -1094,6 +1094,14 @@
     <string name="draft_label">下書き</string>
     <string name="draft_discard_confirm">未送信の下書きを破棄しますか？この操作は元に戻せません。</string>
     <string name="storage_section_shell_detail">シェルの内訳</string>
+    <string name="appearance_chat_menu_section_topbar">トップバーボタン</string>
+    <string name="input_history_title">入力履歴</string>
+    <string name="input_history_topbar_description">トップバーに検索可能なメッセージ一覧を表示します。項目をタップするとそのメッセージに直接ジャンプできます。</string>
+    <string name="input_history_search_hint">メッセージを検索…</string>
+    <string name="input_history_search">検索</string>
+    <string name="input_history_done">完了</string>
+    <string name="input_history_empty">メッセージはまだありません</string>
+    <string name="input_history_no_match">一致するメッセージなし</string>
     <string name="appearance_chat_menu_section_menu">Top-right menu</string>
     <string name="appearance_chat_menu_section_footer">History drawer footer</string>
     <string name="chat_menu_pin_to_footer">Pin to footer</string>

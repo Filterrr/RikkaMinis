@@ -1253,6 +1253,14 @@
     <string name="draft_label">Черновик</string>
     <string name="draft_discard_confirm">Удалить этот неотправленный черновик? Это действие нельзя отменить.</string>
     <string name="storage_section_shell_detail">Состав Shell</string>
+    <string name="appearance_chat_menu_section_topbar">Кнопки панели</string>
+    <string name="input_history_title">История ввода</string>
+    <string name="input_history_topbar_description">Показывает список сообщений с поиском на верхней панели. Нажмите на запись, чтобы перейти к сообщению.</string>
+    <string name="input_history_search_hint">Поиск сообщений…</string>
+    <string name="input_history_search">Поиск</string>
+    <string name="input_history_done">Готово</string>
+    <string name="input_history_empty">Сообщений ещё нет</string>
+    <string name="input_history_no_match">Нет совпадений</string>
     <string name="appearance_chat_menu_section_menu">Top-right menu</string>
     <string name="appearance_chat_menu_section_footer">History drawer footer</string>
     <string name="chat_menu_pin_to_footer">Pin to footer</string>

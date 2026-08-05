@@ -1086,6 +1086,14 @@
     <string name="draft_label">임시 보관</string>
     <string name="draft_discard_confirm">전송하지 않은 임시 보관을 삭제할까요? 이 작업은 취소할 수 없습니다.</string>
     <string name="storage_section_shell_detail">셸 상세</string>
+    <string name="appearance_chat_menu_section_topbar">상단 바 버튼</string>
+    <string name="input_history_title">입력 기록</string>
+    <string name="input_history_topbar_description">상단 바에 검색 가능한 메시지 목록을 표시합니다. 항목을 탭하면 해당 메시지로 바로 이동합니다.</string>
+    <string name="input_history_search_hint">메시지 검색…</string>
+    <string name="input_history_search">검색</string>
+    <string name="input_history_done">완료</string>
+    <string name="input_history_empty">아직 메시지 없음</string>
+    <string name="input_history_no_match">일치하는 메시지 없음</string>
     <string name="appearance_chat_menu_section_menu">Top-right menu</string>
     <string name="appearance_chat_menu_section_footer">History drawer footer</string>
     <string name="chat_menu_pin_to_footer">Pin to footer</string>
