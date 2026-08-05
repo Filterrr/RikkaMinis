@@ -2370,17 +2370,23 @@ fun ChatScreen(
                         }
                     }
                     // [T-chat-menu-empty] The "..." button is only worth
-                    // rendering when it has at least one entry to show. If the
-                    // user switches off every customizable entry (Settings →
-                    // Appearance → Chat Menu) AND no model-conditional toggle
-                    // (Enhanced Cache / Fast Mode) currently applies AND this
+                    // rendering when it has at least one entry to show. If
+                    // every customizable entry is off AND no model-conditional
+                    // toggle (Enhanced Cache / Fast Mode) applies AND this
                     // isn't a DEBUG build, the menu would open empty — a dead
-                    // control. Hide the button entirely; the New Chat pencil
-                    // beside it then becomes the last action on the bar. The
-                    // runtime gates below mirror the ones applied while
-                    // rendering the items, so button visibility and menu
-                    // content can never disagree.
-                    val menuHasCustomEntries = chatActions.menuOrder.any { key ->
+                    // control — so nothing renders and the New Chat pencil
+                    // becomes the last action on the bar.
+                    // [T-chat-menu-solo] When EXACTLY ONE entry would render,
+                    // the overflow is pointless: promote it to a direct
+                    // top-bar IconButton (one tap instead of two) and drop the
+                    // "..." entirely. Two+ entries keep the overflow. The
+                    // DEBUG crash trigger is counted but never promoted — a
+                    // stray tap on a lone top-bar button would crash the app —
+                    // so a menu that would contain only it keeps the "...".
+                    // The gates below mirror the ones applied while rendering
+                    // the items, so button visibility and menu content can
+                    // never disagree.
+                    val visibleCustomEntries = chatActions.menuOrder.filter { key ->
                         chatActions.isVisible(key) && isChatActionAvailable(
                             key,
                             skillsAvailable = skillRepository != null,
@@ -2392,9 +2398,70 @@ fun ChatScreen(
                     val enhancedCacheOn by viewModel.enhancedCacheEnabled.collectAsState()
                     val showFastMode by viewModel.showFastModeToggle.collectAsState()
                     val fastModeOn by viewModel.fastModeEnabled.collectAsState()
-                    val hasAnyMenuItems = menuHasCustomEntries || showEnhancedCache || showFastMode || BuildConfig.DEBUG
+                    val visibleMenuCount =
+                        visibleCustomEntries.size +
+                            (if (showEnhancedCache) 1 else 0) +
+                            (if (showFastMode) 1 else 0) +
+                            (if (BuildConfig.DEBUG) 1 else 0)
+                    // Lone customizable entry (Terminal / Browser / Export / …)
+                    // → direct button. Icon + label come from the same
+                    // ChatActionCatalog the settings screen uses, so the
+                    // promoted button always matches the entry it replaces.
+                    val soloCustomKey =
+                        if (visibleMenuCount == 1 && visibleCustomEntries.size == 1) visibleCustomEntries.first() else null
+                    // Lone model-invocation toggle → direct button whose tint
+                    // carries the on/off state (the trailing Switch would have
+                    // nowhere to live).
+                    val soloCacheToggle = visibleMenuCount == 1 && visibleCustomEntries.isEmpty() && showEnhancedCache
+                    val soloFastToggle = visibleMenuCount == 1 && visibleCustomEntries.isEmpty() && showFastMode
+                    val hasAnyMenuItems =
+                        visibleMenuCount >= 1 && soloCustomKey == null && !soloCacheToggle && !soloFastToggle
                     // iOS: "..." circle button → dropdown menu
-                    if (hasAnyMenuItems) {
+                    if (soloCustomKey != null) {
+                        val spec = ChatActionCatalog.spec(soloCustomKey)
+                        IconButton(onClick = { dispatchChatAction(soloCustomKey) }) {
+                            Icon(
+                                spec?.icon ?: Icons.Default.MoreVert,
+                                contentDescription = spec?.let { stringResource(it.titleRes) } ?: "More",
+                            )
+                        }
+                    } else if (soloCacheToggle) {
+                        // Enhanced Cache as a lone top-bar toggle — same
+                        // first-enable confirmation flow as the menu entry.
+                        IconButton(
+                            onClick = {
+                                if (enhancedCacheOn) {
+                                    viewModel.setEnhancedCacheEnabled(false)
+                                } else if (viewModel.isEnhancedCacheConfirmed()) {
+                                    viewModel.setEnhancedCacheEnabled(true)
+                                } else {
+                                    showEnhancedCacheDialog = true
+                                }
+                            },
+                        ) {
+                            Icon(
+                                Icons.Default.Bolt,
+                                contentDescription = stringResource(R.string.chat_menu_enhanced_cache),
+                                tint = if (enhancedCacheOn) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                            )
+                        }
+                    } else if (soloFastToggle) {
+                        IconButton(onClick = { viewModel.setFastModeEnabled(!fastModeOn) }) {
+                            Icon(
+                                Icons.Default.Bolt,
+                                contentDescription = stringResource(R.string.chat_menu_fast_mode),
+                                tint = if (fastModeOn) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                            )
+                        }
+                    } else if (hasAnyMenuItems) {
                         Box {
                             IconButton(onClick = { showChatMenu = true }) {
                                 Icon(Icons.Default.MoreVert, contentDescription = "More")
@@ -2681,7 +2748,7 @@ fun ChatScreen(
                             }
                         }
                     }
-                    } // [T-chat-menu-empty] end if (hasAnyMenuItems)
+                    } // [T-chat-menu-solo] end else-if chain: solo buttons / "..." overflow
                 },
                 windowInsets = WindowInsets.statusBars,
                 colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
