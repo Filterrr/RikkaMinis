@@ -207,6 +207,49 @@ class ChatMenuPrefsTest {
     }
 
     @Test
+    fun `settingsPinOrder always lists all ten entries with SETTINGS last`() {
+        val prefs = FakePrefs()
+        // Even with everything unpinned and a scrambled persisted pin order,
+        // the settings list keeps all ten rows and anchors SETTINGS at the end.
+        ChatMenuPrefs.setPinned(prefs, ChatMenuPrefs.TOKEN_USAGE, false)
+        ChatMenuPrefs.setPinned(prefs, ChatMenuPrefs.SETTINGS, false)
+        ChatMenuPrefs.writePinOrder(prefs, listOf(ChatMenuPrefs.SETTINGS, ChatMenuPrefs.TERMINAL))
+        val result = ChatMenuPrefs.settingsPinOrder(prefs)
+        assertEquals(ChatMenuPrefs.ALL_ENTRIES.size, result.size)
+        assertEquals(ChatMenuPrefs.TERMINAL, result[0])
+        assertEquals(ChatMenuPrefs.SETTINGS, result.last())
+        // SETTINGS appears exactly once (no dupes from the anchor dance)
+        assertEquals(1, result.count { it == ChatMenuPrefs.SETTINGS })
+    }
+
+    @Test
+    fun `settingsPinOrder keeps SETTINGS reachable after unpin`() {
+        // Regression: the settings screen's footer section used to run the pin
+        // order through anchorSettingsLast, which drops an unpinned SETTINGS —
+        // the row vanished the moment the user toggled it off, leaving no UI
+        // path back. settingsPinOrder must keep the row listed so the switch
+        // always stays reachable.
+        val prefs = FakePrefs()
+        ChatMenuPrefs.setPinned(prefs, ChatMenuPrefs.SETTINGS, false)
+        val result = ChatMenuPrefs.settingsPinOrder(prefs)
+        assertTrue(ChatMenuPrefs.SETTINGS in result)
+        assertEquals(ChatMenuPrefs.SETTINGS, result.last())
+    }
+
+    @Test
+    fun `settingsPinOrder does not depend on pin flags`() {
+        // The settings list shows all ten rows regardless of which entries are
+        // currently pinned — pin state only drives the Switch checked value.
+        val prefs = FakePrefs()
+        ChatMenuPrefs.setPinned(prefs, ChatMenuPrefs.TERMINAL, true)
+        ChatMenuPrefs.setPinned(prefs, ChatMenuPrefs.TOKEN_USAGE, false)
+        val result = ChatMenuPrefs.settingsPinOrder(prefs)
+        assertEquals(ChatMenuPrefs.ALL_ENTRIES.size, result.size)
+        assertTrue(ChatMenuPrefs.TERMINAL in result)
+        assertTrue(ChatMenuPrefs.TOKEN_USAGE in result)
+    }
+
+    @Test
     fun `TOKEN_USAGE can appear before or after SETTINGS when both pinned`() {
         val prefs = FakePrefs()
         ChatMenuPrefs.setPinned(prefs, ChatMenuPrefs.TOKEN_USAGE, true)
