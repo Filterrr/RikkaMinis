@@ -825,4 +825,8 @@
     <string name="draft_label">草稿</string>
     <string name="draft_discard_confirm">丟棄這條未傳送的草稿？此操作無法復原。</string>
     <string name="storage_section_shell_detail">終端佔用明細</string>
+    <string name="appearance_chat_menu_section_menu">右上角選單</string>
+    <string name="appearance_chat_menu_section_footer">歷史抽屜底欄</string>
+    <string name="chat_menu_pin_to_footer">置於底欄</string>
+    <string name="chat_menu_settings_always_last">固定最右</string>
 </resources>

@@ -429,14 +429,17 @@ internal object ConfigBuiltins {
                 defaultValue = true,
             )
         )
-        // Chat "..." menu customization (Settings → Appearance → Chat Menu).
-        // Each entry's visibility is a bool field; the display order is a
-        // comma-separated string field. Both live in appearance_prefs so they
-        // round-trip through minis-config AND every local backup automatically
-        // (ConfigBackup walks the registry). Defaults keep the full menu
-        // visible in its natural order — nothing is hidden until the user
-        // declutters.
-        for (entryKey in ChatMenuPrefs.DEFAULT_ORDER) {
+        // Chat action customization (Settings → Appearance → Chat Menu).
+        // The action pool spans the top-right "..." menu AND the history-drawer
+        // footer. Each stable key contributes two independent bool fields:
+        //   appearance.chatMenu.<key>      — "..." menu visibility
+        //   appearance.chatMenuPin.<key>   — footer pin
+        // plus two comma-separated order fields. All live in appearance_prefs so
+        // they round-trip through minis-config AND every local backup
+        // automatically (ConfigBackup walks the registry). Defaults keep the
+        // eight original menu entries visible and pin Token Usage + Settings to
+        // the footer — identical to the pre-customization UI.
+        for (entryKey in ChatMenuPrefs.ALL_ENTRIES) {
             r.register(
                 PrefsBoolField(
                     path = ChatMenuPrefs.visibilityPath(entryKey),
@@ -445,6 +448,16 @@ internal object ConfigBuiltins {
                     prefs = appearancePrefs,
                     key = ChatMenuPrefs.visibilityKey(entryKey),
                     defaultValue = ChatMenuPrefs.defaultVisible(entryKey),
+                )
+            )
+            r.register(
+                PrefsBoolField(
+                    path = ChatMenuPrefs.pinPath(entryKey),
+                    displayName = "Chat footer: pin $entryKey",
+                    description = "When ON, the \"$entryKey\" action is pinned to the history-drawer footer.",
+                    prefs = appearancePrefs,
+                    key = ChatMenuPrefs.pinKey(entryKey),
+                    defaultValue = ChatMenuPrefs.defaultPinned(entryKey),
                 )
             )
         }
@@ -456,6 +469,18 @@ internal object ConfigBuiltins {
                 prefs = appearancePrefs,
                 key = ChatMenuPrefs.ORDER_KEY,
                 defaultValue = ChatMenuPrefs.DEFAULT_ORDER.joinToString(","),
+                maxLength = 512,
+            )
+        )
+        r.register(
+            PrefsStringField(
+                path = ChatMenuPrefs.PIN_ORDER_PATH,
+                displayName = "Chat footer pin order",
+                description = "Comma-separated stable keys defining the display order of actions pinned to the history-drawer footer. Unknown keys are ignored; missing pinned keys fall back to their default position. Settings is always anchored last when pinned.",
+                prefs = appearancePrefs,
+                key = ChatMenuPrefs.PIN_ORDER_KEY,
+                defaultValue = ChatMenuPrefs.DEFAULT_ORDER.joinToString(",") +
+                    "," + ChatMenuPrefs.TOKEN_USAGE + "," + ChatMenuPrefs.SETTINGS,
                 maxLength = 512,
             )
         )

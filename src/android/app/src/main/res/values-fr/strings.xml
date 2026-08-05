@@ -977,4 +977,8 @@
     <string name="draft_label">Brouillon</string>
     <string name="draft_discard_confirm">Supprimer ce brouillon non envoyé ? Cette action est irréversible.</string>
     <string name="storage_section_shell_detail">Détail du shell</string>
+    <string name="appearance_chat_menu_section_menu">Top-right menu</string>
+    <string name="appearance_chat_menu_section_footer">History drawer footer</string>
+    <string name="chat_menu_pin_to_footer">Pin to footer</string>
+    <string name="chat_menu_settings_always_last">Always last</string>
 </resources>

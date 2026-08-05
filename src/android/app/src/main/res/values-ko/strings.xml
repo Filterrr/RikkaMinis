@@ -1086,4 +1086,8 @@
     <string name="draft_label">임시 보관</string>
     <string name="draft_discard_confirm">전송하지 않은 임시 보관을 삭제할까요? 이 작업은 취소할 수 없습니다.</string>
     <string name="storage_section_shell_detail">셸 상세</string>
+    <string name="appearance_chat_menu_section_menu">Top-right menu</string>
+    <string name="appearance_chat_menu_section_footer">History drawer footer</string>
+    <string name="chat_menu_pin_to_footer">Pin to footer</string>
+    <string name="chat_menu_settings_always_last">Always last</string>
 </resources>
