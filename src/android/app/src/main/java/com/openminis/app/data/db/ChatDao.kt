@@ -3,6 +3,7 @@ package com.openminis.app.data.db
 import androidx.room.ColumnInfo
 import androidx.room.Dao
 import androidx.room.Insert
+import androidx.room.MapInfo
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.RawQuery
@@ -304,6 +305,20 @@ interface ChatDao {
      *  alongside the paginated slice so callers can compute `hasMore`. */
     @Query("SELECT COUNT(*) FROM messages WHERE session_id = :sessionId")
     suspend fun messageCountForSession(sessionId: String): Int
+
+    /**
+     * [P0-1-drawer-title-visibility] Message counts per session, keyed by
+     * session id. The history drawer uses this (instead of `title` /
+     * `last_message` presence) to decide which sessions to surface: a session
+     * that has real messages must be findable even while its auto-generated
+     * title is still pending, and message-less draft rows stay hidden.
+     */
+    @MapInfo(keyColumn = "sessionId", valueColumn = "cnt")
+    @Query(
+        "SELECT session_id AS sessionId, COUNT(*) AS cnt " +
+            "FROM messages GROUP BY session_id"
+    )
+    fun messageCountsPerSession(): Flow<Map<String, Int>>
 
     /**
      * [T-empty-session-residue] Startup sweep for message-less sessions.

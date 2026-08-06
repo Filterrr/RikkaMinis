@@ -11,6 +11,10 @@ class ChatRepository(internal val dao: ChatDao) {
 
     fun observeSessions(): Flow<List<ChatSessionEntity>> = dao.observeSessions()
 
+    /** [P0-1-drawer-title-visibility] Live message-count map per session. */
+    fun observeMessageCountsPerSession(): Flow<Map<String, Int>> =
+        dao.messageCountsPerSession()
+
     suspend fun createSession(
         modelId: String,
         title: String? = null,

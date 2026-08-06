@@ -101,13 +101,16 @@ fun ChatHistoryDrawer(
 ) {
     val sessions by chatRepository.observeSessions()
         .collectAsState(initial = emptyList())
-    // Never surface message-less draft rows (e.g. the current unsent chat) in
-    // the history — they carry no title/preview and would read as noise. The
-    // standalone list applies the same filter via lastMessage presence.
-    val visibleSessions = remember(sessions) {
-        // Draft rows (no title, no preview, not pinned) would read as noise;
-        // the standalone list applies the same filter via lastMessage presence.
-        sessions.filter { !it.title.isNullOrBlank() || !it.lastMessage.isNullOrBlank() || it.pinnedAt != null }
+
+    // [P0-1-drawer-title-visibility] Visibility must not depend on the
+    // auto-generated title: a session that has real messages has to be
+    // findable even while its title is still pending (or after title
+    // generation failed), and message-less draft rows (the current unsent
+    // chat, ghost rows from /memory or /thinking toggles) stay hidden.
+    val messageCounts by chatRepository.observeMessageCountsPerSession()
+        .collectAsState(initial = emptyMap())
+    val visibleSessions = remember(sessions, messageCounts) {
+        sessions.filter { it.pinnedAt != null || (messageCounts[it.id] ?: 0) > 0 }
     }
     val grouped = remember(visibleSessions) { groupSessionsByDate(visibleSessions) }
 
