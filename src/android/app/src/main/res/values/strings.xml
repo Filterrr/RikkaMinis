@@ -852,6 +852,9 @@
     <string name="share_provider_json_import_failed">Invalid provider configuration file</string>
     <string name="provider_list_api_key">API Key</string>
     <string name="provider_list_disabled">Disabled</string>
+    <string name="provider_list_favorites">Favorites</string>
+    <string name="provider_set_favorite">Set as favorite</string>
+    <string name="provider_unset_favorite">Remove from favorites</string>
     <string name="provider_detail_export">Export</string>
     <string name="provider_detail_label">Label</string>
     <string name="provider_detail_manual_bearer_token">Manual Bearer Token</string>

@@ -740,6 +740,22 @@ class ProviderRepository(private val context: Context) {
         }
     }
 
+    /**
+     * Set whether a provider instance is pinned ("favorite"). Multiple
+     * instances may be pinned; pinned instances render in a dedicated
+     * favorites section at the top of the provider list.
+     * [P0-pinned-providers]
+     */
+    fun setInstancePinned(instanceId: String, pinned: Boolean) = synchronized(configLock) {
+        ensureConfigLoaded()
+        val idx = _config.value.instances.indexOfFirst { it.id == instanceId }
+        if (idx >= 0) {
+            // updateInstance handles mutationSnapshot + saveConfig + cache
+            // invalidation; delegate to keep one source of truth.
+            updateInstance(_config.value.instances[idx].copy(pinned = pinned))
+        }
+    }
+
     fun removeInstance(instanceId: String) = synchronized(configLock) {
         ensureConfigLoaded()
         invalidateModelCache(instanceId)
