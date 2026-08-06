@@ -78,6 +78,10 @@ class EpisodeMemoryStore(
     private val minScore: Int = 2,
     private val maxInject: Int = 3,
     private val maxInjectChars: Int = 2048,
+    // [Mem-auto-cleanup] 自动清理阈值：验证计数 <= 0 且超过该时长未被命中的经验，
+    // 在写入时自动剔除（方案 X 保守版——只清"被验证过减分/失败的僵尸经验"，
+    // v==0 从没被调用过的靠排序沉底 + 手动删，不自动删，避免误删低频关键记忆）。
+    private val staleAfterMs: Long = 30L * 24 * 3600 * 1000,
 ) {
 
     /** 单次工具调用（名称 + 该调用成败）。 */
@@ -104,6 +108,7 @@ class EpisodeMemoryStore(
         val reply: String,
         val sid: String,
         val v: Int = 0,
+        val lastHit: Long = 0,
     ) {
         /** 兼容旧字段：成功类（SUCCESS/PARTIAL）视为 ok。 */
         val ok: Boolean get() = outcome.isSuccessClass
@@ -250,9 +255,17 @@ class EpisodeMemoryStore(
         Retrieval(generation, scored.take(maxInject))
     }
 
-    /** 全量快照（供设置页查看/调试；返回解析成功的条目）。 */
-    suspend fun snapshot(): List<Episode> = mutex.withLock {
-        ensureMigratedLocked()?.mapNotNull { parseLine(it) } ?: emptyList()
+    /** 全量快照（供设置页查看/调试；返回解析成功的条目）。
+     *  [sortByValue] 为 true 时按价值排序（成功类优先 → v ↓ → t ↓，与检索契约一致），
+     *  否则保持文件顺序（追加顺序）；设置页用它把有用经验排前、value 低的沉底。 */
+    suspend fun snapshot(sortByValue: Boolean = false): List<Episode> = mutex.withLock {
+        val eps = ensureMigratedLocked()?.mapNotNull { parseLine(it) } ?: return@withLock emptyList()
+        if (!sortByValue) return@withLock eps
+        eps.sortedWith(
+            compareByDescending<Episode> { it.outcome.isSuccessClass }
+                .thenByDescending { it.v }
+                .thenByDescending { it.t }
+        )
     }
 
     /** 当前行数（含未解析的容错行）。 */
@@ -285,6 +298,25 @@ class EpisodeMemoryStore(
     suspend fun currentGeneration(): Int = mutex.withLock { generation }
 
     /**
+     * 按稳定 [episodeId] 删除单条经验。锁内读取 → 过滤掉该 id 的行 → 原子重写。
+     * 找不到该 id 返回 [IoResult.Success]（视为已删除）。删除失败返回 [IoResult.IoFailure]。
+     */
+    suspend fun delete(episodeId: String): IoResult = mutex.withLock {
+        val lines = ensureMigratedLocked() ?: return@withLock IoResult.CorruptData
+        val remaining = ArrayList<String>(lines.size)
+        var found = false
+        for (line in lines) {
+            val ep = parseLine(line)
+            if (ep != null && ep.id == episodeId) { found = true; continue }
+            remaining.add(line)
+        }
+        // 未找到：无变化即成功（幂等）
+        if (!found) return@withLock IoResult.Success
+        if (!writeAllLocked(remaining)) return@withLock IoResult.IoFailure
+        IoResult.Success
+    }
+
+    /**
      * 原子完成一次经验交换（单事务）：
      * 1. 校验 [expectedGeneration]（检索时捕获）——不匹配说明期间发生过 clear，
      *    返回 [IoResult.StaleGeneration]，整批丢弃（清空前任务不得复活写回）；
@@ -305,7 +337,14 @@ class EpisodeMemoryStore(
     ): IoResult = mutex.withLock {
         if (generation != expectedGeneration) return@withLock IoResult.StaleGeneration
         val lines = ensureMigratedLocked()?.toMutableList() ?: return@withLock IoResult.CorruptData
+        val now = System.currentTimeMillis()
         var changed = false
+        // [Mem-auto-cleanup] 先记录本次命中项的 lastHit（"最后被使用时间"），
+        // 供僵尸清理判断"超期未复用"。命中即视为被重新复用，刷新其新鲜度。
+        val hitIds = retrievedIds.toSet()
+        if (hitIds.isNotEmpty()) {
+            changed = bumpLastHitLocked(lines, hitIds, now) || changed
+        }
         if (feedbackDelta != null && feedbackDelta != 0 && retrievedIds.isNotEmpty()) {
             changed = applyFeedbackLocked(lines, retrievedIds, feedbackDelta) || changed
         }
@@ -314,6 +353,19 @@ class EpisodeMemoryStore(
                 lines.add(toLine(exchange))
                 changed = true
             }
+        }
+        // [Mem-auto-cleanup] 自动剔除僵尸经验（方案 X 保守版）：验证计数已减到
+        // <= 0（被验证失败过）且超过 staleAfterMs 未被复用的条目。v==0 的新鲜/
+        // 未被调用经验不乱删，只靠排序沉底 + 手动删。
+        val staleBefore = now - staleAfterMs
+        val cleaned = lines.filterNot { line ->
+            val ep = parseLine(line)
+            ep != null && ep.v <= 0 && ep.lastHit > 0 && ep.lastHit < staleBefore
+        }
+        if (cleaned.size != lines.size) {
+            lines.clear()
+            lines.addAll(cleaned)
+            changed = true
         }
         val excess = lines.size - maxEntries
         val trimmed = if (excess > 0) lines.drop(excess) else lines
@@ -464,6 +516,8 @@ class EpisodeMemoryStore(
                     reply = obj.optString("reply", ""),
                     sid = obj.optString("sid", ""),
                     v = obj.optInt("v", 0),
+                    // [Mem-auto-cleanup] 旧数据无 lastHit 时默认=录制时间 t（视为刚创建过）。
+                    lastHit = obj.optLong("lastHit", obj.optLong("t", 0L)),
                 )
             } catch (_: Exception) {
                 null
@@ -508,6 +562,7 @@ class EpisodeMemoryStore(
             obj.put("reply", exchange.reply.take(500))
             obj.put("sid", exchange.sessionId)
             obj.put("v", v)
+            obj.put("lastHit", System.currentTimeMillis())
             return obj.toString()
         }
     }
@@ -531,6 +586,26 @@ class EpisodeMemoryStore(
             if (newV == ep.v) continue
             val obj = parseToJson(lines[i]) ?: continue
             obj.put("v", newV)
+            lines[i] = obj.toString()
+            changed = true
+        }
+        return changed
+    }
+
+    /** [Mem-auto-cleanup] 锁内把命中项（稳定 id）的 lastHit 更新为 [now]；
+     *  供僵尸清理判断"最后复用时间"。返回是否有任何条目被改写。 */
+    private fun bumpLastHitLocked(
+        lines: MutableList<String>,
+        ids: Set<String>,
+        now: Long,
+    ): Boolean {
+        var changed = false
+        for (i in lines.indices) {
+            val ep = parseLine(lines[i]) ?: continue
+            if (ep.id !in ids) continue
+            if (ep.lastHit == now) continue
+            val obj = parseToJson(lines[i]) ?: continue
+            obj.put("lastHit", now)
             lines[i] = obj.toString()
             changed = true
         }

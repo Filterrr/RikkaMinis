@@ -614,6 +614,12 @@
     <string name="memory_empty_description">Memory files store persistent knowledge across sessions. Edit GLOBAL.md to add instructions visible to the agent.</string>
     <string name="memory_section_files">Files</string>
     <string name="memory_section_footer">GLOBAL.md contains persistent instructions visible to the agent. Daily logs are created automatically during conversations.</string>
+    <string name="memory_section_view_more">View more files</string>
+    <string name="memory_section_view_less">View less</string>
+    <string name="memory_experience_show_all">Show all episodes</string>
+    <string name="memory_experience_delete">Delete this episode</string>
+    <string name="memory_experience_delete_confirm_title">Delete this episode?</string>
+    <string name="memory_experience_delete_confirm_text">This removes the episode from the local memory file. Its reuse count is lost.</string>
     <string name="memory_delete_confirm_title">Delete %1$s?</string>
     <string name="memory_delete_confirm_text">This will permanently remove this memory log.</string>
     <string name="memory_editor_placeholder">Enter content…</string>
