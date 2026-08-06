@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Data extraction rules (Android 12+, API 31+).
+  Excludes the episodic memory file from both cloud backup and device-to-device
+  transfer: it records user query/reply plaintext (privacy). See
+  backup_rules.xml for the legacy full-backup path.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="file" path="minis-global/memory/episodes.jsonl" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="file" path="minis-global/memory/episodes.jsonl" />
+    </device-transfer>
+</data-extraction-rules>

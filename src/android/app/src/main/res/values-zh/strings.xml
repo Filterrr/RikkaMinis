@@ -301,10 +301,13 @@
     <string name="memory_experience_entries">已记录 %d 条经验</string>
     <string name="memory_experience_clear_confirm_title">清空经验记忆？</string>
     <string name="memory_experience_clear_confirm_text">这将永久删除本地经验文件（episodes.jsonl），agent 将忘记过去的交互。</string>
+    <string name="memory_experience_clear_failed">清除经验记忆失败</string>
     <string name="memory_experience_view">查看已记录的经验</string>
     <string name="memory_experience_view_empty">暂无已记录的经验</string>
+    <string name="memory_experience_view_recent">仅显示最近 %1$d 条（共 %2$d 条）</string>
     <string name="memory_experience_reuse">已复用 %d 次</string>
     <string name="memory_experience_outcome_ok">成功</string>
+    <string name="memory_experience_outcome_partial">部分成功</string>
     <string name="memory_experience_outcome_fail">失败</string>
     <string name="memory_experience_detail_query">查询</string>
     <string name="memory_experience_detail_reply">回复</string>

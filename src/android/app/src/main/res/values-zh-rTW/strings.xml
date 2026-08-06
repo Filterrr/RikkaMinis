@@ -59,10 +59,13 @@
     <string name="memory_experience_entries">已記錄 %d 條經驗</string>
     <string name="memory_experience_clear_confirm_title">清空經驗記憶？</string>
     <string name="memory_experience_clear_confirm_text">這將永久刪除本機經驗檔案（episodes.jsonl），agent 將忘記過去的互動。</string>
+    <string name="memory_experience_clear_failed">清除經驗記憶失敗</string>
     <string name="memory_experience_view">檢視已記錄的經驗</string>
     <string name="memory_experience_view_empty">暫無已記錄的經驗</string>
+    <string name="memory_experience_view_recent">僅顯示最近 %1$d 條（共 %2$d 條）</string>
     <string name="memory_experience_reuse">已複用 %d 次</string>
     <string name="memory_experience_outcome_ok">成功</string>
+    <string name="memory_experience_outcome_partial">部分成功</string>
     <string name="memory_experience_outcome_fail">失敗</string>
     <string name="memory_experience_detail_query">查詢</string>
     <string name="memory_experience_detail_reply">回覆</string>

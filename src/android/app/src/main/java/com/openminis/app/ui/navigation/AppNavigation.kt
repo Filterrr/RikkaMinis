@@ -1103,9 +1103,10 @@ fun AppNavigation(
         }
 
         composable(Routes.MEMORY) {
-            if (memoryRepository != null) {
+            if (memoryRepository != null && experienceMemoryStore != null) {
                 MemoryManagementScreen(
                     memoryRepository = memoryRepository,
+                    experienceMemoryStore = experienceMemoryStore,
                     onBack = { navController.safePopBackStack() },
                     onFileClick = { fileName, isGlobal ->
                         navController.safeNavigate(Routes.memoryFileEdit(fileName, isGlobal))
