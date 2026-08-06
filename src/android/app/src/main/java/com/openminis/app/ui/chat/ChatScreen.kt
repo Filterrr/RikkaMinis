@@ -616,13 +616,25 @@ fun ChatScreen(
     var lastUserAppendMs by remember { mutableStateOf(0L) }
     androidx.compose.runtime.LaunchedEffect(inputText) {
         if (inputFieldValue.text != inputText) {
-            // [T-android-slash-menu-align-ios-prepend] Honor a one-shot caret
+            // [Txxx-android-composer-caret-jump] Honor a one-shot caret
             // override from the slash flow (prepend "/ " → caret 1; insert
             // "/<skill> " → caret after the prefix). Read-and-clear so it
-            // applies exactly once; otherwise default the caret to the end
-            // (existing behavior). Coerce into bounds defensively.
+            // applies exactly once.
+            //
+            // When there's NO pendingCaret (normal typing / paste / external
+            // write that didn't tag a caret), PRESERVE the user's current caret
+            // instead of forcing it to inputText.length. The old `?: inputText.length`
+            // reset the selection to the END on every relaunch where the guard
+            // above fired — and because this LaunchedEffect races the
+            // BasicTextField.onValueChange writer to inputFieldValue, a long
+            // paste could see a mid-frame text mismatch, trigger the reset, and
+            // randomly yank the caret (often to the end) while the user was
+            // editing the middle of a long message. The slash/mention/draft
+            // intent paths all set pendingCaret, so this keeps their precise
+            // positioning intact; only the unintended end-jump is removed.
+            // Coerce into bounds both ways defensively.
             val caret = viewModel.consumePendingCaret()?.coerceIn(0, inputText.length)
-                ?: inputText.length
+                ?: inputFieldValue.selection.end.coerceIn(0, inputText.length)
             inputFieldValue = androidx.compose.ui.text.input.TextFieldValue(
                 text = inputText,
                 selection = androidx.compose.ui.text.TextRange(caret),
