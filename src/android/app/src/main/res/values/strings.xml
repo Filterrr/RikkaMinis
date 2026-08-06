@@ -517,7 +517,8 @@
     <string name="appearance_show_chat_title_footer">Display the current session title as a floating pill at the top of the chat while scrolling through history.</string>
     <string name="chat_title_pill_session_default">Untitled</string>
     <string name="appearance_section_tool_preview">Tool Status Bar</string>
-    <string name="appearance_tool_preview_footer">Show a live preview thumbnail alongside the tool status bar during agent execution.</string>
+    <string name="appearance_tool_preview_footer">Control the floating bar shown above the composer while the agent calls tools: hide the whole bar, or just the live preview thumbnail.</string>
+    <string name="appearance_tool_status_bar_title">Tool Status Bar</string>
     <string name="appearance_tool_preview_title">Tool Preview Window</string>
     <string name="appearance_section_auto_focus_after_reply">Auto-Focus Input After Reply</string>
     <string name="appearance_auto_focus_after_reply_title">Auto-Focus Input After Reply</string>

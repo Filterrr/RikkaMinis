@@ -187,7 +187,8 @@
     <string name="appearance_keep_awake_footer">Empêche l\'écran de se mettre en veille pendant qu\'une session exécute une tâche. Peut augmenter la consommation de batterie.</string>
     <string name="appearance_keep_awake_title">Garder l\'écran allumé</string>
     <string name="appearance_section_tool_preview">Barre d\'état des outils</string>
-    <string name="appearance_tool_preview_footer">Afficher une miniature en direct à côté de la barre d\'état des outils pendant l\'exécution de l\'agent.</string>
+    <string name="appearance_tool_preview_footer">Contrôler la barre flottante affichée au-dessus du champ de saisie lorsque l\'agent appelle des outils : masquer toute la barre ou seulement la miniature de prévisualisation en direct.</string>
+    <string name="appearance_tool_status_bar_title">Barre d\'état des outils</string>
     <string name="appearance_tool_preview_title">Fenêtre de prévisualisation des outils</string>
     <string name="appearance_section_font_size">Taille de police</string>
     <string name="appearance_font_size_footer">Ajuste la taille des polices pour la saisie, le contenu des messages et le texte général de l\'application. Les changements s\'appliquent immédiatement.</string>

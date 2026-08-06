@@ -225,7 +225,8 @@
     <string name="appearance_show_chat_title_footer">滚动浏览历史消息时，在聊天顶部以悬浮胶囊形式显示当前会话标题。</string>
     <string name="chat_title_pill_session_default">未命名会话</string>
     <string name="appearance_section_tool_preview">工具状态栏</string>
-    <string name="appearance_tool_preview_footer">在 Agent 执行期间，于工具状态栏旁显示实时预览缩略图。</string>
+    <string name="appearance_tool_preview_footer">控制 Agent 调用工具时输入框上方显示的悬浮条：可隐藏整个状态栏，或仅隐藏实时预览缩略图。</string>
+    <string name="appearance_tool_status_bar_title">工具状态栏</string>
     <string name="appearance_tool_preview_title">工具预览窗口</string>
     <string name="appearance_section_auto_focus_after_reply">回复后自动聚焦输入框</string>
     <string name="appearance_auto_focus_after_reply_title">回复后自动聚焦输入框</string>

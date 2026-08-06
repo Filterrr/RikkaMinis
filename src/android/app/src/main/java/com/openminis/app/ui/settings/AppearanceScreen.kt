@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.BrightnessAuto
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Construction
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.FormatSize
 import androidx.compose.material.icons.outlined.History
@@ -84,6 +85,13 @@ const val KEY_LAUNCH_SESSION = "launch_session"    // 0=Auto, 1=LastSession, 2=N
 const val KEY_RETURN_KEY_BEHAVIOR = "returnKeyBehavior"  // Int 0=Newline (default), 1=Send
 const val KEY_KEEP_SCREEN_AWAKE = "keepScreenAwakeDuringTasks"  // Boolean, default false
 const val KEY_TOOL_PREVIEW = "tool_preview"        // Boolean, default false
+// Whole floating tool-status bar visibility. When false the entire
+// FloatingToolStatusBar (status text, spinner, thumbnail) is hidden and its
+// height reserve is skipped. Independent of KEY_TOOL_PREVIEW (which only
+// controls the thumbnail window ON the bar). Default ON keeps existing
+// behavior. Key name mirrors iOS `appearance.show_tool_status_bar` for future
+// cross-platform sync.
+const val KEY_TOOL_STATUS_BAR = "appearance.show_tool_status_bar"  // Boolean, default true
 // [T-keyboard-auto-pop default flip] Default ON — most users want the
 // composer ready for a follow-up immediately after the model finishes.
 // Key name mirrors iOS `@AppStorage("chat.autoFocusAfterReply")` so a
@@ -173,6 +181,7 @@ fun AppearanceScreen(
     var returnKeyBehavior by remember { mutableIntStateOf(prefs.getInt(KEY_RETURN_KEY_BEHAVIOR, 0)) }
     var keepScreenAwake by remember { mutableStateOf(prefs.getBoolean(KEY_KEEP_SCREEN_AWAKE, false)) }
     var toolPreview by remember { mutableStateOf(prefs.getBoolean(KEY_TOOL_PREVIEW, false)) }
+    var toolStatusBar by remember { mutableStateOf(prefs.getBoolean(KEY_TOOL_STATUS_BAR, true)) }
     var autoFocusAfterReply by remember { mutableStateOf(prefs.getBoolean(KEY_AUTO_FOCUS_AFTER_REPLY, true)) }
     var autoExpandThinking by remember { mutableStateOf(prefs.getBoolean(KEY_AUTO_EXPAND_THINKING, true)) }
     var showChatTitle by remember { mutableStateOf(prefs.getBoolean(KEY_SHOW_CHAT_TITLE, true)) }
@@ -197,6 +206,7 @@ fun AppearanceScreen(
                 KEY_RETURN_KEY_BEHAVIOR -> returnKeyBehavior = prefs.getInt(key, 0)
                 KEY_KEEP_SCREEN_AWAKE -> keepScreenAwake = prefs.getBoolean(key, false)
                 KEY_TOOL_PREVIEW -> toolPreview = prefs.getBoolean(key, false)
+                KEY_TOOL_STATUS_BAR -> toolStatusBar = prefs.getBoolean(key, true)
                 KEY_AUTO_FOCUS_AFTER_REPLY -> autoFocusAfterReply = prefs.getBoolean(key, true)
                 KEY_AUTO_EXPAND_THINKING -> autoExpandThinking = prefs.getBoolean(key, true)
                 KEY_SHOW_CHAT_TITLE -> showChatTitle = prefs.getBoolean(key, true)
@@ -358,6 +368,21 @@ fun AppearanceScreen(
             header = stringResource(R.string.appearance_section_tool_preview),
             footer = stringResource(R.string.appearance_tool_preview_footer),
         ) {
+            // Whole-bar visibility. Independent of the preview-window toggle
+            // below (which only hides the thumbnail ON this bar). When this is
+            // off the entire floating status bar (text + spinner + thumbnail)
+            // is hidden and reserves no space.
+            SettingsSwitchRow(
+                icon = Icons.Outlined.Construction,
+                iconColor = tileTeal,
+                title = stringResource(R.string.appearance_tool_status_bar_title),
+                checked = toolStatusBar,
+                onCheckedChange = {
+                    toolStatusBar = it
+                    prefs.edit().putBoolean(KEY_TOOL_STATUS_BAR, it).apply()
+                },
+                showDivider = true,
+            )
             SettingsSwitchRow(
                 icon = Icons.Outlined.Visibility,
                 iconColor = tileTeal,

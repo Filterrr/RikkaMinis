@@ -1765,6 +1765,10 @@ fun ChatScreen(
     var messageFontLevel by remember { mutableStateOf(appearancePrefs.getInt(com.openminis.app.ui.settings.KEY_FONT_MESSAGE, 0)) }
     var chatInputLevel by remember { mutableStateOf(appearancePrefs.getInt(com.openminis.app.ui.settings.KEY_FONT_CHAT_INPUT, 0)) }
     var toolPreviewEnabled by remember { mutableStateOf(appearancePrefs.getBoolean(com.openminis.app.ui.settings.KEY_TOOL_PREVIEW, false)) }
+    // Whole FloatingToolStatusBar visibility — when OFF the entire bar is
+    // hidden (text + spinner + thumbnail) and no height is reserved. Live
+    // toggles via Settings → Appearance and minis-config.
+    var toolStatusBarEnabled by remember { mutableStateOf(appearancePrefs.getBoolean(com.openminis.app.ui.settings.KEY_TOOL_STATUS_BAR, true)) }
     // T-chat-title-pill: live-toggled by Settings → Appearance and by
     // `minis-config set appearance.show_chat_title …`. Default ON.
     var showChatTitlePill by remember { mutableStateOf(appearancePrefs.getBoolean(com.openminis.app.ui.settings.KEY_SHOW_CHAT_TITLE, true)) }
@@ -1779,6 +1783,7 @@ fun ChatScreen(
                 com.openminis.app.ui.settings.KEY_FONT_MESSAGE -> messageFontLevel = sp.getInt(key, 0)
                 com.openminis.app.ui.settings.KEY_FONT_CHAT_INPUT -> chatInputLevel = sp.getInt(key, 0)
                 com.openminis.app.ui.settings.KEY_TOOL_PREVIEW -> toolPreviewEnabled = sp.getBoolean(key, false)
+                com.openminis.app.ui.settings.KEY_TOOL_STATUS_BAR -> toolStatusBarEnabled = sp.getBoolean(key, true)
                 com.openminis.app.ui.settings.KEY_SHOW_CHAT_TITLE -> showChatTitlePill = sp.getBoolean(key, true)
             }
         }
@@ -2892,7 +2897,13 @@ fun ChatScreen(
                 // view; we mirror that semantically by checking the same
                 // filter on both sources.
                 val streamingById by viewModel.streamingById.collectAsState()
-                val hasFloatingTools = remember(messages, streamingById) {
+                // Also gated on toolStatusBarEnabled: when the user hides the
+                // whole floating bar, hasFloatingTools must report false so
+                // bottomReserve drops to the normal no-tool padding (otherwise
+                // an empty 65dp+ gap stays above the composer). Recompute on
+                // toggle so the reserve and bar flip together.
+                val hasFloatingTools = remember(messages, streamingById, toolStatusBarEnabled) {
+                    if (!toolStatusBarEnabled) return@remember false
                     val merged = if (streamingById.isEmpty()) messages
                                  else mergeStreamingOverlay(messages, streamingById)
                     merged.any { msg ->
@@ -4017,7 +4028,12 @@ fun ChatScreen(
                     }.collect { lastToolBlocks = it }
                 }
                 val allToolBlocks = lastToolBlocks
-                if (lastToolBlocks.isNotEmpty()) {
+                // Whole-bar visibility gate: when the user disables the
+                // floating tool status bar in Appearance, skip both the render
+                // AND the height reserve (otherwise an empty gap lingers above
+                // the composer). Reserve and bar must flip on the same frame for
+                // the T174 reserve logic to stay consistent.
+                if (lastToolBlocks.isNotEmpty() && toolStatusBarEnabled) {
                     Box(
                         modifier = Modifier
                             .align(Alignment.BottomCenter)

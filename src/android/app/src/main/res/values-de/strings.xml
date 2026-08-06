@@ -187,7 +187,8 @@
     <string name="appearance_keep_awake_footer">Verhindert, dass der Bildschirm in den Ruhezustand wechselt, während eine Sitzung eine Aufgabe ausführt. Kann den Akkuverbrauch erhöhen.</string>
     <string name="appearance_keep_awake_title">Bildschirm wach halten</string>
     <string name="appearance_section_tool_preview">Tool-Statusleiste</string>
-    <string name="appearance_tool_preview_footer">Während der Agent-Ausführung eine Live-Vorschau-Miniaturansicht neben der Tool-Statusleiste anzeigen.</string>
+    <string name="appearance_tool_preview_footer">Die schwebende Leiste über dem Eingabefeld steuern, die während Tool-Aufrufen des Agenten erscheint: die gesamte Leiste ausblenden oder nur die Live-Vorschau-Miniaturansicht.</string>
+    <string name="appearance_tool_status_bar_title">Tool-Statusleiste</string>
     <string name="appearance_tool_preview_title">Tool-Vorschaufenster</string>
     <string name="appearance_section_font_size">Schriftgröße</string>
     <string name="appearance_font_size_footer">Skaliert Schriftarten für Chat-Eingabe, Nachrichteninhalte und allgemeinen App-Text. Änderungen werden sofort angewendet.</string>
