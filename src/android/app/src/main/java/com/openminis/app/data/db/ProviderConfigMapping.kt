@@ -91,6 +91,9 @@ fun ProviderConfig.toSnapshot(
             isEnabled = if (inst.isEnabled) 1 else 0,
             sortOrder = idx,
             createdAt = inst.createdAt,
+            // [P0-pinned-providers] Persist the favorite flag so Room
+            // round-trips don't snap pinned instances back to unpinned.
+            pinned = if (inst.pinned) 1 else 0,
         )
     }
 
@@ -211,6 +214,8 @@ fun ProviderConfigSnapshot.toProviderConfig(jsonForBlobs: Json): ProviderConfig 
             imageEndpointResolved = row.imageEndpointResolved?.let { m ->
                 runCatching { ImageEndpointMode.valueOf(m) }.getOrNull()
             },
+            // [P0-pinned-providers] Restore the favorite flag on load.
+            pinned = row.pinned != 0,
         )
     }.toMutableList()
 

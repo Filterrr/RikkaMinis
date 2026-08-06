@@ -34,4 +34,8 @@ data class ProviderInstanceEntity(
     @ColumnInfo(name = "is_enabled") val isEnabled: Int = 1,
     @ColumnInfo(name = "sort_order") val sortOrder: Int = 0,
     @ColumnInfo(name = "created_at") val createdAt: Long,
+    // [P0-pinned-providers] 0/1 user "favorite" flag. NOT NULL DEFAULT 0 so
+    // MIGRATION_3_4's ALTER TABLE backfills existing rows to "not pinned",
+    // matching the entity default and the JSON model's `pinned = false`.
+    @ColumnInfo(name = "pinned") val pinned: Int = 0,
 )
