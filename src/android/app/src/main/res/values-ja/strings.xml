@@ -187,7 +187,8 @@
     <string name="appearance_keep_awake_footer">セッションがタスクを実行している間、画面のスリープを防ぎます。電池消費が増える可能性があります。</string>
     <string name="appearance_keep_awake_title">画面を常にオン</string>
     <string name="appearance_section_tool_preview">ツールステータスバー</string>
-    <string name="appearance_tool_preview_footer">エージェント実行中、ツールステータスバーと共にライブプレビューサムネイルを表示します。</string>
+    <string name="appearance_tool_preview_footer">エージェントがツールを呼び出す際にコンポーザー上に表示されるフローティングバーを制御します：バー全体を非表示にするか、ライブプレビューサムネイルのみを非表示にします。</string>
+    <string name="appearance_tool_status_bar_title">ツールステータスバー</string>
     <string name="appearance_tool_preview_title">ツールプレビューウィンドウ</string>
     <string name="appearance_section_font_size">フォントサイズ</string>
     <string name="appearance_font_size_footer">チャット入力、メッセージ内容、アプリテキストのフォントサイズを調整します。変更は即座に適用されます。</string>

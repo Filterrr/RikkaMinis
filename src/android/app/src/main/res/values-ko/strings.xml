@@ -187,7 +187,8 @@
     <string name="appearance_keep_awake_footer">세션이 작업을 실행하는 동안 화면이 절전되는 것을 방지합니다. 배터리 소모가 증가할 수 있습니다.</string>
     <string name="appearance_keep_awake_title">화면 켜짐 유지</string>
     <string name="appearance_section_tool_preview">도구 상태 바</string>
-    <string name="appearance_tool_preview_footer">에이전트 실행 중 도구 상태 바와 함께 실시간 미리보기 썸네일을 표시합니다.</string>
+    <string name="appearance_tool_preview_footer">에이전트가 도구를 호출할 때 입력창 위에 표시되는 플로팅 바를 제어합니다: 전체 바를 숨기거나, 실시간 미리보기 썸네일만 숨깁니다.</string>
+    <string name="appearance_tool_status_bar_title">도구 상태 바</string>
     <string name="appearance_tool_preview_title">도구 미리보기 창</string>
     <string name="appearance_section_font_size">글자 크기</string>
     <string name="appearance_font_size_footer">채팅 입력, 메시지 내용, 일반 앱 텍스트의 글꼴 크기를 조절합니다. 변경 사항이 즉시 적용됩니다.</string>

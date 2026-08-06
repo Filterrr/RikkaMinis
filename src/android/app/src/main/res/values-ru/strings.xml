@@ -388,7 +388,8 @@
     <string name="appearance_show_chat_title_footer">Отображать название текущей сессии в виде плавающей плашки вверху чата при прокрутке истории.</string>
     <string name="chat_title_pill_session_default">Без названия</string>
     <string name="appearance_section_tool_preview">Строка состояния инструмента</string>
-    <string name="appearance_tool_preview_footer">Показывать живую миниатюру предпросмотра рядом со строкой состояния инструмента во время работы агента.</string>
+    <string name="appearance_tool_preview_footer">Управляет плавающей строкой над полем ввода, показываемой при вызове инструментов агентом: скрыть всю строку или только живую миниатюру предпросмотра.</string>
+    <string name="appearance_tool_status_bar_title">Строка состояния инструмента</string>
     <string name="appearance_tool_preview_title">Окно предпросмотра инструмента</string>
     <string name="appearance_section_auto_focus_after_reply">Автофокус ввода после ответа</string>
     <string name="appearance_auto_focus_after_reply_title">Автофокус ввода после ответа</string>

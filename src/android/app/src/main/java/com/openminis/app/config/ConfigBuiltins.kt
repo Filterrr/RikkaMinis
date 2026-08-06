@@ -388,6 +388,18 @@ internal object ConfigBuiltins {
                 defaultValue = false,
             )
         )
+        // Whole floating tool-status bar visibility (independent of the
+        // thumbnail preview above). Default ON keeps existing behavior.
+        r.register(
+            PrefsBoolField(
+                path = "appearance.showToolStatusBar",
+                displayName = "Tool status bar",
+                description = "When ON, the floating bar above the composer while the agent calls tools is shown (status text, spinner, and thumbnail preview). Turn OFF to hide it entirely.",
+                prefs = appearancePrefs,
+                key = com.openminis.app.ui.settings.KEY_TOOL_STATUS_BAR,
+                defaultValue = true,
+            )
+        )
         // [T-keyboard-auto-pop default flip] On by default — iOS gates
         // the existing post-stream auto-focus behind this. Android
         // currently does not auto-focus on stream end (it only
