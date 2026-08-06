@@ -4,7 +4,9 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.os.SystemClock
 import android.provider.OpenableColumns
+import android.widget.Toast
 import java.io.File
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.Image
@@ -5547,14 +5549,13 @@ fun ChatScreen(
     // handler). Priority order:
     //   1. history drawer open        -> close drawer, consume back
     //   2. slash/mention menu open    -> dismiss menu, consume back
-    //   3. otherwise                  -> background the whole task. The drawer
-    //      is the ONLY history interface — back gesture must never land on
-    //      the stock SESSION_LIST below ChatScreen on the nav stack, so we
-    //      do NOT call onBack()/popBackStack (that would reveal SESSION_LIST)
-    //      and we do NOT swallow back (that would trap the user in a black
-    //      hole with no way to leave). moveTaskToBack pushes the entire app to
-    //      the background, i.e. from ChatScreen a back gesture exits the app
-    //      cleanly. [P0-1-back-exit][P0-2-session-list-out]
+    //   3. otherwise                  -> double-press-to-exit: first press
+    //      shows a toast, second press within 2s backgrounds the task.
+    //      The drawer is the ONLY history interface — back gesture must
+    //      never land on the stock SESSION_LIST below ChatScreen on the
+    //      nav stack. [P0-1-back-exit][P0-2-session-list-out]
+    val lastBackPressTimeMs = remember { mutableStateOf(0L) }
+    val doubleBackToast = stringResource(R.string.back_to_exit_press_again)
     androidx.activity.compose.BackHandler(enabled = true) {
         when {
             historyDrawerState.isOpen -> {
@@ -5569,11 +5570,17 @@ fun ChatScreen(
                 }
             }
             else -> {
-                val activity = context as? android.app.Activity
-                if (activity != null) {
-                    activity.moveTaskToBack(true)
+                val now = SystemClock.elapsedRealtime()
+                if (now - lastBackPressTimeMs.value < 2000L) {
+                    val activity = context as? android.app.Activity
+                    if (activity != null) {
+                        activity.moveTaskToBack(true)
+                    } else {
+                        onBack()
+                    }
                 } else {
-                    onBack()
+                    lastBackPressTimeMs.value = now
+                    Toast.makeText(context, doubleBackToast, Toast.LENGTH_SHORT).show()
                 }
             }
         }
