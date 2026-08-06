@@ -3774,7 +3774,24 @@ class ChatViewModel(
      * This ensures that models already tried (before the primary) are at the end,
      * not the beginning — so retry doesn't re-trigger the same fallback chain.
      */
-    private fun buildFallbackProviders(primaryProvider: LLMProvider): List<LLMProvider> {
+    /**
+     * A fallback candidate = the resolved [provider] plus the model-group
+     * [entryId] it was built from. Carrying the entryId (instead of re-finding
+     * it later by modelId) is what makes fallback landing precise: a group can
+     * hold several entries for the SAME modelId behind different provider
+     * instances/endpoints (e.g. deepseek-v4-flash via a dead hub.oaifree.com
+     * key + via api.deepseek.com). A naive `modelEntries.find { it.model.id ==
+     * modelId }` would return the FIRST matching entry regardless of which
+     * instance we actually used — corrupting the model picker highlight, the
+     * provider label and the effective context window.
+     * [P0-x-fallback-entry-precision]
+     */
+    private data class FallbackCandidate(
+        val provider: LLMProvider,
+        val entryId: String,
+    )
+
+    private fun buildFallbackProviders(primaryProvider: LLMProvider): List<FallbackCandidate> {
         val groupId = _selectedGroupId.value ?: return emptyList()
         val config = providerRepository.config.value
         val group = config.modelGroups.find { it.id == groupId } ?: return emptyList()
@@ -3783,7 +3800,7 @@ class ChatViewModel(
         val currentIdx = members.indexOfFirst { entryId ->
             config.modelEntries.find { it.id == entryId }?.model?.id == primaryProvider.model.id
         }
-        val result = mutableListOf<LLMProvider>()
+        val result = mutableListOf<FallbackCandidate>()
         // Iterate starting from the entry AFTER the primary, cycling around
         for (offset in 1 until members.size) {
             val idx = if (currentIdx >= 0) (currentIdx + offset) % members.size else offset
@@ -3795,7 +3812,7 @@ class ChatViewModel(
             val p = try {
                 ProviderFactory.create(instance, apiKey, entry.model, context)
             } catch (_: Exception) { continue }
-            result.add(p)
+            result.add(FallbackCandidate(p, entryId))
         }
         return result
     }
@@ -4805,7 +4822,7 @@ class ChatViewModel(
     private suspend fun drainQueuedPrompts(
         provider: LLMProvider,
         systemPrompt: String?,
-        fallbackProviders: List<LLMProvider>,
+        fallbackProviders: List<FallbackCandidate>,
         fallbackStrategy: com.openminis.app.data.model.FallbackStrategy,
     ) {
         while (_promptQueue.value.isNotEmpty()) {
@@ -5871,7 +5888,7 @@ class ChatViewModel(
     private suspend fun runAgentLoop(
         provider: LLMProvider,
         systemPrompt: String?,
-        fallbackProviders: List<LLMProvider> = emptyList(),
+        fallbackProviders: List<FallbackCandidate> = emptyList(),
         fallbackStrategy: com.openminis.app.data.model.FallbackStrategy = com.openminis.app.data.model.FallbackStrategy.default,
     ) {
         AppLogger.info(TAG_STREAM, "runAgentLoop ENTER provider=${provider.javaClass.simpleName} historySize=${agentHistory.size}")
@@ -6680,20 +6697,30 @@ class ChatViewModel(
                         // silently. Only flash the model capsule when the
                         // resolved modelId ACTUALLY changes; an endpoint/instance-
                         // only change must not surface to the UI.
-                        val isRealModelChange = next.model.id != currentProvider.model.id
+                        val isRealModelChange = next.provider.model.id != currentProvider.model.id
                         fallbackReasons.add("⚠️ ${currentProvider.model.displayName}: $reason")
-                        Log.i(TAG, "🔀 $reason on ${currentProvider.model.displayName}, switching to ${next.model.displayName} (realModelChange=$isRealModelChange)")
-                        currentProvider = next
+                        Log.i(TAG, "🔀 $reason on ${currentProvider.model.displayName}, switching to ${next.provider.model.displayName} (realModelChange=$isRealModelChange)")
+                        currentProvider = next.provider
                         // Also update class-level provider so the next sendMessage() starts from here
-                        this@ChatViewModel.currentProvider = next
+                        this@ChatViewModel.currentProvider = next.provider
                         // Update top bar model info + active entry. (For a same-
                         // model endpoint recovery these are no-ops on the visible
                         // model name, but still keep activeEntryId / provider name
                         // in sync with the instance we actually used.)
                         _modelName.value = currentProvider.model.displayName
-                        // Update activeEntryId so model picker reflects the switch
+                        // [P0-x-fallback-entry-precision] Resolve the group ENTRY
+                        // we actually fell back to by its id (carried on the
+                        // candidate), NOT by re-searching `modelEntries` with
+                        // `it.model.id == currentProvider.model.id`. A group can
+                        // hold several entries for the same modelId behind
+                        // different instances; a modelId-only find returns the
+                        // FIRST match, which may be a different instance than the
+                        // one we are now using — corrupting _activeEntryId /
+                        // _providerName (model picker highlight, provider label)
+                        // and effectiveContextWindowTokens (context window of the
+                        // wrong instance).
                         val newEntry = providerRepository.config.value.modelEntries.find {
-                            it.model.id == currentProvider.model.id
+                            it.id == next.entryId
                         }
                         if (newEntry != null) {
                             _activeEntryId.value = newEntry.id
