@@ -1134,6 +1134,7 @@
     <string name="model_picker_groups_section">模型分组</string>
     <string name="model_picker_groups_edit">编辑</string>
     <string name="model_picker_groups_footer">将本会话绑定到分组以实现自动回退或负载均衡。</string>
+    <string name="model_picker_all_providers">全部提供商</string>
     <string name="model_picker_default_badge">默认</string>
     <string name="model_picker_active_badge">活跃</string>
     <string name="model_picker_no_linked_models">该分组未绑定任何模型。</string>

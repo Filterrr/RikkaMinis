@@ -760,6 +760,7 @@
     <string name="model_picker_search_clear">Effacer</string>
     <string name="model_picker_groups_section">Groupes de modèles</string>
     <string name="model_picker_groups_footer">Liez cette session à un groupe pour activer le repli automatique ou la répartition de charge.</string>
+    <string name="model_picker_all_providers">Tous les fournisseurs</string>
     <string name="model_picker_default_badge">Par défaut</string>
     <string name="model_picker_active_badge">Actif</string>
     <string name="model_picker_no_linked_models">Aucun modèle lié à ce groupe.</string>

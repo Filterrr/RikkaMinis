@@ -873,6 +873,7 @@
     <string name="model_picker_search_clear">지우기</string>
     <string name="model_picker_groups_section">모델 그룹</string>
     <string name="model_picker_groups_footer">자동 폴백 또는 부하 분산을 위해 이 세션을 그룹에 연결합니다.</string>
+    <string name="model_picker_all_providers">모든 제공업체</string>
     <string name="model_picker_default_badge">기본값</string>
     <string name="model_picker_active_badge">활성</string>
     <string name="model_picker_no_linked_models">이 그룹에 연결된 모델이 없습니다.</string>
