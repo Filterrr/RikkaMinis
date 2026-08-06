@@ -17,8 +17,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
@@ -35,7 +35,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -46,8 +48,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import com.openminis.app.data.EpisodeMemoryStore
@@ -294,6 +299,10 @@ fun MemoryManagementScreen(
     }
 
     // [ExpMem-viewer] Episode detail dialog — query, meta, tools, reply.
+    // Built with plain Dialog + Surface (NOT AlertDialog): M3 AlertDialog
+    // constrains the text slot and its fixed content area eats the vertical
+    // drag, so a long reply ends up clipped with no way to scroll it.
+    // A Dialog + Surface lets us own the height and scroll the Column freely.
     expDetail?.let { ep ->
         val dateStr = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(ep.t))
         val outcomeStr = stringResource(
@@ -304,20 +313,43 @@ fun MemoryManagementScreen(
         } else {
             ep.tools.joinToString(", ") { t -> "${t.n}(${if (t.ok) "✓" else "✗"})" }
         }
-        AlertDialog(
+        val radius = RoundedCornerShape(28.dp)
+        Dialog(
+            usePlatformDefaultWidth = false,
             onDismissRequest = { expDetail = null },
-            title = {
-                Text(
-                    ep.q.ifBlank { "—" },
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            },
-            text = {
+        ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.92f),
+                shape = radius,
+                color = MaterialTheme.colorScheme.surface,
+                tonalElevation = 6.dp,
+                shadowElevation = 16.dp,
+            ) {
                 Column(
                     modifier = Modifier
+                        .padding(24.dp)
+                        .fillMaxHeight(),
+                ) {
+                    // Title area (fixed, not scrolled)
+                Text(
+                    ep.q.ifBlank { "—" },
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Scrollable body — owns its height, so a long reply can be
+                // dragged to reveal everything below the fold.
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
                         .verticalScroll(rememberScrollState())
-                        .heightIn(max = 360.dp),
+                        .padding(end = 4.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Text(
@@ -344,13 +376,21 @@ fun MemoryManagementScreen(
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }
-            },
-            confirmButton = {
-                MinisTextButton(onClick = { expDetail = null }) {
-                    Text(stringResource(R.string.common_close))
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Close button (fixed, not scrolled)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    TextButton(onClick = { expDetail = null }) {
+                        Text(stringResource(R.string.common_close))
+                    }
                 }
-            },
-        )
+            }
+            }
+        }
     }
 }
 
