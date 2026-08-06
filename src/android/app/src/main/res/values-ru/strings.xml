@@ -697,6 +697,9 @@
     <string name="share_provider_json_import_failed">Недействительный файл конфигурации провайдера</string>
     <string name="provider_list_api_key">Ключ API</string>
     <string name="provider_list_disabled">Отключено</string>
+    <string name="provider_list_favorites">Избранное</string>
+    <string name="provider_set_favorite">Добавить в избранное</string>
+    <string name="provider_unset_favorite">Убрать из избранного</string>
     <string name="provider_detail_export">Экспортировать</string>
     <string name="provider_detail_label">Метка</string>
     <string name="provider_detail_manual_bearer_token">Ручной Bearer-токен</string>

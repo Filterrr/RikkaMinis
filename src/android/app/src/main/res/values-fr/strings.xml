@@ -481,6 +481,9 @@
     <string name="share_provider_json_import_failed">Fichier de configuration de fournisseur invalide</string>
     <string name="provider_list_api_key">Clé API</string>
     <string name="provider_list_disabled">Désactivé</string>
+    <string name="provider_list_favorites">Favoris</string>
+    <string name="provider_set_favorite">Mettre en favori</string>
+    <string name="provider_unset_favorite">Retirer des favoris</string>
     <string name="provider_detail_export">Exporter</string>
     <string name="provider_detail_label">Libellé</string>
     <string name="provider_detail_manual_bearer_token">Jeton Bearer manuel</string>

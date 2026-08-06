@@ -714,6 +714,9 @@
     <string name="share_provider_json_import_failed">无效的服务商配置文件</string>
     <string name="provider_list_api_key">API Key</string>
     <string name="provider_list_disabled">已停用</string>
+    <string name="provider_list_favorites">常用</string>
+    <string name="provider_set_favorite">设为常用</string>
+    <string name="provider_unset_favorite">取消常用</string>
     <string name="provider_detail_export">导出</string>
     <string name="provider_detail_label">标签</string>
     <string name="provider_detail_manual_bearer_token">手动 Bearer Token</string>
