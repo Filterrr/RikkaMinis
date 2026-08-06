@@ -247,6 +247,16 @@
     <string name="memory_experience_entries">%d episodes recorded</string>
     <string name="memory_experience_clear_confirm_title">Clear experience memory?</string>
     <string name="memory_experience_clear_confirm_text">This permanently deletes the local episodes file (episodes.jsonl). The agent will forget past exchanges.</string>
+    <string name="memory_experience_view">View recorded episodes</string>
+    <string name="memory_experience_view_empty">No episodes recorded yet</string>
+    <string name="memory_experience_reuse">reused %d×</string>
+    <string name="memory_experience_outcome_ok">Success</string>
+    <string name="memory_experience_outcome_fail">Failed</string>
+    <string name="memory_experience_detail_query">Query</string>
+    <string name="memory_experience_detail_reply">Reply</string>
+    <string name="memory_experience_detail_tools">Tools</string>
+    <string name="memory_experience_detail_meta">Recorded %1$s · %2$s · %3$ds · reused %4$d×</string>
+    <string name="memory_experience_detail_no_tools">(no tools)</string>
     <string name="memory_empty_title">메모리 파일 없음</string>
     <string name="memory_empty_description">메모리 파일은 세션 간 지식을 유지합니다. GLOBAL.md 를 편집해 에이전트에 보이는 지침을 추가하세요.</string>
     <string name="memory_section_files">파일</string>
