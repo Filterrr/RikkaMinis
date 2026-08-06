@@ -156,6 +156,44 @@ fun MemoryManagementScreen(
             )
         }
 
+        if (files.isEmpty()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Text(stringResource(R.string.memory_empty_title), style = MaterialTheme.typography.titleMedium)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    stringResource(R.string.memory_empty_description),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        } else {
+            SettingsSection(
+                header = stringResource(R.string.memory_section_files),
+                footer = stringResource(R.string.memory_section_footer),
+            ) {
+                files.forEachIndexed { index, file ->
+                    MemoryFileRow(
+                        file = file,
+                        onClick = { onFileClick(file.name, file.isGlobal) },
+                        onDelete = if (!file.isGlobal) { { deleteFileName = file.name } } else null,
+                    )
+                    if (index < files.size - 1) {
+                        HorizontalDivider(
+                            modifier = Modifier.padding(start = 16.dp),
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                        )
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
         SettingsSection(
             header = stringResource(R.string.settings_memory_experience_header),
             footer = stringResource(R.string.settings_memory_experience_footer),
@@ -275,44 +313,6 @@ fun MemoryManagementScreen(
             }
         }
         Spacer(modifier = Modifier.height(16.dp))
-
-        if (files.isEmpty()) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(32.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                Text(stringResource(R.string.memory_empty_title), style = MaterialTheme.typography.titleMedium)
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    stringResource(R.string.memory_empty_description),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        } else {
-            SettingsSection(
-                header = stringResource(R.string.memory_section_files),
-                footer = stringResource(R.string.memory_section_footer),
-            ) {
-                files.forEachIndexed { index, file ->
-                    MemoryFileRow(
-                        file = file,
-                        onClick = { onFileClick(file.name, file.isGlobal) },
-                        onDelete = if (!file.isGlobal) { { deleteFileName = file.name } } else null,
-                    )
-                    if (index < files.size - 1) {
-                        HorizontalDivider(
-                            modifier = Modifier.padding(start = 16.dp),
-                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-                        )
-                    }
-                }
-            }
-            Spacer(modifier = Modifier.height(16.dp))
-        }
     }
 
     // Delete confirmation
