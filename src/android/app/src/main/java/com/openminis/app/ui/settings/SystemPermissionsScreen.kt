@@ -1,6 +1,5 @@
 package com.openminis.app.ui.settings
 
-import android.widget.Toast
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
@@ -12,13 +11,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.outlined.DeleteSweep
-import androidx.compose.material.icons.outlined.RecordVoiceOver
 import androidx.compose.material.icons.outlined.Accessibility
 import androidx.compose.material.icons.outlined.BatteryAlert
 import androidx.compose.material.icons.outlined.RestartAlt
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -144,73 +139,6 @@ fun SystemPermissionsScreen(onBack: () -> Unit) {
                         showDivider = false,
                     )
                 }
-            }
-
-            // [T-android-voice-correction] Phase 4: opt-in consent for storing
-            // correction learning data, plus the wipe action. Placed here
-            // because it is a privacy control, matching iOS's Permissions page.
-            var correctionEnabled by remember {
-                mutableStateOf(
-                    com.openminis.app.speech.correction.VoiceCorrectionConsent.isEnabled(context),
-                )
-            }
-            var showClearCorrectionConfirm by remember { mutableStateOf(false) }
-
-            SettingsSection(
-                header = stringResource(R.string.voice_correction_section),
-                footer = stringResource(R.string.voice_correction_footer),
-            ) {
-                SettingsSwitchRow(
-                    icon = Icons.Outlined.RecordVoiceOver,
-                    title = stringResource(R.string.voice_correction_toggle),
-                    checked = correctionEnabled,
-                    onCheckedChange = { on ->
-                        correctionEnabled = on
-                        com.openminis.app.speech.correction.VoiceCorrectionConsent
-                            .setEnabled(context, on)
-                        // Turning the toggle off counts as an answer, so the
-                        // one-time prompt must not reappear afterwards.
-                        com.openminis.app.speech.correction.VoiceCorrectionConsent
-                            .setPrompted(context, true)
-                    },
-                )
-                SettingsRow(
-                    icon = Icons.Outlined.DeleteSweep,
-                    iconColor = MaterialTheme.colorScheme.error,
-                    title = stringResource(R.string.voice_correction_clear),
-                    titleColor = MaterialTheme.colorScheme.error,
-                    onClick = { showClearCorrectionConfirm = true },
-                    showDivider = false,
-                )
-            }
-
-            if (showClearCorrectionConfirm) {
-                AlertDialog(
-                    onDismissRequest = { showClearCorrectionConfirm = false },
-                    title = { Text(stringResource(R.string.voice_correction_clear_title)) },
-                    confirmButton = {
-                        TextButton(onClick = {
-                            showClearCorrectionConfirm = false
-                            com.openminis.app.speech.correction.VoiceCorrection
-                                .clearAllData(context)
-                            Toast.makeText(
-                                context,
-                                context.getString(R.string.voice_correction_cleared),
-                                Toast.LENGTH_SHORT,
-                            ).show()
-                        }) {
-                            Text(
-                                stringResource(R.string.voice_correction_clear),
-                                color = MaterialTheme.colorScheme.error,
-                            )
-                        }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { showClearCorrectionConfirm = false }) {
-                            Text(stringResource(R.string.voice_correction_consent_not_now))
-                        }
-                    },
-                )
             }
         }
     }

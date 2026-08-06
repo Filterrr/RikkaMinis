@@ -811,7 +811,6 @@
     <string name="sessionlist_welcome_step_done">Terminé</string>
     <!-- T-selection-add-to-input — Action du menu de sélection sur appui long -->
     <string name="selection_add_to_chat_input">Ajouter au champ de saisie</string>
-    <string name="selection_read_aloud">Lire à voix haute</string>
     <!-- T-minis-textkit boutons du menu de sélection -->
     <string name="selection_copy">Copier</string>
     <string name="selection_copy_markdown">Copier en Markdown</string>
@@ -927,19 +926,6 @@
     <string name="voice_link_to_host">lien vers %1$s</string>
     <string name="voice_bare_link">lien</string>
     <!-- [T-android-voice-correction] Consent + correction UI -->
-    <string name="voice_correction_consent_title">Améliorer les corrections vocales ?</string>
-    <string name="voice_correction_consent_body">Minis peut enregistrer vos corrections de transcription (original → corrigé) et les corrections IA acceptées dans une base de données locale sur l\'appareil afin d\'améliorer les futures corrections vocales. Rien n\'est envoyé en ligne. Vous pouvez modifier ce choix ou effacer les données à tout moment dans les Réglages.</string>
-    <string name="voice_correction_consent_enable">Activer</string>
-    <string name="voice_correction_consent_not_now">Plus tard</string>
-    <string name="voice_correction_button_a11y">Corriger la transcription avec l\'IA</string>
-    <string name="voice_correction_none_needed">Aucune correction nécessaire</string>
-    <string name="voice_correction_failed">Échec de la correction, original conservé</string>
-    <string name="voice_correction_section">Apprentissage des corrections vocales</string>
-    <string name="voice_correction_toggle">Collecter les données de correction vocale</string>
-    <string name="voice_correction_footer">Une fois activé, vos corrections manuelles des transcriptions (original → corrigé), les corrections IA acceptées et les termes fréquemment saisis sont enregistrés dans une base locale sur l\'appareil afin d\'améliorer les futures corrections vocales. Rien n\'est envoyé en ligne. Désactivé par défaut ; les données existantes sont conservées jusqu\'à ce que vous les effaciez.</string>
-    <string name="voice_correction_clear_title">Effacer toutes les données de correction vocale collectées ?</string>
-    <string name="voice_correction_clear">Tout effacer</string>
-    <string name="voice_correction_cleared">Données de correction vocale effacées</string>
     <string name="voice_provider_system">Système</string>
     <string name="add_provider_subtitle_kimi">Kimi Coding Plan — connectez-vous avec votre compte Kimi</string>
     <string name="kimi_login_title">Se connecter avec Kimi Code</string>

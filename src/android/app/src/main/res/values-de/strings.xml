@@ -920,7 +920,6 @@
     <string name="sessionlist_welcome_step_done">Fertig</string>
     <!-- T-selection-add-to-input — Aktion im Auswahlmenü beim langen Drücken -->
     <string name="selection_add_to_chat_input">Zum Eingabefeld hinzufügen</string>
-    <string name="selection_read_aloud">Vorlesen</string>
     <!-- T-minis-textkit Auswahlmenü-Tasten -->
     <string name="selection_copy">Kopieren</string>
     <string name="selection_copy_markdown">Markdown kopieren</string>
@@ -1037,19 +1036,6 @@
     <string name="voice_link_to_host">Link zu %1$s</string>
     <string name="voice_bare_link">Link</string>
     <!-- [T-android-voice-correction] Consent + correction UI -->
-    <string name="voice_correction_consent_title">Sprachkorrekturen verbessern?</string>
-    <string name="voice_correction_consent_body">Minis kann deine Korrekturen an Transkripten (Original → Korrektur) und übernommene KI-Korrekturen in einer lokalen Datenbank auf dem Gerät speichern, um künftige Sprachkorrekturen zu verbessern. Es wird nichts hochgeladen. Du kannst dies jederzeit in den Einstellungen ändern oder die Daten löschen.</string>
-    <string name="voice_correction_consent_enable">Aktivieren</string>
-    <string name="voice_correction_consent_not_now">Jetzt nicht</string>
-    <string name="voice_correction_button_a11y">Transkript mit KI korrigieren</string>
-    <string name="voice_correction_none_needed">Keine Korrekturen nötig</string>
-    <string name="voice_correction_failed">Korrektur fehlgeschlagen, Original beibehalten</string>
-    <string name="voice_correction_section">Lernen aus Sprachkorrekturen</string>
-    <string name="voice_correction_toggle">Sprachkorrekturdaten erfassen</string>
-    <string name="voice_correction_footer">Wenn aktiviert, werden deine manuellen Korrekturen an Transkripten (Original → Korrektur), übernommene KI-Korrekturen und häufig getippte Begriffe lokal auf dem Gerät gespeichert, um künftige Sprachkorrekturen zu verbessern. Es wird nichts hochgeladen. Standardmäßig aus; vorhandene Daten bleiben, bis du sie löschst.</string>
-    <string name="voice_correction_clear_title">Alle erfassten Sprachkorrekturdaten löschen?</string>
-    <string name="voice_correction_clear">Alle löschen</string>
-    <string name="voice_correction_cleared">Sprachkorrekturdaten gelöscht</string>
     <string name="voice_provider_system">System</string>
     <string name="add_provider_subtitle_kimi">Kimi Coding Plan — mit Kimi-Konto anmelden</string>
     <string name="kimi_login_title">Mit Kimi Code anmelden</string>

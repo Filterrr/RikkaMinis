@@ -5,7 +5,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * [T-android-voice-correction] Mirrors the iOS SentenceSplitter test cases
+ * Mirrors the iOS SentenceSplitter test cases
  * (MinisTests/VoiceCorrectionTests.swift L15-27).
  */
 class SentenceSplitterTest {

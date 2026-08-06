@@ -2,8 +2,9 @@ package com.openminis.app.speech
 
 /**
  * [T-android-tts-intranumber-guard] Streaming sentence extraction for the TTS
- * paths. Shared by [ReadAloudPlayer] and [TextToSpeechManager] so the two can
- * never drift — they previously carried byte-identical copies of this loop and
+ * paths. Shared by [TextToSpeechManager] and the (removed) read-aloud UI
+ * player, so the two could never drift — they previously carried
+ * byte-identical copies of this loop.
  * a fix to one would have silently missed the other.
  *
  * Port of the guards in iOS `AIChatViewModel+SSEStream.extractSentencesStatic`

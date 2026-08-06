@@ -67,14 +67,6 @@ internal class MinisMarkdownTextToolbar(
      */
     private val onAddToInput: ((String) -> Unit)? = null,
     /**
-     * [T-android-selection-readaloud] Invoked when the user taps **Read Aloud**.
-     * Receives the currently-selected substring (same clipboard round-trip as
-     * [addSelectionToInput]); the host speaks it through ReadAloudPlayer. Null
-     * disables the action. The callback owns the player's lifecycle — this
-     * toolbar deliberately does not create one it could never dispose.
-     */
-    private val onReadAloud: ((String) -> Unit)? = null,
-    /**
      * [T-android-markdown-table-copy-actions] The MinisTextKit selection
      * controller. This toolbar is the one Compose's SelectionContainer shows
      * (via LocalTextToolbar), and a table-cell long-press also sets the
@@ -124,17 +116,6 @@ internal class MinisMarkdownTextToolbar(
     }
 
     /**
-     * [T-android-selection-readaloud] Speak just the selected substring (not the
-     * whole message) through the host-supplied reader.
-     */
-    internal fun readAloudSelection() {
-        val sink = onReadAloud ?: return
-        withSelection(sink)
-    }
-
-    internal val canReadAloud: Boolean get() = onReadAloud != null
-
-    /**
      * Resolve the current selection and hand it to [sink].
      *
      * Compose's [TextToolbar] interface only exposes the selection indirectly
@@ -150,10 +131,9 @@ internal class MinisMarkdownTextToolbar(
      *   4. Restore the original clip.
      *   5. Forward the selection to [sink].
      *
-     * Shared by [addSelectionToInput] and [readAloudSelection] so both actions
-     * use the identical restore-the-user's-clipboard discipline. If anything
-     * goes wrong (`onCopyRequested` absent, blank selection) this is a no-op —
-     * it never throws and never leaves the clipboard in an unrelated state.
+     * If anything goes wrong (`onCopyRequested` absent, blank selection) this
+     * is a no-op — it never throws and never leaves the clipboard in an
+     * unrelated state.
      */
     private fun withSelection(sink: (String) -> Unit) {
         val onCopy = state.onCopyRequested ?: return
@@ -268,20 +248,6 @@ internal fun MinisMarkdownTextToolbarHost(toolbar: MinisMarkdownTextToolbar) {
                         label = stringResource(R.string.selection_add_to_chat_input),
                     ) {
                         toolbar.addSelectionToInput()
-                        toolbar.hide()
-                    }
-                }
-                // [T-android-selection-readaloud] Speak just the selected
-                // substring through Minis TTS (provider voice with the system
-                // engine as fallback), mirroring iOS's "Read Aloud / Read
-                // Selection" selection-menu action. Available for any
-                // selection, like Add to Chat Input.
-                if (toolbar.canReadAloud) {
-                    ToolbarDivider()
-                    ToolbarButton(
-                        label = stringResource(R.string.selection_read_aloud),
-                    ) {
-                        toolbar.readAloudSelection()
                         toolbar.hide()
                     }
                 }

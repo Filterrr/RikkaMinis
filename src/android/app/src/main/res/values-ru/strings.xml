@@ -869,7 +869,6 @@
     <string name="notif_config_confirm_body_multi">%d изменений требуют вашего рассмотрения — откройте Minis, чтобы принять или отклонить.</string>
     <string name="notif_task_failed_body">Задача завершилась с ошибкой. Нажмите, чтобы открыть чат.</string>
     <string name="selection_add_to_chat_input">Добавить в поле ввода чата</string>
-    <string name="selection_read_aloud">Озвучить</string>
     <string name="selection_copy">Копировать</string>
     <string name="selection_copy_markdown">Копировать Markdown</string>
     <string name="selection_copy_rich_text">Копировать форматированный текст</string>
@@ -1203,19 +1202,6 @@
     <string name="voice_link_to_host">ссылка на %1$s</string>
     <string name="voice_bare_link">ссылка</string>
     <!-- [T-android-voice-correction] Consent + correction UI -->
-    <string name="voice_correction_consent_title">Улучшить исправление распознавания речи?</string>
-    <string name="voice_correction_consent_body">Minis может сохранять ваши правки расшифровок (оригинал → исправление) и принятые исправления ИИ в локальной базе данных на устройстве, чтобы в дальнейшем исправлять распознавание точнее. Ничего не загружается в сеть. Вы можете изменить это или удалить данные в настройках в любой момент.</string>
-    <string name="voice_correction_consent_enable">Включить</string>
-    <string name="voice_correction_consent_not_now">Не сейчас</string>
-    <string name="voice_correction_button_a11y">Исправить расшифровку с помощью ИИ</string>
-    <string name="voice_correction_none_needed">Исправления не требуются</string>
-    <string name="voice_correction_failed">Не удалось исправить, оригинал сохранён</string>
-    <string name="voice_correction_section">Обучение на исправлениях речи</string>
-    <string name="voice_correction_toggle">Собирать данные об исправлениях</string>
-    <string name="voice_correction_footer">Когда включено, ваши ручные правки расшифровок (оригинал → исправление), принятые исправления ИИ и часто набираемые термины сохраняются в локальной базе данных на устройстве, чтобы в дальнейшем исправлять распознавание точнее. Ничего не загружается в сеть. По умолчанию выключено; имеющиеся данные сохраняются, пока вы их не удалите.</string>
-    <string name="voice_correction_clear_title">Удалить все собранные данные об исправлениях речи?</string>
-    <string name="voice_correction_clear">Удалить всё</string>
-    <string name="voice_correction_cleared">Данные об исправлениях удалены</string>
     <string name="voice_provider_system">Система</string>
     <string name="add_provider_subtitle_kimi">Kimi Coding Plan — войдите с аккаунтом Kimi</string>
     <string name="kimi_login_title">Войти через Kimi Code</string>

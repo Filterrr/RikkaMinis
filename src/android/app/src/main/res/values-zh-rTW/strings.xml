@@ -681,7 +681,6 @@
     <string name="perm_a11y_system_disabled">未啟用</string>
     <!-- T-selection-add-to-input — 長按選擇選單「加到輸入框」動作 -->
     <string name="selection_add_to_chat_input">加入到輸入框</string>
-    <string name="selection_read_aloud">朗讀</string>
     <!-- T-minis-textkit 選擇選單按鈕 -->
     <string name="selection_copy">複製</string>
     <string name="selection_copy_markdown">複製 Markdown</string>
@@ -816,19 +815,6 @@
     <string name="voice_link_to_host">%1$s 的連結</string>
     <string name="voice_bare_link">連結</string>
     <!-- [T-android-voice-correction] Consent + correction UI -->
-    <string name="voice_correction_consent_title">改進語音校正？</string>
-    <string name="voice_correction_consent_body">Minis 可以把你對轉錄文字的修改（原文 → 修正）以及已採用的 AI 校正儲存到本機資料庫，讓之後的語音校正更準確。不會上傳任何內容。你可以隨時在設定中變更或清除這些資料。</string>
-    <string name="voice_correction_consent_enable">啟用</string>
-    <string name="voice_correction_consent_not_now">暫不</string>
-    <string name="voice_correction_button_a11y">用 AI 修正轉錄文字</string>
-    <string name="voice_correction_none_needed">不需要修正</string>
-    <string name="voice_correction_failed">校正失敗，已保留原文</string>
-    <string name="voice_correction_section">語音校正學習</string>
-    <string name="voice_correction_toggle">收集語音校正資料</string>
-    <string name="voice_correction_footer">啟用後，你對語音轉錄的手動修改（原文 → 修正）、已採用的 AI 校正以及常用輸入詞彙會儲存到本機資料庫，讓之後的語音校正更準確。不會上傳任何內容。預設關閉；既有資料會保留到你清除為止。</string>
-    <string name="voice_correction_clear_title">清除所有已收集的語音校正資料？</string>
-    <string name="voice_correction_clear">全部清除</string>
-    <string name="voice_correction_cleared">語音校正資料已清除</string>
     <string name="voice_provider_system">系統</string>
     <string name="add_provider_subtitle_kimi">Kimi Coding Plan — 使用 Kimi 帳號登入</string>
     <string name="kimi_login_title">使用 Kimi Code 登入</string>
