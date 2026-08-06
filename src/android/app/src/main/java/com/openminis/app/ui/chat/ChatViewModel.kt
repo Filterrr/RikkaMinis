@@ -7176,6 +7176,18 @@ class ChatViewModel(
                     .filter { it.kind == "tool_use" && it.toolName.isNotBlank() }
                     .map { EpisodeMemoryStore.ToolCall(it.toolName, it.toolStatus == ToolBlockStatus.SUCCESS) }
                 try {
+                    // Feedback BEFORE record: the line indices captured in Hook A's
+                    // retrieve() are only valid while the file keeps the same layout.
+                    // record() may trigger the maxEntries rollover, which drops head
+                    // lines and shifts every line number — applying feedback after
+                    // record() would bump the WRONG episode's v counter (TOCTOU).
+                    // (The standalone prototype avoids this with stable ids; here we
+                    // keep the index contract and just reorder the two calls.)
+                    if (injectedMemories.isNotEmpty()) {
+                        experienceMemoryStore.applyFeedback(
+                            injectedMemories.map { it.index }, loopExitedNormally
+                        )
+                    }
                     experienceMemoryStore.record(
                         EpisodeMemoryStore.ExchangeRecord(
                             query = query,
@@ -7186,11 +7198,6 @@ class ChatViewModel(
                             sessionId = sessionId,
                         )
                     )
-                    if (injectedMemories.isNotEmpty()) {
-                        experienceMemoryStore.applyFeedback(
-                            injectedMemories.map { it.index }, loopExitedNormally
-                        )
-                    }
                     AppLogger.info(
                         TAG_STREAM,
                         "experience-memory: recorded exchange (ok=$loopExitedNormally, tools=${tools.size})"
