@@ -2005,6 +2005,12 @@ fun ChatScreen(
                 }
             }
     }
+    // [P0-0-drawer-fix] Hoist slash/mention menu visibility to the ChatScreen
+    // scope (was previously declared inside the ModalNavigationDrawer content
+    // lambda) so the drawer BackHandler below can also dismiss them. Both
+    // subscriptions snap to the same StateFlow the in-drawer popups read.
+    val slashMenuOpen by viewModel.showSlashMenu.collectAsState()
+    val mentionMenuOpenForSpy by viewModel.showMentionMenu.collectAsState()
     // [bottom-toolbar-customizable] Footer actions resolved from the pin order,
     // filtered by runtime availability so a hidden Skills/MCPs/Memory
     // repository never leaves a dead button in the footer.
@@ -3368,26 +3374,6 @@ fun ChatScreen(
                     markdownToolbar.hide()
                     focusManager.clearFocus()
                     block()
-                }
-                // Hoist slash-menu state up so the LazyColumn pointerInput
-                // tap-spy below can react to it. The popup itself, declared
-                // further down near the composer, reads viewModel.showSlashMenu
-                // again — both subscriptions snap to the same StateFlow.
-                val slashMenuOpen by viewModel.showSlashMenu.collectAsState()
-                // T4: mirror state hoist for the mention picker so the chat-list
-                // tap-spy can dismiss it the same way as the slash popup.
-                val mentionMenuOpenForSpy by viewModel.showMentionMenu.collectAsState()
-                // Intercept back press to dismiss slash/mention menus before
-                // navigating away from the chat screen.
-                androidx.activity.compose.BackHandler(
-                    enabled = slashMenuOpen || mentionMenuOpenForSpy
-                ) {
-                    if (slashMenuOpen) {
-                        viewModel.setInputText(viewModel.dismissSlashMenu(inputText))
-                    }
-                    if (mentionMenuOpenForSpy) {
-                        viewModel.dismissMentionMenu()
-                    }
                 }
                 // (selectionController declared above, before markdownToolbar.)
                 androidx.compose.runtime.CompositionLocalProvider(
@@ -5554,13 +5540,28 @@ fun ChatScreen(
         }
     }
     }
-    // Close the history drawer with system back BEFORE navigation pops.
-    // Registered AFTER ModalNavigationDrawer so this BackHandler takes
-    // priority over the drawer's own predictive-back handler, which can
-    // otherwise let the edge-back gesture fall through to popBackStack and
-    // land on SESSION_LIST instead of just closing the drawer.
-    androidx.activity.compose.BackHandler(enabled = historyDrawerState.isOpen) {
-        historyDrawerScope.launch { historyDrawerState.close() }
+    // [P0-0-drawer-fix] Always enabled so this BackHandler is always the last
+    // enabled callback on OnBackPressedDispatcher. onBackStarted() finds it,
+    // onBackPressed() uses it — the drawer's internal PredictiveBackHandler is
+    // skipped, which is exactly what we want. Priority order:
+    //   1. history drawer open        -> close drawer, consume back
+    //   2. slash/mention menu open    -> dismiss menu, consume back
+    //   3. otherwise                  -> fall through to NavHost via onBack()
+    androidx.activity.compose.BackHandler(enabled = true) {
+        when {
+            historyDrawerState.isOpen -> {
+                historyDrawerScope.launch { historyDrawerState.close() }
+            }
+            slashMenuOpen || mentionMenuOpenForSpy -> {
+                if (slashMenuOpen) {
+                    viewModel.setInputText(viewModel.dismissSlashMenu(inputText))
+                }
+                if (mentionMenuOpenForSpy) {
+                    viewModel.dismissMentionMenu()
+                }
+            }
+            else -> onBack()
+        }
     }
 
     // Browser bottom sheet
