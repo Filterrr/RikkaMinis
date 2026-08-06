@@ -2343,9 +2343,11 @@ fun ChatScreen(
                 navigationIcon = {
                     // Hamburger opens the RikkaHub-style chat-history drawer
                     // (ModalNavigationDrawer wrapping this Scaffold). A left
-                    // edge-swipe opens the same drawer. onBack is still used by
-                    // system/predictive back to leave the chat; only the glyph
-                    // and this tap target changed.
+                    // edge-swipe opens the same drawer. System/predictive back
+                    // is consumed by the [P0-0-drawer-fix] BackHandler below:
+                    // drawer open -> close drawer, otherwise -> stay on chat
+                    // (no navigation to SESSION_LIST; the drawer is the only
+                    // history interface).
                     IconButton(onClick = {
                         historyDrawerScope.launch {
                             if (historyDrawerState.isOpen) historyDrawerState.close()
@@ -5540,13 +5542,12 @@ fun ChatScreen(
         }
     }
     }
-    // [P0-0-drawer-fix] Always enabled so this BackHandler is always the last
-    // enabled callback on OnBackPressedDispatcher. onBackStarted() finds it,
-    // onBackPressed() uses it — the drawer's internal PredictiveBackHandler is
-    // skipped, which is exactly what we want. Priority order:
+    // [P0-0-drawer-fix] Always enabled BackHandler. Priority order:
     //   1. history drawer open        -> close drawer, consume back
     //   2. slash/mention menu open    -> dismiss menu, consume back
-    //   3. otherwise                  -> fall through to NavHost via onBack()
+    //   3. otherwise                  -> consume back, do NOT navigate to
+    //      SESSION_LIST. The drawer-based history IS the only history
+    //      interface — there is no "back" from ChatScreen.
     androidx.activity.compose.BackHandler(enabled = true) {
         when {
             historyDrawerState.isOpen -> {
@@ -5560,8 +5561,11 @@ fun ChatScreen(
                     viewModel.dismissMentionMenu()
                 }
             }
-            else -> onBack()
         }
+        // else: intentionally consume back without action.
+        // The drawer is the only history interface — the official
+        // SESSION_LIST should not be reachable from ChatScreen via
+        // system back gesture.
     }
 
     // Browser bottom sheet
