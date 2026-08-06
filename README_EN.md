@@ -20,6 +20,10 @@ a native mobile experience, and gives them a real computer to work with: a full
 Linux shell running on your device, browser automation, extensible skills,
 persistent memory, and deep system integration.
 
+> **This is a personal fork primarily for self-use.** I fix what I need and
+> welcome others to use it, but don't expect active support or feature requests.
+> Feel free to fork your own.
+
 ---
 
 ## Install
