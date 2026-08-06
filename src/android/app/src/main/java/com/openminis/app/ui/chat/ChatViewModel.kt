@@ -3860,38 +3860,6 @@ class ChatViewModel(
         return result
     }
 
-    private fun resolveNextFallbackProvider(): LLMProvider? {
-        val groupId = _selectedGroupId.value ?: return null
-        val group = providerRepository.group(groupId) ?: return null
-        val currentEntryId = _activeEntryId.value ?: return null
-        val currentIdx = group.memberEntryIds.indexOf(currentEntryId)
-        if (currentIdx < 0) return null
-
-        val config = providerRepository.config.value
-        // Try next entries in the group
-        for (i in 1 until group.memberEntryIds.size) {
-            val nextIdx = (currentIdx + i) % group.memberEntryIds.size
-            val entryId = group.memberEntryIds[nextIdx]
-            val entry = config.modelEntries.find { it.id == entryId } ?: continue
-            val instance = providerRepository.instance(entry.providerInstanceId) ?: continue
-            // [T-disabled-provider-via-group-android] Skip disabled
-            // providers when walking the group's fallback chain so a
-            // disabled provider sitting after the current entry doesn't
-            // get picked up. buildFallbackProviders already does this; the
-            // single-step variant here had the same bug.
-            if (!instance.isEnabled) continue
-            val apiKey = providerRepository.loadApiKey(instance.id) ?: continue
-
-            currentModel = entry.model
-            _modelName.value = entry.model.displayName
-            _activeEntryId.value = entry.id
-            val provider = ProviderFactory.create(instance, apiKey, entry.model, context)
-            currentProvider = provider
-            return provider
-        }
-        return null
-    }
-
     // [T-android-split-chat] addAttachment / removeAttachment / clearAttachments
     // moved to ChatViewModelUiStateExt.kt (extension functions).
 
