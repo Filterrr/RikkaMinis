@@ -35,7 +35,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ProviderAgentLoopIdEntity::class,
         ProviderConfigMetaEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = false,
 )
 abstract class ProviderDatabase : RoomDatabase() {
@@ -74,6 +74,21 @@ abstract class ProviderDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * [P0-pinned-providers] Add the pinned favorite column. Pure additive
+         * ALTER with NOT NULL DEFAULT 0 so every existing provider row
+         * backfills to "not pinned" — no data rewrite, no provider drop. This
+         * mirrors the [GH#68] image-endpoint bug exactly: the JSON model
+         * carried the field but ProviderInstanceEntity had no column, so every
+         * Room round-trip dropped the value and the "pin to Favorites" toggle
+         * silently did nothing.
+         */
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE provider_instances ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         fun getInstance(context: Context): ProviderDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -81,7 +96,7 @@ abstract class ProviderDatabase : RoomDatabase() {
                     ProviderDatabase::class.java,
                     "provider.db",
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .build()
                     .also { INSTANCE = it }
             }
