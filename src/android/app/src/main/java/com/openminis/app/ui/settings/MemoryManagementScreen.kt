@@ -53,6 +53,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import com.openminis.app.data.EpisodeMemoryStore
@@ -315,8 +316,8 @@ fun MemoryManagementScreen(
         }
         val radius = RoundedCornerShape(28.dp)
         Dialog(
-            usePlatformDefaultWidth = false,
             onDismissRequest = { expDetail = null },
+            properties = DialogProperties(usePlatformDefaultWidth = false),
         ) {
             Surface(
                 modifier = Modifier
