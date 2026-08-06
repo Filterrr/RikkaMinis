@@ -94,6 +94,12 @@ Android-specific product changes that are not present upstream.
   edit, wizard and permission-flow screens keep theirs.
 - **Simpler composer.** The dedicated voice-chat shortcut and its inline UI
   have been removed. Android's agent-facing speech tools are unaffected.
+- **Pin favorite providers.** Frequently used providers can be pinned into a
+  "Favorites" section at the top of the provider list, toggled from the row's
+  trailing menu.
+- **Memory page management improvements.** The memory page file list supports
+  "show more" expand/collapse; experience memories can be sorted by value,
+  shown in full, deleted individually, and stale failed episodes are auto-pruned.
 - **Settings consistency fixes.** Restored preferences refresh the live
   settings UI, and previously disconnected/missing settings keys are now
   registered and included in backups.
