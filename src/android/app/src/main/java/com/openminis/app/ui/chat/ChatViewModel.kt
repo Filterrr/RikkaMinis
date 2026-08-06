@@ -24,6 +24,8 @@ import androidx.compose.material.icons.outlined.Extension
 import com.openminis.app.data.BPETokenizer
 import com.openminis.app.data.ContextOffload
 import com.openminis.app.data.ContextPolicy
+import com.openminis.app.data.EpisodeMemoryStore
+import com.openminis.app.data.ExperienceMemoryPrefs
 import com.openminis.app.logging.AppLogger
 import com.openminis.app.data.FileMentionIndex
 import com.openminis.app.data.db.CompactMarkerEntity
@@ -88,6 +90,7 @@ class ChatViewModel(
     private val providerRepository: ProviderRepository,
     internal val context: Context,
     val memoryRepository: MemoryRepository? = null,
+    val experienceMemoryStore: EpisodeMemoryStore? = null,
     val skillRepository: com.openminis.app.data.repository.SkillRepository? = null,
     val mcpRepository: com.openminis.app.data.repository.MCPRepository? = null,
 ) : ViewModel() {
@@ -297,6 +300,7 @@ class ChatViewModel(
             providerRepository: ProviderRepository,
             appContext: Context,
             memoryRepository: MemoryRepository?,
+            experienceMemoryStore: EpisodeMemoryStore? = null,
             skillRepository: com.openminis.app.data.repository.SkillRepository?,
             mcpRepository: com.openminis.app.data.repository.MCPRepository? = null,
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
@@ -308,6 +312,7 @@ class ChatViewModel(
                     providerRepository = providerRepository,
                     context = appContext,
                     memoryRepository = memoryRepository,
+                    experienceMemoryStore = experienceMemoryStore,
                     skillRepository = skillRepository,
                     mcpRepository = mcpRepository,
                 ) as T
@@ -5973,6 +5978,27 @@ class ChatViewModel(
         // we surface a real error instead of a silent blank bubble. Mirrors iOS
         // AIChatViewModel.didInjectEmptyToolReminderThisRun.
         var didInjectEmptyToolReminder = false
+
+        // [ExpMem] Hook A — episodic memory retrieval + injection (once per runAgentLoop).
+        // Retrieves past exchanges similar to the current query and appends them to the
+        // system prompt tail (cache-friendly: dynamic content goes last). Failures only
+        // surface when the query signals a failure investigation (see EpisodeMemoryStore).
+        var injectedMemories: List<EpisodeMemoryStore.Retrieved> = emptyList()
+        var effectiveSystemPrompt: String? = systemPrompt
+        val loopStartMs = System.currentTimeMillis()
+        if (experienceMemoryStore != null && ExperienceMemoryPrefs.isEnabled(context)) {
+            val query = agentHistory.lastOrNull { it.role == LLMMessage.Role.USER && it.content.isNotBlank() }?.content
+            if (query != null) {
+                val retrieved = experienceMemoryStore.retrieve(query)
+                if (retrieved.isNotEmpty()) {
+                    injectedMemories = retrieved
+                    val block = EpisodeMemoryStore.buildInjectionBlock(retrieved)
+                    effectiveSystemPrompt = if (systemPrompt.isNullOrBlank()) block else "$systemPrompt\n\n$block"
+                    AppLogger.info(TAG_STREAM, "experience-memory: injected ${retrieved.size} episode(s), ${block.length} chars")
+                }
+            }
+        }
+
         for (turn in 0 until MAX_AGENT_TURNS) {
             // Sanitize history before each API call (mirrors iOS pre-API validation)
             sanitizeAgentHistory()
@@ -6108,7 +6134,7 @@ class ChatViewModel(
                     // no compact has happened, so the common path stays zero-copy.
                     currentProvider.streamMessage(
                         applyRequestImageBudget(effectiveAgentHistory()),
-                        systemPrompt, dynamicMaxTokens(currentProvider, lastContextTokens),
+                        effectiveSystemPrompt, dynamicMaxTokens(currentProvider, lastContextTokens),
                         tools = agentTools,
                         thinkingLevel = if (currentModelSupportsReasoning) _thinkingLevel.value else ThinkingLevel.OFF,
                     ).collect { chunk ->
@@ -7138,6 +7164,41 @@ class ChatViewModel(
             }
         } else {
             AppLogger.info(TAG_STREAM, "runAgentLoop EXIT (loop body ended naturally)")
+        }
+
+        // [ExpMem] Hook B — record the finished exchange into the episodic memory store
+        // (success and failure alike; failures only resurface when the user asks why).
+        // Feedback loop: episodes that were injected above get +1 on success / -1 on failure.
+        if (experienceMemoryStore != null && ExperienceMemoryPrefs.isEnabled(context)) {
+            val query = agentHistory.lastOrNull { it.role == LLMMessage.Role.USER && it.content.isNotBlank() }?.content
+            if (query != null) {
+                val tools = allToolBlocks
+                    .filter { it.kind == "tool_use" && it.toolName.isNotBlank() }
+                    .map { EpisodeMemoryStore.ToolCall(it.toolName, it.toolStatus == ToolBlockStatus.SUCCESS) }
+                try {
+                    experienceMemoryStore.record(
+                        EpisodeMemoryStore.ExchangeRecord(
+                            query = query,
+                            tools = tools,
+                            ok = loopExitedNormally,
+                            durationMs = System.currentTimeMillis() - loopStartMs,
+                            reply = accumulatedText,
+                            sessionId = sessionId,
+                        )
+                    )
+                    if (injectedMemories.isNotEmpty()) {
+                        experienceMemoryStore.applyFeedback(
+                            injectedMemories.map { it.index }, loopExitedNormally
+                        )
+                    }
+                    AppLogger.info(
+                        TAG_STREAM,
+                        "experience-memory: recorded exchange (ok=$loopExitedNormally, tools=${tools.size})"
+                    )
+                } catch (e: Exception) {
+                    AppLogger.warning(TAG_STREAM, "experience-memory: record failed", e)
+                }
+            }
         }
     }
 

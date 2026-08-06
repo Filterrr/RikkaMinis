@@ -293,6 +293,14 @@
     <string name="settings_memory_global_footer">单个会话的开关（通过 /memory 斜杠命令或"会话记忆"面板设置）会覆盖此默认值。切换此开关不会影响已有会话。</string>
     <string name="settings_memory_global_enabled_title">默认启用记忆</string>
     <string name="settings_memory_global_enabled_subtitle">关闭后，新会话默认不加载 GLOBAL.md 和每日记忆</string>
+    <string name="settings_memory_experience_header">经验记忆</string>
+    <string name="settings_memory_experience_footer">自动记录每次完成的交互（查询、工具、结果、回复）到本地纯文本文件，并在每次回复前注入最多 3 条相似的历史经验。不产生额外模型调用。失败经验仅在查询涉及失败原因时出现。被注入的经验在交互成功时 +1、失败时 -1。</string>
+    <string name="settings_memory_experience_enabled_title">经验记忆</string>
+    <string name="settings_memory_experience_enabled_subtitle">记住以前有效的方法，跨会话复用</string>
+    <string name="memory_experience_clear">清空经验记忆</string>
+    <string name="memory_experience_entries">已记录 %d 条经验</string>
+    <string name="memory_experience_clear_confirm_title">清空经验记忆？</string>
+    <string name="memory_experience_clear_confirm_text">这将永久删除本地经验文件（episodes.jsonl），agent 将忘记过去的交互。</string>
     <string name="memory_empty_title">暂无记忆文件</string>
     <string name="memory_empty_description">记忆文件在会话之间持久保存知识。编辑 GLOBAL.md 添加 agent 可见的指令。</string>
     <string name="memory_section_files">文件</string>

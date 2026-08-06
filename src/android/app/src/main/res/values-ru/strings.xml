@@ -455,6 +455,14 @@
     <string name="settings_memory_global_footer">Переключатели для отдельных сессий (заданные через слэш-команду /memory или лист Память сессии) переопределяют это значение по умолчанию. Существующие сессии не затрагиваются при изменении этого переключателя.</string>
     <string name="settings_memory_global_enabled_title">Память включена по умолчанию</string>
     <string name="settings_memory_global_enabled_subtitle">Когда выключено, новые сессии по умолчанию пропускают GLOBAL.md и ежедневную память</string>
+    <string name="settings_memory_experience_header">Experience Memory</string>
+    <string name="settings_memory_experience_footer">Auto-records every finished exchange (query, tools, outcome, reply) into a local plain-text file and injects up to 3 similar past episodes before each reply. No extra model calls. Failures only resurface when you ask why. Injected episodes gain +1 on success, -1 on failure.</string>
+    <string name="settings_memory_experience_enabled_title">Experience memory</string>
+    <string name="settings_memory_experience_enabled_subtitle">Remember what worked before and reuse it across sessions</string>
+    <string name="memory_experience_clear">Clear experience memory</string>
+    <string name="memory_experience_entries">%d episodes recorded</string>
+    <string name="memory_experience_clear_confirm_title">Clear experience memory?</string>
+    <string name="memory_experience_clear_confirm_text">This permanently deletes the local episodes file (episodes.jsonl). The agent will forget past exchanges.</string>
     <string name="memory_empty_title">Нет файлов памяти</string>
     <string name="memory_empty_description">Файлы памяти хранят постоянные знания между сессиями. Измените GLOBAL.md, чтобы добавить инструкции, видимые агенту.</string>
     <string name="memory_section_files">Файлы</string>

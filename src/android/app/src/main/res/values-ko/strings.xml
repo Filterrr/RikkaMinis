@@ -239,6 +239,14 @@
     <string name="log_share_chooser">로그 공유</string>
     <string name="log_share_all_chooser">로그 공유</string>
     <string name="memory_title">메모리</string>
+    <string name="settings_memory_experience_header">Experience Memory</string>
+    <string name="settings_memory_experience_footer">Auto-records every finished exchange (query, tools, outcome, reply) into a local plain-text file and injects up to 3 similar past episodes before each reply. No extra model calls. Failures only resurface when you ask why. Injected episodes gain +1 on success, -1 on failure.</string>
+    <string name="settings_memory_experience_enabled_title">Experience memory</string>
+    <string name="settings_memory_experience_enabled_subtitle">Remember what worked before and reuse it across sessions</string>
+    <string name="memory_experience_clear">Clear experience memory</string>
+    <string name="memory_experience_entries">%d episodes recorded</string>
+    <string name="memory_experience_clear_confirm_title">Clear experience memory?</string>
+    <string name="memory_experience_clear_confirm_text">This permanently deletes the local episodes file (episodes.jsonl). The agent will forget past exchanges.</string>
     <string name="memory_empty_title">메모리 파일 없음</string>
     <string name="memory_empty_description">메모리 파일은 세션 간 지식을 유지합니다. GLOBAL.md 를 편집해 에이전트에 보이는 지침을 추가하세요.</string>
     <string name="memory_section_files">파일</string>
