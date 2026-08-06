@@ -2346,9 +2346,8 @@ fun ChatScreen(
                     // edge-swipe opens the same drawer. System/predictive back
                     // is consumed by the [P0-0-drawer-fix] BackHandler below:
                     // drawer open -> close drawer, menu open -> dismiss menu,
-                    // otherwise -> onBack() (NavHost pop). [P0-1-back-exit]
-                    // keeps repeated back gestures able to leave the app:
-                    // ChatScreen -> SESSION_LIST -> launcher.
+                    // otherwise -> background the task (never the stock
+                    // SESSION_LIST). [P0-1-back-exit][P0-2-session-list-out]
                     IconButton(onClick = {
                         historyDrawerScope.launch {
                             if (historyDrawerState.isOpen) historyDrawerState.close()
@@ -5548,11 +5547,14 @@ fun ChatScreen(
     // handler). Priority order:
     //   1. history drawer open        -> close drawer, consume back
     //   2. slash/mention menu open    -> dismiss menu, consume back
-    //   3. otherwise                  -> onBack() (NavHost pop). The drawer
-    //      stays the primary history interface, but ChatScreen is not a
-    //      black hole: repeated back gestures must eventually exit the app
-    //      (ChatScreen -> SESSION_LIST -> launcher), which requires the
-    //      fall-through below. [P0-1-back-exit]
+    //   3. otherwise                  -> background the whole task. The drawer
+    //      is the ONLY history interface — back gesture must never land on
+    //      the stock SESSION_LIST below ChatScreen on the nav stack, so we
+    //      do NOT call onBack()/popBackStack (that would reveal SESSION_LIST)
+    //      and we do NOT swallow back (that would trap the user in a black
+    //      hole with no way to leave). moveTaskToBack pushes the entire app to
+    //      the background, i.e. from ChatScreen a back gesture exits the app
+    //      cleanly. [P0-1-back-exit][P0-2-session-list-out]
     androidx.activity.compose.BackHandler(enabled = true) {
         when {
             historyDrawerState.isOpen -> {
@@ -5566,7 +5568,14 @@ fun ChatScreen(
                     viewModel.dismissMentionMenu()
                 }
             }
-            else -> onBack()
+            else -> {
+                val activity = context as? android.app.Activity
+                if (activity != null) {
+                    activity.moveTaskToBack(true)
+                } else {
+                    onBack()
+                }
+            }
         }
     }
 
