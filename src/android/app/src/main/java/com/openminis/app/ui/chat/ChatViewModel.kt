@@ -25,6 +25,7 @@ import com.openminis.app.data.BPETokenizer
 import com.openminis.app.data.ContextOffload
 import com.openminis.app.data.ContextPolicy
 import com.openminis.app.data.EpisodeMemoryStore
+import com.openminis.app.data.ExperienceExchangeClassifier
 import com.openminis.app.data.ExperienceMemoryPrefs
 import com.openminis.app.logging.AppLogger
 import com.openminis.app.data.FileMentionIndex
@@ -105,38 +106,6 @@ class ChatViewModel(
         // when checking for missing required fields. Mirrors iOS
         // AIChatViewModel.preflightNonBlockingFields.
         private val PREFLIGHT_NON_BLOCKING_FIELDS = setOf("tool_title")
-
-        /**
-         * [ExpMem-outcome] Classify a finished runAgentLoop exchange into an
-         * [EpisodeMemoryStore.Outcome]. Pure function (takes only the post-loop
-         * state, no ChatViewModel fields) so unit tests can pin the semantics.
-         *
-         * Commit-1 scope: everything derivable from the state after the loop
-         * body exits normally. EXCEPTION / CANCELLED / INTERRUPTED are handled
-         * by the exchange-context finalize path (Hook B inside try/finally) and
-         * must NOT get a +1 here.
-         */
-        internal fun classifyExchangeOutcome(
-            loopExitedNormally: Boolean,
-            accumulatedText: String,
-            allToolBlocks: List<AssistantBlock>,
-        ): EpisodeMemoryStore.Outcome {
-            if (!loopExitedNormally) return EpisodeMemoryStore.Outcome.TURN_LIMIT
-            // Mirrors the loop's own hasVisibleContent: a turn that produced
-            // neither text nor a tool call (e.g. empty server response after
-            // the empty-tool reminder retry) is an EMPTY_RESPONSE, not success.
-            val hasVisibleContent = accumulatedText.isNotBlank() ||
-                allToolBlocks.any { it.kind == "tool_use" || (it.kind == "text" && it.content.isNotBlank()) }
-            if (!hasVisibleContent) return EpisodeMemoryStore.Outcome.EMPTY_RESPONSE
-            // PARTIAL = a reply was produced but at least one tool FAILED or
-            // timed out. These get NO feedback (no ground truth) — never +1.
-            val hasToolFailure = allToolBlocks.any {
-                it.kind == "tool_use" &&
-                    (it.toolStatus == ToolBlockStatus.FAILED || it.toolStatus == ToolBlockStatus.TIMEOUT)
-            }
-            return if (hasToolFailure) EpisodeMemoryStore.Outcome.PARTIAL
-            else EpisodeMemoryStore.Outcome.SUCCESS
-        }
 
         /**
          * (tool name → field names) where an EMPTY STRING is a semantically
@@ -7285,10 +7254,21 @@ class ChatViewModel(
         }
 
         // [ExpMem-context] Hook B — normal-path finalize (inside the try).
-        // classifyExchangeOutcome derives TURN_LIMIT / EMPTY_RESPONSE / PARTIAL /
-        // SUCCESS from the post-loop state; finalizeExchange settles the exchange
-        // context captured by Hook A exactly once.
-        finalizeExchange(classifyExchangeOutcome(loopExitedNormally, accumulatedText, allToolBlocks))
+        // [ExpMem-outcome] classifyExchangeOutcome derives TURN_LIMIT /
+        // EMPTY_RESPONSE / PARTIAL / SUCCESS from the post-loop state via the
+        // pure ExperienceExchangeClassifier; finalizeExchange settles the
+        // exchange context captured by Hook A exactly once.
+        finalizeExchange(
+            ExperienceExchangeClassifier.classify(
+                loopExitedNormally = loopExitedNormally,
+                hasVisibleContent = accumulatedText.isNotBlank() ||
+                    allToolBlocks.any { it.kind == "tool_use" || (it.kind == "text" && it.content.isNotBlank()) },
+                hasToolFailure = allToolBlocks.any {
+                    it.kind == "tool_use" &&
+                        (it.toolStatus == ToolBlockStatus.FAILED || it.toolStatus == ToolBlockStatus.TIMEOUT)
+                },
+            )
+        )
         } catch (e: CancellationException) {
             // [ExpMem-context] Job cancelled mid-task (user stop / session switch /
             // queue takeover): settle WITHOUT feedback — no ground truth, so never
