@@ -1388,4 +1388,5 @@
     <string name="appearance_chat_menu_section_footer">历史抽屉底栏</string>
     <string name="chat_menu_pin_to_footer">置于底栏</string>
     <string name="chat_menu_settings_always_last">固定最右</string>
+    <string name="back_to_exit_press_again">再按一次返回退出</string>
 </resources>

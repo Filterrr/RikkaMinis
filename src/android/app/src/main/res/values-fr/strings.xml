@@ -996,4 +996,5 @@
     <string name="appearance_chat_menu_section_footer">History drawer footer</string>
     <string name="chat_menu_pin_to_footer">Pin to footer</string>
     <string name="chat_menu_settings_always_last">Always last</string>
+    <string name="back_to_exit_press_again">Press back again to exit</string>
 </resources>
