@@ -3796,9 +3796,24 @@ class ChatViewModel(
         val config = providerRepository.config.value
         val group = config.modelGroups.find { it.id == groupId } ?: return emptyList()
         val members = group.memberEntryIds
-        // Find current provider's position in the group
-        val currentIdx = members.indexOfFirst { entryId ->
-            config.modelEntries.find { it.id == entryId }?.model?.id == primaryProvider.model.id
+        // [P0-fallback-anchor] Find the current provider's position by the ACTUAL
+        // active entry id, not by `model.id`. A group can hold several entries
+        // for the SAME modelId behind different instances/endpoints (e.g.
+        // deepseek-v4-flash via a dead hub.oaifree.com key + via
+        // api.deepseek.com). `members.indexOfFirst { …model.id == primary }`
+        // returns the FIRST entry matching that modelId, which may be an earlier
+        // index than the entry actually in use — so the fallback chain started
+        // from the wrong point and even re-included the current entry itself,
+        // causing repeated calls to the failing provider. Anchor to
+        // `_activeEntryId` (the entry the loop actually runs on) and fall back
+        // to a modelId match only when the active entry isn't in this group.
+        val activeEntryId = _activeEntryId.value
+        val currentIdx = if (activeEntryId != null && members.contains(activeEntryId)) {
+            members.indexOf(activeEntryId)
+        } else {
+            members.indexOfFirst { entryId ->
+                config.modelEntries.find { it.id == entryId }?.model?.id == primaryProvider.model.id
+            }
         }
         val result = mutableListOf<FallbackCandidate>()
         // Iterate starting from the entry AFTER the primary, cycling around
@@ -4818,11 +4833,16 @@ class ChatViewModel(
      * Drain queued prompts after an agent loop finishes. Each queued prompt is
      * appended to agentHistory, persisted, and re-runs the agent loop.
      * Mirrors iOS AIChatViewModel.drainQueuedPrompts().
+     *
+     * The re-entered loop is anchored to the class-level `currentProvider`
+     * (whatever the prior runAgentLoop settled on after fallback), and its
+     * fallback candidates are rebuilt from that provider — the initial
+     * provider/fallback snapshots are intentionally NOT carried in, so queued
+     * prompts never replay a chain the main loop already resolved away from.
      */
     private suspend fun drainQueuedPrompts(
         provider: LLMProvider,
         systemPrompt: String?,
-        fallbackProviders: List<FallbackCandidate>,
         fallbackStrategy: com.openminis.app.data.model.FallbackStrategy,
     ) {
         while (_promptQueue.value.isNotEmpty()) {
@@ -4880,10 +4900,36 @@ class ChatViewModel(
             ))
 
             try {
+                // [P0-fallback-reentry] Re-anchor to the class-level
+                // `currentProvider` before the queued prompt re-enters the
+                // agent loop. The prior `runAgentLoop` may have fallback-
+                // resolved to a different group entry (e.g. the active instance
+                // 401'd and the loop transparently moved to a same-model
+                // endpoint), so the class-level provider — not the initial
+                // `provider` snapshot captured at send time — is the current
+                // truth. Replaying the stale snapshot here would re-trigger the
+                // SAME failed chain for EVERY queued prompt (the failing entry
+                // fails once, fallback churns to the working endpoint, repeat
+                // per queued message) — observed as the working provider being
+                // "continuously called" while the top-bar capsule shows the
+                // earlier entry. Rebuild the fallback candidates from the
+                // active provider too, so the drain chain continues AFTER the
+                // current entry (and, with the fixed entry-anchor, never
+                // re-includes the active entry itself).
+                val drainedProvider = this@ChatViewModel.currentProvider ?: provider
+                val drainFallbacks = buildFallbackProviders(drainedProvider)
+                // [P0-fallback-reentry] Log the drain anchor so the user can
+                // verify a queued prompt continues on the ACTUAL active entry
+                // (post-fallback) rather than replaying a stale chain.
+                AppLogger.info(
+                    TAG_STREAM,
+                    "drain re-entry anchored provider=${drainedProvider.model.id} " +
+                        "entryId=${_activeEntryId.value} staleSnapshot=${provider.model.id} candidates=${drainFallbacks.map { it.entryId }}",
+                )
                 runAgentLoop(
-                    provider = provider,
+                    provider = drainedProvider,
                     systemPrompt = systemPrompt,
-                    fallbackProviders = fallbackProviders,
+                    fallbackProviders = drainFallbacks,
                     fallbackStrategy = fallbackStrategy,
                 )
             } catch (e: CancellationException) {
@@ -5096,7 +5142,7 @@ class ChatViewModel(
                         AppLogger.info(TAG_STREAM, "send runAgentLoop RETURN normal")
                         // Drain any prompts the user queued while this loop was running.
                         // Skipped on cancel: cancelled job won't reach here.
-                        drainQueuedPrompts(provider, systemPrompt, fallbackProviders, activeFallbackStrategy)
+                        drainQueuedPrompts(provider, systemPrompt, activeFallbackStrategy)
                         AppLogger.info(TAG_STREAM, "send drainQueuedPrompts RETURN")
                     } catch (e: CancellationException) {
                         AppLogger.info(TAG_STREAM, "send runAgentLoop CANCELLED")
@@ -5430,7 +5476,7 @@ class ChatViewModel(
                             fallbackStrategy = activeFallbackStrategy,
                         )
                         AppLogger.info(TAG_STREAM, "retryLast runAgentLoop RETURN normal")
-                        drainQueuedPrompts(provider, systemPrompt, fallbackProviders, activeFallbackStrategy)
+                        drainQueuedPrompts(provider, systemPrompt, activeFallbackStrategy)
                         AppLogger.info(TAG_STREAM, "retryLast drainQueuedPrompts RETURN")
                     } catch (e: CancellationException) {
                         AppLogger.info(TAG_STREAM, "retryLast runAgentLoop CANCELLED")
@@ -9265,14 +9311,11 @@ Environment variables:
                         groupId?.let { providerRepository.config.value.modelGroups.find { g -> g.id == it }?.fallbackStrategy }
                             ?: com.openminis.app.data.model.FallbackStrategy.default
                     }
-                    val fallbackProviders = buildFallbackProviders(provider)
-
                     try {
                         AppLogger.info(TAG_STREAM, "resumeQueueAfterCancel drainQueuedPrompts CALL")
                         drainQueuedPrompts(
                             provider = provider,
                             systemPrompt = systemPrompt,
-                            fallbackProviders = fallbackProviders,
                             fallbackStrategy = activeFallbackStrategy,
                         )
                         AppLogger.info(TAG_STREAM, "resumeQueueAfterCancel drainQueuedPrompts RETURN")
@@ -9538,7 +9581,7 @@ Environment variables:
                             fallbackStrategy = activeFallbackStrategy,
                         )
                         AppLogger.info(TAG_STREAM, "resume runAgentLoop RETURN normal")
-                        drainQueuedPrompts(provider, systemPrompt, fallbackProviders, activeFallbackStrategy)
+                        drainQueuedPrompts(provider, systemPrompt, activeFallbackStrategy)
                         AppLogger.info(TAG_STREAM, "resume drainQueuedPrompts RETURN")
                     } catch (e: CancellationException) {
                         AppLogger.info(TAG_STREAM, "resume runAgentLoop CANCELLED")
