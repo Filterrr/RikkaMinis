@@ -1382,10 +1382,23 @@ fun ChatScreen(
         }
     }
     // Auto-scroll on user-send: explicit "show me the next response"
-    // gesture, fires regardless of current scroll position.
+    // gesture. Fires when messages.size changes and the last message is
+    // a user message. [P0-0-jump-fix] Gate on isNearBottom + userScrolledAway:
+    // without this guard, ANY user-message insertion (including enqueue /
+    // rerun during agent multi-turn) snaps the viewport to index 0 regardless
+    // of the user's scroll position — yanking them away from content they were
+    // reading in the middle of the conversation. The explicit send-button path
+    // (SEND-PATH/initial above) remains unconditional because the user just
+    // tapped send and expects to see the response; this reactive LaunchedEffect
+    // catches the same edge but must only fire when the user is still at the
+    // bottom.
     LaunchedEffect(messages.size) {
         val lastMsg = messages.lastOrNull() ?: return@LaunchedEffect
         if (lastMsg.role != "user") return@LaunchedEffect
+        // [P0-0-jump-fix] Don't yank the viewport when the user explicitly
+        // scrolled away or is not near the bottom — they're reading history.
+        if (userScrolledAway) return@LaunchedEffect
+        if (!isNearBottom.value) return@LaunchedEffect
         // T255: catch-all reset so any user-message append path
         // (send button / Enter / enqueue-while-streaming / future
         // entry points) restores auto-follow even if a call-site reset
