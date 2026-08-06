@@ -976,6 +976,21 @@ fun ChatScreen(
             "ScrollSrc",
             "scrollToItem src=$source idx=$idx off=$off canBwd=${listState.canScrollBackward} firstIdx=${listState.firstVisibleItemIndex} firstOff=${listState.firstVisibleItemScrollOffset} inProgress=${listState.isScrollInProgress}",
         )
+        // [Txxx-android-anchor-settle-debounce] Short-circuit a scrollToItem that
+        // is already AT its target (same index AND same offset). Multiple
+        // auto-follow sources (trailing-row, stream-end, settle-after-interaction,
+        // LAYOUT-DRIFT-SNAP) fire back-to-back during an agent turn, and several
+        // of them aim at the already-settled bottom (idx=0 off=0) — a scrollToItem
+        // to the current position is a no-op that still goes through the gesture
+        // pipeline and, in a LazyColumn already being jittered by content
+        // insertion, can land as a visible snap. Folding these no-ops out removes
+        // the redundant re-pins (log shows them firing every drag-end while
+        // streaming) without changing the intent of any source: each still scrolls
+        // exactly when it has to, and a source that truly needs to re-anchor after
+        // a content-size change will observe a changed firstOff and pass through.
+        val alreadyThere = listState.firstVisibleItemIndex == idx &&
+            listState.firstVisibleItemScrollOffset == off
+        if (alreadyThere) return@scrollToItem
         runCatching { listState.scrollToItem(idx, off) }
         Unit
     }
@@ -1654,7 +1669,17 @@ fun ChatScreen(
         }.distinctUntilChanged().collectLatest { _ ->
             if (userScrolledAway) return@collectLatest
             if (listState.isScrollInProgress) return@collectLatest
-            if (!isNearBottom.value) return@collectLatest
+            // [Txxx-android-drift-snap-gate] DELIBERATELY NOT gated on
+            // isNearBottom here. isNearBottom = firstIdx==0 && firstOff<=thr.
+            // When new messages are inserted at index 0 (reverseLayout) the
+            // LazyList advances firstVisibleItemIndex past 0 before the bottom
+            // anchor settles, so this gate flips false exactly when we NEED the
+            // drift-snap — and the viewport is left floating one row up, which
+            // reads as "the conversation jumped while the agent answered".
+            // userScrolledAway (user actively pulled away) + isScrollInProgress
+            // (still dragging/flinging) already exclude a real user scroll; the
+            // bottomOffset<0 check below is the true "bottom item got pushed
+            // below the viewport" criterion and only fires when anchored bottom.
             // Pin only if the current offset has actually drifted from
             // the bottom (avoid no-op scroll spam).
             val info = listState.layoutInfo
