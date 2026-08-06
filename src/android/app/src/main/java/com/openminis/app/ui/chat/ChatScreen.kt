@@ -596,6 +596,15 @@ fun ChatScreen(
     var inputFieldValue by remember {
         mutableStateOf(androidx.compose.ui.text.input.TextFieldValue(""))
     }
+    // [Txxx-android-composer-caret] Authoritative caret written on EVERY
+    // onValueChange from the IME's own TextFieldValue.selection. The old
+    // fallback read inputFieldValue.selection.end — but under the long-paste
+    // race inputFieldValue holds the PRE-write text, so its selection.end was
+    // a stale index that, coerced into the new text, landed at a random
+    // mid-string position. This never contains the corruption: onValueChange
+    // is the single writer of the true caret, and LaunchedEffect merely reads
+    // this stable value back when no external pendingCaret intent exists.
+    var lastTrueCaretEnd by remember { mutableStateOf(0) }
     // T217-2: suppress IME commits arriving briefly after send. clearFocus
     // triggers finishComposingText, which makes voice/Pinyin IMEs commit
     // their pending candidate back through onValueChange even after we
@@ -634,7 +643,7 @@ fun ChatScreen(
             // positioning intact; only the unintended end-jump is removed.
             // Coerce into bounds both ways defensively.
             val caret = viewModel.consumePendingCaret()?.coerceIn(0, inputText.length)
-                ?: inputFieldValue.selection.end.coerceIn(0, inputText.length)
+                ?: lastTrueCaretEnd.coerceIn(0, inputText.length)
             inputFieldValue = androidx.compose.ui.text.input.TextFieldValue(
                 text = inputText,
                 selection = androidx.compose.ui.text.TextRange(caret),
@@ -5089,6 +5098,12 @@ fun ChatScreen(
                                     }
                                 }
                                 inputFieldValue = tfv
+                                // [Txxx-android-composer-caret] The IME's
+                                // tfv.selection.end is the authoritative user
+                                // caret right now. Persist it so a later
+                                // LaunchedEffect can fall back to it instead of
+                                // an already-stale inputFieldValue.selection.
+                                lastTrueCaretEnd = tfv.selection.end.coerceAtLeast(0)
                                 if (inputText != tfv.text) {
                                     viewModel.setInputText(tfv.text)
                                     viewModel.updateSlashMenuState(tfv.text)
