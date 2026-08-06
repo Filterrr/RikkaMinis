@@ -63,6 +63,23 @@ fun MemoryManagementScreen(
     var files by remember { mutableStateOf<List<MemoryRepository.MemoryFileInfo>>(emptyList()) }
     var deleteFileName by remember { mutableStateOf<String?>(null) }
     val context = androidx.compose.ui.platform.LocalContext.current
+    // [ExpMem] Experience memory (episodic): auto-records every finished
+    // exchange (query, tools, outcome, reply) into a local plain-text JSONL
+    // file and injects up to 3 similar past episodes before each reply.
+    // Zero extra model calls; retrieval is keyword scoring; the verification
+    // counter (+1 on success / -1 on failure) ranks proven episodes higher.
+    // Declared here (before SettingsScaffold) so both the section and the
+    // clear-confirm dialog below can reference them.
+    var expEnabled by remember {
+        mutableStateOf(com.openminis.app.data.ExperienceMemoryPrefs.isEnabled(context))
+    }
+    val expStore = remember(context) {
+        com.openminis.app.data.EpisodeMemoryStore(
+            java.io.File(context.filesDir, "minis-global/memory/episodes.jsonl")
+        )
+    }
+    var expSize by remember { mutableStateOf(expStore.size()) }
+    var expClearConfirm by remember { mutableStateOf(false) }
     // [T-memory-global-toggle-settings-ui-android] Global default for
     // newly-created sessions. Stored separately from per-session
     // memoryEnabled (which lives in the sessions DB row) so toggling
@@ -172,23 +189,6 @@ fun MemoryManagementScreen(
             Spacer(modifier = Modifier.height(16.dp))
         }
     }
-
-    // Experience memory (episodic): auto-records every finished exchange
-    // (query, tools, outcome, reply) into a local plain-text JSONL file and
-    // injects up to 3 similar past episodes before each reply. Zero extra
-    // model calls; retrieval is keyword scoring; the verification counter
-    // (+1 on success / -1 on failure) ranks proven episodes higher.
-    // Declared at function level so the clear-confirm dialog below can see them.
-    var expEnabled by remember {
-        mutableStateOf(com.openminis.app.data.ExperienceMemoryPrefs.isEnabled(context))
-    }
-    val expStore = remember(context) {
-        com.openminis.app.data.EpisodeMemoryStore(
-            java.io.File(context.filesDir, "minis-global/memory/episodes.jsonl")
-        )
-    }
-    var expSize by remember { mutableStateOf(expStore.size()) }
-    var expClearConfirm by remember { mutableStateOf(false) }
 
     // Delete confirmation
     if (deleteFileName != null) {
