@@ -247,7 +247,7 @@
     <string name="memory_experience_entries">%d episodes recorded</string>
     <string name="memory_experience_clear_confirm_title">Clear experience memory?</string>
     <string name="memory_experience_clear_confirm_text">This permanently deletes the local episodes file (episodes.jsonl). The agent will forget past exchanges.</string>
-    <string name="memory_experience_clear_failed">Échec de l'effacement de la mémoire d'expérience</string>
+    <string name="memory_experience_clear_failed">Échec de l\'effacement de la mémoire d\'expérience</string>
     <string name="memory_experience_view">View recorded episodes</string>
     <string name="memory_experience_view_empty">No episodes recorded yet</string>
     <string name="memory_experience_view_recent">%1$d sur %2$d épisodes affichés</string>
