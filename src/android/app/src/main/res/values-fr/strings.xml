@@ -264,6 +264,12 @@
     <string name="memory_empty_description">Les fichiers mémoire stockent des connaissances persistantes. Modifiez GLOBAL.md pour ajouter des instructions visibles à l\'agent.</string>
     <string name="memory_section_files">Fichiers</string>
     <string name="memory_section_footer">GLOBAL.md contient des instructions persistantes visibles à l\'agent. Les logs quotidiens sont créés automatiquement.</string>
+    <string name="memory_section_view_more">Voir plus de fichiers</string>
+    <string name="memory_section_view_less">Voir moins</string>
+    <string name="memory_experience_show_all">Afficher toutes les épisodes</string>
+    <string name="memory_experience_delete">Supprimer cette épisode</string>
+    <string name="memory_experience_delete_confirm_title">Supprimer cette épisode ?</string>
+    <string name="memory_experience_delete_confirm_text">Cela supprime l\'épisode du fichier de mémoire local. Son compteur de réutilisation est perdu.</string>
     <string name="memory_delete_confirm_title">Supprimer %1$s ?</string>
     <string name="memory_delete_confirm_text">Cela supprimera définitivement ce log mémoire.</string>
     <string name="memory_editor_placeholder">Saisir le contenu…</string>

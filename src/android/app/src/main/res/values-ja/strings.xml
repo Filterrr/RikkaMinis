@@ -264,6 +264,12 @@
     <string name="memory_empty_description">メモリファイルはセッションをまたいで知識を保持します。GLOBAL.md を編集してエージェントから見える指示を追加できます。</string>
     <string name="memory_section_files">ファイル</string>
     <string name="memory_section_footer">GLOBAL.md にはエージェントから見える永続的な指示が含まれます。日次ログは会話中に自動作成されます。</string>
+    <string name="memory_section_view_more">ファイルをさらに表示</string>
+    <string name="memory_section_view_less">減らして表示</string>
+    <string name="memory_experience_show_all">すべてのエピソードを表示</string>
+    <string name="memory_experience_delete">このエピソードを削除</string>
+    <string name="memory_experience_delete_confirm_title">このエピソードを削除しますか？</string>
+    <string name="memory_experience_delete_confirm_text">ローカルの記憶ファイルからこのエピソードを削除します。再利用回数は失われます。</string>
     <string name="memory_delete_confirm_title">%1$s を削除しますか？</string>
     <string name="memory_delete_confirm_text">このメモリログを完全に削除します。</string>
     <string name="memory_editor_placeholder">内容を入力…</string>

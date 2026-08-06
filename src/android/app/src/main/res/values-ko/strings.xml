@@ -264,6 +264,12 @@
     <string name="memory_empty_description">메모리 파일은 세션 간 지식을 유지합니다. GLOBAL.md 를 편집해 에이전트에 보이는 지침을 추가하세요.</string>
     <string name="memory_section_files">파일</string>
     <string name="memory_section_footer">GLOBAL.md 에는 에이전트에 보이는 영구 지침이 들어 있습니다. 일일 로그는 대화 중 자동 생성됩니다.</string>
+    <string name="memory_section_view_more">파일 더 보기</string>
+    <string name="memory_section_view_less">덜 보기</string>
+    <string name="memory_experience_show_all">모든 에피소드 표시</string>
+    <string name="memory_experience_delete">이 에피소드 삭제</string>
+    <string name="memory_experience_delete_confirm_title">이 에피소드를 삭제할까요?</string>
+    <string name="memory_experience_delete_confirm_text">로컬 메모리 파일에서 이 에피소드가 제거됩니다. 재사용 횟수가 손실됩니다.</string>
     <string name="memory_delete_confirm_title">%1$s 을(를) 삭제하시겠습니까?</string>
     <string name="memory_delete_confirm_text">이 메모리 로그가 영구적으로 제거됩니다.</string>
     <string name="memory_editor_placeholder">내용 입력…</string>

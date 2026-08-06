@@ -28,8 +28,11 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -84,6 +87,10 @@ fun MemoryManagementScreen(
 ) {
     var files by remember { mutableStateOf<List<MemoryRepository.MemoryFileInfo>>(emptyList()) }
     var deleteFileName by remember { mutableStateOf<String?>(null) }
+    // [Mem-list] File list "View more": files are fully listed but when there
+    // are many (daily logs accrete one file/day), cap the visible rows and let
+    // the user expand — prevents the section growing unboundedly tall.
+    var showAllFiles by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
     // [ExpMem] Experience memory (episodic): auto-records every finished
     // exchange (query, tools, outcome, reply) into a local plain-text JSONL
@@ -112,6 +119,12 @@ fun MemoryManagementScreen(
     var expExpanded by remember { mutableStateOf(false) }
     var expEpisodes by remember { mutableStateOf<List<EpisodeMemoryStore.Episode>>(emptyList()) }
     var expDetail by remember { mutableStateOf<EpisodeMemoryStore.Episode?>(null) }
+    // [Mem-optimize] "Show all episodes" — the inline viewer lists the most
+    // valuable first (sortByValue), capped at 50 visible rows for perf; this
+    // flag reveals the rest so the user can always reach older episodes.
+    var showAllEpisodes by remember { mutableStateOf(false) }
+    // [Mem-optimize] Single-episode delete — trail ⋮ menu → confirm dialog.
+    val expDeleteTarget = remember { mutableStateOf<EpisodeMemoryStore.Episode?>(null) }
     // [T-memory-global-toggle-settings-ui-android] Global default for
     // newly-created sessions. Stored separately from per-session
     // memoryEnabled (which lives in the sessions DB row) so toggling
@@ -177,16 +190,34 @@ fun MemoryManagementScreen(
                 header = stringResource(R.string.memory_section_files),
                 footer = stringResource(R.string.memory_section_footer),
             ) {
-                files.forEachIndexed { index, file ->
+                // [Mem-list] Cap visible file rows at 20 to keep the section from
+                // growing unboundedly tall as daily logs accrete; a "View more"
+                // button discloses the full list.
+                val fileCap = 20
+                val visibleFiles = if (showAllFiles) files else files.take(fileCap)
+                visibleFiles.forEachIndexed { index, file ->
                     MemoryFileRow(
                         file = file,
                         onClick = { onFileClick(file.name, file.isGlobal) },
                         onDelete = if (!file.isGlobal) { { deleteFileName = file.name } } else null,
                     )
-                    if (index < files.size - 1) {
+                    if (index < visibleFiles.size - 1) {
                         HorizontalDivider(
                             modifier = Modifier.padding(start = 16.dp),
                             color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                        )
+                    }
+                }
+                if (files.size > fileCap) {
+                    TextButton(
+                        onClick = { showAllFiles = !showAllFiles },
+                        modifier = Modifier.padding(start = 8.dp),
+                    ) {
+                        Text(
+                            stringResource(
+                                if (showAllFiles) R.string.memory_section_view_less
+                                else R.string.memory_section_view_more
+                            )
                         )
                     }
                 }
@@ -219,13 +250,17 @@ fun MemoryManagementScreen(
                 onClick = {
                     expExpanded = !expExpanded
                     if (expExpanded) {
+                        showAllEpisodes = false
                         // [ExpMem-viewer] reload on every expand so episodes
                         // recorded while the list was collapsed show up.
+                        // [Mem-optimize] sortByValue=true ranks proven episodes
+                        // (success × reuse count) first — matches the agent's
+                        // retrieval order, so the most useful float to the top.
                         expScope.launch {
                             expLoading = true
                             expError = null
                             try {
-                                expEpisodes = experienceMemoryStore.snapshot().reversed()
+                                expEpisodes = experienceMemoryStore.snapshot(sortByValue = true)
                             } catch (e: Exception) {
                                 expError = context.getString(R.string.memory_experience_clear_failed)
                             }
@@ -275,23 +310,39 @@ fun MemoryManagementScreen(
                         )
                     }
                     else -> {
-                        // [ExpMem-viewer] Cap the inline list at 50 rows: a
-                        // 1000-entry file must not be fully composed inside
-                        // the outer scrollable Column (jank + O(n) recompose).
-                        val visible = expEpisodes.take(50)
+                        // [Mem-optimize] Show the most valuable episodes first;
+                        // cap visible rows at 50 for perf, with a "Show all"
+                        // action to reach older ones (so the user can always
+                        // inspect / prune the tail, not just the top).
+                        val cap = 50
+                        val visible = if (showAllEpisodes) expEpisodes else expEpisodes.take(cap)
                         visible.forEachIndexed { index, episode ->
                             EpisodeRow(
                                 episode = episode,
                                 onClick = { expDetail = episode },
+                                onDelete = { expDeleteTarget.value = episode },
                                 showDivider = index < visible.size - 1,
                             )
                         }
-                        if (expEpisodes.size > 50) {
+                        if (expEpisodes.size > cap && !showAllEpisodes) {
                             Text(
-                                stringResource(R.string.memory_experience_view_recent, 50, expEpisodes.size),
+                                stringResource(R.string.memory_experience_view_recent, cap, expEpisodes.size),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                            )
+                            TextButton(
+                                onClick = { showAllEpisodes = true },
+                                modifier = Modifier.padding(start = 8.dp),
+                            ) {
+                                Text(stringResource(R.string.memory_experience_show_all))
+                            }
+                        } else if (expEpisodes.size > cap) {
+                            Text(
+                                stringResource(R.string.memory_experience_view_recent, expEpisodes.size, expEpisodes.size),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                             )
                         }
                     }
@@ -367,6 +418,38 @@ fun MemoryManagementScreen(
             },
             dismissButton = {
                 MinisTextButton(onClick = { expClearConfirm = false }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            },
+        )
+    }
+
+    // [Mem-optimize] Single-episode delete confirmation
+    expDeleteTarget.value?.let { target ->
+        AlertDialog(
+            onDismissRequest = { expDeleteTarget.value = null },
+            title = { Text(stringResource(R.string.memory_experience_delete_confirm_title)) },
+            text = { Text(stringResource(R.string.memory_experience_delete_confirm_text)) },
+            confirmButton = {
+                MinisTextButton(onClick = {
+                    val id = target.id
+                    expDeleteTarget.value = null
+                    expScope.launch {
+                        val result = experienceMemoryStore.delete(id)
+                        if (result is EpisodeMemoryStore.IoResult.Success) {
+                            // Reflect the deletion in the viewer immediately.
+                            expEpisodes = expEpisodes.filterNot { it.id == id }
+                            expSize = (expSize - 1).coerceAtLeast(0)
+                        } else {
+                            expError = context.getString(R.string.memory_experience_clear_failed)
+                        }
+                    }
+                }) {
+                    Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                MinisTextButton(onClick = { expDeleteTarget.value = null }) {
                     Text(stringResource(R.string.common_cancel))
                 }
             },
@@ -537,12 +620,15 @@ private fun MemoryFileRow(
 /**
  * Compact single-episode row inside the expanded Experience Memory list.
  * Green/red dot = outcome, title = query, subtitle = tool names,
- * trailing = reuse count + chevron (tap opens detail dialog).
+ * trailing = reuse count + ⋮ menu (delete) + chevron (tap opens detail dialog).
+ * [Mem-optimize] Added the ⋮ overflow menu so a single useless episode can be
+ * pruned without clearing the whole store.
  */
 @Composable
 private fun EpisodeRow(
     episode: EpisodeMemoryStore.Episode,
     onClick: () -> Unit,
+    onDelete: (() -> Unit)?,
     showDivider: Boolean,
 ) {
     Column {
@@ -586,6 +672,37 @@ private fun EpisodeRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(modifier = Modifier.width(6.dp))
+            }
+            // [Mem-optimize] ⋮ overflow → delete this episode
+            if (onDelete != null) {
+                var menuOpen by remember { mutableStateOf(false) }
+                Box {
+                    IconButton(onClick = { menuOpen = true }) {
+                        Icon(
+                            Icons.Filled.MoreVert,
+                            contentDescription = stringResource(R.string.memory_experience_delete),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = menuOpen,
+                        onDismissRequest = { menuOpen = false },
+                    ) {
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    stringResource(R.string.memory_experience_delete),
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            },
+                            onClick = {
+                                menuOpen = false
+                                onDelete()
+                            },
+                        )
+                    }
+                }
             }
             Icon(
                 Icons.AutoMirrored.Filled.KeyboardArrowRight,
