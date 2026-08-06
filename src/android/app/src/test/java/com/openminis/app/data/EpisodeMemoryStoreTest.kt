@@ -576,15 +576,16 @@ class EpisodeMemoryStoreTest {
         val f = tmpFile()
         // staleAfterMs 用 10_000 —— 10 秒前的 v<0 即僵尸
         val store = EpisodeMemoryStore(f, staleAfterMs = 10_000L)
-        // 写一条正常成功经验（作为底料，不会被误删）
-        store.writeTest(rec("keeper"))
-        // 手工注入：一条 v<0 且超期（僵尸，应删）；一条 v<0 但新鲜（刚记录，应留）；
-        // 一条 v==0 且超期（从未被调用过，按方案 X 不乱删，应留）
+        // 手工注入四条：keeper(正常成功)；一条 v<0 且超期（僵尸，应删）；
+        // 一条 v<0 但新鲜（刚记录，应留）；一条 v==0 且超期（从未被调用过，
+        // 按方案 X 不乱删，应留）。注意 writeText 是覆盖写，必须一次写全，
+        // 不能先 writeTest 再 writeText（后者会抹掉前者的行）。
         val now = System.currentTimeMillis()
+        val keeper = """{"id":"keeper","t":$now,"q":"keeper","tools":[],"ok":true,"v":0,"lastHit":$now}"""
         val zombie = """{"id":"zombie","t":${now - 100_000},"q":"old fail","tools":[],"ok":false,"v":-1,"lastHit":${now - 100_000}}"""
         val freshNeg = """{"id":"freshneg","t":$now,"q":"fresh fail","tools":[],"ok":false,"v":-2,"lastHit":$now}"""
         val neverUsed = """{"id":"neverused","t":${now - 100_000},"q":"never called","tools":[],"ok":false,"v":0,"lastHit":${now - 100_000}}"""
-        f.writeText(listOf(zombie, freshNeg, neverUsed).joinToString("\n") + "\n")
+        f.writeText(listOf(keeper, zombie, freshNeg, neverUsed).joinToString("\n") + "\n")
         // 触发一次写入（新经验），顺带自动清理
         store.writeTest(rec("trigger"))
         val remaining = store.snapshot()
