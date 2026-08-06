@@ -63,6 +63,12 @@
     <string name="memory_experience_view">檢視已記錄的經驗</string>
     <string name="memory_experience_view_empty">暫無已記錄的經驗</string>
     <string name="memory_experience_view_recent">僅顯示最近 %1$d 條（共 %2$d 條）</string>
+    <string name="memory_experience_show_all">顯示全部經驗</string>
+    <string name="memory_experience_delete">刪除此條經驗</string>
+    <string name="memory_experience_delete_confirm_title">刪除此條經驗？</string>
+    <string name="memory_experience_delete_confirm_text">這將從本機經驗檔案中移除該條，其複用次數將一併消失。</string>
+    <string name="memory_section_view_more">檢視更多檔案</string>
+    <string name="memory_section_view_less">收合</string>
     <string name="memory_experience_reuse">已複用 %d 次</string>
     <string name="memory_experience_outcome_ok">成功</string>
     <string name="memory_experience_outcome_partial">部分成功</string>

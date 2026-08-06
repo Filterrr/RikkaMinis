@@ -264,6 +264,12 @@
     <string name="memory_empty_description">Memory-Dateien speichern persistentes Wissen über Sitzungen. Bearbeiten Sie GLOBAL.md, um für den Agenten sichtbare Anweisungen hinzuzufügen.</string>
     <string name="memory_section_files">Dateien</string>
     <string name="memory_section_footer">GLOBAL.md enthält persistente, für den Agenten sichtbare Anweisungen. Tageslogs werden während Gesprächen automatisch erstellt.</string>
+    <string name="memory_section_view_more">Weitere Dateien anzeigen</string>
+    <string name="memory_section_view_less">Weniger anzeigen</string>
+    <string name="memory_experience_show_all">Alle Episoden anzeigen</string>
+    <string name="memory_experience_delete">Diese Episode löschen</string>
+    <string name="memory_experience_delete_confirm_title">Diese Episode löschen?</string>
+    <string name="memory_experience_delete_confirm_text">Dies entfernt die Episode aus der lokalen Speicherdatei. Die Wiederverwendungsanzahl geht verloren.</string>
     <string name="memory_delete_confirm_title">%1$s löschen?</string>
     <string name="memory_delete_confirm_text">Dieses Memory-Log wird dauerhaft entfernt.</string>
     <string name="memory_editor_placeholder">Inhalt eingeben…</string>

@@ -516,4 +516,102 @@ class EpisodeMemoryStoreTest {
             dir.delete()
         }
     }
+
+    // ── [Mem-optimize] single-episode delete, value sort, auto-prune ──
+
+    @Test
+    fun `delete removes exactly the target episode and keeps the rest`() = runBlocking {
+        val f = tmpFile()
+        val store = EpisodeMemoryStore(f)
+        assertEquals(EpisodeMemoryStore.IoResult.Success, store.writeTest(rec("first")))
+        assertEquals(EpisodeMemoryStore.IoResult.Success, store.writeTest(rec("second")))
+        val all = store.snapshot()
+        assertEquals(2, all.size)
+        val victimId = all.first { it.q == "first" }.id
+        assertEquals(EpisodeMemoryStore.IoResult.Success, store.delete(victimId))
+        val after = store.snapshot()
+        assertEquals(1, after.size)
+        assertTrue(after.none { it.id == victimId })
+        assertTrue(after.any { it.q == "second" })
+    }
+
+    @Test
+    fun `delete of unknown id is idempotent success`() = runBlocking {
+        val f = tmpFile()
+        val store = EpisodeMemoryStore(f)
+        store.writeTest(rec("only"))
+        assertEquals(EpisodeMemoryStore.IoResult.Success, store.delete("no-such-id"))
+        assertEquals(1, store.snapshot().size)
+    }
+
+    @Test
+    fun `snapshot with sortByValue ranks success then reuse count`() = runBlocking {
+        val f = tmpFile()
+        val store = EpisodeMemoryStore(f)
+        // 两条成功、一条失败；给其中一条加高 v
+        val s1 = store.writeTest(rec("a"))
+        val s2 = store.writeTest(rec("b"))
+        val s3 = store.writeTest(rec("c", outcome = Outcome.FAILURE))
+        assertEquals(EpisodeMemoryStore.IoResult.Success, s1)
+        assertEquals(EpisodeMemoryStore.IoResult.Success, s2)
+        assertEquals(EpisodeMemoryStore.IoResult.Success, s3)
+        val all = store.snapshot() // 无排序 → 文件顺序
+        assertEquals(listOf("a", "b", "c"), all.map { it.q })
+        // 给 "a" 加 v：completeExchange with feedbackDelta=+1
+        val gen = store.currentGeneration()
+        val hitId = store.snapshot().first { it.q == "a" }.id
+        store.completeExchange(expectedGeneration = gen, retrievedIds = listOf(hitId), feedbackDelta = 1, exchange = null)
+        // sortByValue: 成功类(SUCCESS)优先 → v 高在前 → 时间
+        val byValue = store.snapshot(sortByValue = true)
+        val aV = byValue.first { it.q == "a" }.v
+        val bV = byValue.first { it.q == "b" }.v
+        assertTrue("a reuse count should be higher", aV > bV)
+        // 成功类两条都应在失败前面
+        val failIdx = byValue.indexOfFirst { it.outcome == Outcome.FAILURE }
+        assertTrue("failure should be last", failIdx == byValue.size - 1)
+    }
+
+    @Test
+    fun `auto-prune removes stale failed episodes but keeps fresh failed ones`() = runBlocking {
+        val f = tmpFile()
+        // staleAfterMs 用 10_000 —— 10 秒前的 v<0 即僵尸
+        val store = EpisodeMemoryStore(f, staleAfterMs = 10_000L)
+        // 手工注入四条：keeper(正常成功)；一条 v<0 且超期（僵尸，应删）；
+        // 一条 v<0 但新鲜（刚记录，应留）；一条 v==0 且超期（从未被调用过，
+        // 按方案 X 不乱删，应留）。注意 writeText 是覆盖写，必须一次写全，
+        // 不能先 writeTest 再 writeText（后者会抹掉前者的行）。
+        val now = System.currentTimeMillis()
+        val keeper = """{"id":"keeper","t":$now,"q":"keeper","tools":[],"ok":true,"v":0,"lastHit":$now}"""
+        val zombie = """{"id":"zombie","t":${now - 100_000},"q":"old fail","tools":[],"ok":false,"v":-1,"lastHit":${now - 100_000}}"""
+        val freshNeg = """{"id":"freshneg","t":$now,"q":"fresh fail","tools":[],"ok":false,"v":-2,"lastHit":$now}"""
+        val neverUsed = """{"id":"neverused","t":${now - 100_000},"q":"never called","tools":[],"ok":false,"v":0,"lastHit":${now - 100_000}}"""
+        f.writeText(listOf(keeper, zombie, freshNeg, neverUsed).joinToString("\n") + "\n")
+        // 触发一次写入（新经验），顺带自动清理
+        store.writeTest(rec("trigger"))
+        val remaining = store.snapshot()
+        assertTrue("zombie (v<0 & stale) must be pruned", remaining.none { it.id == "zombie" })
+        assertTrue("fresh v<0 (recently recorded) must be kept", remaining.any { it.id == "freshneg" })
+        assertTrue("v==0 never-used must NOT be auto-pruned (plan X conservative)", remaining.any { it.id == "neverused" })
+        assertTrue("keeper kept", remaining.any { it.q == "keeper" })
+    }
+
+    @Test
+    fun `retrieval hit refreshes lastHit so a used episode is not pruned`() = runBlocking {
+        val f = tmpFile()
+        val store = EpisodeMemoryStore(f, staleAfterMs = 10_000L)
+        // 注入一条 v<0 的老经验（本应僵尸），但下面通过 retrieve 命中刷新 lastHit
+        val now = System.currentTimeMillis()
+        val old = """{"id":"used","t":${now - 50_000},"q":"error","tools":[],"ok":false,"v":-1,"lastHit":${now - 50_000}}"""
+        f.writeText(old + "\n")
+        // query 含失败信号词 "error" → 失败经验参与检索；命中 → bump lastHit 刷新新鲜度
+        val gen = store.currentGeneration()
+        val hit = store.retrieve("error")
+        val hitIds = hit.hits.map { it.episode.id }
+        assertTrue("failure episode must be retrievable with failure signal", hitIds.isNotEmpty())
+        store.completeExchange(expectedGeneration = gen, retrievedIds = hitIds, feedbackDelta = null, exchange = null)
+        // 再次写入触发清理
+        store.writeTest(rec("after"))
+        val remaining = store.snapshot()
+        assertTrue("episode revived by a hit must survive", remaining.any { it.id == "used" })
+    }
 }
