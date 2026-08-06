@@ -874,6 +874,7 @@
     <string name="model_picker_search_clear">クリア</string>
     <string name="model_picker_groups_section">モデルグループ</string>
     <string name="model_picker_groups_footer">このセッションをグループにバインドして、自動フォールバックや負荷分散を有効にします。</string>
+    <string name="model_picker_all_providers">すべてのプロバイダー</string>
     <string name="model_picker_default_badge">デフォルト</string>
     <string name="model_picker_active_badge">アクティブ</string>
     <string name="model_picker_no_linked_models">このグループにはモデルがバインドされていません。</string>

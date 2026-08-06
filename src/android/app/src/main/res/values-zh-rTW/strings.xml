@@ -609,6 +609,7 @@
     <string name="model_picker_groups_section">模型分組</string>
     <string name="model_picker_groups_edit">編輯</string>
     <string name="model_picker_groups_footer">將本會話綁定到分組以實現自動回退或負載平衡。</string>
+    <string name="model_picker_all_providers">全部提供商</string>
     <string name="model_picker_default_badge">預設</string>
     <string name="model_picker_active_badge">活躍</string>
     <string name="model_picker_no_linked_models">該分組未綁定任何模型。</string>

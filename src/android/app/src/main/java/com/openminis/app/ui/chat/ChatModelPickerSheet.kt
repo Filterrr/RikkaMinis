@@ -370,6 +370,16 @@ internal fun ModelPickerSheet(
         result
     }
 
+    // [P0-pinned-providers] Split providers into pinned (Favorites) and the rest,
+    // so the picker can float pinned ones up right below the Model Groups card —
+    // mirroring the pin ordering already used in Settings → Providers.
+    val pinnedInstancesWithEntries = remember(allInstancesWithEntries) {
+        allInstancesWithEntries.filter { it.first.pinned }
+    }
+    val otherInstancesWithEntries = remember(allInstancesWithEntries) {
+        allInstancesWithEntries.filter { !it.first.pinned }
+    }
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
@@ -771,8 +781,40 @@ internal fun ModelPickerSheet(
                 // sit on a higher tonal surface so the boundary between
                 // providers is unmistakable even on the dark sheet background.
                 if (allInstancesWithEntries.isNotEmpty()) {
-                    allInstancesWithEntries.forEach { (instance, entries) ->
+                    // [P0-pinned-providers] Favorite (pinned) providers float to a
+                    // dedicated "Favorites" section immediately under the Model
+                    // Groups card and above all remaining providers. The label
+                    // reuses the existing Settings translation (Favorites / 常用).
+                    if (pinnedInstancesWithEntries.isNotEmpty()) {
+                        item {
+                            Text(
+                                stringResource(R.string.provider_list_favorites),
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 2.dp),
+                            )
+                        }
+                    }
+                    // Pinned providers first, then everything else — each group
+                    // keeps its original relative order.
+                    val orderedProviderSections = pinnedInstancesWithEntries + otherInstancesWithEntries
+                    orderedProviderSections.forEachIndexed { sectionIndex, (instance, entries) ->
                         val isCollapsed = collapsedInstanceIds.contains(instance.id)
+                        // When both Favorites and the rest are present, mark the
+                        // boundary with an "All Providers" section label.
+                        if (sectionIndex == pinnedInstancesWithEntries.size &&
+                            pinnedInstancesWithEntries.isNotEmpty() &&
+                            otherInstancesWithEntries.isNotEmpty()
+                        ) {
+                            item {
+                                Text(
+                                    stringResource(R.string.model_picker_all_providers),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 2.dp),
+                                )
+                            }
+                        }
                         item(key = "section_${instance.id}") {
                             Column(
                                 modifier = Modifier

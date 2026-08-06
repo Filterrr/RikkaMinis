@@ -988,6 +988,7 @@
     <string name="model_picker_search_clear">Очистить</string>
     <string name="model_picker_groups_section">Группы моделей</string>
     <string name="model_picker_groups_footer">Привяжите эту сессию к группе для автоматического резервирования или балансировки нагрузки.</string>
+    <string name="model_picker_all_providers">Все провайдеры</string>
     <string name="model_picker_default_badge">По умолчанию</string>
     <string name="model_picker_active_badge">Активна</string>
     <string name="model_picker_no_linked_models">К этой группе не привязано ни одной модели.</string>
