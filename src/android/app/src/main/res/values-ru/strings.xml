@@ -480,6 +480,12 @@
     <string name="memory_empty_description">Файлы памяти хранят постоянные знания между сессиями. Измените GLOBAL.md, чтобы добавить инструкции, видимые агенту.</string>
     <string name="memory_section_files">Файлы</string>
     <string name="memory_section_footer">GLOBAL.md содержит постоянные инструкции, видимые агенту. Ежедневные журналы создаются автоматически во время диалогов.</string>
+    <string name="memory_section_view_more">Показать больше файлов</string>
+    <string name="memory_section_view_less">Показать меньше</string>
+    <string name="memory_experience_show_all">Показать все эпизоды</string>
+    <string name="memory_experience_delete">Удалить этот эпизод</string>
+    <string name="memory_experience_delete_confirm_title">Удалить этот эпизод?</string>
+    <string name="memory_experience_delete_confirm_text">Это удалит эпизод из локального файла памяти. Счётчик повторного использования будет потерян.</string>
     <string name="memory_delete_confirm_title">Удалить %1$s?</string>
     <string name="memory_delete_confirm_text">Это безвозвратно удалит этот журнал памяти.</string>
     <string name="memory_editor_placeholder">Введите содержимое…</string>

@@ -318,6 +318,12 @@
     <string name="memory_empty_description">记忆文件在会话之间持久保存知识。编辑 GLOBAL.md 添加 agent 可见的指令。</string>
     <string name="memory_section_files">文件</string>
     <string name="memory_section_footer">GLOBAL.md 包含 agent 可见的持久指令。每日日志在对话期间自动创建。</string>
+    <string name="memory_section_view_more">查看更多文件</string>
+    <string name="memory_section_view_less">收起</string>
+    <string name="memory_experience_show_all">显示全部经验</string>
+    <string name="memory_experience_delete">删除此条经验</string>
+    <string name="memory_experience_delete_confirm_title">删除此条经验？</string>
+    <string name="memory_experience_delete_confirm_text">这将从本地经验文件中移除该条，其复用次数将一并消失。</string>
     <string name="memory_delete_confirm_title">删除 %1$s？</string>
     <string name="memory_delete_confirm_text">这将永久删除该记忆日志。</string>
     <string name="memory_editor_placeholder">输入内容…</string>
