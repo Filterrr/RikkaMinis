@@ -142,6 +142,7 @@ import com.openminis.app.config.ChatActionCatalog
 import com.openminis.app.config.ChatMenuPrefs
 import com.openminis.app.config.isChatActionAvailable
 import com.openminis.app.data.FileMentionIndex
+import com.openminis.app.data.EpisodeMemoryStore
 import com.openminis.app.logging.AppLogger
 import com.openminis.app.ui.components.MinisAlertDialog
 import com.openminis.app.ui.components.MinisMenu
@@ -400,6 +401,7 @@ fun ChatScreen(
     chatRepository: ChatRepository,
     providerRepository: ProviderRepository,
     memoryRepository: MemoryRepository? = null,
+    experienceMemoryStore: EpisodeMemoryStore? = null,
     skillRepository: com.openminis.app.data.repository.SkillRepository? = null,
     mcpRepository: com.openminis.app.data.repository.MCPRepository? = null,
     onBack: () -> Unit,
@@ -446,6 +448,7 @@ fun ChatScreen(
             providerRepository = providerRepository,
             appContext = context.applicationContext,
             memoryRepository = memoryRepository,
+            experienceMemoryStore = experienceMemoryStore,
             skillRepository = skillRepository,
             mcpRepository = mcpRepository,
         ),

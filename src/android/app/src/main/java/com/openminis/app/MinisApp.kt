@@ -20,6 +20,7 @@ import com.openminis.app.data.repository.BackgroundSettingsRepository
 import com.openminis.app.data.repository.ChatRepository
 import com.openminis.app.data.repository.EnvVarRepository
 import com.openminis.app.data.MountedFoldersStore
+import com.openminis.app.data.EpisodeMemoryStore
 import com.openminis.app.data.repository.MemoryRepository
 import com.openminis.app.data.repository.ProviderRepository
 import com.openminis.app.data.repository.WebAppShortcutRepository
@@ -85,6 +86,8 @@ class MinisApp : Application(), ImageLoaderFactory {
     lateinit var mcpRepository: MCPRepository
         private set
     lateinit var memoryRepository: MemoryRepository
+        private set
+    lateinit var experienceMemoryStore: EpisodeMemoryStore
         private set
     lateinit var webAppShortcutRepository: WebAppShortcutRepository
         private set
@@ -304,6 +307,7 @@ class MinisApp : Application(), ImageLoaderFactory {
         skillRepository = SkillRepository(this)
         mcpRepository = MCPRepository(this)
         memoryRepository = MemoryRepository(java.io.File(filesDir, "minis-global/memory"))
+        experienceMemoryStore = EpisodeMemoryStore(java.io.File(filesDir, "minis-global/memory/episodes.jsonl"))
         webAppShortcutRepository = WebAppShortcutRepository(database.webAppShortcutDao())
 
         // [T-soul-md] Seed SOUL.md with the default content on first launch

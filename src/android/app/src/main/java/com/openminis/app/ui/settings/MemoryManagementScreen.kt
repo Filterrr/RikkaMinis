@@ -96,6 +96,58 @@ fun MemoryManagementScreen(
                 showDivider = false,
             )
         }
+
+        // Experience memory (episodic): auto-records every finished exchange
+        // (query, tools, outcome, reply) into a local plain-text JSONL file and
+        // injects up to 3 similar past episodes before each reply. Zero extra
+        // model calls; retrieval is keyword scoring; the verification counter
+        // (+1 on success / -1 on failure) ranks proven episodes higher.
+        var expEnabled by remember {
+            mutableStateOf(com.openminis.app.data.ExperienceMemoryPrefs.isEnabled(context))
+        }
+        val expStore = remember(context) {
+            com.openminis.app.data.EpisodeMemoryStore(
+                java.io.File(context.filesDir, "minis-global/memory/episodes.jsonl")
+            )
+        }
+        var expSize by remember { mutableStateOf(expStore.size()) }
+        var expClearConfirm by remember { mutableStateOf(false) }
+
+        SettingsSection(
+            header = stringResource(R.string.settings_memory_experience_header),
+            footer = stringResource(R.string.settings_memory_experience_footer),
+        ) {
+            SettingsSwitchRow(
+                title = stringResource(R.string.settings_memory_experience_enabled_title),
+                subtitle = stringResource(R.string.settings_memory_experience_enabled_subtitle),
+                checked = expEnabled,
+                onCheckedChange = { newValue ->
+                    expEnabled = newValue
+                    com.openminis.app.data.ExperienceMemoryPrefs.setEnabled(context, newValue)
+                },
+                showDivider = true,
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expClearConfirm = true }
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        stringResource(R.string.memory_experience_clear),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    Text(
+                        stringResource(R.string.memory_experience_entries, expSize),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
         Spacer(modifier = Modifier.height(16.dp))
 
         if (files.isEmpty()) {
@@ -156,6 +208,29 @@ fun MemoryManagementScreen(
             },
             dismissButton = {
                 MinisTextButton(onClick = { deleteFileName = null }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            },
+        )
+    }
+
+    // Experience memory clear confirmation
+    if (expClearConfirm) {
+        AlertDialog(
+            onDismissRequest = { expClearConfirm = false },
+            title = { Text(stringResource(R.string.memory_experience_clear_confirm_title)) },
+            text = { Text(stringResource(R.string.memory_experience_clear_confirm_text)) },
+            confirmButton = {
+                MinisTextButton(onClick = {
+                    expStore.clear()
+                    expSize = 0
+                    expClearConfirm = false
+                }) {
+                    Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                MinisTextButton(onClick = { expClearConfirm = false }) {
                     Text(stringResource(R.string.common_cancel))
                 }
             },

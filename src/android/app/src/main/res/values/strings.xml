@@ -589,6 +589,14 @@
     <string name="settings_memory_global_footer">Per-session toggles (set via the /memory slash command or the Session Memory sheet) override this default. Existing sessions are not affected when you flip this switch.</string>
     <string name="settings_memory_global_enabled_title">Memory enabled by default</string>
     <string name="settings_memory_global_enabled_subtitle">When off, new sessions skip GLOBAL.md and daily memory by default</string>
+    <string name="settings_memory_experience_header">Experience Memory</string>
+    <string name="settings_memory_experience_footer">Auto-records every finished exchange (query, tools, outcome, reply) into a local plain-text file and injects up to 3 similar past episodes before each reply. No extra model calls. Failures only resurface when you ask why. Injected episodes gain +1 on success, -1 on failure.</string>
+    <string name="settings_memory_experience_enabled_title">Experience memory</string>
+    <string name="settings_memory_experience_enabled_subtitle">Remember what worked before and reuse it across sessions</string>
+    <string name="memory_experience_clear">Clear experience memory</string>
+    <string name="memory_experience_entries">%d episodes recorded</string>
+    <string name="memory_experience_clear_confirm_title">Clear experience memory?</string>
+    <string name="memory_experience_clear_confirm_text">This permanently deletes the local episodes file (episodes.jsonl). The agent will forget past exchanges.</string>
     <string name="memory_empty_title">No Memory Files</string>
     <string name="memory_empty_description">Memory files store persistent knowledge across sessions. Edit GLOBAL.md to add instructions visible to the agent.</string>
     <string name="memory_section_files">Files</string>
