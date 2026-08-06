@@ -301,6 +301,16 @@
     <string name="memory_experience_entries">已记录 %d 条经验</string>
     <string name="memory_experience_clear_confirm_title">清空经验记忆？</string>
     <string name="memory_experience_clear_confirm_text">这将永久删除本地经验文件（episodes.jsonl），agent 将忘记过去的交互。</string>
+    <string name="memory_experience_view">查看已记录的经验</string>
+    <string name="memory_experience_view_empty">暂无已记录的经验</string>
+    <string name="memory_experience_reuse">已复用 %d 次</string>
+    <string name="memory_experience_outcome_ok">成功</string>
+    <string name="memory_experience_outcome_fail">失败</string>
+    <string name="memory_experience_detail_query">查询</string>
+    <string name="memory_experience_detail_reply">回复</string>
+    <string name="memory_experience_detail_tools">工具</string>
+    <string name="memory_experience_detail_meta">记录于 %1$s · %2$s · %3$ds · 复用 %4$d 次</string>
+    <string name="memory_experience_detail_no_tools">（无工具）</string>
     <string name="memory_empty_title">暂无记忆文件</string>
     <string name="memory_empty_description">记忆文件在会话之间持久保存知识。编辑 GLOBAL.md 添加 agent 可见的指令。</string>
     <string name="memory_section_files">文件</string>

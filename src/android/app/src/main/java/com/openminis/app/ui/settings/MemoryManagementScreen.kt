@@ -17,10 +17,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -43,8 +50,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import com.openminis.app.data.EpisodeMemoryStore
 import com.openminis.app.data.repository.MemoryRepository
 import com.openminis.app.ui.components.DialogTextField
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * Settings-level memory file management.
@@ -80,6 +91,11 @@ fun MemoryManagementScreen(
     }
     var expSize by remember { mutableStateOf(expStore.size()) }
     var expClearConfirm by remember { mutableStateOf(false) }
+    // [ExpMem-viewer] Inline episode viewer: "View recorded episodes" row
+    // expands in place to a compact list; tapping a row opens a detail dialog.
+    var expExpanded by remember { mutableStateOf(false) }
+    var expEpisodes by remember { mutableStateOf<List<EpisodeMemoryStore.Episode>>(emptyList()) }
+    var expDetail by remember { mutableStateOf<EpisodeMemoryStore.Episode?>(null) }
     // [T-memory-global-toggle-settings-ui-android] Global default for
     // newly-created sessions. Stored separately from per-session
     // memoryEnabled (which lives in the sessions DB row) so toggling
@@ -128,6 +144,51 @@ fun MemoryManagementScreen(
                 },
                 showDivider = true,
             )
+            // View recorded episodes — expandable inline list (newest first)
+            SettingsRow(
+                title = stringResource(R.string.memory_experience_view),
+                subtitle = if (expSize > 0) {
+                    stringResource(R.string.memory_experience_entries, expSize)
+                } else {
+                    stringResource(R.string.memory_experience_view_empty)
+                },
+                onClick = {
+                    expExpanded = !expExpanded
+                    if (expExpanded) {
+                        // [ExpMem-viewer] reload on every expand so episodes
+                        // recorded while the list was collapsed show up.
+                        expEpisodes = expStore.snapshot().reversed()
+                    }
+                },
+                showDivider = true,
+                showChevron = false,
+                trailing = {
+                    Icon(
+                        imageVector = if (expExpanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                },
+            )
+            if (expExpanded) {
+                if (expEpisodes.isEmpty()) {
+                    Text(
+                        stringResource(R.string.memory_experience_view_empty),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    )
+                } else {
+                    expEpisodes.forEachIndexed { index, episode ->
+                        EpisodeRow(
+                            episode = episode,
+                            onClick = { expDetail = episode },
+                            showDivider = index < expEpisodes.size - 1,
+                        )
+                    }
+                }
+            }
+            // Clear experience memory — destructive, always last
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -135,18 +196,11 @@ fun MemoryManagementScreen(
                     .padding(horizontal = 16.dp, vertical = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        stringResource(R.string.memory_experience_clear),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                    Text(
-                        stringResource(R.string.memory_experience_entries, expSize),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                Text(
+                    stringResource(R.string.memory_experience_clear),
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.error,
+                )
             }
         }
         Spacer(modifier = Modifier.height(16.dp))
@@ -225,6 +279,7 @@ fun MemoryManagementScreen(
                 MinisTextButton(onClick = {
                     expStore.clear()
                     expSize = 0
+                    expEpisodes = emptyList()
                     expClearConfirm = false
                 }) {
                     Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error)
@@ -233,6 +288,66 @@ fun MemoryManagementScreen(
             dismissButton = {
                 MinisTextButton(onClick = { expClearConfirm = false }) {
                     Text(stringResource(R.string.common_cancel))
+                }
+            },
+        )
+    }
+
+    // [ExpMem-viewer] Episode detail dialog — query, meta, tools, reply.
+    expDetail?.let { ep ->
+        val dateStr = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(ep.t))
+        val outcomeStr = stringResource(
+            if (ep.ok) R.string.memory_experience_outcome_ok else R.string.memory_experience_outcome_fail
+        )
+        val toolsText = if (ep.tools.isEmpty()) {
+            stringResource(R.string.memory_experience_detail_no_tools)
+        } else {
+            ep.tools.joinToString(", ") { t -> "${t.n}(${if (t.ok) "✓" else "✗"})" }
+        }
+        AlertDialog(
+            onDismissRequest = { expDetail = null },
+            title = {
+                Text(
+                    ep.q.ifBlank { "—" },
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .verticalScroll(rememberScrollState())
+                        .heightIn(max = 360.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        stringResource(
+                            R.string.memory_experience_detail_meta,
+                            dateStr, outcomeStr, ep.durMs / 1000, ep.v
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        stringResource(R.string.memory_experience_detail_tools),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Text(toolsText, style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        stringResource(R.string.memory_experience_detail_reply),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Text(
+                        ep.reply.ifBlank { "—" },
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            },
+            confirmButton = {
+                MinisTextButton(onClick = { expDetail = null }) {
+                    Text(stringResource(R.string.common_close))
                 }
             },
         )
@@ -297,6 +412,75 @@ private fun MemoryFileRow(
             tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
             modifier = Modifier.size(20.dp),
         )
+    }
+}
+
+/**
+ * Compact single-episode row inside the expanded Experience Memory list.
+ * Green/red dot = outcome, title = query, subtitle = tool names,
+ * trailing = reuse count + chevron (tap opens detail dialog).
+ */
+@Composable
+private fun EpisodeRow(
+    episode: EpisodeMemoryStore.Episode,
+    onClick: () -> Unit,
+    showDivider: Boolean,
+) {
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onClick)
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(
+                        if (episode.ok) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.error
+                    ),
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    episode.q.ifBlank { "—" },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                Text(
+                    if (episode.tools.isEmpty()) "—"
+                    else episode.tools.joinToString(", ") { it.n },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (episode.v > 0) {
+                Text(
+                    stringResource(R.string.memory_experience_reuse, episode.v),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+            }
+            Icon(
+                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                modifier = Modifier.size(20.dp),
+            )
+        }
+        if (showDivider) {
+            HorizontalDivider(
+                modifier = Modifier.padding(start = 34.dp),
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+            )
+        }
     }
 }
 
