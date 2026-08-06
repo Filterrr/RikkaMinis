@@ -27,6 +27,7 @@ import com.openminis.app.data.ContextPolicy
 import com.openminis.app.data.EpisodeMemoryStore
 import com.openminis.app.data.ExperienceExchangeClassifier
 import com.openminis.app.data.ExperienceMemoryPrefs
+import com.openminis.app.data.Outcome
 import com.openminis.app.logging.AppLogger
 import com.openminis.app.data.FileMentionIndex
 import com.openminis.app.data.db.CompactMarkerEntity
@@ -5990,7 +5991,7 @@ class ChatViewModel(
         var experienceExchange: ExperienceExchangeContext? = null
         var effectiveSystemPrompt: String? = systemPrompt
 
-        fun beginExperienceExchange() {
+        suspend fun beginExperienceExchange() {
             val store = experienceMemoryStore
             if (store == null || !ExperienceMemoryPrefs.isEnabled(context)) {
                 experienceExchange = null
@@ -6034,7 +6035,7 @@ class ChatViewModel(
         // its generation and its start time; the tools/reply come from the
         // CURRENT loop state at settle time. INTERRUPTED/CANCELLED (no ground
         // truth) write nothing and give no feedback — never a +1.
-        fun finalizeExchange(outcome: EpisodeMemoryStore.Outcome) {
+        suspend fun finalizeExchange(outcome: Outcome) {
             val ctx = experienceExchange ?: return
             if (ctx.finalized) return
             ctx.finalized = true
@@ -6044,7 +6045,7 @@ class ChatViewModel(
                 .filter { it.kind == "tool_use" && it.toolName.isNotBlank() }
                 .map { EpisodeMemoryStore.ToolCall(it.toolName, it.toolStatus == ToolBlockStatus.SUCCESS) }
             val feedbackDelta = outcome.feedbackDelta
-            val exchange = if (outcome in EpisodeMemoryStore.Outcome.STORABLE) {
+            val exchange = if (outcome in Outcome.STORABLE) {
                 EpisodeMemoryStore.ExchangeRecord(
                     query = ctx.query,
                     tools = tools,
@@ -7217,7 +7218,7 @@ class ChatViewModel(
                     // exchange for the queued prompt that just entered
                     // agentHistory so its result is paired with ITS OWN
                     // injections, never the old ones.
-                    finalizeExchange(EpisodeMemoryStore.Outcome.INTERRUPTED)
+                    finalizeExchange(Outcome.INTERRUPTED)
                     assistantId = handled.newAssistantId
                     accumulatedText = ""
                     allToolBlocks.clear()
@@ -7274,13 +7275,13 @@ class ChatViewModel(
             // queue takeover): settle WITHOUT feedback — no ground truth, so never
             // +1/-1 on a partial run. Then rethrow so cancellation propagates as
             // before (e.g. the queue switch handler depends on it).
-            finalizeExchange(EpisodeMemoryStore.Outcome.CANCELLED)
+            finalizeExchange(Outcome.CANCELLED)
             throw e
         } catch (e: Exception) {
             // [ExpMem-context] Unexpected failure: settle as EXCEPTION (-1 feedback
             // on injected episodes + recorded as a failure episode), then rethrow
             // so the caller's error handling behaves exactly as before.
-            finalizeExchange(EpisodeMemoryStore.Outcome.EXCEPTION)
+            finalizeExchange(Outcome.EXCEPTION)
             throw e
         }
     }

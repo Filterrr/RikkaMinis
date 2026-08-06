@@ -59,6 +59,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import com.openminis.app.data.EpisodeMemoryStore
+import com.openminis.app.data.Outcome
 import com.openminis.app.data.repository.MemoryRepository
 import com.openminis.app.ui.components.DialogTextField
 import java.text.SimpleDateFormat
@@ -381,8 +382,8 @@ fun MemoryManagementScreen(
         val dateStr = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(ep.t))
         val outcomeStr = stringResource(
             when (ep.outcome) {
-                EpisodeMemoryStore.Outcome.SUCCESS -> R.string.memory_experience_outcome_ok
-                EpisodeMemoryStore.Outcome.PARTIAL -> R.string.memory_experience_outcome_partial
+                Outcome.SUCCESS -> R.string.memory_experience_outcome_ok
+                Outcome.PARTIAL -> R.string.memory_experience_outcome_partial
                 else -> R.string.memory_experience_outcome_fail
             }
         )
