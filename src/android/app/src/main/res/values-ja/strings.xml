@@ -594,6 +594,9 @@
     <string name="share_provider_json_import_failed">無効なプロバイダー設定ファイルです</string>
     <string name="provider_list_api_key">API Key</string>
     <string name="provider_list_disabled">無効</string>
+    <string name="provider_list_favorites">お気に入り</string>
+    <string name="provider_set_favorite">お気に入りに追加</string>
+    <string name="provider_unset_favorite">お気に入りから削除</string>
     <string name="provider_detail_export">エクスポート</string>
     <string name="provider_detail_label">ラベル</string>
     <string name="provider_detail_manual_bearer_token">手動Bearerトークン</string>

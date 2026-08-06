@@ -183,6 +183,13 @@ data class ProviderInstance(
     // so existing OpenAI instances are completely unaffected. Field name
     // matches iOS for cross-platform export/import interop.
     var azureMode: Boolean = false,
+    // [P0-pinned-providers] User "favorite" flag. Pinned instances are
+    // rendered in a dedicated "常用/Favorites" section at the very top of
+    // the provider list, separate from their providerType group, so the
+    // providers the user reaches for most are always one tap away. Multiple
+    // instances may be pinned at once. Boolean default false == old
+    // persisted JSON stays valid (coerceInputValues covers missing field).
+    var pinned: Boolean = false,
 ) {
     /** Returns the effective API base URL, applying v1 suffix if configured. */
     val effectiveBaseURL: String?

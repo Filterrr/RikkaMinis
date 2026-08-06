@@ -594,6 +594,9 @@
     <string name="share_provider_json_import_failed">잘못된 제공자 구성 파일입니다</string>
     <string name="provider_list_api_key">API Key</string>
     <string name="provider_list_disabled">비활성화됨</string>
+    <string name="provider_list_favorites">즐겨찾기</string>
+    <string name="provider_set_favorite">즐겨찾기로 설정</string>
+    <string name="provider_unset_favorite">즐겨찾기에서 제거</string>
     <string name="provider_detail_export">내보내기</string>
     <string name="provider_detail_label">라벨</string>
     <string name="provider_detail_manual_bearer_token">수동 Bearer Token</string>

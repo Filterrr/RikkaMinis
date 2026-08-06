@@ -22,7 +22,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.outlined.VpnKey
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -59,7 +64,8 @@ fun ProviderListScreen(
 ) {
     val config by providerRepository.config.collectAsState()
     val instances = config.instances
-    val groupedInstances = instances.groupBy { it.providerType }
+    val pinnedInstances = instances.filter { it.pinned }
+    val groupedInstances = instances.filter { !it.pinned }.groupBy { it.providerType }
     val context = LocalContext.current
 
     var showMenu by remember { mutableStateOf(false) }
@@ -143,6 +149,42 @@ fun ProviderListScreen(
                 )
             }
         } else {
+            // [P0-pinned-providers] Favorites section: pinned instances float
+            // to the very top, separate from their providerType group, so the
+            // providers the user reaches for most are always one tap away.
+            if (pinnedInstances.isNotEmpty()) {
+                SettingsSection(header = stringResource(R.string.provider_list_favorites)) {
+                    pinnedInstances.forEachIndexed { index, instance ->
+                        ProviderInstanceRow(
+                            instance = instance,
+                            modelCount = providerRepository.visibleEntries(instance.id).size,
+                            apiKey = providerRepository.loadApiKey(instance.id),
+                            isConfigured = if (instance.credentialType ==
+                                com.openminis.app.data.model.ProviderCredential.oauth) {
+                                val mgr = com.openminis.app.auth.OAuthManager.forInstance(context, instance)
+                                mgr?.isAuthenticated() == true
+                            } else {
+                                !providerRepository.loadApiKey(instance.id).isNullOrBlank()
+                            },
+                            pinned = instance.pinned,
+                            onTogglePinned = {
+                                providerRepository.setInstancePinned(instance.id, !instance.pinned)
+                            },
+                            onClick = { onProviderClick(instance.id) },
+                        )
+                        if (index < pinnedInstances.size - 1) {
+                            val divider = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(start = 38.dp, end = 14.dp)
+                                    .height(0.5.dp)
+                                    .background(divider),
+                            )
+                        }
+                    }
+                }
+            }
             groupedInstances.forEach { (providerType, typeInstances) ->
                 SettingsSection(header = providerType.displayName) {
                     typeInstances.forEachIndexed { index, instance ->
@@ -166,6 +208,10 @@ fun ProviderListScreen(
                             modelCount = modelCount,
                             apiKey = apiKey,
                             isConfigured = isConfigured,
+                            pinned = instance.pinned,
+                            onTogglePinned = {
+                                providerRepository.setInstancePinned(instance.id, !instance.pinned)
+                            },
                             onClick = { onProviderClick(instance.id) },
                         )
                         if (index < typeInstances.size - 1) {
@@ -242,9 +288,12 @@ private fun ProviderInstanceRow(
     modelCount: Int,
     apiKey: String?,
     isConfigured: Boolean,
+    pinned: Boolean,
+    onTogglePinned: () -> Unit,
     onClick: () -> Unit,
 ) {
     val isActive = isConfigured && instance.isEnabled
+    var menuExpanded by remember { mutableStateOf(false) }
 
     Row(
         modifier = Modifier
@@ -317,6 +366,46 @@ private fun ProviderInstanceRow(
                     .padding(horizontal = 6.dp, vertical = 2.dp),
             )
             Spacer(Modifier.width(8.dp))
+        }
+
+        // [P0-pinned-providers] Row overflow menu: pin/unpin this instance.
+        Box {
+            IconButton(
+                onClick = { menuExpanded = true },
+                modifier = Modifier.size(28.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.MoreVert,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+            DropdownMenu(
+                expanded = menuExpanded,
+                onDismissRequest = { menuExpanded = false },
+            ) {
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text = stringResource(
+                                if (pinned) R.string.provider_unset_favorite
+                                else R.string.provider_set_favorite,
+                            ),
+                        )
+                    },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = if (pinned) Icons.Filled.Star else Icons.Filled.StarBorder,
+                            contentDescription = null,
+                        )
+                    },
+                    onClick = {
+                        menuExpanded = false
+                        onTogglePinned()
+                    },
+                )
+            }
         }
 
         Icon(
