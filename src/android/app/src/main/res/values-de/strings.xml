@@ -872,6 +872,7 @@
     <string name="model_picker_search_clear">Löschen</string>
     <string name="model_picker_groups_section">Modellgruppen</string>
     <string name="model_picker_groups_footer">Sitzung an eine Gruppe binden, um automatischen Fallback oder Lastverteilung zu nutzen.</string>
+    <string name="model_picker_all_providers">Alle Anbieter</string>
     <string name="model_picker_default_badge">Standard</string>
     <string name="model_picker_active_badge">Aktiv</string>
     <string name="model_picker_no_linked_models">Keine Modelle mit dieser Gruppe verknüpft.</string>

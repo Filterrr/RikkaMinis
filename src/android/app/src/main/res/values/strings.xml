@@ -1284,6 +1284,7 @@
     <string name="model_picker_groups_section">Model Groups</string>
     <string name="model_picker_groups_edit">Edit</string>
     <string name="model_picker_groups_footer">Bind this session to a group for automatic fallback or load balancing.</string>
+    <string name="model_picker_all_providers">All Providers</string>
     <string name="model_picker_default_badge">Default</string>
     <string name="model_picker_active_badge">Active</string>
     <string name="model_picker_no_linked_models">No models linked to this group.</string>
