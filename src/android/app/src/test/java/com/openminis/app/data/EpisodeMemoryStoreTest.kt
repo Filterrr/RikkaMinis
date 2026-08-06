@@ -4,6 +4,9 @@ import com.openminis.app.data.EpisodeMemoryStore.ExchangeRecord
 import com.openminis.app.data.Outcome
 import com.openminis.app.data.EpisodeMemoryStore.Retrieved
 import com.openminis.app.data.EpisodeMemoryStore.ToolCall
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -356,5 +359,161 @@ class EpisodeMemoryStoreTest {
         // Failure-signal query: failures may surface too.
         val failing = store.retrieve("模型余额 失败").hits
         assertTrue("failure query must surface the failure", failing.any { it.episode.outcome.isFailureClass })
+    }
+
+    // ── [ExpMem-concurrency] 并发写 / 竞态 / 迁移幂等 / IO 失败 ──
+
+    @Test
+    fun `100 concurrent records all persist as valid jsonl with unique ids`() = runBlocking {
+        val f = tmpFile()
+        val store = EpisodeMemoryStore(f, maxEntries = 1000)
+        coroutineScope {
+            repeat(100) { i ->
+                launch(Dispatchers.IO) {
+                    val gen = store.currentGeneration()
+                    val r = store.completeExchange(
+                        expectedGeneration = gen,
+                        retrievedIds = emptyList(),
+                        feedbackDelta = null,
+                        exchange = rec("并发查询$i", reply = "结果$i"),
+                    )
+                    assertEquals(EpisodeMemoryStore.IoResult.Success, r)
+                }
+            }
+        }
+        // 无丢行：100 行全部落盘
+        val lines = f.readLines()
+        assertEquals("all 100 concurrent records must persist", 100, lines.size)
+        // 全部是合法 JSONL 且 id 唯一
+        val parsed = lines.mapNotNull { EpisodeMemoryStore.parseLine(it) }
+        assertEquals(100, parsed.size)
+        assertEquals(100, parsed.map { it.id }.distinct().size)
+    }
+
+    @Test
+    fun `feedback by id after rollover updates only A's episodes`() = runBlocking {
+        val f = tmpFile()
+        val store = EpisodeMemoryStore(f, maxEntries = 10)
+        // 填 8 条，检索 q2 → 命中 ep2（稳定 id）
+        for (i in 0 until 8) store.writeTest(rec("q$i", reply = "r$i"))
+        val retrieval = store.retrieve("q2")
+        assertEquals(1, retrieval.hits.size)
+        val targetId = retrieval.hits[0].episodeId
+        // 再写 3 条 → 13 行 → rollover 丢最旧 3 行（q0/q1/q2 的旧行被滚掉?）
+        // maxEntries=10：写满 10 后第 11 条触发 drop(excess)。13 行 → 丢 3 行。
+        for (i in 8 until 11) store.writeTest(rec("q$i", reply = "r$i"))
+        // 若 ep2 还在（id 命中）→ 只给它 +1；若被滚掉 → 无任何条目被改。
+        val result = store.completeExchange(
+            expectedGeneration = retrieval.generation,
+            retrievedIds = listOf(targetId),
+            feedbackDelta = 1,
+            exchange = null,
+        )
+        assertEquals(EpisodeMemoryStore.IoResult.Success, result)
+        val snap = store.snapshot()
+        val target = snap.firstOrNull { it.id == targetId }
+        val others = snap.filterNot { it.id == targetId }
+        if (target != null) {
+            assertEquals("rollover must not shift feedback to another episode", 1, target.v)
+        }
+        assertTrue("no unrelated episode may receive feedback", others.all { it.v == 0 })
+    }
+
+    @Test
+    fun `exchange started before clear is rejected as stale and file stays empty`() = runBlocking {
+        val f = tmpFile()
+        val store = EpisodeMemoryStore(f)
+        store.writeTest(rec("查询", reply = "r1"))
+        val retrieval = store.retrieve("查询") // generation 0 时检索
+        assertEquals(EpisodeMemoryStore.IoResult.Success, store.clear()) // generation 1
+        val result = store.completeExchange(
+            expectedGeneration = retrieval.generation, // 0 ≠ 1
+            retrievedIds = retrieval.hits.map { it.episodeId },
+            feedbackDelta = 1,
+            exchange = rec("查询", reply = "r2"),
+        )
+        assertEquals(EpisodeMemoryStore.IoResult.StaleGeneration, result)
+        assertEquals("cleared file must stay empty", 0, store.size())
+        assertFalse("no resurrection on disk", f.exists())
+    }
+
+    @Test
+    fun `legacy migration is idempotent and maps ok to outcome`() = runBlocking {
+        val f = tmpFile()
+        // 旧格式：无 id、无 outcome，只有 ok 布尔
+        f.writeText(
+            "{\"t\":1,\"q\":\"旧查询\",\"tools\":[],\"ok\":true,\"dur\":100,\"reply\":\"\",\"sid\":\"s\",\"v\":0}\n" +
+                "{\"t\":2,\"q\":\"旧失败\",\"tools\":[],\"ok\":false,\"dur\":200,\"reply\":\"\",\"sid\":\"s\",\"v\":0}\n"
+        )
+        val store = EpisodeMemoryStore(f)
+        val first = store.snapshot()
+        assertEquals(2, first.size)
+        assertTrue("migrated rows must carry ids", first.all { it.id.isNotBlank() })
+        assertEquals(Outcome.SUCCESS, first[0].outcome)
+        assertEquals(Outcome.FAILURE, first[1].outcome)
+        val ids1 = first.map { it.id }
+        // 第二次访问：不得重复迁移（id 稳定，文件不膨胀）
+        val second = store.snapshot()
+        assertEquals(ids1, second.map { it.id })
+        assertEquals("idempotent migration must not rewrite", 2, f.readLines().size)
+    }
+
+    @Test
+    fun `write failure returns IoFailure and never corrupts the original file`() = runBlocking {
+        // 构造"父路径是普通文件"的场景：写临时文件必失败，原文件不受影响。
+        val base = java.io.File(java.io.File.createTempFile("epmem-io", "").absolutePath)
+        base.delete()
+        base.mkdirs()
+        val f = java.io.File(base, "episodes.jsonl")
+        try {
+            val store = EpisodeMemoryStore(f)
+            val first = store.completeExchange(
+                expectedGeneration = 0,
+                retrievedIds = emptyList(),
+                feedbackDelta = null,
+                exchange = rec("ok", reply = "r"),
+            )
+            assertEquals(EpisodeMemoryStore.IoResult.Success, first)
+            val before = f.readText()
+            // 破坏：目录 → 普通文件占位
+            val backup = java.io.File(base.absolutePath + ".bak")
+            assertTrue(base.renameTo(backup))
+            base.writeText("not a directory")
+            val broken = EpisodeMemoryStore(f)
+            val result = broken.completeExchange(
+                expectedGeneration = 0,
+                retrievedIds = emptyList(),
+                feedbackDelta = null,
+                exchange = rec("x", reply = "y"),
+            )
+            assertEquals(EpisodeMemoryStore.IoResult.IoFailure, result)
+            // 恢复并验证原文件完好
+            base.delete()
+            assertTrue(backup.renameTo(base))
+            assertEquals("original file must be untouched", before, f.readText())
+        } finally {
+            base.delete()
+            java.io.File(base.absolutePath + ".bak").delete()
+        }
+    }
+
+    @Test
+    fun `read failure returns CorruptData and never overwrites with empty`() = runBlocking {
+        // f 是一个目录：读必然失败 → CorruptData（而不是伪装成空文件后覆盖）
+        val dir = java.io.File(java.io.File.createTempFile("epmemdir", "").absolutePath + ".d")
+        dir.mkdirs()
+        try {
+            val store = EpisodeMemoryStore(dir)
+            val result = store.completeExchange(
+                expectedGeneration = 0,
+                retrievedIds = emptyList(),
+                feedbackDelta = null,
+                exchange = rec("x", reply = "y"),
+            )
+            assertEquals(EpisodeMemoryStore.IoResult.CorruptData, result)
+            assertTrue("unreadable path must not be replaced by a file", dir.isDirectory)
+        } finally {
+            dir.delete()
+        }
     }
 }
