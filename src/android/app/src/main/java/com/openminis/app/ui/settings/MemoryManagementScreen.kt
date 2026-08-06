@@ -29,6 +29,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -44,6 +45,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -62,6 +64,7 @@ import com.openminis.app.ui.components.DialogTextField
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.launch
 
 /**
  * Settings-level memory file management.
@@ -74,6 +77,7 @@ import java.util.Locale
 @Composable
 fun MemoryManagementScreen(
     memoryRepository: MemoryRepository,
+    experienceMemoryStore: EpisodeMemoryStore,
     onBack: () -> Unit,
     onFileClick: (fileName: String, isGlobal: Boolean) -> Unit = { _, _ -> },
 ) {
@@ -85,20 +89,25 @@ fun MemoryManagementScreen(
     // file and injects up to 3 similar past episodes before each reply.
     // Zero extra model calls; retrieval is keyword scoring; the verification
     // counter (+1 on success / -1 on failure) ranks proven episodes higher.
+    // The store is the app-wide singleton (MinisApp.experienceMemoryStore),
+    // injected via navigation — this screen must NOT create its own instance,
+    // or it would read/write the same JSONL without the singleton's Mutex.
     // Declared here (before SettingsScaffold) so both the section and the
     // clear-confirm dialog below can reference them.
     var expEnabled by remember {
         mutableStateOf(com.openminis.app.data.ExperienceMemoryPrefs.isEnabled(context))
     }
-    val expStore = remember(context) {
-        com.openminis.app.data.EpisodeMemoryStore(
-            java.io.File(context.filesDir, "minis-global/memory/episodes.jsonl")
-        )
-    }
-    var expSize by remember { mutableStateOf(expStore.size()) }
+    // [ExpMem-threads] All store IO is suspend + serialized by the store's
+    // internal Mutex; this screen only observes via a local scope. size /
+    // snapshot / clear must never run on the main thread.
+    val expScope = rememberCoroutineScope()
+    var expSize by remember { mutableStateOf(0) }
+    var expLoading by remember { mutableStateOf(true) }
+    var expError by remember { mutableStateOf<String?>(null) }
     var expClearConfirm by remember { mutableStateOf(false) }
     // [ExpMem-viewer] Inline episode viewer: "View recorded episodes" row
-    // expands in place to a compact list; tapping a row opens a detail dialog.
+    // expands in place to a compact list (capped at 50 rows for perf);
+    // tapping a row opens a detail dialog.
     var expExpanded by remember { mutableStateOf(false) }
     var expEpisodes by remember { mutableStateOf<List<EpisodeMemoryStore.Episode>>(emptyList()) }
     var expDetail by remember { mutableStateOf<EpisodeMemoryStore.Episode?>(null) }
@@ -114,6 +123,16 @@ fun MemoryManagementScreen(
 
     LaunchedEffect(Unit) {
         files = memoryRepository.listAllFiles()
+        // [ExpMem-threads] size() is suspend (Mutex-serialized) — load once
+        // on entry; failures surface as an error instead of a fake 0.
+        expLoading = true
+        expError = null
+        try {
+            expSize = experienceMemoryStore.size()
+        } catch (e: Exception) {
+            expError = context.getString(R.string.memory_experience_clear_failed)
+        }
+        expLoading = false
     }
 
     // top-level page: rely on system back gesture / bottom nav (no back arrow)
@@ -163,7 +182,16 @@ fun MemoryManagementScreen(
                     if (expExpanded) {
                         // [ExpMem-viewer] reload on every expand so episodes
                         // recorded while the list was collapsed show up.
-                        expEpisodes = expStore.snapshot().reversed()
+                        expScope.launch {
+                            expLoading = true
+                            expError = null
+                            try {
+                                expEpisodes = experienceMemoryStore.snapshot().reversed()
+                            } catch (e: Exception) {
+                                expError = context.getString(R.string.memory_experience_clear_failed)
+                            }
+                            expLoading = false
+                        }
                     }
                 },
                 showDivider = true,
@@ -177,20 +205,56 @@ fun MemoryManagementScreen(
                 },
             )
             if (expExpanded) {
-                if (expEpisodes.isEmpty()) {
-                    Text(
-                        stringResource(R.string.memory_experience_view_empty),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                    )
-                } else {
-                    expEpisodes.forEachIndexed { index, episode ->
-                        EpisodeRow(
-                            episode = episode,
-                            onClick = { expDetail = episode },
-                            showDivider = index < expEpisodes.size - 1,
+                when {
+                    expLoading -> {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 12.dp),
+                            horizontalArrangement = Arrangement.Center,
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                            )
+                        }
+                    }
+                    expError != null -> {
+                        Text(
+                            expError!!,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                         )
+                    }
+                    expEpisodes.isEmpty() -> {
+                        Text(
+                            stringResource(R.string.memory_experience_view_empty),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                        )
+                    }
+                    else -> {
+                        // [ExpMem-viewer] Cap the inline list at 50 rows: a
+                        // 1000-entry file must not be fully composed inside
+                        // the outer scrollable Column (jank + O(n) recompose).
+                        val visible = expEpisodes.take(50)
+                        visible.forEachIndexed { index, episode ->
+                            EpisodeRow(
+                                episode = episode,
+                                onClick = { expDetail = episode },
+                                showDivider = index < visible.size - 1,
+                            )
+                        }
+                        if (expEpisodes.size > 50) {
+                            Text(
+                                stringResource(R.string.memory_experience_view_recent, 50, expEpisodes.size),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            )
+                        }
                     }
                 }
             }
@@ -283,10 +347,19 @@ fun MemoryManagementScreen(
             text = { Text(stringResource(R.string.memory_experience_clear_confirm_text)) },
             confirmButton = {
                 MinisTextButton(onClick = {
-                    expStore.clear()
-                    expSize = 0
-                    expEpisodes = emptyList()
-                    expClearConfirm = false
+                    expScope.launch {
+                        val result = experienceMemoryStore.clear()
+                        expClearConfirm = false
+                        // [ExpMem-threads] Only a real Success clears the UI;
+                        // a failed delete must NOT pretend the store is empty.
+                        if (result is EpisodeMemoryStore.IoResult.Success) {
+                            expSize = 0
+                            expEpisodes = emptyList()
+                            expError = null
+                        } else {
+                            expError = context.getString(R.string.memory_experience_clear_failed)
+                        }
+                    }
                 }) {
                     Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error)
                 }
@@ -307,7 +380,11 @@ fun MemoryManagementScreen(
     expDetail?.let { ep ->
         val dateStr = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(ep.t))
         val outcomeStr = stringResource(
-            if (ep.ok) R.string.memory_experience_outcome_ok else R.string.memory_experience_outcome_fail
+            when (ep.outcome) {
+                EpisodeMemoryStore.Outcome.SUCCESS -> R.string.memory_experience_outcome_ok
+                EpisodeMemoryStore.Outcome.PARTIAL -> R.string.memory_experience_outcome_partial
+                else -> R.string.memory_experience_outcome_fail
+            }
         )
         val toolsText = if (ep.tools.isEmpty()) {
             stringResource(R.string.memory_experience_detail_no_tools)
@@ -480,7 +557,7 @@ private fun EpisodeRow(
                     .size(8.dp)
                     .clip(CircleShape)
                     .background(
-                        if (episode.ok) MaterialTheme.colorScheme.primary
+                        if (episode.outcome.isSuccessClass) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.error
                     ),
             )

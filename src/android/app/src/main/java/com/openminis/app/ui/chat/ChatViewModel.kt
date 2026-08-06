@@ -107,6 +107,38 @@ class ChatViewModel(
         private val PREFLIGHT_NON_BLOCKING_FIELDS = setOf("tool_title")
 
         /**
+         * [ExpMem-outcome] Classify a finished runAgentLoop exchange into an
+         * [EpisodeMemoryStore.Outcome]. Pure function (takes only the post-loop
+         * state, no ChatViewModel fields) so unit tests can pin the semantics.
+         *
+         * Commit-1 scope: everything derivable from the state after the loop
+         * body exits normally. EXCEPTION / CANCELLED / INTERRUPTED are handled
+         * by the exchange-context finalize path (Hook B inside try/finally) and
+         * must NOT get a +1 here.
+         */
+        internal fun classifyExchangeOutcome(
+            loopExitedNormally: Boolean,
+            accumulatedText: String,
+            allToolBlocks: List<AssistantBlock>,
+        ): EpisodeMemoryStore.Outcome {
+            if (!loopExitedNormally) return EpisodeMemoryStore.Outcome.TURN_LIMIT
+            // Mirrors the loop's own hasVisibleContent: a turn that produced
+            // neither text nor a tool call (e.g. empty server response after
+            // the empty-tool reminder retry) is an EMPTY_RESPONSE, not success.
+            val hasVisibleContent = accumulatedText.isNotBlank() ||
+                allToolBlocks.any { it.kind == "tool_use" || (it.kind == "text" && it.content.isNotBlank()) }
+            if (!hasVisibleContent) return EpisodeMemoryStore.Outcome.EMPTY_RESPONSE
+            // PARTIAL = a reply was produced but at least one tool FAILED or
+            // timed out. These get NO feedback (no ground truth) — never +1.
+            val hasToolFailure = allToolBlocks.any {
+                it.kind == "tool_use" &&
+                    (it.toolStatus == ToolBlockStatus.FAILED || it.toolStatus == ToolBlockStatus.TIMEOUT)
+            }
+            return if (hasToolFailure) EpisodeMemoryStore.Outcome.PARTIAL
+            else EpisodeMemoryStore.Outcome.SUCCESS
+        }
+
+        /**
          * (tool name → field names) where an EMPTY STRING is a semantically
          * valid value and must not be treated as "missing".
          *
@@ -5985,16 +6017,23 @@ class ChatViewModel(
         // surface when the query signals a failure investigation (see EpisodeMemoryStore).
         var injectedMemories: List<EpisodeMemoryStore.Retrieved> = emptyList()
         var effectiveSystemPrompt: String? = systemPrompt
+        var memoryGeneration = 0
         val loopStartMs = System.currentTimeMillis()
         if (experienceMemoryStore != null && ExperienceMemoryPrefs.isEnabled(context)) {
             val query = agentHistory.lastOrNull { it.role == LLMMessage.Role.USER && it.content.isNotBlank() }?.content
             if (query != null) {
-                val retrieved = experienceMemoryStore.retrieve(query)
-                if (retrieved.isNotEmpty()) {
-                    injectedMemories = retrieved
-                    val block = EpisodeMemoryStore.buildInjectionBlock(retrieved)
+                // [ExpMem-stable-ids] retrieve() returns stable episode ids plus the
+                // store generation at retrieval time — Hook B passes that generation
+                // back so a clear() racing in between invalidates the whole exchange
+                // instead of resurrecting cleared entries. Feedback is keyed by id,
+                // never by line number (a record/rollover must not shift feedback).
+                val retrieval = experienceMemoryStore.retrieve(query)
+                if (retrieval.hits.isNotEmpty()) {
+                    injectedMemories = retrieval.hits
+                    memoryGeneration = retrieval.generation
+                    val block = EpisodeMemoryStore.buildInjectionBlock(retrieval.hits)
                     effectiveSystemPrompt = if (systemPrompt.isNullOrBlank()) block else "$systemPrompt\n\n$block"
-                    AppLogger.info(TAG_STREAM, "experience-memory: injected ${retrieved.size} episode(s), ${block.length} chars")
+                    AppLogger.info(TAG_STREAM, "experience-memory: injected ${retrieval.hits.size} episode(s), ${block.length} chars")
                 }
             }
         }
@@ -7168,7 +7207,10 @@ class ChatViewModel(
 
         // [ExpMem] Hook B — record the finished exchange into the episodic memory store
         // (success and failure alike; failures only resurface when the user asks why).
-        // Feedback loop: episodes that were injected above get +1 on success / -1 on failure.
+        // Feedback + record are ONE atomic store transaction keyed by stable episode
+        // ids (never line numbers), so a maxEntries rollover can never bump the wrong
+        // episode's v counter. The generation captured in Hook A guards against a
+        // clear() that raced in mid-task: StaleGeneration discards the whole batch.
         if (experienceMemoryStore != null && ExperienceMemoryPrefs.isEnabled(context)) {
             val query = agentHistory.lastOrNull { it.role == LLMMessage.Role.USER && it.content.isNotBlank() }?.content
             if (query != null) {
@@ -7176,31 +7218,23 @@ class ChatViewModel(
                     .filter { it.kind == "tool_use" && it.toolName.isNotBlank() }
                     .map { EpisodeMemoryStore.ToolCall(it.toolName, it.toolStatus == ToolBlockStatus.SUCCESS) }
                 try {
-                    // Feedback BEFORE record: the line indices captured in Hook A's
-                    // retrieve() are only valid while the file keeps the same layout.
-                    // record() may trigger the maxEntries rollover, which drops head
-                    // lines and shifts every line number — applying feedback after
-                    // record() would bump the WRONG episode's v counter (TOCTOU).
-                    // (The standalone prototype avoids this with stable ids; here we
-                    // keep the index contract and just reorder the two calls.)
-                    if (injectedMemories.isNotEmpty()) {
-                        experienceMemoryStore.applyFeedback(
-                            injectedMemories.map { it.index }, loopExitedNormally
-                        )
-                    }
-                    experienceMemoryStore.record(
-                        EpisodeMemoryStore.ExchangeRecord(
+                    val outcome = classifyExchangeOutcome(loopExitedNormally, accumulatedText, allToolBlocks)
+                    val result = experienceMemoryStore.completeExchange(
+                        expectedGeneration = memoryGeneration,
+                        retrievedIds = injectedMemories.map { it.episodeId },
+                        feedbackDelta = outcome.feedbackDelta,
+                        exchange = EpisodeMemoryStore.ExchangeRecord(
                             query = query,
                             tools = tools,
-                            ok = loopExitedNormally,
+                            outcome = outcome,
                             durationMs = System.currentTimeMillis() - loopStartMs,
                             reply = accumulatedText,
                             sessionId = sessionId,
-                        )
+                        ),
                     )
                     AppLogger.info(
                         TAG_STREAM,
-                        "experience-memory: recorded exchange (ok=$loopExitedNormally, tools=${tools.size})"
+                        "experience-memory: exchange finalized (outcome=$outcome, result=$result, tools=${tools.size})"
                     )
                 } catch (e: Exception) {
                     AppLogger.warning(TAG_STREAM, "experience-memory: record failed: ${e.message}")

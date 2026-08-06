@@ -463,10 +463,13 @@
     <string name="memory_experience_entries">%d episodes recorded</string>
     <string name="memory_experience_clear_confirm_title">Clear experience memory?</string>
     <string name="memory_experience_clear_confirm_text">This permanently deletes the local episodes file (episodes.jsonl). The agent will forget past exchanges.</string>
+    <string name="memory_experience_clear_failed">Не удалось очистить память опыта</string>
     <string name="memory_experience_view">View recorded episodes</string>
     <string name="memory_experience_view_empty">No episodes recorded yet</string>
+    <string name="memory_experience_view_recent">Показано %1$d из %2$d записей</string>
     <string name="memory_experience_reuse">reused %d×</string>
     <string name="memory_experience_outcome_ok">Success</string>
+    <string name="memory_experience_outcome_partial">Частично</string>
     <string name="memory_experience_outcome_fail">Failed</string>
     <string name="memory_experience_detail_query">Query</string>
     <string name="memory_experience_detail_reply">Reply</string>

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Backup rules (Android 11 and below / legacy full-backup).
+  Excludes the episodic memory file: it records user query/reply plaintext
+  and the user may expect it to be local-only. See data_extraction_rules.xml
+  for Android 12+ (API 31+) cloud-backup / device-transfer.
+-->
+<full-backup-content>
+    <exclude domain="file" path="minis-global/memory/episodes.jsonl" />
+</full-backup-content>
