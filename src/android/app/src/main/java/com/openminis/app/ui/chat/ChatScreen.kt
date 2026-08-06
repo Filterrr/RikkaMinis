@@ -1991,10 +1991,6 @@ fun ChatScreen(
     // Reuse the screen's existing coroutineScope (declared above) to drive
     // open/close animations.
     val historyDrawerScope = coroutineScope
-    // Close the drawer with system back before it falls through to onBack.
-    androidx.activity.compose.BackHandler(enabled = historyDrawerState.isOpen) {
-        historyDrawerScope.launch { historyDrawerState.close() }
-    }
     // [composer-draft-v1/ime] Dismiss the IME the moment the history drawer
     // starts opening (targetValue, not isOpen) so the sheet is never covered
     // by the keyboard: the drawer sheet sits OUTSIDE the chat's imePadding(),
@@ -5588,6 +5584,14 @@ fun ChatScreen(
         )
         }
     }
+    }
+    // Close the history drawer with system back BEFORE navigation pops.
+    // Registered AFTER ModalNavigationDrawer so this BackHandler takes
+    // priority over the drawer's own predictive-back handler, which can
+    // otherwise let the edge-back gesture fall through to popBackStack and
+    // land on SESSION_LIST instead of just closing the drawer.
+    androidx.activity.compose.BackHandler(enabled = historyDrawerState.isOpen) {
+        historyDrawerScope.launch { historyDrawerState.close() }
     }
 
     // Browser bottom sheet
