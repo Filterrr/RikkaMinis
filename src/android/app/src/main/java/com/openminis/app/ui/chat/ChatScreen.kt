@@ -601,8 +601,7 @@ fun ChatScreen(
     var lastSendTimeMs by remember { mutableStateOf(0L) }
     // Commit the composer input-mode pref on send. Voice input was removed, so
     // every composition is now "text"; the old voiceUsedSinceClear tracker and
-    // the VoiceCorrection vocabulary miner (which only fed voice STT correction)
-    // went with it.
+    // the VoiceCorrection vocabulary miner went with it.
     val noteSendForInputModePref: () -> Unit = {
         ComposerInputModePrefs.save(context, voice = false)
     }
@@ -3341,17 +3340,7 @@ fun ChatScreen(
                 // scrolling back in re-registers the shard and the highlight
                 // redraws automatically.
                 val selectionController = remember { SelectionController() }
-                // [T-android-selection-readaloud] Player backing the selection
-                // toolbar's "Read Aloud". Screen-scoped and independent of the
-                // voice panel's own player (that one only exists while voice
-                // mode is active), so reading a selection works any time. Built
-                // lazily on first use — an unused ChatScreen never binds a TTS
-                // engine — and shut down with the screen.
-                val selectionReader = remember { LazyReadAloudPlayer(context) }
-                DisposableEffect(selectionReader) {
-                    onDispose { selectionReader.shutdown() }
-                }
-                val markdownToolbar = remember(context, messageBounds, viewModel, inputFocusRequester, keyboardController, selectionController, selectionReader) {
+                val markdownToolbar = remember(context, messageBounds, viewModel, inputFocusRequester, keyboardController, selectionController) {
                     MinisMarkdownTextToolbar(
                         context = context,
                         registry = messageBounds,
@@ -3365,7 +3354,6 @@ fun ChatScreen(
                             }
                             keyboardController?.show()
                         },
-                        onReadAloud = { snippet -> selectionReader.speak(snippet) },
                         selectionController = selectionController,
                     )
                 }
@@ -3991,10 +3979,6 @@ fun ChatScreen(
                             try { inputFocusRequester.requestFocus() } catch (_: IllegalStateException) {}
                             keyboardController?.show()
                         },
-                        // [T-android-selection-readaloud] Speak the selection
-                        // through the same screen-scoped lazy player the
-                        // Compose-SelectionContainer toolbar uses.
-                        onReadAloud = { snippet -> selectionReader.speak(snippet) },
                     ),
                 )
                 // iOS-style selection handle dots, one at each endpoint.
@@ -5031,21 +5015,6 @@ fun ChatScreen(
                                 if (now - lastSendTimeMs < 300L && tfv.text.isNotEmpty()) {
                                     return@BasicTextField
                                 }
-                                // [T-android-voice-correction] Capability #3:
-                                // learn from select-and-replace edits. When the
-                                // PREVIOUS value had a non-empty selection and
-                                // this change swapped that span for different
-                                // text, the user deliberately replaced something
-                                // they had already written — the same shape as
-                                // fixing a transcript, so the recorder applies
-                                // the identical phonetic admission test and
-                                // discards anything that reads as a rewrite.
-                                //
-                                // Silent background capture: consent-gated,
-                                // fire-and-forget, no UI. Deliberately NOT
-                                // firing on ordinary typing, which is
-                                // append-only and carries no correction signal.
-                                captureSelectionReplacement(context, inputFieldValue, tfv)
                                 // [T-android-enter-to-send-multiline] Root cause:
                                 // the composer is a multi-line BasicTextField
                                 // (maxLines=6 ⇒ EditorInfo carries

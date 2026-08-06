@@ -915,7 +915,6 @@
     <string name="notif_task_failed_body">任务执行失败。点击打开聊天。</string>
     <!-- T-selection-add-to-input — 长按选择菜单"添加到输入框"动作 -->
     <string name="selection_add_to_chat_input">添加到输入框</string>
-    <string name="selection_read_aloud">朗读</string>
     <!-- T-minis-textkit 选择菜单按钮 -->
     <string name="selection_copy">复制</string>
     <string name="selection_copy_markdown">复制 Markdown</string>
@@ -1359,19 +1358,6 @@
     <string name="voice_link_to_host">%1$s 的链接</string>
     <string name="voice_bare_link">链接</string>
     <!-- [T-android-voice-correction] Consent + correction UI -->
-    <string name="voice_correction_consent_title">改进语音纠错？</string>
-    <string name="voice_correction_consent_body">Minis 可以把你对转录文本的修改（原文 → 修正）以及已采纳的 AI 纠错保存到本机数据库，让之后的语音纠错更准确。不会上传任何内容。你可以随时在设置中更改或清除这些数据。</string>
-    <string name="voice_correction_consent_enable">启用</string>
-    <string name="voice_correction_consent_not_now">暂不</string>
-    <string name="voice_correction_button_a11y">用 AI 修正转录文本</string>
-    <string name="voice_correction_none_needed">无需修正</string>
-    <string name="voice_correction_failed">纠错失败，已保留原文</string>
-    <string name="voice_correction_section">语音纠错学习</string>
-    <string name="voice_correction_toggle">收集语音纠错数据</string>
-    <string name="voice_correction_footer">启用后，你对语音转录的手动修改（原文 → 修正）、已采纳的 AI 纠错以及常用输入词汇会保存到本机数据库，让之后的语音纠错更准确。不会上传任何内容。默认关闭；已有数据会保留到你清除为止。</string>
-    <string name="voice_correction_clear_title">清除所有已收集的语音纠错数据？</string>
-    <string name="voice_correction_clear">全部清除</string>
-    <string name="voice_correction_cleared">语音纠错数据已清除</string>
     <string name="voice_provider_system">系统</string>
     <string name="add_provider_subtitle_kimi">Kimi Coding Plan — 使用 Kimi 账号登录</string>
     <string name="kimi_login_title">使用 Kimi Code 登录</string>

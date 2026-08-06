@@ -21,7 +21,7 @@ class TextToSpeechManager : TextToSpeech.OnInitListener {
         private val HAN_REGEX = Regex("[\\u4e00-\\u9fff\\u3400-\\u4dbf]")
         // [T-android-tts-intranumber-guard] The sentence-boundary set moved to
         // SpeechSentenceSplitter.SENTENCE_ENDERS — a single source of truth
-        // shared with ReadAloudPlayer, so the two TTS paths can't drift.
+        // shared by every TTS path, so they can't drift.
     }
 
     private var tts: TextToSpeech? = null
@@ -153,8 +153,9 @@ class TextToSpeechManager : TextToSpeech.OnInitListener {
 
     /**
      * [T-android-tts-intranumber-guard] Delegates to the shared
-     * [SpeechSentenceSplitter] so this path and [ReadAloudPlayer] apply the same
-     * terminator set AND the same intra-number guards ("3.14" is never cut into
+     * [SpeechSentenceSplitter] so this path and the read-aloud UI path apply the
+     * same terminator set AND the same intra-number guards ("3.14" is never cut
+     * into "3." / "14").
      * "3." + "14").
      */
     private fun extractCompleteSentences(buffer: StringBuilder): List<String> =

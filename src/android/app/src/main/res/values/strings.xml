@@ -1064,7 +1064,6 @@
 
     <!-- T-selection-add-to-input — long-press text selection menu action -->
     <string name="selection_add_to_chat_input">Add to Chat Input</string>
-    <string name="selection_read_aloud">Read Aloud</string>
     <!-- T-minis-textkit selection menu actions (Copy / Copy Markdown / Copy Rich Text) -->
     <string name="selection_copy">Copy</string>
     <string name="selection_copy_markdown">Copy Markdown</string>
@@ -1471,19 +1470,6 @@
     <string name="voice_link_to_host">link to %1$s</string>
     <string name="voice_bare_link">link</string>
     <!-- [T-android-voice-correction] Consent + correction UI -->
-    <string name="voice_correction_consent_title">Improve voice corrections?</string>
-    <string name="voice_correction_consent_body">Minis can store your transcript fixes (original → corrected pairs) and accepted AI corrections in a local on-device database to make future voice corrections smarter. Nothing is uploaded. You can change this or clear the data anytime in Settings.</string>
-    <string name="voice_correction_consent_enable">Enable</string>
-    <string name="voice_correction_consent_not_now">Not Now</string>
-    <string name="voice_correction_button_a11y">Correct transcript with AI</string>
-    <string name="voice_correction_none_needed">No corrections needed</string>
-    <string name="voice_correction_failed">Correction failed, original kept</string>
-    <string name="voice_correction_section">Voice Correction Learning</string>
-    <string name="voice_correction_toggle">Collect voice correction data</string>
-    <string name="voice_correction_footer">When enabled, your manual fixes to voice transcripts (original → corrected pairs), accepted AI corrections, and frequently typed terms are stored in a local on-device database to make future voice corrections smarter. Nothing is uploaded. Default is off; existing data stays until you clear it.</string>
-    <string name="voice_correction_clear_title">Clear all collected voice correction data?</string>
-    <string name="voice_correction_clear">Clear All</string>
-    <string name="voice_correction_cleared">Voice correction data cleared</string>
     <string name="voice_provider_system">System</string>
     <string name="add_provider_subtitle_kimi">Kimi Coding Plan — sign in with your Kimi account</string>
     <string name="kimi_login_title">Sign in with Kimi Code</string>

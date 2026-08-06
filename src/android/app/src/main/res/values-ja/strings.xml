@@ -931,7 +931,6 @@
     <string name="sessionlist_welcome_step_done">完了</string>
     <!-- T-selection-add-to-input — 長押し選択メニュー「入力欄に追加」 -->
     <string name="selection_add_to_chat_input">入力欄に追加</string>
-    <string name="selection_read_aloud">読み上げ</string>
     <!-- T-minis-textkit 選択メニューボタン -->
     <string name="selection_copy">コピー</string>
     <string name="selection_copy_markdown">Markdown をコピー</string>
@@ -1044,19 +1043,6 @@
     <string name="voice_link_to_host">%1$s のリンク</string>
     <string name="voice_bare_link">リンク</string>
     <!-- [T-android-voice-correction] Consent + correction UI -->
-    <string name="voice_correction_consent_title">音声修正を改善しますか？</string>
-    <string name="voice_correction_consent_body">Minis は文字起こしの修正（元の文 → 修正後）と採用された AI 修正を端末内のデータベースに保存し、今後の音声修正の精度を高めます。アップロードは行いません。設定でいつでも変更・削除できます。</string>
-    <string name="voice_correction_consent_enable">有効にする</string>
-    <string name="voice_correction_consent_not_now">後で</string>
-    <string name="voice_correction_button_a11y">AI で文字起こしを修正</string>
-    <string name="voice_correction_none_needed">修正の必要はありません</string>
-    <string name="voice_correction_failed">修正に失敗しました。元の文を保持します</string>
-    <string name="voice_correction_section">音声修正の学習</string>
-    <string name="voice_correction_toggle">音声修正データを収集</string>
-    <string name="voice_correction_footer">有効にすると、文字起こしへの手動修正（元の文 → 修正後）、採用された AI 修正、よく入力する語句が端末内のデータベースに保存され、今後の音声修正の精度が向上します。アップロードは行いません。既定はオフで、既存のデータは削除するまで保持されます。</string>
-    <string name="voice_correction_clear_title">収集した音声修正データをすべて削除しますか？</string>
-    <string name="voice_correction_clear">すべて削除</string>
-    <string name="voice_correction_cleared">音声修正データを削除しました</string>
     <string name="voice_provider_system">システム</string>
     <string name="add_provider_subtitle_kimi">Kimi Coding Plan — Kimi アカウントでサインイン</string>
     <string name="kimi_login_title">Kimi Code でサインイン</string>

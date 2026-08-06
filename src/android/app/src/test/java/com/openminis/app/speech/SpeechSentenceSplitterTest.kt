@@ -6,8 +6,8 @@ import org.junit.Test
 
 /**
  * [T-android-tts-intranumber-guard] Covers the number-aware TTS sentence
- * splitting shared by ReadAloudPlayer and TextToSpeechManager. The regression
- * being guarded: "3.14" was cut into "3." + "14" and spoken wrong.
+ * splitting shared by the TTS paths. The regression being guarded: "3.14" was
+ * cut into "3." + "14" and spoken wrong.
  */
 class SpeechSentenceSplitterTest {
 

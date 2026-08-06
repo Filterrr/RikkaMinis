@@ -625,12 +625,6 @@ data class SelectionToolbarActions(
     val resolveSelectionMarkdown: () -> String?,
     /** Append the currently-selected plain text to the chat composer. Null hides the button. */
     val onAddToInput: ((String) -> Unit)? = null,
-    /**
-     * [T-android-selection-readaloud] Speak the currently-selected plain text
-     * through Minis TTS. Null hides the button. Mirrors iOS's "Read Aloud /
-     * Read Selection" selection-menu action.
-     */
-    val onReadAloud: ((String) -> Unit)? = null,
 )
 
 @Composable
@@ -779,7 +773,6 @@ fun MinisSelectionToolbarHost(
                 val labelAddToInput = androidx.compose.ui.res.stringResource(com.openminis.app.R.string.selection_add_to_chat_input)
                 val labelCopyMarkdown = androidx.compose.ui.res.stringResource(com.openminis.app.R.string.selection_copy_markdown)
                 val labelCopyRichText = androidx.compose.ui.res.stringResource(com.openminis.app.R.string.selection_copy_rich_text)
-                val labelReadAloud = androidx.compose.ui.res.stringResource(com.openminis.app.R.string.selection_read_aloud)
                 val toastCopiedAsMarkdown = androidx.compose.ui.res.stringResource(com.openminis.app.R.string.selection_copied_as_markdown_toast)
                 val toastCopiedAsRichText = androidx.compose.ui.res.stringResource(com.openminis.app.R.string.selection_copied_as_rich_text_toast)
                 MinisToolbarButton(label = labelCopy) {
@@ -798,17 +791,6 @@ fun MinisSelectionToolbarHost(
                     MinisToolbarButton(label = labelAddToInput) {
                         val text = controller.selectedPlainText()
                         if (text.isNotEmpty()) actions.onAddToInput.invoke(text)
-                        controller.clearSelection()
-                    }
-                }
-                // [T-android-selection-readaloud] Speak ONLY the selected
-                // substring (controller.selectedPlainText(), not the message's
-                // markdown source) through Minis TTS.
-                if (actions?.onReadAloud != null) {
-                    MinisToolbarDivider()
-                    MinisToolbarButton(label = labelReadAloud) {
-                        val text = controller.selectedPlainText()
-                        if (text.isNotEmpty()) actions.onReadAloud.invoke(text)
                         controller.clearSelection()
                     }
                 }

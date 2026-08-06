@@ -11,10 +11,9 @@ package com.openminis.app.shared
  * single definition is deliberate: a second, slightly different set elsewhere
  * would silently misalign sentences between the two.
  *
- * NOTE this is a different set from [com.openminis.app.speech.ReadAloudPlayer]'s
- * TTS chunking terminators, which deliberately includes `\n` (a line break is a
- * natural place to breathe) and excludes `；`/`…`. These two are not
- * interchangeable; do not merge them.
+ * NOTE this is a different set from the TTS chunking terminators, which
+ * deliberately includes `\n` (a line break is a natural place to breathe) and
+ * excludes `；`/`…`. These two are not interchangeable; do not merge them.
  */
 object SentenceSplitter {
 
