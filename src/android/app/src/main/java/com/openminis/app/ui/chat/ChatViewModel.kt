@@ -7196,7 +7196,7 @@ class ChatViewModel(
                         "experience-memory: recorded exchange (ok=$loopExitedNormally, tools=${tools.size})"
                     )
                 } catch (e: Exception) {
-                    AppLogger.warning(TAG_STREAM, "experience-memory: record failed", e)
+                    AppLogger.warning(TAG_STREAM, "experience-memory: record failed: ${e.message}")
                 }
             }
         }

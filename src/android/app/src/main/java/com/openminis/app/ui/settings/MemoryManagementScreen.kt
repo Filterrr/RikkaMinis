@@ -97,22 +97,6 @@ fun MemoryManagementScreen(
             )
         }
 
-        // Experience memory (episodic): auto-records every finished exchange
-        // (query, tools, outcome, reply) into a local plain-text JSONL file and
-        // injects up to 3 similar past episodes before each reply. Zero extra
-        // model calls; retrieval is keyword scoring; the verification counter
-        // (+1 on success / -1 on failure) ranks proven episodes higher.
-        var expEnabled by remember {
-            mutableStateOf(com.openminis.app.data.ExperienceMemoryPrefs.isEnabled(context))
-        }
-        val expStore = remember(context) {
-            com.openminis.app.data.EpisodeMemoryStore(
-                java.io.File(context.filesDir, "minis-global/memory/episodes.jsonl")
-            )
-        }
-        var expSize by remember { mutableStateOf(expStore.size()) }
-        var expClearConfirm by remember { mutableStateOf(false) }
-
         SettingsSection(
             header = stringResource(R.string.settings_memory_experience_header),
             footer = stringResource(R.string.settings_memory_experience_footer),
@@ -188,6 +172,23 @@ fun MemoryManagementScreen(
             Spacer(modifier = Modifier.height(16.dp))
         }
     }
+
+    // Experience memory (episodic): auto-records every finished exchange
+    // (query, tools, outcome, reply) into a local plain-text JSONL file and
+    // injects up to 3 similar past episodes before each reply. Zero extra
+    // model calls; retrieval is keyword scoring; the verification counter
+    // (+1 on success / -1 on failure) ranks proven episodes higher.
+    // Declared at function level so the clear-confirm dialog below can see them.
+    var expEnabled by remember {
+        mutableStateOf(com.openminis.app.data.ExperienceMemoryPrefs.isEnabled(context))
+    }
+    val expStore = remember(context) {
+        com.openminis.app.data.EpisodeMemoryStore(
+            java.io.File(context.filesDir, "minis-global/memory/episodes.jsonl")
+        )
+    }
+    var expSize by remember { mutableStateOf(expStore.size()) }
+    var expClearConfirm by remember { mutableStateOf(false) }
 
     // Delete confirmation
     if (deleteFileName != null) {
