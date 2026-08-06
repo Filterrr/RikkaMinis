@@ -354,13 +354,13 @@ class EpisodeMemoryStore(
                 changed = true
             }
         }
-        // [Mem-auto-cleanup] 自动剔除僵尸经验（方案 X 保守版）：验证计数已减到
-        // <= 0（被验证失败过）且超过 staleAfterMs 未被复用的条目。v==0 的新鲜/
-        // 未被调用经验不乱删，只靠排序沉底 + 手动删。
+        // [Mem-auto-cleanup] 自动剔除僵尸经验（方案 X 保守版）：验证计数净为负
+        // （v < 0，被失败复用减过分）且超过 staleAfterMs 未被复用的条目。
+        // v==0 的"从未被调用/净零"经验不乱删——可能只是还没遇到，靠排序沉底 + 手动删。
         val staleBefore = now - staleAfterMs
         val cleaned = lines.filterNot { line ->
             val ep = parseLine(line)
-            ep != null && ep.v <= 0 && ep.lastHit > 0 && ep.lastHit < staleBefore
+            ep != null && ep.v < 0 && ep.lastHit > 0 && ep.lastHit < staleBefore
         }
         if (cleaned.size != lines.size) {
             lines.clear()
