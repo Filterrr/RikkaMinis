@@ -197,6 +197,11 @@ object PRootKernel {
             val hostDir = File(globalBase, subdir).also { it.mkdirs() }
             bindMounts["/var/minis/$subdir"] = hostDir.absolutePath
         }
+        // [T-logs-bind-android] Expose AppLogger's daily logs (files/logs/
+        // minis-*.log) to direct file I/O tools (file_read/file_edit) via
+        // /var/minis/logs, mirroring the shell bind in ExecutionCoordinator.
+        val logsDir = File(context.filesDir, "logs").also { it.mkdirs() }
+        bindMounts["/var/minis/logs"] = logsDir.absolutePath
     }
 
     fun removeBindMount(linuxPath: String) {

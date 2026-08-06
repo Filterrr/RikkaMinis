@@ -206,6 +206,16 @@ object ExecutionCoordinator {
             PRootKernel.addBindMount(linuxPath, hostDir.absolutePath)
         }
 
+        // [T-logs-bind-android] AppLogger writes daily logs to files/logs/
+        // (minis-YYYY-MM-DD.log). Bind them into /var/minis/logs so the agent's
+        // shell can read the app's own runtime logs directly instead of
+        // requiring a manual share from LogManagementScreen. Host dir is
+        // guaranteed to exist: AppLogger.init() mkdirs it in Application.onCreate.
+        val logsDir = File(filesDir, "logs").also { it.mkdirs() }
+        val logsLinuxPath = "/var/minis/logs"
+        mounts[logsLinuxPath] = logsDir.absolutePath
+        PRootKernel.addBindMount(logsLinuxPath, logsDir.absolutePath)
+
         // T277: user-mounted external folders (SAF-picked trees). PersistentShell
         // uses this map verbatim as PRoot's `-b` argv, so any mount missing here
         // is invisible to the shell — `ls /var/minis/mounts/<name>/` then shows
