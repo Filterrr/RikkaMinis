@@ -990,7 +990,7 @@ fun ChatScreen(
         // a content-size change will observe a changed firstOff and pass through.
         val alreadyThere = listState.firstVisibleItemIndex == idx &&
             listState.firstVisibleItemScrollOffset == off
-        if (alreadyThere) return@scrollToItem
+        if (alreadyThere) return@tracedScrollToItem
         runCatching { listState.scrollToItem(idx, off) }
         Unit
     }
