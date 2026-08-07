@@ -107,11 +107,20 @@ class AutoScrollDecisionTest {
     }
 
     @Test
-    fun streamGlide_indexPushedByInsertion_skips() {
-        // [P0-0-jump-fix] firstIdx > 0 means new row inserted at index 0;
-        // the glide must NOT fight that — TRAILING_ROW handles it.
-        val s = baseState().copy(firstVisibleItemIndex = 1)
-        assertEquals(ScrollVerdict.Skip, decideAutoFollow(ScrollIntent.STREAM_GLIDE, s))
+    fun streamGlide_pushedAwayAfterReStick_scrolls() {
+        // [T261] After the user explicitly re-stuck to bottom via the
+        // JumpToBottom FAB, streaming growth of the index-0 block pushes the
+        // viewport above the bottom row (firstIdx=1). The COMMON GATE already
+        // let this through (userScrolledAway=false → stickToBottom=true), so
+        // the glide MUST pull it back — it must NOT skip just because
+        // firstIdx>0. This is the exact regression the old firstIdx==0 gate
+        // caused (FAB tap seemed to do nothing once streaming resumed).
+        val s = baseState().copy(
+            firstVisibleItemIndex = 1,
+            firstVisibleItemScrollOffset = 100,
+        )
+        val v = decideAutoFollow(ScrollIntent.STREAM_GLIDE, s)
+        assertTrue("re-stuck stream pushed off-bottom must glide back", v is ScrollVerdict.ScrollTo)
     }
 
     @Test
