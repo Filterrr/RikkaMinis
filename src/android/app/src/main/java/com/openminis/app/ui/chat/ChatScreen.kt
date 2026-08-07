@@ -1349,7 +1349,7 @@ fun ChatScreen(
             firstVisibleItemIndex = listState.firstVisibleItemIndex,
             firstVisibleItemScrollOffset = listState.firstVisibleItemScrollOffset,
             bottomItemOffset = bottomItem?.offset ?: 0,
-            avgItemSize = avgItemSize.value,
+            avgItemSize = avgItemSize.value.toFloat(),
             sendFollowGraceMs = SEND_FOLLOW_GRACE_MS,
         )
     }
