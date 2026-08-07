@@ -49,7 +49,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import com.openminis.app.data.repository.MemoryRepository
-import com.openminis.app.ui.components.DialogTextField
+import com.openminis.app.ui.components.MemoryFileEditorContent
 import java.util.Date
 import kotlinx.coroutines.launch
 
@@ -171,7 +171,7 @@ fun MemoryManagementScreen(
     if (deleteFileName != null) {
         AlertDialog(
             onDismissRequest = { deleteFileName = null },
-            title = { Text("Delete ${deleteFileName}?") },
+            title = { Text(stringResource(R.string.memory_delete_confirm_title, deleteFileName!!)) },
             text = { Text(stringResource(R.string.memory_delete_confirm_text)) },
             confirmButton = {
                 MinisTextButton(onClick = {
@@ -332,17 +332,12 @@ fun MemoryFileEditScreen(
         ) {
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Editor
-            DialogTextField(
+            // [P3-shared-editor] Shared monospace editor, also used by
+            // SessionMemorySheet auto-file detail.
+            MemoryFileEditorContent(
                 value = content,
-                onValueChange = {
-                    content = it
-                },
-                singleLine = false,
-                textStyle = MaterialTheme.typography.bodySmall.copy(
-                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                ),
-                placeholder = stringResource(R.string.memory_editor_placeholder),
+                onValueChange = { content = it },
+                errorMessage = saveError,
                 modifier = Modifier.weight(1f),
             )
 
@@ -355,17 +350,6 @@ fun MemoryFileEditScreen(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 )
             }
-
-            if (saveError != null) {
-                Text(
-                    saveError!!,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                )
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
         }
     }
 }

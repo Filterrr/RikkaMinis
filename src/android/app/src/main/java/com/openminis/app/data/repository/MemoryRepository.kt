@@ -64,11 +64,14 @@ class MemoryRepository(private val memoryDir: File) {
         val timestamp = timeFmt.format(Date())
         val entry = "<!-- $timestamp -->\n$content\n\n"
 
-        val existing = if (file.exists()) file.readText() else ""
-        val newContent = entry + existing
-
+        // [P1-append] Append to end instead of prepending. Prepending
+        // (read entire file + concat + write) is O(n²) per write; append
+        // is O(1). All read paths (getMemory, revokeEntry, replaceEntryBody)
+        // use marker-regex and are order-agnostic. The two paths that care
+        // about newest-first (system prompt injection, file list preview)
+        // are adapted below.
         return try {
-            file.writeText(newContent)
+            file.appendText(entry)
             Log.i(TAG, "Memory written to $fileName (${content.length} chars)")
             "Memory saved to $fileName (${content.length} chars)"
         } catch (e: Exception) {
@@ -276,7 +279,9 @@ class MemoryRepository(private val memoryDir: File) {
                 val content = try { file.readText() } catch (_: Exception) { "" }
                 if (content.isNotEmpty()) {
                     val lines = content.lines()
-                    val preview = lines.take(MAX_INJECT_LINES).joinToString("\n")
+                    // [P1-append] Entries are now appended (newest at bottom).
+                    // Reverse so system prompt gets newest-first, matching old prepend.
+                    val preview = lines.takeLast(MAX_INJECT_LINES).reversed().joinToString("\n")
                     val label = when (dayOffset) {
                         0 -> "Today's"
                         1 -> "Yesterday's"
@@ -320,14 +325,13 @@ class MemoryRepository(private val memoryDir: File) {
 
         // GLOBAL.md always first
         val globalFile = File(memoryDir, GLOBAL_FILE)
-        val globalContent = if (globalFile.exists()) try { globalFile.readText() } catch (_: Exception) { "" } else ""
         val globalModDate = if (globalFile.exists()) dateFmt.format(Date(globalFile.lastModified())) else ""
         items.add(MemoryFileInfo(
             name = GLOBAL_FILE,
             isGlobal = true,
             modifiedDate = globalModDate,
             fileSize = formatFileSize(globalFile.length()),
-            preview = firstContentLine(globalContent),
+            preview = if (globalFile.exists()) firstContentLineFromFile(globalFile) else "",
         ))
 
         // Daily logs sorted descending
@@ -337,13 +341,14 @@ class MemoryRepository(private val memoryDir: File) {
             ?: emptyList()
 
         for (file in dailyFiles) {
-            val content = try { file.readText() } catch (_: Exception) { "" }
+            // [P2-lazy-preview] Use lazy line-by-line read instead of full
+            // readText() — avoids loading every daily log into memory.
             items.add(MemoryFileInfo(
                 name = file.name,
                 isGlobal = false,
                 modifiedDate = dateFmt.format(Date(file.lastModified())),
                 fileSize = formatFileSize(file.length()),
-                preview = firstContentLine(content),
+                preview = firstContentLineFromFile(file),
             ))
         }
 
@@ -496,11 +501,31 @@ class MemoryRepository(private val memoryDir: File) {
         return "%.1f MB".format(mb)
     }
 
-    private fun firstContentLine(content: String): String {
-        return content.lines()
-            .firstOrNull { it.isNotBlank() && !it.startsWith("<!--") }
-            ?.take(100)
-            ?: ""
+    /**
+     * Preview line used by [listAllFiles]. Reads only as many lines as needed
+     * via [BufferedReader], stopping at the first non-comment, non-blank line.
+     * Keeps memory O(1) regardless of file size — avoids loading every daily
+     * log into memory when listing files in Settings → Memory.
+     *
+     * [P5-empty] If the file contains only HTML comments (edge case after
+     * revokeEntry removes the last body entry), return a placeholder so the
+     * file-list row doesn't look broken.
+     */
+    private fun firstContentLineFromFile(file: File): String {
+        return try {
+            java.io.BufferedReader(file.reader()).use { reader ->
+                var line = reader.readLine()
+                while (line != null) {
+                    if (line.isNotBlank() && !line.startsWith("<!--")) {
+                        return@use line.take(100)
+                    }
+                    line = reader.readLine()
+                }
+                "(empty)"
+            }
+        } catch (_: Exception) {
+            ""
+        }
     }
 
     private fun mergeRanges(ranges: List<IntRange>): List<IntRange> {
