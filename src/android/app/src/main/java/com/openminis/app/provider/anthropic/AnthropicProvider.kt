@@ -1003,13 +1003,17 @@ class AnthropicProvider(
     }
 
     private fun parseUsage(json: JSONObject): LLMUsage {
-        val inputTokens = json.optInt("input_tokens", 0)
+        val totalInput = json.optInt("input_tokens", 0)
+        val cacheRead = json.optInt("cache_read_input_tokens").takeIf { it > 0 }
+        val cacheCreate = json.optInt("cache_creation_input_tokens").takeIf { it > 0 }
+        val cacheTotal = (cacheRead ?: 0) + (cacheCreate ?: 0)
+        val freshInput = (totalInput - cacheTotal).coerceAtLeast(0)
         return LLMUsage(
-            inputTokens = inputTokens,
+            inputTokens = freshInput,
             outputTokens = json.optInt("output_tokens", 0),
-            cacheCreationInputTokens = json.optInt("cache_creation_input_tokens").takeIf { it > 0 },
-            cacheReadInputTokens = json.optInt("cache_read_input_tokens").takeIf { it > 0 },
-            latestContextTokens = inputTokens,
+            cacheCreationInputTokens = cacheCreate,
+            cacheReadInputTokens = cacheRead,
+            latestContextTokens = totalInput,
         )
     }
 

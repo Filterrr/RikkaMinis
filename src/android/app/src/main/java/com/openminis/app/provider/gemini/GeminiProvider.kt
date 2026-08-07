@@ -462,9 +462,15 @@ class GeminiProvider(
 
     private fun extractUsage(json: JSONObject): LLMUsage? {
         val usage = json.optJSONObject("usageMetadata") ?: return null
+        val totalInput = usage.optInt("promptTokenCount", 0)
+        val cacheRead = usage.optInt("cachedContentTokenCount").takeIf { it > 0 }
+        val freshInput = (totalInput - (cacheRead ?: 0)).coerceAtLeast(0)
         return LLMUsage(
-            inputTokens = usage.optInt("promptTokenCount", 0),
+            inputTokens = freshInput,
             outputTokens = usage.optInt("candidatesTokenCount", 0),
+            cacheCreationInputTokens = null,
+            cacheReadInputTokens = cacheRead,
+            latestContextTokens = totalInput,
         )
     }
 
