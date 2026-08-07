@@ -7,6 +7,8 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.VibrationEffect
+import android.os.Vibrator
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -82,6 +84,18 @@ class BackgroundTaskNotifier(
                     context.getString(R.string.notif_task_completed_body)
                 }
                 postNotification(sessionId, title, body)
+                // [feat-vibrate-task-complete] Direct haptic on completion.
+                // MIUI suppresses notification-channel vibration
+                // (dumpsys shows VibratorManager marking every
+                // Notification-usage vibration "ignored_ringtone_or_notify_miui"),
+                // so riding the notification's vibration pattern is unreliable
+                // on Xiaomi ROMs. Instead, also drive the hardware vibrator
+                // directly with VibrationEffect — that path (verified via
+                // `cmd vibrator_manager synced oneshot` on the device) is NOT
+                // subject to that suppression. Runs regardless of whether the
+                // notification itself was posted (it even fires for foreground
+                // activity, giving the user a physical cue while watching).
+                vibrateCompletion()
             } catch (t: Throwable) {
                 AppLogger.warning(TAG, "notifyTaskCompleted failed: ${t.message}")
             }
@@ -147,6 +161,35 @@ class BackgroundTaskNotifier(
             } catch (t: Throwable) {
                 AppLogger.warning(TAG, "notifyWorkCompleted failed: ${t.message}")
             }
+        }
+    }
+
+    /**
+     * [feat-vibrate-task-complete] Drive the hardware vibrator directly with a
+     * short double-buzz (0ms → 120ms buzz → 90ms gap → 160ms buzz).
+     * Deliberately uses the platform `Vibrator` API (not a notification's
+     * vibration) because on Xiaomi/MIUI ROMs notification-vibration is
+     * suppressed at the VibratorManager layer (every Notification-usage
+     * vibration arrives tagged `ignored_ringtone_or_notify_miui`). The direct
+     * VibrationEffect path is immune to that, as confirmed on-device. Safe to
+     * call on any thread; uses default usage (ALARM-ish) so it is not gated by
+     * the caller's notification channel. Errors are swallowed so a vibrator
+     * hiccup can never block the completion-notification path.
+     */
+    private fun vibrateCompletion() {
+        try {
+            val vibrator =
+                ContextCompat.getSystemService(context, Vibrator::class.java) ?: return
+            if (!vibrator.hasVibrator()) return
+            val pattern = longArrayOf(0L, 120L, 90L, 160L)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                vibrator.vibrate(VibrationEffect.createWaveform(pattern, -1))
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(pattern, -1)
+            }
+        } catch (t: Throwable) {
+            AppLogger.warning(TAG, "vibrateCompletion failed: ${t.message}")
         }
     }
 
