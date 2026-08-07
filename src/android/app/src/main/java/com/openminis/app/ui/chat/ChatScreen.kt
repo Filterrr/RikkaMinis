@@ -510,10 +510,11 @@ fun ChatScreen(
                     val sep = if (inputText.isNotEmpty()) "\n" else ""
                     val needsTrailingSpace = item.value.startsWith("http://") ||
                         item.value.startsWith("https://")
-                    viewModel.setInputText(
-                        inputText + sep + item.value +
-                            if (needsTrailingSpace) " " else "",
-                    )
+                    val newText = inputText + sep + item.value +
+                        if (needsTrailingSpace) " " else ""
+                    // [fix/setinputtext-caret-intent] Explicit caret to the end of
+                    // the appended text (caret lands after the just-injected text).
+                    viewModel.setInputText(newText, caretOverride = newText.length)
                 }
                 com.openminis.app.share.PendingShare.Item.Kind.ATTACHMENT -> {
                     viewModel.addAttachmentFromStagedShare(java.io.File(sharedDir, item.value))
@@ -583,7 +584,10 @@ fun ChatScreen(
         viewModel.clearAttachments()
         if (transfer.inputText.isNotEmpty()) {
             val sep = if (inputText.isNotEmpty()) "\n" else ""
-            viewModel.setInputText(inputText + sep + transfer.inputText)
+            val appended = inputText + sep + transfer.inputText
+            // [fix/setinputtext-caret-intent] Explicit caret to end of injected
+            // transfer text so the composer shows the tail after injection.
+            viewModel.setInputText(appended, caretOverride = appended.length)
         }
         for (a in transfer.attachments) viewModel.addAttachment(a)
         viewModel.markShareInjected()
@@ -3757,7 +3761,9 @@ fun ChatScreen(
                                 onEdit = if (isStreaming || item.message.isQueued) null else ({
                                     val prefill = viewModel.editMessage(item.message.id)
                                     if (prefill != null) {
-                                        viewModel.setInputText(prefill)
+                                        // [fix/setinputtext-caret-intent] Editing a full message:
+                                        // place the caret at the end so the user sees the tail.
+                                        viewModel.setInputText(prefill, caretOverride = prefill.length)
                                         coroutineScope.launch {
                                             tracedScrollToItem("EDIT-MSG", 0, 0)
                                         }
@@ -4577,11 +4583,11 @@ fun ChatScreen(
                                                         currentText = inputFieldValue.text,
                                                         currentCaret = inputFieldValue.selection.end,
                                                     )
-                                                    viewModel.setInputText(newText)
-                                                    inputFieldValue = androidx.compose.ui.text.input.TextFieldValue(
-                                                        text = newText,
-                                                        selection = androidx.compose.ui.text.TextRange(newCaret),
-                                                    )
+                                                    // [fix/setinputtext-caret-intent] Pass the explicit caret
+                                                    // intent so the consuming LaunchedEffect places the cursor
+                                                    // exactly here — replaces the old manual TextFieldValue
+                                                    // double-write that raced the effect's pendingCaret read.
+                                                    viewModel.setInputText(newText, caretOverride = newCaret)
                                                 }
                                                 .padding(horizontal = 12.dp, vertical = 8.dp),
                                             verticalAlignment = Alignment.CenterVertically,
@@ -5175,11 +5181,9 @@ fun ChatScreen(
                                                 )
                                                 if (result != null) {
                                                     val (newText, newCaret) = result
-                                                    viewModel.setInputText(newText)
-                                                    inputFieldValue = androidx.compose.ui.text.input.TextFieldValue(
-                                                        text = newText,
-                                                        selection = androidx.compose.ui.text.TextRange(newCaret),
-                                                    )
+                                                    // [fix/setinputtext-caret-intent] Explicit caret intent,
+                                                    // same as the tap path — single-writer through LaunchedEffect.
+                                                    viewModel.setInputText(newText, caretOverride = newCaret)
                                                     return@onKeyEvent true
                                                 }
                                                 // Menu open but no candidates → fall
