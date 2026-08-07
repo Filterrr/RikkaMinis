@@ -442,7 +442,7 @@ class MainActivity : ComponentActivity() {
         val newRoute = Routes.chat("__new__${java.util.UUID.randomUUID()}")
         AppLogger.info("LaunchSession", "resume → mode=NewChat, navigating to $newRoute")
         nav.safeNavigate(newRoute) {
-            popUpTo(Routes.SESSION_LIST) { inclusive = false }
+            popUpTo(nav.graph.startDestinationId) { inclusive = true }
         }
     }
 
@@ -513,8 +513,8 @@ class MainActivity : ComponentActivity() {
                 // shortcut / onNewIntent) can't stack a duplicate chat on
                 // top of the same chat that's already showing.
                 nav.navigate(Routes.chat(action.sessionId)) {
-                    popUpTo(Routes.SESSION_LIST) {
-                        inclusive = false
+                    popUpTo(nav.graph.startDestinationId) {
+                        inclusive = true
                         saveState = true
                     }
                     launchSingleTop = true
@@ -554,7 +554,7 @@ class MainActivity : ComponentActivity() {
                 }
                 val newRoute = Routes.chat("__new__${java.util.UUID.randomUUID()}")
                 nav.navigate(newRoute) {
-                    popUpTo(Routes.SESSION_LIST) { inclusive = false }
+                    popUpTo(nav.graph.startDestinationId) { inclusive = true }
                     launchSingleTop = true
                 }
             }
