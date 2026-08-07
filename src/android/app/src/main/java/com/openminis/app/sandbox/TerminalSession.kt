@@ -120,7 +120,7 @@ class TerminalSession(private val context: Context) {
                     }
                 }
 
-                val cmdList = buildInteractiveCommand()
+                val cmdList = buildInteractiveCommand(sessionId)
                 val cmd = cmdList.first()
                 val argv = cmdList.toTypedArray()
 
@@ -342,7 +342,7 @@ class TerminalSession(private val context: Context) {
         }
     }
 
-    private fun buildInteractiveCommand(): List<String> {
+    private fun buildInteractiveCommand(sessionId: String? = null): List<String> {
         check(PRootKernel.isBooted) { "PRootKernel must be booted" }
         val rootfsManager = RootfsManager.getInstance(context)
         val cmd = mutableListOf<String>()
@@ -351,13 +351,34 @@ class TerminalSession(private val context: Context) {
         // T141: see PRootKernel.buildProotCommand for rationale — translates
         // hardlinks to symlinks so apk install of binutils/gcc works.
         cmd.add("--link2symlink")
+        // [P2-proot-resource-hygiene] Ask PRoot to exit once the child /bin/sh
+        // terminates, mirroring PersistentShell.startProcess(). Without this,
+        // the PRoot tracer leaks native memory through the PTY master fd when
+        // the interactive session is closed.
+        cmd.add("--kill-on-exit")
         cmd.add("-r"); cmd.add(rootfsManager.rootfsDir.absolutePath)
         cmd.add("-b"); cmd.add("/dev")
         cmd.add("-b"); cmd.add("/proc")
         cmd.add("-b"); cmd.add("/sys")
         cmd.add("-w"); cmd.add("/root")
 
-        for ((linuxPath, hostPath) in PRootKernel.bindMounts) {
+        // Start from the global bind mounts, then overlay this session's
+        // per-session dirs so the terminal sees the correct attachments/
+        // workspace/offloads/browser for the active session. (The global
+        // map no longer carries per-session dirs — buildSessionBindMounts
+        // keeps them session-local, so without this overlay an interactive
+        // terminal would mount the empty rootfs placeholder for those paths.)
+        val mounts = PRootKernel.bindMounts.toMutableMap()
+        if (sessionId != null) {
+            val sessionBase = File(context.filesDir, "minis-sessions/$sessionId")
+            for (subdir in listOf("attachments", "offloads", "workspace", "browser")) {
+                val hostDir = File(sessionBase, subdir)
+                if (hostDir.exists()) {
+                    mounts["/var/minis/$subdir"] = hostDir.absolutePath
+                }
+            }
+        }
+        for ((linuxPath, hostPath) in mounts) {
             cmd.add("-b"); cmd.add("$hostPath:$linuxPath")
         }
 

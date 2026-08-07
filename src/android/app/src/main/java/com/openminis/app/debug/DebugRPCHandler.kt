@@ -307,7 +307,7 @@ class DebugRPCHandler(private val context: Context) {
     }
 
     /**
-     * [diag] Raw list of a host-filesystem directory, bypassing the PRoot
+     * Raw list of a host-filesystem directory, bypassing the PRoot
      * bindMounts/rootfs resolver. Constrained to filesDir to avoid poking
      * at arbitrary paths. Use `minis-sessions` (default) to enumerate every
      * session's attachments/workspace/... directories and find files that

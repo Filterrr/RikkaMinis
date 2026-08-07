@@ -108,10 +108,6 @@ object ExecutionCoordinator {
                 PRootKernel.boot(appContext)
             }
 
-            // [diag] trace the sessionId that shell_execute is dispatched with —
-            // suspected source of the Chinese-emoji filename vanishing bug
-            Log.w(TAG, "[diag] execute sessionId=$sessionId cmd=${command.take(120).replace('\n', ' ')}")
-
             // Get or create shell — protected by globalLock to avoid duplicate creation
             val shell = getOrCreateShell(sessionId)
 
@@ -178,7 +174,7 @@ object ExecutionCoordinator {
         // Fast path: existing alive shell
         val existing = shells[sessionId]
         if (existing != null && existing.isAlive) {
-            Log.w(TAG, "[diag] reuse existing shell for sessionId=$sessionId attachmentsMount=${existing.debugBindMount("/var/minis/attachments")}")
+            Log.d(TAG, "[$sessionId] Reusing existing shell")
             return existing
         }
 
@@ -187,7 +183,7 @@ object ExecutionCoordinator {
             // Double-check after acquiring lock
             val recheck = shells[sessionId]
             if (recheck != null && recheck.isAlive) {
-                Log.w(TAG, "[diag] reuse existing shell (post-lock) for sessionId=$sessionId attachmentsMount=${recheck.debugBindMount("/var/minis/attachments")}")
+                Log.d(TAG, "[$sessionId] Reusing existing shell (post-lock)")
                 return@withLock recheck
             }
 
@@ -202,7 +198,6 @@ object ExecutionCoordinator {
             shells[sessionId] = shell
             shell.ensureStarted()
             Log.i(TAG, "[$sessionId] Shell created with ${bindMounts.size} bind mounts")
-            Log.w(TAG, "[diag] new shell created sessionId=$sessionId attachmentsMount=${bindMounts["/var/minis/attachments"]}")
             shell
         }
     }
@@ -216,22 +211,19 @@ object ExecutionCoordinator {
         val filesDir = appContext.filesDir
         val mounts = linkedMapOf<String, String>()
 
-        // [diag] previous attachments mount target — exposes cross-session
-        // overwrite of the global bindMounts map (the suspected cause of
-        // the "file disappears after first download" bug)
-        val prevAttachments = PRootKernel.bindMounts["/var/minis/attachments"]
-
-        // Session-specific directories
+        // Session-specific directories — written ONLY into this shell's local
+        // bind-mount map, never the global PRootKernel.bindMounts. The global
+        // map is shared across all sessions; per-session host paths would
+        // otherwise overwrite each other (last session to boot wins), and the
+        // interactive terminal (which reads the global map) would point at the
+        // wrong session's dirs. Callers that need a session's per-session dir
+        // must go through PRootKernel.resolveSessionHostPath(sessionId, ...).
         val sessionBase = File(filesDir, "minis-sessions/$sessionId")
         listOf("attachments", "offloads", "workspace", "browser").forEach { subdir ->
             val hostDir = File(sessionBase, subdir).also { it.mkdirs() }
             val linuxPath = "/var/minis/$subdir"
             mounts[linuxPath] = hostDir.absolutePath
-            PRootKernel.addBindMount(linuxPath, hostDir.absolutePath)
         }
-
-        Log.w(TAG, "[diag] buildSessionBindMounts sessionId=$sessionId " +
-            "attachments: prev=$prevAttachments new=${mounts["/var/minis/attachments"]}")
 
         // Global shared directories.
         // [T-android-mcp-bind-mount] mcp-servers MUST be here, not only in
@@ -360,6 +352,7 @@ object ExecutionCoordinator {
             shells.clear()
             lastInjectedKeys.clear()
             lastActiveMs.clear()
+            @Suppress("DEPRECATION")
             ShellExecutor.destroyCurrent()
         }
     }
