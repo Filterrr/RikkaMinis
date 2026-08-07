@@ -21,12 +21,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.FileDownload
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.outlined.VpnKey
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -293,7 +290,6 @@ private fun ProviderInstanceRow(
     onClick: () -> Unit,
 ) {
     val isActive = isConfigured && instance.isEnabled
-    var menuExpanded by remember { mutableStateOf(false) }
 
     Row(
         modifier = Modifier
@@ -374,44 +370,24 @@ private fun ProviderInstanceRow(
             Spacer(Modifier.width(8.dp))
         }
 
-        // [P0-pinned-providers] Row overflow menu: pin/unpin this instance.
-        Box {
-            IconButton(
-                onClick = { menuExpanded = true },
-                modifier = Modifier.size(28.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.MoreVert,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                    modifier = Modifier.size(18.dp),
-                )
-            }
-            DropdownMenu(
-                expanded = menuExpanded,
-                onDismissRequest = { menuExpanded = false },
-            ) {
-                DropdownMenuItem(
-                    text = {
-                        Text(
-                            text = stringResource(
-                                if (pinned) R.string.provider_unset_favorite
-                                else R.string.provider_set_favorite,
-                            ),
-                        )
-                    },
-                    leadingIcon = {
-                        Icon(
-                            imageVector = if (pinned) Icons.Filled.Star else Icons.Filled.StarBorder,
-                            contentDescription = null,
-                        )
-                    },
-                    onClick = {
-                        menuExpanded = false
-                        onTogglePinned()
-                    },
-                )
-            }
+        // [P0-pinned-providers] Inline star toggles favorite directly — no overflow menu needed.
+        IconButton(
+            onClick = onTogglePinned,
+            modifier = Modifier.size(32.dp),
+        ) {
+            Icon(
+                imageVector = if (pinned) Icons.Filled.Star else Icons.Filled.StarBorder,
+                contentDescription = stringResource(
+                    if (pinned) R.string.provider_unset_favorite
+                    else R.string.provider_set_favorite,
+                ),
+                tint = if (pinned) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                },
+                modifier = Modifier.size(20.dp),
+            )
         }
 
 
