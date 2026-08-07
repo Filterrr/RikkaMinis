@@ -1117,4 +1117,11 @@
     <string name="chat_menu_pin_to_footer">Pin to footer</string>
     <string name="chat_menu_settings_always_last">Always last</string>
     <string name="back_to_exit_press_again">Press back again to exit</string>
+    <string name="backup_snapshot_section_title">로컬 스냅샷</string>
+    <string name="backup_snapshot_section_footer">복원 전에 현재 설정 스냅샷이 자동 저장됩니다. 탭하여 설정을 롤백합니다.</string>
+    <string name="backup_snapshot_empty">아직 로컬 스냅샷이 없습니다.</string>
+    <string name="backup_snapshot_restore_confirm_title">이 스냅샷을 복원할까요?</string>
+    <string name="backup_snapshot_restore_confirm_text">현재 설정이 %1$s의 스냅샷으로 대체됩니다. 현재 설정은 먼저 새 스냅샷으로 저장됩니다.</string>
+    <string name="backup_snapshot_restore">복원</string>
+    <string name="backup_done_fatal">복원이 중간에 실패했습니다 — 설정이 부분적으로만 복원되었습니다. 스냅샷에서 롤백하세요.</string>
 </resources>

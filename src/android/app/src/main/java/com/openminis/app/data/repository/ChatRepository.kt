@@ -33,6 +33,13 @@ class ChatRepository(internal val dao: ChatDao) {
         thinkingLevel: String? = null,
     ): ChatSessionEntity {
         val now = System.currentTimeMillis()
+        // [fix-audit-p0-1] Thinking override folds INTO the row at insert
+        // time. The previous implementation ran a separate
+        // updateThinkingOverride() BEFORE insertSession() — an UPDATE that
+        // matched zero rows because the session didn't exist yet, silently
+        // dropping the user's /thinking choice on draft chats. Folding it
+        // into the entity makes the write atomic AND makes the "persist
+        // together with the row" comment actually true.
         val session = ChatSessionEntity(
             id = UUID.randomUUID().toString(),
             title = title,
@@ -40,10 +47,8 @@ class ChatRepository(internal val dao: ChatDao) {
             createdAt = now,
             updatedAt = now,
             memoryEnabled = if (memoryEnabled) 1 else 0,
+            thinkingOverride = thinkingLevel,
         )
-        if (thinkingLevel != null) {
-            dao.updateThinkingOverride(id = session.id, value = thinkingLevel, updatedAt = now)
-        }
         dao.insertSession(session)
         return session
     }

@@ -1510,4 +1510,11 @@
     <string name="chat_menu_pin_to_footer">Pin to footer</string>
     <string name="chat_menu_settings_always_last">Always last</string>
     <string name="back_to_exit_press_again">Press back again to exit</string>
+    <string name="backup_snapshot_section_title">Local snapshots</string>
+    <string name="backup_snapshot_section_footer">Snapshots are saved automatically before every restore. Tap one to roll the configuration back.</string>
+    <string name="backup_snapshot_empty">No local snapshots yet.</string>
+    <string name="backup_snapshot_restore_confirm_title">Restore this snapshot?</string>
+    <string name="backup_snapshot_restore_confirm_text">The current configuration is replaced by the snapshot from %1$s. A new snapshot of the current config is saved first.</string>
+    <string name="backup_snapshot_restore">Restore</string>
+    <string name="backup_done_fatal">Restore failed mid-way — the configuration is only partially restored. Roll back from a snapshot.</string>
 </resources>

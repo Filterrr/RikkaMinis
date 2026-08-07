@@ -439,7 +439,11 @@ fun MemoryManagementScreen(
                         if (result is EpisodeMemoryStore.IoResult.Success) {
                             // Reflect the deletion in the viewer immediately.
                             expEpisodes = expEpisodes.filterNot { it.id == id }
-                            expSize = (expSize - 1).coerceAtLeast(0)
+                            // [fix-audit-p3-1] Re-query the live size instead
+                            // of locally decrementing: episodes recorded by the
+                            // agent while the list was open would otherwise
+                            // leave the counter drifting.
+                            expSize = experienceMemoryStore.size()
                         } else {
                             expError = context.getString(R.string.memory_experience_clear_failed)
                         }

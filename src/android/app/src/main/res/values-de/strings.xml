@@ -1118,4 +1118,11 @@
     <string name="chat_menu_pin_to_footer">Pin to footer</string>
     <string name="chat_menu_settings_always_last">Always last</string>
     <string name="back_to_exit_press_again">Press back again to exit</string>
+    <string name="backup_snapshot_section_title">Lokale Snapshots</string>
+    <string name="backup_snapshot_section_footer">Vor jeder Wiederherstellung wird automatisch ein Snapshot gespeichert. Tippen Sie, um die Konfiguration zurückzurollen.</string>
+    <string name="backup_snapshot_empty">Noch keine lokalen Snapshots.</string>
+    <string name="backup_snapshot_restore_confirm_title">Diesen Snapshot wiederherstellen?</string>
+    <string name="backup_snapshot_restore_confirm_text">Die aktuelle Konfiguration wird durch den Snapshot vom %1$s ersetzt. Zuvor wird ein neuer Snapshot der aktuellen Konfiguration gespeichert.</string>
+    <string name="backup_snapshot_restore">Wiederherstellen</string>
+    <string name="backup_done_fatal">Wiederherstellung fehlgeschlagen — die Konfiguration wurde nur teilweise wiederhergestellt. Stellen Sie über einen Snapshot wieder her.</string>
 </resources>

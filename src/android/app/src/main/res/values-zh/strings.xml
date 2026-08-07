@@ -1400,4 +1400,11 @@
     <string name="chat_menu_pin_to_footer">置于底栏</string>
     <string name="chat_menu_settings_always_last">固定最右</string>
     <string name="back_to_exit_press_again">再按一次返回退出</string>
+    <string name="backup_snapshot_section_title">本地快照</string>
+    <string name="backup_snapshot_section_footer">每次恢复前会自动保存当前配置快照。点按可回滚配置。</string>
+    <string name="backup_snapshot_empty">暂无本地快照。</string>
+    <string name="backup_snapshot_restore_confirm_title">恢复此快照？</string>
+    <string name="backup_snapshot_restore_confirm_text">当前配置将被 %1$s 的快照替换。当前配置会先保存为新快照。</string>
+    <string name="backup_snapshot_restore">恢复</string>
+    <string name="backup_done_fatal">恢复中途失败——配置只恢复了一部分。可从快照回滚。</string>
 </resources>

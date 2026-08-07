@@ -20,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.History
@@ -31,6 +32,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -124,6 +126,22 @@ fun BackupSettingsScreen(
     var remoteError by remember { mutableStateOf<String?>(null) }
     var deletePending by remember { mutableStateOf<WebDavBackupItem?>(null) }
     var snapshotNote by remember { mutableStateOf<String?>(null) }
+    // [fix-audit-p0-2] Local pre-restore snapshots, newest first. They used to
+    // be written with no UI to list or restore them — a promise of rollback
+    // with no way to roll back. Now listed here and restorable via the same
+    // restoreWithSnapshot path used for WebDAV.
+    val snapshotDir = remember { File(context.filesDir, "backup-snapshots") }
+    var snapshotFiles by remember { mutableStateOf(ConfigBackup.listSnapshots(snapshotDir)) }
+    var snapshotRestoreTarget by remember { mutableStateOf<File?>(null) }
+
+    // Refresh the snapshot list on entry (and after restore writes a new one).
+    LaunchedEffect(Unit) {
+        snapshotFiles = withContext(Dispatchers.IO) { ConfigBackup.listSnapshots(snapshotDir) }
+    }
+
+    val refreshSnapshots: () -> Unit = {
+        snapshotFiles = ConfigBackup.listSnapshots(snapshotDir)
+    }
 
     val savedToast = stringResource(R.string.backup_saved)
     val errWriteFmt = stringResource(R.string.backup_err_write)
@@ -142,6 +160,12 @@ fun BackupSettingsScreen(
         webDavBusy = true
         // Restore must complete even if the user navigates away; run on the
         // app scope and fall back to a tray notification once done.
+        // [fix-audit-p1-1] All Compose state writes are hopped back to Main
+        // explicitly — the old code wrote snapshotNote / importReport /
+        // errorMessage / webDavBusy straight from Dispatchers.IO (the
+        // applicationScope dispatcher), racing recomposition. The export
+        // path in this same file already did withContext(Dispatchers.Main);
+        // this restores the same discipline here.
         application.applicationScope.launch {
             try {
                 val payload = withContext(Dispatchers.Default) {
@@ -163,16 +187,24 @@ fun BackupSettingsScreen(
                 // naming) that pollutes the remote list. The snapshot's only
                 // job is rolling back THIS device if the restore goes wrong, so
                 // it belongs in local storage, never on the remote.
-                val dir = File(context.filesDir, "backup-snapshots").apply { mkdirs() }
-                File(dir, ConfigBackup.suggestedFileName()).writeText(payload)
-                snapshotNote = context.getString(R.string.backup_snapshot_local)
+                // [fix-audit-p0-3] Second-precision name + keep SNAPSHOT_KEEP
+                // newest (see ConfigBackup.writeSnapshot) so two restores in
+                // the same minute no longer overwrite the first rollback point.
+                val dir = File(context.filesDir, "backup-snapshots")
+                ConfigBackup.writeSnapshot(dir, payload)
+                withContext(Dispatchers.Main) {
+                    snapshotNote = context.getString(R.string.backup_snapshot_local)
+                    refreshSnapshots()
+                }
             } catch (t: Throwable) {
-                snapshotNote = context.getString(R.string.backup_snapshot_failed)
+                withContext(Dispatchers.Main) {
+                    snapshotNote = context.getString(R.string.backup_snapshot_failed)
+                }
             }
             var restoredOk = true
             var restoredMsg: String? = null
             try {
-                importReport = withContext(Dispatchers.Default) {
+                val report = withContext(Dispatchers.Default) {
                     ConfigBackup.import(
                         providerRepo = providerRepository,
                         json = json,
@@ -183,17 +215,22 @@ fun BackupSettingsScreen(
                         chatRepo = chatRepository,
                     )
                 }
-                restoredMsg = context.getString(
-                    R.string.backup_restored_notify_body,
-                    importReport?.providersImported ?: 0,
-                    importReport?.groupsImported ?: 0,
-                )
+                withContext(Dispatchers.Main) {
+                    importReport = report
+                    restoredMsg = context.getString(
+                        R.string.backup_restored_notify_body,
+                        report?.providersImported ?: 0,
+                        report?.groupsImported ?: 0,
+                    )
+                }
             } catch (t: Throwable) {
-                errorMessage = t.message ?: errImport
-                restoredOk = false
-                restoredMsg = t.message ?: errImport
+                withContext(Dispatchers.Main) {
+                    errorMessage = t.message ?: errImport
+                    restoredOk = false
+                    restoredMsg = t.message ?: errImport
+                }
             } finally {
-                webDavBusy = false
+                withContext(Dispatchers.Main) { webDavBusy = false }
             }
             // Always notify completion from the tray; harmless if the screen is
             // still foregrounded (Toast + inline report already covered it).
@@ -286,6 +323,34 @@ fun BackupSettingsScreen(
                 onClick = { importLauncher.launch(arrayOf("application/json", "*/*")) },
                 showDivider = false,
             )
+        }
+        // [fix-audit-p0-2] Local pre-restore snapshots with a rollback entry
+        // point. Before this the snapshots were written but unreachable — the
+        // UI promised "snapshot saved" yet nothing could restore from it.
+        SettingsSection(
+            header = stringResource(R.string.backup_snapshot_section_title),
+            footer = stringResource(R.string.backup_snapshot_section_footer),
+        ) {
+            if (snapshotFiles.isEmpty()) {
+                Text(
+                    stringResource(R.string.backup_snapshot_empty),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                )
+            } else {
+                snapshotFiles.forEachIndexed { index, file ->
+                    SettingsRow(
+                        title = file.name,
+                        subtitle = java.text.SimpleDateFormat(
+                            "yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()
+                        ).format(java.util.Date(file.lastModified())),
+                        icon = Icons.Filled.Restore,
+                        onClick = { snapshotRestoreTarget = file },
+                        showDivider = index < snapshotFiles.size - 1,
+                    )
+                }
+            }
         }
         SettingsSection(
             header = stringResource(R.string.webdav_section),
@@ -525,6 +590,40 @@ fun BackupSettingsScreen(
         )
     }
 
+    // [fix-audit-p0-2] Local-snapshot restore confirmation. Restoring a
+    // snapshot goes through the exact same restoreWithSnapshot path as a
+    // WebDAV restore — including taking a fresh snapshot of the current
+    // config first, so a mistaken rollback is itself rollback-able.
+    snapshotRestoreTarget?.let { file ->
+        AlertDialog(
+            onDismissRequest = { snapshotRestoreTarget = null },
+            title = { Text(stringResource(R.string.backup_snapshot_restore_confirm_title)) },
+            text = {
+                Text(stringResource(R.string.backup_snapshot_restore_confirm_text, file.name))
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        snapshotRestoreTarget = null
+                        val content = runCatching { file.readText() }.getOrNull()
+                        if (content != null) {
+                            restoreWithSnapshot(content)
+                        } else {
+                            errorMessage = errRead
+                        }
+                    },
+                ) {
+                    Text(stringResource(R.string.backup_snapshot_restore))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { snapshotRestoreTarget = null }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
+    }
+
     // Import is best-effort per item, so the result sheet has to say what did
     // NOT land — otherwise a partially-restored setup looks like a full one.
     importReport?.let { report ->
@@ -615,6 +714,23 @@ fun BackupSettingsScreen(
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
+                    // [fix-audit-p0-4] A fatal restore is NOT a normal one —
+                    // surface the failure loudly and point at the rollback
+                    // path instead of letting a half-applied config look ok.
+                    report.fatal?.let { fatalMsg ->
+                        Text(
+                            stringResource(R.string.backup_done_fatal),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(top = 8.dp),
+                        )
+                        Text(
+                            fatalMsg,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
                     Text(
                         stringResource(R.string.backup_done_restart),
                         style = MaterialTheme.typography.bodySmall,
@@ -622,6 +738,25 @@ fun BackupSettingsScreen(
                 }
             },
             confirmButton = {
+                if (report.fatal != null) {
+                    // One-tap rollback to the newest pre-restore snapshot
+                    // (which restoreWithSnapshot itself also snapshots first,
+                    // so the rollback is itself reversible).
+                    TextButton(
+                        onClick = {
+                            importReport = null
+                            snapshotNote = null
+                            val snap = snapshotFiles.firstOrNull()
+                            if (snap != null) {
+                                val content = runCatching { snap.readText() }.getOrNull()
+                                if (content != null) restoreWithSnapshot(content)
+                                else errorMessage = errRead
+                            }
+                        },
+                    ) {
+                        Text(stringResource(R.string.backup_snapshot_restore))
+                    }
+                }
                 TextButton(onClick = { importReport = null; snapshotNote = null }) {
                     Text(stringResource(R.string.backup_ok))
                 }

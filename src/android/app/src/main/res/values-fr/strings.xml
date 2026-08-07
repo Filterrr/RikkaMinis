@@ -1008,4 +1008,11 @@
     <string name="chat_menu_pin_to_footer">Pin to footer</string>
     <string name="chat_menu_settings_always_last">Always last</string>
     <string name="back_to_exit_press_again">Press back again to exit</string>
+    <string name="backup_snapshot_section_title">Instantanés locaux</string>
+    <string name="backup_snapshot_section_footer">Un instantané est enregistré automatiquement avant chaque restauration. Touchez pour revenir à cette configuration.</string>
+    <string name="backup_snapshot_empty">Aucun instantané local pour l'instant.</string>
+    <string name="backup_snapshot_restore_confirm_title">Restaurer cet instantané ?</string>
+    <string name="backup_snapshot_restore_confirm_text">La configuration actuelle sera remplacée par l'instantané du %1$s. Un nouvel instantané de la configuration actuelle est d'abord enregistré.</string>
+    <string name="backup_snapshot_restore">Restaurer</string>
+    <string name="backup_done_fatal">La restauration a échoué en cours de route — la configuration n'est que partiellement restaurée. Revenez à partir d'un instantané.</string>
 </resources>
