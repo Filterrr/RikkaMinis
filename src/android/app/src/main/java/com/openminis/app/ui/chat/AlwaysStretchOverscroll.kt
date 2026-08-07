@@ -64,7 +64,12 @@ fun AlwaysStretchOverscrollBox(
  * of those flips on content insertion even when the user never gestured,
  * so they re-yank a reader back to the bottom.
  *
- * We hook [NestedScrollConnection.onPostScroll]: nested scroll is dispatched
+ * We hook [NestedScrollConnection.onPreScroll]: nested scroll is dispatched
+ * top-down (outermost first), so the connection on the Box wrapping the
+ * LazyColumn sees the gesture's raw delta before the list or its
+ * overscroll/stretch layer can consume it — a clean direction + intent
+ * signal that is immune to content insertion (only gesture sources reach
+ * it, programmatic scroll does not).
  * ONLY while a gesture is in flight (finger/fling), never by programmatic
  * scrollToItem/scrollBy — so a non-zero [available] here means the user
  * genuinely pushed against an edge during a gesture, regardless of how much
@@ -84,13 +89,41 @@ internal class BottomEdgeDetector(
     private val atBottomEdge: () -> Boolean,
     private val onHitBottom: () -> Unit,
 ) : NestedScrollConnection {
-    override fun onPostScroll(
+    // [bottom-trigger v2] Use onPreScroll, NOT onPostScroll.
+    //
+    // Why onPostScroll failed on the real device: the AlwaysStretchOverscroll
+    // box's `.overscroll(effect)` connection consumes the leftover delta that
+    // we were expecting to see at the OUTER Box's onPostScroll — so by the time
+    // the signal reached us, available.y had already been swallowed by the
+    // stretch layer and read 0 → we returned early on every actual edge hit.
+    // The leftover-based trigger was therefore a no-op in production.
+    //
+    // onPreScroll on the LazyColumn itself sees the gesture's FULL unconsumed
+    // delta BEFORE any overscroll/stretch layer can touch it. That gives us a
+    // clean direction signal: under reverseLayout "toward latest/bottom" is a
+    // negative content delta (mirrors scrollBy(-step) used by the glide). When
+    // the user drags toward the bottom AND the list is already pinned at the
+    // absolute physical bottom (firstVisibleItemIndex==0 AND
+    // firstVisibleItemScrollOffset==0 — the strongest "fully bottom" reading,
+    // stricter than isNearBottom's threshold), the only place they can be
+    // pushing is the physical bottom edge → engage follow.
+    override fun onPreScroll(
         consumed: Offset,
         available: Offset,
         source: NestedScrollSource,
     ): Offset {
-        if (source != NestedScrollSource.UserInput) return Offset.Zero
-        if (available.y == 0f) return Offset.Zero
+        // Accept BOTH finger drag (UserInput) and fling (Fling). A decisive
+        // swipe to the bottom is a fling — filtering to UserInput alone would
+        // never engage the "hit the bottom edge" trigger for exactly the
+        // gesture the user means by "撞击到底". Only the gesture-initiated
+        // sources count; programmatic scrollBy/scrollToItem is never Fling.
+        if (source != NestedScrollSource.UserInput && source != NestedScrollSource.Fling) {
+            return Offset.Zero
+        }
+        // Toward-bottom gesture = negative delta in reverseLayout content space
+        // (mirrors scrollBy(-step) toward newest). Opp-direction (toward older)
+        // must NOT engage.
+        if (available.y >= 0f) return Offset.Zero
         if (atBottomEdge()) {
             onHitBottom()
         }

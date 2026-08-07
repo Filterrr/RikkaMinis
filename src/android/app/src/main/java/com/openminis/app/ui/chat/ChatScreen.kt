@@ -3581,7 +3581,15 @@ fun ChatScreen(
                 // the battle-tested isNearBottom (firstIdx==0 within threshold)
                 // so the trigger works regardless of reverseLayout sign.
                 val bottomEdgeConnection = rememberBottomEdgeDetector(
-                    atBottomEdge = { isNearBottom.value },
+                    // Strict physical-bottom: only when the viewport is pinned
+                    // at absolute index 0 offset 0 (the true edge) does a
+                    // continued toward-bottom drag mean "hit the bottom edge".
+                    // isNearBottom's threshold would engage too eagerly mid-
+                    // read; firstIdx==0 && firstOff==0 is the strongest signal.
+                    atBottomEdge = {
+                        listState.firstVisibleItemIndex == 0 &&
+                            listState.firstVisibleItemScrollOffset == 0
+                    },
                     onHitBottom = { stickToBottom = true },
                 )
                 Box(modifier = Modifier.nestedScroll(bottomEdgeConnection)) {
