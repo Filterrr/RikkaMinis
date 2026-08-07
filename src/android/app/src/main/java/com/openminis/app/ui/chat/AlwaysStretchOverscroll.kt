@@ -105,10 +105,9 @@ internal class BottomEdgeDetector(
     // the user drags toward the bottom AND the list is already pinned at the
     // absolute physical bottom (firstVisibleItemIndex==0 AND
     // firstVisibleItemScrollOffset==0 — the strongest "fully bottom" reading,
-    // stricter than isNearBottom's threshold), the only place they can be
+    // stricker than isNearBottom's threshold), the only place they can be
     // pushing is the physical bottom edge → engage follow.
     override fun onPreScroll(
-        consumed: Offset,
         available: Offset,
         source: NestedScrollSource,
     ): Offset {
