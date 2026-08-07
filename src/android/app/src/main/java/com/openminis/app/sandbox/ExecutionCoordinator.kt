@@ -310,6 +310,39 @@ object ExecutionCoordinator {
     }
 
     /**
+     * [P2-proot-resource-hygiene] Clear accumulated junk from the PROOT_TMP_DIR
+     * cache and the guest rootfs temp dirs. PRoot writes transient files
+     * (loader cache, temp scratch) under app cache; apk/busybox and command
+     * output also accumulate in rootfs /tmp and /var/tmp. Over weeks these grow
+     * and push disk pressure / IO overhead (the "use it a long time → flash
+     * crash" class of report). Mirrors RikkaHub's cleanupAllTempDirs, which runs
+     * after each command — here we sweep on a low cadence instead so we never
+     * delete a file a *running* command still needs.
+     *
+     * Only runs when NO shell is mid-command, to avoid racing an in-flight
+     * command's temp files (they get reaped on the next sweep).
+     */
+    fun cleanupProotTmp() {
+        // Skip entirely if any shell is alive and possibly executing — safest
+        // and sufficient given the sweeper runs every minute.
+        if (shells.values.any { it.isAlive }) return
+        if (!::appContext.isInitialized) return
+        val ctx = appContext
+        val tmpDir = PRootKernel.getProotTmpDir(ctx)
+        try {
+            var removed = 0L
+            tmpDir.listFiles()?.forEach { f ->
+                if (f.deleteRecursively()) removed++
+            }
+            if (removed > 0) {
+                Log.i(TAG, "cleanupProotTmp: cleared $removed entries from ${tmpDir.name}")
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "cleanupProotTmp failed: ${t.message}")
+        }
+    }
+
+    /**
      * Stop the shell for a specific session (e.g. user tapped cancel).
      * The shell process is killed; next command will recreate it.
      */

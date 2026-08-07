@@ -608,6 +608,16 @@ object PRootKernel {
         // equivalent for the apk consumer.
         cmd.add("--link2symlink")
 
+        // [P2-proot-resource-hygiene] Ask PRoot to exit once its child
+        // (/bin/sh) terminates. When a command shell is destroyForcibly'd
+        // (timeout, user cancel, oversize recycle) this makes the PRoot
+        // tracer itself exit instead of lingering with leaked native memory
+        // held via the PTY/pipe master fd (measured 6.2-6.9GB → device OOM →
+        // SIGABRT). RikkaHub uses the same flag for per-command proot runs so
+        // the tracer never outlives the command. Long-lived interactive shells
+        // are unaffected — the /bin/sh stays alive the whole session.
+        cmd.add("--kill-on-exit")
+
         // Set rootfs
         cmd.add("-r")
         cmd.add(rootfsManager.rootfsDir.absolutePath)
