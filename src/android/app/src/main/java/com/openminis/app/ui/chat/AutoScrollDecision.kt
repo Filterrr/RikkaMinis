@@ -140,22 +140,28 @@ fun decideAutoFollow(intent: ScrollIntent, s: ScrollStateSnapshot): ScrollVerdic
         ScrollIntent.STREAM_GLIDE -> {
             if (s.isScrollInProgress) return ScrollVerdict.Skip
             if (!s.isStreaming) return ScrollVerdict.Skip
-            val sinceInterrupt = s.nowMs - s.lastInterruptMs
-            if (sinceInterrupt < 1000L) return ScrollVerdict.Skip
-            // [T261] REMOVED the firstIdx==0 gate. It was added in the
-            // 1st-round scroll patch (884d9f1) to stop a reader who HAD
-            // scrolled away from being yanked back while streaming grew the
-            // index-0 block. But the COMMON GATE already covers that: a
-            // reader who scrolled away has userScrolledAway=true (fed from
-            // !stickToBottom), so they never reach this branch. The extra
-            // firstIdx>0 gate instead KILLED the legit case where the user
-            // explicitly tapped the JumpToBottom FAB (stickToBottom=true)
-            // and streaming then pushed the viewport above the bottom row —
-            // the glide refused to pull them back, so follow silently died.
-            // FAB re-stick is the explicit "follow to the bottom" intent, so
-            // a firstIdx>0 here must still glide. New row insertion at index
-            // 0 is handled by TRAILING_ROW regardless; this branch only
-            // decides whether the live stream keeps the viewport pinned.
+            // [T261-ios] REMOVED the sinceInterrupt (grace-time) gate once
+            // and for all — see git log for the failed firstIdx/grace patch
+            // (884d9f1, b89c118). Root cause of "FAB then stream stops
+            // following": the caller fed lastInterruptMs from the user's
+            // LAST touch before tapping the JumpToBottom FAB (drag to read
+            // history), not from the FAB's programmatic scroll (which never
+            // touches the interaction source). So immediately after FAB
+            // re-stick, sinceInterrupt was still <1000ms and STREAM_GLIDE
+            // bailed for ~1s — exactly the window in which streaming pushes
+            // the viewport off the bottom → follow silently died.
+            //
+            // iOS (CollectionViewMessageListV3) has NO such grace window. It
+            // keys follow purely on the single scrollMode state: once
+            // autoScrolling, any content growth compensates in-layout, no
+            // timing gate. On Android, COMMON GATE already plays that role of
+            // "who may pin": a user who scrolled away has
+            // userScrolledAway=true (fed from !stickToBottom) and never
+            // reaches this branch. So this per-intent time-window is REDUNDANT
+            // (COMMON GATE already excludes the would-be-protected case) AND
+            // harmful (kills the legit re-stuck stream). Drop it; keep the
+            // competition guard (isScrollInProgress ≈ iOS isTracking/
+            // isDecelerating) and the streaming guard.
             // If already perfectly pinned, skip.
             if (s.firstVisibleItemIndex == 0 && s.firstVisibleItemScrollOffset == 0) {
                 return ScrollVerdict.Skip
