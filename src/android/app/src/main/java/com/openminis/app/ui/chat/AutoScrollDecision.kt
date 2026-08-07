@@ -108,7 +108,14 @@ sealed class ScrollVerdict {
  */
 fun decideAutoFollow(intent: ScrollIntent, s: ScrollStateSnapshot): ScrollVerdict {
     // ─── USER_SEND: unconditional ───
+    // [P2-scroll-user-send] Was fully unconditional — yanked a user who
+    // sent while reading history (log: user-send/initial at firstIdx=16)
+    // straight to the bottom. The ChatScreen send handlers now snapshot
+    // the anchor pre-insert and skip when the reader is in history; mirror
+    // that here so any future caller of decideAutoFollow(USER_SEND) gets
+    // the same behavior: scroll only when anchored on the bottom row.
     if (intent == ScrollIntent.USER_SEND) {
+        if (s.firstVisibleItemIndex > 0) return ScrollVerdict.Skip
         return ScrollVerdict.ScrollTo(0, 0, intent.label)
     }
 
@@ -185,7 +192,20 @@ fun decideAutoFollow(intent: ScrollIntent, s: ScrollStateSnapshot): ScrollVerdic
             // we NEED the drift-snap.
             // BUT: isScrollInProgress IS gated (as in original 1679) —
             // don't compete with an active user drag/fling.
+            //
+            // [P2-scroll-read-history] The one true discriminator between
+            //  (a) "content inserted under a bottom-anchored user — compensate"
+            //  (b) "user is reading history up the list — leave them alone"
+            // is firstVisibleItemIndex, NOT bottomItemOffset. In reverseLayout
+            // ANY insertion pushes index 0's offset negative even when the
+            // user has drifted 2+ rows up reading (log: drift-snap fired with
+            // firstIdx=2). bottomItemOffset<0 alone is true in BOTH cases and
+            // yanks the reader back to (0,0). So: only compensate drift when
+            // the viewport is still anchored on the bottom row (firstIdx==0);
+            // a user who has scrolled into history (firstIdx>0) — whether by
+            // drag or by insertion drift — must never be snapped back.
             if (s.isScrollInProgress) return ScrollVerdict.Skip
+            if (s.firstVisibleItemIndex > 0) return ScrollVerdict.Skip
             if (s.bottomItemOffset >= 0) return ScrollVerdict.Skip
             ScrollVerdict.ScrollTo(0, 0, intent.label)
         }
