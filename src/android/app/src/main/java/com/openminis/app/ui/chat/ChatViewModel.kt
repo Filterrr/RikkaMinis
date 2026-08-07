@@ -541,8 +541,22 @@ class ChatViewModel(
      */
     val listState: LazyListState = LazyListState(0, 0)
 
-    fun setInputText(value: String) {
+    /**
+     * [fix/setinputtext-caret-intent] Replaces the composer text and, when the
+     * caller knows where the caret must land, tags an explicit one-shot caret.
+     *
+     * [caretOverride] is authoritative: when non-null it is written to
+     * [_pendingCaret] (wiping any stale value) so the consuming LaunchedEffect
+     * positions the selection exactly there. Use it for EVERY external rewrite
+     * that must control the cursor (mention insert, draft restore, slash
+     * response). Omit it only when the caller is NOT touching the caret intent
+     * at all (IME onValueChange pass-through) — then [_pendingCaret] stays
+     * untouched and the editor preserves the user's current cursor via
+     * lastTrueCaretEnd.
+     */
+    fun setInputText(value: String, caretOverride: Int? = null) {
         _inputText.value = value
+        if (caretOverride != null) _pendingCaret.value = caretOverride
         syncComposerDraft(value)
     }
 
