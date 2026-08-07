@@ -1,6 +1,7 @@
 package com.openminis.app.sandbox
 
 import android.content.Context
+import android.os.SystemClock
 import android.util.Log
 import com.openminis.app.data.repository.EnvVarRepository
 import kotlinx.coroutines.sync.Mutex
@@ -27,6 +28,19 @@ object ExecutionCoordinator {
 
     private const val TAG = "ExecutionCoordinator"
 
+    // [P2-proot-native-leak]
+    // High-water mark (MB). Normal operation is ~35-55MB native heap.
+    // A long-lived PRoot persistent shell leaks native memory monotonically
+    // (measured 6.2-6.9GB on 2026-08-07, enough to OOM the device). When a
+    // command returns and native heap exceeds this, we recycle the session's
+    // shell so the next getOrCreateShell spawns a fresh PRoot at baseline.
+    private const val NATIVE_HEAP_HIGH_WATER_MARK_MB = 512L
+    // A shell idle this long is terminated to release its PRoot native
+    // footprint. Generous above any agent transition gap (model thinking).
+    private const val SHELL_IDLE_TIMEOUT_MS = 10 * 60 * 1000L  // 10 min
+    // Sweep cadence for idle shell recycling (public for MinisApp sweeper).
+    const val IDLE_SWEEP_INTERVAL_MS = 60 * 1000L              // 1 min
+
     data class CommandResult(
         val output: String,
         val exitCode: Int,
@@ -49,6 +63,9 @@ object ExecutionCoordinator {
      * keep the stale value around indefinitely.
      */
     private val lastInjectedKeys = ConcurrentHashMap<String, Set<String>>()
+    // [P2-proot-native-leak] elapsedRealtime of last command completion
+    // per session; drives recycleIdleShells.
+    private val lastActiveMs = ConcurrentHashMap<String, Long>()
 
     /**
      * Global lock used only for shell creation to prevent duplicate shells
@@ -118,6 +135,15 @@ object ExecutionCoordinator {
                 "$truncated\n(exit code: $exitCode)"
             } else {
                 truncated
+            }
+
+            // [P2-proot-native-leak] mark active; recycle if native heap
+            // ballooned past the safe ceiling (PRoot tracer leak).
+            lastActiveMs[sessionId] = SystemClock.elapsedRealtime()
+            val nativeHeapMB = android.os.Debug.getNativeHeapAllocatedSize() / (1024L * 1024L)
+            if (nativeHeapMB > NATIVE_HEAP_HIGH_WATER_MARK_MB) {
+                Log.w(TAG, "[$sessionId] native heap ${nativeHeapMB}MB > mark after command — recycling PRoot shell")
+                sessionDidTerminate(sessionId)
             }
 
             CommandResult(output = output, exitCode = exitCode, durationMs = durationMs)
@@ -243,8 +269,25 @@ object ExecutionCoordinator {
         // restarts from a clean baseline, so the next applyEnvironment
         // shouldn't try to `unset` keys that don't exist in the new shell.
         lastInjectedKeys.remove(sessionId)
+        lastActiveMs.remove(sessionId)
         shell?.stop()
         if (shell != null) Log.i(TAG, "[$sessionId] Shell terminated")
+    }
+
+    /**
+     * [P2-proot-native-leak] Recycle shells idle past SHELL_IDLE_TIMEOUT_MS.
+     * Long-lived PRoot shells leak native memory monotonically; terminating
+     * idle ones releases their footprint. Next command re-spawns fresh.
+     */
+    fun recycleIdleShells() {
+        val now = SystemClock.elapsedRealtime()
+        for (sessionId in shells.keys) {
+            val last = lastActiveMs[sessionId] ?: 0L
+            if (last != 0L && (now - last) > SHELL_IDLE_TIMEOUT_MS) {
+                Log.w(TAG, "[$sessionId] shell idle ${(now - last) / 1000}s — recycling")
+                sessionDidTerminate(sessionId)
+            }
+        }
     }
 
     /**
@@ -256,6 +299,7 @@ object ExecutionCoordinator {
             val shell = shells.remove(sessionId)
             // T124a: snapshot belongs to the now-dead shell.
             lastInjectedKeys.remove(sessionId)
+            lastActiveMs.remove(sessionId)
             shell?.stop()
             Log.i(TAG, "[$sessionId] Shell stopped by user")
         } else {
@@ -263,6 +307,7 @@ object ExecutionCoordinator {
             shells.values.forEach { it.stop() }
             shells.clear()
             lastInjectedKeys.clear()
+            lastActiveMs.clear()
             ShellExecutor.destroyCurrent()
         }
     }

@@ -59,6 +59,7 @@ import com.openminis.app.ui.MinisImageFetcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 class MinisApp : Application(), ImageLoaderFactory {
@@ -567,6 +568,25 @@ class MinisApp : Application(), ImageLoaderFactory {
 
         // Initialize offload permission manager
         OffloadPermissionManager.init(this)
+
+        // [P2-proot-native-leak] Background shell-recycle sweeper. Long-lived
+        // PRoot persistent shells leak native memory monotonically (measured
+        // 6.2-6.9GB on 2026-08-07, enough to OOM the device). The sweeper runs
+        // on the app IO scope and terminates any shell idle for >10 min
+        // (see ExecutionCoordinator.recycleIdleShells); the next command in
+        // that session transparently re-spawns a fresh PRoot. Post-command
+        // completion also enforces a hard 512MB native-heap water mark. Cheap
+        // no-ops when no shells exist.
+        applicationScope.launch {
+            while (isActive) {
+                try {
+                    ExecutionCoordinator.recycleIdleShells()
+                } catch (t: Throwable) {
+                    Log.w("MinisApp", "recycleIdleShells failed: ${t.message}")
+                }
+                kotlinx.coroutines.delay(com.openminis.app.sandbox.ExecutionCoordinator.IDLE_SWEEP_INTERVAL_MS)
+            }
+        }
 
         // Initialize speech-recognition adapter layer (system + provider engines).
         com.openminis.app.speech.SpeechRecognitionManager.init(this)
