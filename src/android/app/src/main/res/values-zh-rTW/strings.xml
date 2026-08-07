@@ -51,33 +51,8 @@
     <string name="common_yes">是</string>
     <string name="common_no">否</string>
     <string name="memory_file_empty">空</string>
-    <string name="settings_memory_experience_header">經驗記憶</string>
-    <string name="settings_memory_experience_footer">自動記錄每次完成的互動（查詢、工具、結果、回覆）到本機純文字檔案，並在每次回覆前注入最多 3 條相似的歷史經驗。不產生額外模型呼叫。失敗經驗僅在查詢涉及失敗原因時出現。被注入的經驗在互動成功時 +1、失敗時 -1。</string>
-    <string name="settings_memory_experience_enabled_title">經驗記憶</string>
-    <string name="settings_memory_experience_enabled_subtitle">記住以前有效的方法，跨工作階段重用</string>
-    <string name="memory_experience_clear">清空經驗記憶</string>
-    <string name="memory_experience_entries">已記錄 %d 條經驗</string>
-    <string name="memory_experience_clear_confirm_title">清空經驗記憶？</string>
-    <string name="memory_experience_clear_confirm_text">這將永久刪除本機經驗檔案（episodes.jsonl），agent 將忘記過去的互動。</string>
-    <string name="memory_experience_clear_failed">清除經驗記憶失敗</string>
-    <string name="memory_experience_view">檢視已記錄的經驗</string>
-    <string name="memory_experience_view_empty">暫無已記錄的經驗</string>
-    <string name="memory_experience_view_recent">僅顯示最近 %1$d 條（共 %2$d 條）</string>
-    <string name="memory_experience_show_all">顯示全部經驗</string>
-    <string name="memory_experience_delete">刪除此條經驗</string>
-    <string name="memory_experience_delete_confirm_title">刪除此條經驗？</string>
-    <string name="memory_experience_delete_confirm_text">這將從本機經驗檔案中移除該條，其複用次數將一併消失。</string>
     <string name="memory_section_view_more">檢視更多檔案</string>
     <string name="memory_section_view_less">收合</string>
-    <string name="memory_experience_reuse">已複用 %d 次</string>
-    <string name="memory_experience_outcome_ok">成功</string>
-    <string name="memory_experience_outcome_partial">部分成功</string>
-    <string name="memory_experience_outcome_fail">失敗</string>
-    <string name="memory_experience_detail_query">查詢</string>
-    <string name="memory_experience_detail_reply">回覆</string>
-    <string name="memory_experience_detail_tools">工具</string>
-    <string name="memory_experience_detail_meta">記錄於 %1$s · %2$s · %3$ds · 複用 %4$d 次</string>
-    <string name="memory_experience_detail_no_tools">（無工具）</string>
 
     <!-- T172 — components / onboarding / preview i18n -->
     <string name="common_back">返回</string>
