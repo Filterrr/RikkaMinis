@@ -695,6 +695,8 @@
     <string name="share_provider_json_imported">已导入服务商“%1$s”</string>
     <string name="share_provider_json_import_failed">无效的服务商配置文件</string>
     <string name="provider_list_api_key">API Key</string>
+    <string name="provider_list_oauth">OAuth</string>
+    <string name="provider_list_no_api_key">无 API 密钥</string>
     <string name="provider_list_disabled">已停用</string>
     <string name="provider_list_favorites">常用</string>
     <string name="provider_set_favorite">设为常用</string>
@@ -707,12 +709,23 @@
     <string name="provider_detail_auto_append_v1">自动追加 /v1</string>
     <string name="provider_detail_custom_user_agent">自定义 User-Agent</string>
     <string name="provider_detail_custom_user_agent_placeholder">留空使用默认值</string>
-    <string name="provider_detail_save_url_settings">保存 URL 设置</string>
     <string name="provider_detail_api_format">API Format</string>
     <string name="provider_detail_chat_completions">Chat Completions</string>
     <string name="provider_detail_responses_api">Responses API</string>
     <string name="provider_detail_azure_openai">Azure OpenAI</string>
     <string name="provider_detail_azure_openai_footer">使用 Azure OpenAI 认证（api-key 请求头）。将完整的 Azure 端点（含 ?api-version=… 查询参数）粘贴到上面的自定义 API Base。两种 API 格式均可用。</string>
+    <string name="provider_detail_image_generation">图像生成</string>
+    <string name="provider_detail_image_endpoint_auto_footer_resolved">自动：先尝试 /v1/images/generations，失败则回退到 /v1/chat/completions。最近成功的端点: %1$s。</string>
+    <string name="provider_detail_image_endpoint_auto_footer">自动：先尝试 /v1/images/generations，失败则回退到 /v1/chat/completions。首次调用后缓存可用的端点。</string>
+    <string name="provider_detail_image_endpoint_images_footer">始终使用 /v1/images/generations。</string>
+    <string name="provider_detail_image_endpoint_chat_footer">始终使用 /v1/chat/completions（多模态输出）。</string>
+    <string name="provider_detail_image_endpoint_auto">自动</string>
+    <string name="provider_detail_image_endpoint_images_api">Images API</string>
+    <string name="provider_detail_image_endpoint_chat">聊天</string>
+    <string name="provider_detail_api_format_responses_footer">使用 /v1/responses 端点格式。某些仅支持 Responses API 的服务需要此格式。</string>
+    <string name="provider_detail_api_format_chat_footer">标准 /v1/chat/completions 格式。兼容大多数 OpenAI 兼容服务。</string>
+    <string name="provider_detail_manual_bearer_footer">对接自定义代理端点时使用。</string>
+
     <string name="provider_detail_status">状态</string>
     <string name="provider_detail_enabled">已启用</string>
     <string name="provider_detail_refresh_models">刷新模型</string>
@@ -869,6 +882,14 @@
     <string name="add_models_to_group_add_count">添加 (%1$d)</string>
     <string name="provider_detail_https_api_example_placeholder">https://api.example.com</string>
     <string name="provider_detail_models_count_header">模型 (%1$d)</string>
+    <string name="provider_detail_refresh_success_api">已刷新——从提供商加载了 %1$d 个模型。</string>
+    <string name="provider_detail_refresh_success_oauth">已刷新，模型列表已通过 OAuth 加载。</string>
+    <string name="provider_detail_refresh_success_models_dev">无实时列表；已使用 models.dev 注册表（%1$d 个模型）。结果可能不精确。</string>
+    <string name="provider_detail_refresh_no_key">未配置 API 密钥——没有可刷新的内容。</string>
+    <string name="provider_detail_refresh_preserved">无匹配的 models.dev 条目——保留现有模型列表。</string>
+    <string name="provider_detail_refresh_failed">无法刷新模型。</string>
+    <string name="provider_detail_refreshing">刷新中…</string>
+    <string name="provider_detail_refresh_models_list">刷新模型列表</string>
     <string name="provider_detail_delete_provider_confirm">确定要删除 \"%1$s\" 吗？此操作无法撤销。</string>
     <string name="provider_detail_delete_model_confirm">确定要删除 \"%1$s\" 吗？此操作无法撤销。</string>
     <string name="agent_loop_models_model_count_singular">1 个模型</string>

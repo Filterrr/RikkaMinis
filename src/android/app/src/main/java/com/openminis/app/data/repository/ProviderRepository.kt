@@ -1697,7 +1697,7 @@ class ProviderRepository(private val context: Context) {
     }
 
 
-    suspend fun refreshModels(instance: ProviderInstance) {
+    suspend fun refreshModels(instance: ProviderInstance): ModelRefreshResult {
         var apiKey = loadApiKey(instance.id)
 
         // For OAuth providers, try to refresh the token before using it (mirrors iOS validAccessToken)
@@ -1724,7 +1724,7 @@ class ProviderRepository(private val context: Context) {
             val models = OpenAIModelsApi.fetchModelsOAuth()
             if (models.isNotEmpty()) {
                 replaceEntries(instance.id, models)
-                return
+                return ModelRefreshResult.SUCCESS_OAUTH
             }
         }
 
@@ -1775,7 +1775,7 @@ class ProviderRepository(private val context: Context) {
             // Step 2: If API returned results, use them
             if (models.isNotEmpty()) {
                 replaceEntries(instance.id, models)
-                return
+                return ModelRefreshResult.SUCCESS_API
             }
         }
 
@@ -1789,9 +1789,17 @@ class ProviderRepository(private val context: Context) {
         if (fallbackModels.isNotEmpty()) {
             android.util.Log.i("ProviderRepo", "models.dev fallback returned ${fallbackModels.size} models for ${instance.label}")
             replaceEntries(instance.id, fallbackModels)
-        } else if (isThirdParty) {
-            android.util.Log.i("ProviderRepo", "Third-party endpoint, no models.dev match — preserving existing models for ${instance.label}")
+            return ModelRefreshResult.SUCCESS_MODELS_DEV
         }
+        if (apiKey == null) {
+            android.util.Log.i("ProviderRepo", "refreshModels: no API key and no models.dev match — nothing to load for ${instance.label}")
+            return ModelRefreshResult.NO_KEY
+        }
+        if (isThirdParty) {
+            android.util.Log.i("ProviderRepo", "Third-party endpoint, no models.dev match — preserving existing models for ${instance.label}")
+            return ModelRefreshResult.PRESERVED
+        }
+        return ModelRefreshResult.FAILURE
     }
 
     /**
@@ -2375,4 +2383,22 @@ class ProviderRepository(private val context: Context) {
         val bits = obj.optInt("modalityOverride", 0)
         return modalityListsFromBitfield(bits)
     }
+}
+
+/** Outcome of a [ProviderRepository.refreshModels] call, surfaced to the UI
+ *  so refresh feedback (spinner → toast) can distinguish success source,
+ *  no-key, and fallback. Added [provider-mgmt-opt]. */
+enum class ModelRefreshResult {
+    /** Live provider /v1/models (or OpenAI OAuth / switching provider) succeeded. */
+    SUCCESS_API,
+    /** OAuth static model list (Codex) succeeded. */
+    SUCCESS_OAUTH,
+    /** No live API results; used the models.dev registry by hostname. May be approximate. */
+    SUCCESS_MODELS_DEV,
+    /** No API key configured and no models.dev match — nothing loaded. */
+    NO_KEY,
+    /** Third-party custom base with no matching models.dev entry; kept existing list. */
+    PRESERVED,
+    /** All known sources failed. */
+    FAILURE,
 }
