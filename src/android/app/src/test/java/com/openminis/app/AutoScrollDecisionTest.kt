@@ -100,10 +100,22 @@ class AutoScrollDecisionTest {
     }
 
     @Test
-    fun streamGlide_withinInterruptGrace_skips() {
-        // lastInterrupt pulled very recent (< 1000ms)
-        val s = baseState().copy(lastInterruptMs = 49_800L) // 200ms ago
-        assertEquals(ScrollVerdict.Skip, decideAutoFollow(ScrollIntent.STREAM_GLIDE, s))
+    fun streamGlide_ignoresRecentInterrupt_scrolls() {
+        // [T261-ios] The per-intent interrupt-grace window is REMOVED. It
+        // previously bailed for ~1s whenever lastInterruptMs was recent — but
+        // lastInterruptMs is fed from the user's LAST touch before tapping
+        // the FAB (reading history), NOT the FAB's programmatic scroll. So
+        // immediately after FAB re-stick it would skip for ~1s — exactly the
+        // window in which streaming pushes the viewport off-bottom → follow
+        // dies. iOS has no such grace. Once stick is re-engaged (COMMON GATE
+        // passed → userScrolledAway=false) and streaming is active, a recent
+        // lastInterrupt must NOT hold the glide back.
+        val s = baseState().copy(
+            lastInterruptMs = 49_800L, // 200ms ago — must NOT gate
+            firstVisibleItemScrollOffset = 100, // drift off perfect pin
+        )
+        val v = decideAutoFollow(ScrollIntent.STREAM_GLIDE, s)
+        assertTrue("re-stuck stream must follow even with a recent lastInterrupt", v is ScrollVerdict.ScrollTo)
     }
 
     @Test
