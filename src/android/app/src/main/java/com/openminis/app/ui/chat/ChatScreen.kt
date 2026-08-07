@@ -193,7 +193,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.layout.boundsInWindow
@@ -1302,19 +1301,20 @@ fun ChatScreen(
     // `userScrolledAway` which only toggles on real user drags.
     var userScrolledAway by remember { mutableStateOf(false) }
 
-    // ─── stickToBottom state machine (user-confirmed trigger semantics) ───
+    // ─── stickToBottom state machine (explicit-trigger semantics) ───
     //
     // Replaces the passive position gates (isNearBottom / firstVisibleItemIndex)
-    // as the SINGLE source of truth for auto-follow. The trigger is a real,
-    // user-initiated gesture that pushes the viewport to the physical bottom
-    // edge — detected in AlwaysStretchOverscroll via NestedScrollConnection
-    // (BottomEdgeDetector). Content insertion can no longer flip this flag,
-    // which is what the three patch rounds (884d9f1 → 58fe086 → 1955485)
-    // were fighting.
+    // as the SINGLE source of truth for auto-follow. Follow is ENGAGED by an
+    // explicit intent only — the down-arrow FAB (jump to bottom), send while
+    // anchored, resume, and auto-push while already sticky. A gesture-based
+    // "hit the bottom edge" NestedScroll trigger was tried and removed because
+    // it proved unreliable on device; the down-arrow FAB is the deterministic
+    // replacement. Content insertion can never flip this flag, which is what
+    // the three patch rounds (884d9f1 → 58fe086 → 1955485) were fighting.
     //
-    // Model:  hit-bottom-edge → stickToBottom=true (follow);
+    // Model:  down-arrow / return-to-bottom → stickToBottom=true (follow);
     //         scroll-away-from-bottom → stickToBottom=false (stop moving);
-    //         hit-bottom-edge again → resume follow. WeChat/Telegram model.
+    //         down-arrow again → resume follow.
     var stickToBottom by remember(sessionId) { mutableStateOf(true) }
 
     // [T-android-scroll-fab-reversed] TEMP diagnostic — capture BOTH FABs'
@@ -1454,9 +1454,8 @@ fun ChatScreen(
                     // [bottom-trigger] A real user drag that lands away from the
                     // bottom disengages follow. On a listener that stayed on the
                     // bottom row this is a no-op (stickToBottom stays true); the
-                    // BottomEdgeDetector re-engages it when they push to the
-                    // very edge again. Note fling settle is handled separately
-                    // (isScrollInProgress→false checkpoint below).
+                    // down-arrow FAB re-engages it explicitly. Note fling settle
+                    // is handled separately (isScrollInProgress→false below).
                     if (nowAtBottom != stickToBottom) {
                         stickToBottom = nowAtBottom
                     }
@@ -3583,26 +3582,11 @@ fun ChatScreen(
                 // tells us whether the bottleneck is row-list build,
                 // initial list measure, or per-row composition.
                 val perfFirstLayoutFired = remember(sessionId) { java.util.concurrent.atomic.AtomicBoolean(false) }
-                // [bottom-trigger] The single "hit-the-bottom-edge" trigger for
-                // the stickToBottom state machine. Attached as the OUTERMOST
-                // nested-scroll connection on the Box that wraps the LazyColumn,
-                // so it sees every UserInput delta the list could not consume
-                // (i.e. the user pushed against an edge). `atBottomEdge` reuses
-                // the battle-tested isNearBottom (firstIdx==0 within threshold)
-                // so the trigger works regardless of reverseLayout sign.
-                val bottomEdgeConnection = rememberBottomEdgeDetector(
-                    // Strict physical-bottom: only when the viewport is pinned
-                    // at absolute index 0 offset 0 (the true edge) does a
-                    // continued toward-bottom drag mean "hit the bottom edge".
-                    // isNearBottom's threshold would engage too eagerly mid-
-                    // read; firstIdx==0 && firstOff==0 is the strongest signal.
-                    atBottomEdge = {
-                        listState.firstVisibleItemIndex == 0 &&
-                            listState.firstVisibleItemScrollOffset == 0
-                    },
-                    onHitBottom = { stickToBottom = true },
-                )
-                Box(modifier = Modifier.nestedScroll(bottomEdgeConnection)) {
+                // [bottom-trigger] Gesture edge-trigger REMOVED — it proved
+                // unreliable on device. Follow is engaged only by explicit
+                // intent: the down-arrow FAB below, send-when-anchored, and
+                // auto-push while already sticky. (See AlwaysStretchOverscroll.kt.)
+                Box {
                 AlwaysStretchOverscrollBox { sharedEffect ->
                 LazyColumn(
                     state = listState,
