@@ -229,7 +229,6 @@ class BackgroundTaskNotifier(
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = ContextCompat.getSystemService(context, NotificationManager::class.java)
             ?: return
-        if (manager.getNotificationChannel(CHANNEL_ID) != null) return
         val channel = NotificationChannel(
             CHANNEL_ID,
             context.getString(R.string.notif_task_completed_channel_name),
@@ -246,6 +245,10 @@ class BackgroundTaskNotifier(
             setVibrationPattern(longArrayOf(0L, 120L, 90L, 160L))
             setShowBadge(true)
         }
+        // Always re-create the channel so vibration settings are applied even
+        // when the channel already existed from a prior version — Android
+        // respects the app's update unless the user has manually overridden
+        // sound/vibration for this channel in system settings.
         manager.createNotificationChannel(channel)
     }
 
