@@ -3,10 +3,14 @@ package com.openminis.app.sandbox
 import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.BufferedWriter
+import java.io.File
 import java.io.OutputStreamWriter
 import java.nio.charset.StandardCharsets
 import java.util.UUID
@@ -30,6 +34,10 @@ class PersistentShell(
 
     companion object {
         private const val TAG = "PersistentShell"
+        // [P2-proot-native-leak] Poll cadence for the in-command PRoot child
+        // RSS monitor. Cheap /proc read; every poll catches a mid-run OOM at
+        // this granularity and lets ExecutionCoordinator recycle pre-crash.
+        private const val PROOT_MEM_POLL_MS = 1_000L
     }
 
     @Volatile
@@ -46,6 +54,46 @@ class PersistentShell(
 
     val isAlive: Boolean
         get() = process?.isAlive == true
+
+    /**
+     * [P2-proot-native-leak] Resident set size (MB) of the live PRoot child
+     * process, read from /proc/<pid>/status VmRSS. This is the authoritative
+     * signal for the PRoot tracer's native leak — NOT Debug.getNativeHeap-
+     * AllocatedSize(), which reports the *app* process heap and never sees
+     * the leaked memory held by the forked PRoot tracer (via the PTY master
+     * fd). Returns 0 when no process is alive or the file is unreadable.
+     */
+    fun nativeRssMB(): Long {
+        val proc = process ?: return 0L
+        val pid = processPid(proc)
+        if (pid <= 0) return 0L
+        return try {
+            val status = File("/proc/$pid/status").readText()
+            val m = Regex("""VmRSS:\s+(\d+) kB""").find(status) ?: return 0L
+            m.groupValues[1].toLongOrNull()?.let { it / 1024L } ?: 0L
+        } catch (_: Throwable) {
+            0L
+        }
+    }
+
+    /**
+     * [P2-proot-native-leak] Resolve the PID of a [ProcessBuilder]-spawned
+     * child process on Android. `java.lang.Process.pid()` (Java 9+) is NOT
+     * on the Android compile classpath, so we read the private `pid` field
+     * that every concrete Process impl keeps. Returns 0 if it can't be
+     * resolved (caller then treats the shell as "no process to monitor").
+     */
+    private fun processPid(proc: Process): Int {
+        return try {
+            val f = proc.javaClass.declaredFields.firstOrNull { it.name == "pid" }
+                ?: proc.javaClass.superclass?.declaredFields?.firstOrNull { it.name == "pid" }
+            if (f == null) return 0
+            f.isAccessible = true
+            (f.get(proc) as? Number)?.toInt() ?: return 0
+        } catch (_: Throwable) {
+            0
+        }
+    }
 
     /** [diag] Read back the mount this shell was started with (frozen at boot). */
     fun debugBindMount(linuxPath: String): String? = sessionBindMounts[linuxPath]
@@ -266,6 +314,7 @@ class PersistentShell(
         command: String,
         timeout: Long = 600_000L,
         lineCallback: ((String) -> Unit)? = null,
+        memoryMonitor: ((Long) -> Unit)? = null,
     ): Pair<String, Int> {
         ensureStarted()
 
@@ -278,6 +327,20 @@ class PersistentShell(
         val wrappedCommand = "$command\necho \"__MINIS_DONE_${marker}_EXIT_\$?__\"\n"
 
         return withContext(Dispatchers.IO) {
+            // [P2-proot-native-leak] In-flight memory monitor: poll the real
+            // PRoot child RSS while the command runs and surface it to the
+            // coordinator so a crossing of the high-water mark can recycle
+            // the shell BEFORE the child OOMs. Cheap — a /proc read per tick.
+            val monitorJob = if (memoryMonitor != null) {
+                launch {
+                    while (isActive) {
+                        val rss = nativeRssMB()
+                        if (rss > 0L) memoryMonitor(rss)
+                        delay(PROOT_MEM_POLL_MS)
+                    }
+                }
+            } else null
+
             val result = withTimeoutOrNull(timeout) {
                 suspendCancellableCoroutine { cont ->
                     val cb = CommandCallback(
@@ -306,6 +369,8 @@ class PersistentShell(
                     }
                 }
             }
+
+            monitorJob?.cancel()
 
             if (result == null) {
                 // Timeout — cancel pending, but don't kill the shell
