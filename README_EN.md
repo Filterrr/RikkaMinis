@@ -10,8 +10,10 @@
 
 RikkaMinis is a personal **Android-only** build that hybridizes two projects:
 the engine and codebase come from [OpenMinis](https://github.com/OpenMinis/OpenMinis),
-while the interaction design (chat history drawer, minimal top bar, simplified
-settings) is inspired by [RikkaHub](https://github.com/rikkahub/rikkahub).
+while the UI and interaction logic are inspired by
+[RikkaHub](https://github.com/rikkahub/rikkahub) — including the chat history
+drawer, minimal top bar, message-list layout, and interaction behaviors such as
+message-list follow and input-bar focus.
 
 It builds a working APK on GitHub Actions and publishes it automatically.
 
@@ -263,6 +265,10 @@ chroot for the Android sandbox, via [OpenMinis' fork](https://github.com/OpenMin
 
 **Text & rendering** — [cppjieba](https://github.com/yanyiwu/cppjieba) (MIT),
 [KaTeX](https://katex.org) (MIT).
+
+**Interaction reference** — [RikkaHub](https://github.com/rikkahub/rikkahub)
+(AGPL-3.0), an Android multi-LLM client whose design informed RikkaMinis' chat
+UI and interaction logic (conceptual inspiration, not code reuse).
 
 **Android** — [AndroidX & Jetpack Compose](https://developer.android.com/jetpack),
 [OkHttp](https://square.github.io/okhttp/), [Coil](https://coil-kt.github.io/coil/),

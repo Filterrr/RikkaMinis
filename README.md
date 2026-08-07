@@ -10,7 +10,8 @@
 
 RikkaMinis 是一个个人专用的 **Android-only** 构建，杂交了两个项目：
 引擎与代码库来自 [OpenMinis](https://github.com/OpenMinis/OpenMinis)，
-交互设计（聊天历史抽屉、极简顶栏、精简设置）则受 [RikkaHub](https://github.com/rikkahub/rikkahub) 启发。
+UI 与交互逻辑则受 [RikkaHub](https://github.com/rikkahub/rikkahub) 启发——
+包括聊天历史抽屉、极简顶栏、消息流布局，以及消息流跟随、输入栏聚焦这类交互行为。
 
 它在 GitHub Actions 上构建可用的 APK 并自动发布。
 
@@ -225,6 +226,10 @@ chroot，经由 [OpenMinis 的 fork](https://github.com/OpenMinis/proot)；
 
 **文本与渲染** — [cppjieba](https://github.com/yanyiwu/cppjieba)（MIT）、
 [KaTeX](https://katex.org)（MIT）。
+
+**交互参考 — [RikkaHub](https://github.com/rikkahub/rikkahub)**（AGPL-3.0），Android
+多 LLM 客户端，为 RikkaMinis 的聊天 UI 与交互逻辑提供设计灵感（借鉴灵感，
+非代码复制）。
 
 **Android** — [AndroidX & Jetpack Compose](https://developer.android.com/jetpack)、
 [OkHttp](https://square.github.io/okhttp/)、[Coil](https://coil-kt.github.io/coil/)、
