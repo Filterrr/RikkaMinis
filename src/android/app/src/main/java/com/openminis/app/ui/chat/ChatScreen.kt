@@ -194,6 +194,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.layout.boundsInWindow
@@ -1304,14 +1305,29 @@ fun ChatScreen(
     // `userScrolledAway` which only toggles on real user drags.
     var userScrolledAway by remember { mutableStateOf(false) }
 
+    // ─── stickToBottom state machine (user-confirmed trigger semantics) ───
+    //
+    // Replaces the passive position gates (isNearBottom / firstVisibleItemIndex)
+    // as the SINGLE source of truth for auto-follow. The trigger is a real,
+    // user-initiated gesture that pushes the viewport to the physical bottom
+    // edge — detected in AlwaysStretchOverscroll via NestedScrollConnection
+    // (BottomEdgeDetector). Content insertion can no longer flip this flag,
+    // which is what the three patch rounds (884d9f1 → 58fe086 → 1955485)
+    // were fighting.
+    //
+    // Model:  hit-bottom-edge → stickToBottom=true (follow);
+    //         scroll-away-from-bottom → stickToBottom=false (stop moving);
+    //         hit-bottom-edge again → resume follow. WeChat/Telegram model.
+    var stickToBottom by remember(sessionId) { mutableStateOf(true) }
+
     // [T-android-scroll-fab-reversed] TEMP diagnostic — capture BOTH FABs'
     // gates so we can verify the matrix (bottom=none, middle=both, top=down
     // only) and why the down-FAB is missing at the top. Remove after fix.
     LaunchedEffect(listState) {
         snapshotFlow {
             val up = isFarFromTop.value && isFarFromBottom.value && messages.isNotEmpty()
-            val down = userScrolledAway && contentOverflows.value && messages.isNotEmpty()
-            "FABs up=$up down=$down | farTop=${isFarFromTop.value} farBottom=${isFarFromBottom.value} scrolledAway=$userScrolledAway overflow=${contentOverflows.value} canFwd=${listState.canScrollForward} canBwd=${listState.canScrollBackward}"
+            val down = !stickToBottom && contentOverflows.value && messages.isNotEmpty()
+            "FABs up=$up down=$down | stick=$stickToBottom scrolledAway=$userScrolledAway isNearBottom=${isNearBottom.value} overflow=${contentOverflows.value} canFwd=${listState.canScrollForward} canBwd=${listState.canScrollBackward}"
         }.collect { AppLogger.debug("ScrollFAB2", it) }
     }
 
@@ -1331,20 +1347,45 @@ fun ChatScreen(
             return@handler
         }
         lastSendTimeMs = SystemClock.elapsedRealtime()
+        // [P2-scroll-user-send] Capture the viewport anchor BEFORE sendMessage:
+        // sending inserts the user row at index 0, which in reverseLayout
+        // pushes firstVisibleItemIndex from 0 → 1, so reading isNearBottom
+        // AFTER the insert would wrongly read "scrolled into history" for a
+        // bottom-anchored sender. Snapshot first, then act.
+        val wasScrolledIntoHistory = !isNearBottom.value
         viewModel.setInputText("")
         keyboardController?.hide()
         focusManager.clearFocus()
         viewModel.sendMessage(rawText)
         noteSendForInputModePref()
+        // [P2-scroll-user-send] Was: unconditional `userScrolledAway=false` +
+        // unconditional scrollToItem(0,0). That yanked a user who was reading
+        // history (log: user-send/initial fired at firstIdx=16) straight to
+        // the bottom. Now: the send always clears the sticky flag (the user
+        // just interacted), but the scroll-to-bottom only fires when the
+        // viewport was anchored at the bottom row — otherwise we respect the
+        // reader's place in history and let the in-flight push
+        // (trailing-row/glide) decide. USER_SEND remains "scroll if you were
+        // already at the bottom"; it stops being "yank whoever read earlier".
         userScrolledAway = false
+        // [bottom-trigger] Follow re-engages ONLY if the user was already at
+        // the bottom (wasScrolledIntoHistory==false) — sending does NOT turn
+        // a history reader into a follower. Restoring follow unconditionally
+        // here would re-create the P2 yank (trailing-row/glide pan a reader
+        // back). The edge trigger + FAB remain the ways a reader re-engages.
+        stickToBottom = !wasScrolledIntoHistory
         coroutineScope.launch {
-            // [consolidated] USER_SEND is unconditional — no gate to consult.
-            // (decideAutoFollow(USER_SEND) always returns ScrollTo(0,0), so
-            //  calling it here would be a pure indirection; call the executor
-            //  directly with engine-style reasons.)
-            tracedScrollToItem("user-send/initial", 0, 0)
-            kotlinx.coroutines.delay(100)
-            tracedScrollToItem("user-send/settle", 0, 0)
+            if (!wasScrolledIntoHistory) {
+                // [consolidated] USER_SEND is unconditional — no gate to consult.
+                // (decideAutoFollow(USER_SEND) always returns ScrollTo(0,0), so
+                //  calling it here would be a pure indirection; call the executor
+                //  directly with engine-style reasons.)
+                tracedScrollToItem("user-send/initial", 0, 0)
+                kotlinx.coroutines.delay(100)
+                tracedScrollToItem("user-send/settle", 0, 0)
+            } else {
+                AppLogger.debug("USER-SEND", "reader-in-history, skip yank (firstIdx drift scene)")
+            }
         }
     }
     // T196: timestamp of the last drag-stop. The streaming auto-follow LE
@@ -1366,7 +1407,13 @@ fun ChatScreen(
         val info = listState.layoutInfo
         val bottomItem = info.visibleItemsInfo.firstOrNull { it.index == 0 }
         return ScrollStateSnapshot(
-            userScrolledAway = userScrolledAway,
+            // [bottom-trigger] Converge the passive position gates onto the
+            // active-intent stickToBottom state machine: "user has left the
+            // bottom" ⇔ stickToBottom==false. This feeds AutoScrollDecision's
+            // COMMON GATE (`userScrolledAway → Skip`) so every auto-follow
+            // path now defers to the NestedScroll-driven trigger instead of
+            // re-reading isNearBottom (which content insertion flips).
+            userScrolledAway = !stickToBottom,
             isNearBottom = isNearBottom.value,
             isScrollInProgress = listState.isScrollInProgress,
             isStreaming = viewModel.isStreaming.value,
@@ -1407,6 +1454,15 @@ fun ChatScreen(
                     if (newScrolledAway != userScrolledAway) {
                         userScrolledAway = newScrolledAway
                     }
+                    // [bottom-trigger] A real user drag that lands away from the
+                    // bottom disengages follow. On a listener that stayed on the
+                    // bottom row this is a no-op (stickToBottom stays true); the
+                    // BottomEdgeDetector re-engages it when they push to the
+                    // very edge again. Note fling settle is handled separately
+                    // (isScrollInProgress→false checkpoint below).
+                    if (nowAtBottom != stickToBottom) {
+                        stickToBottom = nowAtBottom
+                    }
                 }
                 is androidx.compose.foundation.interaction.DragInteraction.Cancel ->
                     isUserDragging = false
@@ -1440,6 +1496,10 @@ fun ChatScreen(
             // return-to-bottom gesture.
             if (sinceDragMs > 1500L) return@LaunchedEffect
             userScrolledAway = false
+            // [bottom-trigger] User just dragged back to the bottom (recent
+            // DragInteraction.Stop) — that's a real return-to-bottom gesture,
+            // so restore follow.
+            stickToBottom = true
         }
     }
     // T169 / T170: an IME show/hide animates the LazyColumn's content area,
@@ -1453,7 +1513,12 @@ fun ChatScreen(
     // they were reading.
     val imeBottomPx = WindowInsets.ime.getBottom(LocalDensity.current)
     LaunchedEffect(imeBottomPx) {
-        if (userScrolledAway && isNearBottom.value) userScrolledAway = false
+        if (userScrolledAway && isNearBottom.value) {
+            userScrolledAway = false
+            // [bottom-trigger] The IME reshaped the viewport while the user was
+            // actually at the bottom — keep the follow state in sync.
+            stickToBottom = true
+        }
     }
     // [T-android-tool-autoscroll] Start-of-turn edge from ViewModel: resume() /
     // retryLast() / retryFromMessage() / rerunFromToolBlock() emit Unit on
@@ -1499,6 +1564,9 @@ fun ChatScreen(
                 // was missed.
                 lastUserAppendMs = SystemClock.elapsedRealtime()
                 userScrolledAway = false
+                // [bottom-trigger] A user message was appended and the engine
+                // decided to follow — restore the stick state.
+                stickToBottom = true
                 tracedScrollToItem(verdict.reason, verdict.index, verdict.offset)
             }
             is ScrollVerdict.ScrollBy -> {} // not used by this intent
@@ -1742,7 +1810,13 @@ fun ChatScreen(
             }
             val infoAfter = listState.layoutInfo
             val bottomNow = infoAfter.visibleItemsInfo.firstOrNull { it.index == 0 }
-            if (bottomNow != null && bottomNow.offset < 0) {
+            // [P2-scroll-read-history] LAYOUT-DRIFT-CLIP mirrors the drift-snap
+            // gate: only compensate the bottom row's negative offset when the
+            // viewport is still anchored on index 0. When the user has drifted
+            // into history (firstIdx>0, whether by drag or insertion), a
+            // negative offset read here is not "content pushed the bottom row"
+            // — it's the user reading — so do NOT clip/scroll them back.
+            if (listState.firstVisibleItemIndex == 0 && bottomNow != null && bottomNow.offset < 0) {
                 tracedScrollBy("LAYOUT-DRIFT-CLIP", bottomNow.offset.toFloat())
             }
         }
@@ -1781,9 +1855,13 @@ fun ChatScreen(
                 // userScrolledAway=false; the fling then carries the
                 // viewport off-bottom. Use the isScrollInProgress→false
                 // edge (past drag AND fling settle) as the authoritative
-                // checkpoint and re-arm userScrolledAway.
+                // checkpoint and re-arm userScrolledAway + stickToBottom.
                 if (!inProgress && !isNearBottom.value && !userScrolledAway) {
                     userScrolledAway = true
+                    // [bottom-trigger] The fling settled away from the bottom —
+                    // the user's follow intent is gone until they push to the
+                    // edge again.
+                    stickToBottom = false
                 }
             }
     }
@@ -3495,7 +3573,26 @@ fun ChatScreen(
                 // tells us whether the bottleneck is row-list build,
                 // initial list measure, or per-row composition.
                 val perfFirstLayoutFired = remember(sessionId) { java.util.concurrent.atomic.AtomicBoolean(false) }
-                Box {
+                // [bottom-trigger] The single "hit-the-bottom-edge" trigger for
+                // the stickToBottom state machine. Attached as the OUTERMOST
+                // nested-scroll connection on the Box that wraps the LazyColumn,
+                // so it sees every UserInput delta the list could not consume
+                // (i.e. the user pushed against an edge). `atBottomEdge` reuses
+                // the battle-tested isNearBottom (firstIdx==0 within threshold)
+                // so the trigger works regardless of reverseLayout sign.
+                val bottomEdgeConnection = rememberBottomEdgeDetector(
+                    // Strict physical-bottom: only when the viewport is pinned
+                    // at absolute index 0 offset 0 (the true edge) does a
+                    // continued toward-bottom drag mean "hit the bottom edge".
+                    // isNearBottom's threshold would engage too eagerly mid-
+                    // read; firstIdx==0 && firstOff==0 is the strongest signal.
+                    atBottomEdge = {
+                        listState.firstVisibleItemIndex == 0 &&
+                            listState.firstVisibleItemScrollOffset == 0
+                    },
+                    onHitBottom = { stickToBottom = true },
+                )
+                Box(modifier = Modifier.nestedScroll(bottomEdgeConnection)) {
                 AlwaysStretchOverscrollBox { sharedEffect ->
                 LazyColumn(
                     state = listState,
@@ -3605,6 +3702,9 @@ fun ChatScreen(
                                 // then again after 100ms so the indicator
                                 // doesn't land below the fold.
                                 userScrolledAway = false
+                                // [bottom-trigger] Resume = user wants to see
+                                // the continuation → restore follow.
+                                stickToBottom = true
                                 coroutineScope.launch {
                                     tracedScrollToItem("RESUME-BANNER/initial", 0, 0)
                                     kotlinx.coroutines.delay(100)
@@ -4211,7 +4311,11 @@ fun ChatScreen(
                     }
                 }
 
-                if (userScrolledAway && contentOverflows.value && messages.isNotEmpty()) {
+                // [bottom-trigger] Down-FAB shows when follow is NOT engaged
+                // (stickToBottom==false) — i.e. the user scrolled away to read
+                // history and the "return to newest" button should be available
+                // as the explicit resume-follow escape hatch.
+                if (!stickToBottom && contentOverflows.value && messages.isNotEmpty()) {
                     val fabBottomPadding = if (lastToolBlocks.isNotEmpty()) 80.dp else 8.dp
                     androidx.compose.material3.FilledIconButton(
                         onClick = {
@@ -4228,6 +4332,10 @@ fun ChatScreen(
                             // stuck visible. The user tapped "go to bottom" — the
                             // intent is unambiguous, so reset directly.
                             userScrolledAway = false
+                            // [bottom-trigger] Tapping the JumpToBottom FAB is
+                            // the explicit "return to newest / resume follow"
+                            // gesture — re-engage the stick state.
+                            stickToBottom = true
                             coroutineScope.launch {
                                 tracedScrollToItem("FAB-DOWN", 0, 0)
                                 // Second pin after a frame: the first scroll may
@@ -5086,17 +5194,28 @@ fun ChatScreen(
                             // empty inputText becomes visible.
                             val toSend = inputText
                             lastSendTimeMs = SystemClock.elapsedRealtime()
+                            // [P2-scroll-user-send] snapshot BEFORE sendMessage
+                            // (insert pushes index 0 → 1; must not read after).
+                            val wasScrolledIntoHistory = !isNearBottom.value
                             viewModel.setInputText("")
                             keyboardController?.hide()
                             focusManager.clearFocus()
                             viewModel.sendMessage(toSend)
                             noteSendForInputModePref()
                             userScrolledAway = false
+                            // [bottom-trigger] Re-engage follow only if the
+                            // reader was anchored at the bottom (P2: must not
+                            // turn a history reader into a follower).
+                            stickToBottom = !wasScrolledIntoHistory
                             coroutineScope.launch {
-                                // [consolidated] USER_SEND is unconditional.
-                                tracedScrollToItem("user-send/ime-action/initial", 0, 0)
-                                kotlinx.coroutines.delay(100)
-                                tracedScrollToItem("user-send/ime-action/settle", 0, 0)
+                                if (!wasScrolledIntoHistory) {
+                                    // [consolidated] USER_SEND is unconditional.
+                                    tracedScrollToItem("user-send/ime-action/initial", 0, 0)
+                                    kotlinx.coroutines.delay(100)
+                                    tracedScrollToItem("user-send/ime-action/settle", 0, 0)
+                                } else {
+                                    AppLogger.debug("USER-SEND", "ime-action reader-in-history, skip yank")
+                                }
                             }
                             true
                         }
