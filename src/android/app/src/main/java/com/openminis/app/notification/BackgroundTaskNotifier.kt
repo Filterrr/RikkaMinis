@@ -140,6 +140,7 @@ class BackgroundTaskNotifier(
                     .setAutoCancel(true)
                     .setPriority(NotificationCompat.PRIORITY_DEFAULT)
                     .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+                    .setDefaults(NotificationCompat.DEFAULT_ALL)
                     .build()
 
                 nm.notify(id, notification)
@@ -185,6 +186,7 @@ class BackgroundTaskNotifier(
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
             .build()
 
         try {
@@ -254,6 +256,6 @@ class BackgroundTaskNotifier(
 
     companion object {
         private const val TAG = "TaskNotifier"
-        const val CHANNEL_ID = "minis_task_completed"
+        const val CHANNEL_ID = "minis_task_completed_v2"
     }
 }
