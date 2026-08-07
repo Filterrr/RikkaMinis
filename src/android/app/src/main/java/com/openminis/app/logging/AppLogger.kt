@@ -25,6 +25,11 @@ object AppLogger {
     // (d83bc894). The previous 14 came from the March parity-scaffolding
     // batch with no recorded rationale — plain historical drift, not intent.
     private const val MAX_AGE_DAYS = 15
+    // [T-android-log-size-cap] Hard cap on total log storage. Time-based
+    // pruning (MAX_AGE_DAYS) handles routine daily rotation; this guards
+    // against a single runaway day generating hundreds of MB. Today's file
+    // is always excluded from size-pruning (see pruneOldLogs).
+    private const val MAX_TOTAL_SIZE_BYTES = 200L * 1024 * 1024
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
     private val timestampFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
 
@@ -141,7 +146,6 @@ object AppLogger {
             val today = dateFormat.format(now)
             val w = getWriter(today)
             w.println("[LOGCAT] $rawLine")
-            w.flush()
         } catch (_: Exception) {
             // Swallow — must not feed back into logcat or we loop forever.
         }
@@ -215,7 +219,6 @@ object AppLogger {
             val timestamp = timestampFormat.format(now)
             val w = getWriter(today)
             w.println("[$timestamp] [$channel] $line")
-            w.flush()
         } catch (e: Exception) {
             Log.w(TAG, "Failed to write captured line: ${e.message}")
         }
@@ -272,7 +275,6 @@ object AppLogger {
         try {
             val w = getWriter(today)
             w.println("[$timestamp] [$level] [$category] $message")
-            w.flush()
         } catch (e: Exception) {
             Log.w(TAG, "Failed to write log: ${e.message}")
         }
@@ -354,6 +356,49 @@ object AppLogger {
     }
 
     /**
+     * Result of a bounded segment read — [content] holds at most [bytesRead]
+     * bytes starting at the requested offset, and [truncated] tells the caller
+     * whether more data remains past the end of [content].
+     */
+    data class LogSegment(
+        val totalSize: Long,
+        val content: String,
+        val bytesRead: Int,
+        val truncated: Boolean,
+    )
+
+    /**
+     * Read a segment of a log file without loading the entire file into
+     * memory. [offset] is a byte offset into the file, [limit] the max bytes
+     * to return. Uses [java.io.RandomAccessFile] opened per call — the
+     * descriptor is released on return, so repeated reads from an agent
+     * paging through a large log cannot leak FDs or OOM the process.
+     */
+    fun readLogSegment(filename: String, offset: Int, limit: Int): LogSegment? {
+        val dir = logDir ?: return null
+        val file = File(dir, filename)
+        if (!file.exists()) return null
+        return try {
+            java.io.RandomAccessFile(file, "r").use { raf ->
+                val fileSize = raf.length()
+                val start = offset.toLong().coerceIn(0L, fileSize)
+                val end = (start + limit.coerceAtLeast(0).toLong()).coerceAtMost(fileSize)
+                val buf = ByteArray((end - start).toInt())
+                raf.seek(start)
+                raf.readFully(buf)
+                LogSegment(
+                    totalSize = fileSize,
+                    content = String(buf, Charsets.UTF_8),
+                    bytesRead = buf.size,
+                    truncated = (start + buf.size) < fileSize,
+                )
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
      * Delete all log files.
      */
     @Synchronized
@@ -378,11 +423,34 @@ object AppLogger {
     }
 
     private fun pruneOldLogs() {
-        val cutoff = System.currentTimeMillis() - MAX_AGE_DAYS * 24L * 60 * 60 * 1000
+        val now = System.currentTimeMillis()
+        val ageCutoff = now - MAX_AGE_DAYS * 24L * 60 * 60 * 1000
+        val today = dateFormat.format(Date(now))
+        val todayFileName = "minis-$today.log"
+
+        // Phase 1: time-based — delete files older than MAX_AGE_DAYS.
         logDir?.listFiles()?.forEach { file ->
-            if (file.lastModified() < cutoff) {
+            if (file.lastModified() < ageCutoff) {
                 file.delete()
             }
+        }
+
+        // Phase 2: size-based — if total still exceeds cap, delete oldest
+        // non-today files until under threshold. Today's file is protected
+        // because it's the actively-written log.
+        val dir = logDir ?: return
+        var total = dir.listFiles()?.sumOf { it.length() } ?: 0L
+        if (total <= MAX_TOTAL_SIZE_BYTES) return
+
+        val candidates = dir.listFiles()
+            ?.filter { it.name != todayFileName }
+            ?.sortedBy { it.lastModified() } // oldest first
+            ?: return
+
+        for (file in candidates) {
+            if (total <= MAX_TOTAL_SIZE_BYTES) break
+            total -= file.length()
+            file.delete()
         }
     }
 }

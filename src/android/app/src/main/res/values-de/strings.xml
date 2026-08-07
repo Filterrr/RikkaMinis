@@ -230,6 +230,8 @@
     <string name="log_no_files">Keine Logdateien</string>
     <string name="log_section_storage">Speicherplatz</string>
     <string name="log_section_storage_footer">Gesamtlogspeicher: %1$s</string>
+    <string name="log_section_crash">Absturzprotokolle</string>
+    <string name="log_section_crash_footer">Letzte %1$d Absturzbericht(e) (Java/Kotlin + native)</string>
     <string name="log_delete_all_title">Alle Logs löschen</string>
     <string name="log_delete_confirm_title">Alle Logs löschen?</string>
     <string name="log_delete_confirm_text">Es werden %1$s an Logdateien gelöscht. Diese Aktion ist nicht umkehrbar.</string>
