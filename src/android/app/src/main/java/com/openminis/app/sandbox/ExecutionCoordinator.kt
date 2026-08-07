@@ -31,9 +31,13 @@ object ExecutionCoordinator {
     // [P2-proot-native-leak]
     // High-water mark (MB). Normal operation is ~35-55MB native heap.
     // A long-lived PRoot persistent shell leaks native memory monotonically
-    // (measured 6.2-6.9GB on 2026-08-07, enough to OOM the device). When a
-    // command returns and native heap exceeds this, we recycle the session's
-    // shell so the next getOrCreateShell spawns a fresh PRoot at baseline.
+    // (measured 6.2-6.9GB on 2026-08-07, enough to OOM the device). We read
+    // the *PRoot child process* RSS directly (PersistentShell.nativeRssMB),
+    // not Debug.getNativeHeapAllocatedSize() — that reports the app-process
+    // heap, which never sees the leaked memory held by the forked PRoot
+    // tracer. When a command returns (or while it runs) and the child RSS
+    // exceeds this, we recycle the session's shell so the next
+    // getOrCreateShell spawns a fresh PRoot at baseline.
     private const val NATIVE_HEAP_HIGH_WATER_MARK_MB = 512L
     // A shell idle this long is terminated to release its PRoot native
     // footprint. Generous above any agent transition gap (model thinking).
@@ -126,6 +130,7 @@ object ExecutionCoordinator {
                 command = command,
                 timeout = timeout,
                 lineCallback = lineCallback,
+                memoryMonitor = { rssMB -> midCommandRecycleIfOversized(shell, sessionId, rssMB) },
             )
 
             val durationMs = System.currentTimeMillis() - startTime
@@ -137,16 +142,30 @@ object ExecutionCoordinator {
                 truncated
             }
 
-            // [P2-proot-native-leak] mark active; recycle if native heap
-            // ballooned past the safe ceiling (PRoot tracer leak).
+            // [P2-proot-native-leak] mark active; recycle if the PRoot *child
+            // process* RSS ballooned past the safe ceiling (tracer leak). This
+            // reads the real child (PersistentShell.nativeRssMB) — NOT app
+            // Debug.getNativeHeapAllocatedSize(), which misses the leak.
             lastActiveMs[sessionId] = SystemClock.elapsedRealtime()
-            val nativeHeapMB = android.os.Debug.getNativeHeapAllocatedSize() / (1024L * 1024L)
-            if (nativeHeapMB > NATIVE_HEAP_HIGH_WATER_MARK_MB) {
-                Log.w(TAG, "[$sessionId] native heap ${nativeHeapMB}MB > mark after command — recycling PRoot shell")
+            if (shell.nativeRssMB() > NATIVE_HEAP_HIGH_WATER_MARK_MB) {
+                Log.w(TAG, "[$sessionId] PRoot child RSS > ${NATIVE_HEAP_HIGH_WATER_MARK_MB}MB after command — recycling PRoot shell")
                 sessionDidTerminate(sessionId)
+            } else {
+                Log.d(TAG, "[$sessionId] PRoot child RSS ${shell.nativeRssMB()}MB — within mark")
             }
 
             CommandResult(output = output, exitCode = exitCode, durationMs = durationMs)
+        }
+    }
+
+    /** [P2-proot-native-leak] If the PRoot child is already dead mid-command
+     * (it OOM'd), immediately recycle the session so the shell isn't held as
+     * a zombie and the next command spawns fresh. Called from the executeCommand
+     * in-flight monitor; rssMB of 0 means the child already died. */
+    private fun midCommandRecycleIfOversized(shell: PersistentShell, sessionId: String, rssMB: Long) {
+        if (rssMB > NATIVE_HEAP_HIGH_WATER_MARK_MB) {
+            Log.w(TAG, "[$sessionId] PRoot child RSS ${rssMB}MB crossed mark mid-command — recycling")
+            sessionDidTerminate(sessionId)
         }
     }
 
