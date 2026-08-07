@@ -47,6 +47,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import com.openminis.app.ui.components.MinisTextButton
+import com.openminis.app.ui.components.MemoryFileEditorContent
 
 /**
  * Bottom sheet showing memory state for the current session.
@@ -172,13 +173,33 @@ fun SessionMemorySheet(
                     },
                     onRevoke = {},
                 )
-                MemoryFileViewerBody(
-                    initialContent = m.content,
-                    isEditing = isEditing,
-                    editedContent = editedContent,
-                    onEditedContentChange = { editedContent = it },
-                    showSavedToast = savedToastVisible,
-                )
+                // [P3-shared-editor] Editing mode uses shared monospace
+                // editor (same as MemoryFileEditScreen in Settings).
+                // Read-only mode keeps MemoryFileViewerBody for its
+                // SelectionContainer + verticalScroll behaviour.
+                if (isEditing) {
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        MemoryFileEditorContent(
+                            value = editedContent,
+                            onValueChange = { editedContent = it },
+                            errorMessage = null,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                        if (savedToastVisible) {
+                            SavedToast(
+                                modifier = Modifier.align(Alignment.BottomCenter),
+                            )
+                        }
+                    }
+                } else {
+                    MemoryFileViewerBody(
+                        initialContent = m.content,
+                        isEditing = false,
+                        editedContent = "",
+                        onEditedContentChange = {},
+                        showSavedToast = savedToastVisible,
+                    )
+                }
             }
 
             is MemorySheetMode.Write -> Column(modifier = Modifier.fillMaxSize()) {

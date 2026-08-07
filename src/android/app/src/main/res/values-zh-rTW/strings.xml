@@ -838,4 +838,8 @@
     <string name="backup_snapshot_restore_confirm_text">目前設定將被 %1$s 的快照取代。目前設定會先儲存為新快照。</string>
     <string name="backup_snapshot_restore">還原</string>
     <string name="backup_done_fatal">還原中途失敗——設定只還原了一部分。可從快照回滾。</string>
+    <!-- [P4-i18n] Mirrors values/values-zh strings; zh-rTW previously lacked
+         this key so the Delete-confirm dialog in Memory settings fell back to
+         English hardcoded text. -->
+    <string name="memory_delete_confirm_title">刪除 %1$s？</string>
 </resources>
