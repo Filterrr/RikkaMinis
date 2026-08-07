@@ -973,6 +973,29 @@ fun ChatScreen(
             OffloadPermissionManager.respondToAndroidPermission(true)
             return@LaunchedEffect
         }
+        // [P3-all-any-unify] Single source of truth for runtime permissions now
+        // lives here (MainActivity's bridge was removed). Before launching,
+        // detect permanently-denied permissions (dialog would no-op): report
+        // DENIED so the handler can fall back to the in-app settings gate.
+        val permanentlyDenied = req.permissions.any { permission ->
+            when {
+                ContextCompat.checkSelfPermission(context, permission) ==
+                    PackageManager.PERMISSION_GRANTED -> false
+                // shouldShowRequestPermissionRationale is an Activity method; the
+                // Compose LocalContext is the Activity in this single-activity app.
+                OffloadPermissionManager.hasAskedForPermission(context, permission) &&
+                    (context as? android.app.Activity)
+                        ?.shouldShowRequestPermissionRationale(permission) == false -> true
+                else -> false
+            }
+        }
+        if (permanentlyDenied) {
+            OffloadPermissionManager.respondToAndroidPermission(false)
+            return@LaunchedEffect
+        }
+        for (p in req.permissions) {
+            OffloadPermissionManager.markPermissionAsked(context, p)
+        }
         currentPermissionsRef.value = perms
         androidPermissionLauncher.launch(perms)
     }
