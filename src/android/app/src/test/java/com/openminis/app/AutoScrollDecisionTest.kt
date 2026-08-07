@@ -36,18 +36,37 @@ class AutoScrollDecisionTest {
         sendFollowGraceMs = 2_000L,
     )
 
-    // ─── USER_SEND: unconditional ───
+    // ─── USER_SEND ───
 
     @Test
-    fun userSend_scrollsUnconditionally() {
-        // Even with userScrolledAway and far from bottom, USER_SEND must snap.
+    fun userSend_anchoredBottomRow_scrolls() {
+        // User sends while viewport is anchored on the bottom row — scroll
+        // to the fresh reply as designed.
+        val s = baseState().copy(
+            userScrolledAway = false,
+            isNearBottom = true,
+            firstVisibleItemIndex = 0,
+        )
+        val v = decideAutoFollow(ScrollIntent.USER_SEND, s)
+        assertTrue("USER_SEND must ScrollTo when anchored at bottom", v is ScrollVerdict.ScrollTo)
+    }
+
+    @Test
+    fun userSend_readingHistory_skips() {
+        // [P2-scroll-user-send] User sends while reading history (firstIdx>0).
+        // Must NOT yank them to the bottom — respect their place and let the
+        // in-flight push (trailing-row/glide) decide. This was the bug: send
+        // fired at firstIdx=16 and pulled the reader to (0,0).
         val s = baseState().copy(
             userScrolledAway = true,
             isNearBottom = false,
             firstVisibleItemIndex = 40,
         )
-        val v = decideAutoFollow(ScrollIntent.USER_SEND, s)
-        assertTrue("USER_SEND must always ScrollTo", v is ScrollVerdict.ScrollTo)
+        assertEquals(
+            "USER_SEND must Skip when the reader is in history",
+            ScrollVerdict.Skip,
+            decideAutoFollow(ScrollIntent.USER_SEND, s),
+        )
     }
 
     // ─── USER_MESSAGE_APPEND: isNearBottom + not scrolled away ───

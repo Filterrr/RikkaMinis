@@ -108,7 +108,14 @@ sealed class ScrollVerdict {
  */
 fun decideAutoFollow(intent: ScrollIntent, s: ScrollStateSnapshot): ScrollVerdict {
     // ─── USER_SEND: unconditional ───
+    // [P2-scroll-user-send] Was fully unconditional — yanked a user who
+    // sent while reading history (log: user-send/initial at firstIdx=16)
+    // straight to the bottom. The ChatScreen send handlers now snapshot
+    // the anchor pre-insert and skip when the reader is in history; mirror
+    // that here so any future caller of decideAutoFollow(USER_SEND) gets
+    // the same behavior: scroll only when anchored on the bottom row.
     if (intent == ScrollIntent.USER_SEND) {
+        if (s.firstVisibleItemIndex > 0) return ScrollVerdict.Skip
         return ScrollVerdict.ScrollTo(0, 0, intent.label)
     }
 
