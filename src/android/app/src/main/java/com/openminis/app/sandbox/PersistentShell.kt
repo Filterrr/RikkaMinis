@@ -144,6 +144,14 @@ class PersistentShell(
         cmd.add("-b"); cmd.add("/sys")
         cmd.add("-w"); cmd.add("/root")
 
+        // [P2-proot-resource-hygiene] Same --kill-on-exit as buildProotCommand:
+        // guarantees the PRoot tracer exits when this persistent /bin/sh is
+        // destroyForcibly'd (oversize recycle, idle recycle, session end). The
+        // /bin/sh stays alive for the whole session so this does not shorten
+        // the persistent shell's lifetime — it only ensures a clean exit of
+        // the tracer (which otherwise leaks native memory at ~6GB scale).
+        cmd.add("--kill-on-exit")
+
         // Apply this session's bind mounts (session-specific, not global)
         for ((linuxPath, hostPath) in sessionBindMounts) {
             cmd.add("-b")

@@ -577,6 +577,12 @@ class MinisApp : Application(), ImageLoaderFactory {
             while (isActive) {
                 try {
                     ExecutionCoordinator.recycleIdleShells()
+                    // [P2-proot-resource-hygiene] On the same low cadence, sweep
+                    // PRoot's temp cache once no shell needs it. Long-running
+                    // usage accumulates transients in cache/proot-tmp which grow
+                    // disk/IO pressure over weeks (a "flash crash" contributor).
+                    // No-op when any shell is alive (see implementation).
+                    ExecutionCoordinator.cleanupProotTmp()
                 } catch (t: Throwable) {
                     Log.w("MinisApp", "recycleIdleShells failed: ${t.message}")
                 }
