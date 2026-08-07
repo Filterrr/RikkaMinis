@@ -228,6 +228,7 @@ class ChatRepositoryCreateSessionTest {
 
         assertEquals(1, on.memoryEnabled)
         assertEquals(0, off.memoryEnabled)
-        assertEquals(1, dao.insertedSession?.memoryEnabled)
+        // insertedSession is the LAST insert (the `off` session).
+        assertEquals(0, dao.insertedSession?.memoryEnabled)
     }
 }
