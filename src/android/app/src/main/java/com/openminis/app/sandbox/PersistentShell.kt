@@ -95,9 +95,6 @@ class PersistentShell(
         }
     }
 
-    /** [diag] Read back the mount this shell was started with (frozen at boot). */
-    fun debugBindMount(linuxPath: String): String? = sessionBindMounts[linuxPath]
-
     private class CommandCallback(
         val marker: String,
         val output: StringBuilder = StringBuilder(),

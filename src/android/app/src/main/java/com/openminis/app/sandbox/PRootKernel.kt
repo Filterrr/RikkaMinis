@@ -41,6 +41,11 @@ object PRootKernel {
 
     private lateinit var rootfsManager: RootfsManager
 
+    /** Application context captured at boot — used by session-scoped path
+     *  fallbacks in [resolveHostPath] that need filesDir without a caller-
+     *  supplied Context. */
+    private var bootContext: Context? = null
+
     /** Custom environment variables injected into every proot command. */
     val customEnvironment: MutableMap<String, String> = mutableMapOf()
 
@@ -56,6 +61,7 @@ object PRootKernel {
             return
         }
 
+        bootContext = context.applicationContext
         rootfsManager = RootfsManager.getInstance(context)
         rootfsManager.installIfNeeded()
         rootfsManager.installProotIfNeeded()
@@ -689,6 +695,16 @@ object PRootKernel {
     /**
      * Resolve a Linux path to a host filesystem File by checking bind mounts.
      * Returns null if no matching mount is found.
+     *
+     * Per-session subdirs (attachments/workspace/offloads/browser) are NOT in
+     * the global bindMounts map — buildSessionBindMounts keeps them
+     * session-local, and the terminal overlays its own. Callers that know the
+     * owning session should use [resolveSessionHostPath]. For callers without
+     * a session context (Coil image fetcher, generic media resolvers), fall
+     * back to searching every `minis-sessions/<id>/<subdir>` tree for a file
+     * that actually exists — the same fallback resolveMdMediaFile uses — so a
+     * `minis://attachments/x.png` URL still resolves to a real file instead of
+     * the empty rootfs placeholder.
      */
     fun resolveHostPath(linuxPath: String): File? {
         // Check bind mounts (longest prefix match)
@@ -702,6 +718,29 @@ object PRootKernel {
                 } else {
                     File(hostBase, relativePath)
                 }
+            }
+        }
+
+        // Per-session subdir fallback: no session context available — search
+        // all minis-sessions/<id>/ trees for an existing file (or existing
+        // dir) at this Linux path. Picks the first match; ambiguity is
+        // acceptable here because these callers can't know the session anyway.
+        if (linuxPath.startsWith("/var/minis/")) {
+            val rest = linuxPath.removePrefix("/var/minis/")
+            val subdir = rest.substringBefore('/')
+            if (subdir in perSessionSubdirs) {
+                val sessionsRoot = bootContext?.filesDir?.let { File(it, "minis-sessions") }
+                val tail = rest.substringAfter('/', missingDelimiterValue = "")
+                if (sessionsRoot?.isDirectory == true) {
+                    sessionsRoot.listFiles()?.forEach { sessionDir ->
+                        if (!sessionDir.isDirectory) return@forEach
+                        val candidate = if (tail.isEmpty()) File(sessionDir, subdir)
+                        else File(sessionDir, "$subdir/$tail")
+                        if (candidate.exists()) return candidate
+                    }
+                }
+                // No existing file in any session — fall through to rootfs
+                // placeholder (matches pre-existing behavior for missing files).
             }
         }
 

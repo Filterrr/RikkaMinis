@@ -7525,13 +7525,10 @@ class ChatViewModel(
                 }
             }
 
-            // [diag] sessionId vs realSessionId mismatch was the root cause
-            // of the Chinese-emoji filename "disappears" bug. `activeSessionId`
-            // resolves to the persisted id once `ensureSession()` has run, so
-            // every shell runs in a directory that survives VM recreation.
+            // activeSessionId resolves to the persisted id once
+            // ensureSession() has run, so every shell runs in a directory
+            // that survives VM recreation.
             val dispatchSessionId = activeSessionId
-            android.util.Log.w("ShellExecDiag",
-                "executeShell dispatch=$dispatchSessionId rawSessionId=$sessionId realSessionId=$realSessionId isDraft=$isDraft cmd=${command.take(120).replace('\n', ' ')}")
 
             // [T-bash-on-demand] Detect busybox-ash-incompatible bash syntax and,
             // if found, transparently install + switch to bash. Install time is

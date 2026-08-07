@@ -12,7 +12,13 @@ import java.nio.charset.StandardCharsets
 /**
  * Executes shell commands inside the PRoot sandbox via ProcessBuilder.
  * Corresponds to iOS ISHShellExecutor.
+ *
+ * @Deprecated Production agent commands go through ExecutionCoordinator →
+ * PersistentShell. ShellExecutor is kept only for instrumentation tests and
+ * the legacy stopCurrentCommand() fallback (when sessionId is null). New code
+ * should use ExecutionCoordinator.execute() instead.
  */
+@Deprecated("Use ExecutionCoordinator.execute() instead. ShellExecutor is only for tests and legacy fallback.")
 object ShellExecutor {
 
     private const val TAG = "ShellExecutor"
