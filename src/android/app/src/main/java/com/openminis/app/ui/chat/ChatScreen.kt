@@ -1666,7 +1666,20 @@ fun ChatScreen(
                 // to the glide loop below"; Skip means "do nothing".
                 val state = buildScrollStateSnapshot()
                 when (val verdict = decideAutoFollow(ScrollIntent.STREAM_GLIDE, state)) {
-                    is ScrollVerdict.Skip -> return@collect
+                    is ScrollVerdict.Skip -> {
+                        // [T261-diag] After every STREAM_GLIDE Skip, log the
+                        // exact gate values so a re-stuck stream that refuses
+                        // to follow can be pinpointed from the device log.
+                        AppLogger.debug(
+                            "GlideDiag",
+                            "GLIDE SKIP stick=${stickToBottom} scrolledAway=${state.userScrolledAway} " +
+                                "inProgress=${state.isScrollInProgress} streaming=${state.isStreaming} " +
+                                "sinceInterrupt=${state.nowMs - state.lastInterruptMs} " +
+                                "fIdx=${state.firstVisibleItemIndex} fOff=${state.firstVisibleItemScrollOffset} " +
+                                "verdict=$verdict"
+                        )
+                        return@collect
+                    }
                     is ScrollVerdict.ScrollTo -> { /* fall through to glide */ }
                     is ScrollVerdict.ScrollBy -> {} // unused
                 }
