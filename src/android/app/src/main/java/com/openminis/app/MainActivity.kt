@@ -22,8 +22,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.openminis.app.offload.OffloadPermissionManager
 import kotlinx.coroutines.flow.filterNotNull
@@ -81,13 +79,6 @@ class MainActivity : ComponentActivity() {
      * does what it says when the user resumes from the recents tray.
      */
     private var hasResumedFromBackground = false
-
-    /**
-     * Bridges [OffloadPermissionManager.requestAndroidPermission] to the system
-     * runtime-permission dialog. Background offload handlers suspend while
-     * this launcher's callback resolves the request.
-     */
-    private lateinit var permissionLauncher: ActivityResultLauncher<Array<String>>
 
     /**
      * Used by the "go to settings" gate to open e.g. the app-details or
@@ -219,44 +210,9 @@ class MainActivity : ComponentActivity() {
                 com.openminis.app.crash.CrashFrequencyDetector.shouldForceHomeOnLaunch(this)
             }
 
-        permissionLauncher = registerForActivityResult(
-            ActivityResultContracts.RequestMultiplePermissions()
-        ) { results ->
-            val allGranted = results.isNotEmpty() && results.values.all { it }
-            OffloadPermissionManager.respondToAndroidPermission(allGranted)
-        }
         settingsLauncher = registerForActivityResult(
             ActivityResultContracts.StartActivityForResult()
         ) { /* polled by OffloadPermissionManager.requestSettingsGate */ }
-
-        // Bridge: system permission dialog (first ask / can-ask-again).
-        // If the permission has already been permanently denied (dialog
-        // would no-op), report DENIED so the handler can fall back to the
-        // in-app settings gate.
-        lifecycleScope.launch {
-            OffloadPermissionManager.pendingAndroidPermission
-                .filterNotNull()
-                .collect { req ->
-                    val permanentlyDenied = req.permissions.any { permission ->
-                        ContextCompat.checkSelfPermission(this@MainActivity, permission) !=
-                            android.content.pm.PackageManager.PERMISSION_GRANTED &&
-                            !ActivityCompat.shouldShowRequestPermissionRationale(
-                                this@MainActivity, permission
-                            ) &&
-                            OffloadPermissionManager.hasAskedForPermission(this@MainActivity, permission)
-                    }
-                    if (permanentlyDenied) {
-                        OffloadPermissionManager.respondToAndroidPermission(
-                            OffloadPermissionManager.AndroidPermissionResult.DENIED
-                        )
-                    } else {
-                        for (p in req.permissions) {
-                            OffloadPermissionManager.markPermissionAsked(this@MainActivity, p)
-                        }
-                        permissionLauncher.launch(req.permissions.toTypedArray())
-                    }
-                }
-        }
 
         // Bridge: in-app "open settings" dialog. Used for already-denied
         // runtime permissions AND for special-access capabilities like
