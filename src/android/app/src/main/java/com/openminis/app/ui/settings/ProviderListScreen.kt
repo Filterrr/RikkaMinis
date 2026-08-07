@@ -51,6 +51,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.stringResource
 import com.openminis.app.data.model.ProviderInstance
+import com.openminis.app.data.model.ProviderCredential
 import com.openminis.app.data.repository.ProviderRepository
 import com.openminis.app.R
 
@@ -328,7 +329,13 @@ private fun ProviderInstanceRow(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = stringResource(R.string.provider_list_api_key),
+                    text = stringResource(
+                        if (instance.credentialType == ProviderCredential.oauth) {
+                            R.string.provider_list_oauth
+                        } else {
+                            R.string.provider_list_api_key
+                        },
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -338,7 +345,7 @@ private fun ProviderInstanceRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
                 )
                 Text(
-                    text = if (!apiKey.isNullOrBlank()) maskKey(apiKey) else "No API key",
+                    text = if (!apiKey.isNullOrBlank()) maskKey(apiKey) else stringResource(R.string.provider_list_no_api_key),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,

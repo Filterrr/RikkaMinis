@@ -678,6 +678,8 @@
     <string name="share_provider_json_imported">Провайдер \"%1$s\" импортирован</string>
     <string name="share_provider_json_import_failed">Недействительный файл конфигурации провайдера</string>
     <string name="provider_list_api_key">Ключ API</string>
+    <string name="provider_list_oauth">OAuth</string>
+    <string name="provider_list_no_api_key">Нет ключа API</string>
     <string name="provider_list_disabled">Отключено</string>
     <string name="provider_list_favorites">Избранное</string>
     <string name="provider_set_favorite">Добавить в избранное</string>
@@ -688,12 +690,23 @@
     <string name="provider_detail_use_a_static_bearer_token_instead_of_the">Использовать статический Bearer-токен вместо входа через OAuth. </string>
     <string name="provider_detail_custom_api_base">Свой базовый URL API</string>
     <string name="provider_detail_auto_append_v1">Автодобавление /v1</string>
-    <string name="provider_detail_save_url_settings">Сохранить настройки URL</string>
     <string name="provider_detail_api_format">Формат API</string>
     <string name="provider_detail_chat_completions">Chat Completions</string>
     <string name="provider_detail_responses_api">Responses API</string>
     <string name="provider_detail_azure_openai">Azure OpenAI</string>
     <string name="provider_detail_azure_openai_footer">Использует аутентификацию Azure OpenAI (заголовок api-key). Вставьте полный эндпоинт Azure в Custom API Base выше, включая запрос ?api-version=…. Работает с обоими форматами API.</string>
+    <string name="provider_detail_image_generation">Генерация изображений</string>
+    <string name="provider_detail_image_endpoint_auto_footer_resolved">Авто: сначала пробует /v1/images/generations, затем переключается на /v1/chat/completions. Последний успешный эндпоинт: %1$s.</string>
+    <string name="provider_detail_image_endpoint_auto_footer">Авто: сначала пробует /v1/images/generations, затем переключается на /v1/chat/completions. Кэширует рабочий эндпоинт после первого вызова.</string>
+    <string name="provider_detail_image_endpoint_images_footer">Всегда использовать /v1/images/generations.</string>
+    <string name="provider_detail_image_endpoint_chat_footer">Всегда использовать /v1/chat/completions (мультимодальный вывод).</string>
+    <string name="provider_detail_image_endpoint_auto">Авто</string>
+    <string name="provider_detail_image_endpoint_images_api">Images API</string>
+    <string name="provider_detail_image_endpoint_chat">Чат</string>
+    <string name="provider_detail_api_format_responses_footer">Использует формат эндпоинта /v1/responses. Требуется для некоторых сервисов только с Responses API.</string>
+    <string name="provider_detail_api_format_chat_footer">Стандартный формат /v1/chat/completions. Совместим с большинством OpenAI-совместимых сервисов.</string>
+    <string name="provider_detail_manual_bearer_footer">Полезно при использовании пользовательских прокси-эндпоинтов.</string>
+
     <string name="provider_detail_status">Статус</string>
     <string name="provider_detail_enabled">Включено</string>
     <string name="provider_detail_refresh_models">Обновить модели</string>
@@ -827,6 +840,14 @@
     <string name="add_models_to_group_add_count">Добавить (%1$d)</string>
     <string name="provider_detail_https_api_example_placeholder">https://api.example.com</string>
     <string name="provider_detail_models_count_header">Модели (%1$d)</string>
+    <string name="provider_detail_refresh_success_api">Обновлено – загружено %1$d моделей от провайдера.</string>
+    <string name="provider_detail_refresh_success_oauth">Обновлено, список моделей загружен через OAuth.</string>
+    <string name="provider_detail_refresh_success_models_dev">Живого списка нет; использован реестр models.dev (%1$d моделей). Результаты могут быть приблизительными.</string>
+    <string name="provider_detail_refresh_no_key">Ключ API не настроен — обновлять нечего.</string>
+    <string name="provider_detail_refresh_preserved">Совпадений в models.dev нет — сохранён текущий список моделей.</string>
+    <string name="provider_detail_refresh_failed">Не удалось обновить модели.</string>
+    <string name="provider_detail_refreshing">Обновление…</string>
+    <string name="provider_detail_refresh_models_list">Обновить список моделей</string>
     <string name="provider_detail_delete_provider_confirm">Вы уверены, что хотите удалить \"%1$s\"? Это действие необратимо.</string>
     <string name="provider_detail_delete_model_confirm">Вы уверены, что хотите удалить \"%1$s\"? Это действие необратимо.</string>
     <string name="agent_loop_models_model_count_singular">1 модель</string>
