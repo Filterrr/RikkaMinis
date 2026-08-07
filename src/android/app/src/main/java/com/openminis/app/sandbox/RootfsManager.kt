@@ -179,32 +179,19 @@ class RootfsManager private constructor(private val context: Context) {
     }
 
     /**
-     * Reset rootfs. Optionally keeps user data (/root).
-     * Returns the backup directory if keepUserData is true, null otherwise.
+     * Reset rootfs to factory state: delete everything and reinstall.
+     *
+     * [M-rootfs-drop-backup] Backup / restore ("Reset & Backup") was removed
+     * deliberately — real persistent data lives in the cross-session shared
+     * area (/var/minis/shared) outside the rootfs, so backing up the in-container
+     * /root backed up a disposable temp layer for zero practical value. The old
+     * back up path also crashed on dangling runtime links (pulse runtime
+     * socket under .config/pulse) inside /root via copyRecursively.
+     * Reset is now a pure delete + reinstall; there is nothing to restore.
      */
-    suspend fun reset(keepUserData: Boolean = false): File? = withContext(Dispatchers.IO) {
-        var backupDir: File? = null
-
-        if (keepUserData) {
-            val rootHome = File(rootfsDir, "root")
-            if (rootHome.exists()) {
-                backupDir = File(context.cacheDir, "rootfs-backup-root")
-                backupDir.deleteRecursively()
-                rootHome.copyRecursively(backupDir, overwrite = true)
-            }
-        }
-
+    suspend fun reset(): Unit = withContext(Dispatchers.IO) {
         rootfsDir.deleteRecursively()
         installIfNeeded()
-
-        // Restore user data
-        if (backupDir != null && backupDir.exists()) {
-            val rootHome = File(rootfsDir, "root")
-            backupDir.copyRecursively(rootHome, overwrite = true)
-            backupDir.deleteRecursively()
-        }
-
-        backupDir
     }
 
     /**
@@ -213,18 +200,6 @@ class RootfsManager private constructor(private val context: Context) {
     suspend fun getRootfsSize(): Long = withContext(Dispatchers.IO) {
         if (!rootfsDir.exists()) return@withContext 0L
         RootfsUsageScanner.scan(rootfsDir, RootfsUsageScanner.androidStat()).totalBytes
-    }
-
-    /**
-     * Restore user data from a backup directory into /root.
-     */
-    suspend fun restoreUserData(backupDir: File) = withContext(Dispatchers.IO) {
-        if (!backupDir.exists()) return@withContext
-        val rootHome = File(rootfsDir, "root")
-        rootHome.mkdirs()
-        backupDir.copyRecursively(rootHome, overwrite = true)
-        backupDir.deleteRecursively()
-        Log.i(TAG, "User data restored from $backupDir")
     }
 
     /**

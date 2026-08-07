@@ -10,7 +10,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import java.io.File
 
 data class RootfsManagementUiState(
     val isInstalled: Boolean = false,
@@ -20,7 +19,6 @@ data class RootfsManagementUiState(
     val lastOperationSuccess: Boolean = false,
     val rootfsSize: Long = 0L,
     val rootfsPath: String = "",
-    val hasBackup: Boolean = false,
     /** Current install phase + 0..1 progress (null when not installing). */
     val installProgress: Float? = null,
 )
@@ -30,7 +28,6 @@ class RootfsManagementViewModel : ViewModel() {
     private val _uiState = MutableStateFlow(RootfsManagementUiState())
     val uiState: StateFlow<RootfsManagementUiState> = _uiState.asStateFlow()
 
-    private var backupDir: File? = null
     private var progressJob: Job? = null
 
     /**
@@ -118,10 +115,10 @@ class RootfsManagementViewModel : ViewModel() {
         }
     }
 
-    fun resetRootfs(context: Context, keepUserData: Boolean) {
+    fun resetRootfs(context: Context) {
         _uiState.value = _uiState.value.copy(
             isProcessing = true,
-            statusMessage = if (keepUserData) "Backing up and resetting..." else "Resetting rootfs...",
+            statusMessage = "Resetting rootfs...",
             resultMessage = null,
             installProgress = 0f,
         )
@@ -130,18 +127,12 @@ class RootfsManagementViewModel : ViewModel() {
         observeInstallProgress(manager)
         viewModelScope.launch {
             try {
-                val backup = manager.reset(keepUserData)
+                manager.reset()
 
-                backupDir = backup
                 _uiState.value = _uiState.value.copy(
                     isProcessing = false,
                     lastOperationSuccess = true,
-                    hasBackup = backup != null && backup.exists(),
-                    resultMessage = if (keepUserData) {
-                        "Rootfs reset with backup created"
-                    } else {
-                        "Rootfs reset complete"
-                    },
+                    resultMessage = "Rootfs reset complete",
                     installProgress = null,
                 )
                 refresh(context)
@@ -151,45 +142,6 @@ class RootfsManagementViewModel : ViewModel() {
                     lastOperationSuccess = false,
                     resultMessage = "Reset failed: ${e.message}",
                     installProgress = null,
-                )
-            }
-        }
-    }
-
-    fun restoreBackup(context: Context) {
-        val backup = backupDir
-        if (backup == null || !backup.exists()) {
-            _uiState.value = _uiState.value.copy(
-                resultMessage = "No backup available",
-                lastOperationSuccess = false,
-            )
-            return
-        }
-
-        _uiState.value = _uiState.value.copy(
-            isProcessing = true,
-            statusMessage = "Restoring user data...",
-            resultMessage = null,
-        )
-
-        val manager = RootfsManager.getInstance(context)
-        viewModelScope.launch {
-            try {
-                manager.restoreUserData(backup)
-
-                backupDir = null
-                _uiState.value = _uiState.value.copy(
-                    isProcessing = false,
-                    lastOperationSuccess = true,
-                    hasBackup = false,
-                    resultMessage = "User data restored successfully",
-                )
-                refresh(context)
-            } catch (e: Exception) {
-                _uiState.value = _uiState.value.copy(
-                    isProcessing = false,
-                    lastOperationSuccess = false,
-                    resultMessage = "Restore failed: ${e.message}",
                 )
             }
         }
