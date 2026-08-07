@@ -5296,15 +5296,24 @@ class ChatViewModel(
      *   - Sync the DB: if we popped a trailing assistant, drop just its
      *     persisted row so a re-load doesn't resurrect the failed turn.
      */
-    fun retryLast() {
-        if (_isStreaming.value) return
-        // T-streaming-side-channel: belt-and-suspenders flush in case any
-        // delta survived an earlier abnormal exit; retryLast is gated on
-        // !isStreaming so this is normally a no-op.
-        flushAllStreamingDeltas()
+    /**
+     * Roll back an incomplete assistant turn before re-running the loop on a
+     * different provider. Extracted verbatim from [retryLast] steps 1-3 so
+     * the model-switch-during-streaming path (switchModelAndRerun) shares
+     * exactly the same rollback semantics.
+     *
+     * Returns [Boolean]?:
+     *   - null  : there is no assistant message in the UI at all — nothing to
+     *             roll back. Caller should treat this as "abort the re-run".
+     *   - false : an assistant message exists, but agentHistory ends on a
+     *             user(tool_result) entry — no trailing assistant was popped.
+     *   - true  : a trailing assistant entry was popped from agentHistory and
+     *             orphaned tool_result parts were GC'd.
+     */
+    private fun rollbackIncompleteTurn(): Boolean? {
         val msgs = _messages.value.toMutableList()
         val lastAssistantIdx = msgs.indexOfLast { it.role == "assistant" }
-        if (lastAssistantIdx < 0) return
+        if (lastAssistantIdx < 0) return null
         // [T-android-tool-autoscroll] Start-of-turn snap — see resume().
         _forceScrollToBottom.tryEmit(Unit)
 
@@ -5336,9 +5345,9 @@ class ChatViewModel(
         //    iOS retry() :2107-2109). If the tail is already user(tool_result),
         //    the next-turn LLM call errored — leave history alone.
         val poppedAssistant = if (agentHistory.lastOrNull()?.role == LLMMessage.Role.ASSISTANT) {
-            val last = agentHistory.removeAt(agentHistory.size - 1)
-            last
-        } else null
+            agentHistory.removeAt(agentHistory.size - 1)
+            true
+        } else false
 
         // 3. GC orphaned tool_result parts whose tool_use is gone (mirrors
         //    iOS retry() :2114-2128). Walks backward so removeAt is safe.
@@ -5358,6 +5367,17 @@ class ChatViewModel(
                     agentHistory[i] = m.copy(contentParts = cleanedParts)
             }
         }
+        return poppedAssistant
+    }
+
+    fun retryLast() {
+        if (_isStreaming.value) return
+        // T-streaming-side-channel: belt-and-suspenders flush in case any
+        // delta survived an earlier abnormal exit; retryLast is gated on
+        // !isStreaming so this is normally a no-op.
+        flushAllStreamingDeltas()
+        val poppedAssistant = rollbackIncompleteTurn()
+        if (poppedAssistant == null) return
 
         val initialProvider = currentProvider ?: return
         var provider: LLMProvider = initialProvider
@@ -5380,7 +5400,9 @@ class ChatViewModel(
             // unchanged and stay persisted, so retry preserves their cards.
             // toolLoopDetector keeps its accumulated state — completed tools
             // shouldn't be unlearned just because the next turn errored.
-            if (poppedAssistant != null) {
+            // (poppedAssistant is non-null Boolean here — the null case was
+            // returned above.)
+            if (poppedAssistant) {
                 val dbMessages = chatRepository.loadMessages(sid)
                 val trailingAssistantSortOrder = dbMessages
                     .lastOrNull { it.role == "assistant" }?.sortOrder
