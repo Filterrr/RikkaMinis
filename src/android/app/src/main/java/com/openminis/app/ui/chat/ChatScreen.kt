@@ -1832,19 +1832,51 @@ fun ChatScreen(
                 draft = draftSnapshot
                     ?.takeIf { it.text.isNotBlank() && it.id != sessionId },
                 onOpenDraft = {
-                    historyDrawerScope.launch { historyDrawerState.close() }
-                    draftSnapshot?.let { if (it.id != sessionId) onOpenSession(it.id) }
+                    // [history-drawer-auto-close] Close the drawer BEFORE
+                    // navigating: onOpenSession swaps the whole ChatScreen out
+                    // of the composition, which cancels historyDrawerScope's
+                    // coroutine and kills an in-flight close() animation —
+                    // leaving the drawer visually open during the switch. So
+                    // wait for the drawer to finish closing (suspend), then
+                    // navigate. Catch CancellationException in case the user
+                    // re-opens the drawer mid-animation; navigation should
+                    // still proceed (their intent was to switch).
+                    historyDrawerScope.launch {
+                        try {
+                            historyDrawerState.close()
+                        } catch (_: kotlinx.coroutines.CancellationException) {}
+                        draftSnapshot?.let { if (it.id != sessionId) onOpenSession(it.id) }
+                    }
                 },
                 onDiscardDraft = {
                     draftSnapshot?.let { com.openminis.app.data.ComposerDraftStore.clearDraft(context, it.id) }
                 },
                 onSessionClick = { id ->
-                    historyDrawerScope.launch { historyDrawerState.close() }
-                    if (id != sessionId) onOpenSession(id)
+                    if (id == sessionId) {
+                        // Current session: just close the drawer, no navigation.
+                        historyDrawerScope.launch { historyDrawerState.close() }
+                    } else {
+                        // [history-drawer-auto-close] Other session: close the
+                        // drawer first and only navigate after it settles.
+                        // Navigating synchronously cancels the close() coroutine
+                        // (screen leaves composition) and the drawer stays open.
+                        historyDrawerScope.launch {
+                            try {
+                                historyDrawerState.close()
+                            } catch (_: kotlinx.coroutines.CancellationException) {}
+                            onOpenSession(id)
+                        }
+                    }
                 },
                 onNewChat = {
-                    historyDrawerScope.launch { historyDrawerState.close() }
-                    onNewChat()
+                    // [history-drawer-auto-close] Same ordering: close first,
+                    // navigate after the animation settles.
+                    historyDrawerScope.launch {
+                        try {
+                            historyDrawerState.close()
+                        } catch (_: kotlinx.coroutines.CancellationException) {}
+                        onNewChat()
+                    }
                 },
                 // [bottom-toolbar-customizable] Footer: resolved action list +
                 // single dispatcher. The drawer no longer owns Settings/Token
