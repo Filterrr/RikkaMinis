@@ -83,7 +83,7 @@ fun AlwaysStretchOverscrollBox(
 internal class BottomEdgeDetector(
     private val atBottomEdge: () -> Boolean,
     private val onHitBottom: () -> Unit,
-) : NestedScrollConnection() {
+) : NestedScrollConnection {
     override fun onPostScroll(
         consumed: Offset,
         available: Offset,
