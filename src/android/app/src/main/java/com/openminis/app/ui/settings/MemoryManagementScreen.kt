@@ -256,8 +256,6 @@ private fun MemoryFileRow(
     }
 }
 
-/**
-}
 
 /**
  * Full-page memory file editor, matching iOS MemoryFileEditView.
