@@ -430,22 +430,20 @@ class DebugRPCHandler(private val context: Context) {
             throw RPCException(-32602, "Invalid params: 'name' must be a filename")
         }
 
-        val content = AppLogger.readLog(name)
-            ?: throw RPCException(-32602, "Log file not found: $name")
-
+        // T-android-log-read-oom: bounded segment read via RandomAccessFile
+        // instead of a full-file readText() — a multi-MB log loaded whole can
+        // OOM the process. offset/limit semantics unchanged.
         val offset = params.optInt("offset", 0)
         val limit = params.optInt("limit", 524_288)
-        val sliced = content.substring(
-            offset.coerceAtMost(content.length),
-            (offset + limit).coerceAtMost(content.length),
-        )
+        val segment = AppLogger.readLogSegment(name, offset, limit)
+            ?: throw RPCException(-32602, "Log file not found: $name")
 
         return JSONObject().apply {
             put("name", name)
-            put("size", content.length)
-            put("content", sliced)
-            put("bytesRead", sliced.length)
-            if (sliced.length < content.length - offset) put("truncated", true)
+            put("size", segment.totalSize)
+            put("content", segment.content)
+            put("bytesRead", segment.bytesRead)
+            if (segment.truncated) put("truncated", true)
         }
     }
 
