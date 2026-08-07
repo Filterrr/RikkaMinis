@@ -1,0 +1,204 @@
+package com.openminis.app.ui.chat
+
+/**
+ * Auto-scroll follow decision engine for the reverseLayout LazyColumn.
+ *
+ * Consolidates the 8 bespoke gate chains into a single pure function
+ * [decideAutoFollow] that takes a [ScrollIntent] and the current scroll
+ * state, and returns a [ScrollVerdict].
+ *
+ * Pure function — no side effects, no Android dependencies, JVM-testable.
+ */
+
+/**
+ * The category of the scroll-triggering event.
+ */
+enum class ScrollIntent(val label: String) {
+    /** User just tapped send / Enter. Unconditional scroll to bottom. */
+    USER_SEND("user-send"),
+
+    /** Reactive catch-all for user-message append (messages.size change). */
+    USER_MESSAGE_APPEND("user-msg-append"),
+
+    /** Per-token glide during streaming. */
+    STREAM_GLIDE("stream-glide"),
+
+    /** Stream just finished — re-pin to catch async self-sizing. */
+    STREAM_END_SETTLE("stream-end-settle"),
+
+    /** Second-stage settle, 900ms after stream-end. */
+    STREAM_END_LATE_REPIN("stream-end-late-repin"),
+
+    /** LayoutInfo-driven safety net: bottom item pushed below viewport. */
+    LAYOUT_DRIFT_SNAP("layout-drift-snap"),
+
+    /** bottomReserve changed (toolbar appearing/disappearing). */
+    RESERVE_CHANGE("reserve-change"),
+
+    /** New trailing tool/typing row appeared. */
+    TRAILING_ROW("trailing-row"),
+}
+
+/**
+ * Snapshot of the LazyColumn scroll state and relevant timestamps.
+ * All values are read from remembered state at the decision point.
+ */
+data class ScrollStateSnapshot(
+    val userScrolledAway: Boolean,
+    val isNearBottom: Boolean,
+    val isScrollInProgress: Boolean,
+    val isStreaming: Boolean,
+    val nowMs: Long,
+    val lastInterruptMs: Long,
+    val lastUserAppendMs: Long,
+    val firstVisibleItemIndex: Int,
+    val firstVisibleItemScrollOffset: Int,
+    val bottomItemOffset: Int,
+    /** avgItemSize in pixels (for stream-glide distance estimation). */
+    val avgItemSize: Float,
+    /** SEND_FOLLOW_GRACE_MS constant from the caller. */
+    val sendFollowGraceMs: Long,
+)
+
+/**
+ * What the scroll engine should do.
+ */
+sealed class ScrollVerdict {
+    /** Do not scroll. */
+    data object Skip : ScrollVerdict()
+
+    /**
+     * Scroll to (index, offset). reason is logged as the ScrollSrc tag.
+     */
+    data class ScrollTo(val index: Int, val offset: Int, val reason: String) : ScrollVerdict()
+
+    /**
+     * Scroll by a delta (used by LAYOUT-DRIFT-CLIP). reason is logged.
+     */
+    data class ScrollBy(val delta: Float, val reason: String) : ScrollVerdict()
+}
+
+/**
+ * Pure decision function: given the intent and the current state,
+ * returns the verdict.
+ *
+ * Rules encoded per intent (preserving the pre-consolidation behavior):
+ *
+ * COMMON GATE (all intents):
+ *   - If userScrolledAway → Skip (user explicitly left the bottom)
+ *   - EXCEPTION: USER_SEND is unconditional (user just tapped send)
+ *
+ * PER-INTENT GATES:
+ *   USER_SEND: unconditional (isNearBottom irrelevant)
+ *   USER_MESSAGE_APPEND: isNearBottom must be true
+ *   STREAM_GLIDE: isStreaming=true, 1s post-interrupt, firstIdx==0
+ *   STREAM_END_SETTLE: !isStreaming, isNearBottom, 1s post-interrupt
+ *   STREAM_END_LATE_REPIN: !isStreaming, isNearBottom, 1.5s post-interrupt, firstIdx!=0
+ *   LAYOUT_DRIFT_SNAP: bottomItemOffset<0 only (deliberately NOT gated on isNearBottom)
+ *   RESERVE_CHANGE: isNearBottom || sendGrace (within 2s of send)
+ *   TRAILING_ROW: isNearBottom, 1s post-interrupt, (sendGrace || streaming)
+ */
+fun decideAutoFollow(intent: ScrollIntent, s: ScrollStateSnapshot): ScrollVerdict {
+    // ─── USER_SEND: unconditional ───
+    if (intent == ScrollIntent.USER_SEND) {
+        return ScrollVerdict.ScrollTo(0, 0, intent.label)
+    }
+
+    // ─── All other intents: userScrolledAway → Skip ───
+    if (s.userScrolledAway) return ScrollVerdict.Skip
+
+    // ─── isScrollInProgress handled per-branch below, EXACTLY where the
+    //     original code gated on it. USER_SEND / USER_MESSAGE_APPEND /
+    //     RESERVE_CHANGE never gated on it originally (a send-snap must
+    //     still fire even mid-scroll), so they do not gate here either.
+    return when (intent) {
+        ScrollIntent.USER_SEND -> {
+            // Unreachable (handled above), but keep exhaustive.
+            ScrollVerdict.ScrollTo(0, 0, intent.label)
+        }
+
+        ScrollIntent.USER_MESSAGE_APPEND -> {
+            if (!s.isNearBottom) return ScrollVerdict.Skip
+            ScrollVerdict.ScrollTo(0, 0, intent.label)
+        }
+
+        ScrollIntent.STREAM_GLIDE -> {
+            if (s.isScrollInProgress) return ScrollVerdict.Skip
+            if (!s.isStreaming) return ScrollVerdict.Skip
+            val sinceInterrupt = s.nowMs - s.lastInterruptMs
+            if (sinceInterrupt < 1000L) return ScrollVerdict.Skip
+            // [P0-0-jump-fix] Only handle drift within the same item
+            // (firstIdx==0, firstOff>0). New item insertion is handled
+            // by TRAILING_ROW.
+            if (s.firstVisibleItemIndex > 0) return ScrollVerdict.Skip
+            // If already perfectly pinned, skip.
+            if (s.firstVisibleItemIndex == 0 && s.firstVisibleItemScrollOffset == 0) {
+                return ScrollVerdict.Skip
+            }
+            // Estimate remaining distance and decide glide vs snap.
+            val avg = s.avgItemSize.coerceAtLeast(1f)
+            val remaining = s.firstVisibleItemIndex * avg + s.firstVisibleItemScrollOffset
+            if (remaining <= 0f) return ScrollVerdict.Skip
+            // Cold start: no avg item size yet → snap instead of glide.
+            if (s.avgItemSize <= 0f) {
+                return ScrollVerdict.ScrollTo(0, 0, intent.label)
+            }
+            // Step toward bottom in bounded increments.
+            // This is handled by the caller's scroll loop; the verdict
+            // here means "start a glide session".
+            return ScrollVerdict.ScrollTo(0, 0, intent.label)
+        }
+
+        ScrollIntent.STREAM_END_SETTLE -> {
+            if (s.isScrollInProgress) return ScrollVerdict.Skip
+            val sinceInterrupt = s.nowMs - s.lastInterruptMs
+            if (sinceInterrupt < 1000L) return ScrollVerdict.Skip
+            // [P0-0-jump-fix] isNearBottom guard
+            if (!s.isNearBottom) return ScrollVerdict.Skip
+            ScrollVerdict.ScrollTo(0, 0, intent.label)
+        }
+
+        ScrollIntent.STREAM_END_LATE_REPIN -> {
+            if (s.isScrollInProgress) return ScrollVerdict.Skip
+            val sinceInterrupt = s.nowMs - s.lastInterruptMs
+            if (sinceInterrupt < 1500L) return ScrollVerdict.Skip
+            // [P0-0-jump-fix] isNearBottom guard
+            if (!s.isNearBottom) return ScrollVerdict.Skip
+            // Only fire if viewport actually drifted from index 0
+            if (s.firstVisibleItemIndex == 0) return ScrollVerdict.Skip
+            ScrollVerdict.ScrollTo(0, 0, intent.label)
+        }
+
+        ScrollIntent.LAYOUT_DRIFT_SNAP -> {
+            // [Txxx-android-drift-snap-gate] DELIBERATELY NOT gated on
+            // isNearBottom. When new messages are inserted at index 0,
+            // firstVisibleItemIndex advances past 0 before the bottom
+            // anchor settles, so isNearBottom flips false exactly when
+            // we NEED the drift-snap.
+            // BUT: isScrollInProgress IS gated (as in original 1679) —
+            // don't compete with an active user drag/fling.
+            if (s.isScrollInProgress) return ScrollVerdict.Skip
+            if (s.bottomItemOffset >= 0) return ScrollVerdict.Skip
+            ScrollVerdict.ScrollTo(0, 0, intent.label)
+        }
+
+        ScrollIntent.RESERVE_CHANGE -> {
+            val sinceSend = s.nowMs - s.lastUserAppendMs
+            val sendGrace = s.lastUserAppendMs > 0L && sinceSend in 0..s.sendFollowGraceMs
+            if (!sendGrace && !s.isNearBottom) return ScrollVerdict.Skip
+            ScrollVerdict.ScrollTo(0, 0, intent.label)
+        }
+
+        ScrollIntent.TRAILING_ROW -> {
+            if (s.isScrollInProgress) return ScrollVerdict.Skip
+            val sinceInterrupt = s.nowMs - s.lastInterruptMs
+            if (sinceInterrupt < 1000L) return ScrollVerdict.Skip
+            if (!s.isNearBottom) return ScrollVerdict.Skip
+            val sinceSend = s.nowMs - s.lastUserAppendMs
+            val sendGrace = s.lastUserAppendMs > 0L && sinceSend <= s.sendFollowGraceMs
+            val streamingActive = s.isStreaming && !s.userScrolledAway
+            if (!sendGrace && !streamingActive) return ScrollVerdict.Skip
+            ScrollVerdict.ScrollTo(0, 0, intent.label)
+        }
+    }
+}

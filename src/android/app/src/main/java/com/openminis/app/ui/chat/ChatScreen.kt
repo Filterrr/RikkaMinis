@@ -1311,9 +1311,13 @@ fun ChatScreen(
         noteSendForInputModePref()
         userScrolledAway = false
         coroutineScope.launch {
-            tracedScrollToItem("SEND-PATH/initial", 0, 0)
+            // [consolidated] USER_SEND is unconditional — no gate to consult.
+            // (decideAutoFollow(USER_SEND) always returns ScrollTo(0,0), so
+            //  calling it here would be a pure indirection; call the executor
+            //  directly with engine-style reasons.)
+            tracedScrollToItem("user-send/initial", 0, 0)
             kotlinx.coroutines.delay(100)
-            tracedScrollToItem("SEND-PATH/settle", 0, 0)
+            tracedScrollToItem("user-send/settle", 0, 0)
         }
     }
     // T196: timestamp of the last drag-stop. The streaming auto-follow LE
@@ -1327,6 +1331,28 @@ fun ChatScreen(
     // time by scrolling all the way to the bottom (LE(isNearBottom) above
     // resets userScrolledAway).
     var lastInterruptMs by remember { mutableStateOf(0L) }
+    // [consolidated] Build the state snapshot for the auto-follow decision
+    // engine (AutoScrollDecision.kt). Reads all the current scroll state into
+    // an immutable data class so the pure decideAutoFollow() function can
+    // render a verdict without touching Compose state.
+    fun buildScrollStateSnapshot(): ScrollStateSnapshot {
+        val info = listState.layoutInfo
+        val bottomItem = info.visibleItemsInfo.firstOrNull { it.index == 0 }
+        return ScrollStateSnapshot(
+            userScrolledAway = userScrolledAway,
+            isNearBottom = isNearBottom.value,
+            isScrollInProgress = listState.isScrollInProgress,
+            isStreaming = viewModel.isStreaming.value,
+            nowMs = SystemClock.elapsedRealtime(),
+            lastInterruptMs = lastInterruptMs,
+            lastUserAppendMs = lastUserAppendMs,
+            firstVisibleItemIndex = listState.firstVisibleItemIndex,
+            firstVisibleItemScrollOffset = listState.firstVisibleItemScrollOffset,
+            bottomItemOffset = bottomItem?.offset ?: 0,
+            avgItemSize = avgItemSize.value,
+            sendFollowGraceMs = SEND_FOLLOW_GRACE_MS,
+        )
+    }
     // [T-android-composer-input-blocked-while-streaming] True only while the
     // user's FINGER is actively dragging the message list. Programmatic scrolls
     // (the streaming auto-follow glide, settle, pin-to-bottom) go through
@@ -1413,7 +1439,10 @@ fun ChatScreen(
             // Match the user-send path: clear any prior "scrolled away" flag
             // so the streaming auto-follow stays active for the new turn.
             userScrolledAway = false
-            tracedScrollToItem("FORCE-SCROLL-TO-BOTTOM(resume/retry/rerun)", 0, 0)
+            // [consolidated] USER_SEND is unconditional (resume/retry/rerun
+            // are explicit user "show me the response" gestures).
+            decideAutoFollow(ScrollIntent.USER_SEND, buildScrollStateSnapshot())
+                .let { if (it is ScrollVerdict.ScrollTo) tracedScrollToItem(it.reason, it.index, it.offset) }
         }
     }
     // Auto-scroll on user-send: explicit "show me the next response"
@@ -1430,17 +1459,22 @@ fun ChatScreen(
     LaunchedEffect(messages.size) {
         val lastMsg = messages.lastOrNull() ?: return@LaunchedEffect
         if (lastMsg.role != "user") return@LaunchedEffect
-        // [P0-0-jump-fix] Don't yank the viewport when the user explicitly
-        // scrolled away or is not near the bottom — they're reading history.
-        if (userScrolledAway) return@LaunchedEffect
-        if (!isNearBottom.value) return@LaunchedEffect
-        // T255: catch-all reset so any user-message append path
-        // (send button / Enter / enqueue-while-streaming / future
-        // entry points) restores auto-follow even if a call-site reset
-        // was missed.
-        lastUserAppendMs = SystemClock.elapsedRealtime()
-        userScrolledAway = false
-        tracedScrollToItem("LE(messages.size)USER-SEND-SNAP", 0, 0)
+        // [consolidated] Delegate to the pure decision function instead of
+        // a bespoke gate chain. Same logic: isNearBottom + userScrolledAway.
+        val state = buildScrollStateSnapshot()
+        when (val verdict = decideAutoFollow(ScrollIntent.USER_MESSAGE_APPEND, state)) {
+            is ScrollVerdict.Skip -> return@LaunchedEffect
+            is ScrollVerdict.ScrollTo -> {
+                // T255: catch-all reset so any user-message append path
+                // (send button / Enter / enqueue-while-streaming / future
+                // entry points) restores auto-follow even if a call-site reset
+                // was missed.
+                lastUserAppendMs = SystemClock.elapsedRealtime()
+                userScrolledAway = false
+                tracedScrollToItem(verdict.reason, verdict.index, verdict.offset)
+            }
+            is ScrollVerdict.ScrollBy -> {} // not used by this intent
+        }
     }
     // T128: streaming auto-follow when the user is at the bottom.
     //
@@ -1532,18 +1566,17 @@ fun ChatScreen(
             // just keep up smoothly.)
             .sample(120L)
             .collect {
-                if (!viewModel.isStreaming.value) return@collect
-                if (userScrolledAway) return@collect
-                if (listState.isScrollInProgress) return@collect
-                val sinceInterrupt = SystemClock.elapsedRealtime() - lastInterruptMs
-                if (sinceInterrupt < 1000L) return@collect
-                // [P0-0-jump-fix] When content insertion pushes the viewport
-                // from index 0 to 1+ (new typing/tool row), the glide would
-                // drag the user back to the newest row — same root cause as
-                // the trailing-row pin yank. The trailing-row pin (T304)
-                // handles new-item insertion separately; the glide should only
-                // handle drift within the same item (firstIdx=0, firstOff>0).
-                if (listState.firstVisibleItemIndex > 0) return@collect
+                // [consolidated] Delegate to pure decision function.
+                // STREAM_GLIDE returns ScrollTo only when drifting within the
+                // bottom item (firstIdx==0, firstOff>0) AND streaming AND past
+                // the 1s post-interrupt grace. A ScrollTo here means "proceed
+                // to the glide loop below"; Skip means "do nothing".
+                val state = buildScrollStateSnapshot()
+                when (val verdict = decideAutoFollow(ScrollIntent.STREAM_GLIDE, state)) {
+                    is ScrollVerdict.Skip -> return@collect
+                    is ScrollVerdict.ScrollTo -> { /* fall through to glide */ }
+                    is ScrollVerdict.ScrollBy -> {} // unused
+                }
                 // [T-android-stream-grow-anim] Frame-driven glide to the bottom.
                 // animateScrollToItem(0) was the problem: when the viewport had
                 // fallen >= 1 item behind (diagnostics showed fIdx=1..5 during
@@ -1629,29 +1662,23 @@ fun ChatScreen(
         // numeric, totalItems-delta) and every one made the symptom
         // worse — see commits cd08a334 and 9873a3ed for the analysis.
         kotlinx.coroutines.delay(220)
-        if (userScrolledAway || listState.isScrollInProgress) return@LaunchedEffect
-        // [P0-0-jump-fix] Same guard as trailing-row pin: content insertion
-        // can push the viewport from index 0 to 1 without user drag, leaving
-        // userScrolledAway=false. Without isNearBottom the re-pin yanks the
-        // user to the newest row even though they are reading pushed-up content.
-        if (!isNearBottom.value) return@LaunchedEffect
-        val sinceInterrupt = SystemClock.elapsedRealtime() - lastInterruptMs
-        if (sinceInterrupt < 1000L) return@LaunchedEffect
-        // At-bottom settle: user was following the stream; re-pin to
-        // index 0 so async self-sizing (code blocks / tables / images)
-        // finishing after our last per-token scrollToItem still leaves
-        // the bottom item flush with the viewport bottom.
-        tracedScrollToItem("stream-end/AT-BOTTOM-RE-PIN", 0, 0)
+        // [consolidated] Delegate to pure decision function.
+        val state = buildScrollStateSnapshot()
+        when (val verdict = decideAutoFollow(ScrollIntent.STREAM_END_SETTLE, state)) {
+            is ScrollVerdict.Skip -> return@LaunchedEffect
+            is ScrollVerdict.ScrollTo ->
+                tracedScrollToItem(verdict.reason, verdict.index, verdict.offset)
+            is ScrollVerdict.ScrollBy -> {}
+        }
         withFrameNanos { }
         kotlinx.coroutines.delay(900)
-        if (userScrolledAway || listState.isScrollInProgress) return@LaunchedEffect
-        // [P0-0-jump-fix] Re-check isNearBottom: content insertion during the
-        // 900ms settle window can push the viewport from index 0 to 1, and
-        // the LATE-REPIN would yank the user back to the newest row.
-        if (!isNearBottom.value) return@LaunchedEffect
-        if (listState.firstVisibleItemIndex != 0) {
-            val sinceDrag = SystemClock.elapsedRealtime() - lastInterruptMs
-            if (sinceDrag > 1500L) tracedScrollToItem("stream-end/LATE-REPIN", 0, 0)
+        // [consolidated] Delegate to pure decision function.
+        val lateState = buildScrollStateSnapshot()
+        when (val verdict = decideAutoFollow(ScrollIntent.STREAM_END_LATE_REPIN, lateState)) {
+            is ScrollVerdict.Skip -> return@LaunchedEffect
+            is ScrollVerdict.ScrollTo ->
+                tracedScrollToItem(verdict.reason, verdict.index, verdict.offset)
+            is ScrollVerdict.ScrollBy -> {}
         }
     }
     // T170: layoutInfo-driven safety net. iOS pins via contentSize KVO on
@@ -1675,33 +1702,16 @@ fun ChatScreen(
                 info.viewportEndOffset,
             )
         }.distinctUntilChanged().collectLatest { _ ->
-            if (userScrolledAway) return@collectLatest
-            if (listState.isScrollInProgress) return@collectLatest
-            // [Txxx-android-drift-snap-gate] DELIBERATELY NOT gated on
-            // isNearBottom here. isNearBottom = firstIdx==0 && firstOff<=thr.
-            // When new messages are inserted at index 0 (reverseLayout) the
-            // LazyList advances firstVisibleItemIndex past 0 before the bottom
-            // anchor settles, so this gate flips false exactly when we NEED the
-            // drift-snap — and the viewport is left floating one row up, which
-            // reads as "the conversation jumped while the agent answered".
-            // userScrolledAway (user actively pulled away) + isScrollInProgress
-            // (still dragging/flinging) already exclude a real user scroll; the
-            // bottomOffset<0 check below is the true "bottom item got pushed
-            // below the viewport" criterion and only fires when anchored bottom.
-            // Pin only if the current offset has actually drifted from
-            // the bottom (avoid no-op scroll spam).
-            val info = listState.layoutInfo
-            val bottomItemNow = info.visibleItemsInfo.firstOrNull { it.index == 0 }
-            // T180/T181: in reverseLayout=true, the bottom item (index 0,
-            // newest) anchors to viewport bottom when its offset == 0.
-            // When NEW items are inserted at index 0 and the LazyList does
-            // NOT auto-shift older items, the bottom item ends up below
-            // the viewport (negative offset). That's the only drift we
-            // need to fix. Don't react to gap<0 — for a tall bottom item
-            // that's the correct anchored-at-bottom state.
-            val bottomOffsetNow = bottomItemNow?.offset ?: 0
-            if (bottomOffsetNow >= 0) return@collectLatest
-            tracedScrollToItem("LAYOUT-DRIFT-SNAP", 0, 0)
+            // [consolidated] Delegate to pure decision function.
+            // Note: LAYOUT_DRIFT_SNAP is intentionally NOT gated on
+            // isNearBottom — the pure function preserves this exception.
+            val state = buildScrollStateSnapshot()
+            when (val verdict = decideAutoFollow(ScrollIntent.LAYOUT_DRIFT_SNAP, state)) {
+                is ScrollVerdict.Skip -> return@collectLatest
+                is ScrollVerdict.ScrollTo ->
+                    tracedScrollToItem(verdict.reason, verdict.index, verdict.offset)
+                is ScrollVerdict.ScrollBy -> {}
+            }
             val infoAfter = listState.layoutInfo
             val bottomNow = infoAfter.visibleItemsInfo.firstOrNull { it.index == 0 }
             if (bottomNow != null && bottomNow.offset < 0) {
@@ -3001,11 +3011,15 @@ fun ChatScreen(
                     // outside the grace window, so the C2 stream-end
                     // protections are untouched (a stream end is never
                     // within 2s of the user's send).
-                    val sinceSendMs = SystemClock.elapsedRealtime() - lastUserAppendMs
-                    val sendGrace = lastUserAppendMs > 0L && sinceSendMs in 0..SEND_FOLLOW_GRACE_MS
-                    if (!userScrolledAway && (isNearBottom.value || sendGrace)) {
-                        val reason = if (!isNearBottom.value) "send-grace" else "near-bottom"
-                        tracedScrollToItem("reserve-change/$reason", 0, 0)
+                    // [consolidated] Delegate to pure decision function.
+                    // Same logic: !userScrolledAway && (isNearBottom || sendGrace)
+                    // — the engine reads lastUserAppendMs from the snapshot.
+                    val state = buildScrollStateSnapshot()
+                    when (val verdict = decideAutoFollow(ScrollIntent.RESERVE_CHANGE, state)) {
+                        is ScrollVerdict.Skip -> { /* skip */ }
+                        is ScrollVerdict.ScrollTo ->
+                            tracedScrollToItem(verdict.reason, verdict.index, verdict.offset)
+                        is ScrollVerdict.ScrollBy -> {}
                     }
                 }
                 // T120: removed three streaming-time LaunchedEffects that
@@ -3277,28 +3291,15 @@ fun ChatScreen(
                         newest !is FlatChatItem.AssistantTyping
                     ) return@LaunchedEffect
                     if (newest.key == lastTrailingPinKey) return@LaunchedEffect
-                    if (userScrolledAway) return@LaunchedEffect
-                    // [P0-0-jump-fix] Gate on isNearBottom too: content
-                    // insertion (new typing/tool row at index 0) pushes the
-                    // visible viewport from index 0 to index 1 WITHOUT the
-                    // user dragging, so userScrolledAway stays false. Without
-                    // this check the pin fires and yanks the user to the new
-                    // row even though they are no longer at the bottom.
-                    if (!isNearBottom.value) return@LaunchedEffect
-                    if (listState.isScrollInProgress) return@LaunchedEffect
-                    val sinceInterrupt = SystemClock.elapsedRealtime() - lastInterruptMs
-                    if (sinceInterrupt < 1000L) return@LaunchedEffect
-                    // Pin fires when EITHER (a) we're inside the send-grace
-                    // window (the original "freshly sent, snap the typing
-                    // row up" case), OR (b) the agent loop is actively
-                    // streaming AND the user hasn't manually scrolled away.
-                    // History readers fail (b) on userScrolledAway.
-                    val sinceSendForPin = SystemClock.elapsedRealtime() - lastUserAppendMs
-                    val sendGrace = lastUserAppendMs > 0L && sinceSendForPin <= SEND_FOLLOW_GRACE_MS
-                    val streamingActive = viewModel.isStreaming.value && !userScrolledAway
-                    if (!sendGrace && !streamingActive) return@LaunchedEffect
+                    // [consolidated] Delegate to pure decision function.
+                    // Preserves: userScrolledAway, isNearBottom, 1s
+                    // post-interrupt, and (sendGrace || streamingActive).
+                    val verdict = decideAutoFollow(ScrollIntent.TRAILING_ROW, buildScrollStateSnapshot())
+                    if (verdict is ScrollVerdict.Skip) return@LaunchedEffect
                     lastTrailingPinKey = newest.key
-                    tracedScrollToItem("trailing-row/${newest.contentType}", 0, 0)
+                    if (verdict is ScrollVerdict.ScrollTo) {
+                        tracedScrollToItem("trailing-row/${newest.contentType}", verdict.index, verdict.offset)
+                    }
                 }
                 // messageId → isCompactedHistory map. Used to fade entire
                 // assistant-row clusters (header + text + tool pills) at
@@ -5062,9 +5063,10 @@ fun ChatScreen(
                             noteSendForInputModePref()
                             userScrolledAway = false
                             coroutineScope.launch {
-                                tracedScrollToItem("SEND-PATH(keyboard-imeAction)/initial", 0, 0)
+                                // [consolidated] USER_SEND is unconditional.
+                                tracedScrollToItem("user-send/ime-action/initial", 0, 0)
                                 kotlinx.coroutines.delay(100)
-                                tracedScrollToItem("SEND-PATH(keyboard-imeAction)/settle", 0, 0)
+                                tracedScrollToItem("user-send/ime-action/settle", 0, 0)
                             }
                             true
                         }
