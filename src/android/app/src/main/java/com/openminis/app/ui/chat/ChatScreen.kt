@@ -1742,7 +1742,13 @@ fun ChatScreen(
             }
             val infoAfter = listState.layoutInfo
             val bottomNow = infoAfter.visibleItemsInfo.firstOrNull { it.index == 0 }
-            if (bottomNow != null && bottomNow.offset < 0) {
+            // [P2-scroll-read-history] LAYOUT-DRIFT-CLIP mirrors the drift-snap
+            // gate: only compensate the bottom row's negative offset when the
+            // viewport is still anchored on index 0. When the user has drifted
+            // into history (firstIdx>0, whether by drag or insertion), a
+            // negative offset read here is not "content pushed the bottom row"
+            // — it's the user reading — so do NOT clip/scroll them back.
+            if (listState.firstVisibleItemIndex == 0 && bottomNow != null && bottomNow.offset < 0) {
                 tracedScrollBy("LAYOUT-DRIFT-CLIP", bottomNow.offset.toFloat())
             }
         }

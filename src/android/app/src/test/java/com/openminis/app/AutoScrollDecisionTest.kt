@@ -161,20 +161,43 @@ class AutoScrollDecisionTest {
         assertTrue(decideAutoFollow(ScrollIntent.STREAM_END_LATE_REPIN, s) is ScrollVerdict.ScrollTo)
     }
 
-    // ─── LAYOUT_DRIFT_SNAP: NOT gated on isNearBottom ───
+    // ─── LAYOUT_DRIFT_SNAP ───
 
     @Test
-    fun layoutDriftSnap_negativeOffset_pinsDespiteNotNearBottom() {
-        // This is the critical [P0-0] behaviour: insertion pushes index-0
-        // item below viewport (negative offset). isNearBottom flips false
-        // EXACTLY when we need to snap. Must still fire.
+    fun layoutDriftSnap_readingHistory_driftedUp_skips() {
+        // [P2-scroll-read-history] The core bug: content insertion pushed the
+        // viewport up to index 1 while the user was reading history there.
+        // Old code fired (bottomItemOffset<0 alone) and yanked the user back
+        // to (0,0). Now firstVisibleItemIndex>0 means the viewport has left
+        // the bottom row — whether by drag OR by insertion drift — so the
+        // drift-snap must NOT compensate. Only TRAILING_ROW/STREAM_* handle
+        // pushing a bottom-anchored reader down.
         val s = baseState().copy(
             isNearBottom = false,
             firstVisibleItemIndex = 1,
             bottomItemOffset = -50,
         )
+        assertEquals(
+            "must NOT yank a reader who drifted into history",
+            ScrollVerdict.Skip,
+            decideAutoFollow(ScrollIntent.LAYOUT_DRIFT_SNAP, s),
+        )
+    }
+
+    @Test
+    fun layoutDriftSnap_anchoredBottomRow_driftedNegative_pins() {
+        // The legitimate drift-snap case: the user IS anchored on the bottom
+        // row (firstVisibleItemIndex==0) and that row's content grew, pushing
+        // its offset negative. isNearBottom may read false (transient reflow)
+        // but we must still compensate to keep index 0 pinned.
+        val s = baseState().copy(
+            isNearBottom = false,
+            firstVisibleItemIndex = 0,
+            firstVisibleItemScrollOffset = 5,
+            bottomItemOffset = -50,
+        )
         val v = decideAutoFollow(ScrollIntent.LAYOUT_DRIFT_SNAP, s)
-        assertTrue("drift-snap must fire even when !isNearBottom", v is ScrollVerdict.ScrollTo)
+        assertTrue("bottom-anchored negative drift must snap", v is ScrollVerdict.ScrollTo)
     }
 
     @Test
