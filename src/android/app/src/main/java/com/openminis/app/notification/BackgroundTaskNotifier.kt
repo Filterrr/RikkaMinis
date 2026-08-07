@@ -236,6 +236,14 @@ class BackgroundTaskNotifier(
             NotificationManager.IMPORTANCE_DEFAULT,
         ).apply {
             description = context.getString(R.string.notif_task_completed_channel_description)
+            // [feat-vibrate-task-complete] Enable a short double-buzz on the
+            // task-completion channel so a user who is screen-off / wearing
+            // headphones / away still feels when the agent loop finishes. The
+            // vibration pattern rides the channel's own notification sound so
+            // headphones hear an audio cue too. Toggled independently from
+            // sound by the system Settings → Notifications ui (per-channel).
+            enableVibration(true)
+            setVibrationPattern(longArrayOf(0L, 120L, 90L, 160L))
             setShowBadge(true)
         }
         manager.createNotificationChannel(channel)
