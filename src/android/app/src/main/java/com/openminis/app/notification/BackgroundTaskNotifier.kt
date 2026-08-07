@@ -37,8 +37,11 @@ import kotlinx.coroutines.launch
  * Behaviour rules:
  * - Skip silently if the user has disabled Task Notifications
  *   ([BackgroundSettingsRepository.taskNotificationsEnabled] = false).
- * - Skip silently if the app is currently in foreground — the user is
- *   already looking at the chat, no need to interrupt.
+ * - Foreground vs background:
+ *     - Backgrounded: post the tray notification (tap deep-links back to
+ *       the chat) AND drive a direct hardware vibration.
+ *     - Foreground: the user is already looking at the chat, so no tray
+ *       notification — but still buzz the vibrator as a "task done" cue.
  * - Tap on the notification deep-links into the originating chat via
  *   `minis://session/<sessionId>` (existing
  *   `DeepLinkHandler.OpenSession` path).
@@ -66,35 +69,41 @@ class BackgroundTaskNotifier(
      * session finishes (active → inactive transition). Looks up the
      * session title via [chatRepository] and posts the notification, off
      * the main thread. No-ops silently if the user has disabled
-     * notifications or the app is in foreground.
+     * notifications. When the app is backgrounded it posts a tray
+     * notification; foreground or background, it drives a direct hardware
+     * buzz as a completion cue.
      */
     fun notifyTaskCompleted(sessionId: String, isError: Boolean = false) {
         if (!backgroundSettings.taskNotificationsEnabled.value) return
-        if (isAppForeground()) return
+        val foreground = isAppForeground()
 
         scope.launch {
             try {
-                val session = chatRepository.getSession(sessionId)
-                val rawTitle = session?.title?.takeIf { it.isNotBlank() }
-                    ?: context.getString(R.string.notif_task_completed_default_title)
-                val title = if (isError) "❌ $rawTitle" else rawTitle
-                val body = if (isError) {
-                    context.getString(R.string.notif_task_failed_body)
-                } else {
-                    context.getString(R.string.notif_task_completed_body)
+                if (!foreground) {
+                    val session = chatRepository.getSession(sessionId)
+                    val rawTitle = session?.title?.takeIf { it.isNotBlank() }
+                        ?: context.getString(R.string.notif_task_completed_default_title)
+                    val title = if (isError) "❌ $rawTitle" else rawTitle
+                    val body = if (isError) {
+                        context.getString(R.string.notif_task_failed_body)
+                    } else {
+                        context.getString(R.string.notif_task_completed_body)
+                    }
+                    postNotification(sessionId, title, body)
                 }
-                postNotification(sessionId, title, body)
-                // [feat-vibrate-task-complete] Direct haptic on completion.
-                // MIUI suppresses notification-channel vibration
-                // (dumpsys shows VibratorManager marking every
-                // Notification-usage vibration "ignored_ringtone_or_notify_miui"),
-                // so riding the notification's vibration pattern is unreliable
-                // on Xiaomi ROMs. Instead, also drive the hardware vibrator
-                // directly with VibrationEffect — that path (verified via
-                // `cmd vibrator_manager synced oneshot` on the device) is NOT
-                // subject to that suppression. Runs regardless of whether the
-                // notification itself was posted (it even fires for foreground
-                // activity, giving the user a physical cue while watching).
+                // [feat-vibrate-task-complete] Direct haptic on completion,
+                // regardless of foreground/background. When the app is in
+                // the foreground the user is already watching the chat, so
+                // no tray notification is posted — but they still get the
+                // physical buzz as a "task done" cue (useful when they've
+                // glanced away, e.g. with headphones on). MIUI suppresses
+                // notification-channel vibration (dumpsys shows
+                // VibratorManager marking every Notification-usage vibration
+                // "ignored_ringtone_or_notify_miui"), so riding the
+                // notification's vibration pattern is unreliable on Xiaomi
+                // ROMs. Driving the hardware vibrator directly with
+                // VibrationEffect (verified via `cmd vibrator_manager synced
+                // oneshot` on the device) is NOT subject to that suppression.
                 vibrateCompletion()
             } catch (t: Throwable) {
                 AppLogger.warning(TAG, "notifyTaskCompleted failed: ${t.message}")
