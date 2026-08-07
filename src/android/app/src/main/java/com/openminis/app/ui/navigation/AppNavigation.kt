@@ -66,7 +66,6 @@ import com.openminis.app.ui.settings.SharedFoldersScreen
 import com.openminis.app.ui.settings.SkillsManagementScreen
 import com.openminis.app.data.repository.EnvVarRepository
 import com.openminis.app.data.repository.MemoryRepository
-import com.openminis.app.data.EpisodeMemoryStore
 import com.openminis.app.data.repository.SkillRepository
 import com.openminis.app.ui.settings.LogDetailScreen
 import com.openminis.app.ui.settings.LogManagementScreen
@@ -230,7 +229,6 @@ fun AppNavigation(
     skillRepository: SkillRepository? = null,
     mcpRepository: com.openminis.app.data.repository.MCPRepository? = null,
     memoryRepository: MemoryRepository? = null,
-    experienceMemoryStore: EpisodeMemoryStore? = null,
     navController: NavHostController = rememberNavController(),
     initialDeepLink: DeepLinkAction? = null,
 ) {
@@ -547,7 +545,6 @@ fun AppNavigation(
                 chatRepository = chatRepository,
                 providerRepository = providerRepository,
                 memoryRepository = memoryRepository,
-                experienceMemoryStore = experienceMemoryStore,
                 skillRepository = skillRepository,
                 mcpRepository = mcpRepository,
                 onBack = { navController.safePopBackStack() },
@@ -1103,10 +1100,9 @@ fun AppNavigation(
         }
 
         composable(Routes.MEMORY) {
-            if (memoryRepository != null && experienceMemoryStore != null) {
+            if (memoryRepository != null) {
                 MemoryManagementScreen(
                     memoryRepository = memoryRepository,
-                    experienceMemoryStore = experienceMemoryStore,
                     onBack = { navController.safePopBackStack() },
                     onFileClick = { fileName, isGlobal ->
                         navController.safeNavigate(Routes.memoryFileEdit(fileName, isGlobal))
