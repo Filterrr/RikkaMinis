@@ -1331,20 +1331,39 @@ fun ChatScreen(
             return@handler
         }
         lastSendTimeMs = SystemClock.elapsedRealtime()
+        // [P2-scroll-user-send] Capture the viewport anchor BEFORE sendMessage:
+        // sending inserts the user row at index 0, which in reverseLayout
+        // pushes firstVisibleItemIndex from 0 → 1, so reading isNearBottom
+        // AFTER the insert would wrongly read "scrolled into history" for a
+        // bottom-anchored sender. Snapshot first, then act.
+        val wasScrolledIntoHistory = !isNearBottom.value
         viewModel.setInputText("")
         keyboardController?.hide()
         focusManager.clearFocus()
         viewModel.sendMessage(rawText)
         noteSendForInputModePref()
+        // [P2-scroll-user-send] Was: unconditional `userScrolledAway=false` +
+        // unconditional scrollToItem(0,0). That yanked a user who was reading
+        // history (log: user-send/initial fired at firstIdx=16) straight to
+        // the bottom. Now: the send always clears the sticky flag (the user
+        // just interacted), but the scroll-to-bottom only fires when the
+        // viewport was anchored at the bottom row — otherwise we respect the
+        // reader's place in history and let the in-flight push
+        // (trailing-row/glide) decide. USER_SEND remains "scroll if you were
+        // already at the bottom"; it stops being "yank whoever read earlier".
         userScrolledAway = false
         coroutineScope.launch {
-            // [consolidated] USER_SEND is unconditional — no gate to consult.
-            // (decideAutoFollow(USER_SEND) always returns ScrollTo(0,0), so
-            //  calling it here would be a pure indirection; call the executor
-            //  directly with engine-style reasons.)
-            tracedScrollToItem("user-send/initial", 0, 0)
-            kotlinx.coroutines.delay(100)
-            tracedScrollToItem("user-send/settle", 0, 0)
+            if (!wasScrolledIntoHistory) {
+                // [consolidated] USER_SEND is unconditional — no gate to consult.
+                // (decideAutoFollow(USER_SEND) always returns ScrollTo(0,0), so
+                //  calling it here would be a pure indirection; call the executor
+                //  directly with engine-style reasons.)
+                tracedScrollToItem("user-send/initial", 0, 0)
+                kotlinx.coroutines.delay(100)
+                tracedScrollToItem("user-send/settle", 0, 0)
+            } else {
+                AppLogger.debug("USER-SEND", "reader-in-history, skip yank (firstIdx drift scene)")
+            }
         }
     }
     // T196: timestamp of the last drag-stop. The streaming auto-follow LE
@@ -5092,6 +5111,9 @@ fun ChatScreen(
                             // empty inputText becomes visible.
                             val toSend = inputText
                             lastSendTimeMs = SystemClock.elapsedRealtime()
+                            // [P2-scroll-user-send] snapshot BEFORE sendMessage
+                            // (insert pushes index 0 → 1; must not read after).
+                            val wasScrolledIntoHistory = !isNearBottom.value
                             viewModel.setInputText("")
                             keyboardController?.hide()
                             focusManager.clearFocus()
@@ -5099,10 +5121,14 @@ fun ChatScreen(
                             noteSendForInputModePref()
                             userScrolledAway = false
                             coroutineScope.launch {
-                                // [consolidated] USER_SEND is unconditional.
-                                tracedScrollToItem("user-send/ime-action/initial", 0, 0)
-                                kotlinx.coroutines.delay(100)
-                                tracedScrollToItem("user-send/ime-action/settle", 0, 0)
+                                if (!wasScrolledIntoHistory) {
+                                    // [consolidated] USER_SEND is unconditional.
+                                    tracedScrollToItem("user-send/ime-action/initial", 0, 0)
+                                    kotlinx.coroutines.delay(100)
+                                    tracedScrollToItem("user-send/ime-action/settle", 0, 0)
+                                } else {
+                                    AppLogger.debug("USER-SEND", "ime-action reader-in-history, skip yank")
+                                }
                             }
                             true
                         }
