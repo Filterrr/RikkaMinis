@@ -78,16 +78,6 @@ internal object ConfigBuiltins {
                 defaultValue = true,
             )
         )
-        r.register(
-            PrefsBoolField(
-                path = "memory.experience.enabled",
-                displayName = "Experience memory (episodic)",
-                description = "Automatically records every finished exchange (query, tools, outcome, reply) into a local plain-text JSONL file (filesDir/minis-global/memory/episodes.jsonl) and, before each reply, injects up to 3 similar past episodes into the system prompt tail. Zero extra model calls: recording is a mechanical extraction, retrieval is keyword scoring. Failures are stored but only resurface when the query signals a failure investigation. Verification counter: injected episodes get +1 when the exchange succeeds, -1 on failure. Clear anytime from Settings → Memory.",
-                prefs = prefs,
-                key = "memory.experience.enabled",
-                defaultValue = true,
-            )
-        )
     }
 
     // -- Master switch surface (read-only via the registry; UI toggles it) --

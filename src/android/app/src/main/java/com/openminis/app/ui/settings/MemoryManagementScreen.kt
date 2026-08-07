@@ -20,19 +20,11 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -48,26 +40,17 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import com.openminis.app.data.EpisodeMemoryStore
-import com.openminis.app.data.Outcome
 import com.openminis.app.data.repository.MemoryRepository
 import com.openminis.app.ui.components.DialogTextField
-import java.text.SimpleDateFormat
 import java.util.Date
-import java.util.Locale
 import kotlinx.coroutines.launch
 
 /**
@@ -81,7 +64,6 @@ import kotlinx.coroutines.launch
 @Composable
 fun MemoryManagementScreen(
     memoryRepository: MemoryRepository,
-    experienceMemoryStore: EpisodeMemoryStore,
     onBack: () -> Unit,
     onFileClick: (fileName: String, isGlobal: Boolean) -> Unit = { _, _ -> },
 ) {
@@ -92,39 +74,6 @@ fun MemoryManagementScreen(
     // the user expand — prevents the section growing unboundedly tall.
     var showAllFiles by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
-    // [ExpMem] Experience memory (episodic): auto-records every finished
-    // exchange (query, tools, outcome, reply) into a local plain-text JSONL
-    // file and injects up to 3 similar past episodes before each reply.
-    // Zero extra model calls; retrieval is keyword scoring; the verification
-    // counter (+1 on success / -1 on failure) ranks proven episodes higher.
-    // The store is the app-wide singleton (MinisApp.experienceMemoryStore),
-    // injected via navigation — this screen must NOT create its own instance,
-    // or it would read/write the same JSONL without the singleton's Mutex.
-    // Declared here (before SettingsScaffold) so both the section and the
-    // clear-confirm dialog below can reference them.
-    var expEnabled by remember {
-        mutableStateOf(com.openminis.app.data.ExperienceMemoryPrefs.isEnabled(context))
-    }
-    // [ExpMem-threads] All store IO is suspend + serialized by the store's
-    // internal Mutex; this screen only observes via a local scope. size /
-    // snapshot / clear must never run on the main thread.
-    val expScope = rememberCoroutineScope()
-    var expSize by remember { mutableStateOf(0) }
-    var expLoading by remember { mutableStateOf(true) }
-    var expError by remember { mutableStateOf<String?>(null) }
-    var expClearConfirm by remember { mutableStateOf(false) }
-    // [ExpMem-viewer] Inline episode viewer: "View recorded episodes" row
-    // expands in place to a compact list (capped at 50 rows for perf);
-    // tapping a row opens a detail dialog.
-    var expExpanded by remember { mutableStateOf(false) }
-    var expEpisodes by remember { mutableStateOf<List<EpisodeMemoryStore.Episode>>(emptyList()) }
-    var expDetail by remember { mutableStateOf<EpisodeMemoryStore.Episode?>(null) }
-    // [Mem-optimize] "Show all episodes" — the inline viewer lists the most
-    // valuable first (sortByValue), capped at 50 visible rows for perf; this
-    // flag reveals the rest so the user can always reach older episodes.
-    var showAllEpisodes by remember { mutableStateOf(false) }
-    // [Mem-optimize] Single-episode delete — trail ⋮ menu → confirm dialog.
-    val expDeleteTarget = remember { mutableStateOf<EpisodeMemoryStore.Episode?>(null) }
     // [T-memory-global-toggle-settings-ui-android] Global default for
     // newly-created sessions. Stored separately from per-session
     // memoryEnabled (which lives in the sessions DB row) so toggling
@@ -137,16 +86,6 @@ fun MemoryManagementScreen(
 
     LaunchedEffect(Unit) {
         files = memoryRepository.listAllFiles()
-        // [ExpMem-threads] size() is suspend (Mutex-serialized) — load once
-        // on entry; failures surface as an error instead of a fake 0.
-        expLoading = true
-        expError = null
-        try {
-            expSize = experienceMemoryStore.size()
-        } catch (e: Exception) {
-            expError = context.getString(R.string.memory_experience_clear_failed)
-        }
-        expLoading = false
     }
 
     // top-level page: rely on system back gesture / bottom nav (no back arrow)
@@ -225,144 +164,6 @@ fun MemoryManagementScreen(
             Spacer(modifier = Modifier.height(16.dp))
         }
 
-        SettingsSection(
-            header = stringResource(R.string.settings_memory_experience_header),
-            footer = stringResource(R.string.settings_memory_experience_footer),
-        ) {
-            SettingsSwitchRow(
-                title = stringResource(R.string.settings_memory_experience_enabled_title),
-                subtitle = stringResource(R.string.settings_memory_experience_enabled_subtitle),
-                checked = expEnabled,
-                onCheckedChange = { newValue ->
-                    expEnabled = newValue
-                    com.openminis.app.data.ExperienceMemoryPrefs.setEnabled(context, newValue)
-                },
-                showDivider = true,
-            )
-            // View recorded episodes — expandable inline list (newest first)
-            SettingsRow(
-                title = stringResource(R.string.memory_experience_view),
-                subtitle = if (expSize > 0) {
-                    stringResource(R.string.memory_experience_entries, expSize)
-                } else {
-                    stringResource(R.string.memory_experience_view_empty)
-                },
-                onClick = {
-                    expExpanded = !expExpanded
-                    if (expExpanded) {
-                        showAllEpisodes = false
-                        // [ExpMem-viewer] reload on every expand so episodes
-                        // recorded while the list was collapsed show up.
-                        // [Mem-optimize] sortByValue=true ranks proven episodes
-                        // (success × reuse count) first — matches the agent's
-                        // retrieval order, so the most useful float to the top.
-                        expScope.launch {
-                            expLoading = true
-                            expError = null
-                            try {
-                                expEpisodes = experienceMemoryStore.snapshot(sortByValue = true)
-                            } catch (e: Exception) {
-                                expError = context.getString(R.string.memory_experience_clear_failed)
-                            }
-                            expLoading = false
-                        }
-                    }
-                },
-                showDivider = true,
-                showChevron = false,
-                trailing = {
-                    Icon(
-                        imageVector = if (expExpanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                },
-            )
-            if (expExpanded) {
-                when {
-                    expLoading -> {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 12.dp),
-                            horizontalArrangement = Arrangement.Center,
-                        ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
-                                strokeWidth = 2.dp,
-                            )
-                        }
-                    }
-                    expError != null -> {
-                        Text(
-                            expError!!,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                        )
-                    }
-                    expEpisodes.isEmpty() -> {
-                        Text(
-                            stringResource(R.string.memory_experience_view_empty),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                        )
-                    }
-                    else -> {
-                        // [Mem-optimize] Show the most valuable episodes first;
-                        // cap visible rows at 50 for perf, with a "Show all"
-                        // action to reach older ones (so the user can always
-                        // inspect / prune the tail, not just the top).
-                        val cap = 50
-                        val visible = if (showAllEpisodes) expEpisodes else expEpisodes.take(cap)
-                        visible.forEachIndexed { index, episode ->
-                            EpisodeRow(
-                                episode = episode,
-                                onClick = { expDetail = episode },
-                                onDelete = { expDeleteTarget.value = episode },
-                                showDivider = index < visible.size - 1,
-                            )
-                        }
-                        if (expEpisodes.size > cap && !showAllEpisodes) {
-                            Text(
-                                stringResource(R.string.memory_experience_view_recent, cap, expEpisodes.size),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                            )
-                            TextButton(
-                                onClick = { showAllEpisodes = true },
-                                modifier = Modifier.padding(start = 8.dp),
-                            ) {
-                                Text(stringResource(R.string.memory_experience_show_all))
-                            }
-                        } else if (expEpisodes.size > cap) {
-                            Text(
-                                stringResource(R.string.memory_experience_view_recent, expEpisodes.size, expEpisodes.size),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                            )
-                        }
-                    }
-                }
-            }
-            // Clear experience memory — destructive, always last
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { expClearConfirm = true }
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    stringResource(R.string.memory_experience_clear),
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-        }
         Spacer(modifier = Modifier.height(16.dp))
     }
 
@@ -391,173 +192,7 @@ fun MemoryManagementScreen(
         )
     }
 
-    // Experience memory clear confirmation
-    if (expClearConfirm) {
-        AlertDialog(
-            onDismissRequest = { expClearConfirm = false },
-            title = { Text(stringResource(R.string.memory_experience_clear_confirm_title)) },
-            text = { Text(stringResource(R.string.memory_experience_clear_confirm_text)) },
-            confirmButton = {
-                MinisTextButton(onClick = {
-                    expScope.launch {
-                        val result = experienceMemoryStore.clear()
-                        expClearConfirm = false
-                        // [ExpMem-threads] Only a real Success clears the UI;
-                        // a failed delete must NOT pretend the store is empty.
-                        if (result is EpisodeMemoryStore.IoResult.Success) {
-                            expSize = 0
-                            expEpisodes = emptyList()
-                            expError = null
-                        } else {
-                            expError = context.getString(R.string.memory_experience_clear_failed)
-                        }
-                    }
-                }) {
-                    Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error)
-                }
-            },
-            dismissButton = {
-                MinisTextButton(onClick = { expClearConfirm = false }) {
-                    Text(stringResource(R.string.common_cancel))
-                }
-            },
-        )
-    }
 
-    // [Mem-optimize] Single-episode delete confirmation
-    expDeleteTarget.value?.let { target ->
-        AlertDialog(
-            onDismissRequest = { expDeleteTarget.value = null },
-            title = { Text(stringResource(R.string.memory_experience_delete_confirm_title)) },
-            text = { Text(stringResource(R.string.memory_experience_delete_confirm_text)) },
-            confirmButton = {
-                MinisTextButton(onClick = {
-                    val id = target.id
-                    expDeleteTarget.value = null
-                    expScope.launch {
-                        val result = experienceMemoryStore.delete(id)
-                        if (result is EpisodeMemoryStore.IoResult.Success) {
-                            // Reflect the deletion in the viewer immediately.
-                            expEpisodes = expEpisodes.filterNot { it.id == id }
-                            // [fix-audit-p3-1] Re-query the live size instead
-                            // of locally decrementing: episodes recorded by the
-                            // agent while the list was open would otherwise
-                            // leave the counter drifting.
-                            expSize = experienceMemoryStore.size()
-                        } else {
-                            expError = context.getString(R.string.memory_experience_clear_failed)
-                        }
-                    }
-                }) {
-                    Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error)
-                }
-            },
-            dismissButton = {
-                MinisTextButton(onClick = { expDeleteTarget.value = null }) {
-                    Text(stringResource(R.string.common_cancel))
-                }
-            },
-        )
-    }
-
-    // [ExpMem-viewer] Episode detail dialog — query, meta, tools, reply.
-    // Built with plain Dialog + Surface (NOT AlertDialog): M3 AlertDialog
-    // constrains the text slot and its fixed content area eats the vertical
-    // drag, so a long reply ends up clipped with no way to scroll it.
-    // A Dialog + Surface lets us own the height and scroll the Column freely.
-    expDetail?.let { ep ->
-        val dateStr = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(ep.t))
-        val outcomeStr = stringResource(
-            when (ep.outcome) {
-                Outcome.SUCCESS -> R.string.memory_experience_outcome_ok
-                Outcome.PARTIAL -> R.string.memory_experience_outcome_partial
-                else -> R.string.memory_experience_outcome_fail
-            }
-        )
-        val toolsText = if (ep.tools.isEmpty()) {
-            stringResource(R.string.memory_experience_detail_no_tools)
-        } else {
-            ep.tools.joinToString(", ") { t -> "${t.n}(${if (t.ok) "✓" else "✗"})" }
-        }
-        val radius = RoundedCornerShape(28.dp)
-        Dialog(
-            onDismissRequest = { expDetail = null },
-            properties = DialogProperties(usePlatformDefaultWidth = false),
-        ) {
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(0.92f),
-                shape = radius,
-                color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 6.dp,
-                shadowElevation = 16.dp,
-            ) {
-                Column(
-                    modifier = Modifier
-                        .padding(24.dp)
-                        .fillMaxHeight(),
-                ) {
-                    // Title area (fixed, not scrolled)
-                Text(
-                    ep.q.ifBlank { "—" },
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // Scrollable body — owns its height, so a long reply can be
-                // dragged to reveal everything below the fold.
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .verticalScroll(rememberScrollState())
-                        .padding(end = 4.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text(
-                        stringResource(
-                            R.string.memory_experience_detail_meta,
-                            dateStr, outcomeStr, ep.durMs / 1000, ep.v
-                        ),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(
-                        stringResource(R.string.memory_experience_detail_tools),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                    Text(toolsText, style = MaterialTheme.typography.bodyMedium)
-                    Text(
-                        stringResource(R.string.memory_experience_detail_reply),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                    Text(
-                        ep.reply.ifBlank { "—" },
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Close button (fixed, not scrolled)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                ) {
-                    TextButton(onClick = { expDetail = null }) {
-                        Text(stringResource(R.string.common_close))
-                    }
-                }
-            }
-            }
-        }
-    }
 }
 
 @Composable
@@ -622,106 +257,6 @@ private fun MemoryFileRow(
 }
 
 /**
- * Compact single-episode row inside the expanded Experience Memory list.
- * Green/red dot = outcome, title = query, subtitle = tool names,
- * trailing = reuse count + ⋮ menu (delete) + chevron (tap opens detail dialog).
- * [Mem-optimize] Added the ⋮ overflow menu so a single useless episode can be
- * pruned without clearing the whole store.
- */
-@Composable
-private fun EpisodeRow(
-    episode: EpisodeMemoryStore.Episode,
-    onClick: () -> Unit,
-    onDelete: (() -> Unit)?,
-    showDivider: Boolean,
-) {
-    Column {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onClick)
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(8.dp)
-                    .clip(CircleShape)
-                    .background(
-                        if (episode.outcome.isSuccessClass) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.error
-                    ),
-            )
-            Spacer(modifier = Modifier.width(10.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    episode.q.ifBlank { "—" },
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.bodyLarge,
-                )
-                Text(
-                    if (episode.tools.isEmpty()) "—"
-                    else episode.tools.joinToString(", ") { it.n },
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            if (episode.v > 0) {
-                Text(
-                    stringResource(R.string.memory_experience_reuse, episode.v),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-            }
-            // [Mem-optimize] ⋮ overflow → delete this episode
-            if (onDelete != null) {
-                var menuOpen by remember { mutableStateOf(false) }
-                Box {
-                    IconButton(onClick = { menuOpen = true }) {
-                        Icon(
-                            Icons.Filled.MoreVert,
-                            contentDescription = stringResource(R.string.memory_experience_delete),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                    DropdownMenu(
-                        expanded = menuOpen,
-                        onDismissRequest = { menuOpen = false },
-                    ) {
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    stringResource(R.string.memory_experience_delete),
-                                    color = MaterialTheme.colorScheme.error,
-                                )
-                            },
-                            onClick = {
-                                menuOpen = false
-                                onDelete()
-                            },
-                        )
-                    }
-                }
-            }
-            Icon(
-                Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                modifier = Modifier.size(20.dp),
-            )
-        }
-        if (showDivider) {
-            HorizontalDivider(
-                modifier = Modifier.padding(start = 34.dp),
-                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-            )
-        }
-    }
 }
 
 /**
