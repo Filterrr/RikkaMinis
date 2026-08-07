@@ -1299,6 +1299,12 @@ fun ChatScreen(
     //         down-arrow again → resume follow.
     var stickToBottom by remember(sessionId) { mutableStateOf(true) }
 
+    // T-android-use-dragging-guard: does a real pointer drag currently own the
+    // list? The anchor-guard reads this so it never fires a compensation
+    // scroll while the user's finger is mid-gesture (racing the drag would
+    // cause visible jitter). Tracked by the DragInteraction collector below.
+    var isUserDragging by remember { mutableStateOf(false) }
+
     // T-drag-send-queue: shared send-or-enqueue handler used by BOTH the
     // send-button tap and the swipe-up-to-send drag. Routes through
     // `viewModel.sendMessage(...)` which internally dispatches to
@@ -1397,7 +1403,6 @@ fun ChatScreen(
     // touch focus). Without this the keyboard closed itself mid-stream and
     // dropped the in-flight keystroke (the reported "can't type while
     // streaming" bug).
-    var isUserDragging by remember { mutableStateOf(false) }
     LaunchedEffect(listState) {
         listState.interactionSource.interactions.collect { interaction ->
             // T-android-jank-profile: drag interactions fire on every drag
