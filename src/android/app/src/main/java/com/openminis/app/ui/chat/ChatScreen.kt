@@ -1436,12 +1436,13 @@ fun ChatScreen(
     // streamed token finally bumps the auto-follow tuple.
     LaunchedEffect(listState, viewModel) {
         viewModel.forceScrollToBottom.collect {
-            // Match the user-send path: clear any prior "scrolled away" flag
-            // so the streaming auto-follow stays active for the new turn.
-            userScrolledAway = false
-            // [consolidated] USER_SEND is unconditional (resume/retry/rerun
-            // are explicit user "show me the response" gestures).
-            decideAutoFollow(ScrollIntent.USER_SEND, buildScrollStateSnapshot())
+            // [fix/force-scroll-respect-viewport] resume/retry/rerun fire this
+            // BOTH on an explicit user gesture AND when the agent loop re-runs
+            // a tool block / retries a message on its own mid-multi-turn. Route
+            // through the engine with the FORCE_SCROLL intent: it respects the
+            // user's viewport (Skips when they scrolled away to read history)
+            // instead of yanking them back to the bottom on every agent retry.
+            decideAutoFollow(ScrollIntent.FORCE_SCROLL, buildScrollStateSnapshot())
                 .let { if (it is ScrollVerdict.ScrollTo) tracedScrollToItem(it.reason, it.index, it.offset) }
         }
     }

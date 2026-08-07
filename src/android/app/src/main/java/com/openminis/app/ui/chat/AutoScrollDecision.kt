@@ -37,6 +37,12 @@ enum class ScrollIntent(val label: String) {
 
     /** New trailing tool/typing row appeared. */
     TRAILING_ROW("trailing-row"),
+
+    /** ViewModel forceScrollToBottom (resume/retry/rerun) — respects the
+     *  user's viewport: Skip if they scrolled away to read history. Fired by
+     *  both explicit user gestures and agent-loop self-retries; the latter
+     *  must not yank the user back to the bottom mid-multi-turn. */
+    FORCE_SCROLL("force-scroll"),
 }
 
 /**
@@ -97,6 +103,8 @@ sealed class ScrollVerdict {
  *   LAYOUT_DRIFT_SNAP: bottomItemOffset<0 only (deliberately NOT gated on isNearBottom)
  *   RESERVE_CHANGE: isNearBottom || sendGrace (within 2s of send)
  *   TRAILING_ROW: isNearBottom, 1s post-interrupt, (sendGrace || streaming)
+ *   FORCE_SCROLL: COMMON GATE only (resume/retry/rerun when the user has
+ *     NOT left the bottom; never yanks someone who scrolled away to read)
  */
 fun decideAutoFollow(intent: ScrollIntent, s: ScrollStateSnapshot): ScrollVerdict {
     // ─── USER_SEND: unconditional ───
@@ -186,6 +194,16 @@ fun decideAutoFollow(intent: ScrollIntent, s: ScrollStateSnapshot): ScrollVerdic
             val sinceSend = s.nowMs - s.lastUserAppendMs
             val sendGrace = s.lastUserAppendMs > 0L && sinceSend in 0..s.sendFollowGraceMs
             if (!sendGrace && !s.isNearBottom) return ScrollVerdict.Skip
+            ScrollVerdict.ScrollTo(0, 0, intent.label)
+        }
+
+        ScrollIntent.FORCE_SCROLL -> {
+            // [fix/force-scroll-respect-viewport] ViewModel asked to go to
+            // bottom (resume/retry/rerun). COMMON GATE above already returned
+            // Skip if the user scrolled away — here, if we reach this branch
+            // the user has not left the bottom, so follow unconditionally
+            // (no isScrollInProgress gate, mirroring RESERVE_CHANGE: a
+            // retry-into-new-turn should still re-pin mid-frame).
             ScrollVerdict.ScrollTo(0, 0, intent.label)
         }
 

@@ -262,4 +262,38 @@ class AutoScrollDecisionTest {
         )
         assertEquals(ScrollVerdict.Skip, decideAutoFollow(ScrollIntent.TRAILING_ROW, s))
     }
+
+    // ─── FORCE_SCROLL: respects viewport (resume/retry/rerun) ───
+
+    @Test
+    fun forceScroll_scrolledAway_skips() {
+        // [fix/force-scroll-respect-viewport] The core bug: an agent loop
+        // self-retry must NOT yank a user who scrolled up to read history
+        // back to the bottom.
+        val s = baseState().copy(
+            userScrolledAway = true,
+            isNearBottom = false,
+            firstVisibleItemIndex = 23,
+        )
+        assertEquals(ScrollVerdict.Skip, decideAutoFollow(ScrollIntent.FORCE_SCROLL, s))
+    }
+
+    @Test
+    fun forceScroll_atBottomFollowing_scrolls() {
+        // User has not left the bottom → retry re-pins normally.
+        val s = baseState().copy(userScrolledAway = false, isNearBottom = true)
+        assertTrue(
+            decideAutoFollow(ScrollIntent.FORCE_SCROLL, s) is ScrollVerdict.ScrollTo
+        )
+    }
+
+    @Test
+    fun forceScroll_scrollingMidRetry_stillScrolls() {
+        // No isScrollInProgress gate: a retry into a new turn re-pins even
+        // during an in-flight scroll (mirrors RESERVE_CHANGE).
+        val s = baseState().copy(userScrolledAway = false, isScrollInProgress = true)
+        assertTrue(
+            decideAutoFollow(ScrollIntent.FORCE_SCROLL, s) is ScrollVerdict.ScrollTo
+        )
+    }
 }
