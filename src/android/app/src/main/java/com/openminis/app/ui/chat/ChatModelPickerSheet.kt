@@ -343,7 +343,13 @@ internal fun ModelPickerSheet(
     }
 
     // Filtered entries by instance
-    val allInstancesWithEntries = remember(config, searchText) {
+    // [fix-audit-p3-3] Key on config.revision instead of the whole data-class
+    // object: ProviderConfig.equals walks every inner list, so any unrelated
+    // field change (e.g. a model-entry tweak) re-ran this whole filter and
+    // re-logged every provider on every recomposition of the sheet. revision
+    // is bumped on every publish (T273), so it is the cheapest reliable
+    // change signal — and it recomputes exactly when config actually changes.
+    val allInstancesWithEntries = remember(config.revision, searchText) {
         val t0 = System.nanoTime()
         var totalCount = 0
         val result = config.instances

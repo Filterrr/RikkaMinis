@@ -1303,7 +1303,7 @@ fun ChatScreen(
             focusManager.clearFocus()
             return@handler
         }
-        lastSendTimeMs = System.currentTimeMillis()
+        lastSendTimeMs = SystemClock.elapsedRealtime()
         viewModel.setInputText("")
         keyboardController?.hide()
         focusManager.clearFocus()
@@ -1348,7 +1348,7 @@ fun ChatScreen(
                     isUserDragging = true
                 is androidx.compose.foundation.interaction.DragInteraction.Stop -> {
                     isUserDragging = false
-                    lastInterruptMs = System.currentTimeMillis()
+                    lastInterruptMs = SystemClock.elapsedRealtime()
                     val nowAtBottom = isNearBottom.value
                     val newScrolledAway = !nowAtBottom
                     if (newScrolledAway != userScrolledAway) {
@@ -1381,7 +1381,7 @@ fun ChatScreen(
     // directly (line 1124) and never relies on this LE.
     LaunchedEffect(isNearBottom.value) {
         if (isNearBottom.value && userScrolledAway) {
-            val sinceDragMs = System.currentTimeMillis() - lastInterruptMs
+            val sinceDragMs = SystemClock.elapsedRealtime() - lastInterruptMs
             // KEEP userScrolledAway when no recent drag — the at-bottom
             // reading came from a stream-end layout reflow, not a real
             // return-to-bottom gesture.
@@ -1438,7 +1438,7 @@ fun ChatScreen(
         // (send button / Enter / enqueue-while-streaming / future
         // entry points) restores auto-follow even if a call-site reset
         // was missed.
-        lastUserAppendMs = System.currentTimeMillis()
+        lastUserAppendMs = SystemClock.elapsedRealtime()
         userScrolledAway = false
         tracedScrollToItem("LE(messages.size)USER-SEND-SNAP", 0, 0)
     }
@@ -1535,7 +1535,7 @@ fun ChatScreen(
                 if (!viewModel.isStreaming.value) return@collect
                 if (userScrolledAway) return@collect
                 if (listState.isScrollInProgress) return@collect
-                val sinceInterrupt = System.currentTimeMillis() - lastInterruptMs
+                val sinceInterrupt = SystemClock.elapsedRealtime() - lastInterruptMs
                 if (sinceInterrupt < 1000L) return@collect
                 // [P0-0-jump-fix] When content insertion pushes the viewport
                 // from index 0 to 1+ (new typing/tool row), the glide would
@@ -1635,7 +1635,7 @@ fun ChatScreen(
         // userScrolledAway=false. Without isNearBottom the re-pin yanks the
         // user to the newest row even though they are reading pushed-up content.
         if (!isNearBottom.value) return@LaunchedEffect
-        val sinceInterrupt = System.currentTimeMillis() - lastInterruptMs
+        val sinceInterrupt = SystemClock.elapsedRealtime() - lastInterruptMs
         if (sinceInterrupt < 1000L) return@LaunchedEffect
         // At-bottom settle: user was following the stream; re-pin to
         // index 0 so async self-sizing (code blocks / tables / images)
@@ -1650,7 +1650,7 @@ fun ChatScreen(
         // the LATE-REPIN would yank the user back to the newest row.
         if (!isNearBottom.value) return@LaunchedEffect
         if (listState.firstVisibleItemIndex != 0) {
-            val sinceDrag = System.currentTimeMillis() - lastInterruptMs
+            val sinceDrag = SystemClock.elapsedRealtime() - lastInterruptMs
             if (sinceDrag > 1500L) tracedScrollToItem("stream-end/LATE-REPIN", 0, 0)
         }
     }
@@ -3001,7 +3001,7 @@ fun ChatScreen(
                     // outside the grace window, so the C2 stream-end
                     // protections are untouched (a stream end is never
                     // within 2s of the user's send).
-                    val sinceSendMs = System.currentTimeMillis() - lastUserAppendMs
+                    val sinceSendMs = SystemClock.elapsedRealtime() - lastUserAppendMs
                     val sendGrace = lastUserAppendMs > 0L && sinceSendMs in 0..SEND_FOLLOW_GRACE_MS
                     if (!userScrolledAway && (isNearBottom.value || sendGrace)) {
                         val reason = if (!isNearBottom.value) "send-grace" else "near-bottom"
@@ -3286,14 +3286,14 @@ fun ChatScreen(
                     // row even though they are no longer at the bottom.
                     if (!isNearBottom.value) return@LaunchedEffect
                     if (listState.isScrollInProgress) return@LaunchedEffect
-                    val sinceInterrupt = System.currentTimeMillis() - lastInterruptMs
+                    val sinceInterrupt = SystemClock.elapsedRealtime() - lastInterruptMs
                     if (sinceInterrupt < 1000L) return@LaunchedEffect
                     // Pin fires when EITHER (a) we're inside the send-grace
                     // window (the original "freshly sent, snap the typing
                     // row up" case), OR (b) the agent loop is actively
                     // streaming AND the user hasn't manually scrolled away.
                     // History readers fail (b) on userScrolledAway.
-                    val sinceSendForPin = System.currentTimeMillis() - lastUserAppendMs
+                    val sinceSendForPin = SystemClock.elapsedRealtime() - lastUserAppendMs
                     val sendGrace = lastUserAppendMs > 0L && sinceSendForPin <= SEND_FOLLOW_GRACE_MS
                     val streamingActive = viewModel.isStreaming.value && !userScrolledAway
                     if (!sendGrace && !streamingActive) return@LaunchedEffect
@@ -5054,7 +5054,7 @@ fun ChatScreen(
                             // buffer is committed/dropped before the
                             // empty inputText becomes visible.
                             val toSend = inputText
-                            lastSendTimeMs = System.currentTimeMillis()
+                            lastSendTimeMs = SystemClock.elapsedRealtime()
                             viewModel.setInputText("")
                             keyboardController?.hide()
                             focusManager.clearFocus()
@@ -5075,7 +5075,7 @@ fun ChatScreen(
                                 // finishComposingText (fired by clearFocus on send) makes
                                 // voice/Pinyin IMEs replay their pending candidate through
                                 // onValueChange after we cleared inputText.
-                                val now = System.currentTimeMillis()
+                                val now = SystemClock.elapsedRealtime()
                                 if (now - lastSendTimeMs < 300L && tfv.text.isNotEmpty()) {
                                     return@BasicTextField
                                 }

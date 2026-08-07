@@ -350,7 +350,11 @@ class EpisodeMemoryStore(
         }
         if (exchange != null && exchange.outcome in Outcome.STORABLE) {
             if (!fingerprintExistsLocked(lines, exchange)) {
-                lines.add(toLine(exchange))
+                // [fix-audit-p3-2] Pass the transaction's `now` down so the
+                // new row's t/lastHit are the same timestamp the prune window
+                // was computed against (the old code re-read the clock inside
+                // toLine, giving one transaction three different "now"s).
+                lines.add(toLine(exchange, v = 0, now = now))
                 changed = true
             }
         }
@@ -542,11 +546,13 @@ class EpisodeMemoryStore(
             null
         }
 
-        /** ExchangeRecord → JSONL 行（生成稳定 UUID id；同时写 outcome 与兼容 ok）。 */
-        fun toLine(exchange: ExchangeRecord, v: Int = 0): String {
+        /** ExchangeRecord → JSONL 行（生成稳定 UUID id；同时写 outcome 与兼容 ok）。
+         *  [now] is the transaction clock (see completeExchange) so one write
+         *  carries one timestamp everywhere. */
+        fun toLine(exchange: ExchangeRecord, v: Int = 0, now: Long = System.currentTimeMillis()): String {
             val obj = JSONObject()
             obj.put("id", UUID.randomUUID().toString())
-            obj.put("t", System.currentTimeMillis())
+            obj.put("t", now)
             obj.put("q", exchange.query.take(200))
             val toolsArr = JSONArray()
             for (t in exchange.tools) {
@@ -562,7 +568,7 @@ class EpisodeMemoryStore(
             obj.put("reply", exchange.reply.take(500))
             obj.put("sid", exchange.sessionId)
             obj.put("v", v)
-            obj.put("lastHit", System.currentTimeMillis())
+            obj.put("lastHit", now)
             return obj.toString()
         }
     }

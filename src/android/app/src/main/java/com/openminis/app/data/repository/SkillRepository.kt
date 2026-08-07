@@ -440,6 +440,14 @@ class SkillRepository(private val context: Context) {
         val prefix = if (skillMdEntry.name == "SKILL.md") "" else skillMdEntry.name.dropLast("SKILL.md".length)
         val skillDir = File(skillsDir, skill.id)
         skillDir.mkdirs()
+        // [fix-audit-p1-3] Zip-slip guard via canonical-path containment,
+        // matching ProviderImportZip's implementation. The old check only
+        // rejected names containing ".." — it missed absolute-path entries
+        // (e.g. "/data/..."), which File(parent, child) resolves outside the
+        // skill dir. canonicalPath resolves both ".." and absolute prefixes,
+        // so any escape lands outside rootPrefix and is dropped.
+        val rootCanonical = skillDir.canonicalPath
+        val rootPrefix = rootCanonical + File.separator
 
         for (entry in entries) {
             if (entry.isDirectory) continue
@@ -448,10 +456,13 @@ class SkillRepository(private val context: Context) {
                 relativePath = relativePath.drop(prefix.length)
             }
             if (relativePath == "SKILL.md" || relativePath.startsWith(".") || relativePath.isEmpty()) continue
-            // Guard against zip-slip: reject path traversal.
-            if (relativePath.contains("..")) continue
 
             val destFile = File(skillDir, relativePath)
+            val canonical = destFile.canonicalPath
+            if (canonical != rootCanonical && !canonical.startsWith(rootPrefix)) {
+                Log.w(TAG, "importFromArchive: rejected zip-slip entry $relativePath")
+                continue
+            }
             destFile.parentFile?.mkdirs()
             try { destFile.writeBytes(entry.data) } catch (e: Exception) {
                 Log.w(TAG, "Failed to write $relativePath: ${e.message}")
@@ -464,6 +475,13 @@ class SkillRepository(private val context: Context) {
 
     private fun readZipEntries(input: InputStream): List<ZipEntryData> {
         val out = mutableListOf<ZipEntryData>()
+        // [fix-audit-p1-2] Decompression-bomb guard: a zip advertises tiny
+        // compressed sizes but can expand enormously. readZipEntries holds
+        // EVERY entry's bytes in memory at once (the caller then writes them
+        // out), so cap the cumulative expanded size. Exceeding it aborts the
+        // whole read — the caller treats an empty result as unreadable.
+        var totalExpanded = 0L
+        val maxExpanded = 32L * 1024 * 1024
         ZipInputStream(input).use { zis ->
             while (true) {
                 val entry = zis.nextEntry ?: break
@@ -476,8 +494,17 @@ class SkillRepository(private val context: Context) {
                         val n = zis.read(chunk)
                         if (n <= 0) break
                         buf.write(chunk, 0, n)
+                        if (buf.size() > maxExpanded) {
+                            Log.w(TAG, "readZipEntries: expanded size exceeds ${maxExpanded} bytes, aborting")
+                            return emptyList()
+                        }
                     }
                     buf.toByteArray()
+                }
+                totalExpanded += data.size
+                if (totalExpanded > maxExpanded) {
+                    Log.w(TAG, "readZipEntries: cumulative expanded size exceeds ${maxExpanded} bytes, aborting")
+                    return emptyList()
                 }
                 out.add(ZipEntryData(name, isDir, data))
                 zis.closeEntry()

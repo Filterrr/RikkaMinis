@@ -92,6 +92,11 @@ object ConfigBackup {
         val skipped: List<String>,
         /** True when the payload carried credentials (affects the post-import hint). */
         val hadSecrets: Boolean,
+        /** [fix-audit-p0-4] Non-null when the import failed mid-way: some
+         *  stages already landed (counts above) but the restore did not
+         *  complete. Callers must surface this as a partial restore, not a
+         *  normal one — and should offer the pre-restore snapshot rollback. */
+        val fatal: String? = null,
     )
 
     /**
@@ -102,7 +107,7 @@ object ConfigBackup {
      *   retyping keys by hand, which defeats the point of a backup. Callers are
      *   expected to warn before writing the file somewhere shareable.
      */
-    fun export(
+    suspend fun export(
         providerRepo: ProviderRepository,
         includeSecrets: Boolean = true,
         envVarRepo: EnvVarRepository? = null,
@@ -231,9 +236,15 @@ object ConfigBackup {
                 }
                 // Prefer the full archive; fall back to SKILL.md text so a skill
                 // whose zip could not be produced is still recoverable in part.
+                // [fix-audit-p1-2] A skill archive over MAX_SKILL_ARCHIVE_BYTES
+                // also degrades to SKILL.md-only: the payload is Base64'd in
+                // memory as one string, so an oversized archive is an OOM risk
+                // on both export and restore.
                 val zip = runCatching { skillRepo.exportSkillToZip(skill.id) }.getOrNull()
                 val zipBytes = zip?.let { f -> runCatching { f.readBytes() }.getOrNull() }
-                if (zipBytes != null && zipBytes.isNotEmpty()) {
+                if (zipBytes != null && zipBytes.isNotEmpty() &&
+                    zipBytes.size <= MAX_SKILL_ARCHIVE_BYTES
+                ) {
                     entry.put(
                         "archive",
                         android.util.Base64.encodeToString(zipBytes, android.util.Base64.NO_WRAP),
@@ -242,7 +253,11 @@ object ConfigBackup {
                     entry.put("fileCount", skillRepo.listSkillFiles(skill.id).size)
                 } else {
                     entry.put("body", skill.body)
-                    Log.w(TAG, "export: no archive for skill ${skill.id}, carrying SKILL.md only")
+                    Log.w(
+                        TAG,
+                        "export: ${if (zipBytes == null) "no archive" else "archive too large (${zipBytes.size} bytes)"} " +
+                            "for skill ${skill.id}, carrying SKILL.md only",
+                    )
                 }
                 // Clean up the cache artifact immediately — exportSkillToZip is
                 // designed for the share sheet (TTL-swept), but here the bytes
@@ -295,7 +310,7 @@ object ConfigBackup {
         if (chatRepo != null && chatWindowDays > 0) {
             val cutoff = System.currentTimeMillis() - chatWindowDays * 24L * 3600 * 1000
             val sessions = runCatching {
-                kotlinx.coroutines.runBlocking { chatRepo.dao.sessionsUpdatedSince(cutoff) }
+                chatRepo.dao.sessionsUpdatedSince(cutoff)
             }.getOrDefault(emptyList())
             for (session in sessions) {
                 chatSessions.put(JSONObject().apply {
@@ -314,9 +329,7 @@ object ConfigBackup {
                     put("thinkingOverride", session.thinkingOverride)
                 })
                 for (message in runCatching {
-                    kotlinx.coroutines.runBlocking {
-                        chatRepo.dao.messagesLast(session.id, MAX_CHAT_MESSAGES_PER_SESSION)
-                    }
+                    chatRepo.dao.messagesLast(session.id, MAX_CHAT_MESSAGES_PER_SESSION)
                 }.getOrDefault(emptyList()).reversed()) {
                     val cleaned = sanitizeChatParts(message.partsJson) ?: continue
                     chatMessages.put(JSONObject().apply {
@@ -395,7 +408,7 @@ object ConfigBackup {
      * provider is still appended via [ProviderRepository.importInstanceJSON]
      * (which itself auto-renames on label conflict as a last resort).
      */
-    fun import(
+    suspend fun import(
         providerRepo: ProviderRepository,
         json: String,
         envVarRepo: EnvVarRepository? = null,
@@ -404,6 +417,16 @@ object ConfigBackup {
         mcpRepo: MCPRepository? = null,
         chatRepo: ChatRepository? = null,
     ): ImportResult {
+        // [fix-audit-p1-2] Reject oversized documents BEFORE any parsing /
+        // decoding: a backup with embedded skill archives or chat history is
+        // Base64-decoded into full byte arrays in memory, so an unbounded
+        // payload is an OOM door. This check runs on the raw string, before
+        // JSONTokener allocates the parsed tree.
+        if (json.length > MAX_PAYLOAD_BYTES) {
+            throw InvalidBackupException(
+                "Backup too large (${json.length} chars, max ${MAX_PAYLOAD_BYTES})"
+            )
+        }
         val root = try {
             JSONTokener(json).nextValue() as? JSONObject
                 ?: throw InvalidBackupException("Backup root is not a JSON object")
@@ -425,6 +448,22 @@ object ConfigBackup {
 
         val skipped = ArrayList<String>()
         val registry = ConfigRegistry.get()
+        // [fix-audit-p0-4] Counters hoisted OUTSIDE the stage try so the catch
+        // below can report what already landed when a stage blows up mid-
+        // restore. Any Throwable past format validation becomes
+        // ImportResult.fatal instead of being lost — the caller must treat a
+        // fatal restore as partial and offer the snapshot rollback.
+        var fatal: String? = null
+        var providersImported = 0
+        var groupsImported = 0
+        var applied = 0
+        var envVarsImported = 0
+        var skillsImported = 0
+        var memoryFilesImported = 0
+        var mcpServersImported = 0
+        var chatSessionsImported = 0
+        var chatMessagesImported = 0
+        try {
 
         // [T-backup-group-idmap] Order matters. Providers create the model
         // entries that groups reference; groups create the ids that
@@ -437,7 +476,6 @@ object ConfigBackup {
         val groupIdMap = HashMap<String, String>()    // source group id  → restored id
 
         // -- Stage 1: providers (also builds the entry-id map) --
-        var providersImported = 0
         val providers = root.optJSONArray("providers")
         if (providers != null) {
             for (i in 0 until providers.length()) {
@@ -509,7 +547,6 @@ object ConfigBackup {
         }
 
         // -- Stage 2: model groups (remaps member entry ids, builds group map) --
-        var groupsImported = 0
         val groups = root.optJSONArray("groups")
         if (groups != null) {
             val existingGroupIds = providerRepo.config.value.modelGroups.map { it.id }.toSet()
@@ -610,7 +647,6 @@ object ConfigBackup {
         }
 
         // -- Stage 3: scalar fields (defaults.* group/entry ids remapped) --
-        var applied = 0
         val fields = root.optJSONObject("fields")
         if (fields != null) {
             val keys = fields.keys()
@@ -661,7 +697,6 @@ object ConfigBackup {
         }
 
         // -- Stage 4: environment variables (own repository, secret-gated) --
-        var envVarsImported = 0
         val envVarsArr = root.optJSONArray("envVars")
         if (envVarsArr != null && envVarRepo != null) {
             for (i in 0 until envVarsArr.length()) {
@@ -696,7 +731,6 @@ object ConfigBackup {
         // -- Stage 5: skills (db row + full directory from the embedded zip) --
         // Skill ids are slugify(name), not random uuids, so they are stable
         // across installs — no id remapping needed here, unlike providers.
-        var skillsImported = 0
         val skillsArr = root.optJSONArray("skills")
         if (skillsArr != null && skillRepo != null) {
             for (i in 0 until skillsArr.length()) {
@@ -708,8 +742,19 @@ object ConfigBackup {
                     // skill of the same id in place, which is what we want:
                     // restoring should refresh, not create "skill (2)".
                     val imported = if (archive.isNotEmpty()) {
-                        val bytes = android.util.Base64.decode(archive, android.util.Base64.NO_WRAP)
-                        skillRepo.importFromArchive(ByteArrayInputStream(bytes))
+                        // [fix-audit-p1-2] Estimate the decoded size BEFORE
+                        // decoding (Base64: 4 chars ≈ 3 bytes). A backup made
+                        // by a future build — or hand-edited — can embed an
+                        // oversized archive; decoding it would spike memory
+                        // for zero benefit.
+                        val estimatedBytes = (archive.length / 4L) * 3L
+                        if (estimatedBytes > MAX_SKILL_ARCHIVE_BYTES) {
+                            skipped.add("skill \"$name\": archive too large (${estimatedBytes} bytes)")
+                            null
+                        } else {
+                            val bytes = android.util.Base64.decode(archive, android.util.Base64.NO_WRAP)
+                            skillRepo.importFromArchive(ByteArrayInputStream(bytes))
+                        }
                     } else {
                         val body = s.optString("body", "")
                         if (body.isBlank()) null
@@ -745,7 +790,6 @@ object ConfigBackup {
         }
 
         // -- Stage 6: memory files (GLOBAL.md + daily logs) --
-        var memoryFilesImported = 0
         val memArr = root.optJSONArray("memoryFiles")
         if (memArr != null && memoryRepo != null) {
             for (i in 0 until memArr.length()) {
@@ -775,7 +819,6 @@ object ConfigBackup {
         }
 
         // -- Stage 7: MCP servers --
-        var mcpServersImported = 0
         val mcpArr = root.optJSONArray("mcpServers")
         if (mcpArr != null && mcpRepo != null) {
             var needsReauth = 0
@@ -815,8 +858,6 @@ object ConfigBackup {
         // Sessions go in first — messages reference them via FK. REPLACE
         // conflict strategy makes re-imports idempotent. Message ids are
         // preserved so later references to a restored session stay valid.
-        var chatSessionsImported = 0
-        var chatMessagesImported = 0
         val chatSessionsArr = root.optJSONArray("chatSessions")
         val chatMessagesArr = root.optJSONArray("chatMessages")
         if (chatSessionsArr != null && chatRepo != null) {
@@ -839,7 +880,7 @@ object ConfigBackup {
                         editCount = s.optInt("editCount", 0),
                         thinkingOverride = if (s.has("thinkingOverride")) s.optString("thinkingOverride") else null,
                     )
-                    kotlinx.coroutines.runBlocking { chatRepo.dao.insertSession(session) }
+                    chatRepo.dao.insertSession(session)
                     chatSessionsImported++
                 } catch (t: Throwable) {
                     skipped.add("chat session \"$label\": ${t.message ?: "import failed"}")
@@ -858,7 +899,7 @@ object ConfigBackup {
                             sortOrder = m.optInt("sortOrder", i),
                             reasoningContent = if (m.has("reasoningContent")) m.optString("reasoningContent") else null,
                         )
-                        kotlinx.coroutines.runBlocking { chatRepo.dao.insertMessage(message) }
+                        chatRepo.dao.insertMessage(message)
                         chatMessagesImported++
                     } catch (t: Throwable) {
                         skipped.add("chat message #${i + 1}: ${t.message ?: "import failed"}")
@@ -870,6 +911,10 @@ object ConfigBackup {
         }
 
 
+        } catch (t: Throwable) {
+            fatal = t.message ?: "import failed"
+            Log.e(TAG, "import FATAL — partial restore left on disk: ${t.message}", t)
+        }
         return ImportResult(
             fieldsApplied = applied,
             providersImported = providersImported,
@@ -882,6 +927,7 @@ object ConfigBackup {
             chatMessagesImported = chatMessagesImported,
             skipped = skipped,
             hadSecrets = root.optBoolean("includesSecrets", false),
+            fatal = fatal,
         ).also { result ->
             // Mirror the outcome into the diagnostic log. The result dialog
             // only shows the first few skipped lines (screen budget), and the
@@ -939,6 +985,49 @@ object ConfigBackup {
 
     /** Hard cap on messages carried per session in a chat-history backup. */
     internal const val MAX_CHAT_MESSAGES_PER_SESSION = 200
+
+    /** [fix-audit-p0-3] How many pre-restore snapshots to keep on disk.
+     *  Rollback candidates; older ones are pruned by [writeSnapshot]. */
+    const val SNAPSHOT_KEEP = 5
+
+    /** [fix-audit-p1-2] Per-skill archive cap for backups. A skill with
+     *  bundled assets bigger than this degrades to SKILL.md-only in the
+     *  payload rather than ballooning the backup into an OOM risk (the whole
+     *  payload is Base64-encoded in memory on export and decoded on import). */
+    const val MAX_SKILL_ARCHIVE_BYTES = 8 * 1024 * 1024
+
+    /** [fix-audit-p1-2] Hard cap on the serialized backup payload itself.
+     *  Export refuses to build beyond this; import rejects the document
+     *  before decoding anything (a malicious/huge file is dropped outright
+     *  instead of OOMing mid-restore). */
+    const val MAX_PAYLOAD_BYTES = 64 * 1024 * 1024
+
+    /** [fix-audit-p0-3] Snapshot files live under `filesDir/backup-snapshots`,
+     *  named with second precision so two restores in the same minute can't
+     *  clobber each other (the old minute-precision [suggestedFileName] did
+     *  exactly that — restoring A then B overwrote A's rollback point). The
+     *  distinct `rikkaminis-snapshot-` prefix also keeps them out of the
+     *  WebDAV remote-list matcher (`rikkaminis-backup-*`). */
+    fun snapshotFileName(now: Long = System.currentTimeMillis()): String {
+        val fmt = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
+        return "rikkaminis-snapshot-${fmt.format(java.util.Date(now))}.json"
+    }
+
+    /** Writes [payload] as a fresh snapshot into [dir] and prunes to the
+     *  newest [SNAPSHOT_KEEP] files. Returns the written file. */
+    fun writeSnapshot(dir: java.io.File, payload: String): java.io.File {
+        dir.mkdirs()
+        val file = java.io.File(dir, snapshotFileName())
+        file.writeText(payload)
+        listSnapshots(dir).drop(SNAPSHOT_KEEP).forEach { runCatching { it.delete() } }
+        return file
+    }
+
+    /** Snapshots in [dir], newest first. Only `rikkaminis-snapshot-*.json`. */
+    fun listSnapshots(dir: java.io.File): List<java.io.File> =
+        dir.listFiles { f ->
+            f.isFile && f.name.startsWith("rikkaminis-snapshot-") && f.name.endsWith(".json")
+        }?.sortedByDescending { it.lastModified() } ?: emptyList()
 
     private val ATTACHED_FILES_REGEX =
         Regex("<user-attached-files>.*?</user-attached-files>", RegexOption.DOT_MATCHES_ALL)
