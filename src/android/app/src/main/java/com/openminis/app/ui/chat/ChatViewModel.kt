@@ -3660,6 +3660,8 @@ class ChatViewModel(
         if (resolved) {
             persistBinding("""{"type":"group","groupId":"$groupId"}""")
             applyGroupSessionDefaults(groupId)
+            // [switchModelAndRerun] Model-switch-during-streaming (Plan A).
+            if (_isStreaming.value) switchModelAndRerun("switchModel-group")
         }
     }
 
@@ -3675,6 +3677,8 @@ class ChatViewModel(
             // resolved active entry as last-used (resolveProviderFromGroup may
             // fall back off a disabled member, so _activeEntryId is the truth).
             _activeEntryId.value?.let { providerRepository.lastUsedEntryId = it }
+            // [switchModelAndRerun] Model-switch-during-streaming (Plan A).
+            if (_isStreaming.value) switchModelAndRerun("switchModel-groupEntry")
         }
     }
 
@@ -3749,6 +3753,9 @@ class ChatViewModel(
         val instance = providerRepository.instance(entry.providerInstanceId) ?: return
         val apiKey = providerRepository.loadApiKey(instance.id) ?: return
 
+        // Apply the new model's state + persisted binding. This runs in BOTH
+        // the idle and the streaming cases (the streaming case additionally
+        // cancels + restarts the loop on this provider via switchModelAndRerun).
         currentModel = entry.model
         _modelName.value = entry.model.displayName
         _providerName.value = instance.label.ifEmpty { entry.model.provider }
@@ -3761,6 +3768,100 @@ class ChatViewModel(
         // global last-used model so the NEXT new chat (when no default group
         // is set) defaults back to it. Tier 2 of the new-chat fallback chain.
         providerRepository.lastUsedEntryId = entryId
+
+        // [switchModelAndRerun] Model-switch-during-streaming (Plan A): the UI
+        // picker is intentionally left active during streaming — a switch here
+        // cancels the in-flight turn and re-answers the CURRENT user message
+        // with the newly selected model (no more "UI shows B but the stream is
+        // still calling A" split state).
+        if (_isStreaming.value) switchModelAndRerun("switchModel-entry")
+    }
+
+    /**
+     * [switchModelAndRerun] Model-switch-during-streaming (Plan A: cancel +
+     * restart). Called by [selectEntry] / [selectGroup] / [selectGroupEntry]
+     * AFTER the caller has already applied the new model's fields
+     * (currentModel / _modelName / _providerName / _selectedGroup* /
+     * _activeEntryId / currentProvider) and persisted the binding.
+     *
+     * This function cancels the in-flight agent loop, rolls back the
+     * incomplete assistant turn, re-syncs DB + agentHistory to the last
+     * committed user message, then restarts the loop on the newly-selected
+     * provider so the CURRENT user message is answered by the new model.
+     *
+     * Note: enqueued prompts (_promptQueue) are intentionally left untouched —
+     * they stay as dashed bubbles the user can retry after the switch; the
+     * restart answers the current turn only.
+     */
+    private fun switchModelAndRerun(label: String) {
+        AppLogger.info(
+            TAG,
+            "switchModelAndRerun($label): cancelling in-flight loop, restarting on " +
+                "${currentProvider?.model?.displayName}",
+        )
+        // ── Phase 1: cancel current stream (light cancel — do NOT kick the
+        // queue-drain tail; we restart in place). ──
+        streamJob?.cancel()
+        flushAllStreamingDeltas()
+        ExecutionCoordinator.stopCurrentCommand(activeSessionId)
+        SessionActivityTracker.clearToolRunning(com.openminis.app.service.ToolOutcome.Cancelled)
+        SessionActivityTracker.setInactive(activeSessionId)
+        if (isDraft && realSessionId.isNotEmpty() && activeSessionId != sessionId) {
+            SessionActivityTracker.setInactive(sessionId)
+            ExecutionCoordinator.stopCurrentCommand(sessionId)
+        }
+
+        // ── Phase 2: roll back the incomplete assistant turn in UI + history ──
+        rollbackIncompleteTurn()
+
+        // ── Phase 3: re-sync DB + agentHistory to the last committed user
+        // message, then restart the loop on the (already-switched) provider. ──
+        val provider = currentProvider ?: run {
+            AppLogger.warning(TAG, "switchModelAndRerun: no currentProvider after switch — aborting restart")
+            return
+        }
+        viewModelScope.launch {
+            try {
+                val sid = realSessionId.takeIf { it.isNotEmpty() } ?: sessionId
+                val dbMessages = chatRepository.loadMessages(sid)
+                val lastUserSortOrder = dbMessages.findLast { it.role == "user" }?.sortOrder
+                if (lastUserSortOrder != null) {
+                    chatRepository.deleteMessagesAfter(sid, lastUserSortOrder + 1)
+                }
+                // Rebuild agentHistory from the trimmed DB so the retried loop
+                // starts from committed context only (defense in depth against
+                // any partial tool_result / assistant rows the cancelled loop
+                // may have persisted).
+                agentHistory.clear()
+                toolLoopDetector.reset()
+                val remaining = chatRepository.loadMessages(sid)
+                for (entity in remaining) agentHistory.add(entity.toLLMMessage())
+                // Drop stream-flush side-channel state for messages the rollback
+                // removed, so no stale delta can resurrect on a kept bubble
+                // (mirrors rerunFromToolBlock).
+                val keptIds = _messages.value.mapTo(mutableSetOf()) { it.id }
+                retainStreamFlushStates(keptIds)
+                if (_streamingById.value.isNotEmpty()) {
+                    _streamingById.value = _streamingById.value.filterKeys { it in keptIds }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "switchModelAndRerun: DB re-sync failed: ${e.message}")
+            }
+            // Restart the loop on the switched provider (mirrors retryFromMessage).
+            _error.value = null
+            _canResume.value = false
+            AppLogger.info(TAG_STREAM, "$label _isStreaming=true (sync, sid=$activeSessionId)")
+            _isStreaming.value = true
+            var streamLaunched = false
+            try {
+                streamLaunched = runRerunStreamTail(provider, label)
+            } finally {
+                if (!streamLaunched) {
+                    AppLogger.info(TAG_STREAM, "$label _isStreaming=false (setup aborted)")
+                    _isStreaming.value = false
+                }
+            }
+        }
     }
 
     /** Persist the model binding to the DB session (no-op for draft sessions). */
