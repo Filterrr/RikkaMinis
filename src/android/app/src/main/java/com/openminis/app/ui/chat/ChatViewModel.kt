@@ -24,10 +24,6 @@ import androidx.compose.material.icons.outlined.Extension
 import com.openminis.app.data.BPETokenizer
 import com.openminis.app.data.ContextOffload
 import com.openminis.app.data.ContextPolicy
-import com.openminis.app.data.EpisodeMemoryStore
-import com.openminis.app.data.ExperienceExchangeClassifier
-import com.openminis.app.data.ExperienceMemoryPrefs
-import com.openminis.app.data.Outcome
 import com.openminis.app.logging.AppLogger
 import com.openminis.app.data.FileMentionIndex
 import com.openminis.app.data.db.CompactMarkerEntity
@@ -92,7 +88,6 @@ class ChatViewModel(
     private val providerRepository: ProviderRepository,
     internal val context: Context,
     val memoryRepository: MemoryRepository? = null,
-    val experienceMemoryStore: EpisodeMemoryStore? = null,
     val skillRepository: com.openminis.app.data.repository.SkillRepository? = null,
     val mcpRepository: com.openminis.app.data.repository.MCPRepository? = null,
 ) : ViewModel() {
@@ -302,7 +297,6 @@ class ChatViewModel(
             providerRepository: ProviderRepository,
             appContext: Context,
             memoryRepository: MemoryRepository?,
-            experienceMemoryStore: EpisodeMemoryStore? = null,
             skillRepository: com.openminis.app.data.repository.SkillRepository?,
             mcpRepository: com.openminis.app.data.repository.MCPRepository? = null,
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
@@ -314,7 +308,6 @@ class ChatViewModel(
                     providerRepository = providerRepository,
                     context = appContext,
                     memoryRepository = memoryRepository,
-                    experienceMemoryStore = experienceMemoryStore,
                     skillRepository = skillRepository,
                     mcpRepository = mcpRepository,
                 ) as T
@@ -6026,102 +6019,6 @@ class ChatViewModel(
         // AIChatViewModel.didInjectEmptyToolReminderThisRun.
         var didInjectEmptyToolReminder = false
 
-        // [ExpMem-context] Hook A — begin the exchange ONCE per runAgentLoop.
-        // Captures the query, the retrieval batch (stable ids + generation),
-        // the start time and the injected system prompt into an
-        // ExperienceExchangeContext; Hook B (finalizeExchange) settles exactly
-        // this context. beginExperienceExchange is re-invoked after a mid-loop
-        // queue switch so the queued prompt becomes a fresh, correctly-paired
-        // exchange instead of being settled against the old query's injections.
-        var experienceExchange: ExperienceExchangeContext? = null
-        var effectiveSystemPrompt: String? = systemPrompt
-
-        suspend fun beginExperienceExchange() {
-            val store = experienceMemoryStore
-            if (store == null || !ExperienceMemoryPrefs.isEnabled(context)) {
-                experienceExchange = null
-                effectiveSystemPrompt = systemPrompt
-                return
-            }
-            val query = agentHistory.lastOrNull { it.role == LLMMessage.Role.USER && it.content.isNotBlank() }?.content
-            if (query == null) {
-                experienceExchange = null
-                effectiveSystemPrompt = systemPrompt
-                return
-            }
-            // [ExpMem-stable-ids] retrieve() returns stable episode ids plus the
-            // store generation at retrieval time — finalize passes that generation
-            // back so a clear() racing in between invalidates the whole exchange
-            // instead of resurrecting cleared entries. Feedback is keyed by id,
-            // never by line number (a record/rollover must not shift feedback).
-            val retrieval = store.retrieve(query)
-            val injected = retrieval.hits
-            val block = if (injected.isNotEmpty()) EpisodeMemoryStore.buildInjectionBlock(injected) else null
-            effectiveSystemPrompt = when {
-                block == null -> systemPrompt
-                systemPrompt.isNullOrBlank() -> block
-                else -> "$systemPrompt\n\n$block"
-            }
-            if (block != null) {
-                AppLogger.info(TAG_STREAM, "experience-memory: injected ${injected.size} episode(s), ${block.length} chars")
-            }
-            experienceExchange = ExperienceExchangeContext(
-                query = query,
-                retrieval = retrieval,
-                startedAtMs = System.currentTimeMillis(),
-                systemPromptWithMemory = effectiveSystemPrompt,
-            )
-        }
-
-        // [ExpMem-context] Hook B — settle the exchange exactly once (guarded by
-        // ExperienceExchangeContext.finalized; the try/catch/finally state
-        // machine below calls it on normal exit, exception and cancellation).
-        // Settles the context captured in Hook A: its query, its retrieved ids,
-        // its generation and its start time; the tools/reply come from the
-        // CURRENT loop state at settle time. INTERRUPTED/CANCELLED (no ground
-        // truth) write nothing and give no feedback — never a +1.
-        suspend fun finalizeExchange(outcome: Outcome) {
-            val ctx = experienceExchange ?: return
-            if (ctx.finalized) return
-            ctx.finalized = true
-            val store = experienceMemoryStore
-            if (store == null || !ExperienceMemoryPrefs.isEnabled(context)) return
-            val tools = allToolBlocks
-                .filter { it.kind == "tool_use" && it.toolName.isNotBlank() }
-                .map { EpisodeMemoryStore.ToolCall(it.toolName, it.toolStatus == ToolBlockStatus.SUCCESS) }
-            val feedbackDelta = outcome.feedbackDelta
-            val exchange = if (outcome in Outcome.STORABLE) {
-                EpisodeMemoryStore.ExchangeRecord(
-                    query = ctx.query,
-                    tools = tools,
-                    outcome = outcome,
-                    durationMs = System.currentTimeMillis() - ctx.startedAtMs,
-                    reply = accumulatedText,
-                    sessionId = sessionId,
-                )
-            } else null
-            if (feedbackDelta == null && exchange == null) {
-                AppLogger.info(TAG_STREAM, "experience-memory: exchange settled (outcome=$outcome, nothing recorded)")
-                return
-            }
-            try {
-                val result = store.completeExchange(
-                    expectedGeneration = ctx.retrieval.generation,
-                    retrievedIds = ctx.retrieval.hits.map { it.episodeId },
-                    feedbackDelta = feedbackDelta,
-                    exchange = exchange,
-                )
-                AppLogger.info(
-                    TAG_STREAM,
-                    "experience-memory: exchange finalized (outcome=$outcome, result=$result, tools=${tools.size})"
-                )
-            } catch (e: Exception) {
-                AppLogger.warning(TAG_STREAM, "experience-memory: record failed: ${e.message}")
-            }
-        }
-
-        beginExperienceExchange()
-
         try {
         for (turn in 0 until MAX_AGENT_TURNS) {
             // Sanitize history before each API call (mirrors iOS pre-API validation)
@@ -6258,7 +6155,7 @@ class ChatViewModel(
                     // no compact has happened, so the common path stays zero-copy.
                     currentProvider.streamMessage(
                         applyRequestImageBudget(effectiveAgentHistory()),
-                        effectiveSystemPrompt, dynamicMaxTokens(currentProvider, lastContextTokens),
+                        systemPrompt, dynamicMaxTokens(currentProvider, lastContextTokens),
                         tools = agentTools,
                         thinkingLevel = if (currentModelSupportsReasoning) _thinkingLevel.value else ThinkingLevel.OFF,
                     ).collect { chunk ->
@@ -7266,21 +7163,12 @@ class ChatViewModel(
                     // (turnStartBlockIndex captures allToolBlocks.size at
                     // iteration top, so clearing means new turn's blocks
                     // span [0..size).
-                    // [ExpMem-context] Queue switch: the running exchange
-                    // belongs to the OLD user turn. Settle it as INTERRUPTED
-                    // BEFORE clearing the accumulator (no record, no feedback —
-                    // the old query never got a result), then re-begin an
-                    // exchange for the queued prompt that just entered
-                    // agentHistory so its result is paired with ITS OWN
-                    // injections, never the old ones.
-                    finalizeExchange(Outcome.INTERRUPTED)
                     assistantId = handled.newAssistantId
                     accumulatedText = ""
                     allToolBlocks.clear()
                     allToolInputs.clear()
                     toolInputChunkRings.clear()
                     _canResume.value = false
-                    beginExperienceExchange()
                     continue
                 }
                 // null return = empty-after-build / drain rejected; fall
@@ -7308,35 +7196,14 @@ class ChatViewModel(
         } else {
             AppLogger.info(TAG_STREAM, "runAgentLoop EXIT (loop body ended naturally)")
         }
-
-        // [ExpMem-context] Hook B — normal-path finalize (inside the try).
-        // [ExpMem-outcome] classifyExchangeOutcome derives TURN_LIMIT /
-        // EMPTY_RESPONSE / PARTIAL / SUCCESS from the post-loop state via the
-        // pure ExperienceExchangeClassifier; finalizeExchange settles the
-        // exchange context captured by Hook A exactly once.
-        finalizeExchange(
-            ExperienceExchangeClassifier.classify(
-                loopExitedNormally = loopExitedNormally,
-                hasVisibleContent = accumulatedText.isNotBlank() ||
-                    allToolBlocks.any { it.kind == "tool_use" || (it.kind == "text" && it.content.isNotBlank()) },
-                hasToolFailure = allToolBlocks.any {
-                    it.kind == "tool_use" &&
-                        (it.toolStatus == ToolBlockStatus.FAILED || it.toolStatus == ToolBlockStatus.TIMEOUT)
-                },
-            )
-        )
         } catch (e: CancellationException) {
-            // [ExpMem-context] Job cancelled mid-task (user stop / session switch /
-            // queue takeover): settle WITHOUT feedback — no ground truth, so never
-            // +1/-1 on a partial run. Then rethrow so cancellation propagates as
-            // before (e.g. the queue switch handler depends on it).
-            finalizeExchange(Outcome.CANCELLED)
+            // Job cancelled mid-task (user stop / session switch / queue
+            // takeover): rethrow so cancellation propagates as before (e.g.
+            // the queue switch handler depends on it).
             throw e
         } catch (e: Exception) {
-            // [ExpMem-context] Unexpected failure: settle as EXCEPTION (-1 feedback
-            // on injected episodes + recorded as a failure episode), then rethrow
-            // so the caller's error handling behaves exactly as before.
-            finalizeExchange(Outcome.EXCEPTION)
+            // Unexpected failure: rethrow so the caller's error handling
+            // behaves exactly as before.
             throw e
         }
     }
@@ -10066,21 +9933,3 @@ Environment variables:
     }
 }
 
-/**
- * [ExpMem-context] Binds ONE runAgentLoop's retrieval (Hook A) to its
- * feedback/record (Hook B). All fields are captured once at loop start;
- * Hook B settles exactly the context Hook A began — it must NEVER re-derive
- * the query from agentHistory (a mid-loop queue switch would pair this
- * exchange's injected episodes with the queued prompt's result).
- *
- * [finalized] is the once-only guard for the try/catch/finally state machine:
- * normal exit, exception and cancellation each call finalizeExchange exactly
- * once; the first call wins and the rest are no-ops.
- */
-internal data class ExperienceExchangeContext(
-    val query: String,
-    val retrieval: EpisodeMemoryStore.Retrieval,
-    val startedAtMs: Long,
-    val systemPromptWithMemory: String?,
-    var finalized: Boolean = false,
-)
