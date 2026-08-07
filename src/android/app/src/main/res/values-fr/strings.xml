@@ -1014,5 +1014,5 @@
     <string name="backup_snapshot_restore_confirm_title">Restaurer cet instantané ?</string>
     <string name="backup_snapshot_restore_confirm_text">La configuration actuelle sera remplacée par l\'instantané du %1$s. Un nouvel instantané de la configuration actuelle est d\'abord enregistré.</string>
     <string name="backup_snapshot_restore">Restaurer</string>
-    <string name="backup_done_fatal">La restauration a échoué en cours de route — la configuration n\'est que partiellement restaurée. Revenez à partir d'un instantané.</string>
+    <string name="backup_done_fatal">La restauration a échoué en cours de route — la configuration n\'est que partiellement restaurée. Revenez à partir d\'un instantané.</string>
 </resources>
