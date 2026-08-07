@@ -98,7 +98,7 @@ fun MemoryFileViewerBody(
 }
 
 @Composable
-private fun SavedToast(modifier: Modifier = Modifier) {
+internal fun SavedToast(modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
             .padding(bottom = 12.dp)

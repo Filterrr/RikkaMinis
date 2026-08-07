@@ -475,7 +475,7 @@ fun ProviderDetailScreen(
                 } else {
                     {
                         isRefreshing = true
-                        val toastContext = androidx.compose.ui.platform.LocalContext.current
+                        val toastContext = exportContext
                         scope.launch {
                             try {
                                 val result = providerRepository.refreshModels(instance)
