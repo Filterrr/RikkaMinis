@@ -1304,6 +1304,10 @@ fun ChatScreen(
     // scroll while the user's finger is mid-gesture (racing the drag would
     // cause visible jitter). Tracked by the DragInteraction collector below.
     var isUserDragging by remember { mutableStateOf(false) }
+    // [bottom-fix] Timestamp of the last drag-stop. The anchor-guard skips
+    // compensation for 300ms after a drag ends, giving the state machine
+    // (stickToBottom disengage) time to settle even if isNearBottom lagged.
+    var lastDragStopMs by remember { mutableStateOf(0L) }
 
     // T-drag-send-queue: shared send-or-enqueue handler used by BOTH the
     // send-button tap and the swipe-up-to-send drag. Routes through
@@ -1386,8 +1390,14 @@ fun ChatScreen(
         .distinctUntilChanged()
         .collect { (idx, off) ->
             if (isUserDragging) return@collect
-            if (idx == 0 && off <= nearBottomThresholdPx.toInt()) return@collect
             val now = SystemClock.elapsedRealtime()
+            // [bottom-fix] Right after a drag ends, the layout / isNearBottom /
+            // stickToBottom state is mid-settle. Skipping compensation for
+            // this window prevents the guard from yanking a reader who just
+            // scrolled away from the bottom (the observed "output-end jump").
+            val stopMs = lastDragStopMs
+            if (now - stopMs < 300L) return@collect
+            if (idx == 0 && off <= nearBottomThresholdPx.toInt()) return@collect
             if (now - lastCompensateMs < 100L) return@collect
             lastCompensateMs = now
             tracedScrollToItem("anchor-guard", 0, 0)
@@ -1413,18 +1423,26 @@ fun ChatScreen(
                     isUserDragging = true
                 is androidx.compose.foundation.interaction.DragInteraction.Stop -> {
                     isUserDragging = false
-                    // [bottom-trigger] A real user drag that lands away from the
-                    // bottom disengages follow. On a listener that stayed on the
-                    // bottom row this is a no-op (stickToBottom stays true); the
-                    // down-arrow FAB re-engages it explicitly. stickToBottom is
-                    // the single source of truth — the anchor-guard loop reads it
-                    // directly.
-                    if (stickToBottom != isNearBottom.value) {
-                        stickToBottom = isNearBottom.value
+                    lastDragStopMs = SystemClock.elapsedRealtime()
+                    // [bottom-fix] Drive the disengage decision off the raw
+                    // list position, NOT the lazy isNearBottom derived-state.
+                    // isNearBottom caches and can lag one snapshot behind a
+                    // drag-stop, so reading its `.value` here can return the
+                    // pre-drag "bottom" (index 0) long after the user has
+                    // actually scrolled up — leaving stickToBottom=true and
+                    // letting the anchor-guard yank the reader (the observed
+                    // "output-end jump"). Reading the raw index/offset is
+                    // authoritative and settles in the same snapshot.
+                    val stoppedIdx = listState.firstVisibleItemIndex
+                    val stoppedOff = listState.firstVisibleItemScrollOffset
+                    if (stickToBottom != (stoppedIdx == 0 && stoppedOff <= nearBottomThresholdPx.toInt())) {
+                        stickToBottom = (stoppedIdx == 0 && stoppedOff <= nearBottomThresholdPx.toInt())
                     }
                 }
-                is androidx.compose.foundation.interaction.DragInteraction.Cancel ->
+                is androidx.compose.foundation.interaction.DragInteraction.Cancel -> {
                     isUserDragging = false
+                    lastDragStopMs = SystemClock.elapsedRealtime()
+                }
                 else -> Unit
             }
         }
