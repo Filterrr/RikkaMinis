@@ -78,7 +78,7 @@ import kotlin.math.roundToInt
 // -- Preference Keys --
 const val PREF_APPEARANCE = "appearance_prefs"
 const val KEY_THEME_MODE = "theme_mode"            // 0=System, 1=Light, 2=Dark
-const val KEY_LAUNCH_SESSION = "launch_session"    // 0=Auto, 1=LastSession, 2=NewChat, 3=Home
+const val KEY_LAUNCH_SESSION = "launch_session"    // 0=Auto, 1=LastSession, 2=NewChat, 3=Safe
 // iOS-aligned key names — match `@AppStorage("returnKeyBehavior")` and
 // `@AppStorage("keepScreenAwakeDuringTasks")` in ContentView.swift so
 // future cross-platform sync (if it ever lands) reads the same values.
@@ -278,7 +278,7 @@ fun AppearanceScreen(
                 LaunchRow(stringResource(R.string.appearance_launch_auto), Icons.Outlined.Bolt, tileBlue),
                 LaunchRow(stringResource(R.string.appearance_launch_last), Icons.Outlined.History, tileTeal),
                 LaunchRow(stringResource(R.string.appearance_launch_new), Icons.Outlined.ChatBubbleOutline, tileGreen),
-                LaunchRow(stringResource(R.string.appearance_launch_home), Icons.Outlined.Home, tileBlue),
+                LaunchRow(stringResource(R.string.appearance_launch_safe), Icons.Outlined.Shield, tileBlue),
             )
             launchRows.forEachIndexed { idx, row ->
                 SettingsChoiceRow(

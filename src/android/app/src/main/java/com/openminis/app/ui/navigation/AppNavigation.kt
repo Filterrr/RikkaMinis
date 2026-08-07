@@ -30,7 +30,6 @@ import androidx.navigation.navArgument
 import com.openminis.app.data.repository.ChatRepository
 import com.openminis.app.data.repository.ProviderRepository
 import com.openminis.app.ui.chat.ChatScreen
-import com.openminis.app.ui.sessions.SessionListScreen
 import com.openminis.app.ui.settings.AddAgentLoopGroupsScreen
 import com.openminis.app.ui.settings.AddAgentLoopModelsScreen
 import com.openminis.app.ui.settings.AgentLoopModelsScreen
@@ -86,7 +85,6 @@ private val EmphasizedDecelerate = CubicBezierEasing(0.05f, 0.7f, 0.1f, 1.0f)
 private val EmphasizedAccelerate = CubicBezierEasing(0.3f, 0.0f, 0.8f, 0.15f)
 
 object Routes {
-    const val SESSION_LIST = "sessions"
     /**
      * [P0-0] `focusMessageId` is an OPTIONAL query arg: any caller that just
      * wants "open this session" keeps calling [chat] with one argument and
@@ -252,17 +250,17 @@ fun AppNavigation(
             }
             is DeepLinkAction.OpenSession -> {
                 // T-double-chat-fix: on process-death recreation NavController
-                // auto-restores [SESSION_LIST, chat/<id>] AND MainActivity
+                // auto-restores the single chat entry AND MainActivity
                 // synthesizes an OpenSession deep-link from saved state. A
                 // bare navigate() pushed a SECOND chat entry, forcing the
                 // user to press back twice. launchSingleTop collapses the
-                // duplicate; popUpTo(SESSION_LIST, saveState=true) +
+                // duplicate; popUpTo(start) + saveState=true +
                 // restoreState=true preserves chat-screen state across the
                 // hop. When the synthesized deep-link is a no-op (chat
                 // already on top) launchSingleTop short-circuits.
                 navController.safeNavigate(Routes.chat(initialDeepLink.sessionId)) {
-                    popUpTo(Routes.SESSION_LIST) {
-                        inclusive = false
+                    popUpTo(navController.graph.startDestinationId) {
+                        inclusive = true
                         saveState = true
                     }
                     launchSingleTop = true
@@ -349,15 +347,19 @@ fun AppNavigation(
         ) 3 else rawMode
         val autoThresholdMs = 15L * 60 * 1000
         val target: String? = when {
-            // T185: if a system share is buffered and the configured launch
-            // mode would leave us on the session list (mode 3 = Home), the
-            // ChatScreen consumer never mounts and the buffer expires —
-            // exactly the symptom from the bug report. Force a new draft
-            // chat so the share lands in a composer.
+            // T185: if a system share is buffered, the fresh chat below is
+            // where it lands. Mode 3 ("Safe") now also opens a new draft chat
+            // (the stock session list is gone), so the share consumer always
+            // mounts.
             hasPendingShare && mode == 3 -> Routes.chat(com.openminis.app.data.ComposerDraftStore.nextDraftId(context))
             mode == 1 -> chatRepository.dao.listSessions().firstOrNull()?.let { Routes.chat(it.id) }
             mode == 2 -> Routes.chat(com.openminis.app.data.ComposerDraftStore.nextDraftId(context))
-            mode == 3 -> null
+            // [remove-session-list] Mode 3 was "Home" (the deleted session
+            // list). It now means "Safe Start": always open a fresh draft
+            // chat so the force-home/HangDetector breakers still avoid
+            // re-entering a session that may have crashed, but never land
+            // on a page that no longer exists.
+            mode == 3 -> Routes.chat(com.openminis.app.data.ComposerDraftStore.nextDraftId(context))
             else -> {
                 val latest = chatRepository.dao.listSessions().firstOrNull()
                 val fresh = latest != null && System.currentTimeMillis() - latest.updatedAt < autoThresholdMs
@@ -375,31 +377,20 @@ fun AppNavigation(
             // hasn't even rendered, and we want to navigate to it BEFORE
             // it shows. Calling navigate() unconditionally produces the
             // intended cold-start dispatch (mode 1 → last session, mode 2
-            // → new chat, mode 0 → auto). Pre-T314 the safeNavigate guard
-            // silently dropped this navigation and stranded the user on
-            // the SESSION_LIST start destination regardless of mode.
+            // → new chat, mode 0 → auto). The start destination is always
+            // a chat now (no SESSION_LIST), so we pop to it inclusively to
+            // replace the placeholder draft with the real target.
             navController.navigate(target) {
-                popUpTo(Routes.SESSION_LIST) { inclusive = false }
+                popUpTo(navController.graph.startDestinationId) { inclusive = true }
             }
         }
     }
 
-    // T185: warm-share fallback — if a share lands while the user is sitting
-    // on the session list (cold-start with mode 3 that raced past the launch
-    // resolver, or onNewIntent re-fires processPendingShare), route into a
-    // fresh chat so ChatScreen's existing LaunchedEffect(shareBufferVersion)
-    // can drain it. The drain itself is idempotent: consumeBuffer is one-shot,
-    // so a ChatScreen already in the backstack won't double-inject.
-    val shareBufferVersion by com.openminis.app.share.ShareCoordinator.bufferVersion.collectAsState()
-    LaunchedEffect(shareBufferVersion) {
-        if (shareBufferVersion == 0) return@LaunchedEffect
-        val current = navController.currentDestination?.route ?: return@LaunchedEffect
-        if (current == Routes.SESSION_LIST) {
-            navController.safeNavigate(Routes.chat(com.openminis.app.data.ComposerDraftStore.nextDraftId(context))) {
-                popUpTo(Routes.SESSION_LIST) { inclusive = false }
-            }
-        }
-    }
+    // [remove-session-list] The share fallback that used to watch for the
+    // user sitting on the (deleted) session-list is gone: startDestination
+    // is always a chat now, so a buffered share is always drained by a
+    // ChatScreen's LaunchedEffect(shareBufferVersion). Consuming is
+    // idempotent (one-shot consumeBuffer), so no double-inject.
 
     // Pinned-shortcut cold start: when launched via
      // `minis://session/<id>/<resource-path>`, set the pending HTML
@@ -434,7 +425,10 @@ fun AppNavigation(
             Routes.chat(htmlShortcut.sessionId)
         }
         quickActionStart != null -> quickActionStart
-        else -> Routes.SESSION_LIST
+        // [remove-session-list] No stock session list: the conversation
+        // drawer is the only session switcher, so cold-start heads straight
+        // into a fresh draft chat (mirrors the New Chat launch mode).
+        else -> Routes.chat(com.openminis.app.data.ComposerDraftStore.nextDraftId(context))
     }
     NavHost(
         navController = navController,
@@ -493,34 +487,6 @@ fun AppNavigation(
             ) + fadeOut(animationSpec = tween(200, easing = EmphasizedAccelerate))
         },
     ) {
-        composable(Routes.SESSION_LIST) {
-            SessionListScreen(
-                chatRepository = chatRepository,
-                providerRepository = providerRepository,
-                onSessionClick = { sessionId ->
-                    navController.safeNavigate(Routes.chat(sessionId))
-                },
-                onNewChat = { sessionId ->
-                    navController.safeNavigate(Routes.chat(sessionId))
-                },
-                onSettingsClick = {
-                    navController.safeNavigate(Routes.SETTINGS)
-                },
-                onAddProviderClick = {
-                    navController.safeNavigate(Routes.ADD_PROVIDER)
-                },
-                onSelectModelsClick = {
-                    navController.safeNavigate(Routes.ONBOARDING_MODELS)
-                },
-                onTerminalClick = {
-                    navController.safeNavigate(Routes.terminal())
-                },
-                onRootfsClick = {
-                    navController.safeNavigate(Routes.ROOTFS_MANAGEMENT)
-                },
-            )
-        }
-
         composable(
             route = Routes.CHAT,
             arguments = listOf(
@@ -552,12 +518,12 @@ fun AppNavigation(
                 // funnel as the session list / NewChat deep link — a fresh
                 // "__new__" route whose DB record is only created on first
                 // send, so abandoning it leaves no empty session. popUpTo
-                // removes the current chat from the stack (back → list) and
-                // a double-fire just replaces one unpersisted draft with
-                // another instead of stacking two chats.
+                // removes the current chat from the stack (back → the stack
+                // root) and a double-fire just replaces one unpersisted
+                // draft with another instead of stacking two chats.
                 onNewChat = {
                     navController.safeNavigate(Routes.chat(com.openminis.app.data.ComposerDraftStore.nextDraftId(context))) {
-                        popUpTo(Routes.SESSION_LIST) { inclusive = false }
+                        popUpTo(navController.graph.startDestinationId) { inclusive = true }
                         launchSingleTop = true
                     }
                 },
@@ -571,7 +537,7 @@ fun AppNavigation(
                 },
                 onMoveToSession = { targetId ->
                     navController.safeNavigate(Routes.chat(targetId)) {
-                        popUpTo(Routes.SESSION_LIST) { inclusive = false }
+                        popUpTo(navController.graph.startDestinationId) { inclusive = true }
                     }
                 },
                 onBrowseChatFiles = {
@@ -583,10 +549,10 @@ fun AppNavigation(
                 },
                 onModelGroupsClick = { navController.safeNavigate(Routes.MODEL_GROUPS) },
                 // Chat-history drawer: open another conversation (same funnel
-                // as the session list's onSessionClick) or jump to Settings.
+                // as the session click) or jump to Settings.
                 onOpenSession = { targetId ->
                     navController.safeNavigate(Routes.chat(targetId)) {
-                        popUpTo(Routes.SESSION_LIST) { inclusive = false }
+                        popUpTo(navController.graph.startDestinationId) { inclusive = true }
                         launchSingleTop = true
                     }
                 },
