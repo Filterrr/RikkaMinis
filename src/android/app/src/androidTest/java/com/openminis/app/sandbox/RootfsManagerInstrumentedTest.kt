@@ -224,32 +224,10 @@ class RootfsManagerInstrumentedTest {
         File(manager.rootfsDir, "custom.txt").writeText("custom")
         assertTrue(File(manager.rootfsDir, "custom.txt").exists())
 
-        manager.reset(keepUserData = false)
+        manager.reset()
 
         assertTrue("Should be reinstalled", manager.isInstalled)
         assertFalse("Custom file should be gone", File(manager.rootfsDir, "custom.txt").exists())
-    }
-
-    @Test
-    fun resetKeepsUserDataWhenRequested() = runBlocking {
-        if (!hasAsset("alpine-minirootfs.tar.gz")) {
-            println("SKIP: alpine-minirootfs.tar.gz not in assets")
-            return@runBlocking
-        }
-
-        manager.installIfNeeded()
-
-        // Create user data in /root
-        val rootHome = File(manager.rootfsDir, "root")
-        rootHome.mkdirs()
-        File(rootHome, "userfile.txt").writeText("user data")
-
-        manager.reset(keepUserData = true)
-
-        assertTrue("Should be reinstalled", manager.isInstalled)
-        val restored = File(manager.rootfsDir, "root/userfile.txt")
-        assertTrue("User file should be restored", restored.exists())
-        assertEquals("user data", restored.readText())
     }
 
     // ==================== tar extraction with real files ====================

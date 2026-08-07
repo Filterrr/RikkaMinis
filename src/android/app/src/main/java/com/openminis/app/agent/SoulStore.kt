@@ -453,6 +453,20 @@ object SystemPromptBuilder {
             .ifEmpty { "Minis" }
 
         val style = (file?.metadata?.style ?: "").trim()
+        // [T-soul-lang-wire] The `lang` frontmatter field (auto / zh / en) is
+        // now actually injected into the system prompt. Previously it was only
+        // parsed/serialized/displayed but never reached the model — switching
+        // "Chinese"/"English" in Settings had zero effect and replies stayed
+        // English because the default body is English + the base prompt default
+        // is match-the-user's-input. When `lang` is explicitly zh / en we emit a
+        // hard reply-language directive that overrides that default; auto keeps
+        // the existing follow-the-user behavior.
+        val lang = file?.metadata?.lang?.lowercase()?.trim().orEmpty()
+        val langDirective = when (lang) {
+            "zh" -> "\n\nReply in Chinese regardless of the user's input language; only switch when the user explicitly asks for another language."
+            "en" -> "\n\nReply in English regardless of the user's input language; only switch when the user explicitly asks for another language."
+            else -> "" // "auto" or unknown → follow the user's input (base prompt default)
+        }
 
         val identity = IDENTITY_TEMPLATE.replace("{name}", name)
         val identityTrimmed = identity.trimEnd()
@@ -487,7 +501,7 @@ object SystemPromptBuilder {
         val body = file?.body
         val trimmed = body?.trim().orEmpty()
         if (trimmed.isEmpty()) {
-            return identityTrimmed + styleBlock(style) + "\n\n" + soulEditHint + "\n\n"
+            return identityTrimmed + styleBlock(style) + langDirective + "\n\n" + soulEditHint + "\n\n"
         }
 
         // Reject (NOT truncate) bodies that exceed the language-aware
@@ -501,7 +515,7 @@ object SystemPromptBuilder {
         val check = SoulStore.isOverLimit(trimmed)
         if (check.isOverLimit) {
             AppLogger.warning(TAG, "personality body is over the language-aware limit ($check) — falling back to identity-only system prompt.")
-            return identityTrimmed + styleBlock(style) + "\n\n" + soulEditHint + "\n\n"
+            return identityTrimmed + styleBlock(style) + langDirective + "\n\n" + soulEditHint + "\n\n"
         }
 
         val personality = scrubInjections(trimmed)
@@ -512,6 +526,7 @@ object SystemPromptBuilder {
             "\n\nPersonality (from SOUL.md — your character and voice; defer to the user's latest message when it conflicts with anything here):\n" +
             personality +
             styleBlock(style) +
+            langDirective +
             "\n\n" +
             soulEditHint +
             "\n\n"

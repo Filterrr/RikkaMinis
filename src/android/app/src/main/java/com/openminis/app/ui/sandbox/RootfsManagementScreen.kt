@@ -19,13 +19,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -68,7 +66,6 @@ fun RootfsManagementScreen(
     val context = LocalContext.current
 
     var showResetDialog by remember { mutableStateOf(false) }
-    var showResetBackupDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         viewModel.refresh(context)
@@ -208,39 +205,6 @@ fun RootfsManagementScreen(
                             ),
                         colors = transparentListItemColors(),
                     )
-                    SettingsRowDivider()
-                    ListItem(
-                        headlineContent = { Text(stringResource(R.string.rootfs_reset_backup_label)) },
-                        supportingContent = { Text(stringResource(R.string.rootfs_reset_backup_description)) },
-                        leadingContent = {
-                            Icon(Icons.Filled.Archive, contentDescription = null)
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickableListItem(
-                                enabled = !state.isProcessing,
-                                onClick = { showResetBackupDialog = true },
-                            ),
-                        colors = transparentListItemColors(),
-                    )
-                }
-
-                if (state.hasBackup) {
-                    SettingsRowDivider()
-                    ListItem(
-                        headlineContent = { Text(stringResource(R.string.rootfs_restore_label)) },
-                        supportingContent = { Text(stringResource(R.string.rootfs_restore_description)) },
-                        leadingContent = {
-                            Icon(Icons.Filled.Restore, contentDescription = null)
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickableListItem(
-                                enabled = !state.isProcessing && state.isInstalled,
-                                onClick = { viewModel.restoreBackup(context) },
-                            ),
-                        colors = transparentListItemColors(),
-                    )
                 }
             }
 
@@ -297,8 +261,7 @@ fun RootfsManagementScreen(
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = "Reset: Delete everything\n" +
-                            "Backup: Save /root directory\n" +
-                            "Restore: Recover saved data",
+                            "Note: persistent data lives in the shared area outside the rootfs and is kept across resets.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -318,36 +281,13 @@ fun RootfsManagementScreen(
             confirmButton = {
                 MinisTextButton(onClick = {
                     showResetDialog = false
-                    viewModel.resetRootfs(context, keepUserData = false)
+                    viewModel.resetRootfs(context)
                 }) {
                     Text("Reset", color = MaterialTheme.colorScheme.error)
                 }
             },
             dismissButton = {
                 MinisTextButton(onClick = { showResetDialog = false }) {
-                    Text(stringResource(R.string.common_cancel))
-                }
-            },
-        )
-    }
-
-    if (showResetBackupDialog) {
-        AlertDialog(
-            onDismissRequest = { showResetBackupDialog = false },
-            title = { Text(stringResource(R.string.rootfs_reset_backup_confirm_title)) },
-            text = {
-                Text(stringResource(R.string.rootfs_reset_backup_confirm_message))
-            },
-            confirmButton = {
-                MinisTextButton(onClick = {
-                    showResetBackupDialog = false
-                    viewModel.resetRootfs(context, keepUserData = true)
-                }) {
-                    Text(stringResource(R.string.rootfs_reset_backup_confirm_button), color = MaterialTheme.colorScheme.error)
-                }
-            },
-            dismissButton = {
-                MinisTextButton(onClick = { showResetBackupDialog = false }) {
                     Text(stringResource(R.string.common_cancel))
                 }
             },
