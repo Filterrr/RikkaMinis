@@ -100,18 +100,39 @@ class AutoScrollDecisionTest {
     }
 
     @Test
-    fun streamGlide_withinInterruptGrace_skips() {
-        // lastInterrupt pulled very recent (< 1000ms)
-        val s = baseState().copy(lastInterruptMs = 49_800L) // 200ms ago
-        assertEquals(ScrollVerdict.Skip, decideAutoFollow(ScrollIntent.STREAM_GLIDE, s))
+    fun streamGlide_ignoresRecentInterrupt_scrolls() {
+        // [T261-ios] The per-intent interrupt-grace window is REMOVED. It
+        // previously bailed for ~1s whenever lastInterruptMs was recent — but
+        // lastInterruptMs is fed from the user's LAST touch before tapping
+        // the FAB (reading history), NOT the FAB's programmatic scroll. So
+        // immediately after FAB re-stick it would skip for ~1s — exactly the
+        // window in which streaming pushes the viewport off-bottom → follow
+        // dies. iOS has no such grace. Once stick is re-engaged (COMMON GATE
+        // passed → userScrolledAway=false) and streaming is active, a recent
+        // lastInterrupt must NOT hold the glide back.
+        val s = baseState().copy(
+            lastInterruptMs = 49_800L, // 200ms ago — must NOT gate
+            firstVisibleItemScrollOffset = 100, // drift off perfect pin
+        )
+        val v = decideAutoFollow(ScrollIntent.STREAM_GLIDE, s)
+        assertTrue("re-stuck stream must follow even with a recent lastInterrupt", v is ScrollVerdict.ScrollTo)
     }
 
     @Test
-    fun streamGlide_indexPushedByInsertion_skips() {
-        // [P0-0-jump-fix] firstIdx > 0 means new row inserted at index 0;
-        // the glide must NOT fight that — TRAILING_ROW handles it.
-        val s = baseState().copy(firstVisibleItemIndex = 1)
-        assertEquals(ScrollVerdict.Skip, decideAutoFollow(ScrollIntent.STREAM_GLIDE, s))
+    fun streamGlide_pushedAwayAfterReStick_scrolls() {
+        // [T261] After the user explicitly re-stuck to bottom via the
+        // JumpToBottom FAB, streaming growth of the index-0 block pushes the
+        // viewport above the bottom row (firstIdx=1). The COMMON GATE already
+        // let this through (userScrolledAway=false → stickToBottom=true), so
+        // the glide MUST pull it back — it must NOT skip just because
+        // firstIdx>0. This is the exact regression the old firstIdx==0 gate
+        // caused (FAB tap seemed to do nothing once streaming resumed).
+        val s = baseState().copy(
+            firstVisibleItemIndex = 1,
+            firstVisibleItemScrollOffset = 100,
+        )
+        val v = decideAutoFollow(ScrollIntent.STREAM_GLIDE, s)
+        assertTrue("re-stuck stream pushed off-bottom must glide back", v is ScrollVerdict.ScrollTo)
     }
 
     @Test
