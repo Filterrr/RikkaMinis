@@ -833,6 +833,10 @@
     <string name="share_provider_json_imported">Imported provider \"%1$s\"</string>
     <string name="share_provider_json_import_failed">Invalid provider configuration file</string>
     <string name="provider_list_api_key">API Key</string>
+    <!-- [provider-mgmt-opt] OAuth providers show this credential label in the
+         list row instead of "API Key". -->
+    <string name="provider_list_oauth">OAuth</string>
+    <string name="provider_list_no_api_key">No API key</string>
     <string name="provider_list_disabled">Disabled</string>
     <string name="provider_list_favorites">Favorites</string>
     <string name="provider_set_favorite">Set as favorite</string>
@@ -845,12 +849,24 @@
     <string name="provider_detail_auto_append_v1">Auto-append /v1</string>
     <string name="provider_detail_custom_user_agent">Custom User-Agent</string>
     <string name="provider_detail_custom_user_agent_placeholder">Leave blank for default</string>
-    <string name="provider_detail_save_url_settings">Save URL Settings</string>
     <string name="provider_detail_api_format">API Format</string>
     <string name="provider_detail_chat_completions">Chat Completions</string>
     <string name="provider_detail_responses_api">Responses API</string>
     <string name="provider_detail_azure_openai">Azure OpenAI</string>
     <string name="provider_detail_azure_openai_footer">Use Azure OpenAI authentication (api-key header). Paste your full Azure endpoint into Custom API Base above, including the ?api-version=… query. Works with both API formats.</string>
+    <!-- [provider-mgmt-opt] Image Generation endpoint section (was hardcoded
+         English). i18n'd on 2026-08-08. -->
+    <string name="provider_detail_image_generation">Image Generation</string>
+    <string name="provider_detail_image_endpoint_auto_footer_resolved">Auto: tries /v1/images/generations first, falls back to /v1/chat/completions. Last successful endpoint: %1$s.</string>
+    <string name="provider_detail_image_endpoint_auto_footer">Auto: tries /v1/images/generations first, falls back to /v1/chat/completions. Caches the working endpoint after the first call.</string>
+    <string name="provider_detail_image_endpoint_images_footer">Always use /v1/images/generations.</string>
+    <string name="provider_detail_image_endpoint_chat_footer">Always use /v1/chat/completions (multimodal output).</string>
+    <string name="provider_detail_image_endpoint_auto">Auto</string>
+    <string name="provider_detail_image_endpoint_images_api">Images API</string>
+    <string name="provider_detail_image_endpoint_chat">Chat</string>
+    <string name="provider_detail_api_format_responses_footer">Uses /v1/responses endpoint format. Required for some Responses-API-only services.</string>
+    <string name="provider_detail_api_format_chat_footer">Standard /v1/chat/completions format. Compatible with most OpenAI-compatible services.</string>
+    <string name="provider_detail_manual_bearer_footer">Useful with custom proxy endpoints.</string>
     <string name="provider_detail_status">Status</string>
     <string name="provider_detail_enabled">Enabled</string>
     <string name="provider_detail_refresh_models">Refresh Models</string>
@@ -1013,6 +1029,15 @@
     <string name="add_models_to_group_add_count">Add (%1$d)</string>
     <string name="provider_detail_https_api_example_placeholder">https://api.example.com</string>
     <string name="provider_detail_models_count_header">Models (%1$d)</string>
+    <!-- [provider-mgmt-opt] Refresh-model feedback strings (was silent). -->
+    <string name="provider_detail_refresh_success_api">Refreshed — loaded %1$d models from the provider.</string>
+    <string name="provider_detail_refresh_success_oauth">Refreshed, model list loaded via OAuth.</string>
+    <string name="provider_detail_refresh_success_models_dev">No live list; used models.dev registry (%1$d models). Results may be approximate.</string>
+    <string name="provider_detail_refresh_no_key">No API key configured — nothing to refresh.</string>
+    <string name="provider_detail_refresh_preserved">No matching models.dev entry — kept existing model list.</string>
+    <string name="provider_detail_refresh_failed">Could not refresh models.</string>
+    <string name="provider_detail_refreshing">Refreshing…</string>
+    <string name="provider_detail_refresh_models_list">Refresh model list</string>
     <string name="provider_detail_delete_provider_confirm">Are you sure you want to delete \"%1$s\"? This cannot be undone.</string>
     <string name="provider_detail_delete_model_confirm">Are you sure you want to delete \"%1$s\"? This action cannot be undone.</string>
     <string name="agent_loop_models_model_count_singular">1 model</string>

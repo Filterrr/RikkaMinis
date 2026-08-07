@@ -575,6 +575,8 @@
     <string name="share_provider_json_imported">プロバイダー「%1$s」をインポートしました</string>
     <string name="share_provider_json_import_failed">無効なプロバイダー設定ファイルです</string>
     <string name="provider_list_api_key">API Key</string>
+    <string name="provider_list_oauth">OAuth</string>
+    <string name="provider_list_no_api_key">APIキーなし</string>
     <string name="provider_list_disabled">無効</string>
     <string name="provider_list_favorites">お気に入り</string>
     <string name="provider_set_favorite">お気に入りに追加</string>
@@ -585,12 +587,23 @@
     <string name="provider_detail_use_a_static_bearer_token_instead_of_the">OAuth ログインフローではなく、静的なベアラートークンを使用します。</string>
     <string name="provider_detail_custom_api_base">カスタムAPIベース</string>
     <string name="provider_detail_auto_append_v1">/v1 を自動的に付加</string>
-    <string name="provider_detail_save_url_settings">URL 設定を保存</string>
     <string name="provider_detail_api_format">API Format</string>
     <string name="provider_detail_chat_completions">Chat Completions</string>
     <string name="provider_detail_responses_api">Responses API</string>
     <string name="provider_detail_azure_openai">Azure OpenAI</string>
     <string name="provider_detail_azure_openai_footer">Azure OpenAI 認証（api-key ヘッダー）を使用します。?api-version=… クエリを含む完全な Azure エンドポイントを上のカスタム API ベースに貼り付けてください。両方の API 形式で動作します。</string>
+    <string name="provider_detail_image_generation">画像生成</string>
+    <string name="provider_detail_image_endpoint_auto_footer_resolved">自動: 最初に /v1/images/generations を試し、次に /v1/chat/completions にフォールバックします。最後に成功したエンドポイント: %1$s。</string>
+    <string name="provider_detail_image_endpoint_auto_footer">自動: 最初に /v1/images/generations を試し、次に /v1/chat/completions にフォールバックします。最初の呼び出し後に使用可能なエンドポイントをキャッシュします。</string>
+    <string name="provider_detail_image_endpoint_images_footer">常に /v1/images/generations を使用します。</string>
+    <string name="provider_detail_image_endpoint_chat_footer">常に /v1/chat/completions を使用します (マルチモーダル出力)。</string>
+    <string name="provider_detail_image_endpoint_auto">自動</string>
+    <string name="provider_detail_image_endpoint_images_api">Images API</string>
+    <string name="provider_detail_image_endpoint_chat">Chat</string>
+    <string name="provider_detail_api_format_responses_footer">/v1/responses エンドポイント形式を使用します。Responses-API のみの一部サービスで必要です。</string>
+    <string name="provider_detail_api_format_chat_footer">標準の /v1/chat/completions 形式。ほとんどの OpenAI 互換サービスで動作します。</string>
+    <string name="provider_detail_manual_bearer_footer">カスタムプロキシエンドポイントで役立ちます。</string>
+
     <string name="provider_detail_status">ステータス</string>
     <string name="provider_detail_enabled">有効</string>
     <string name="provider_detail_refresh_models">モデルを更新</string>
@@ -710,6 +723,14 @@
     <string name="add_models_to_group_add_count">追加 (%1$d)</string>
     <string name="provider_detail_https_api_example_placeholder">https://api.example.com</string>
     <string name="provider_detail_models_count_header">モデル (%1$d)</string>
+    <string name="provider_detail_refresh_success_api">更新完了 – プロバイダーから%1$d件のモデルを読み込みました。</string>
+    <string name="provider_detail_refresh_success_oauth">更新完了、OAuth でモデルリストを読み込みました。</string>
+    <string name="provider_detail_refresh_success_models_dev">ライブリストなし。models.dev レジストリを使用（%1$d件）。結果は不正確な場合があります。</string>
+    <string name="provider_detail_refresh_no_key">APIキーが設定されていません – 更新対象なし。</string>
+    <string name="provider_detail_refresh_preserved">一致する models.dev エントリなし – 既存のモデルリストを保持。</string>
+    <string name="provider_detail_refresh_failed">モデルを更新できませんでした。</string>
+    <string name="provider_detail_refreshing">更新中…</string>
+    <string name="provider_detail_refresh_models_list">モデル一覧を更新</string>
     <string name="provider_detail_delete_provider_confirm">\"%1$s\" を削除してもよろしいですか?この操作は元に戻せません。</string>
     <string name="provider_detail_delete_model_confirm">\"%1$s\" を削除してもよろしいですか?この操作は元に戻せません。</string>
     <string name="agent_loop_models_model_count_singular">1 モデル</string>

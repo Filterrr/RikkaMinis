@@ -230,6 +230,8 @@
     <string name="share_provider_json_imported">已匯入服務商「%1$s」</string>
     <string name="share_provider_json_import_failed">無效的服務商設定檔</string>
     <string name="provider_list_api_key">API Key</string>
+    <string name="provider_list_oauth">OAuth</string>
+    <string name="provider_list_no_api_key">無 API 金鑰</string>
     <string name="provider_list_disabled">已停用</string>
     <string name="provider_list_favorites">常用</string>
     <string name="provider_set_favorite">設為常用</string>
@@ -241,12 +243,23 @@
     <string name="provider_detail_use_a_static_bearer_token_instead_of_the">使用靜態 bearer token,而不是 OAuth 登入流程。</string>
     <string name="provider_detail_custom_api_base">自定義 API 地址</string>
     <string name="provider_detail_auto_append_v1">自動附加 /v1</string>
-    <string name="provider_detail_save_url_settings">儲存 URL 設定</string>
     <string name="provider_detail_api_format">API Format</string>
     <string name="provider_detail_chat_completions">Chat Completions</string>
     <string name="provider_detail_responses_api">Responses API</string>
     <string name="provider_detail_azure_openai">Azure OpenAI</string>
     <string name="provider_detail_azure_openai_footer">使用 Azure OpenAI 驗證（api-key 標頭）。將完整的 Azure 端點（含 ?api-version=… 查詢參數）貼到上面的自訂 API Base。兩種 API 格式皆可用。</string>
+    <string name="provider_detail_image_generation">圖像生成</string>
+    <string name="provider_detail_image_endpoint_auto_footer_resolved">自動：優先嘗試 /v1/images/generations，失敗則回退到 /v1/chat/completions。最近成功的端點: %1$s。</string>
+    <string name="provider_detail_image_endpoint_auto_footer">自動：優先嘗試 /v1/images/generations，失敗則回退到 /v1/chat/completions。首次呼叫後快取可用的端點。</string>
+    <string name="provider_detail_image_endpoint_images_footer">一律使用 /v1/images/generations。</string>
+    <string name="provider_detail_image_endpoint_chat_footer">一律使用 /v1/chat/completions（多模態輸出）。</string>
+    <string name="provider_detail_image_endpoint_auto">自動</string>
+    <string name="provider_detail_image_endpoint_images_api">Images API</string>
+    <string name="provider_detail_image_endpoint_chat">聊天</string>
+    <string name="provider_detail_api_format_responses_footer">使用 /v1/responses 端點格式。某些僅支援 Responses API 的服務需要此格式。</string>
+    <string name="provider_detail_api_format_chat_footer">標準 /v1/chat/completions 格式。相容大部分 OpenAI 相容服務。</string>
+    <string name="provider_detail_manual_bearer_footer">對接自訂代理端點時使用。</string>
+
     <string name="provider_detail_status">狀態</string>
     <string name="provider_detail_enabled">已啓用</string>
     <string name="provider_detail_refresh_models">重新整理模型</string>
@@ -389,6 +402,14 @@
     <string name="add_models_to_group_add_count">新增 (%1$d)</string>
     <string name="provider_detail_https_api_example_placeholder">https://api.example.com</string>
     <string name="provider_detail_models_count_header">模型 (%1$d)</string>
+    <string name="provider_detail_refresh_success_api">已重新整理——已從提供者載入 %1$d 個模型。</string>
+    <string name="provider_detail_refresh_success_oauth">已重新整理，模型清單已透過 OAuth 載入。</string>
+    <string name="provider_detail_refresh_success_models_dev">無即時清單；已使用 models.dev 註冊表（%1$d 個模型）。結果可能不精確。</string>
+    <string name="provider_detail_refresh_no_key">未設定 API 金鑰——沒有可重新整理的內容。</string>
+    <string name="provider_detail_refresh_preserved">無相符的 models.dev 項目——保留現有模型清單。</string>
+    <string name="provider_detail_refresh_failed">無法重新整理模型。</string>
+    <string name="provider_detail_refreshing">重新整理中…</string>
+    <string name="provider_detail_refresh_models_list">重新整理模型清單</string>
     <string name="provider_detail_delete_provider_confirm">確定要刪除 \"%1$s\" 嗎?此操作無法復原。</string>
     <string name="provider_detail_delete_model_confirm">確定要刪除 \"%1$s\" 嗎?此操作無法復原。</string>
     <string name="agent_loop_models_model_count_singular">1 個模型</string>

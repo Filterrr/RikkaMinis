@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -35,12 +34,10 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -52,6 +49,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -61,6 +59,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.stringResource
 import com.openminis.app.data.model.ProviderType
 import com.openminis.app.data.repository.ProviderRepository
+import android.widget.Toast
 import com.openminis.app.logging.AppLogger
 import com.openminis.app.ui.components.MinisAlertDialog
 import com.openminis.app.ui.util.bringIntoViewOnFocus
@@ -122,13 +121,36 @@ fun ProviderDetailScreen(
     // OpenAI-/Anthropic-compat custom-base section surfaces it (see gate below).
     var customUserAgent by remember { mutableStateOf(instance.customUserAgent ?: "") }
 
+    // saveBaseURLSettings(): single source of truth for persisting the three
+    // Custom Base URL fields (URL, /v1 switch, custom UA). Invoked on focus
+    // loss and on the /v1 toggle, keeping these consistent with the instant-save
+    // behavior of every other control on this screen. Blank URL/UA collapse to
+    // null (= default). Declared AFTER the vars it captures (customBaseURL,
+    // appendV1Suffix, customUserAgent) — a local function can't forward-reference
+    // a later-declared local `var`.
+    fun saveBaseURLSettings(appendV1: Boolean = appendV1Suffix) {
+        providerRepository.updateInstance(
+            instance.copy(
+                customBaseURL = customBaseURL.ifBlank { null },
+                appendV1Suffix = appendV1,
+                customUserAgent = customUserAgent.ifBlank { null },
+            )
+        )
+        AppLogger.info(
+            TAG,
+            "Saved base URL for ${instance.id}: " +
+                "url='${customBaseURL.ifBlank { "<default>" }}', appendV1=$appendV1, " +
+                "ua='${customUserAgent.ifBlank { "<default>" }}'",
+        )
+    }
+
     val entries = providerRepository.entriesFor(instanceId)
     var isRefreshing by remember { mutableStateOf(false) }
 
     val exportContext = androidx.compose.ui.platform.LocalContext.current
 
     SettingsScaffold(
-        title = instance.label,
+        title = label,
         onBack = onBack,
         actions = {
             IconButton(onClick = {
@@ -219,7 +241,7 @@ fun ProviderDetailScreen(
             SettingsSection(
                 header = stringResource(R.string.provider_detail_manual_bearer_token),
                 footer = stringResource(R.string.provider_detail_use_a_static_bearer_token_instead_of_the) +
-                    "Useful with custom proxy endpoints.",
+                    stringResource(R.string.provider_detail_manual_bearer_footer),
             ) {
                 SettingsCardBlock {
                     ManualBearerTokenSection(
@@ -233,106 +255,59 @@ fun ProviderDetailScreen(
         // ─── Custom Base URL ────────────────────────────────────────
         if (instance.providerType != ProviderType.openRouter) {
             SettingsSection(header = stringResource(R.string.provider_detail_custom_api_base)) {
-                // URL input row — tighter vertical padding to match T226's
-                // SectionTextField height shrink (~-20%).
-                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                    SectionTextField(
-                        value = customBaseURL,
-                        onValueChange = { customBaseURL = it },
-                        singleLine = true,
-                        placeholder = stringResource(R.string.provider_detail_https_api_example_placeholder),
-                        fieldModifier = Modifier.bringIntoViewOnFocus(),
-                    )
-                }
-                HorizontalDivider(
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                    thickness = 0.5.dp,
-                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
-                )
-                // Auto-append /v1 switch row — inline Row with heightIn=44dp
-                // so the row matches the URL-input row above and the save
-                // action below. SettingsSwitchRow's intrinsic 12dp padding
-                // around the 32dp Switch over-reported the height (~60dp),
-                // breaking the three-row rhythm in the Custom API base card
-                // (T231).
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 44.dp)
-                        .padding(horizontal = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = stringResource(R.string.provider_detail_auto_append_v1),
-                        style = MaterialTheme.typography.bodyLarge,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Switch(
-                        checked = appendV1Suffix,
-                        onCheckedChange = { appendV1Suffix = it },
-                    )
-                }
-                HorizontalDivider(
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                    thickness = 0.5.dp,
-                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
-                )
-                // [T-provider-custom-user-agent] Custom User-Agent input —
-                // only for OpenAI-/Anthropic-compat (relay) protocols. Some
-                // gateways reject Minis' default UA and only allow official
-                // clients (e.g. Claude Code). Blank → default UA. Official
-                // direct OpenAI/Anthropic instances still see the field because
-                // protocol == openAI/anthropic; it's harmless there (the value
-                // is only injected when this instance has a custom base, and on
-                // the official path customUserAgent stays at its default null
-                // unless the user typed one — applied verbatim if they do).
-                val showUserAgentField = instance.providerType == ProviderType.openAI ||
-                    instance.providerType == ProviderType.anthropic
-                if (showUserAgentField) {
-                    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                        Text(
-                            text = stringResource(R.string.provider_detail_custom_user_agent),
-                            style = MaterialTheme.typography.bodyLarge,
-                        )
+                SettingsCardBlock {
+                    // URL input row — tighter vertical padding to match T226's
+                    // SectionTextField height shrink (~-20%). Saved on focus loss
+                    // so changes to Custom Base URL take effect immediately,
+                    // consistent with the instant-save of every other control.
+                    Column(modifier = Modifier.padding(vertical = 8.dp)) {
                         SectionTextField(
-                            value = customUserAgent,
-                            onValueChange = { customUserAgent = it },
+                            value = customBaseURL,
+                            onValueChange = { customBaseURL = it },
                             singleLine = true,
-                            placeholder = stringResource(R.string.provider_detail_custom_user_agent_placeholder),
-                            fieldModifier = Modifier.bringIntoViewOnFocus(),
+                            placeholder = stringResource(R.string.provider_detail_https_api_example_placeholder),
+                            fieldModifier = Modifier
+                                .bringIntoViewOnFocus()
+                                .onFocusChanged { focusState ->
+                                    if (!focusState.isFocused) saveBaseURLSettings()
+                                },
                         )
                     }
-                    HorizontalDivider(
-                        modifier = Modifier.padding(horizontal = 16.dp),
-                        thickness = 0.5.dp,
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+                    val showUserAgentField = instance.providerType == ProviderType.openAI ||
+                        instance.providerType == ProviderType.anthropic
+                    SettingsSwitchRow(
+                        title = stringResource(R.string.provider_detail_auto_append_v1),
+                        checked = appendV1Suffix,
+                        onCheckedChange = { newVal ->
+                            appendV1Suffix = newVal
+                            saveBaseURLSettings(newVal)
+                        },
+                        showDivider = showUserAgentField,
                     )
-                }
-                // Save action — TextButton presentation so it reads as a list
-                // row rather than a floating filled button inside the card.
-                MinisSmallTextButton(
-                    onClick = {
-                        providerRepository.updateInstance(
-                            instance.copy(
-                                customBaseURL = customBaseURL.ifBlank { null },
-                                appendV1Suffix = appendV1Suffix,
-                                // [T-provider-custom-user-agent] Blank → null →
-                                // default UA. Only the gated providers can edit
-                                // this; for others customUserAgent equals the
-                                // unchanged instance value, so the copy is inert.
-                                customUserAgent = customUserAgent.ifBlank { null },
+                    // [T-provider-custom-user-agent] Custom User-Agent input —
+                    // only for OpenAI-/Anthropic-compat (relay) protocols. Some
+                    // gateways reject Minis' default UA and only allow official
+                    // clients (e.g. Claude Code). Blank → default UA.
+                    if (showUserAgentField) {
+                        Column(modifier = Modifier.padding(vertical = 8.dp)) {
+                            Text(
+                                text = stringResource(R.string.provider_detail_custom_user_agent),
+                                style = MaterialTheme.typography.bodyLarge,
                             )
-                        )
-                        AppLogger.info(
-                            TAG,
-                            "Saved base URL for ${instance.id}: " +
-                                "url='${customBaseURL.ifBlank { "<default>" }}', appendV1=$appendV1Suffix, " +
-                                "ua='${customUserAgent.ifBlank { "<default>" }}'",
-                        )
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(stringResource(R.string.provider_detail_save_url_settings))
+                            Spacer(Modifier.height(4.dp))
+                            SectionTextField(
+                                value = customUserAgent,
+                                onValueChange = { customUserAgent = it },
+                                singleLine = true,
+                                placeholder = stringResource(R.string.provider_detail_custom_user_agent_placeholder),
+                                fieldModifier = Modifier
+                                    .bringIntoViewOnFocus()
+                                    .onFocusChanged { focusState ->
+                                        if (!focusState.isFocused) saveBaseURLSettings()
+                                    },
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -344,9 +319,9 @@ fun ProviderDetailScreen(
             SettingsSection(
                 header = stringResource(R.string.provider_detail_api_format),
                 footer = if (instance.useResponsesAPI) {
-                    "Uses /v1/responses endpoint format. Required for some Responses-API-only services."
+                    stringResource(R.string.provider_detail_api_format_responses_footer)
                 } else {
-                    "Standard /v1/chat/completions format. Compatible with most OpenAI-compatible services."
+                    stringResource(R.string.provider_detail_api_format_chat_footer)
                 },
             ) {
                 SettingsCardBlock {
@@ -404,21 +379,24 @@ fun ProviderDetailScreen(
         if (instance.supportsImageEndpointSetting) {
             val mode = instance.imageEndpointMode
             SettingsSection(
-                header = "Image Generation",
+                header = stringResource(R.string.provider_detail_image_generation),
                 footer = when (mode) {
                     com.openminis.app.data.model.ImageEndpointMode.auto ->
                         if (instance.imageEndpointResolved != null) {
                             val resolved = if (instance.imageEndpointResolved ==
                                 com.openminis.app.data.model.ImageEndpointMode.imagesGenerations
                             ) "/v1/images/generations" else "/v1/chat/completions"
-                            "Auto: tries /v1/images/generations first, falls back to /v1/chat/completions. Last successful endpoint: $resolved."
+                            stringResource(
+                                R.string.provider_detail_image_endpoint_auto_footer_resolved,
+                                resolved,
+                            )
                         } else {
-                            "Auto: tries /v1/images/generations first, falls back to /v1/chat/completions. Caches the working endpoint after the first call."
+                            stringResource(R.string.provider_detail_image_endpoint_auto_footer)
                         }
                     com.openminis.app.data.model.ImageEndpointMode.imagesGenerations ->
-                        "Always use /v1/images/generations."
+                        stringResource(R.string.provider_detail_image_endpoint_images_footer)
                     com.openminis.app.data.model.ImageEndpointMode.chatCompletions ->
-                        "Always use /v1/chat/completions (multimodal output)."
+                        stringResource(R.string.provider_detail_image_endpoint_chat_footer)
                 },
             ) {
                 SettingsCardBlock {
@@ -435,7 +413,7 @@ fun ProviderDetailScreen(
                                 }
                             },
                             shape = SegmentedButtonDefaults.itemShape(index = 0, count = 3),
-                        ) { Text("Auto") }
+                        ) { Text(stringResource(R.string.provider_detail_image_endpoint_auto)) }
                         SegmentedButton(
                             selected = mode == com.openminis.app.data.model.ImageEndpointMode.imagesGenerations,
                             onClick = {
@@ -450,7 +428,7 @@ fun ProviderDetailScreen(
                                 }
                             },
                             shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3),
-                        ) { Text("Images API") }
+                        ) { Text(stringResource(R.string.provider_detail_image_endpoint_images_api)) }
                         SegmentedButton(
                             selected = mode == com.openminis.app.data.model.ImageEndpointMode.chatCompletions,
                             onClick = {
@@ -464,7 +442,7 @@ fun ProviderDetailScreen(
                                 }
                             },
                             shape = SegmentedButtonDefaults.itemShape(index = 2, count = 3),
-                        ) { Text("Chat") }
+                        ) { Text(stringResource(R.string.provider_detail_image_endpoint_chat)) }
                     }
                 }
             }
@@ -491,16 +469,22 @@ fun ProviderDetailScreen(
             // Refresh action sits as the first row, mirroring the iOS
             // tap-to-refresh affordance in the section header area.
             SettingsRow(
-                title = if (isRefreshing) "Refreshing…" else "Refresh model list",
+                title = if (isRefreshing) stringResource(R.string.provider_detail_refreshing) else stringResource(R.string.provider_detail_refresh_models_list),
                 onClick = if (isRefreshing) {
                     null
                 } else {
                     {
                         isRefreshing = true
+                        val toastContext = androidx.compose.ui.platform.LocalContext.current
                         scope.launch {
                             try {
-                                providerRepository.refreshModels(instance)
-                                AppLogger.info(TAG, "Refreshed models for ${instance.id}")
+                                val result = providerRepository.refreshModels(instance)
+                                Toast.makeText(
+                                    toastContext,
+                                    refreshResultMessage(result, entries.size, toastContext),
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                                AppLogger.info(TAG, "Refreshed models for ${instance.id}: $result")
                             } finally {
                                 isRefreshing = false
                             }
@@ -509,11 +493,18 @@ fun ProviderDetailScreen(
                 },
                 showChevron = false,
                 trailing = {
-                    Icon(
-                        Icons.Default.Refresh,
-                        contentDescription = stringResource(R.string.provider_detail_refresh_models),
-                        tint = MaterialTheme.colorScheme.primary,
-                    )
+                    if (isRefreshing) {
+                        androidx.compose.material3.CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp,
+                        )
+                    } else {
+                        Icon(
+                            Icons.Default.Refresh,
+                            contentDescription = stringResource(R.string.provider_detail_refresh_models),
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    }
                 },
                 showDivider = entries.isNotEmpty() || true,
             )
@@ -1062,4 +1053,26 @@ private fun ModalityIconsRow(
         if ("audio" in outputModalities) Icon(Icons.Default.VolumeUp, contentDescription = stringResource(R.string.modeldetail_audio_output), tint = outputTint, modifier = size)
         if ("video" in outputModalities) Icon(Icons.Default.MovieCreation, contentDescription = stringResource(R.string.modeldetail_video_output), tint = outputTint, modifier = size)
     }
+}
+
+/** Maps a [ModelRefreshResult] to a user-facing toast message. Uses
+ *  `context.getString` so all strings come from resources (i18n). Added
+ *  [provider-mgmt-opt]. */
+private fun refreshResultMessage(
+    result: com.openminis.app.data.repository.ModelRefreshResult,
+    modelCount: Int,
+    context: android.content.Context,
+): String = when (result) {
+    com.openminis.app.data.repository.ModelRefreshResult.SUCCESS_API ->
+        context.getString(R.string.provider_detail_refresh_success_api, modelCount)
+    com.openminis.app.data.repository.ModelRefreshResult.SUCCESS_OAUTH ->
+        context.getString(R.string.provider_detail_refresh_success_oauth)
+    com.openminis.app.data.repository.ModelRefreshResult.SUCCESS_MODELS_DEV ->
+        context.getString(R.string.provider_detail_refresh_success_models_dev, modelCount)
+    com.openminis.app.data.repository.ModelRefreshResult.NO_KEY ->
+        context.getString(R.string.provider_detail_refresh_no_key)
+    com.openminis.app.data.repository.ModelRefreshResult.PRESERVED ->
+        context.getString(R.string.provider_detail_refresh_preserved)
+    com.openminis.app.data.repository.ModelRefreshResult.FAILURE ->
+        context.getString(R.string.provider_detail_refresh_failed)
 }
