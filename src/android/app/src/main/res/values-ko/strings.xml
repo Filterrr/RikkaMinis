@@ -575,6 +575,8 @@
     <string name="share_provider_json_imported">제공자 \"%1$s\"을(를) 가져왔습니다</string>
     <string name="share_provider_json_import_failed">잘못된 제공자 구성 파일입니다</string>
     <string name="provider_list_api_key">API Key</string>
+    <string name="provider_list_oauth">OAuth</string>
+    <string name="provider_list_no_api_key">API 키 없음</string>
     <string name="provider_list_disabled">비활성화됨</string>
     <string name="provider_list_favorites">즐겨찾기</string>
     <string name="provider_set_favorite">즐겨찾기로 설정</string>
@@ -585,12 +587,23 @@
     <string name="provider_detail_use_a_static_bearer_token_instead_of_the">OAuth 로그인 플로 대신 정적 베어러 토큰을 사용합니다.</string>
     <string name="provider_detail_custom_api_base">사용자 정의 API 주소</string>
     <string name="provider_detail_auto_append_v1">/v1 자동 추가</string>
-    <string name="provider_detail_save_url_settings">URL 설정 저장</string>
     <string name="provider_detail_api_format">API Format</string>
     <string name="provider_detail_chat_completions">Chat Completions</string>
     <string name="provider_detail_responses_api">Responses API</string>
     <string name="provider_detail_azure_openai">Azure OpenAI</string>
     <string name="provider_detail_azure_openai_footer">Azure OpenAI 인증(api-key 헤더)을 사용합니다. ?api-version=… 쿼리를 포함한 전체 Azure 엔드포인트를 위의 사용자 지정 API Base에 붙여넣으세요. 두 API 형식 모두 지원됩니다.</string>
+    <string name="provider_detail_image_generation">이미지 생성</string>
+    <string name="provider_detail_image_endpoint_auto_footer_resolved">/v1/images/generations를 먼저 시도한 후 /v1/chat/completions로 전환합니다. 마지막으로 성공한 엔드포인트: %1$s.</string>
+    <string name="provider_detail_image_endpoint_auto_footer">/v1/images/generations를 먼저 시도한 후 /v1/chat/completions로 전환합니다. 첫 호출 후 작동하는 엔드포인트를 캐시합니다.</string>
+    <string name="provider_detail_image_endpoint_images_footer">항상 /v1/images/generations를 사용합니다.</string>
+    <string name="provider_detail_image_endpoint_chat_footer">항상 /v1/chat/completions를 사용합니다 (멀티모달 출력).</string>
+    <string name="provider_detail_image_endpoint_auto">자동</string>
+    <string name="provider_detail_image_endpoint_images_api">이미지 API</string>
+    <string name="provider_detail_image_endpoint_chat">채팅</string>
+    <string name="provider_detail_api_format_responses_footer">/v1/responses 엔드포인트 형식을 사용합니다. Responses-API 전용 일부 서비스에서 필요합니다.</string>
+    <string name="provider_detail_api_format_chat_footer">표준 /v1/chat/completions 형식. 대부분의 OpenAI 호환 서비스와 호환됩니다.</string>
+    <string name="provider_detail_manual_bearer_footer">사용자 지정 프록시 엔드포인트를 사용할 때 유용합니다.</string>
+
     <string name="provider_detail_status">상태</string>
     <string name="provider_detail_enabled">활성화됨</string>
     <string name="provider_detail_refresh_models">모델 새로 고침</string>
@@ -710,6 +723,14 @@
     <string name="add_models_to_group_add_count">추가 (%1$d)</string>
     <string name="provider_detail_https_api_example_placeholder">https://api.example.com</string>
     <string name="provider_detail_models_count_header">모델 (%1$d)</string>
+    <string name="provider_detail_refresh_success_api">새로고침됨 – 공급자에서 %1$d개 모델을 불러왔습니다.</string>
+    <string name="provider_detail_refresh_success_oauth">새로고침됨, OAuth로 모델 목록을 불러왔습니다.</string>
+    <string name="provider_detail_refresh_success_models_dev">라이브 목록이 없어 models.dev 레지스트리 사용(%1$d개). 결과는 대략적일 수 있습니다.</string>
+    <string name="provider_detail_refresh_no_key">API 키가 설정되지 않음 – 새로고침할 내용 없음.</string>
+    <string name="provider_detail_refresh_preserved">일치하는 models.dev 항목 없음 – 기존 모델 목록 유지.</string>
+    <string name="provider_detail_refresh_failed">모델을 새로고침할 수 없습니다.</string>
+    <string name="provider_detail_refreshing">새로고침 중…</string>
+    <string name="provider_detail_refresh_models_list">모델 목록 새로고침</string>
     <string name="provider_detail_delete_provider_confirm">\"%1$s\" 을(를) 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.</string>
     <string name="provider_detail_delete_model_confirm">\"%1$s\" 을(를) 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.</string>
     <string name="agent_loop_models_model_count_singular">모델 1 개</string>
