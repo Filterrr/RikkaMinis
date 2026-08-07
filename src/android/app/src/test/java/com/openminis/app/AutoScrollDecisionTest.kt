@@ -338,4 +338,97 @@ class AutoScrollDecisionTest {
             decideAutoFollow(ScrollIntent.FORCE_SCROLL, s) is ScrollVerdict.ScrollTo
         )
     }
+
+    // ─── stickToBottom convergence ───
+    //
+    // [bottom-trigger] ChatScreen now maps the active-intent stickToBottom
+    // state machine onto the snapshot's `userScrolledAway` field as
+    // `userScrolledAway = !stickToBottom`. `userScrolledAway` meaning
+    // "follow is disengaged" (the user scroll-away gesture set stick=false)
+    // is therefore the SINGLE COMMON GATE every intent defers to — and since
+    // stickToBottom only ever changes on a real user gesture (NestedScroll
+    // edge trigger, send-when-anchored, FAB, resume), NOT on content
+    // insertion, these tests lock in that NO auto-follow intent may scroll
+    // once the user has left the bottom. Collectively they are the regression
+    // guard for the whole reverseLayout "jump" bug class.
+    private val followInducingIntents = listOf(
+        ScrollIntent.USER_MESSAGE_APPEND,
+        ScrollIntent.STREAM_GLIDE,
+        ScrollIntent.STREAM_END_SETTLE,
+        ScrollIntent.STREAM_END_LATE_REPIN,
+        ScrollIntent.LAYOUT_DRIFT_SNAP,
+        ScrollIntent.RESERVE_CHANGE,
+        ScrollIntent.TRAILING_ROW,
+        ScrollIntent.FORCE_SCROLL,
+    )
+
+    @Test
+    fun allAutoFollowIntents_respectStickToBottom_disengaged() {
+        // Reader in history (stickToBottom=false ⇒ userScrolledAway=true) —
+        // content insertion / stream events must NEVER drag them back.
+        for (intent in followInducingIntents) {
+            val s = baseState().copy(
+                userScrolledAway = true, // == !stickToBottom
+                isNearBottom = true,     // even if a position read says bottom
+                firstVisibleItemIndex = 3,
+                firstVisibleItemScrollOffset = 120,
+            )
+            assertEquals(
+                "intent $intent must Skip when follow is disengaged (stickToBottom=false)",
+                ScrollVerdict.Skip,
+                decideAutoFollow(intent, s),
+            )
+        }
+    }
+
+    @Test
+    fun allAutoFollowIntents_mayFollowWhenSticky() {
+        // Engaged (stickToBottom=true ⇒ userScrolledAway=false) at the bottom
+        // with a negative drift pending — the follow-capable intents must
+        // actually scroll (not be gagged by a stale position gate), proving
+        // the COMMON GATE is the only disengager and it respects stickToBottom.
+        val engagedFollowIntents = listOf(
+            ScrollIntent.USER_MESSAGE_APPEND,
+            ScrollIntent.STREAM_END_SETTLE,
+            ScrollIntent.LAYOUT_DRIFT_SNAP,
+            ScrollIntent.RESERVE_CHANGE,
+            ScrollIntent.TRAILING_ROW,
+            ScrollIntent.FORCE_SCROLL,
+        )
+        for (intent in engagedFollowIntents) {
+            val s = baseState().copy(
+                userScrolledAway = false, // == stickToBottom
+                isNearBottom = true,
+                isStreaming = true,
+                firstVisibleItemIndex = 0,
+                firstVisibleItemScrollOffset = 0,
+                bottomItemOffset = -30,
+            )
+            val v = decideAutoFollow(intent, s)
+            assertTrue(
+                "intent $intent must follow when engaged (stickToBottom=true): got $v",
+                v is ScrollVerdict.ScrollTo,
+            )
+        }
+    }
+
+    @Test
+    fun allAutoFollowIntents_sendGraceDoesNotOverrideDisengaged() {
+        // Even within the send-grace window, a reader who scrolled away must
+        // not be pulled back — stickToBottom is authoritative over send-grace.
+        // USER_SEND is excluded (its own firstIdx gate governs it).
+        for (intent in followInducingIntents) {
+            val s = baseState().copy(
+                userScrolledAway = true,
+                isNearBottom = false,
+                firstVisibleItemIndex = 6,
+                lastUserAppendMs = 49_500L, // within 2s grace
+            )
+            assertEquals(
+                "send-grace must not override disengaged follow for $intent",
+                ScrollVerdict.Skip,
+                decideAutoFollow(intent, s),
+            )
+        }
+    }
 }
