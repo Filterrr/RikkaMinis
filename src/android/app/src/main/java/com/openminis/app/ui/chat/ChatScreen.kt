@@ -1927,6 +1927,18 @@ fun ChatScreen(
                         dispatchChatAction(key)
                     }
                 },
+                // [session-pin-toggle] Pin/unpin from the history drawer. The
+                // drawer is a pure renderer (no scope of its own), so the DB
+                // write runs on the chat screen's scope; drawer stays open so
+                // the row visibly hops to the PINNED section live.
+                onPinSession = { id ->
+                    coroutineScope.launch {
+                        val session = chatRepository.observeSessions()
+                            .first()
+                            .find { it.id == id } ?: return@launch
+                        chatRepository.pinSession(id, session.pinnedAt == null)
+                    }
+                },
             )
         },
     ) {
