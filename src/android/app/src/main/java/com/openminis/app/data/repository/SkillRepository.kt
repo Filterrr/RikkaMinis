@@ -83,6 +83,18 @@ class SkillRepository(private val context: Context) {
         }
     }
 
+    /**
+     * Decoded `requirements.json` of a skill: the runtime deps (apk/pip)
+     * and the mapping of deployment tier → capability description, per
+     * env var. See `loadSkillRequirements()`.
+     */
+    data class SkillRequirements(
+        val apk: List<String> = emptyList(),
+        val pip: List<String> = emptyList(),
+        val env: Map<String, String> = emptyMap(),
+        val tiers: Map<String, String> = emptyMap(),
+    )
+
     data class Skill(
         val id: String = UUID.randomUUID().toString(),
         val name: String,
@@ -1130,17 +1142,49 @@ class SkillRepository(private val context: Context) {
 
     // -- Bundled Skills --
 
+    /**
+     * Install all skills bundled in the APK's `assets/skills/` directory.
+     *
+     * Each subdirectory under `assets/skills/<name>/` is treated as one
+     * skill: `SKILL.md` (required, carries name/description/version in the
+     * YAML frontmatter) is installed into the registry, and every sibling
+     * file (`scripts/`, `*.py`, `*.pkl`, `requirements.json`, …) is
+     * extracted to the skill's sandbox directory. This replaces the old
+     * single hardcoded `skill-creator` bundle so platform skills
+     * (semantic-memory, github-sync-helper, cloudflare-fullright-ops) ship
+     * in the app out of the box.
+     *
+     * Version-gated: a skill already installed at the same-or-newer version
+     * is left untouched (preserves any user edits and skips redundant I/O).
+     */
     private fun installBundledSkills() {
-        val bundledId = "skill-creator"
-        val bundledVersion = "2.0.0"
-        val existing = _skills.value.find { it.id == bundledId }
+        try {
+            val skillDirs = context.assets.list("skills") ?: return
+            for (dirName in skillDirs) {
+                installBundledSkill(dirName)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "installBundledSkills failed: ${e.message}")
+        }
+    }
+
+    private fun installBundledSkill(dirName: String) {
+        val content: String
+        try {
+            content = context.assets.open("skills/$dirName/SKILL.md").bufferedReader().readText()
+        } catch (e: Exception) {
+            Log.w(TAG, "Bundled skill $dirName has no SKILL.md, skipping")
+            return
+        }
+
+        val parsed = parseSkillMd(content) ?: return
+        val bundledVersion = parsed.version.ifBlank { "1.0.0" }
+        val existing = _skills.value.find { it.id == dirName }
 
         // Skip if local version is same or newer
         if (existing != null && existing.version >= bundledVersion) return
 
-        val parsed = parseSkillMd(SKILL_CREATOR_CONTENT) ?: return
         if (existing != null) {
-            // Upgrade existing
             val updated = existing.copy(
                 description = parsed.description,
                 version = bundledVersion,
@@ -1149,20 +1193,97 @@ class SkillRepository(private val context: Context) {
             )
             db.execSQL(
                 "UPDATE skills SET description=?, version=?, updated_at=? WHERE id=?",
-                arrayOf<Any>(updated.description, bundledVersion, updated.updatedAt, bundledId)
+                arrayOf<Any>(updated.description, bundledVersion, updated.updatedAt, dirName)
             )
             writeSkillMd(updated)
-            _skills.value = _skills.value.map { if (it.id == bundledId) updated else it }
-            Log.i(TAG, "Upgraded bundled skill: $bundledId → v$bundledVersion")
+            extractBundledSiblings(dirName)
+            _skills.value = _skills.value.map { if (it.id == dirName) updated else it }
+            Log.i(TAG, "Upgraded bundled skill: $dirName → v$bundledVersion")
         } else {
-            // Fresh install
             add(
                 name = parsed.name,
                 description = parsed.description,
                 body = parsed.body,
+                version = bundledVersion,
                 source = ImportSource.BUNDLED,
             )
-            Log.i(TAG, "Installed bundled skill: $bundledId (v$bundledVersion)")
+            extractBundledSiblings(dirName)
+            Log.i(TAG, "Installed bundled skill: $dirName (v$bundledVersion)")
+        }
+    }
+
+    /**
+     * Recursively copy every sibling file under `assets/skills/<dirName>/`
+     * (scripts/, data/, .py, .pkl, requirements.json, …) into the skill's
+     * sandbox directory. SKILL.md is skipped at the top level because
+     * `add()` / `writeSkillMd()` already wrote it from the parsed body.
+     */
+    private fun extractBundledSiblings(dirName: String) {
+        val destDir = File(skillsDir, dirName)
+        destDir.mkdirs()
+        copyAssetsRecursive("skills/$dirName", destDir, skipTopLevelMd = true)
+    }
+
+    private fun copyAssetsRecursive(assetPath: String, destDir: File, skipTopLevelMd: Boolean) {
+        try {
+            val entries = context.assets.list(assetPath) ?: return
+            for (entry in entries) {
+                if (skipTopLevelMd && entry == "SKILL.md") continue
+                val childAsset = "$assetPath/$entry"
+                val childFile = File(destDir, entry)
+                // A path under assets that lists child entries is a directory.
+                val isDir = try {
+                    val sub = context.assets.list(childAsset)
+                    !(sub == null || sub.isEmpty())
+                } catch (_: Exception) { false }
+                if (isDir) {
+                    childFile.mkdirs()
+                    copyAssetsRecursive(childAsset, childFile, skipTopLevelMd = false)
+                } else {
+                    try {
+                        context.assets.open(childAsset).use { input ->
+                            childFile.outputStream().use { output -> input.copyTo(output) }
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to extract $childAsset: ${e.message}")
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "copyAssetsRecursive($assetPath): ${e.message}")
+        }
+    }
+
+    /**
+     * Load a skill's `requirements.json` (dependency + deployment-tiers
+     * manifest). Returns null when the file is missing or unparseable.
+     *
+     * Consumed by the Android-side integration-status builder to surface
+     * each platform skill's capabilities + the tier each env var unlocks;
+     * also the seed for the future sandbox dependency pre-flight.
+     */
+    fun loadSkillRequirements(skillId: String): SkillRequirements? {
+        return try {
+            val reqFile = File(File(skillsDir, skillId), "requirements.json")
+            if (!reqFile.exists()) return null
+            val json = JSONObject(reqFile.readText())
+            SkillRequirements(
+                apk = json.optJSONArray("apk")?.let { arr ->
+                    (0 until arr.length()).map { arr.getString(it) }
+                } ?: emptyList(),
+                pip = json.optJSONArray("pip")?.let { arr ->
+                    (0 until arr.length()).map { arr.getString(it) }
+                } ?: emptyList(),
+                env = json.optJSONObject("env")?.let { obj ->
+                    obj.keys().asSequence().associate { key -> key to obj.getString(key) }
+                } ?: emptyMap(),
+                tiers = json.optJSONObject("tiers")?.let { obj ->
+                    obj.keys().asSequence().associate { key -> key to obj.getString(key) }
+                } ?: emptyMap(),
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "loadSkillRequirements($skillId): ${e.message}")
+            null
         }
     }
 
@@ -1465,99 +1586,3 @@ class SkillRepository(private val context: Context) {
         }
     }
 }
-
-// Bundled skill-creator content (matches iOS SkillStore.skillCreatorContent)
-private val SKILL_CREATOR_CONTENT = """
----
-name: skill-creator
-version: 2.0.0
-description: Guide for creating effective skills. This skill should be used when users want to create a new skill (or update an existing skill) that extends Claude's capabilities with specialized knowledge, workflows, or tool integrations.
----
-
-# Skill Creator
-
-This skill provides guidance for creating effective skills.
-
-## About Skills
-
-Skills are modular, self-contained packages that extend Claude's capabilities by providing
-specialized knowledge, workflows, and tools. Think of them as "onboarding guides" for specific
-domains or tasks—they transform Claude from a general-purpose agent into a specialized agent
-equipped with procedural knowledge that no model can fully possess.
-
-### What Skills Provide
-
-1. Specialized workflows - Multi-step procedures for specific domains
-2. Tool integrations - Instructions for working with specific file formats or APIs
-3. Domain expertise - Company-specific knowledge, schemas, business logic
-4. Bundled resources - Scripts, references, and assets for complex and repetitive tasks
-
-## Core Principles
-
-### Concise is Key
-
-The context window is a public good. Skills share the context window with everything else Claude needs: system prompt, conversation history, other Skills' metadata, and the actual user request.
-
-**Default assumption: Claude is already very smart.** Only add context Claude doesn't already have. Challenge each piece of information: "Does Claude really need this explanation?" and "Does this paragraph justify its token cost?"
-
-Prefer concise examples over verbose explanations.
-
-### Set Appropriate Degrees of Freedom
-
-Match the level of specificity to the task's fragility and variability:
-
-- **High freedom (text-based instructions)**: Use when multiple approaches are valid.
-- **Medium freedom (pseudocode or scripts with parameters)**: Use when a preferred pattern exists.
-- **Low freedom (specific scripts, few parameters)**: Use when operations are fragile, consistency is critical, or a specific sequence must be followed.
-
-### Anatomy of a Skill
-
-Every skill consists of a required SKILL.md file and optional bundled resources:
-
-```
-skill-name/
-├── SKILL.md (required)
-│   ├── YAML frontmatter (name + description required)
-│   └── Markdown instructions
-└── Bundled Resources (optional)
-    ├── scripts/       - Executable code
-    ├── references/    - Documentation loaded as needed
-    └── assets/        - Files used in output (templates, icons, etc.)
-```
-
-#### SKILL.md Frontmatter
-
-- `name` (required): The skill name
-- `description` (required): What the skill does and when to trigger it. Be comprehensive—this is the primary triggering mechanism.
-
-#### SKILL.md Body
-
-Instructions and guidance, loaded after the skill triggers. Keep under 500 lines; split into reference files when approaching this limit.
-
-### Progressive Disclosure
-
-Skills use three loading levels:
-1. **Metadata** - Always in context (~100 words)
-2. **SKILL.md body** - When skill triggers (<5k words)
-3. **Bundled resources** - As needed (unlimited)
-
-## Skill Creation Process
-
-1. **Understand** the skill with concrete examples from the user
-2. **Plan** reusable contents (scripts, references, assets)
-3. **Create** the SKILL.md with proper frontmatter and instructions
-4. **Test** by using the skill on real tasks
-5. **Iterate** based on actual usage
-
-### Writing the SKILL.md
-
-- Use imperative/infinitive form
-- `description` field should include all "when to use" triggers (body is loaded after triggering)
-- Only add context Claude doesn't already have
-- Prefer concise examples over verbose explanations
-- Keep essential workflow in SKILL.md; move detailed reference material to separate files
-
-### What NOT to Include
-
-Do not create extraneous files: README.md, INSTALLATION_GUIDE.md, CHANGELOG.md, etc. The skill should only contain what an AI agent needs to do the job.
-""".trimIndent()

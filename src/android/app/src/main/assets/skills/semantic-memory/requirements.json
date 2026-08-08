@@ -1,0 +1,12 @@
+{
+  "apk": ["python3", "py3-pip", "py3-numpy"],
+  "pip": ["sentence-transformers"],
+  "env": {
+    "HF_TOKEN": "Tier 2 - 写入经验到 Dataset（Tier 0/1 搜索不需要）"
+  },
+  "tiers": {
+    "0": "搜索已有经验（公开推理 API + 内置向量索引，零配置）",
+    "1": "搜索 + 读取 Dataset（需 HF_TOKEN 只读 scope）",
+    "2": "搜索 + 读写 Dataset（需 HF_TOKEN 读写 scope）"
+  }
+}
