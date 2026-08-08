@@ -9,7 +9,6 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ScrollState
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.IntrinsicSize
@@ -31,6 +30,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpOffset
@@ -66,17 +66,17 @@ fun MinisMenu(
     // in dark, a subtle shade in light) so the menu pops out — same fix already
     // validated on the text-selection toolbar (T-android-text-toolbar-dark-
     // visibility). The dark-mode `border` below adds the extra edge definition.
-    containerColor: Color = if (isSystemInDarkTheme()) MaterialTheme.colorScheme.surfaceContainerHigh else Color.White,
+    // NOTE: these are resolved against the ACTIVE app theme inside the body
+    // (via MaterialTheme.colorScheme), NOT isSystemInDarkTheme() — the system
+    // setting only tracks the OS dark toggle and breaks when the user overrides
+    // the app theme (Light/Dark) in Settings → Appearance. null = auto-resolve.
+    containerColor: Color? = null,
     tonalElevation: Dp = 3.dp,
     // Lower than Material's default 8dp — at 12dp the drop shadow read as
     // much heavier on the light theme than the iOS context menu we're
     // mirroring. 4dp keeps a clear pop-out without the dark halo.
     shadowElevation: Dp = 4.dp,
-    border: BorderStroke? = if (isSystemInDarkTheme()) {
-        BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
-    } else {
-        null
-    },
+    border: BorderStroke? = null,
     minWidth: Dp = 180.dp,
     // T238: when true, anchor the menu's RIGHT edge to the anchor box's
     // right edge instead of Material3 DropdownMenu's default left-anchor
@@ -96,6 +96,22 @@ fun MinisMenu(
     // immediately on expanded=false, so this is an enter-only animation — the
     // dismiss is instant, matching the prior alignEnd behaviour.
     if (!expanded) return
+    // Resolve theme-aware defaults against the ACTIVE app theme (MaterialTheme
+    // colorScheme is driven by MinisTheme(darkTheme=...), i.e. the theme_mode
+    // pref). Detecting "dark" via MaterialTheme.background luminance instead of
+    // isSystemInDarkTheme() keeps these popups following the in-app theme
+    // override rather than the system dark-mode toggle.
+    val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val resolvedContainerColor = containerColor ?: if (isDark) {
+        MaterialTheme.colorScheme.surfaceContainerHigh
+    } else {
+        Color.White
+    }
+    val resolvedBorder = border ?: if (isDark) {
+        BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
+    } else {
+        null
+    }
     val density = LocalDensity.current
     val offsetXPx = with(density) { offset.x.roundToPx() }
     val offsetYPx = with(density) { offset.y.roundToPx() }
@@ -164,10 +180,10 @@ fun MinisMenu(
                     .width(IntrinsicSize.Max)
                     .widthIn(min = minWidth, max = 280.dp),
                 shape = shape,
-                color = containerColor,
+                color = resolvedContainerColor,
                 tonalElevation = tonalElevation,
                 shadowElevation = shadowElevation,
-                border = border,
+                border = resolvedBorder,
             ) {
                 // Mirrors DropdownMenu's content layout: a vertically-scrollable
                 // Column inside the surface (scrollState preserved from the old
@@ -191,7 +207,8 @@ fun MinisMenu(
  */
 @Composable
 fun MinisMenuDivider(modifier: Modifier = Modifier) {
-    val tint = if (isSystemInDarkTheme()) Color.White else Color.Black
+    val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val tint = if (isDark) Color.White else Color.Black
     HorizontalDivider(
         modifier = modifier.padding(horizontal = 14.dp, vertical = 4.dp),
         thickness = 1.dp,

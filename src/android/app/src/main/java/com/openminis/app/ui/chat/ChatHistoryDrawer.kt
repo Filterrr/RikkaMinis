@@ -328,7 +328,13 @@ private fun DrawerSectionHeader(period: DatePeriod) {
             Icon(
                 imageVector = Icons.Default.PushPin,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                // [T-dark-pin-visibility] onSurfaceVariant at 13dp reads as
+                // near-invisible on the near-black ModalDrawerSheet surface
+                // (#0E1514 dark background vs #BEC9C6 variant grey). Use the
+                // theme primary (teal in both palettes) so the pinned-section
+                // indicator keeps clear contrast in dark mode while staying
+                // legible in light mode.
+                tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(13.dp),
             )
             Spacer(modifier = Modifier.width(4.dp))
