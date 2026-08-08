@@ -257,10 +257,13 @@ class TerminalSession(private val context: Context) {
     //  Output control
     // ──────────────────────────────────────────────
 
-    /** Signal UI to wipe the emulator. Sends RIS (ESC c) to the shell. */
+    /** Signal UI to wipe the emulator. Sends Ctrl+L (form feed 0x0C) — the
+     *  shell's native clear-screen shortcut — so the TTY redraws the prompt. */
     fun clearOutput() {
         _clearVersion.value = _clearVersion.value + 1
-        sendRawBytes(byteArrayOf(0x1B, 'c'.code.toByte()))
+        // 0x0C = Ctrl+L. The old ESC c (RIS) got split by readline into
+        // meta-prefix + literal "c", printing a stray "c" on the input line.
+        sendRawBytes(byteArrayOf(0x0C))
     }
 
     // ──────────────────────────────────────────────
@@ -340,7 +343,11 @@ class TerminalSession(private val context: Context) {
         }
 
         // Login + interactive shell.
-        args.add("/bin/sh")
+        // Use bash, not busybox ash: interactive ash exits when it receives
+        // SIGINT while waiting at the prompt (pressing Ctrl+C in the terminal
+        // kills the whole session, exit=130). Bash ignores a pending SIGINT
+        // at the prompt and just clears the input line.
+        args.add("/bin/bash")
         args.add("-l")
         args.add("-i")
         return args
