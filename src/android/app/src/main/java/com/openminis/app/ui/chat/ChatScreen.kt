@@ -1887,6 +1887,11 @@ fun ChatScreen(
                     }
                 },
                 onNewChat = {
+                    // [promote-draft-on-new-chat] Free the draft slot before
+                    // closing the drawer + navigating, so onNewChat opens a
+                    // genuinely fresh draft (the typed text is promoted to a
+                    // real session instead of lost).
+                    viewModel.promoteDraftIfNeeded()
                     // [history-drawer-auto-close] Same ordering: close first,
                     // navigate after the animation settles.
                     historyDrawerScope.launch {
@@ -2197,7 +2202,10 @@ fun ChatScreen(
                     // session switching via the drawer, which never confirms
                     // either; a "stop the task" prompt here would be both
                     // inconsistent and factually wrong.
-                    IconButton(onClick = { onNewChat() }) {
+                    IconButton(onClick = {
+                        viewModel.promoteDraftIfNeeded()
+                        onNewChat()
+                    }) {
                         Icon(Icons.Filled.Edit, contentDescription = stringResource(R.string.chat_menu_new_chat))
                     }
                     // [T-input-history] Always-visible history button (pinned
