@@ -241,6 +241,20 @@ private class MinisTerminalViewClient(
     override fun onEmulatorSet() {}
 
     override fun shouldBackButtonBeMappedToEscape(): Boolean = false
+    override fun shouldEnforceCharBasedInput(): Boolean = false
+    override fun shouldUseCtrlSpaceWorkaround(): Boolean = false
+    override fun isTerminalViewSelected(): Boolean = true
+    override fun copyModeChanged(copyMode: Boolean) {}
+    override fun readShiftKey(): Boolean = false
+    override fun readFnKey(): Boolean = false
+
+    // ── JitPack 0.118.0 log callbacks (no-op) ──
+    override fun logError(tag: String, message: String) {}
+    override fun logWarn(tag: String, message: String) {}
+    override fun logInfo(tag: String, message: String) {}
+    override fun logDebug(tag: String, message: String) {}
+    override fun logVerbose(tag: String, message: String) {}
+    override fun logStackTraceWithMessage(tag: String, message: String, e: java.lang.Exception) {}
 
     @Volatile var clearVersion: Int = 0; private set
     fun bumpClear() { clearVersion++ }
