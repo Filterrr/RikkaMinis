@@ -94,6 +94,10 @@ fun TerminalScreen(
     var ctrlDown by remember { mutableStateOf(false) }
     var altDown by remember { mutableStateOf(false) }
 
+    // Track terminal session state so Compose re-executes the
+    // AndroidView.update block when the Termux PTY finishes booting.
+    val isRunning by terminalSession.state.collectAsStateEffect()
+
     // ── Lifecycle ──────────────────────────────────────────────────────────
     LaunchedEffect(Unit) {
         if (!terminalSession.isRunning) terminalSession.start(sessionId = sessionId)
@@ -129,7 +133,6 @@ fun TerminalScreen(
     val accessoryBarHeightDp = 40.dp
 
     Box(modifier = Modifier.fillMaxSize().background(TerminalBg)) {
-        // ── Main content ───────────────────────────────────────────────────
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -154,8 +157,15 @@ fun TerminalScreen(
                         }
                     },
                     update = { view ->
+                        // [fix: terminal dead-on-entry] This block re-runs when
+                        // `isRunning` flips false→true (reading it here
+                        // subscribes this update to that State), so attachSession
+                        // fires as soon as the Termux PTY finishes booting —
+                        // not just on first composition when termuxSession is
+                        // still null. Without this, the TerminalView stays blank
+                        // and every keypress is dropped (only ✕ worked).
                         val session = terminalSession.termuxSession
-                        if (session != null && view.mTermSession != session) {
+                        if (isRunning && session != null && view.mTermSession != session) {
                             view.attachSession(session)
                         }
                     },
