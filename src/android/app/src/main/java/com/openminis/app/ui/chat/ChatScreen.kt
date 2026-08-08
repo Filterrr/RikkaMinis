@@ -4408,7 +4408,7 @@ fun ChatScreen(
                                     // is text to send; otherwise keep the
                                     // overlay hidden and defer keyboard
                                     // activation to onEnd.
-                                    val hasText = viewModel.inputText.value.isNotBlank()
+                                    val hasText = inputText.isNotBlank()
                                     if (hasText) {
                                         val newProgress = (-totalDy / swipeThresholdPx).coerceIn(0f, 1f)
                                         if (newProgress >= swipeArmFraction && sendSwipeProgress < swipeArmFraction) {
@@ -4427,7 +4427,7 @@ fun ChatScreen(
                                 }
                             }
                             // Drag ended (finger up or pointer cancel).
-                            val hasText = viewModel.inputText.value.isNotBlank()
+                            val hasText = inputText.isNotBlank()
                             val swipedUp = claimed && totalDy < 0 &&
                                 kotlin.math.abs(totalDy) > kotlin.math.abs(totalDx)
                             if (swipedUp && hasText) {
@@ -4798,12 +4798,17 @@ fun ChatScreen(
                         BasicTextField(
                             value = inputFieldValue,
                             onValueChange = { tfv ->
-                                // T217-2: drop IME residue commits in 300ms post-send window.
-                                // finishComposingText (fired by clearFocus on send) makes
-                                // voice/Pinyin IMEs replay their pending candidate through
-                                // onValueChange after we cleared inputText.
+                                // T217-2: drop IME residue commits after send.
+                                // clearFocus triggers finishComposingText, which makes
+                                // voice/Pinyin IMEs replay their composing candidate
+                                // through onValueChange after we cleared inputText.
+                                // Residue always carries a non-null composition region;
+                                // normal user typing arrives with composition==null,
+                                // so we only gate the post-send window when the IME
+                                // is mid-composition — fast typing right after a send
+                                // is never dropped.
                                 val now = SystemClock.elapsedRealtime()
-                                if (now - lastSendTimeMs < 300L && tfv.text.isNotEmpty()) {
+                                if (tfv.composition != null && now - lastSendTimeMs < 500L && tfv.text.isNotEmpty()) {
                                     return@BasicTextField
                                 }
                                 // [T-android-enter-to-send-multiline] Root cause:
