@@ -255,6 +255,7 @@ private class MinisTerminalViewClient(
     override fun logDebug(tag: String, message: String) {}
     override fun logVerbose(tag: String, message: String) {}
     override fun logStackTraceWithMessage(tag: String, message: String, e: java.lang.Exception) {}
+    override fun logStackTrace(tag: String, e: java.lang.Exception) {}
 
     @Volatile var clearVersion: Int = 0; private set
     fun bumpClear() { clearVersion++ }
