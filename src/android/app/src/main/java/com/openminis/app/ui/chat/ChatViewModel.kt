@@ -8361,7 +8361,7 @@ class ChatViewModel(
 
     /**
      * Build the "内置集成" prompt fragment: the list of bundled platform
-     * skills (semantic-memory / github-sync-helper / cloudflare-fullright-ops)
+     * skills (semantic-memory / github-ops / cloudflare-fullright-ops)
      * with their *current* capability tier, derived from each skill's
      * `requirements.json`.
      *
@@ -8373,7 +8373,7 @@ class ChatViewModel(
      */
     private fun buildIntegrationStatus(): String? {
         val repo = skillRepository ?: return null
-        val platformIds = listOf("semantic-memory", "github-sync-helper", "cloudflare-fullright-ops")
+        val platformIds = listOf("semantic-memory", "github-ops", "cloudflare-fullright-ops")
         val rows = mutableListOf<String>()
 
         for (id in platformIds) {
@@ -8648,7 +8648,7 @@ Environment variables:
         // enabled-MCP disclosure, injected right after the skills fragment.
         mcpRepository?.reloadFromDisk()
         val mcpFragment = mcpRepository?.mcpPromptFragment(activeSessionId)
-        // Bundled platform integrations (semantic-memory / github-sync-helper /
+        // Bundled platform integrations (semantic-memory / github-ops /
         // cloudflare-fullright-ops) with their current capability tier. Injected
         // right after the skills fragment so the model knows what it can do with
         // each platform before it tries anything.
