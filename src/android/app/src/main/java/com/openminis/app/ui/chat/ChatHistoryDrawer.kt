@@ -414,8 +414,14 @@ private fun DrawerSessionRow(
             }
         }
 
-        // Pin toggle — inline icon, same pattern as the provider star
-        // toggle (0d968d4): one tap switches state, no menu hop.
+        Text(
+            text = timeText,
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.outline,
+        )
+
+        // Pin toggle — inline icon, same style as the provider's favorite
+        // star. Placed at the right edge of the row, after the timestamp.
         IconButton(
             onClick = onTogglePin,
             modifier = Modifier.size(28.dp),
@@ -430,11 +436,5 @@ private fun DrawerSessionRow(
                 modifier = Modifier.size(16.dp),
             )
         }
-
-        Text(
-            text = timeText,
-            fontSize = 11.sp,
-            color = MaterialTheme.colorScheme.outline,
-        )
     }
 }
