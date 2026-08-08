@@ -8381,11 +8381,22 @@ class ChatViewModel(
             if (!repo.isEnabledForSession(id, activeSessionId)) continue
             val reqs = repo.loadSkillRequirements(id)
             val tier = determineIntegrationTier(reqs)
+            val declaredVars = reqs?.env?.keys ?: emptySet()
+            val foundVars = envVarsSnapshot().keys.intersect(declaredVars)
             // A platform is only "available" if it defines an explicit
             // capability description for its current tier. If the tier key
             // is absent (e.g. no entry for "0"), the platform has no
             // capability at that tier — don't label it "zero-config usable".
             val ops = reqs?.tiers?.get(tier.toString())
+            // Diagnostic: surface exactly which declared env vars were found
+            // in the store at prompt-build time, so a "以为配了却显示需配置"
+            // mismatch is greppable in logcat instead of being a silent guess.
+            AppLogger.info(
+                TAG,
+                "[IntegrationStatus] ${skill.name}: tier=$tier " +
+                    "declared=${declaredVars.sorted()} found=${foundVars.sorted()} " +
+                    "hasCapability=${ops != null} enabled=${repo.isEnabledForSession(id, activeSessionId)}"
+            )
             if (ops == null) {
                 // No capability described for this tier → no free tier.
                 rows.add("| ${skill.name} | 🔒 需配置 | 暂无可用能力（未定义 Tier $tier 能力） |")
