@@ -154,6 +154,15 @@ fun TerminalScreen(
                                 getControlDown = { ctrlDown },
                                 getAltDown = { altDown },
                             ))
+                            // TerminalView must be focusable in touch mode so a
+                            // tap requests focus and opens the soft keyboard.
+                            // Termux's own layout XML sets android:focusable="true";
+                            // in Compose we must do it programmatically.
+                            isFocusable = true
+                            isFocusableInTouchMode = true
+                            // Hand the view to the session so PTY output can
+                            // redraw it (onTextChanged → onScreenUpdated).
+                            terminalSession.attachView(this)
                         }
                     },
                     update = { view ->
@@ -168,6 +177,7 @@ fun TerminalScreen(
                         if (sessionState == TerminalSession.State.RUNNING && session != null && view.mTermSession != session) {
                             view.attachSession(session)
                         }
+                        terminalSession.attachView(view)
                     },
                     modifier = Modifier.fillMaxSize(),
                 )
