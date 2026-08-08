@@ -791,6 +791,9 @@
     <string name="chat_menu_drag_handle">Zum Neuanordnen ziehen</string>
     <string name="chat_menu_open_browser">Browser öffnen</string>
     <string name="chat_menu_browse_chat_files">Chat-Dateien durchsuchen</string>
+    <string name="chat_menu_compact">Verlauf komprimieren</string>
+    <string name="menu_compacting_in_progress">Wird komprimiert…</string>
+    <string name="chat_menu_thinking">Denkstufe</string>
     <string name="chat_menu_enhanced_cache">Erweiterter Cache</string>
     <string name="chat_menu_fast_mode">Schnellmodus aktivieren</string>
     <string name="chat_menu_slash_commands">Slash-Befehle</string>

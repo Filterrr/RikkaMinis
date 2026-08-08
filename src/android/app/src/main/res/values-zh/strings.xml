@@ -987,6 +987,9 @@
     <string name="chat_menu_drag_handle">拖拽以重新排序</string>
     <string name="chat_menu_open_browser">打开浏览器</string>
     <string name="chat_menu_browse_chat_files">浏览对话文件</string>
+    <string name="chat_menu_compact">压缩对话</string>
+    <string name="menu_compacting_in_progress">正在压缩…</string>
+    <string name="chat_menu_thinking">思考强度</string>
     <string name="chat_menu_enhanced_cache">增强缓存</string>
     <string name="chat_menu_fast_mode">启用高速模式</string>
     <string name="chat_menu_slash_commands">斜杠命令</string>

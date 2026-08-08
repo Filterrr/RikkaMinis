@@ -15,9 +15,7 @@ import com.openminis.app.browser.BrowserActionInput
 import com.openminis.app.browser.BrowserTabPool
 import com.openminis.app.data.db.MessageEntity
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Compress
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.Extension
@@ -1306,7 +1304,12 @@ class ChatViewModel(
 
     /** Static catalogue of available slash commands, in display order.
      *  Subtitles are placeholders here — [filteredSlashCommands] always
-     *  rebuilds them with the current localized state. */
+     *  rebuilds them with the current localized state.
+     *
+     *  Compact and Thinking are NOT here anymore: they moved to the
+     *  customizable chat action pool (ChatMenuPrefs.COMPACT / THINKING —
+     *  top-right "..." menu + history-drawer footer) because they are
+     *  frequent session-level operations rather than input aids. */
     internal val availableSlashCommands: List<SlashCommand> = listOf(
         SlashCommand(
             id = "clear",
@@ -1315,21 +1318,9 @@ class ChatViewModel(
             subtitle = "",
         ),
         SlashCommand(
-            id = "compact",
-            icon = Icons.Default.Compress,
-            title = "Compact",
-            subtitle = "",
-        ),
-        SlashCommand(
             id = "memory",
             icon = Icons.Default.Psychology,
             title = "Memory",
-            subtitle = "",
-        ),
-        SlashCommand(
-            id = "thinking",
-            icon = Icons.Default.Lightbulb,
-            title = "Thinking",
             subtitle = "",
         ),
     )
@@ -1389,9 +1380,7 @@ class ChatViewModel(
         _slashMenuSelectedIndex.value = -1
 
         when (cmd.id) {
-            "compact" -> compactAll()
             "memory" -> toggleMemoryEnabled()
-            "thinking" -> toggleThinking()
             "clear" -> _clearChatConfirmRequested.value = true
             else -> AppLogger.info(TAG, "[Slash] unrecognized id=${cmd.id} — no dispatch")
         }
@@ -1428,8 +1417,10 @@ class ChatViewModel(
         )
     }
 
-    /** Toggle thinking between OFF and MEDIUM (matches iOS default toggle semantics). */
-    private fun toggleThinking() {
+    /** Toggle thinking between OFF and MEDIUM (matches iOS default toggle semantics).
+     *  internal: invoked from the chat-action menu/footer entry (menu_thinking),
+     *  no longer from the slash picker (which uses [setThinkingLevel] picker). */
+    internal fun toggleThinking() {
         if (!currentModelSupportsReasoning) {
             appendSystemInfo(
                 text = "The current model does not support deep thinking.",
@@ -1507,6 +1498,19 @@ class ChatViewModel(
         val first = trimmed[0]
         if (first != '/' && first != '／') return false
         val name = trimmed.drop(1).lowercase()
+        // [menu-compact-thinking] Compact/Thinking left the slash ROSTER
+        // (they live in the "..." menu + drawer footer now), but keep the
+        // typed-"/" aliases working so muscle memory doesn't send "/compact"
+        // to the model as a plain message. Anything else routes through the
+        // roster as before.
+        if (name == "compact") {
+            compactAll()
+            return true
+        }
+        if (name == "thinking") {
+            toggleThinking()
+            return true
+        }
         val cmd = availableSlashCommands.firstOrNull { it.title.lowercase() == name }
             ?: return false
         executeSlashCommand(cmd)

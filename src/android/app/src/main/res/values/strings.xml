@@ -1140,6 +1140,9 @@
     <string name="chat_menu_open_terminal">Open Terminal</string>
     <string name="chat_menu_open_browser">Open Browser</string>
     <string name="chat_menu_browse_chat_files">Browse Chat Files</string>
+    <string name="chat_menu_compact">Compress History</string>
+    <string name="menu_compacting_in_progress">Compressing…</string>
+    <string name="chat_menu_thinking">Thinking Level</string>
     <string name="chat_menu_enhanced_cache">Enhanced Cache</string>
     <string name="chat_menu_fast_mode">Enable Fast Mode</string>
     <string name="chat_menu_slash_commands">Slash Commands</string>

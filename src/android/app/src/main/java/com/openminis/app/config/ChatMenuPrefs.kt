@@ -16,7 +16,7 @@ import android.content.SharedPreferences
  *  - ChatScreen reads them to filter + order the rendered menu and footer.
  *  - ChatMenuSettingsScreen writes them from the settings UI.
  *
- * The action pool has ten stable keys: the original eight "action / session"
+ * The action pool has twelve stable keys: the ten "action / session"
  * menu entries plus two footer-only actions (Token Usage, Settings). Each key
  * carries TWO independent flags:
  *  - `visible` — appears in the top-right "..." menu;
@@ -43,6 +43,8 @@ object ChatMenuPrefs {
     const val SESSION_SKILLS = "menu_session_skills"
     const val SESSION_MCPS = "menu_session_mcps"
     const val SESSION_MEMORY = "menu_session_memory"
+    const val COMPACT = "menu_compact"
+    const val THINKING = "menu_thinking"
     const val TOKEN_USAGE = "footer_token_usage"
     const val SETTINGS = "footer_settings"
 
@@ -51,6 +53,8 @@ object ChatMenuPrefs {
         TERMINAL,
         BROWSER,
         CHAT_FILES,
+        COMPACT,
+        THINKING,
         SESSION_SKILLS,
         SESSION_MCPS,
         SESSION_MEMORY,
@@ -95,7 +99,7 @@ object ChatMenuPrefs {
 
     /**
      * Default pinning: Token Usage and Settings start in the footer; the
-     * eight menu entries do not.
+     * other ten entries do not.
      */
     fun defaultPinned(entryKey: String): Boolean =
         entryKey == TOKEN_USAGE || entryKey == SETTINGS
@@ -159,12 +163,12 @@ object ChatMenuPrefs {
         return ordered
     }
 
-    /** Resolve the persisted "..." menu order (all ten entries). */
+    /** Resolve the persisted "..." menu order (all twelve entries). */
     fun resolveOrder(prefs: SharedPreferences): List<String> =
         normalizeOrder(prefs.getString(ORDER_KEY, null), ALL_ENTRIES)
 
     /**
-     * Resolve the persisted footer pin order over all ten entries — unpinned
+     * Resolve the persisted footer pin order over all twelve entries — unpinned
      * entries are INCLUDED so the settings UI can show the full editable
      * list. Render-time filtering happens in [resolvePinnedOrder].
      */
@@ -183,7 +187,7 @@ object ChatMenuPrefs {
 
     /**
      * The order shown in the Chat Menu settings screen's footer section: all
-     * ten entries with SETTINGS anchored last regardless of its pin state.
+     * twelve entries with SETTINGS anchored last regardless of its pin state.
      * Unlike [anchorSettingsLast] (render semantics — an unpinned SETTINGS is
      * dropped), the settings list must always keep the SETTINGS row visible so
      * an unpinned settings button can always be re-pinned from the UI; a row
@@ -207,7 +211,7 @@ object ChatMenuPrefs {
 
     /**
      * Key for the "Input History" top-bar icon (the always-visible list-bullet
-     * button alongside New Chat). Unlike the ten [ALL_ENTRIES] items it does
+     * button alongside New Chat). Unlike the twelve [ALL_ENTRIES] items it does
      * NOT participate in the overflow menu or footer — it has a fixed top-bar
      * slot. The preference only controls whether the icon is rendered at all.
      * Default: true (visible).
