@@ -1,8 +1,11 @@
 package com.openminis.app.sandbox
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import com.termux.terminal.TerminalSessionClient
+import com.termux.view.TerminalView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -89,6 +92,13 @@ class TerminalSession(private val context: Context) {
     internal var termuxSession: com.termux.terminal.TerminalSession? = null
         private set
 
+    /** The TerminalView currently rendering this session (if any). */
+    @Volatile
+    private var attachedView: TerminalView? = null
+
+    /** Marshals output-redraw callbacks from the emulator thread to the UI thread. */
+    private val mainHandler = Handler(Looper.getMainLooper())
+
     /** Track last transcript length so we can emit delta bytes on text changes. */
     @Volatile
     private var lastTranscriptLength: Int = 0
@@ -173,12 +183,28 @@ class TerminalSession(private val context: Context) {
     fun stop() {
         val s = termuxSession
         termuxSession = null
+        attachedView = null
         if (s != null) {
             s.finishIfRunning()
         }
         if (_state.value != State.STOPPED) _state.value = State.STOPPED
         liveSessions.removeAll { it.get() === this || it.get() == null }
         Log.i(TAG, "TerminalSession stopped")
+    }
+
+    /**
+     * Hand the Android TerminalView to this session so output callbacks
+     * ([TermuxSessionClient.onTextChanged]) can redraw it. Called from
+     * [TerminalScreen] both on first composition and whenever the view is
+     * re-attached. If the PTY already booted, attach and size it immediately.
+     */
+    fun attachView(view: TerminalView) {
+        attachedView = view
+        val session = termuxSession
+        if (session != null && view.mTermSession != session) {
+            view.attachSession(session)
+            view.updateSize()
+        }
     }
 
     // ──────────────────────────────────────────────
@@ -353,7 +379,33 @@ class TerminalSession(private val context: Context) {
      * backward-compatible side channels.
      */
     private inner class TermuxSessionClient : TerminalSessionClient {
-        override fun onTextChanged(changedSession: com.termux.terminal.TerminalSession) {}
+        override fun onTextChanged(changedSession: com.termux.terminal.TerminalSession) {
+            // CRITICAL: this callback is what drives the TerminalView to
+            // redraw when the PTY emits bytes. Termux 0.118.0's own
+            // TermuxTerminalSessionClient.onTextChanged() calls
+            // terminalView.onScreenUpdated(). Without forwarding here the view
+            // stays frozen (black, no cursor, no output) — exactly the
+            // "can't operate the terminal" symptom.
+            val view = attachedView
+            if (view != null) {
+                // onTextChanged fires on the emulator thread; redraw on UI.
+                mainHandler.post {
+                    if (attachedView == null || attachedView !== view) return@post
+                    view.onScreenUpdated()
+                    // Keep the PTY size in sync with the real view dimensions
+                    // once the view is laid out (it starts at 80×24 defaults).
+                    val emu = view.mEmulator
+                    if (emu != null) {
+                        val c = emu.mColumns
+                        val r = emu.mRows
+                        if (c != cols || r != rows) {
+                            cols = c; rows = r
+                            termuxSession?.updateSize(c, r)
+                        }
+                    }
+                }
+            }
+        }
         override fun onTitleChanged(changedSession: com.termux.terminal.TerminalSession) {}
         override fun onSessionFinished(
             changedSession: com.termux.terminal.TerminalSession,
