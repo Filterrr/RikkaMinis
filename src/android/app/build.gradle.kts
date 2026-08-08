@@ -151,6 +151,9 @@ android {
             // extractNativeLibs="true" in AndroidManifest.xml.
             useLegacyPackaging = true
         }
+        // Termux terminal-view brings its own libtermux.so;
+        // pickFirst avoids conflict with any other native lib.
+        jniLibs.pickFirsts += "lib/*/libtermux.so"
     }
 
     testOptions {
@@ -273,6 +276,11 @@ dependencies {
     // sender, no network permission). CrashFileSender writes reports to
     // filesDir/logs/ where LogManagementScreen surfaces them.
     implementation("ch.acra:acra-core:5.12.0")
+
+    // Terminal emulation — Termux engine replaces the hand-rolled emulator
+    // for full ANSI/CSI/OSC support, TUI compatibility, and mature text
+    // selection / keyboard handling.
+    implementation("com.termux.termux-app:terminal-view:0.118.0")
 
     // T322: Shizuku SDK — offloads privileged Android system APIs (PackageManager,
     // PermissionManager, ActivityManager, AppOps, IInputManager, …) through a

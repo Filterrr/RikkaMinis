@@ -26,6 +26,13 @@ import kotlin.coroutines.resume
  * packages, and running services all persist between commands within the
  * same session.
  */
+/** Result of a single command executed in the persistent shell. */
+data class CommandResult(
+    val output: String,
+    val exitCode: Int,
+    val truncated: Boolean = false,
+)
+
 class PersistentShell(
     private val context: Context,
     private val sessionId: String,
@@ -38,6 +45,11 @@ class PersistentShell(
         // RSS monitor. Cheap /proc read; every poll catches a mid-run OOM at
         // this granularity and lets ExecutionCoordinator recycle pre-crash.
         private const val PROOT_MEM_POLL_MS = 1_000L
+
+        // Hard cap on command output before truncation to guard against
+        // runaway commands flooding the agent context window and app memory.
+        // Mirrors RikkaHub's WorkspaceShellRunner.MAX_OUTPUT_CHARS.
+        private const val MAX_OUTPUT_CHARS = 128 * 1024
     }
 
     @Volatile
@@ -99,7 +111,8 @@ class PersistentShell(
         val marker: String,
         val output: StringBuilder = StringBuilder(),
         val lineCallback: ((String) -> Unit)?,
-        var onComplete: ((String, Int) -> Unit)? = null,
+        var onComplete: ((String, Int, Boolean) -> Unit)? = null,
+        var truncated: Boolean = false,
     )
 
     /**
@@ -248,9 +261,9 @@ class PersistentShell(
                     val markerIdx = text.indexOf(markerExitPattern)
 
                     if (markerIdx >= 0) {
-                        // Extract output before marker
+                        // Extract output before marker, with truncation guard
                         val beforeMarker = text.substring(0, markerIdx)
-                        cb.output.append(beforeMarker)
+                        cb.appendOutput(beforeMarker)
                         if (cb.lineCallback != null) {
                             feedLines(beforeMarker, cb.lineCallback)
                         }
@@ -259,11 +272,11 @@ class PersistentShell(
                         val afterMarker = text.substring(markerIdx)
                         val exitCode = parseExitCode(afterMarker, cb.marker)
 
-                        // Signal completion
-                        cb.onComplete?.invoke(cb.output.toString(), exitCode)
+                        // Signal completion with truncated flag
+                        cb.onComplete?.invoke(cb.output.toString(), exitCode, cb.truncated)
                         pendingCallback = null
                     } else {
-                        cb.output.append(text)
+                        cb.appendOutput(text)
                         if (cb.lineCallback != null) {
                             feedLines(text, cb.lineCallback)
                         }
@@ -278,7 +291,7 @@ class PersistentShell(
         // Process exited
         val cb = pendingCallback
         if (cb != null) {
-            cb.onComplete?.invoke(cb.output.toString(), -1)
+            cb.onComplete?.invoke(cb.output.toString(), -1, cb.truncated)
             pendingCallback = null
         }
 
@@ -297,6 +310,22 @@ class PersistentShell(
                 // Partial line — still feed it for real-time updates
                 callback(line)
             }
+        }
+    }
+    /** Append text to output, capping at [MAX_OUTPUT_CHARS]. Sets [cb.truncated] when the
+     * limit is exceeded. The process continues reading (to avoid pipe back-pressure), but
+     * no further text is accumulated. */
+    private fun CommandCallback.appendOutput(text: String) {
+        val remaining = MAX_OUTPUT_CHARS - output.length
+        if (remaining <= 0) {
+            truncated = true
+            return
+        }
+        if (text.length > remaining) {
+            output.append(text, 0, remaining)
+            truncated = true
+        } else {
+            output.append(text)
         }
     }
 
@@ -320,7 +349,7 @@ class PersistentShell(
         timeout: Long = 600_000L,
         lineCallback: ((String) -> Unit)? = null,
         memoryMonitor: ((Long) -> Unit)? = null,
-    ): Pair<String, Int> {
+    ): CommandResult {
         ensureStarted()
 
         val writer = stdinWriter
@@ -329,7 +358,22 @@ class PersistentShell(
         }
 
         val marker = UUID.randomUUID().toString().take(8)
-        val wrappedCommand = "$command\necho \"__MINIS_DONE_${marker}_EXIT_\$?__\"\n"
+
+        // [T-termux-terminal-engine] Pass command via heredoc with a quoted
+        // delimiter so the shell performs ZERO expansion on the command body.
+        // Single quotes, double quotes, backslashes, dollar signs, backticks
+        // all pass through literally — no escape nesting, no quoting hell.
+        // Exit code is captured via $? immediately after eval.
+        val heredocDelimiter = "ENDOFMINISCMD_${marker}"
+        val wrappedCommand = buildString {
+            append("eval \"\$(cat <<'$heredocDelimiter'\n")
+            append(command)
+            if (!command.endsWith('\n')) append('\n')
+            append("$heredocDelimiter\n")
+            append(")\"\n")
+            append("RET=\$?\n")
+            append("echo \"__MINIS_DONE_${marker}_EXIT_\${RET}__\"\n")
+        }
 
         return withContext(Dispatchers.IO) {
             // [P2-proot-native-leak] In-flight memory monitor: poll the real
@@ -352,9 +396,9 @@ class PersistentShell(
                         marker = marker,
                         lineCallback = lineCallback,
                     )
-                    cb.onComplete = { output, exitCode ->
+                    cb.onComplete = { output, exitCode, truncated ->
                         if (cont.isActive) {
-                            cont.resume(Pair(output, exitCode))
+                            cont.resume(CommandResult(output, exitCode, truncated))
                         }
                     }
                     pendingCallback = cb

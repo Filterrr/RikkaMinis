@@ -48,7 +48,8 @@ object ExecutionCoordinator {
     data class CommandResult(
         val output: String,
         val exitCode: Int,
-        val durationMs: Long
+        val durationMs: Long,
+        val truncated: Boolean = false,
     )
 
     private lateinit var appContext: Context
@@ -122,7 +123,7 @@ object ExecutionCoordinator {
                 lastInjectedKeys[sessionId] = envVars.keys.toSet()
             }
 
-            val (rawOutput, exitCode) = shell.executeCommand(
+            val result = shell.executeCommand(
                 command = command,
                 timeout = timeout,
                 lineCallback = lineCallback,
@@ -130,10 +131,12 @@ object ExecutionCoordinator {
             )
 
             val durationMs = System.currentTimeMillis() - startTime
-            val sanitized = TerminalSanitizer.sanitize(rawOutput)
+            val sanitized = TerminalSanitizer.sanitize(result.output)
             val truncated = TerminalSanitizer.truncateIfNeeded(sanitized)
-            val output = if (exitCode != 0 && exitCode != 124) {
-                "$truncated\n(exit code: $exitCode)"
+            // Combine host-side and shell-side truncation flags
+            val outputTruncated = result.truncated || truncated != sanitized
+            val output = if (result.exitCode != 0 && result.exitCode != 124) {
+                "$truncated\n(exit code: ${result.exitCode})"
             } else {
                 truncated
             }
@@ -150,7 +153,7 @@ object ExecutionCoordinator {
                 Log.d(TAG, "[$sessionId] PRoot child RSS ${shell.nativeRssMB()}MB — within mark")
             }
 
-            CommandResult(output = output, exitCode = exitCode, durationMs = durationMs)
+            CommandResult(output = output, exitCode = result.exitCode, durationMs = durationMs, truncated = outputTruncated)
         }
     }
 
