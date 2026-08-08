@@ -55,6 +55,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.runtime.withFrameNanos
+import androidx.compose.runtime.Immutable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -271,6 +272,7 @@ import com.openminis.app.ui.browser.BrowserSheet
 import com.openminis.app.ui.theme.ChatColors
 import com.openminis.app.ui.components.MinisTextButton
 
+@Immutable
 internal sealed class FlatChatItem {
     abstract val key: String
     abstract val contentType: String
@@ -290,6 +292,7 @@ internal sealed class FlatChatItem {
      * — the two bubbles read as one. When set, UserMessageBubble adds extra
      * top padding so the pair is clearly two distinct messages.
      */
+    @Immutable
     class UserBubble(
         val message: ChatMessage,
         val precededByUser: Boolean = false,
@@ -306,6 +309,7 @@ internal sealed class FlatChatItem {
         override fun hashCode(): Int = message.hashCode() * 31 + precededByUser.hashCode()
     }
 
+    @Immutable
     data class AssistantHeader(val messageId: String) : FlatChatItem() {
         override val key = "header:$messageId"
         override val contentType = "header"
@@ -322,6 +326,7 @@ internal sealed class FlatChatItem {
      * String *reference* of large bodies) instead, falling back to length
      * if the references differ — never a full char-by-char walk.
      */
+    @Immutable
     class AssistantText(
         val messageId: String,
         val block: AssistantBlock,
@@ -363,6 +368,7 @@ internal sealed class FlatChatItem {
      * by length (cheap proxy for "has content grown") and identity instead
      * of char-by-char.
      */
+    @Immutable
     class AssistantMarkdownBlock(
         val messageId: String,
         val parentBlockId: String,
@@ -400,6 +406,7 @@ internal sealed class FlatChatItem {
         }
     }
 
+    @Immutable
     data class AssistantThinking(
         val messageId: String,
         val block: AssistantBlock,
@@ -424,6 +431,7 @@ internal sealed class FlatChatItem {
         override val contentType = "thinking"
     }
 
+    @Immutable
     data class AssistantToolUse(
         val messageId: String,
         val block: AssistantBlock,
@@ -435,6 +443,7 @@ internal sealed class FlatChatItem {
         override val contentType = "tool"
     }
 
+    @Immutable
     data class AssistantInfo(
         val messageId: String,
         val block: AssistantBlock,
@@ -443,11 +452,13 @@ internal sealed class FlatChatItem {
         override val contentType = "info"
     }
 
+    @Immutable
     data class AssistantTyping(val messageId: String) : FlatChatItem() {
         override val key = "typing:$messageId"
         override val contentType = "typing"
     }
 
+    @Immutable
     data class AssistantError(val messageId: String, val error: String) : FlatChatItem() {
         override val key = "error:$messageId"
         override val contentType = "error"
@@ -456,6 +467,7 @@ internal sealed class FlatChatItem {
     /**
      * See [AssistantText] — same cheap-equals rationale.
      */
+    @Immutable
     class AssistantLegacyContent(
         val messageId: String,
         val content: String,
