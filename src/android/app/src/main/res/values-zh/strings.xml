@@ -649,6 +649,7 @@
     <string name="browser_minis_browsing">Minis 正在浏览</string>
     <string name="chat_typing_indicator">%1$s 正在思考</string>
     <string name="chat_input_placeholder">发消息给 %1$s（@ 提及文件）</string>
+    <string name="chat_attachment_limit">仅附加了前 %1$d 个项目。</string>
     <string name="browser_takeover">接管</string>
     <string name="browser_settings_done">完成</string>
     <string name="browser_settings_user_agent">用户代理</string>
@@ -690,6 +691,9 @@
     <string name="provider_list_no_providers_configured">未配置 AI 服务商</string>
     <string name="provider_list_add_a_provider_to_get_started">添加一个 AI 服务商以开始使用。</string>
     <string name="provider_list_import_provider">Import Provider</string>
+    <string name="provider_import_success">已导入服务商 \"%1$s\"</string>
+    <string name="provider_import_invalid_file">无效的服务商配置文件</string>
+    <string name="provider_import_read_error">读取文件失败</string>
     <string name="share_provider_json_title">检测到服务商配置</string>
     <string name="share_provider_json_message">这个 JSON 文件看起来是导出的服务商配置。你想怎么处理？</string>
     <string name="share_provider_json_import">导入为服务商</string>
@@ -827,6 +831,16 @@
     <string name="model_group_detail_recovery_honor_first">始终优先使用第一个成员</string>
     <string name="model_group_detail_recovery_cooldown">仅冷却跳过</string>
     <string name="model_group_detail_unavailable">不可用</string>
+    <string name="model_group_name_saved">名称已保存</string>
+    <string name="model_group_routing_fallback_footer">按顺序尝试模型。如果某个失败，则推进到下一个。</string>
+    <string name="model_group_routing_loadbalance_footer">将会话分摊到组内的各个模型。</string>
+    <string name="model_group_fallback_default_footer">仅因限流（429）和服务器错误（5xx）回退。</string>
+    <string name="model_group_fallback_always_footer">任何错误都回退，包括网络和认证失败。</string>
+    <string name="model_group_recovery_continue_footer">永久停留在回退成员上（默认）。</string>
+    <string name="model_group_recovery_honorfirst_footer">始终优先尝试第一个成员；被限流的成员会在冷却期结束前被跳过。</string>
+    <string name="model_group_recovery_cooldown_footer">保留当前绑定，但暂时跳过被限流的成员。</string>
+    <string name="model_group_no_models">此组中没有模型。</string>
+    <string name="model_group_model_unavailable">模型已不可用</string>
     <string name="model_group_detail_drag_to_reorder">拖动以重新排序</string>
     <string name="model_group_detail_more_options">更多选项</string>
     <string name="model_group_detail_remove_from_group">从分组中移除</string>
@@ -963,6 +977,8 @@
 
     <!-- T184-chatmenu-i18n — ChatScreen overflow ⋮ menu -->
     <string name="chat_menu_new_chat">新建对话</string>
+    <string name="session_edit_title">编辑会话</string>
+    <string name="session_new_chat_default">新建对话</string>
     <string name="chat_menu_clear_chat">清空对话</string>
     <string name="chat_menu_open_terminal">打开终端</string>
     <string name="appearance_section_chat_menu">聊天菜单</string>
@@ -1409,4 +1425,51 @@
     <string name="backup_snapshot_restore_confirm_text">当前配置将被 %1$s 的快照替换。当前配置会先保存为新快照。</string>
     <string name="backup_snapshot_restore">恢复</string>
     <string name="backup_done_fatal">恢复中途失败——配置只恢复了一部分。可从快照回滚。</string>
+    <!-- 补全缺失翻译（2026-08-08） -->
+    <string name="mcp_form_startup_timeout">启动超时（秒）</string>
+    <string name="mcp_form_startup_timeout_placeholder">默认 60</string>
+    <string name="quicktest_no_audio">未返回任何音频。</string>
+    <string name="quicktest_voice_unsupported">该模型的提供商无法提供此语音方向。</string>
+    <string name="quicktest_audio_play">播放</string>
+    <string name="quicktest_audio_replay">重播</string>
+    <string name="quicktest_transcript_result">听到: "%1$s"\n识别: "%2$s"</string>
+    <string name="quicktest_clip_failed">无法合成本地测试片段。</string>
+    <string name="mcp_export_copy">复制 JSON</string>
+    <string name="mcp_export_share">分享 JSON</string>
+    <string name="mcp_export_copied">配置已复制到剪贴板</string>
+    <string name="soul_count_zero">0 字符</string>
+    <string name="soul_count_chars">%1$d / %2$d 字符</string>
+    <string name="soul_count_words">%1$d / %2$d 词</string>
+    <string name="soul_over_limit_chinese">超出限制：%1$d / %2$d 字符。中文 ≤ %2$d 字符或英文 ≤ %3$d 词。</string>
+    <string name="soul_over_limit_english">超出限制：%1$d / %2$d 词。中文 ≤ %3$d 字符或英文 ≤ %2$d 词。</string>
+    <string name="skills_search_placeholder">搜索技能</string>
+    <string name="skills_search_no_match">没有技能匹配 "%1$s"。</string>
+    <string name="browser_use_tab_busy_timeout">另一个工具正在操作浏览器标签页 %1$d，此请求在 %2$d 秒内未能获得机会。不支持多个工具同时操作同一标签页。请打开新标签页（操作：new_tab）并在那里重试。</string>
+    <string name="filebrowser_more_action">更多</string>
+    <string name="filebrowser_show_hidden">显示隐藏文件</string>
+    <string name="filebrowser_hide_hidden">隐藏隐藏文件</string>
+    <string name="filebrowser_sort_by">排序方式</string>
+    <string name="add_provider_endpoint_anthropic_hint">按原样使用官方 Anthropic 端点。对于第三方 Anthropic 兼容服务（如 Mimo），基础 URL 可能需要路径后缀，如 "/anthropic" — 请查阅提供商文档。URL 会被原样使用并追加 "/v1/messages"。</string>
+    <string name="modeldetail_video_output">视频输出</string>
+    <string name="model_groups_defaults_hint">Primary 用于主要 agent 任务。Sub 用于轻量任务，如标题生成。若未设置 Sub，则继承 Primary。使用组上的 ⋮ 菜单设置这些。</string>
+    <string name="model_group_no_usable_models_badge">无可用模型</string>
+    <string name="voice_system_recognition_online">系统识别（在线）</string>
+    <string name="voice_system_recognition_offline">系统识别（离线）</string>
+    <string name="voice_system_online_subtitle">Android 内置，需要网络</string>
+    <string name="voice_system_offline_subtitle">Android 内置，离线可用</string>
+    <string name="system_permissions_title">系统权限</string>
+    <string name="system_permissions_subtitle">从系统设置授予的 OS 级权限</string>
+    <string name="system_permissions_section_a11y">无障碍服务</string>
+    <string name="system_permissions_a11y_row">Minis 无障碍服务</string>
+    <string name="system_permissions_a11y_enabled">已启用 — android-a11y-cli 已就绪</string>
+    <string name="system_permissions_a11y_disabled">已禁用 — 点击以在系统设置中启用</string>
+    <string name="system_permissions_a11y_footer">android-a11y-cli 需要一个无障碍服务来读取 UI 树、注入手势和监听事件。没有它，AI agent 无法驱动其他应用。请在下一个屏幕中切换 Minis 下的开关。</string>
+    <string name="a11y_service_label">Minis 无障碍</string>
+    <string name="a11y_service_description">让 Minis 读取屏幕上的 UI 结构、执行点击和手势，并代表调用 android-a11y-cli 的 AI agent 接收系统事件。</string>
+    <string name="a11y_service_summary">Minis 的 UI 层自动化后端</string>
+    <string name="back">返回</string>
+    <string name="chat_stream_degraded_notice">性能保护：流式输出时简化渲染</string>
+    <string name="chat_resume_crash_warning">上次应用在流式输出时无响应。再次点击仍要继续。</string>
+    <string name="ok">确定</string>
+    <string name="chat_load_older_messages">↑ 加载更早的消息</string>
 </resources>

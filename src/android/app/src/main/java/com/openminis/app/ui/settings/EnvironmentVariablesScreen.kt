@@ -211,7 +211,7 @@ fun EnvironmentVariablesScreen(
         val entry = entries.find { it.id == deleteEntryId }
         AlertDialog(
             onDismissRequest = { deleteEntryId = null },
-            title = { Text("Delete ${entry?.key ?: "variable"}?") },
+            title = { Text(stringResource(R.string.env_var_delete_confirm_title, entry?.key ?: "variable")) },
             text = { Text(stringResource(R.string.env_var_delete_confirm_text)) },
             confirmButton = {
                 MinisTextButton(onClick = {
