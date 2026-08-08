@@ -1126,4 +1126,21 @@
     <string name="backup_snapshot_restore_confirm_text">현재 설정이 %1$s의 스냅샷으로 대체됩니다. 현재 설정은 먼저 새 스냅샷으로 저장됩니다.</string>
     <string name="backup_snapshot_restore">복원</string>
     <string name="backup_done_fatal">복원이 중간에 실패했습니다 — 설정이 부분적으로만 복원되었습니다. 스냅샷에서 롤백하세요.</string>
+    <!-- 英文兜底 (2026-08-08) -->
+    <string name="model_group_name_saved">Name saved</string>
+    <string name="model_group_routing_fallback_footer">Try models in order. If one fails, advance to the next.</string>
+    <string name="model_group_routing_loadbalance_footer">Distribute sessions across models in the group.</string>
+    <string name="model_group_fallback_default_footer">Fall back on rate limits (429) and server errors (5xx) only.</string>
+    <string name="model_group_fallback_always_footer">Fall back on any error, including network and auth failures.</string>
+    <string name="model_group_recovery_continue_footer">Stay on the fallback member permanently (default).</string>
+    <string name="model_group_recovery_honorfirst_footer">Always try the first member first; rate-limited members are skipped until their cooldown expires.</string>
+    <string name="model_group_recovery_cooldown_footer">Keep the current binding, but temporarily skip rate-limited members.</string>
+    <string name="model_group_no_models">No models in this group.</string>
+    <string name="model_group_model_unavailable">Model no longer available</string>
+    <string name="provider_import_success">Imported provider "%1$s"</string>
+    <string name="provider_import_invalid_file">Invalid provider configuration file</string>
+    <string name="provider_import_read_error">Failed to read file</string>
+    <string name="chat_attachment_limit">Only the first %1$d items were attached.</string>
+    <string name="session_edit_title">Edit Session</string>
+    <string name="session_new_chat_default">New Chat</string>
 </resources>

@@ -789,7 +789,7 @@ fun ChatScreen(
         if (uris.size > ATTACHMENT_PICK_LIMIT) {
             android.widget.Toast.makeText(
                 context,
-                "Only the first $ATTACHMENT_PICK_LIMIT items were attached.",
+                context.getString(R.string.chat_attachment_limit, ATTACHMENT_PICK_LIMIT),
                 android.widget.Toast.LENGTH_SHORT,
             ).show()
         }

@@ -293,7 +293,7 @@ fun MutationResultDialog(
         onDismissRequest = onDismiss,
         text = { Text(msg) },
         confirmButton = {
-            MinisTextButton(onClick = onDismiss) { Text("OK") }
+            MinisTextButton(onClick = onDismiss) { Text(stringResource(R.string.ok)) }
         },
     )
 }
