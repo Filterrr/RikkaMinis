@@ -84,6 +84,12 @@ SHA-256  FC:0C:40:0D:B7:7E:C1:81:A3:35:18:C2:E8:13:6A:AE
 - **记忆页管理改进。** 记忆页文件列表支持「查看更多」展开/收起，文件记忆按文件名排序，过期失败记录自动清理。
 - **设置一致性修复。** 恢复的偏好会刷新实时设置界面，此前缺失/断连的设置键
   现已注册并纳入备份。
+- **三大平台内置集成（GitHub / Cloudflare / Hugging Face）。** 完整能力见下文
+  [内置平台集成](#内置平台集成github--cloudflare--hugging-face)。简单说：三个
+  平台技能（语义记忆、GitHub 自动化、Cloudflare 运维）直接打进 APK，应用启动时
+  根据你是否配置了对应的 API token（`HF_TOKEN` / `GITHUB_TOKEN` / `CF_API_TOKEN`）
+  动态计算每个平台的可用能力等级，并把「内置集成」表格注入系统提示词——智能体
+  一上来就清楚知道每个平台能做什么、不能做什么，不用靠试错猜测。
 
 ### 构建与发布改动
 
@@ -95,6 +101,12 @@ SHA-256  FC:0C:40:0D:B7:7E:C1:81:A3:35:18:C2:E8:13:6A:AE
 - **备份测试在 CI 中运行。** 备份负载测试在 APK 构建之前执行。
 - **iOS 源码已移除。** `src/ios/` 已删除；本树仅限 Android。
 - **自动发布。** 成功构建会把 APK 发布到 `android-latest` release。
+- **平台技能打进资产包。** `semantic-memory`、`github-sync-helper`、
+  `cloudflare-fullright-ops`、`skill-creator` 四个技能（含脚本）随 APK
+  一起打包在 `assets/skills/`，安装即自带，无需手动安装。
+- **集成状态动态注入 system prompt。** 每个内置技能带一份 `requirements.json`
+  声明它需要的环境变量，运行时按「哪些配置了」推导能力等级，把结论作为
+  `[IntegrationStatus]` 日志输出 + 「内置集成」表格注入系统提示词。
 
 
 ### 为什么要从源码构建 proot？
@@ -113,6 +125,67 @@ pty_bridge / crash_handler / jieba 库。
 
 ---
 
+## 内置平台集成（GitHub / Cloudflare / Hugging Face）
+
+> **这一节是本 fork 相对上游最重要、也最容易忽略的结构性改动。**
+> 它把一个"端侧单机智能体"扩展成了**一端脑三平台手**的形态——
+> 智能体不只是在你手机上跑 shell / 浏览器，还能直接操作三个外部平台。
+> 如果只是拿源码构建却不知道这层的存在，你会困惑"为什么 system prompt
+> 里多了一张内置集成表格"。
+
+### 一句话
+
+RikkaMinis 打包了三个**平台技能**——每个技能封装一个外部平台的常用操作，
+通过各自的 `requirements.json` 声明它依赖的环境变量。应用启动时读取你配置的
+token，为每个平台算出一个当前能力等级（零配置 / 只读 / 完整），把结论
+**动态注入 system prompt**，让智能体不用靠试错就知道自己此刻能碰哪些平台。
+
+### 三平台各管什么
+
+| 平台 | 技能 | 能做什么 | 需要的 token | 最低 / 完整等级 |
+|---|---|---|---|---|
+| **GitHub** | `github-sync-helper` | 推送代码、触发 CI、管理 issue/label/release/PR、查状态 | `GITHUB_TOKEN` | Tier 1 只读 · Tier 2 完整 |
+| **Cloudflare** | `cloudflare-fullright-ops` | 列/部署 Worker、管理 KV / R2、查 Zone / DNS | `CF_API_TOKEN` | Tier 1 只读 · Tier 2 完整 |
+| **Hugging Face** | `semantic-memory` | 语义搜索历史经验、读写 HF Dataset、跨设备持久化记忆 | `HF_TOKEN` | Tier 0 零配置搜索 · Tier 2 完整读写 |
+
+配置入口：**Settings → Environments**（或 `minis-config envvars`）。三个 token
+都是标准的个人 API token，各自平台的 dashboard 里创建。**注意：token 直接存储在
+本地（供应用启动时读取判级），不会出现在任何日志里，默认也不纳入备份导出——
+除非你在备份里显式勾选"包含机密"。**
+
+### 能力等级怎么算（`buildIntegrationStatus`）
+
+每个技能自带的 `requirements.json` 声明它需要的环境变量（如 GitHub 需要
+`GITHUB_TOKEN`）。运行时对照应用的环境变量存储，按以下规则推等级：
+
+- **Tier 0 — 零配置**：不需要任何 token 就能干的公共能力（比如语义记忆的
+  公开搜索）。
+- **Tier 1 — 只读**：声明了 env 且**部分**配置了 token（能读公开数据或有限操作）。
+- **Tier 2 — 完整**：声明了 env 且**全部**配置了 token（完整读写 / 部署）。
+
+当前等级会：
+1. 以 **`[IntegrationStatus]` 日志行**输出（`logcat | grep IntegrationStatus`），
+   附带 `declared=` 和 `found=` 的环境变量清单——排查"以为配了却显示需配置"时
+   一眼定位是哪个变量没被读到，不用瞎猜。
+2. 以**「内置集成」表格**注入 system prompt 的可用工具区，智能体据此决定
+   用哪种方式干活。没配置 token 的平台会标成 "🔒 需配置"，绝不虚标为
+   "⚡ 零配置可用"——宁可让它什么都不干，也不能让它误导智能体去操作。
+
+### 三个技能怎么升级
+
+技能本体在仓库 `src/android/app/src/main/assets/skills/<skill>/` 下（SKILL.md
++ requirements.json + 脚本）。改动这些文件 → 提交 → CI 重新打包 → 新 APK 里
+就是新版本技能。本地开发时也可以覆盖 `/var/minis/skills/<skill>/` 直接生效
+（应用优先读 /var/minis/skills，有才回落到 assets 内置版）。
+
+### 隐私注记
+
+平台技能只在你**明确让智能体使用**对应平台时才发起请求（换句话说：你
+在对话里让它"帮我查一下 GitHub issue"）。应用本身不会后台偷偷调用任何平台。
+token 只用于这些显式请求的鉴权。
+
+---
+
 ## 它能做什么
 
 | | |
@@ -122,6 +195,7 @@ pty_bridge / crash_handler / jieba 库。
 | **设备集成** | 日历、联系人、剪贴板、定位、媒体、闹钟、通知等，作为工具开放给智能体。 |
 | **浏览器自动化** | 智能体可以代表你浏览并操作网页。 |
 | **技能与记忆** | 可扩展技能 + 跨会话的持久记忆。完整技能包与记忆文件包含在本地备份中。 |
+| **平台集成** | 内置 GitHub / Cloudflare / Hugging Face 三平台技能，按配置的 token 动态注入可用能力（详见上节）。 |
 | **本地备份与恢复** | 把配置、凭据（可选）、技能、记忆、MCP 服务器与聊天历史（文本、最近 N 天）导出到一个可移植的 JSON 文件。 |
 | **工作区** | 把工作组织到独立上下文中，通过 `minis://workspace/` 访问。 |
 | **原生卸载（offload）** | 繁重或平台特定的工作交给原生代码而非沙箱处理。 |
@@ -201,7 +275,7 @@ git rebase upstream/main               # 不要 merge
 src/android/      Android 应用（Kotlin / Compose）
   app/src/main/jniLibs/arm64-v8a/   原生库（jieba、pty bridge、crash handler）；
                                     libproot.so 是 CI 构建产物，非 vendored
-  app/src/main/assets/              Alpine minirootfs
+  app/src/main/assets/              Alpine minirootfs + 内置平台技能（skills/）
 src/shared/       与上游 iOS 树共享的资源（bashism 规则）
 deps/             proot 源码（子模块）+ build_proot.sh（NDK r28 构建）
 docs/             同步流程与接口规范
