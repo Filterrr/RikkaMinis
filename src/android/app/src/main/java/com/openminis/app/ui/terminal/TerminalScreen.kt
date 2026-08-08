@@ -96,7 +96,7 @@ fun TerminalScreen(
 
     // Track terminal session state so Compose re-executes the
     // AndroidView.update block when the Termux PTY finishes booting.
-    val isRunning by terminalSession.state.collectAsStateEffect()
+    val sessionState by terminalSession.state.collectAsStateEffect()
 
     // ── Lifecycle ──────────────────────────────────────────────────────────
     LaunchedEffect(Unit) {
@@ -165,7 +165,7 @@ fun TerminalScreen(
                         // still null. Without this, the TerminalView stays blank
                         // and every keypress is dropped (only ✕ worked).
                         val session = terminalSession.termuxSession
-                        if (isRunning && session != null && view.mTermSession != session) {
+                        if (sessionState == TerminalSession.State.RUNNING && session != null && view.mTermSession != session) {
                             view.attachSession(session)
                         }
                     },
