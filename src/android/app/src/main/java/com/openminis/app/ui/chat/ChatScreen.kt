@@ -5088,81 +5088,18 @@ fun ChatScreen(
                             .padding(horizontal = 12.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        // Left slot: model picker. Occupies the space the "+"
-                        // and "/" buttons used to hold. Rationale: choosing a
-                        // model is a per-turn decision made WHILE composing, so
-                        // it belongs next to the text you are about to send,
-                        // not in the nav bar where it competed with the session
-                        // title for the same tap target. The nav bar keeps a
-                        // read-only echo of the group name; this is the control.
-                        //
-                        // Same `showModelPicker` state as the nav-bar subtitle,
-                        // so either entry point opens the identical sheet.
-                        Surface(
-                            shape = RoundedCornerShape(16.dp),
-                            color = ChatColors.inputBg,
-                            modifier = Modifier.clickable { showModelPicker = true },
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(3.dp),
-                                modifier = Modifier.padding(start = 8.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
-                            ) {
-                                // Green = a model resolved for this session,
-                                // orange = binding unresolved. Mirrors the dot
-                                // in the nav-bar subtitle so the two entry
-                                // points can't disagree.
-                                Box(
-                                    modifier = Modifier
-                                        .size(6.dp)
-                                        .background(
-                                            if (modelName.isNotEmpty()) Color(0xFF34C759) else Color(0xFFFF9500),
-                                            CircleShape,
-                                        ),
-                                )
-                                Text(
-                                    // Show the CONCRETE model actually being
-                                    // called, not the group name. `modelName`
-                                    // is entry.model.displayName, resolved the
-                                    // same way for both paths: picking a group
-                                    // resolves through its routing/fallback
-                                    // strategy to a concrete entry and sets
-                                    // modelName to that; picking a single model
-                                    // sets it directly. Either way this chip
-                                    // names what the next turn will hit. The
-                                    // group name still lives in the nav-bar
-                                    // subtitle for people who want to see which
-                                    // group is active. Fall back to provider,
-                                    // then to the group name, only when no
-                                    // model has resolved yet (brief window
-                                    // during loadSession, or an unresolved
-                                    // binding).
-                                    text = modelName.ifEmpty {
-                                        providerName.ifEmpty {
-                                            selectedGroupName.ifEmpty {
-                                                val defaultGroupId = providerRepository.defaultPrimaryGroupId
-                                                availableGroups.firstOrNull { it.id == defaultGroupId }?.name
-                                                    ?: stringResource(R.string.model_picker_default_badge)
-                                            }
-                                        }
-                                    },
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = ChatColors.secondaryText,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    // Cap the chip so a long model name can't
-                                    // starve the mic/send cluster on a narrow
-                                    // screen.
-                                    modifier = Modifier.widthIn(max = 150.dp),
-                                )
-                                Icon(
-                                    Icons.Default.KeyboardArrowDown,
-                                    contentDescription = null,
-                                    tint = ChatColors.tertiaryText,
-                                    modifier = Modifier.size(14.dp),
-                                )
-                            }
+                        // Circular model-picker button — matches the + and send
+                        // button style for a unified look. The model name and
+                        // resolved-status dot live in the nav-bar subtitle;
+                        // this is just a compact trigger that can't be
+                        // mistaken for the text field (no long text label).
+                        InputCircleButton(onClick = { showModelPicker = true }) {
+                            Icon(
+                                Icons.Default.KeyboardArrowDown,
+                                contentDescription = stringResource(R.string.model_picker_default_badge),
+                                tint = ChatColors.secondaryText,
+                                modifier = Modifier.size(18.dp),
+                            )
                         }
 
                         // The "/" slash-command circle button used to sit here.
