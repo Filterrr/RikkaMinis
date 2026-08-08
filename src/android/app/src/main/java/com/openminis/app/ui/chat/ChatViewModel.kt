@@ -2825,6 +2825,39 @@ class ChatViewModel(
         }
     }
 
+    /**
+     * [promote-draft-on-new-chat] If the user is on a draft with unsent text
+     * and taps "New Chat", promote the current draft to a real session so the
+     * typed text isn't silently lost. The slot is freed synchronously so the
+     * next `ComposerDraftStore.nextDraftId` returns a fresh id for the new
+     * draft; the DB row + title write happens asynchronously in viewModelScope
+     * (local DB, ~50ms — no need to block the UI).
+     *
+     * Returns true when promotion was triggered — the caller should let
+     * onNewChat proceed (the slot is already freed either way).
+     */
+    fun promoteDraftIfNeeded(): Boolean {
+        if (!isDraft || realSessionId.isNotEmpty()) return false
+        val text = _inputText.value
+        if (text.isBlank()) return false
+
+        // Free the draft slot synchronously — the text is captured in `text`,
+        // and nextDraftId must return a fresh ID before the navigation fires.
+        _inputText.value = ""
+        com.openminis.app.data.ComposerDraftStore.clearDraft(context, sessionId)
+
+        // Create a real session row + set its title asynchronously.
+        viewModelScope.launch {
+            val sid = ensureSession()
+            if (sid.isNotEmpty()) {
+                val title = text.take(50).trim()
+                chatRepository.updateSessionTitleAndCategory(sid, title, null)
+                _sessionTitle.value = title
+            }
+        }
+        return true
+    }
+
     /** Ensure the session exists in the database. Called before first message. */
     private suspend fun ensureSession(): String {
         if (realSessionId.isNotEmpty()) return realSessionId
