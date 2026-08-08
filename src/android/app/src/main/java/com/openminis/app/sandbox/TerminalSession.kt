@@ -372,5 +372,16 @@ class TerminalSession(private val context: Context) {
             session: com.termux.terminal.TerminalSession,
             text: String,
         ) {}
+
+        override fun getTerminalCursorStyle(): Int? = null
+
+        // ── JitPack 0.118.0 log callbacks (no-op — we use our own logging) ──
+        override fun logError(tag: String, message: String) {}
+        override fun logWarn(tag: String, message: String) {}
+        override fun logInfo(tag: String, message: String) {}
+        override fun logDebug(tag: String, message: String) {}
+        override fun logVerbose(tag: String, message: String) {}
+        override fun logStackTraceWithMessage(tag: String, message: String, e: java.lang.Exception) {}
+        override fun logStackTrace(tag: String, e: java.lang.Exception) {}
     }
 }
