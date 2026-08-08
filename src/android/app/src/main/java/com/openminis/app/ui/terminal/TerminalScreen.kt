@@ -150,7 +150,10 @@ fun TerminalScreen(
                         TerminalView(ctx, null).apply {
                             setTextSize(24)          // px; ≈ 12 sp at 2x density
                             setTypeface(jetBrainsMonoTypeface(ctx))
+                            val view = this
                             setTerminalViewClient(MinisTerminalViewClient(
+                                view = view,
+                                context = ctx,
                                 getControlDown = { ctrlDown },
                                 getAltDown = { altDown },
                             ))
@@ -241,10 +244,23 @@ fun TerminalScreen(
 // ── Termux TerminalViewClient with Ctrl/Alt relay ─────────────────────────────
 
 private class MinisTerminalViewClient(
+    private val view: TerminalView,
+    private val context: android.content.Context,
     private val getControlDown: () -> Boolean,
     private val getAltDown: () -> Boolean,
 ) : TerminalViewClient {
-    override fun onSingleTapUp(e: MotionEvent) {}
+    override fun onSingleTapUp(e: MotionEvent) {
+        // Termux's own client calls KeyboardUtils.showSoftKeyboard() here.
+        // Without it the TerminalView never opens the on-screen keyboard, so
+        // the user can see output but cannot type — the "terminal can't be
+        // operated" symptom.
+        view.requestFocus()
+        val imm = context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE)
+                as? android.view.inputmethod.InputMethodManager
+        if (imm != null) {
+            imm.showSoftInput(view, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+        }
+    }
     override fun onLongPress(event: MotionEvent): Boolean = false
     override fun onScale(scale: Float): Float = scale
     override fun onCodePoint(
@@ -261,7 +277,10 @@ private class MinisTerminalViewClient(
     override fun onEmulatorSet() {}
 
     override fun shouldBackButtonBeMappedToEscape(): Boolean = false
-    override fun shouldEnforceCharBasedInput(): Boolean = false
+    // Some keyboards (mainly Samsung stock) misbehave with TYPE_NULL; forcing a
+    // char-based input type makes the soft keyboard reliably produce text.
+    // https://github.com/termux/termux-app/issues/686
+    override fun shouldEnforceCharBasedInput(): Boolean = true
     override fun shouldUseCtrlSpaceWorkaround(): Boolean = false
     override fun isTerminalViewSelected(): Boolean = true
     override fun copyModeChanged(copyMode: Boolean) {}
