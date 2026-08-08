@@ -5095,7 +5095,7 @@ fun ChatScreen(
                         // mistaken for the text field (no long text label).
                         InputCircleButton(onClick = { showModelPicker = true }) {
                             Icon(
-                                Icons.Default.KeyboardArrowDown,
+                                Icons.Default.KeyboardArrowUp,
                                 contentDescription = stringResource(R.string.model_picker_default_badge),
                                 tint = ChatColors.secondaryText,
                                 modifier = Modifier.size(18.dp),
