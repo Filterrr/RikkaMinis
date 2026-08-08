@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -98,6 +99,7 @@ fun ChatHistoryDrawer(
     onNewChat: () -> Unit,
     footerActions: List<ChatActionSpec> = emptyList(),
     onAction: (String) -> Unit = {},
+    onPinSession: (String) -> Unit = {},
 ) {
     val sessions by chatRepository.observeSessions()
         .collectAsState(initial = emptyList())
@@ -221,6 +223,8 @@ fun ChatHistoryDrawer(
                                 selected = session.id == currentSessionId,
                                 onClick = { onSessionClick(session.id) },
                                 onLongClick = { deleteTarget = session },
+                                isPinned = session.pinnedAt != null,
+                                onTogglePin = { onPinSession(session.id) },
                             )
                         }
                     }
@@ -345,6 +349,8 @@ private fun DrawerSessionRow(
     selected: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
+    isPinned: Boolean,
+    onTogglePin: () -> Unit,
 ) {
     val style = remember(session.category) { categoryStyle(session.category) }
     val ctx = LocalContext.current
@@ -406,6 +412,23 @@ private fun DrawerSessionRow(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+        }
+
+        // Pin toggle — inline icon, same pattern as the provider star
+        // toggle (0d968d4): one tap switches state, no menu hop.
+        IconButton(
+            onClick = onTogglePin,
+            modifier = Modifier.size(28.dp),
+        ) {
+            Icon(
+                imageVector = if (isPinned) Icons.Filled.PushPin else Icons.Outlined.PushPin,
+                contentDescription = stringResource(
+                    if (isPinned) R.string.sessionlist_unpin else R.string.sessionlist_pin,
+                ),
+                tint = if (isPinned) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.outlineVariant,
+                modifier = Modifier.size(16.dp),
+            )
         }
 
         Text(
