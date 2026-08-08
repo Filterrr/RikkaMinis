@@ -5,7 +5,6 @@
     "CF_API_TOKEN": "Tier 2 - 部署 Worker、管理 KV/R2"
   },
   "tiers": {
-    "0": "查询 CI 状态（rikka-ci-bridge 公开端点，GET 零认证）",
     "1": "列 Workers、Zones（需 CF_API_TOKEN 只读 scope）",
     "2": "部署 Worker、管理 KV/R2（需 CF_API_TOKEN 读写 scope）"
   }
