@@ -461,7 +461,6 @@ fun ChatScreen(
     val canResume by viewModel.canResume.collectAsState()
     val error by viewModel.error.collectAsState()
     val modelName by viewModel.modelName.collectAsState()
-    val sessionTitle by viewModel.sessionTitle.collectAsState()
     val sessionCategory by viewModel.sessionCategory.collectAsState()
     val attachments by viewModel.attachments.collectAsState()
     val availableGroups by viewModel.availableGroups.collectAsState()
@@ -1946,6 +1945,10 @@ fun ChatScreen(
         containerColor = ChatColors.background,
         contentWindowInsets = WindowInsets(0),
         topBar = {
+            // [perf] Collect topBar-only state here instead of at ChatScreen
+            // scope so a title/model change recomposes only this lambda, not
+            // the whole message list below.
+            val topBarSessionTitle by viewModel.sessionTitle.collectAsState()
             TopAppBar(
                 title = {
                     // RikkaHub-style LEFT-aligned nav title, sitting directly
@@ -2002,8 +2005,8 @@ fun ChatScreen(
                             // loadSessionEntity so the sheet stays closed.
                             val displayTitle = when {
                                 showChatTitlePill
-                                    && sessionTitle.isNotBlank()
-                                    && sessionTitle != "New Chat" -> sessionTitle
+                                    && topBarSessionTitle.isNotBlank()
+                                    && topBarSessionTitle != "New Chat" -> topBarSessionTitle
                                 else -> stringResource(R.string.app_name)
                             }
                             Text(

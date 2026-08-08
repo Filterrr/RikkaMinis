@@ -1,8 +1,10 @@
 package com.openminis.app.ui.chat
 
 import android.net.Uri
+import androidx.compose.runtime.Immutable
 import java.util.UUID
 
+@Immutable
 data class InputAttachment(
     val id: String = UUID.randomUUID().toString(),
     val fileName: String,
