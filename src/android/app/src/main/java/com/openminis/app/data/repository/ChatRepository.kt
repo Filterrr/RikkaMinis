@@ -123,6 +123,23 @@ class ChatRepository(internal val dao: ChatDao) {
         dao.updateSessionBinding(sessionId, binding, modelId)
     }
 
+    /**
+     * Toggle a session's pin state.
+     *
+     * Pinning records [pinnedAt] on the row; the drawer's
+     * [com.openminis.app.ui.sessions.groupSessionsByDate] lifts pinned
+     * sessions into the PINNED section sorted by pin time (newest first),
+     * and [com.openminis.app.ui.chat.ChatHistoryDrawer] keeps pinned
+     * sessions visible even when they have zero messages.
+     *
+     * @param pinned true = pin (timestamp set to now), false = unpin
+     *   (pinned_at reset to null). Idempotent either way.
+     */
+    suspend fun pinSession(sessionId: String, pinned: Boolean) {
+        val now = System.currentTimeMillis()
+        dao.updatePinnedAt(sessionId, if (pinned) now else null, now)
+    }
+
     suspend fun deleteSession(id: String) {
         dao.deleteMessages(id)
         dao.deleteSession(id)
