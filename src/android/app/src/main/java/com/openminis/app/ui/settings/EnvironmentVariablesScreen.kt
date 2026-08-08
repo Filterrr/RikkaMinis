@@ -3,8 +3,12 @@ package com.openminis.app.ui.settings
 import com.openminis.app.R
 import com.openminis.app.ui.components.DialogTextField
 import com.openminis.app.ui.components.MinisTextButton
+import com.openminis.app.ui.components.SettingsRowDivider
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -12,6 +16,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentCopy
@@ -33,13 +39,19 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.res.stringResource
 import com.openminis.app.data.repository.EnvVarRepository
+import com.openminis.app.data.repository.SkillRepository
 import com.openminis.app.deeplink.DeepLinkCoordinator
 
 /**
@@ -53,6 +65,7 @@ import com.openminis.app.deeplink.DeepLinkCoordinator
 @Composable
 fun EnvironmentVariablesScreen(
     envVarRepository: EnvVarRepository,
+    skillRepository: SkillRepository?,
     onBack: () -> Unit,
 ) {
     val entries by envVarRepository.entries.collectAsState()
@@ -74,6 +87,35 @@ fun EnvironmentVariablesScreen(
     }
 
     val privacyEnabled by com.openminis.app.data.EnvVarPrivacyStore.enabled.collectAsState()
+
+    // ── Platform integrations ────────────────────────────────────────
+    // Collect bundled skills that declare env requirements (github/
+    // cloudflare/huggingface). Build a per-skill card: skill name, tier
+    // badge (0/1/2), and one tappable row per required env var.
+    val allSkills: List<SkillRepository.Skill> by if (skillRepository != null) {
+        skillRepository.skills.collectAsState()
+    } else {
+        remember { mutableStateOf(emptyList()) }
+    }
+    val platformSkills = remember(allSkills) {
+        allSkills.filter { it.importSource == SkillRepository.ImportSource.BUNDLED }
+            .mapNotNull { skill ->
+                val req = skillRepository?.loadSkillRequirements(skill.id)
+                    ?: return@mapNotNull null
+                if (req.env.isEmpty()) return@mapNotNull null
+                Triple(skill, req, computePlatformTier(envVarRepository, req))
+            }
+    }
+    val platformVarKeys = remember(platformSkills) {
+        platformSkills.flatMap { (_, req, _) -> req.env.keys }.toSet()
+    }
+    val platformEntries = remember(entries, platformVarKeys) {
+        entries.filter { it.key in platformVarKeys }
+    }
+    // Remaining entries (non-platform) still render in the flat list below.
+    val otherEntries = remember(entries, platformVarKeys) {
+        entries.filter { it.key !in platformVarKeys }
+    }
 
     SettingsScaffold(
         title = stringResource(R.string.env_var_title),
@@ -98,11 +140,39 @@ fun EnvironmentVariablesScreen(
             )
         }
 
+        // Platform integrations: bundled skills with env requirements get a
+        // dedicated card (each env var row tappable → Add/Edit sheet).
+        if (platformSkills.isNotEmpty()) {
+            SettingsSection(
+                header = stringResource(R.string.env_var_platform_header),
+            ) {
+                platformSkills.forEachIndexed { index, (skill, req, tier) ->
+                    PlatformIntegrationCard(
+                        skill = skill,
+                        requirements = req,
+                        tier = tier,
+                        envVarRepository = envVarRepository,
+                        platformEntries = platformEntries,
+                        onAddEnvVar = { key, note ->
+                            prefill = DeepLinkCoordinator.EnvVarCreate(key, "", note)
+                            showAddSheet = true
+                        },
+                        onEditEnvVar = { entryId ->
+                            editEntryId = entryId
+                        },
+                    )
+                    if (index < platformSkills.size - 1) {
+                        SettingsRowDivider()
+                    }
+                }
+            }
+        }
+
         SettingsSection(
-            header = stringResource(R.string.env_var_section_header),
+            header = stringResource(R.string.env_var_other_header),
             footer = stringResource(R.string.env_var_section_footer),
         ) {
-            if (entries.isEmpty()) {
+            if (otherEntries.isEmpty()) {
                 // Centred empty-state message inside the same card so the
                 // section visually owns it (instead of an empty card +
                 // separately-positioned text block).
@@ -125,7 +195,7 @@ fun EnvironmentVariablesScreen(
                     )
                 }
             } else {
-                entries.forEachIndexed { index, entry ->
+                otherEntries.forEachIndexed { index, entry ->
                     val isVisible = entry.key in visibleKeys.value
                     val displayValue = if (isVisible) {
                         envVarRepository.getValue(entry.key) ?: ""
@@ -145,7 +215,7 @@ fun EnvironmentVariablesScreen(
                         title = entry.key,
                         subtitle = subtitleText,
                         showChevron = false,
-                        showDivider = index < entries.size - 1,
+                        showDivider = index < otherEntries.size - 1,
                         onClick = { editEntryId = entry.id },
                         trailing = {
                             Row {
@@ -349,5 +419,151 @@ private fun EnvVarFormSheet(
                 }
             }
         }
+    }
+}
+
+/**
+ * One bundled platform skill inside the "Platform Integrations" card.
+ * Renders the skill name + tier badge on the first line, then one tappable
+ * row per required env var. Each var row:
+ *   - configured → green dot + "Configured" → tap opens the Edit sheet
+ *   - missing    → error dot + "Tap to add <KEY>" → tap opens the Add sheet
+ *     prefilled with the key and a note taken from the skill's
+ *     requirements.json `env` description.
+ */
+@Composable
+private fun PlatformIntegrationCard(
+    skill: SkillRepository.Skill,
+    requirements: SkillRepository.SkillRequirements,
+    tier: Int,
+    envVarRepository: EnvVarRepository,
+    platformEntries: List<EnvVarRepository.EnvVarEntry>,
+    onAddEnvVar: (key: String, note: String) -> Unit,
+    onEditEnvVar: (entryId: String) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        // Skill name + tier badge
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = skill.name,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f),
+            )
+            TierBadge(tier = tier)
+        }
+
+        // One row per required env var
+        requirements.env.forEach { (varKey, varDesc) ->
+            val existingEntry = platformEntries.find {
+                it.key.equals(varKey, ignoreCase = true)
+            }
+            val isConfigured = existingEntry != null &&
+                envVarRepository.getValue(varKey) != null
+
+            val rowColor = if (isConfigured)
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.06f)
+            else
+                MaterialTheme.colorScheme.error.copy(alpha = 0.06f)
+            val dotColor = if (isConfigured)
+                MaterialTheme.colorScheme.primary
+            else
+                MaterialTheme.colorScheme.error
+            val keyColor = if (isConfigured)
+                MaterialTheme.colorScheme.onSurface
+            else
+                MaterialTheme.colorScheme.error
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(rowColor)
+                    .clickable {
+                        if (existingEntry != null) {
+                            onEditEnvVar(existingEntry.id)
+                        } else {
+                            onAddEnvVar(varKey, varDesc)
+                        }
+                    }
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                // Status dot
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .background(dotColor, CircleShape),
+                )
+                // Var key (mono)
+                Text(
+                    text = varKey,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Medium,
+                    ),
+                    color = keyColor,
+                    modifier = Modifier.weight(1f),
+                )
+                // Status text
+                Text(
+                    text = if (isConfigured)
+                        stringResource(R.string.env_var_platform_var_configured)
+                    else
+                        stringResource(R.string.env_var_platform_var_missing, varKey),
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TierBadge(tier: Int) {
+    val (label, color) = when (tier) {
+        2 -> stringResource(R.string.env_var_platform_tier_2) to MaterialTheme.colorScheme.primary
+        1 -> stringResource(R.string.env_var_platform_tier_1) to Color(0xFFD4A017)
+        else -> stringResource(R.string.env_var_platform_tier_0) to MaterialTheme.colorScheme.error
+    }
+    Text(
+        text = label,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.Medium,
+        color = color,
+        modifier = Modifier
+            .background(color.copy(alpha = 0.10f), RoundedCornerShape(4.dp))
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+    )
+}
+
+/**
+ * Compute the platform integration tier from how many of the skill's
+ * required env vars actually have a value in storage.
+ *   - all configured → 2 (Complete)
+ *   - some          → 1 (Read-only)
+ *   - none          → 0 (Needs config)
+ */
+private fun computePlatformTier(
+    envVarRepository: EnvVarRepository,
+    req: SkillRepository.SkillRequirements,
+): Int {
+    val keys = req.env.keys.toList()
+    if (keys.isEmpty()) return 2 // zero-config capability = complete
+    val configured = keys.count { envVarRepository.getValue(it) != null }
+    return when {
+        configured == keys.size -> 2
+        configured > 0 -> 1
+        else -> 0
     }
 }
