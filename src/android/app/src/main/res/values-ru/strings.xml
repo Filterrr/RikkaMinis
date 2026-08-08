@@ -914,6 +914,9 @@
     <string name="chat_menu_drag_handle">Перетащите, чтобы изменить порядок</string>
     <string name="chat_menu_open_browser">Открыть браузер</string>
     <string name="chat_menu_browse_chat_files">Файлы чата</string>
+    <string name="chat_menu_compact">Сжать историю</string>
+    <string name="menu_compacting_in_progress">Сжатие…</string>
+    <string name="chat_menu_thinking">Уровень мышления</string>
     <string name="chat_menu_enhanced_cache">Расширенный кэш</string>
     <string name="chat_menu_fast_mode">Включить быстрый режим</string>
     <string name="chat_menu_slash_commands">Слэш-команды</string>

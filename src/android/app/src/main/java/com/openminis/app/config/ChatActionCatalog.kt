@@ -3,10 +3,12 @@ package com.openminis.app.config
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.DataUsage
+import androidx.compose.material.icons.outlined.Compress
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material.icons.outlined.Keyboard
 import androidx.compose.material.icons.outlined.Language
+import androidx.compose.material.icons.outlined.Lightbulb
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Share
@@ -43,6 +45,8 @@ object ChatActionCatalog {
         ChatActionSpec(ChatMenuPrefs.TERMINAL, R.string.chat_menu_open_terminal, Icons.Outlined.Terminal, true, false),
         ChatActionSpec(ChatMenuPrefs.BROWSER, R.string.chat_menu_open_browser, Icons.Outlined.Language, true, false),
         ChatActionSpec(ChatMenuPrefs.CHAT_FILES, R.string.chat_menu_browse_chat_files, Icons.Outlined.Description, true, false),
+        ChatActionSpec(ChatMenuPrefs.COMPACT, R.string.chat_menu_compact, Icons.Outlined.Compress, true, false),
+        ChatActionSpec(ChatMenuPrefs.THINKING, R.string.chat_menu_thinking, Icons.Outlined.Lightbulb, true, false),
         ChatActionSpec(ChatMenuPrefs.SESSION_SKILLS, R.string.session_skills_title, Icons.Outlined.Build, true, false),
         ChatActionSpec(ChatMenuPrefs.SESSION_MCPS, R.string.session_mcps_title, Icons.Outlined.Extension, true, false),
         ChatActionSpec(ChatMenuPrefs.SESSION_MEMORY, R.string.session_memory_title, Icons.Outlined.Psychology, true, false),

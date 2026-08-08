@@ -791,6 +791,9 @@
     <string name="chat_menu_drag_handle">드래그하여 재정렬</string>
     <string name="chat_menu_open_browser">브라우저 열기</string>
     <string name="chat_menu_browse_chat_files">채팅 파일 탐색</string>
+    <string name="chat_menu_compact">기록 압축</string>
+    <string name="menu_compacting_in_progress">압축 중…</string>
+    <string name="chat_menu_thinking">사고 수준</string>
     <string name="chat_menu_enhanced_cache">향상된 캐시</string>
     <string name="chat_menu_fast_mode">고속 모드 활성화</string>
     <string name="chat_menu_slash_commands">슬래시 명령</string>

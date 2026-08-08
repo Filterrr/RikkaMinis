@@ -791,6 +791,9 @@
     <string name="chat_menu_drag_handle">ドラッグして並べ替え</string>
     <string name="chat_menu_open_browser">ブラウザを開く</string>
     <string name="chat_menu_browse_chat_files">チャットファイルを閲覧</string>
+    <string name="chat_menu_compact">履歴を圧縮</string>
+    <string name="menu_compacting_in_progress">圧縮中…</string>
+    <string name="chat_menu_thinking">思考レベル</string>
     <string name="chat_menu_enhanced_cache">拡張キャッシュ</string>
     <string name="chat_menu_fast_mode">高速モードを有効化</string>
     <string name="chat_menu_slash_commands">スラッシュコマンド</string>

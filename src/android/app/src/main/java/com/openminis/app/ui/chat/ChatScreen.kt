@@ -113,6 +113,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Compress
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Image
@@ -738,6 +739,8 @@ fun ChatScreen(
             ChatMenuPrefs.TERMINAL -> onOpenTerminal()
             ChatMenuPrefs.BROWSER -> viewModel.toggleBrowserSheet()
             ChatMenuPrefs.CHAT_FILES -> onBrowseChatFiles()
+            ChatMenuPrefs.COMPACT -> viewModel.runCompactNow()
+            ChatMenuPrefs.THINKING -> viewModel.toggleThinking()
             ChatMenuPrefs.SESSION_SKILLS -> showSkillsSheet = true
             ChatMenuPrefs.SESSION_MCPS -> showMcpsSheet = true
             ChatMenuPrefs.SESSION_MEMORY -> viewModel.toggleMemorySheet()
@@ -2409,6 +2412,69 @@ fun ChatScreen(
                                                 },
                                                 leadingIcon = {
                                                     Icon(Icons.Default.Description, contentDescription = null)
+                                                },
+                                            )
+                                        }
+                                        ChatMenuPrefs.COMPACT -> {
+                                            // Compress conversation history into a summary.
+                                            // [bottom-toolbar-customizable] Moved out of the slash
+                                            // picker into the customizable chat-action pool — it is
+                                            // a frequent session-level operation, not an input aid.
+                                            // Shows a live "compressing…" hint while a compaction
+                                            // is in progress.
+                                            val compacting = viewModel.isCompacting.collectAsState()
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Column {
+                                                        Text(stringResource(R.string.chat_menu_compact))
+                                                        if (compacting.value) {
+                                                            Text(
+                                                                stringResource(R.string.menu_compacting_in_progress),
+                                                                fontSize = 12.sp,
+                                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                            )
+                                                        }
+                                                    }
+                                                },
+                                                onClick = {
+                                                    showChatMenu = false
+                                                    dispatchChatAction(ChatMenuPrefs.COMPACT)
+                                                },
+                                                enabled = !compacting.value,
+                                                leadingIcon = {
+                                                    Icon(Icons.Default.Compress, contentDescription = null)
+                                                },
+                                            )
+                                        }
+                                        ChatMenuPrefs.THINKING -> {
+                                            // Thinking level (off/low/med/high). Displays the
+                                            // current level as a subtitle so the user sees state
+                                            // before deciding to toggle. Tap toggles OFF<->MEDIUM;
+                                            // the level picker sheet is reachable from the current
+                                            // level badge elsewhere. Unsupported models grey out
+                                            // the row. [bottom-toolbar-customizable] Moved out of
+                                            // the slash picker for the same reason as compact.
+                                            val lev = viewModel.thinkingLevel.collectAsState().value
+                                            val supported = viewModel.currentModelSupportsReasoning
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Column {
+                                                        Text(stringResource(R.string.chat_menu_thinking))
+                                                        Text(
+                                                            if (supported) lev.localizedName(context)
+                                                            else context.getString(R.string.slash_thinking_unsupported),
+                                                            fontSize = 12.sp,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        )
+                                                    }
+                                                },
+                                                onClick = {
+                                                    showChatMenu = false
+                                                    dispatchChatAction(ChatMenuPrefs.THINKING)
+                                                },
+                                                enabled = supported,
+                                                leadingIcon = {
+                                                    Icon(Icons.Default.Lightbulb, contentDescription = null)
                                                 },
                                             )
                                         }
