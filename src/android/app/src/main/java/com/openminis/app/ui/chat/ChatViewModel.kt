@@ -8381,13 +8381,21 @@ class ChatViewModel(
             if (!repo.isEnabledForSession(id, activeSessionId)) continue
             val reqs = repo.loadSkillRequirements(id)
             val tier = determineIntegrationTier(reqs)
+            // A platform is only "available" if it defines an explicit
+            // capability description for its current tier. If the tier key
+            // is absent (e.g. no entry for "0"), the platform has no
+            // capability at that tier — don't label it "zero-config usable".
+            val ops = reqs?.tiers?.get(tier.toString())
+            if (ops == null) {
+                // No capability described for this tier → no free tier.
+                rows.add("| ${skill.name} | 🔒 需配置 | 暂无可用能力（未定义 Tier $tier 能力） |")
+                continue
+            }
             val status = when (tier) {
                 2 -> "✅ 完整"
                 1 -> "⚠️ 只读"
                 else -> "⚡ 零配置"
             }
-            val ops = reqs?.tiers?.get(tier.toString())
-                ?: skill.description.take(80)
             rows.add("| ${skill.name} | $status | $ops |")
         }
 
