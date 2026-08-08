@@ -147,8 +147,8 @@ fun TerminalScreen(
                         TerminalView(ctx, null).apply {
                             setTextSize(24)          // px; ≈ 12 sp at 2x density
                             setTypeface(jetBrainsMonoTypeface(ctx))
-                            backgroundColor = 0xFF000000.toInt()
-                            textColor = 0xFFD4D4D4.toInt()
+                            setBackgroundColor(0xFF000000.toInt())
+                            setTextColor(0xFFD4D4D4.toInt())
                             setTerminalViewClient(MinisTerminalViewClient(
                                 getControlDown = { ctrlDown },
                                 getAltDown = { altDown },
@@ -226,51 +226,27 @@ private class MinisTerminalViewClient(
     private val getControlDown: () -> Boolean,
     private val getAltDown: () -> Boolean,
 ) : TerminalViewClient {
-    // ── Modifier queries read by Termux's IME / key-event processing ──
-
-    override fun readControlKey(): Boolean = getControlDown()
-    override fun readAltKey(): Boolean = getAltDown()
-    override fun readShiftKey(): Boolean = false
-    override fun readFnKey(): Boolean = false
-
-    // ── Touch / gesture ──
-
     override fun onSingleTapUp(e: MotionEvent) {}
     override fun onLongPress(event: MotionEvent): Boolean = false
     override fun onScale(scale: Float): Float = scale
-    override fun onScrollUp(e: MotionEvent, distance: Float): Boolean = false
-    override fun onScrollDown(e: MotionEvent, distance: Float): Boolean = false
-
-    // ── Keyboard ──
-
     override fun onCodePoint(
-        codePoint: Int,
-        ctrlDownFromEvent: Boolean,
-        altDownFromEvent: Boolean,
+        codePoint: Int, ctrlDown: Boolean,
         session: com.termux.terminal.TerminalSession,
     ): Boolean = false
-
     override fun onKeyDown(
         keyCode: Int, event: KeyEvent,
         session: com.termux.terminal.TerminalSession,
     ): Boolean = false
-
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean = false
-
-    // ── Session lifecycle ──
-
-    override fun onTextChanged(session: com.termux.terminal.TerminalSession) {}
-    override fun onTitleChanged(session: com.termux.terminal.TerminalSession) {}
-    override fun onSessionFinished(session: com.termux.terminal.TerminalSession, exitMessage: String) {}
-    override fun onBell(session: com.termux.terminal.TerminalSession) {}
-    override fun onColorsChanged(session: com.termux.terminal.TerminalSession) {}
-    override fun onTerminalCursorStateChanged(state: Int) {}
-    override fun copyModeChanged(copyMode: Boolean) {}
-    override fun getCurrentSession(): com.termux.terminal.TerminalSession? = null
-    override fun getPasteText(session: com.termux.terminal.TerminalSession): String? = null
+    override fun readControlKey(): Boolean = getControlDown()
+    override fun readAltKey(): Boolean = getAltDown()
+    override fun readShiftKey(): Boolean = false
+    override fun readFnKey(): Boolean = false
     override fun shouldEnforceCharBasedInput(): Boolean = false
-
-    // ── Clear-version counter for MinisOpenUrlBroker ──
+    override fun shouldBackButtonBeMappedToEscape(): Boolean = false
+    override fun shouldUseCtrlSpaceWorkaround(): Boolean = false
+    override fun isTerminalViewSelected(): Boolean = true
+    override fun copyModeChanged(copyMode: Boolean) {}
 
     @Volatile var clearVersion: Int = 0; private set
     fun bumpClear() { clearVersion++ }

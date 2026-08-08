@@ -354,7 +354,7 @@ class PersistentShell(
 
         val writer = stdinWriter
         if (writer == null || !isAlive) {
-            return Pair("[Shell not running]", -1)
+            return CommandResult("[Shell not running]", -1)
         }
 
         val marker = UUID.randomUUID().toString().take(8)
@@ -424,7 +424,7 @@ class PersistentShell(
             if (result == null) {
                 // Timeout — cancel pending, but don't kill the shell
                 pendingCallback = null
-                Pair("[Command timed out after ${timeout / 1000}s]", 124)
+                CommandResult("[Command timed out after ${timeout / 1000}s]", 124)
             } else {
                 result
             }
@@ -477,7 +477,7 @@ class PersistentShell(
         process?.destroyForcibly()
         process = null
         pendingCallback?.let {
-            it.onComplete?.invoke(it.output.toString(), -1)
+            it.onComplete?.invoke(it.output.toString(), -1, it.truncated)
         }
         pendingCallback = null
         Log.i(TAG, "Persistent shell stopped")

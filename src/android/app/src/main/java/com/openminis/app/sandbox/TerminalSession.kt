@@ -144,7 +144,7 @@ class TerminalSession(private val context: Context) {
                     filesDir,
                     args.toTypedArray(),
                     env.toTypedArray(),
-                    emptyArray(), // filePaths — not used
+                    intArrayOf(), // processId — tracked by Termux internally
                     client,
                 )
                 session.updateSize(cols, rows)
@@ -353,50 +353,37 @@ class TerminalSession(private val context: Context) {
      * backward-compatible side channels.
      */
     private inner class TermuxSessionClient : TerminalSessionClient {
-        override fun onTextChanged(changedSession: com.termux.terminal.TerminalSession) {
-            try {
-                // Emit delta bytes since last callback.
-                val screen = changedSession.emulator?.mScreen ?: return
-                val transcript = screen.transcriptText ?: ""
-                val transcriptLen = transcript.length
-                if (transcriptLen > lastTranscriptLength) {
-                    val delta = transcript.substring(lastTranscriptLength)
-                    lastTranscriptLength = transcriptLen
-                    if (delta.isNotEmpty()) {
-                        _outputBytes.tryEmit(delta.toByteArray(StandardCharsets.UTF_8))
-                    }
-                }
-            } catch (_: Exception) {
-                // Termux internals may throw on rapid session teardown.
-            }
-        }
-
-        override fun onTitleChanged(changedSession: com.termux.terminal.TerminalSession) {
-            // Not surfaced in the legacy API; TerminalScreen can read directly.
-        }
-
-        override fun onSessionFinished(changedSession: com.termux.terminal.TerminalSession) {
-            Log.i(TAG, "Termux session finished: exitCode=${changedSession.exitStatus}")
-            _outputBytes.tryEmit(
-                "\r\n[Process exited: ${changedSession.exitStatus}]\r\n".toByteArray()
-            )
+        override fun onTextChanged(changedSession: com.termux.terminal.TerminalSession) {}
+        override fun onTitleChanged(changedSession: com.termux.terminal.TerminalSession) {}
+        override fun onSessionFinished(
+            changedSession: com.termux.terminal.TerminalSession,
+            exitMessage: String,
+        ) {
+            Log.i(TAG, "Termux session finished (exit=${changedSession.exitStatus}): $exitMessage")
             _state.value = State.STOPPED
         }
-
-        override fun onClipboardText(requestor: com.termux.terminal.TerminalSession, text: String) {
-            // Handled by Termux TerminalView's built-in clipboard support.
-        }
-
-        override fun onBell(requestor: com.termux.terminal.TerminalSession) {
-            // No action needed — Termux TerminalView handles visual bell.
-        }
-
-        override fun onColorsChanged(changedSession: com.termux.terminal.TerminalSession) {
-            // TerminalScreen theme handles this.
-        }
-
-        override fun onTerminalCursorStateChanged(state: Int) {
-            // Cursor visibility managed by Termux TerminalView.
-        }
+        override fun onBell(session: com.termux.terminal.TerminalSession) {}
+        override fun onColorsChanged(session: com.termux.terminal.TerminalSession) {}
+        override fun onTerminalCursorStateChange(state: Boolean?) {}
+        override fun onEmulatorSet() {}
+        override fun copyModeChanged(copyMode: Boolean) {}
+        override fun onPasteTextFromClipboard(
+            session: com.termux.terminal.TerminalSession,
+        ): CharSequence? = null
+        override fun onCopyTextToClipboard(
+            session: com.termux.terminal.TerminalSession,
+            textToCustomer: CharSequence?,
+            startCol: Int, startRow: Int, endCol: Int, endRow: Int,
+        ) {}
+        override fun writeToClipboard(
+            fromSession: com.termux.terminal.TerminalSession,
+            clip: CharSequence,
+        ) {}
+        override fun writeToClipboardDone(requestor: Any) {}
+        override fun logError(tag: String, message: String) { Log.e("$TAG/$tag", message) }
+        override fun logWarn(tag: String, message: String) { Log.w("$TAG/$tag", message) }
+        override fun logInfo(tag: String, message: String) { Log.i("$TAG/$tag", message) }
+        override fun logDebug(tag: String, message: String) { Log.d("$TAG/$tag", message) }
+        override fun logVerbose(tag: String, message: String) { Log.v("$TAG/$tag", message) }
     }
 }
