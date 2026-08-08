@@ -683,6 +683,10 @@
     <string name="model_group_detail_fallback_trigger">폴백 트리거</string>
     <string name="common_default">기본값</string>
     <string name="model_group_detail_always">항상</string>
+    <string name="model_group_detail_recovery">Recovery Policy</string>
+    <string name="model_group_detail_recovery_continue_last">Continue last</string>
+    <string name="model_group_detail_recovery_honor_first">Always try first member</string>
+    <string name="model_group_detail_recovery_cooldown">Cooldown only</string>
     <string name="model_group_detail_unavailable">사용할 수 없음</string>
     <string name="model_group_detail_drag_to_reorder">끌어서 순서 변경</string>
     <string name="model_group_detail_more_options">더 보기</string>

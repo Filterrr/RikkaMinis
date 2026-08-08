@@ -59,6 +59,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.graphics.Color
 import com.openminis.app.data.model.DEFAULT_GROUP_CONTEXT_LIMIT_TOKENS
 import com.openminis.app.data.model.FallbackStrategy
+import com.openminis.app.data.model.RecoveryStrategy
 import com.openminis.app.data.model.RoutingStrategy
 import com.openminis.app.data.model.ThinkingLevel
 import com.openminis.app.provider.effectiveMaxThinkingLevel
@@ -107,6 +108,7 @@ fun ModelGroupDetailScreen(
     val focusManager = LocalFocusManager.current
     var strategy by remember { mutableStateOf(group.strategy) }
     var fallbackStrategy by remember { mutableStateOf(group.fallbackStrategy) }
+    var recovery by remember { mutableStateOf(group.recovery) }
     // T312: Session Defaults — keyed on group.id so navigating to another
     // group via NavBackStack rebuilds these from the new group's persisted
     // values. Using `group` as key would also re-fire on every config
@@ -240,6 +242,46 @@ fun ModelGroupDetailScreen(
                             onSelect = {
                                 fallbackStrategy = FallbackStrategy.always
                                 providerRepository.updateGroup(group.copy(fallbackStrategy = FallbackStrategy.always))
+                            },
+                            showDivider = false,
+                        )
+                    }
+                }
+            }
+
+            // ── Recovery Policy (T-recovery) ─────────────────────────
+            item {
+                SettingsSection(
+                    header = stringResource(R.string.model_group_detail_recovery),
+                    footer = when (recovery) {
+                        RecoveryStrategy.continueLast -> "Stay on the fallback member permanently (default)."
+                        RecoveryStrategy.honorFirst -> "Always try the first member first; rate-limited members are skipped until their cooldown expires."
+                        RecoveryStrategy.cooldown -> "Keep the current binding, but temporarily skip rate-limited members."
+                    },
+                ) {
+                    SettingsChoiceRow(
+                        title = stringResource(R.string.model_group_detail_recovery_continue_last),
+                        selected = recovery == RecoveryStrategy.continueLast,
+                        onSelect = {
+                            recovery = RecoveryStrategy.continueLast
+                            providerRepository.updateGroup(group.copy(recovery = RecoveryStrategy.continueLast))
+                        },
+                    )
+                    SettingsChoiceRow(
+                        title = stringResource(R.string.model_group_detail_recovery_honor_first),
+                        selected = recovery == RecoveryStrategy.honorFirst,
+                        onSelect = {
+                            recovery = RecoveryStrategy.honorFirst
+                            providerRepository.updateGroup(group.copy(recovery = RecoveryStrategy.honorFirst))
+                        },
+                    )
+                    if (strategy == RoutingStrategy.fallback) {
+                        SettingsChoiceRow(
+                            title = stringResource(R.string.model_group_detail_recovery_cooldown),
+                            selected = recovery == RecoveryStrategy.cooldown,
+                            onSelect = {
+                                recovery = RecoveryStrategy.cooldown
+                                providerRepository.updateGroup(group.copy(recovery = RecoveryStrategy.cooldown))
                             },
                             showDivider = false,
                         )

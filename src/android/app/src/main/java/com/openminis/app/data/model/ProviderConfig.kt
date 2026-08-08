@@ -111,6 +111,27 @@ enum class FallbackStrategy {
     always,
 }
 
+/**
+ * Controls what happens after a fallback succeeds: does the session stay
+ * on the fallback member, or try to return to the preferred member?
+ * - continueLast: stay on the fallback member permanently (default, existing
+ *   behaviour — the fallback binding is persisted so re-entering the session
+ *   starts from the fallback member).
+ * - honorFirst: every re-resolution starts from memberEntryIds[0] (the
+ *   preferred member). Rate-limited members get a temporary in-memory
+ *   cooldown (60 s default) and are skipped until it expires; the fallback
+ *   binding is NOT persisted so the next agent loop naturally returns to the
+ *   preferred member once its rate-limit window cools down.
+ * - cooldown: like honorFirst but without the preferred-member bias — only
+ *   rate-limited members are temporarily excluded, no re-ordering.
+ */
+@Serializable
+enum class RecoveryStrategy {
+    continueLast,
+    honorFirst,
+    cooldown,
+}
+
 @Serializable
 data class ModelGroup(
     val id: String = UUID.randomUUID().toString(),
@@ -130,6 +151,14 @@ data class ModelGroup(
     // restores the previous value instead of snapping back to 128K. Default
     // null lets old JSON deserialize cleanly (kotlinx.serialization).
     var lastContextLimitTokens: Int? = null,
+    // T-recovery: post-fallback recovery behaviour. continueLast = stay on
+    // fallback member (existing behaviour); honorFirst = re-resolve from
+    // memberEntryIds[0] on every agent loop, skip rate-limited members via
+    // in-memory cooldown; cooldown = skip rate-limited members only, no
+    // preferred-member bias. Default continueLast matches the pre-recovery
+    // behaviour — old persisted JSON (which lacks this key) round-trips
+    // cleanly via kotlinx.serialization's declared-default fallback.
+    var recovery: RecoveryStrategy = RecoveryStrategy.continueLast,
 )
 
 /**

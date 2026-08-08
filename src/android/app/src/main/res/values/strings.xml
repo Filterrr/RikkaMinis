@@ -966,6 +966,10 @@
     <string name="model_group_detail_fallback_trigger">Fallback Trigger</string>
     <string name="common_default">Default</string>
     <string name="model_group_detail_always">Always</string>
+    <string name="model_group_detail_recovery">Recovery Policy</string>
+    <string name="model_group_detail_recovery_continue_last">Stay on fallback (Continue last)</string>
+    <string name="model_group_detail_recovery_honor_first">Always try first member</string>
+    <string name="model_group_detail_recovery_cooldown">Cooldown only</string>
     <string name="model_group_detail_unavailable">Unavailable</string>
     <string name="model_group_detail_drag_to_reorder">Drag to reorder</string>
     <string name="model_group_detail_more_options">More options</string>
