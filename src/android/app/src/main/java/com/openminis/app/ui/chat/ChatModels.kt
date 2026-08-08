@@ -14,6 +14,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.runtime.Immutable
 import com.openminis.app.agent.Level
 import com.openminis.app.agent.ToolLoopDetector
 import com.openminis.app.browser.BrowserActionInput
@@ -95,12 +96,14 @@ import org.json.JSONObject
  * the side-channel is drained back into the canonical message and the
  * map entry is removed.
  */
+@Immutable
 data class StreamingDelta(
     val content: String,
     val toolBlocks: List<AssistantBlock>,
     val isAwaitingModelResponse: Boolean,
 )
 
+@Immutable
 data class ChatMessage(
     val id: String,
     val role: String,
@@ -199,6 +202,7 @@ data class ChatMessage(
 }
 
 /** A user prompt queued while the agent loop is still running. Mirrors iOS QueuedPrompt. */
+@Immutable
 data class QueuedPrompt(
     val id: String,
     val text: String,
@@ -250,6 +254,7 @@ data class SlashCommand(
     val isMcp: Boolean = false,
 )
 
+@Immutable
 data class AssistantBlock(
     val id: String,
     val kind: String,       // "text", "tool_use", "thinking", "info"
