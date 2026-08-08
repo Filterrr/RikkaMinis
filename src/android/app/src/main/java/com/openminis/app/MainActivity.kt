@@ -345,8 +345,20 @@ class MainActivity : ComponentActivity() {
                 enableEdgeToEdge(statusBarStyle = barStyle, navigationBarStyle = barStyle)
             }
 
+            // [T3-theme-switch-nav-jump] Hoist the NavHost controller OUT of the
+            // MinisTheme content lambda. Switching theme_mode (Settings →
+            // Appearance) changes `darkTheme`, so MinisTheme re-invokes its
+            // content lambda with a different colorScheme argument. A
+            // rememberNavController() declared INSIDE that lambda sits inside
+            // the theme subtree: on a full subtree recomposition after theme
+            // change its remember slot can be invalidated, rebuilding the
+            // NavHost from startDestination (always a chat route) — which
+            // manifested as "tapping Light/Dark yanks the user back into a
+            // chat". Hoisted to the setContent root it survives every theme
+            // recomposition, so the back stack is untouched.
+            val navController = rememberNavController().also { this.navController = it }
+
             MinisTheme(darkTheme = darkTheme, fontScale = fontScale) {
-                val navController = rememberNavController().also { this.navController = it }
 
                 // T166: drive `SessionActivityTracker.setPresent` /
                 // `setAbsent` from the nav back-stack so the foreground
