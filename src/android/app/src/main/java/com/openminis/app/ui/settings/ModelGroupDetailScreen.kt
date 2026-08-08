@@ -106,6 +106,7 @@ fun ModelGroupDetailScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
+    val nameSavedMsg = stringResource(R.string.model_group_name_saved)
     var strategy by remember { mutableStateOf(group.strategy) }
     var fallbackStrategy by remember { mutableStateOf(group.fallbackStrategy) }
     var recovery by remember { mutableStateOf(group.recovery) }
@@ -180,7 +181,7 @@ fun ModelGroupDetailScreen(
                                 if (!focusState.isFocused && name.isNotBlank() && name != group.name) {
                                     providerRepository.updateGroup(group.copy(name = name))
                                     coroutineScope.launch {
-                                        snackbarHostState.showSnackbar(stringResource(R.string.model_group_name_saved))
+                                        snackbarHostState.showSnackbar(nameSavedMsg)
                                     }
                                 }
                             },
