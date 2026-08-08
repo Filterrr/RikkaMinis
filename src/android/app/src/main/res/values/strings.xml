@@ -446,6 +446,7 @@
     <string name="chat_typing_indicator">%1$s is thinking</string>
     <!-- Composer placeholder. %1$s is the Soul-customized assistant name (default "Minis"). The parenthetical is an inline hint reminding the user that typing '@' opens the file-mention picker. T-android-placeholder-single-line collapses the prior two-row (title + hint) layout into a single line, matching iOS 19e1d61f. -->
     <string name="chat_input_placeholder">Message %1$s (@ to mention files)</string>
+    <string name="chat_attachment_limit">Only the first %1$d items were attached.</string>
     <string name="browser_takeover">Takeover</string>
     <string name="browser_settings_done">Done</string>
     <string name="browser_settings_user_agent">User Agent</string>
@@ -566,6 +567,14 @@
     <string name="env_var_field_note_placeholder">Optional note</string>
     <string name="env_var_error_invalid_key">Must start with a letter, use only letters/numbers/underscores</string>
     <string name="env_var_error_duplicate">A variable with this name already exists</string>
+    <string name="env_var_platform_header">Platform Integrations</string>
+    <string name="env_var_platform_tier_2">Complete</string>
+    <string name="env_var_platform_tier_1">Read-only</string>
+    <string name="env_var_platform_tier_0">Needs config</string>
+    <string name="env_var_platform_var_configured">Configured</string>
+    <string name="env_var_platform_var_missing">Tap to add %1$s</string>
+    <string name="env_var_platform_var_add_title">Add %1$s</string>
+    <string name="env_var_other_header">Other Environment Variables</string>
     <string name="log_title">Logs</string>
     <string name="log_share_all">Share All</string>
     <string name="log_section_logging">Logging</string>
@@ -827,6 +836,9 @@
     <string name="provider_list_no_providers_configured">No providers configured</string>
     <string name="provider_list_add_a_provider_to_get_started">Add a provider to get started.</string>
     <string name="provider_list_import_provider">Import Provider</string>
+    <string name="provider_import_success">Imported provider \"%1$s\"</string>
+    <string name="provider_import_invalid_file">Invalid provider configuration file</string>
+    <string name="provider_import_read_error">Failed to read file</string>
     <!-- [T-android-json-open-provider-import-prompt] Shown when a JSON opened/shared into Minis looks like a Provider export. -->
     <string name="share_provider_json_title">Provider configuration detected</string>
     <string name="share_provider_json_message">This JSON file looks like an exported provider. What would you like to do?</string>
@@ -971,6 +983,16 @@
     <string name="model_group_detail_recovery_honor_first">Always try first member</string>
     <string name="model_group_detail_recovery_cooldown">Cooldown only</string>
     <string name="model_group_detail_unavailable">Unavailable</string>
+    <string name="model_group_name_saved">Name saved</string>
+    <string name="model_group_routing_fallback_footer">Try models in order. If one fails, advance to the next.</string>
+    <string name="model_group_routing_loadbalance_footer">Distribute sessions across models in the group.</string>
+    <string name="model_group_fallback_default_footer">Fall back on rate limits (429) and server errors (5xx) only.</string>
+    <string name="model_group_fallback_always_footer">Fall back on any error, including network and auth failures.</string>
+    <string name="model_group_recovery_continue_footer">Stay on the fallback member permanently (default).</string>
+    <string name="model_group_recovery_honorfirst_footer">Always try the first member first; rate-limited members are skipped until their cooldown expires.</string>
+    <string name="model_group_recovery_cooldown_footer">Keep the current binding, but temporarily skip rate-limited members.</string>
+    <string name="model_group_no_models">No models in this group.</string>
+    <string name="model_group_model_unavailable">Model no longer available</string>
     <string name="model_group_detail_drag_to_reorder">Drag to reorder</string>
     <string name="model_group_detail_more_options">More options</string>
     <string name="model_group_detail_remove_from_group">Remove from group</string>
@@ -1120,10 +1142,15 @@
 
     <!-- T184-chatmenu-i18n — ChatScreen overflow ⋮ menu, longpress, attach -->
     <string name="chat_menu_new_chat">New Chat</string>
+    <string name="session_edit_title">Edit Session</string>
+    <string name="session_new_chat_default">New Chat</string>
     <string name="chat_menu_clear_chat">Clear Chat</string>
     <string name="chat_menu_open_terminal">Open Terminal</string>
     <string name="chat_menu_open_browser">Open Browser</string>
     <string name="chat_menu_browse_chat_files">Browse Chat Files</string>
+    <string name="chat_menu_compact">Compress History</string>
+    <string name="menu_compacting_in_progress">Compressing…</string>
+    <string name="chat_menu_thinking">Thinking Level</string>
     <string name="chat_menu_enhanced_cache">Enhanced Cache</string>
     <string name="chat_menu_fast_mode">Enable Fast Mode</string>
     <string name="chat_menu_slash_commands">Slash Commands</string>

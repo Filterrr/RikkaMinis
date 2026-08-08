@@ -80,23 +80,17 @@ class BackgroundTaskNotifier(
      * buzz as a completion cue.
      */
     fun notifyTaskCompleted(sessionId: String, isError: Boolean = false) {
-        if (!backgroundSettings.taskNotificationsEnabled.value) return
         val foreground = isAppForeground()
 
         scope.launch {
             try {
-                if (!foreground) {
-                    val session = chatRepository.getSession(sessionId)
-                    val rawTitle = session?.title?.takeIf { it.isNotBlank() }
-                        ?: context.getString(R.string.notif_task_completed_default_title)
-                    val title = if (isError) "❌ $rawTitle" else rawTitle
-                    val body = if (isError) {
-                        context.getString(R.string.notif_task_failed_body)
-                    } else {
-                        context.getString(R.string.notif_task_completed_body)
-                    }
-                    postNotification(sessionId, title, body)
-                } else {
+                // Foreground: surface completion even when notifications
+                // are disabled — a chime + direct hardware buzz as a
+                // "task done" cue while the user watches the chat. Not
+                // gated on taskNotificationsEnabled (that switch governs
+                // the background tray notification only), so the user
+                // always gets the haptic/sound feedback they asked for.
+                if (foreground) {
                     // [feat-completion-sound] Foreground: play a short
                     // chime alongside vibration so the user notices
                     // completion even when the phone is on a desk or
@@ -104,20 +98,28 @@ class BackgroundTaskNotifier(
                     // USAGE_NOTIFICATION respects system DND/silent
                     // mode automatically.
                     playCompletionSound()
+                    // [feat-vibrate-task-complete] Direct haptic on
+                    // completion. Driving the hardware vibrator directly
+                    // with VibrationEffect is NOT subject to MIUI
+                    // notification-channel suppression on Xiaomi ROMs.
+                    vibrateCompletion()
+                    return@launch
                 }
-                // [feat-vibrate-task-complete] Direct haptic on completion,
-                // regardless of foreground/background. When the app is in
-                // the foreground the user is already watching the chat, so
-                // no tray notification is posted — but they still get the
-                // physical buzz as a "task done" cue (useful when they've
-                // glanced away, e.g. with headphones on). MIUI suppresses
-                // notification-channel vibration (dumpsys shows
-                // VibratorManager marking every Notification-usage vibration
-                // "ignored_ringtone_or_notify_miui"), so riding the
-                // notification's vibration pattern is unreliable on Xiaomi
-                // ROMs. Driving the hardware vibrator directly with
-                // VibrationEffect (verified via `cmd vibrator_manager synced
-                // oneshot` on the device) is NOT subject to that suppression.
+
+                // Background: respect the task-notifications switch before
+                // posting the tray notification.
+                if (!backgroundSettings.taskNotificationsEnabled.value) return@launch
+
+                val session = chatRepository.getSession(sessionId)
+                val rawTitle = session?.title?.takeIf { it.isNotBlank() }
+                    ?: context.getString(R.string.notif_task_completed_default_title)
+                val title = if (isError) "❌ $rawTitle" else rawTitle
+                val body = if (isError) {
+                    context.getString(R.string.notif_task_failed_body)
+                } else {
+                    context.getString(R.string.notif_task_completed_body)
+                }
+                postNotification(sessionId, title, body)
                 vibrateCompletion()
             } catch (t: Throwable) {
                 AppLogger.warning(TAG, "notifyTaskCompleted failed: ${t.message}")

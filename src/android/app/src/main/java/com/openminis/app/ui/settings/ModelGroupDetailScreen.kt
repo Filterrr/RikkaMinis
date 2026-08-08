@@ -106,6 +106,7 @@ fun ModelGroupDetailScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
+    val nameSavedMsg = stringResource(R.string.model_group_name_saved)
     var strategy by remember { mutableStateOf(group.strategy) }
     var fallbackStrategy by remember { mutableStateOf(group.fallbackStrategy) }
     var recovery by remember { mutableStateOf(group.recovery) }
@@ -180,7 +181,7 @@ fun ModelGroupDetailScreen(
                                 if (!focusState.isFocused && name.isNotBlank() && name != group.name) {
                                     providerRepository.updateGroup(group.copy(name = name))
                                     coroutineScope.launch {
-                                        snackbarHostState.showSnackbar("Name saved")
+                                        snackbarHostState.showSnackbar(nameSavedMsg)
                                     }
                                 }
                             },
@@ -194,8 +195,8 @@ fun ModelGroupDetailScreen(
                 SettingsSection(
                     header = stringResource(R.string.model_group_detail_routing_strategy),
                     footer = when (strategy) {
-                        RoutingStrategy.fallback -> "Try models in order. If one fails, advance to the next."
-                        RoutingStrategy.loadBalance -> "Distribute sessions across models in the group."
+                        RoutingStrategy.fallback -> stringResource(R.string.model_group_routing_fallback_footer)
+                        RoutingStrategy.loadBalance -> stringResource(R.string.model_group_routing_loadbalance_footer)
                     },
                 ) {
                     SettingsChoiceRow(
@@ -224,8 +225,8 @@ fun ModelGroupDetailScreen(
                     SettingsSection(
                         header = stringResource(R.string.model_group_detail_fallback_trigger),
                         footer = when (fallbackStrategy) {
-                            FallbackStrategy.default -> "Fall back on rate limits (429) and server errors (5xx) only."
-                            FallbackStrategy.always -> "Fall back on any error, including network and auth failures."
+                            FallbackStrategy.default -> stringResource(R.string.model_group_fallback_default_footer)
+                            FallbackStrategy.always -> stringResource(R.string.model_group_fallback_always_footer)
                         },
                     ) {
                         SettingsChoiceRow(
@@ -254,9 +255,9 @@ fun ModelGroupDetailScreen(
                 SettingsSection(
                     header = stringResource(R.string.model_group_detail_recovery),
                     footer = when (recovery) {
-                        RecoveryStrategy.continueLast -> "Stay on the fallback member permanently (default)."
-                        RecoveryStrategy.honorFirst -> "Always try the first member first; rate-limited members are skipped until their cooldown expires."
-                        RecoveryStrategy.cooldown -> "Keep the current binding, but temporarily skip rate-limited members."
+                        RecoveryStrategy.continueLast -> stringResource(R.string.model_group_recovery_continue_footer)
+                        RecoveryStrategy.honorFirst -> stringResource(R.string.model_group_recovery_honorfirst_footer)
+                        RecoveryStrategy.cooldown -> stringResource(R.string.model_group_recovery_cooldown_footer)
                     },
                 ) {
                     SettingsChoiceRow(
@@ -309,7 +310,7 @@ fun ModelGroupDetailScreen(
                             .padding(horizontal = 16.dp),
                     ) {
                         Text(
-                            "No models in this group.",
+                            stringResource(R.string.model_group_no_models),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(vertical = 12.dp),
@@ -331,7 +332,7 @@ fun ModelGroupDetailScreen(
                             ListItem(
                                 headlineContent = {
                                     Text(
-                                        "Model no longer available",
+                                        stringResource(R.string.model_group_model_unavailable),
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
                                 },

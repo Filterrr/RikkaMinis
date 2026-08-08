@@ -318,7 +318,7 @@ fun MemoryFileEditScreen(
                             saveError = e.message
                         }
                     }) {
-                        Text("Save")
+                        Text(stringResource(R.string.common_save))
                     }
                 },
             )

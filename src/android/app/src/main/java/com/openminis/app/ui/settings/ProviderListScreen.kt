@@ -120,14 +120,15 @@ fun ProviderListScreen(
                 if (jsonStr != null) {
                     val label = providerRepository.importInstanceJSON(jsonStr)
                     if (label != null) {
-                        Toast.makeText(context, "Imported provider \"$label\"", Toast.LENGTH_SHORT).show()
+                        val toastMsg = context.getString(R.string.provider_import_success, label)
+                        Toast.makeText(context, toastMsg, Toast.LENGTH_SHORT).show()
                     } else {
-                        Toast.makeText(context, "Invalid provider configuration file", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, context.getString(R.string.provider_import_invalid_file), Toast.LENGTH_SHORT).show()
                     }
                 }
             }
         } catch (e: Exception) {
-            Toast.makeText(context, "Failed to read file", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.provider_import_read_error), Toast.LENGTH_SHORT).show()
         }
     }
 
