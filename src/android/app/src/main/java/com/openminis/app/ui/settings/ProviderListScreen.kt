@@ -62,8 +62,32 @@ fun ProviderListScreen(
     val config by providerRepository.config.collectAsState()
     val instances = config.instances
     val pinnedInstances = instances.filter { it.pinned }
-    val groupedInstances = instances.filter { !it.pinned }.groupBy { it.providerType }
     val context = LocalContext.current
+
+    // [perf-provider-list] Pre-compute per-instance display data once per
+    // `instances` change. loadApiKey() + OAuth isAuthenticated() both hit
+    // EncryptedSharedPreferences (synchronous encrypted I/O); naive inline
+    // calls inside the forEach re-ran them for EVERY row on EVERY
+    // recomposition, stalling the frame during navigation transitions.
+    // Caching here means the I/O happens once per instances change, not
+    // once per row per recomposition.
+    val providerRows: List<ProviderRowData> = remember(instances) {
+        instances.map { instance ->
+            val apiKey = providerRepository.loadApiKey(instance.id)
+            val isConfigured = if (instance.credentialType == ProviderCredential.oauth) {
+                val mgr = com.openminis.app.auth.OAuthManager.forInstance(context, instance)
+                mgr?.isAuthenticated() == true
+            } else {
+                !apiKey.isNullOrBlank()
+            }
+            ProviderRowData(
+                instance = instance,
+                modelCount = providerRepository.visibleEntries(instance.id).size,
+                apiKey = apiKey,
+                isConfigured = isConfigured,
+            )
+        }
+    }
 
     var showMenu by remember { mutableStateOf(false) }
 
@@ -151,25 +175,20 @@ fun ProviderListScreen(
             // providers the user reaches for most are always one tap away.
             if (pinnedInstances.isNotEmpty()) {
                 SettingsSection(header = stringResource(R.string.provider_list_favorites)) {
-                    pinnedInstances.forEachIndexed { index, instance ->
+                    val pinnedRows = providerRows.filter { it.instance.pinned }
+                    pinnedRows.forEachIndexed { index, row ->
                         ProviderInstanceRow(
-                            instance = instance,
-                            modelCount = providerRepository.visibleEntries(instance.id).size,
-                            apiKey = providerRepository.loadApiKey(instance.id),
-                            isConfigured = if (instance.credentialType ==
-                                com.openminis.app.data.model.ProviderCredential.oauth) {
-                                val mgr = com.openminis.app.auth.OAuthManager.forInstance(context, instance)
-                                mgr?.isAuthenticated() == true
-                            } else {
-                                !providerRepository.loadApiKey(instance.id).isNullOrBlank()
+                            instance = row.instance,
+                            modelCount = row.modelCount,
+                            apiKey = row.apiKey,
+                            isConfigured = row.isConfigured,
+                            pinned = row.instance.pinned,
+                            onTogglePinned = remember(row.instance.id) {
+                                { providerRepository.setInstancePinned(row.instance.id, !row.instance.pinned) }
                             },
-                            pinned = instance.pinned,
-                            onTogglePinned = {
-                                providerRepository.setInstancePinned(instance.id, !instance.pinned)
-                            },
-                            onClick = { onProviderClick(instance.id) },
+                            onClick = remember(row.instance.id) { { onProviderClick(row.instance.id) } },
                         )
-                        if (index < pinnedInstances.size - 1) {
+                        if (index < pinnedRows.size - 1) {
                             val divider = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
                             Box(
                                 modifier = Modifier
@@ -182,36 +201,22 @@ fun ProviderListScreen(
                     }
                 }
             }
-            groupedInstances.forEach { (providerType, typeInstances) ->
+            val groupedRows = providerRows.filter { !it.instance.pinned }.groupBy { it.instance.providerType }
+            groupedRows.forEach { (providerType, typeRows) ->
                 SettingsSection(header = providerType.displayName) {
-                    typeInstances.forEachIndexed { index, instance ->
-                        val modelCount = providerRepository.visibleEntries(instance.id).size
-                        val apiKey = providerRepository.loadApiKey(instance.id)
-                        // Mirrors iOS `isConfigured` on ProviderInstancesView:
-                        // for OAuth providers, having a manual bearer token OR
-                        // a stored OAuth credential counts as "configured" — not
-                        // just the presence of an API key. Without this, OAuth
-                        // instances always show the gray dot even after a
-                        // successful sign-in or manual token paste.
-                        val isConfigured = if (instance.credentialType ==
-                            com.openminis.app.data.model.ProviderCredential.oauth) {
-                            val mgr = com.openminis.app.auth.OAuthManager.forInstance(context, instance)
-                            mgr?.isAuthenticated() == true
-                        } else {
-                            !apiKey.isNullOrBlank()
-                        }
+                    typeRows.forEachIndexed { index, row ->
                         ProviderInstanceRow(
-                            instance = instance,
-                            modelCount = modelCount,
-                            apiKey = apiKey,
-                            isConfigured = isConfigured,
-                            pinned = instance.pinned,
-                            onTogglePinned = {
-                                providerRepository.setInstancePinned(instance.id, !instance.pinned)
+                            instance = row.instance,
+                            modelCount = row.modelCount,
+                            apiKey = row.apiKey,
+                            isConfigured = row.isConfigured,
+                            pinned = row.instance.pinned,
+                            onTogglePinned = remember(row.instance.id) {
+                                { providerRepository.setInstancePinned(row.instance.id, !row.instance.pinned) }
                             },
-                            onClick = { onProviderClick(instance.id) },
+                            onClick = remember(row.instance.id) { { onProviderClick(row.instance.id) } },
                         )
-                        if (index < typeInstances.size - 1) {
+                        if (index < typeRows.size - 1) {
                             val divider = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
                             Box(
                                 modifier = Modifier
@@ -398,3 +403,13 @@ private fun maskKey(key: String): String {
     if (key.length <= 8) return "****"
     return key.take(6) + "..." + key.takeLast(4)
 }
+
+/** [perf-provider-list] Per-instance display data, pre-computed once per
+ *  instances change so the per-row composition never re-runs
+ *  EncryptedSharedPreferences reads (loadApiKey / OAuth isAuthenticated). */
+private data class ProviderRowData(
+    val instance: ProviderInstance,
+    val modelCount: Int,
+    val apiKey: String?,
+    val isConfigured: Boolean,
+)
