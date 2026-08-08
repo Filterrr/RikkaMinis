@@ -4,7 +4,7 @@
     <foreground>
         <inset
             android:drawable="@mipmap/ic_launcher_foreground"
-            android:inset="15%" />
+            android:inset="0%" />
     </foreground>
     <!-- T-android-themed-icons: monochrome layer for Android 13+ Themed
          Icons. Same silhouette shared by all 3 activity-alias adaptive
