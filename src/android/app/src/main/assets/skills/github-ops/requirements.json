@@ -1,0 +1,12 @@
+{
+  "apk": ["git", "curl", "openssh"],
+  "pip": [],
+  "env": {
+    "GITHUB_TOKEN": "Tier 2 - 推送代码、触发 CI、管理 PR/issue"
+  },
+  "tiers": {
+    "0": "暂无可用能力（GitHub 公开 API 速率限制严格，不建议零配置使用）",
+    "1": "查公开仓库 CI、issue、PR 列表（需 GITHUB_TOKEN）",
+    "2": "推送代码、触发 CI、管理 PR/issue/label/release"
+  }
+}

@@ -109,6 +109,14 @@ Android-specific product changes that are not present upstream.
 - **Settings consistency fixes.** Restored preferences refresh the live
   settings UI, and previously disconnected/missing settings keys are now
   registered and included in backups.
+- **Bundled platform integrations (GitHub / Cloudflare / Hugging Face).**
+  Full detail in [Built-in platform integrations](#built-in-platform-integrationsgithub--cloudflare--hugging-face).
+  In short: three platform skills (semantic memory, GitHub automation, and
+  Cloudflare ops) ship inside the APK. At startup the app works out each
+  platform's current capability tier from which API tokens
+  (`HF_TOKEN` / `GITHUB_TOKEN` / `CF_API_TOKEN`) you have configured, and
+  injects a "Integrations" table into the system prompt — the agent knows
+  up front what each platform can and cannot do, no trial-and-error guessing.
 
 ### Build and release changes
 
@@ -122,6 +130,16 @@ Android-specific product changes that are not present upstream.
 - **iOS sources removed.** `src/ios/` is gone; this tree is Android only.
 - **Automatic releases.** Successful builds publish the APK to the
   `android-latest` release.
+- **Platform skills shipped in assets.** `semantic-memory`,
+  `github-ops`, `cloudflare-fullright-ops` and `skill-creator`
+  (with their scripts) are bundled under `app/src/main/assets/skills/`,
+  so a fresh install has them ready with zero manual setup.
+- **Integration status injected into the system prompt.** Each bundled
+  skill carries a `requirements.json` listing the env vars it needs. At
+  runtime the app derives a per-platform capability tier from which vars
+  are configured, emits a `[IntegrationStatus]` log line (declared= vs
+  found=) for troubleshooting, and injects an "Integrations" table into
+  the system prompt.
 
 
 ### Why build proot from source?
@@ -142,6 +160,83 @@ prompts and model integrations are unaffected — build normally.
 
 ---
 
+## Built-in platform integrations (GitHub / Cloudflare / Hugging Face)
+
+> **This section is the most important — and easiest to miss — structural
+> change in this fork relative to upstream.** It turns a "standalone on-device
+> agent" into a "one brain, three platforms" shape: the agent not only runs a
+> shell / browser on your phone, it can also operate three external platforms
+> directly. If you build from source and don't know this layer exists, you'll
+> be confused by the extra "Integrations" table that shows up in the system
+> prompt.
+
+### In one sentence
+
+RikkaMinis bundles three **platform skills** — each encapsulates the common
+operations of one external platform and declares the env vars it depends on in
+its own `requirements.json`. At startup the app reads the tokens you've
+configured, derives a per-platform capability tier (zero-config / read-only /
+full), and **injects the result into the system prompt**, so the agent knows
+exactly which platforms it can touch right now — no guessing from
+trial-and-error.
+
+### What each platform handles
+
+| Platform | Skill | Capabilities | Token needed | Min / full tier |
+|---|---|---|---|---|
+| **GitHub** | `github-ops` | Push code, trigger CI, manage issues / labels / releases / PRs, query status | `GITHUB_TOKEN` | Tier 1 read-only · Tier 2 full |
+| **Cloudflare** | `cloudflare-fullright-ops` | List / deploy Workers, manage KV / R2, query Zones / DNS | `CF_API_TOKEN` | Tier 1 read-only · Tier 2 full |
+| **Hugging Face** | `semantic-memory` | Semantic search of past experience, read/write HF Datasets, cross-device persistent memory | `HF_TOKEN` | Tier 0 zero-config search · Tier 2 full read/write |
+
+Configuration entry point: **Settings → Environments** (or `minis-config
+envvars`). All three tokens are standard personal API tokens created in each
+platform's dashboard. **Note: token values are stored locally on-device (so the
+app can read them at startup to compute tiers); they never appear in any log,
+and by default they are not included in backup exports — unless you explicitly
+check "include secrets" in Backup.**
+
+### How the capability tier is computed (`buildIntegrationStatus`)
+
+Each skill ships a `requirements.json` naming the env vars it needs (e.g.
+GitHub needs `GITHUB_TOKEN`). At runtime these are matched against the app's
+environment-variable store, with the following rules:
+
+- **Tier 0 — zero-config**: public capability that needs no token (e.g.
+  semantic memory's public search).
+- **Tier 1 — read-only**: declares env vars and at least one is **partially**
+  configured (can read public data / limited operations).
+- **Tier 2 — full**: declares env vars and **all** are configured (full
+  read/write / deploy).
+
+The current tier is surfaced two ways:
+
+1. As a **`[IntegrationStatus]` log line** (`logcat | grep IntegrationStatus`),
+   annotated with `declared=` and `found=` environment-variable sets — when
+   you hit a "thought I configured it but it says not configured" mismatch,
+   you can see in one line which variable wasn't read, instead of guessing.
+2. As an **"Integrations" table** in the system prompt's tool section, which
+   the agent uses to decide how to do its work. A platform with no
+   configured token is labelled "🔒 Needs config" — never falsely labelled
+   "⚡ zero-config usable". Better to refuse than to mislead the agent into
+   operating it.
+
+### How the three skills are upgraded
+
+Each skill lives under `src/android/app/src/main/assets/skills/<skill>/`
+(SKILL.md + requirements.json + scripts). Edit the files → commit → CI
+repackages → the new APK carries the new skill version. For local development,
+overwriting `/var/minis/skills/<skill>/` takes effect immediately (the app
+prefers `/var/minis/skills`, falling back to the bundled copy only when absent).
+
+### Privacy note
+
+Platform skills fire requests against their platforms **only when you
+explicitly ask the agent to** (i.e. you say in chat "check that GitHub issue
+for me"). The app never calls the platforms in the background on its own.
+Tokens are only used for authenticating those explicit requests.
+
+---
+
 ## What it does
 
 | | |
@@ -151,6 +246,7 @@ prompts and model integrations are unaffected — build normally.
 | **Device integration** | Calendar, Contacts, Clipboard, Location, Media, Alarms, Notifications and more, exposed to the agent as tools. |
 | **Browser automation** | The agent can browse and interact with the web on your behalf. |
 | **Skills & memory** | Extensible skills plus persistent memory across sessions. Complete skill bundles and memory files are included in local backups. |
+| **Platform integrations** | Built-in GitHub / Cloudflare / Hugging Face platform skills; available capability per platform is derived dynamically from the tokens you configure (see previous section). |
 | **Local backup & restore** | Export configuration, credentials (optional), skills, memory, MCP servers and chat history (text, last N days) to one portable JSON file. |
 | **Workspaces** | Organise work into separate contexts, addressable via `minis://workspace/`. |
 | **Native offloads** | Heavy or platform-specific work is handed to native code instead of the sandbox. |
@@ -239,7 +335,7 @@ the point of use — the agent can only use what you grant.
 src/android/      Android app (Kotlin / Compose)
   app/src/main/jniLibs/arm64-v8a/   Native libs (jieba, pty bridge, crash handler);
                                     libproot.so is a CI build artifact, not vendored
-  app/src/main/assets/              Alpine minirootfs
+  app/src/main/assets/              Alpine minirootfs + bundled platform skills (skills/)
 src/shared/       Assets shared with upstream's iOS tree (bashism rules)
 deps/             proot source (submodule) + build_proot.sh (NDK r28 build)
 docs/             Sync procedure and interface specifications

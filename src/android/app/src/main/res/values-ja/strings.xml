@@ -219,6 +219,14 @@
     <string name="env_var_field_note">メモ</string>
     <string name="env_var_field_note_placeholder">メモ（任意）</string>
     <string name="env_var_error_invalid_key">英字で始まり、英数字とアンダースコアのみ使用可</string>
+    <string name="env_var_platform_header">Platform Integrations</string>
+    <string name="env_var_platform_tier_2">Complete</string>
+    <string name="env_var_platform_tier_1">Read-only</string>
+    <string name="env_var_platform_tier_0">Needs config</string>
+    <string name="env_var_platform_var_configured">Configured</string>
+    <string name="env_var_platform_var_missing">Tap to add %1$s</string>
+    <string name="env_var_platform_var_add_title">Add %1$s</string>
+    <string name="env_var_other_header">Other Environment Variables</string>
     <string name="env_var_error_duplicate">同名の変数が既に存在します</string>
     <string name="log_title">ログ</string>
     <string name="log_share_all">すべて共有</string>
@@ -791,6 +799,9 @@
     <string name="chat_menu_drag_handle">ドラッグして並べ替え</string>
     <string name="chat_menu_open_browser">ブラウザを開く</string>
     <string name="chat_menu_browse_chat_files">チャットファイルを閲覧</string>
+    <string name="chat_menu_compact">履歴を圧縮</string>
+    <string name="menu_compacting_in_progress">圧縮中…</string>
+    <string name="chat_menu_thinking">思考レベル</string>
     <string name="chat_menu_enhanced_cache">拡張キャッシュ</string>
     <string name="chat_menu_fast_mode">高速モードを有効化</string>
     <string name="chat_menu_slash_commands">スラッシュコマンド</string>
@@ -1134,4 +1145,21 @@
     <string name="backup_snapshot_restore_confirm_text">現在の設定は %1$s のスナップショットに置き換わります。現在の設定は先に新しいスナップショットとして保存されます。</string>
     <string name="backup_snapshot_restore">復元</string>
     <string name="backup_done_fatal">復元が途中で失敗しました — 設定は部分的に復元されています。スナップショットからロールバックしてください。</string>
+    <!-- 英文兜底 (2026-08-08) -->
+    <string name="model_group_name_saved">Name saved</string>
+    <string name="model_group_routing_fallback_footer">Try models in order. If one fails, advance to the next.</string>
+    <string name="model_group_routing_loadbalance_footer">Distribute sessions across models in the group.</string>
+    <string name="model_group_fallback_default_footer">Fall back on rate limits (429) and server errors (5xx) only.</string>
+    <string name="model_group_fallback_always_footer">Fall back on any error, including network and auth failures.</string>
+    <string name="model_group_recovery_continue_footer">Stay on the fallback member permanently (default).</string>
+    <string name="model_group_recovery_honorfirst_footer">Always try the first member first; rate-limited members are skipped until their cooldown expires.</string>
+    <string name="model_group_recovery_cooldown_footer">Keep the current binding, but temporarily skip rate-limited members.</string>
+    <string name="model_group_no_models">No models in this group.</string>
+    <string name="model_group_model_unavailable">Model no longer available</string>
+    <string name="provider_import_success">Imported provider "%1$s"</string>
+    <string name="provider_import_invalid_file">Invalid provider configuration file</string>
+    <string name="provider_import_read_error">Failed to read file</string>
+    <string name="chat_attachment_limit">Only the first %1$d items were attached.</string>
+    <string name="session_edit_title">Edit Session</string>
+    <string name="session_new_chat_default">New Chat</string>
 </resources>

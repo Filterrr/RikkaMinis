@@ -208,6 +208,7 @@ internal fun SessionEditSheet(
 ) {
     var title by remember { mutableStateOf(session.title ?: "") }
     var selectedCategory by remember { mutableStateOf(session.category) }
+    val defaultSessionTitle = stringResource(R.string.session_new_chat_default)
 
     // [T-android-sessionedit-regenerate-button] When a regeneration run writes a
     // new title/category to the DB, `liveSession` updates — mirror those values
@@ -234,17 +235,17 @@ internal fun SessionEditSheet(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                MinisTextButton(onClick = onDismiss) { Text("Cancel") }
+                MinisTextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) }
                 Spacer(Modifier.weight(1f))
                 Text(
-                    "Edit Session",
+                    stringResource(R.string.session_edit_title),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
                 Spacer(Modifier.weight(1f))
                 MinisTextButton(
-                    onClick = { onSave(title.ifBlank { "New Chat" }, selectedCategory) },
-                ) { Text("Save") }
+                    onClick = { onSave(title.ifBlank { defaultSessionTitle }, selectedCategory) },
+                ) { Text(stringResource(R.string.common_save)) }
             }
 
             Spacer(Modifier.height(16.dp))

@@ -362,13 +362,13 @@ fun SkillsManagementScreen(
         val skill = skills.find { it.id == deleteSkillId }
         AlertDialog(
             onDismissRequest = { deleteSkillId = null },
-            title = { Text("Delete ${skill?.name ?: "skill"}?") },
+            title = { Text(stringResource(R.string.skill_delete_confirm_title, skill?.name ?: "skill")) },
             text = { Text(stringResource(R.string.skill_delete_confirm_text)) },
             confirmButton = {
                 MinisTextButton(onClick = {
                     deleteSkillId?.let { skillRepository.delete(it) }
                     deleteSkillId = null
-                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                }) { Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = {
                 MinisTextButton(onClick = { deleteSkillId = null }) { Text(stringResource(R.string.common_cancel)) }
@@ -889,7 +889,7 @@ fun SkillDetailScreen(
     if (showDeleteDialog) {
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
-            title = { Text("Delete ${skill.name}?") },
+            title = { Text(stringResource(R.string.skill_delete_confirm_title, skill.name)) },
             text = { Text(stringResource(R.string.skill_delete_confirm_text)) },
             confirmButton = {
                 MinisTextButton(onClick = {
@@ -897,7 +897,7 @@ fun SkillDetailScreen(
                     skillRepository.delete(skill.id)
                     showDeleteDialog = false
                     onBack()
-                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                }) { Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = {
                 MinisTextButton(onClick = { showDeleteDialog = false }) { Text(stringResource(R.string.common_cancel)) }

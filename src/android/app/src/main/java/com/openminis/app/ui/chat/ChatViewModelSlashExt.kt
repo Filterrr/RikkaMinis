@@ -20,10 +20,6 @@ import com.openminis.app.browser.BrowserActionInput
 import com.openminis.app.browser.BrowserTabPool
 import com.openminis.app.data.db.MessageEntity
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Compress
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Lightbulb
-import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.Extension
 import com.openminis.app.data.BPETokenizer
@@ -104,24 +100,11 @@ internal fun ChatViewModel.filteredSlashCommands(): List<SlashCommand> {
     val filter = _slashFilter.value.lowercase()
     val base = availableSlashCommands.map { cmd ->
         when (cmd.id) {
-            "compact" -> cmd.copy(
-                subtitle = context.getString(R.string.slash_compact_subtitle),
-            )
             "memory" -> cmd.copy(
                 subtitle = context.getString(
                     if (_memoryEnabled.value) R.string.slash_memory_writes_on
                     else R.string.slash_memory_writes_off,
                 ),
-            )
-            "thinking" -> cmd.copy(
-                subtitle = if (!currentModelSupportsReasoning) {
-                    context.getString(R.string.slash_thinking_unsupported)
-                } else {
-                    context.getString(
-                        R.string.slash_thinking_subtitle,
-                        _thinkingLevel.value.localizedName(context),
-                    )
-                },
             )
             "clear" -> cmd.copy(
                 subtitle = context.getString(R.string.slash_clear_subtitle),

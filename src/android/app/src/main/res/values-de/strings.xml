@@ -219,6 +219,14 @@
     <string name="env_var_field_note">Notiz</string>
     <string name="env_var_field_note_placeholder">Optionale Notiz</string>
     <string name="env_var_error_invalid_key">Muss mit einem Buchstaben beginnen, nur Buchstaben/Zahlen/Unterstriche</string>
+    <string name="env_var_platform_header">Platform Integrations</string>
+    <string name="env_var_platform_tier_2">Complete</string>
+    <string name="env_var_platform_tier_1">Read-only</string>
+    <string name="env_var_platform_tier_0">Needs config</string>
+    <string name="env_var_platform_var_configured">Configured</string>
+    <string name="env_var_platform_var_missing">Tap to add %1$s</string>
+    <string name="env_var_platform_var_add_title">Add %1$s</string>
+    <string name="env_var_other_header">Other Environment Variables</string>
     <string name="env_var_error_duplicate">Eine Variable mit diesem Namen existiert bereits</string>
     <string name="log_title">Protokolle</string>
     <string name="log_share_all">Alle teilen</string>
@@ -791,6 +799,9 @@
     <string name="chat_menu_drag_handle">Zum Neuanordnen ziehen</string>
     <string name="chat_menu_open_browser">Browser öffnen</string>
     <string name="chat_menu_browse_chat_files">Chat-Dateien durchsuchen</string>
+    <string name="chat_menu_compact">Verlauf komprimieren</string>
+    <string name="menu_compacting_in_progress">Wird komprimiert…</string>
+    <string name="chat_menu_thinking">Denkstufe</string>
     <string name="chat_menu_enhanced_cache">Erweiterter Cache</string>
     <string name="chat_menu_fast_mode">Schnellmodus aktivieren</string>
     <string name="chat_menu_slash_commands">Slash-Befehle</string>
@@ -1127,4 +1138,21 @@
     <string name="backup_snapshot_restore_confirm_text">Die aktuelle Konfiguration wird durch den Snapshot vom %1$s ersetzt. Zuvor wird ein neuer Snapshot der aktuellen Konfiguration gespeichert.</string>
     <string name="backup_snapshot_restore">Wiederherstellen</string>
     <string name="backup_done_fatal">Wiederherstellung fehlgeschlagen — die Konfiguration wurde nur teilweise wiederhergestellt. Stellen Sie über einen Snapshot wieder her.</string>
+    <!-- 英文兜底 (2026-08-08) -->
+    <string name="model_group_name_saved">Name saved</string>
+    <string name="model_group_routing_fallback_footer">Try models in order. If one fails, advance to the next.</string>
+    <string name="model_group_routing_loadbalance_footer">Distribute sessions across models in the group.</string>
+    <string name="model_group_fallback_default_footer">Fall back on rate limits (429) and server errors (5xx) only.</string>
+    <string name="model_group_fallback_always_footer">Fall back on any error, including network and auth failures.</string>
+    <string name="model_group_recovery_continue_footer">Stay on the fallback member permanently (default).</string>
+    <string name="model_group_recovery_honorfirst_footer">Always try the first member first; rate-limited members are skipped until their cooldown expires.</string>
+    <string name="model_group_recovery_cooldown_footer">Keep the current binding, but temporarily skip rate-limited members.</string>
+    <string name="model_group_no_models">No models in this group.</string>
+    <string name="model_group_model_unavailable">Model no longer available</string>
+    <string name="provider_import_success">Imported provider "%1$s"</string>
+    <string name="provider_import_invalid_file">Invalid provider configuration file</string>
+    <string name="provider_import_read_error">Failed to read file</string>
+    <string name="chat_attachment_limit">Only the first %1$d items were attached.</string>
+    <string name="session_edit_title">Edit Session</string>
+    <string name="session_new_chat_default">New Chat</string>
 </resources>
