@@ -283,6 +283,11 @@ class BackgroundTaskNotifier(
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = ContextCompat.getSystemService(context, NotificationManager::class.java)
             ?: return
+        // Remove the old channel from before feat/completion-sound, which
+        // switched from "minis_task_completed" to "minis_task_completed_v2".
+        // Android never auto-deletes channels, so the old one lingers as a
+        // duplicate "Task Completion" entry in system notification settings.
+        manager.deleteNotificationChannel("minis_task_completed")
         val channel = NotificationChannel(
             CHANNEL_ID,
             context.getString(R.string.notif_task_completed_channel_name),
