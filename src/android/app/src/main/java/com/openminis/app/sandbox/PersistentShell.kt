@@ -390,7 +390,7 @@ class PersistentShell(
                 }
             } else null
 
-            val result = withTimeoutOrNull(timeout) {
+            val result: CommandResult? = withTimeoutOrNull(timeout) {
                 suspendCancellableCoroutine { cont ->
                     val cb = CommandCallback(
                         marker = marker,
@@ -413,7 +413,7 @@ class PersistentShell(
                     } catch (e: Exception) {
                         pendingCallback = null
                         if (cont.isActive) {
-                            cont.resume(Pair("[Write error: ${e.message}]", -1))
+                            cont.resume(CommandResult("[Write error: ${e.message}]", -1))
                         }
                     }
                 }

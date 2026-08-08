@@ -144,7 +144,7 @@ class TerminalSession(private val context: Context) {
                     filesDir,
                     args.toTypedArray(),
                     env.toTypedArray(),
-                    intArrayOf(), // processId — tracked by Termux internally
+                    2_000, // scrollback rows — match RikkaHub default
                     client,
                 )
                 session.updateSize(cols, rows)
@@ -357,33 +357,15 @@ class TerminalSession(private val context: Context) {
         override fun onTitleChanged(changedSession: com.termux.terminal.TerminalSession) {}
         override fun onSessionFinished(
             changedSession: com.termux.terminal.TerminalSession,
-            exitMessage: String,
         ) {
-            Log.i(TAG, "Termux session finished (exit=${changedSession.exitStatus}): $exitMessage")
+            Log.i(TAG, "Termux session finished (exit=${changedSession.exitStatus})")
             _state.value = State.STOPPED
         }
         override fun onBell(session: com.termux.terminal.TerminalSession) {}
-        override fun onColorsChanged(session: com.termux.terminal.TerminalSession) {}
-        override fun onTerminalCursorStateChange(state: Boolean?) {}
-        override fun onEmulatorSet() {}
-        override fun copyModeChanged(copyMode: Boolean) {}
+        override fun onColorsChanged(changedSession: com.termux.terminal.TerminalSession) {}
+        override fun onTerminalCursorStateChange(state: Boolean) {}
         override fun onPasteTextFromClipboard(
             session: com.termux.terminal.TerminalSession,
-        ): CharSequence? = null
-        override fun onCopyTextToClipboard(
-            session: com.termux.terminal.TerminalSession,
-            textToCustomer: CharSequence?,
-            startCol: Int, startRow: Int, endCol: Int, endRow: Int,
-        ) {}
-        override fun writeToClipboard(
-            fromSession: com.termux.terminal.TerminalSession,
-            clip: CharSequence,
-        ) {}
-        override fun writeToClipboardDone(requestor: Any) {}
-        override fun logError(tag: String, message: String) { Log.e("$TAG/$tag", message) }
-        override fun logWarn(tag: String, message: String) { Log.w("$TAG/$tag", message) }
-        override fun logInfo(tag: String, message: String) { Log.i("$TAG/$tag", message) }
-        override fun logDebug(tag: String, message: String) { Log.d("$TAG/$tag", message) }
-        override fun logVerbose(tag: String, message: String) { Log.v("$TAG/$tag", message) }
+        ): Unit {} // returns Unit in Termux 0.118.0
     }
 }

@@ -147,8 +147,6 @@ fun TerminalScreen(
                         TerminalView(ctx, null).apply {
                             setTextSize(24)          // px; ≈ 12 sp at 2x density
                             setTypeface(jetBrainsMonoTypeface(ctx))
-                            setBackgroundColor(0xFF000000.toInt())
-                            setTextColor(0xFFD4D4D4.toInt())
                             setTerminalViewClient(MinisTerminalViewClient(
                                 getControlDown = { ctrlDown },
                                 getAltDown = { altDown },
@@ -240,13 +238,7 @@ private class MinisTerminalViewClient(
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean = false
     override fun readControlKey(): Boolean = getControlDown()
     override fun readAltKey(): Boolean = getAltDown()
-    override fun readShiftKey(): Boolean = false
-    override fun readFnKey(): Boolean = false
-    override fun shouldEnforceCharBasedInput(): Boolean = false
-    override fun shouldBackButtonBeMappedToEscape(): Boolean = false
-    override fun shouldUseCtrlSpaceWorkaround(): Boolean = false
-    override fun isTerminalViewSelected(): Boolean = true
-    override fun copyModeChanged(copyMode: Boolean) {}
+    override fun onEmulatorSet() {}
 
     @Volatile var clearVersion: Int = 0; private set
     fun bumpClear() { clearVersion++ }
