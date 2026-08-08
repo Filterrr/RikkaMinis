@@ -1,5 +1,6 @@
 package com.openminis.app.data.model
 
+import androidx.compose.runtime.Stable
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import java.util.UUID
@@ -133,6 +134,7 @@ enum class RecoveryStrategy {
 }
 
 @Serializable
+@Stable
 data class ModelGroup(
     val id: String = UUID.randomUUID().toString(),
     var name: String,
@@ -171,6 +173,7 @@ data class ModelGroup(
 const val DEFAULT_GROUP_CONTEXT_LIMIT_TOKENS: Int = 128_000
 
 @Serializable
+@Stable
 data class ProviderInstance(
     val id: String,
     var label: String,
@@ -252,6 +255,7 @@ data class ProviderInstance(
 }
 
 @Serializable
+@Stable
 data class ModelOverrides(
     val displayName: String? = null,
     val maxOutputTokens: Int? = null,
@@ -284,6 +288,7 @@ data class ModelOverrides(
 }
 
 @Serializable
+@Stable
 data class ModelEntry(
     val providerInstanceId: String,
     @SerialName("model")
@@ -313,6 +318,7 @@ data class ModelEntry(
 }
 
 @Serializable
+@Stable
 data class ProviderConfig(
     val instances: MutableList<ProviderInstance> = mutableListOf(),
     val modelEntries: MutableList<ModelEntry> = mutableListOf(),
