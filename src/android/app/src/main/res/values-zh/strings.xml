@@ -822,6 +822,10 @@
     <string name="model_group_detail_fallback_trigger">Fallback 触发条件</string>
     <string name="common_default">默认</string>
     <string name="model_group_detail_always">始终</string>
+    <string name="model_group_detail_recovery">回退恢复策略</string>
+    <string name="model_group_detail_recovery_continue_last">停留在回退模型（继续上一个）</string>
+    <string name="model_group_detail_recovery_honor_first">始终优先使用第一个成员</string>
+    <string name="model_group_detail_recovery_cooldown">仅冷却跳过</string>
     <string name="model_group_detail_unavailable">不可用</string>
     <string name="model_group_detail_drag_to_reorder">拖动以重新排序</string>
     <string name="model_group_detail_more_options">更多选项</string>

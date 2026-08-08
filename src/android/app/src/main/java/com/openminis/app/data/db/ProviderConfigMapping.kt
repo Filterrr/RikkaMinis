@@ -10,6 +10,7 @@ import com.openminis.app.data.model.ProviderConfig
 import com.openminis.app.data.model.ProviderCredential
 import com.openminis.app.data.model.ProviderInstance
 import com.openminis.app.data.model.ProviderType
+import com.openminis.app.data.model.RecoveryStrategy
 import com.openminis.app.data.model.RoutingStrategy
 import com.openminis.app.data.model.ThinkingLevel
 import kotlinx.serialization.builtins.ListSerializer
@@ -133,6 +134,7 @@ fun ProviderConfig.toSnapshot(
             name = g.name,
             strategy = g.strategy.name,
             fallbackStrategy = g.fallbackStrategy.name,
+            recovery = g.recovery.name,
             defaultThinkingLevel = g.defaultThinkingLevel?.name,
             contextLimitTokens = g.contextLimitTokens,
             lastContextLimitTokens = g.lastContextLimitTokens,
@@ -245,6 +247,7 @@ fun ProviderConfigSnapshot.toProviderConfig(jsonForBlobs: Json): ProviderConfig 
                 .toMutableList(),
             strategy = RoutingStrategy.valueOf(row.strategy),
             fallbackStrategy = FallbackStrategy.valueOf(row.fallbackStrategy),
+            recovery = RecoveryStrategy.valueOf(row.recovery),
             // [T-android-thinking-level-arch] decoded() (not valueOf()) so a
             // level string a NEWER build persisted (e.g. "MAX"/"ULTRA") can't
             // throw and blow up the whole DB load — which would fall back to the
