@@ -1,7 +1,7 @@
 ---
 name: semantic-memory
 description: HF 语义记忆系统 — 用自然语言搜索历史经验（不依赖关键词）。基于 HF Dataset + embeddings，实现跨会话的「真正回忆」。跑通后请移步 Settings → Skills 查看。
-version: 1.0.0
+version: 1.0.1
 ---
 
 # Semantic Memory Skill
