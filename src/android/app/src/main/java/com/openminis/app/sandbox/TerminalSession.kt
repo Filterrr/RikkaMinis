@@ -240,9 +240,9 @@ class TerminalSession(private val context: Context) {
      * Three layered strategies (each is best-effort):
      *  1. /proc children walk — kills descendants individually (leaves
      *     first, so nobody gets reparented into a zombie gap).
-     *  2. killProcessGroup — Termux's JNI forks with setsid(), so the
-     *     PRoot tree is its own process group; this nukes the whole group
-     *     even if /proc children is unreadable under hidepid.
+     *  2. Explicit SIGKILL (Process.sendSignal) on the tracer root itself —
+     *     redundant belt-and-braces in case the walk missed a reparented
+     *     process.
      *  3. finishIfRunning() — Termux's own teardown (closes ByteQueues,
      *     JNI fds; wait-thread cleanupResources runs cleanly).
      */
@@ -258,9 +258,12 @@ class TerminalSession(private val context: Context) {
             } catch (t: Throwable) {
                 Log.w(TAG, "killTermuxProcessTree walk failed: ${t.message}")
             }
-            // (2) Whole-group kill — belt and braces when /proc is hidden.
+            // (2) Also signal-kill the tracer directly (Process.killProcess does the
+            // same under the hood, but keep the explicit sendSignal as a
+            // redundant belt-and-braces — e.g. if the walk in (1) missed a
+            // reparented process, this still nails the root).
             runCatching {
-                android.os.Process.killProcessGroup(android.os.Process.myUid(), pid)
+                android.os.Process.sendSignal(pid, android.os.Process.SIGNAL_KILL)
             }
         }
         // (3) Termux's own teardown — closes the ByteQueues/JNI fds and
