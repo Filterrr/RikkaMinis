@@ -40,6 +40,7 @@ import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -64,7 +65,9 @@ import com.openminis.app.logging.AppLogger
 import com.openminis.app.ui.components.MinisAlertDialog
 import com.openminis.app.ui.util.bringIntoViewOnFocus
 import com.openminis.app.R
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.openminis.app.ui.components.MinisButton
 import com.openminis.app.ui.components.MinisOutlinedButton
 import com.openminis.app.ui.components.MinisSmallButton
@@ -109,7 +112,16 @@ fun ProviderDetailScreen(
     // flushed and show the OLD key, making Save look like a no-op. Keeping it in
     // remember + updating it synchronously in onSave reflects the just-saved
     // value immediately, independent of the async flush.
-    var storedKey by remember(instanceId) { mutableStateOf(providerRepository.loadApiKey(instanceId) ?: "") }
+    //
+    // [perf-provider-detail] The initial loadApiKey() call is deferred to a
+    // LaunchedEffect so EncryptedSharedPreferences I/O doesn't stall the
+    // navigation-transition frame. Initial state is null; the key populates
+    // asynchronously on the next frame — fast enough that no visible flash
+    // occurs during the slide-in animation (~300 ms).
+    var storedKey by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(instanceId) {
+        storedKey = withContext(Dispatchers.IO) { providerRepository.loadApiKey(instanceId) }
+    }
     var isEditingKey by remember { mutableStateOf(false) }
     var editKeyValue by remember { mutableStateOf("") }
     var keyVisible by remember { mutableStateOf(false) }
@@ -213,7 +225,7 @@ fun ProviderDetailScreen(
                         onEditValueChange = { editKeyValue = it },
                         onBeginEdit = {
                             isEditingKey = true
-                            editKeyValue = storedKey
+                            editKeyValue = storedKey ?: ""
                         },
                         onCancelEdit = {
                             isEditingKey = false
@@ -653,7 +665,7 @@ fun ProviderDetailScreen(
 @Composable
 private fun OAuthCredentialBlock(
     instance: com.openminis.app.data.model.ProviderInstance,
-    storedKey: String,
+    storedKey: String?,
     providerRepository: ProviderRepository,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -694,7 +706,7 @@ private fun OAuthCredentialBlock(
             fontWeight = FontWeight.Medium,
         )
         Spacer(modifier = Modifier.width(8.dp))
-        if (displayedKey.isNotEmpty()) {
+        if (!displayedKey.isNullOrEmpty()) {
             Text(
                 maskedKey(displayedKey),
                 style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
@@ -717,7 +729,7 @@ private fun OAuthCredentialBlock(
         }
     }
     Spacer(modifier = Modifier.height(8.dp))
-    if (displayedKey.isNotEmpty()) {
+    if (!displayedKey.isNullOrEmpty()) {
         MinisSmallButton(
             onClick = {
                 // [T-android-openai-oauth-signout-signin-stuck] A real sign-out
@@ -795,7 +807,7 @@ private fun OAuthCredentialBlock(
 
 @Composable
 private fun ApiKeyCredentialBlock(
-    storedKey: String,
+    storedKey: String?,
     keyVisible: Boolean,
     onToggleVisibility: () -> Unit,
     isEditing: Boolean,
@@ -847,7 +859,11 @@ private fun ApiKeyCredentialBlock(
     } else {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = if (keyVisible) storedKey else maskedKey(storedKey),
+                text = if (storedKey != null) {
+                if (keyVisible) storedKey else maskedKey(storedKey)
+            } else {
+                "" // key not loaded yet — LaunchedEffect is still reading prefs
+            },
                 style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
                 modifier = Modifier.weight(1f),
             )
@@ -864,7 +880,8 @@ private fun ApiKeyCredentialBlock(
     }
 }
 
-private fun maskedKey(key: String): String {
+private fun maskedKey(key: String?): String {
+    if (key == null) return ""
     if (key.length <= 10) return key.replace(Regex("."), "•")
     return key.take(6) + "..." + key.takeLast(4)
 }
@@ -922,7 +939,12 @@ private fun ManualBearerTokenSection(
         com.openminis.app.auth.OAuthManager.forInstance(context, instance)
     }
     var reloadTick by remember(instance.id) { mutableStateOf(0) }
-    val stored = remember(instance.id, reloadTick) { manager?.loadManualBearerToken() }
+    // [perf-provider-detail] loadManualBearerToken() reads EncryptedSharedPreferences;
+    // defer to LaunchedEffect so the navigation-transition frame isn't stalled.
+    var stored by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(instance.id, reloadTick) {
+        stored = withContext(Dispatchers.IO) { manager?.loadManualBearerToken() }
+    }
     val hasToken = !stored.isNullOrEmpty()
 
     var isEditing by remember(instance.id) { mutableStateOf(false) }
