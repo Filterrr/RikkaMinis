@@ -8359,6 +8359,102 @@ class ChatViewModel(
         return entity.id
     }
 
+    /**
+     * Build the "内置集成" prompt fragment: the list of bundled platform
+     * skills (semantic-memory / github-sync-helper / cloudflare-fullright-ops)
+     * with their *current* capability tier, derived from each skill's
+     * `requirements.json`.
+     *
+     * Unlike the static `<available_skills>` block, this tells the agent
+     * what it can actually do right now — so it never needs to guess from
+     * trial-and-error whether a token is configured before attempting an
+     * operation. Returns null when no bundled platform skill applies to
+     * this session.
+     */
+    private fun buildIntegrationStatus(): String? {
+        val repo = skillRepository ?: return null
+        val platformIds = listOf("semantic-memory", "github-sync-helper", "cloudflare-fullright-ops")
+        val rows = mutableListOf<String>()
+
+        for (id in platformIds) {
+            val skill = repo.skills.value.find { it.id == id } ?: continue
+            if (!repo.isEnabledForSession(id, activeSessionId)) continue
+            val reqs = repo.loadSkillRequirements(id)
+            val tier = determineIntegrationTier(reqs)
+            val status = when (tier) {
+                2 -> "✅ 完整"
+                1 -> "⚠️ 只读"
+                else -> "⚡ 零配置"
+            }
+            val ops = reqs?.tiers?.get(tier.toString())
+                ?: skill.description.take(80)
+            rows.add("| ${skill.name} | $status | $ops |")
+        }
+
+        if (rows.isEmpty()) return null
+
+        return buildString {
+            append("## 内置集成\n\n")
+            append("以下平台技能已内置，无需手动安装。Tier 0 零配置即可使用；Tier 1/2 需配置对应环境变量（Settings → Environments 或 minis-config envvars）。\n\n")
+            append("| 集成 | 状态 | 可用操作 |\n")
+            append("|------|------|--------|\n")
+            rows.forEach { append(it).append("\n") }
+            append("\n")
+            append("使用涉及环境变量的操作前，请先检查对应变量是否已设置。")
+        }
+    }
+
+    /**
+     * Map a platform skill's `requirements.json` to a tier 0/1/2, based on
+     * which of its declared env vars are present in the app's environment
+     * config. Every requirement present → Tier 2; a partial subset → Tier 1;
+     * none → Tier 0. A skill with no declared `env` stays at Tier 0 (its
+     * operations are all zero-config).
+     */
+    private fun determineIntegrationTier(reqs: com.openminis.app.data.repository.SkillRepository.SkillRequirements?): Int {
+        val declared = reqs?.env?.keys ?: return 0
+        if (declared.isEmpty()) return 0
+        val configured = countConfiguredEnvVars(declared)
+        return when {
+            configured == declared.size -> 2
+            configured > 0 -> 1
+            else -> 0
+        }
+    }
+
+    /**
+     * Count how many of [names] exist as configured environment variables.
+     * Reads from minis-config's envvar store (the sandbox's exported env)
+     * — a variable exists iff it is non-blank. Robust: never throws; a
+     * missing/unreadable store counts every var as unconfigured.
+     */
+    private fun countConfiguredEnvVars(names: Set<String>): Int {
+        if (names.isEmpty()) return 0
+        return try {
+            val env = envVarsSnapshot()
+            names.count { env.containsKey(it) && !env[it].isNullOrBlank() }
+        } catch (e: Exception) {
+            Log.w(TAG, "countConfiguredEnvVars: ${e.message}")
+            0
+        }
+    }
+
+    /**
+     * Read the current environment-variable store as a snapshot map.
+     * Queries [com.openminis.app.data.repository.EnvVarRepository] which is
+     * the same encrypted store the sandbox injects. Only keys with a non-null
+     * stored value are returned — configured-but-blank vars don't count as
+     * present. Values are read internally by the repo but never surfaced
+     * outside `countConfiguredEnvVars` (we only test `containsKey`).
+     */
+    private fun envVarsSnapshot(): Map<String, String> =
+        try {
+            com.openminis.app.data.repository.EnvVarRepository(context).allAsDict()
+        } catch (e: Exception) {
+            Log.w(TAG, "envVarsSnapshot: ${e.message}")
+            emptyMap()
+        }
+
     private fun buildSystemPrompt(): String? {
         // Cache-friendly layout: keep `base` byte-stable by stripping out anything
         // that varies per request, then append a "Runtime context" suffix at the
@@ -8533,6 +8629,11 @@ Environment variables:
         // enabled-MCP disclosure, injected right after the skills fragment.
         mcpRepository?.reloadFromDisk()
         val mcpFragment = mcpRepository?.mcpPromptFragment(activeSessionId)
+        // Bundled platform integrations (semantic-memory / github-sync-helper /
+        // cloudflare-fullright-ops) with their current capability tier. Injected
+        // right after the skills fragment so the model knows what it can do with
+        // each platform before it tries anything.
+        val integrationFragment = buildIntegrationStatus()
         // [T-memory-toggle-gates-injection-and-tools-android] Skip loading
         // GLOBAL.md + recent daily logs entirely when the user has turned
         // memory off for this session. Cheaper (no disk read) and — more
@@ -8549,6 +8650,10 @@ Environment variables:
             if (skillFragment != null) {
                 append("\n\n")
                 append(skillFragment)
+            }
+            if (integrationFragment != null) {
+                append("\n\n")
+                append(integrationFragment)
             }
             if (mcpFragment != null) {
                 append("\n\n")
