@@ -2,9 +2,9 @@ package com.openminis.app.sandbox
 
 import android.content.Context
 import android.util.Log
+import com.termux.terminal.TerminalSessionClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -16,27 +16,24 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.io.File
 import java.lang.ref.WeakReference
+import java.nio.charset.StandardCharsets
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
- * Interactive PTY shell session — mirrors iOS ISHKernel + TerminalSession.
+ * Interactive PTY shell session backed by the Termux terminal emulator engine
+ * (com.termux.terminal). Replaces the hand-rolled [PtyBridge] + TerminalEmulator
+ * stack with industry-standard ANSI/CSI/OSC parsing, TUI compatibility, and
+ * mature keyboard / text-selection handling.
  *
- * Uses [PtyBridge.forkExec] to spawn `proot /bin/sh -l -i` attached to a real
- * PTY (via bionic forkpty). The shell sees `isatty(0)==true`, emits its PS1
- * prompt, honours termios echo/canonical/ISIG modes, and responds to signals,
- * arrow keys, Tab completion, and interactive programs (vi, top, gh auth login)
- * identically to iSH on iOS.
- *
- * Output is delivered as raw bytes through [outputBytes]; a TerminalEmulator
- * should consume these and parse ANSI sequences.
+ * Output is delivered as raw bytes through [outputBytes]; consumers that still
+ * feed a legacy TerminalEmulator can continue to use this same Flow. The new
+ * Termux-backed TerminalScreen (Layer 4) reads directly from the Termux
+ * TerminalView, which is driven by the [termuxSession] below.
  */
 class TerminalSession(private val context: Context) {
 
     companion object {
         private const val TAG = "TerminalSession"
-        private const val READ_BUFFER_SIZE = 8192
-        /** Max bytes per PTY write; larger pastes are chunked so nothing is dropped. */
-        private const val CHUNK_SIZE = 2048
         const val DEFAULT_COLS = 80
         const val DEFAULT_ROWS = 24
 
@@ -58,11 +55,7 @@ class TerminalSession(private val context: Context) {
             liveSessions.removeAll(dead)
         }
 
-        /**
-         * Broadcast the HTTP-proxy env block to every live interactive shell.
-         * Sends `export KEY=value` for each pair — empty values clear a
-         * previously-set proxy in one round trip.
-         */
+        /** Broadcast the HTTP-proxy env block to every live interactive shell. */
         fun broadcastProxy(env: Map<String, String>) {
             val dead = mutableListOf<WeakReference<TerminalSession>>()
             for (ref in liveSessions) {
@@ -79,30 +72,46 @@ class TerminalSession(private val context: Context) {
     private val _state = MutableStateFlow(State.IDLE)
     val state: StateFlow<State> = _state.asStateFlow()
 
-    /** Raw PTY output bytes (not sanitized — feed directly into TerminalEmulator). */
+    /** Raw PTY output bytes — delta stream for legacy consumers not using Termux TerminalView. */
     private val _outputBytes = MutableSharedFlow<ByteArray>(
         extraBufferCapacity = 64,
         onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST,
     )
     val outputBytes: SharedFlow<ByteArray> = _outputBytes.asSharedFlow()
 
-    /** Counter bumped on every reset() / clearOutput() — lets UI wipe emulator state. */
+    /** Counter bumped on every clearOutput() — lets UI wipe emulator state. */
     private val _clearVersion = MutableStateFlow(0)
     val clearVersion: StateFlow<Int> = _clearVersion.asStateFlow()
 
-    private var masterFd: Int = -1
-    private var childPid: Int = 0
-    private var readerJob: Job? = null
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // --- Termux engine internals ---
+
+    /** Underlying Termux portable terminal session (PTY + emulator in one). */
+    @Volatile
+    var termuxSession: com.termux.terminal.TerminalSession? = null
+        private set
+
+    /** Track last transcript length so we can emit delta bytes on text changes. */
+    @Volatile
+    private var lastTranscriptLength: Int = 0
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     @Volatile private var cols: Int = DEFAULT_COLS
     @Volatile private var rows: Int = DEFAULT_ROWS
 
     val isRunning: Boolean get() = _state.value == State.RUNNING
 
+    // ──────────────────────────────────────────────
+    //  Start / Stop
+    // ──────────────────────────────────────────────
+
     /**
-     * Start the PTY-backed shell. Call [setWindowSize] first if you know the
-     * target geometry — otherwise boots at 80×24 and expects a resize callback.
+     * Start the PTY-backed shell via Termux engine.
+     * Call [setWindowSize] first if you know the target geometry.
+     *
+     * Termux [com.termux.terminal.TerminalSession] creates the PTY internally
+     * from the supplied executable path and arguments — we pass PRoot as the
+     * executable with the same args the legacy [buildInteractiveCommand] built.
      */
     fun start(sessionId: String? = null, initialCols: Int = DEFAULT_COLS, initialRows: Int = DEFAULT_ROWS) {
         if (_state.value == State.RUNNING) return
@@ -114,110 +123,82 @@ class TerminalSession(private val context: Context) {
             try {
                 PRootKernel.boot(context)
 
+                // Seed per-session env into the shared customEnvironment so the
+                // interactive shell inherits agent-configured vars.
                 if (sessionId != null) {
                     ExecutionCoordinator.envVarRepository?.allAsDict()?.let { envVars ->
                         PRootKernel.customEnvironment.putAll(envVars)
                     }
                 }
 
-                val cmdList = buildInteractiveCommand(sessionId)
-                val cmd = cmdList.first()
-                val argv = cmdList.toTypedArray()
+                val rootfsManager = RootfsManager.getInstance(context)
+                val proot = rootfsManager.prootBinary.absolutePath
+                val filesDir = context.filesDir.absolutePath
 
-                // Environment in KEY=VALUE form
-                val envMap = LinkedHashMap<String, String>()
-                envMap["PROOT_TMP_DIR"] = PRootKernel.getProotTmpDir(context).absolutePath
-                if (PRootKernel.nativeLibDir.isNotEmpty())
-                    envMap["LD_LIBRARY_PATH"] = PRootKernel.nativeLibDir
-                if (PRootKernel.prootLoaderPath.isNotEmpty())
-                    envMap["PROOT_LOADER"] = PRootKernel.prootLoaderPath
-                if (PRootKernel.prootLoader32Path.isNotEmpty())
-                    envMap["PROOT_LOADER_32"] = PRootKernel.prootLoader32Path
-                envMap["TERM"] = "xterm-256color"
-                envMap["LANG"] = "C.UTF-8"
-                envMap["LC_ALL"] = "C.UTF-8"
-                // Timezone: PRootKernel.boot() already seeded customEnvironment["TZ"],
-                // but set a fresh value here too in case the kernel was booted earlier
-                // and the system timezone changed since.
-                envMap["TZ"] = PRootKernel.posixTz()
-                for ((k, v) in PRootKernel.customEnvironment) envMap[k] = v
-                ExecutionCoordinator.envVarRepository?.allAsDict()?.forEach { (k, v) -> envMap[k] = v }
+                // Build PRoot arguments (mirrors legacy buildInteractiveCommand).
+                val args = buildTermuxArgs(sessionId, rootfsManager)
+                val env = buildTermuxEnv(rootfsManager)
 
-                val envp = envMap.map { (k, v) -> "$k=$v" }.toTypedArray()
-                val cwd = File(cmd).parentFile?.absolutePath
+                val client = TermuxSessionClient()
+                val session = com.termux.terminal.TerminalSession(
+                    proot,
+                    filesDir,
+                    args.toTypedArray(),
+                    env.toTypedArray(),
+                    emptyArray(), // filePaths — not used
+                    client,
+                )
+                session.updateSize(cols, rows)
 
-                val outPid = IntArray(1)
-                val fd = PtyBridge.forkExec(cmd, argv, envp, cwd, cols, rows, outPid)
-                if (fd < 0) {
-                    Log.e(TAG, "forkExec failed: errno=${-fd}")
-                    _outputBytes.emit("Failed to start PTY: errno=${-fd}\r\n".toByteArray())
-                    _state.value = State.STOPPED
-                    return@launch
-                }
-                masterFd = fd
-                childPid = outPid[0]
+                termuxSession = session
+                lastTranscriptLength = 0
                 _state.value = State.RUNNING
                 liveSessions.add(WeakReference(this@TerminalSession))
-                Log.i(TAG, "PTY started: fd=$fd pid=$childPid cols=$cols rows=$rows")
+                Log.i(TAG, "Termux PTY started: cols=$cols rows=$rows sessionId=$sessionId")
 
+                // If a session is active, cd into its workspace so the user lands
+                // in a familiar directory (mirrors legacy behaviour).
                 if (sessionId != null) {
                     kotlinx.coroutines.delay(300)
-                    writeInput("cd /var/minis && clear\n".toByteArray())
-                }
-
-                readerJob = scope.launch { readLoop() }
-
-                // Wait for child exit in a sibling coroutine.
-                scope.launch {
-                    val status = PtyBridge.waitFor(childPid)
-                    Log.i(TAG, "Child exited: status=$status")
-                    _outputBytes.emit("\r\n[Process exited: $status]\r\n".toByteArray())
-                    _state.value = State.STOPPED
+                    val initCmd = "cd /var/minis && clear\r".toByteArray()
+                    session.write(initCmd, 0, initCmd.size) // (text, offset, length)
                 }
             } catch (t: Throwable) {
-                Log.e(TAG, "Failed to start PTY session", t)
+                Log.e(TAG, "Failed to start Termux PTY session", t)
                 _outputBytes.emit("Error: ${t.message}\r\n".toByteArray())
                 _state.value = State.STOPPED
             }
         }
     }
 
-    private suspend fun readLoop() {
-        val fd = masterFd
-        val buf = ByteArray(READ_BUFFER_SIZE)
-        while (_state.value == State.RUNNING) {
-            val n = PtyBridge.readBytes(fd, buf, 0, buf.size)
-            if (n <= 0) {
-                // EOF or error → child exited / fd closed
-                if (n < 0) Log.d(TAG, "readBytes returned errno=${-n}")
-                break
-            }
-            _outputBytes.emit(buf.copyOf(n))
+    fun stop() {
+        val s = termuxSession
+        termuxSession = null
+        if (s != null) {
+            s.finishIfRunning()
         }
+        if (_state.value != State.STOPPED) _state.value = State.STOPPED
+        liveSessions.removeAll { it.get() === this || it.get() == null }
+        Log.i(TAG, "TerminalSession stopped")
     }
 
-    /** Send raw bytes to PTY master. Suitable for keystrokes, control codes, etc. */
+    // ──────────────────────────────────────────────
+    //  Input
+    // ──────────────────────────────────────────────
+
+    /** Send raw bytes to the PTY (keystrokes, control codes, etc.). */
     fun sendRawBytes(bytes: ByteArray) {
-        if (bytes.isEmpty() || masterFd < 0) return
-        scope.launch { writeInput(bytes) }
+        val s = termuxSession ?: return
+        if (bytes.isEmpty()) return
+        s.write(bytes, 0, bytes.size)
     }
 
     /**
-     * Send a UTF-8 string to the PTY, mirroring iOS TerminalInputView.insertText
-     * semantics while covering the cases that iOS handles implicitly through UIKit:
+     * Send a UTF-8 string to the PTY.
      *
-     *  - Unicode (CJK, emoji, combining chars): UTF-8 encoded verbatim.
-     *  - Line endings: `\r\n` and bare `\n` both collapse to `\r`. A TTY expects
-     *    CR for Enter; the kernel's ICRNL termios flag translates CR → NL on the
-     *    shell's read side, so the shell sees a newline as usual.
-     *  - Large pastes: chunked into ≤2048-byte writes and yielded between chunks
-     *    so the PTY's input buffer has time to drain and bytes aren't dropped.
-     *
-     * Ctrl sequences, arrow keys, and function keys come through TerminalInputView
-     * (hardware keys / accessory bar) as already-translated byte arrays via
-     * [sendRawBytes]. They deliberately do NOT go through [sendText] — that
-     * mirrors the iOS split where insertText handles printable text and
-     * pressesBegan handles function/arrow keys.
+     * Unicode (CJK, emoji) is UTF-8 encoded verbatim. Line endings (`\r\n` and
+     * bare `\n`) are collapsed to `\r` so the TTY's ICRNL termios flag maps
+     * them to newline as usual.
      */
     fun sendText(text: String) {
         if (text.isEmpty()) return
@@ -225,19 +206,70 @@ class TerminalSession(private val context: Context) {
         sendRawBytes(normalized.toByteArray(Charsets.UTF_8))
     }
 
-    /** Collapse CRLF / LF to CR so a real TTY treats them as Enter. */
+    /** Legacy — same as [sendText] + CR. */
+    @Deprecated("Use sendText / sendRawBytes instead — real TTY doesn't line-buffer.")
+    fun sendInput(text: String) {
+        sendRawBytes((normalizeLineEndings(text) + "\r").toByteArray(Charsets.UTF_8))
+    }
+
+    /** Send SIGINT (Ctrl+C, 0x03). */
+    fun sendInterrupt() {
+        sendRawBytes(byteArrayOf(0x03))
+    }
+
+    // ──────────────────────────────────────────────
+    //  Window size
+    // ──────────────────────────────────────────────
+
+    fun setWindowSize(newCols: Int, newRows: Int) {
+        if (newCols <= 0 || newRows <= 0) return
+        cols = newCols
+        rows = newRows
+        termuxSession?.updateSize(newCols, newRows)
+    }
+
+    // ──────────────────────────────────────────────
+    //  Output control
+    // ──────────────────────────────────────────────
+
+    /** Signal UI to wipe the emulator. Sends RIS (ESC c) to the shell. */
+    fun clearOutput() {
+        _clearVersion.value = _clearVersion.value + 1
+        sendRawBytes(byteArrayOf(0x1B, 'c'.code.toByte()))
+    }
+
+    // ──────────────────────────────────────────────
+    //  Env broadcasts
+    // ──────────────────────────────────────────────
+
+    private fun applyTimezone(tz: String) {
+        val line = "export TZ='${tz.replace("'", "'\\''")}'\r"
+        sendRawBytes(line.toByteArray(Charsets.UTF_8))
+    }
+
+    private fun applyEnvMap(env: Map<String, String>) {
+        if (env.isEmpty()) return
+        val sb = StringBuilder()
+        for ((k, v) in env) {
+            val escaped = v.replace("'", "'\\''")
+            sb.append("export ").append(k).append("='").append(escaped).append("'\r")
+        }
+        sendRawBytes(sb.toString().toByteArray(Charsets.UTF_8))
+    }
+
+    // ──────────────────────────────────────────────
+    //  Helpers
+    // ──────────────────────────────────────────────
+
     private fun normalizeLineEndings(text: String): String {
-        // Fast path: no newlines to rewrite.
         if ('\n' !in text && '\r' !in text) return text
         val sb = StringBuilder(text.length)
         var i = 0
         val n = text.length
         while (i < n) {
-            val c = text[i]
-            when (c) {
+            when (val c = text[i]) {
                 '\r' -> {
                     sb.append('\r')
-                    // Swallow a following \n so \r\n becomes a single \r.
                     if (i + 1 < n && text[i + 1] == '\n') i++
                 }
                 '\n' -> sb.append('\r')
@@ -248,126 +280,20 @@ class TerminalSession(private val context: Context) {
         return sb.toString()
     }
 
-    /** Legacy API — same as [sendText] but appends a newline. Kept for the deprecated line-input UI. */
-    @Deprecated("Use sendText / sendRawBytes instead — real TTY doesn't line-buffer.")
-    fun sendInput(text: String) {
-        // Use CR, not LF — a real TTY treats CR as Enter (termios ICRNL handles the rest).
-        sendRawBytes((normalizeLineEndings(text) + "\r").toByteArray(Charsets.UTF_8))
-    }
+    /** Build the PRoot argument list for Termux TerminalSession. */
+    private fun buildTermuxArgs(sessionId: String?, rootfsManager: RootfsManager): List<String> {
+        val args = mutableListOf<String>()
 
-    /** Send SIGINT (Ctrl+C handled by kernel thanks to termios ISIG). */
-    fun sendInterrupt() {
-        // With a real PTY, writing 0x03 to the master triggers SIGINT via
-        // termios VINTR — which is the correct, portable path.
-        sendRawBytes(byteArrayOf(0x03))
-    }
+        args.add("-0")
+        args.add("--link2symlink")
+        args.add("--kill-on-exit")
+        args.add("-r"); args.add(rootfsManager.rootfsDir.absolutePath)
+        args.add("-b"); args.add("/dev")
+        args.add("-b"); args.add("/proc")
+        args.add("-b"); args.add("/sys")
+        args.add("-w"); args.add("/root")
 
-    /** Resize PTY window — emits SIGWINCH so the shell redraws its prompt. */
-    fun setWindowSize(newCols: Int, newRows: Int) {
-        if (newCols <= 0 || newRows <= 0) return
-        cols = newCols
-        rows = newRows
-        if (masterFd >= 0) {
-            val rc = PtyBridge.setWindowSize(masterFd, newCols, newRows)
-            if (rc < 0) Log.w(TAG, "setWindowSize failed: errno=${-rc}")
-        }
-    }
-
-    fun stop() {
-        readerJob?.cancel()
-        readerJob = null
-        val fd = masterFd
-        val pid = childPid
-        masterFd = -1
-        childPid = 0
-        if (fd >= 0) PtyBridge.closeFd(fd)
-        if (pid > 0) PtyBridge.sendSignal(pid, 15) // SIGTERM
-        if (_state.value != State.STOPPED) _state.value = State.STOPPED
-        liveSessions.removeAll { it.get() === this || it.get() == null }
-    }
-
-    /**
-     * Push a new TZ value into the running interactive shell via stdin.
-     * Uses CR as the line terminator (termios ICRNL maps it to NL for the shell).
-     */
-    private fun applyTimezone(tz: String) {
-        if (masterFd < 0) return
-        val line = "export TZ='${tz.replace("'", "'\\''")}'\r"
-        sendRawBytes(line.toByteArray(Charsets.UTF_8))
-    }
-
-    /**
-     * Push a block of env vars into the running interactive shell via stdin.
-     * Each key is `export`ed on its own line with POSIX single-quote escaping.
-     * Empty values are exported verbatim — this lets a proxy-unset transition
-     * clear previously-set proxy vars in one round trip.
-     */
-    private fun applyEnvMap(env: Map<String, String>) {
-        if (masterFd < 0 || env.isEmpty()) return
-        val sb = StringBuilder()
-        for ((k, v) in env) {
-            val escaped = v.replace("'", "'\\''")
-            sb.append("export ").append(k).append("='").append(escaped).append("'\r")
-        }
-        sendRawBytes(sb.toString().toByteArray(Charsets.UTF_8))
-    }
-
-    /** Signal UI to wipe the emulator. No PTY bytes are written. */
-    fun clearOutput() {
-        _clearVersion.value = _clearVersion.value + 1
-    }
-
-    private suspend fun writeInput(bytes: ByteArray) {
-        val fd = masterFd
-        if (fd < 0) return
-        // PTY master writes may return a short count at PIPE_BUF (~4096) boundaries
-        // or under backpressure. Loop until all bytes are written; cap per-call size
-        // to CHUNK so large pastes don't monopolize the PTY or block the caller.
-        var off = 0
-        while (off < bytes.size) {
-            val take = minOf(CHUNK_SIZE, bytes.size - off)
-            val rc = PtyBridge.writeBytes(fd, bytes, off, take)
-            if (rc < 0) {
-                Log.w(TAG, "writeBytes failed: errno=${-rc}")
-                return
-            }
-            if (rc == 0) {
-                // Shouldn't happen on a healthy fd; bail rather than spin.
-                Log.w(TAG, "writeBytes returned 0 at off=$off size=${bytes.size}")
-                return
-            }
-            off += rc
-            // Yield after each chunk so the PTY reader side has time to drain.
-            if (off < bytes.size) kotlinx.coroutines.yield()
-        }
-    }
-
-    private fun buildInteractiveCommand(sessionId: String? = null): List<String> {
-        check(PRootKernel.isBooted) { "PRootKernel must be booted" }
-        val rootfsManager = RootfsManager.getInstance(context)
-        val cmd = mutableListOf<String>()
-        cmd.add(rootfsManager.prootBinary.absolutePath)
-        cmd.add("-0")
-        // T141: see PRootKernel.buildProotCommand for rationale — translates
-        // hardlinks to symlinks so apk install of binutils/gcc works.
-        cmd.add("--link2symlink")
-        // [P2-proot-resource-hygiene] Ask PRoot to exit once the child /bin/sh
-        // terminates, mirroring PersistentShell.startProcess(). Without this,
-        // the PRoot tracer leaks native memory through the PTY master fd when
-        // the interactive session is closed.
-        cmd.add("--kill-on-exit")
-        cmd.add("-r"); cmd.add(rootfsManager.rootfsDir.absolutePath)
-        cmd.add("-b"); cmd.add("/dev")
-        cmd.add("-b"); cmd.add("/proc")
-        cmd.add("-b"); cmd.add("/sys")
-        cmd.add("-w"); cmd.add("/root")
-
-        // Start from the global bind mounts, then overlay this session's
-        // per-session dirs so the terminal sees the correct attachments/
-        // workspace/offloads/browser for the active session. (The global
-        // map no longer carries per-session dirs — buildSessionBindMounts
-        // keeps them session-local, so without this overlay an interactive
-        // terminal would mount the empty rootfs placeholder for those paths.)
+        // Bind mounts — global + per-session overlay.
         val mounts = PRootKernel.bindMounts.toMutableMap()
         if (sessionId != null) {
             val sessionBase = File(context.filesDir, "minis-sessions/$sessionId")
@@ -379,18 +305,99 @@ class TerminalSession(private val context: Context) {
             }
         }
         for ((linuxPath, hostPath) in mounts) {
-            cmd.add("-b"); cmd.add("$hostPath:$linuxPath")
+            args.add("-b"); args.add("$hostPath:$linuxPath")
         }
 
+        // Native offload socket.
         val handlers = NativeOffloadServer.registeredHandlers
         if (handlers.isNotEmpty()) {
-            cmd.add("--native-offload=${NativeOffloadServer.socketName}:${handlers.joinToString(",")}")
+            args.add("--native-offload=${NativeOffloadServer.socketName}:${handlers.joinToString(",")}")
         }
 
-        // Login + interactive so /etc/profile is sourced (readline, history, color aliases).
-        cmd.add("/bin/sh")
-        cmd.add("-l")
-        cmd.add("-i")
-        return cmd
+        // Login + interactive shell.
+        args.add("/bin/sh")
+        args.add("-l")
+        args.add("-i")
+        return args
+    }
+
+    /** Build the environment array for Termux TerminalSession. */
+    private fun buildTermuxEnv(rootfsManager: RootfsManager): List<String> {
+        val envMap = LinkedHashMap<String, String>()
+        envMap["PROOT_TMP_DIR"] = PRootKernel.getProotTmpDir(context).absolutePath
+        if (PRootKernel.nativeLibDir.isNotEmpty())
+            envMap["LD_LIBRARY_PATH"] = PRootKernel.nativeLibDir
+        if (PRootKernel.prootLoaderPath.isNotEmpty())
+            envMap["PROOT_LOADER"] = PRootKernel.prootLoaderPath
+        if (PRootKernel.prootLoader32Path.isNotEmpty())
+            envMap["PROOT_LOADER_32"] = PRootKernel.prootLoader32Path
+        envMap["TERM"] = "xterm-256color"
+        envMap["LANG"] = "C.UTF-8"
+        envMap["LC_ALL"] = "C.UTF-8"
+        envMap["TZ"] = PRootKernel.posixTz()
+        for ((k, v) in PRootKernel.customEnvironment) envMap[k] = v
+        ExecutionCoordinator.envVarRepository?.allAsDict()?.forEach { (k, v) -> envMap[k] = v }
+        return envMap.map { (k, v) -> "$k=$v" }
+    }
+
+    // ──────────────────────────────────────────────
+    //  TermuxSessionClient — callbacks → outputBytes
+    // ──────────────────────────────────────────────
+
+    /**
+     * Bridges Termux terminal events into the legacy [outputBytes] flow so
+     * existing consumers (logging, the legacy TerminalEmulator path) keep
+     * receiving output deltas.
+     *
+     * In the new TerminalScreen (Layer 4) the Termux TerminalView reads
+     * directly from the [termuxSession]; this client exists only for
+     * backward-compatible side channels.
+     */
+    private inner class TermuxSessionClient : TerminalSessionClient {
+        override fun onTextChanged(changedSession: com.termux.terminal.TerminalSession) {
+            try {
+                // Emit delta bytes since last callback.
+                val screen = changedSession.emulator?.mScreen ?: return
+                val transcript = screen.transcriptText ?: ""
+                val transcriptLen = transcript.length
+                if (transcriptLen > lastTranscriptLength) {
+                    val delta = transcript.substring(lastTranscriptLength)
+                    lastTranscriptLength = transcriptLen
+                    if (delta.isNotEmpty()) {
+                        _outputBytes.tryEmit(delta.toByteArray(StandardCharsets.UTF_8))
+                    }
+                }
+            } catch (_: Exception) {
+                // Termux internals may throw on rapid session teardown.
+            }
+        }
+
+        override fun onTitleChanged(changedSession: com.termux.terminal.TerminalSession) {
+            // Not surfaced in the legacy API; TerminalScreen can read directly.
+        }
+
+        override fun onSessionFinished(changedSession: com.termux.terminal.TerminalSession) {
+            Log.i(TAG, "Termux session finished: exitCode=${changedSession.exitStatus}")
+            _outputBytes.tryEmit(
+                "\r\n[Process exited: ${changedSession.exitStatus}]\r\n".toByteArray()
+            )
+            _state.value = State.STOPPED
+        }
+
+        override fun onClipboardText(requestor: com.termux.terminal.TerminalSession, text: String) {
+            // Handled by Termux TerminalView's built-in clipboard support.
+        }
+
+        override fun onBell(requestor: com.termux.terminal.TerminalSession) {
+            // No action needed — Termux TerminalView handles visual bell.
+        }
+
+        override fun onColorsChanged(changedSession: com.termux.terminal.TerminalSession) {
+            // TerminalScreen theme handles this.
+        }
+
+        override fun onTerminalCursorStateChanged(state: Int) {
+            // Cursor visibility managed by Termux TerminalView.
+        }
     }
 }
