@@ -101,7 +101,7 @@ SHA-256  FC:0C:40:0D:B7:7E:C1:81:A3:35:18:C2:E8:13:6A:AE
 - **备份测试在 CI 中运行。** 备份负载测试在 APK 构建之前执行。
 - **iOS 源码已移除。** `src/ios/` 已删除；本树仅限 Android。
 - **自动发布。** 成功构建会把 APK 发布到 `android-latest` release。
-- **平台技能打进资产包。** `semantic-memory`、`github-sync-helper`、
+- **平台技能打进资产包。** `semantic-memory`、`github-ops`、
   `cloudflare-fullright-ops`、`skill-creator` 四个技能（含脚本）随 APK
   一起打包在 `assets/skills/`，安装即自带，无需手动安装。
 - **集成状态动态注入 system prompt。** 每个内置技能带一份 `requirements.json`
@@ -144,7 +144,7 @@ token，为每个平台算出一个当前能力等级（零配置 / 只读 / 完
 
 | 平台 | 技能 | 能做什么 | 需要的 token | 最低 / 完整等级 |
 |---|---|---|---|---|
-| **GitHub** | `github-sync-helper` | 推送代码、触发 CI、管理 issue/label/release/PR、查状态 | `GITHUB_TOKEN` | Tier 1 只读 · Tier 2 完整 |
+| **GitHub** | `github-ops` | 推送代码、触发 CI、管理 issue/label/release/PR、查状态 | `GITHUB_TOKEN` | Tier 1 只读 · Tier 2 完整 |
 | **Cloudflare** | `cloudflare-fullright-ops` | 列/部署 Worker、管理 KV / R2、查 Zone / DNS | `CF_API_TOKEN` | Tier 1 只读 · Tier 2 完整 |
 | **Hugging Face** | `semantic-memory` | 语义搜索历史经验、读写 HF Dataset、跨设备持久化记忆 | `HF_TOKEN` | Tier 0 零配置搜索 · Tier 2 完整读写 |
 

@@ -1,5 +1,5 @@
 #!/bin/sh
-# github-sync-helper: reusable GitHub sync workflows for Minis
+# github-ops: reusable GitHub operations for Minis
 # Requirements: git, python3, env GITHUB_TOKEN
 set -e
 

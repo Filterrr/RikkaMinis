@@ -1,6 +1,6 @@
 ---
-name: github-sync-helper
-description: General GitHub basic operations + automation for GitHub platform objects (Issues/Labels/Milestones/Releases/Actions) in the Minis environment. This skill must be triggered when the user mentions any basic Git/GitHub operation or workflow, including "how to use GitHub," clone, init, remote, branch, commit, push, pull, fetch, merge, rebase, tag, release, issues, actions, labels, milestone, protected branches, fork, PR, sync to upstream, delete branches, restore after emptying a directory, push directly to main, or one-click sync.
+name: github-ops
+description: General GitHub/Git operations + automation for GitHub platform objects (Issues/Labels/Milestones/Releases/Actions) in the Minis environment. This skill must be triggered when the user mentions any Git/GitHub operation or workflow, including "how to use GitHub," clone, init, remote, branch, commit, push, pull, fetch, merge, rebase, tag, release, issues, actions, labels, milestone, protected branches, fork, PR, sync to upstream, delete branches, restore after emptying a directory, push directly to main, or one-click operations.
 version: 1.0.1
 ---
 ## Objectives
@@ -22,7 +22,7 @@ Codify GitHub/Git "basic operations" and common collaboration workflows into:
 
 ## How to Run
 
-- **Script entry point**: `sh /var/minis/skills/github-sync-helper/scripts/gh_sync.sh <command> [options]`
+- **Script entry point**: `sh /var/minis/skills/github-ops/scripts/gh_sync.sh <command> [options]`
 
 > The script runs in the "current Git repository directory" and must be run inside a repository.
 
@@ -98,10 +98,10 @@ Codify GitHub/Git "basic operations" and common collaboration workflows into:
 ### 1) Push directly to main: empty directory -> restore directory -> push (the workflow you just used)
 
 ```bash
-sh /var/minis/skills/github-sync-helper/scripts/gh_sync.sh empty-dir --dir self-improving-agent
-sh /var/minis/skills/github-sync-helper/scripts/gh_sync.sh restore-dir --src /var/minis/skills/self-improving-agent --dst self-improving-agent
-sh /var/minis/skills/github-sync-helper/scripts/gh_sync.sh commit --message "restore(self-improving-agent): sync from local"
-sh /var/minis/skills/github-sync-helper/scripts/gh_sync.sh push-main
+sh /var/minis/skills/github-ops/scripts/gh_sync.sh empty-dir --dir self-improving-agent
+sh /var/minis/skills/github-ops/scripts/gh_sync.sh restore-dir --src /var/minis/skills/self-improving-agent --dst self-improving-agent
+sh /var/minis/skills/github-ops/scripts/gh_sync.sh commit --message "restore(self-improving-agent): sync from local"
+sh /var/minis/skills/github-ops/scripts/gh_sync.sh push-main
 ```
 
 ### 4) Replace only the contents of a target file in the repository (preserve the original path and filename), then commit and push
@@ -146,13 +146,13 @@ Key points:
 ### 5) Delete all branches except main (local + remote)
 
 ```bash
-sh /var/minis/skills/github-sync-helper/scripts/gh_sync.sh delete-branches --keep main
+sh /var/minis/skills/github-ops/scripts/gh_sync.sh delete-branches --keep main
 ```
 
 ### 6) Do not create a branch; open a PR directly from fork:main to upstream:main
 
 ```bash
-sh /var/minis/skills/github-sync-helper/scripts/gh_sync.sh pr \
+sh /var/minis/skills/github-ops/scripts/gh_sync.sh pr \
   --upstream OpenMinis/MinisSkills \
   --head GH_USER_NAME:main \
   --base main \

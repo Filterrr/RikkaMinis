@@ -1151,7 +1151,7 @@ class SkillRepository(private val context: Context) {
      * file (`scripts/`, `*.py`, `*.pkl`, `requirements.json`, …) is
      * extracted to the skill's sandbox directory. This replaces the old
      * single hardcoded `skill-creator` bundle so platform skills
-     * (semantic-memory, github-sync-helper, cloudflare-fullright-ops) ship
+     * (semantic-memory, github-ops, cloudflare-fullright-ops) ship
      * in the app out of the box.
      *
      * Version-gated: a skill already installed at the same-or-newer version

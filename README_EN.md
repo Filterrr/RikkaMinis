@@ -131,7 +131,7 @@ Android-specific product changes that are not present upstream.
 - **Automatic releases.** Successful builds publish the APK to the
   `android-latest` release.
 - **Platform skills shipped in assets.** `semantic-memory`,
-  `github-sync-helper`, `cloudflare-fullright-ops` and `skill-creator`
+  `github-ops`, `cloudflare-fullright-ops` and `skill-creator`
   (with their scripts) are bundled under `app/src/main/assets/skills/`,
   so a fresh install has them ready with zero manual setup.
 - **Integration status injected into the system prompt.** Each bundled
@@ -184,7 +184,7 @@ trial-and-error.
 
 | Platform | Skill | Capabilities | Token needed | Min / full tier |
 |---|---|---|---|---|
-| **GitHub** | `github-sync-helper` | Push code, trigger CI, manage issues / labels / releases / PRs, query status | `GITHUB_TOKEN` | Tier 1 read-only · Tier 2 full |
+| **GitHub** | `github-ops` | Push code, trigger CI, manage issues / labels / releases / PRs, query status | `GITHUB_TOKEN` | Tier 1 read-only · Tier 2 full |
 | **Cloudflare** | `cloudflare-fullright-ops` | List / deploy Workers, manage KV / R2, query Zones / DNS | `CF_API_TOKEN` | Tier 1 read-only · Tier 2 full |
 | **Hugging Face** | `semantic-memory` | Semantic search of past experience, read/write HF Datasets, cross-device persistent memory | `HF_TOKEN` | Tier 0 zero-config search · Tier 2 full read/write |
 
