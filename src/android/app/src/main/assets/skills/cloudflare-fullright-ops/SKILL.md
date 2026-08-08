@@ -1,7 +1,7 @@
 ---
 name: cloudflare-fullright-ops
 description: Cloudflare 小号（CF_ACCOUNT_EMAIL's Account，Account ID CF_ACCOUNT_ID）全权限操作。当用户提到 CF/Cloudflare 小号、Cloudflare Workers/R2/DNS/Zone、cfat token，或需要查询/操作 Cloudflare 账号资源（列 Workers、查 DNS、R2 桶、账号设置）时触发。调用方式：直接 curl api.cloudflare.com。
-version: 1.0.0
+version: 1.0.1
 ---
 # Cloudflare 满权限小号操作
 
