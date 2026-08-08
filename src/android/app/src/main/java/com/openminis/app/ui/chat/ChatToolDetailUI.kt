@@ -112,7 +112,6 @@ import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DataUsage
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Error
@@ -303,7 +302,7 @@ internal fun ToolDetailSheet(
                 .fillMaxHeight(0.85f)
                 .background(ChatColors.secondaryBg),
         ) {
-            // ── Top Nav Bar (iOS: X button + "Minis Computer" + action button) ──
+            // ── Top Nav Bar ("Minis Computer" + action button) ──
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -311,24 +310,6 @@ internal fun ToolDetailSheet(
                     .padding(horizontal = 16.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // Close button (iOS: xmark in circle)
-                Box(
-                    modifier = Modifier
-                        .size(32.dp)
-                        .background(ChatColors.secondaryBg, CircleShape)
-                        .border(0.5.dp, ChatColors.inputIconBorder, CircleShape)
-                        .clip(CircleShape)
-                        .clickable { onDismiss() },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        Icons.Default.Close,
-                        contentDescription = "Close",
-                        tint = ChatColors.primaryText,
-                        modifier = Modifier.size(16.dp),
-                    )
-                }
-
                 Spacer(modifier = Modifier.weight(1f))
 
                 // [T-step-timestamp v3 aa8b1128] Sheet header reverted to a
