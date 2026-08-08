@@ -6,6 +6,8 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.media.AudioAttributes
+import android.media.SoundPool
 import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
@@ -60,8 +62,12 @@ class BackgroundTaskNotifier(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    private var completionSoundId: Int = 0
+    private var soundPool: SoundPool? = null
+
     init {
         ensureChannel()
+        initSoundPool()
     }
 
     /**
@@ -90,6 +96,14 @@ class BackgroundTaskNotifier(
                         context.getString(R.string.notif_task_completed_body)
                     }
                     postNotification(sessionId, title, body)
+                } else {
+                    // [feat-completion-sound] Foreground: play a short
+                    // chime alongside vibration so the user notices
+                    // completion even when the phone is on a desk or
+                    // they're wearing headphones. SoundPool +
+                    // USAGE_NOTIFICATION respects system DND/silent
+                    // mode automatically.
+                    playCompletionSound()
                 }
                 // [feat-vibrate-task-complete] Direct haptic on completion,
                 // regardless of foreground/background. When the app is in
@@ -170,6 +184,40 @@ class BackgroundTaskNotifier(
             } catch (t: Throwable) {
                 AppLogger.warning(TAG, "notifyWorkCompleted failed: ${t.message}")
             }
+        }
+    }
+
+    private fun initSoundPool() {
+        try {
+            val attrs = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
+            soundPool = SoundPool.Builder()
+                .setMaxStreams(1)
+                .setAudioAttributes(attrs)
+                .build()
+            completionSoundId = soundPool?.load(context, R.raw.task_complete, 1) ?: 0
+        } catch (t: Throwable) {
+            AppLogger.warning(TAG, "initSoundPool failed: ${t.message}")
+        }
+    }
+
+    /**
+     * [feat-completion-sound] Play a short completion chime via
+     * SoundPool. Deliberately uses USAGE_NOTIFICATION so the system
+     * DND/silent-mode gating applies automatically — the user won't
+     * hear a ding during a meeting if their phone is on silent.
+     * Errors are swallowed; sound is a nice-to-have, never blocks
+     * the completion path. No-op when the sound hasn't loaded yet
+     * (completionSoundId == 0).
+     */
+    private fun playCompletionSound() {
+        if (completionSoundId == 0) return
+        try {
+            soundPool?.play(completionSoundId, 1f, 1f, 1, 0, 1f)
+        } catch (t: Throwable) {
+            AppLogger.warning(TAG, "playCompletionSound failed: ${t.message}")
         }
     }
 
