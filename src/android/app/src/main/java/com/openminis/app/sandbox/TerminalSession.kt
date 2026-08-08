@@ -145,7 +145,9 @@ class TerminalSession(private val context: Context) {
                 val filesDir = context.filesDir.absolutePath
 
                 // Build PRoot arguments (mirrors legacy buildInteractiveCommand).
-                val args = buildTermuxArgs(sessionId, rootfsManager)
+                // Pass the proot binary path so it lands in argv[0] — critical
+                // for PRoot's option parsing (see buildTermuxArgs docs).
+                val args = buildTermuxArgs(sessionId, rootfsManager, proot)
                 val env = buildTermuxEnv(rootfsManager)
 
                 val client = TermuxSessionClient()
@@ -185,11 +187,84 @@ class TerminalSession(private val context: Context) {
         termuxSession = null
         attachedView = null
         if (s != null) {
-            s.finishIfRunning()
+            killTermuxProcessTree(s)
         }
         if (_state.value != State.STOPPED) _state.value = State.STOPPED
         liveSessions.removeAll { it.get() === this || it.get() == null }
         Log.i(TAG, "TerminalSession stopped")
+    }
+
+    /** The PRoot pid backing the given Termux session, via reflection. */
+    private fun termuxShellPid(s: com.termux.terminal.TerminalSession): Int? = try {
+        val f = s.javaClass.getDeclaredField("mShellPid")
+        f.isAccessible = true
+        f.getInt(s).takeIf { it > 0 }
+    } catch (_: Throwable) { null }
+
+    /**
+     * Enumerate the full descendant subtree of [pid] via
+     * /proc/<pid>/task/*/children. Returns children-first (leaf) order.
+     */
+    private fun collectDescendants(pid: Int): List<Int> {
+        val seen = mutableSetOf<Int>()
+        val out = mutableListOf<Int>()
+        fun walk(p: Int) {
+            if (!seen.add(p)) return
+            try {
+                val taskDir = File("/proc/$p/task")
+                val children = taskDir.listFiles()?.flatMap { tidDir ->
+                    runCatching {
+                        File(tidDir, "children").readText().trim()
+                            .split(Regex("\\s+")).filter { it.isNotEmpty() }.map { it.toInt() }
+                    }.getOrElse { emptyList() }
+                } ?: emptyList()
+                for (c in children) { out.add(c); walk(c) }
+            } catch (_: Throwable) { }
+        }
+        walk(pid)
+        return out
+    }
+
+    /**
+     * Kill the entire PRoot tree owned by this Termux session, not just the
+     * tracer itself. [com.termux.terminal.TerminalSession.finishIfRunning]
+     * only SIGKILLs mShellPid (the PRoot tracer); its children (bash, and
+     * anything bash spawned) survive as orphans whose native memory still
+     * counts against this app's process group. Rapid open/close cycles then
+     * accumulate orphaned trees and exhaust the Scudo allocator
+     * (SIGABRT "Can't populate more pages" — the OOM crashes the user is
+     * seeing). Kill leaves first, then the root, and fall back to Termux's
+     * own finish for the root's cleanup path.
+     *
+     * Three layered strategies (each is best-effort):
+     *  1. /proc children walk — kills descendants individually (leaves
+     *     first, so nobody gets reparented into a zombie gap).
+     *  2. killProcessGroup — Termux's JNI forks with setsid(), so the
+     *     PRoot tree is its own process group; this nukes the whole group
+     *     even if /proc children is unreadable under hidepid.
+     *  3. finishIfRunning() — Termux's own teardown (closes ByteQueues,
+     *     JNI fds; wait-thread cleanupResources runs cleanly).
+     */
+    private fun killTermuxProcessTree(s: com.termux.terminal.TerminalSession) {
+        val pid = termuxShellPid(s)
+        if (pid != null) {
+            // (1) Descendant walk via /proc — best-effort.
+            try {
+                val tree = listOf(pid) + collectDescendants(pid)
+                for (p in tree.asReversed()) {
+                    runCatching { android.os.Process.killProcess(p) }
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "killTermuxProcessTree walk failed: ${t.message}")
+            }
+            // (2) Whole-group kill — belt and braces when /proc is hidden.
+            runCatching {
+                android.os.Process.killProcessGroup(android.os.Process.myUid(), pid)
+            }
+        }
+        // (3) Termux's own teardown — closes the ByteQueues/JNI fds and
+        // triggers the wait-thread cleanupResources for a clean close.
+        runCatching { s.finishIfRunning() }
     }
 
     /**
@@ -308,10 +383,27 @@ class TerminalSession(private val context: Context) {
         return sb.toString()
     }
 
-    /** Build the PRoot argument list for Termux TerminalSession. */
-    private fun buildTermuxArgs(sessionId: String?, rootfsManager: RootfsManager): List<String> {
+    /**
+     * Build the PRoot argument list for Termux TerminalSession.
+     *
+     * IMPORTANT: argv[0] must be the program name (the proot binary itself).
+     * Termux's JNI does `execvp(cmd, argv)` where `argv[0]` is argv[0] of the
+     * exec'd program — PRoot's `parse_config` starts parsing at `argv[1]`.
+     * If we omitted the proot path here (i.e. started the list directly with
+     * "-0"), then "-0" would land in argv[0] and never be parsed, the fake-id
+     * root would silently fail, and bash's PS1 `\u` would resolve to
+     * "I have no name!" because the app uid (11576) isn't in /etc/passwd.
+     * This mirrors upstream TermuxSession where `arguments[0] = processName`.
+     */
+    private fun buildTermuxArgs(
+        sessionId: String?,
+        rootfsManager: RootfsManager,
+        proot: String,
+    ): List<String> {
         val args = mutableListOf<String>()
 
+        // argv[0] → program name. Do NOT reorder this before proot.
+        args.add(proot)
         args.add("-0")
         args.add("--link2symlink")
         args.add("--kill-on-exit")
