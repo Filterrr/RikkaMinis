@@ -98,7 +98,7 @@ fun EnvironmentVariablesScreen(
         remember { mutableStateOf(emptyList()) }
     }
     val platformSkills = remember(allSkills) {
-        allSkills.filter { it.importSource == SkillRepository.ImportSource.BUNDLED }
+        allSkills
             .mapNotNull { skill ->
                 val req = skillRepository?.loadSkillRequirements(skill.id)
                     ?: return@mapNotNull null
