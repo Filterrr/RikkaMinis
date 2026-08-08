@@ -604,7 +604,7 @@ class ChatViewModel(
         } else {
             current.trimEnd() + " " + cleaned + " "
         }
-        setInputText(joined)
+        setInputText(joined, caretOverride = joined.length)
     }
 
     private val _isStreaming = MutableStateFlow(false)
