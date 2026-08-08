@@ -202,8 +202,9 @@ class TerminalSession(private val context: Context) {
     } catch (_: Throwable) { null }
 
     /**
-     * Enumerate the full descendant subtree of [pid] via
-     * /proc/<pid>/task/*/children. Returns children-first (leaf) order.
+     * Enumerate the full descendant subtree of [pid] by walking the
+     * task children entries under /proc. Returns children-first
+     * (leaf) order.
      */
     private fun collectDescendants(pid: Int): List<Int> {
         val seen = mutableSetOf<Int>()
