@@ -3,6 +3,8 @@ package com.openminis.app.ui.terminal
 import com.openminis.app.R
 import androidx.compose.ui.res.stringResource
 
+import android.view.KeyEvent
+import android.view.MotionEvent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -51,19 +53,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import com.openminis.app.sandbox.TerminalSession
 import com.openminis.app.terminal.MinisOpenUrlBroker
-import com.openminis.app.ui.terminal.canvas.TerminalNativeViewCompose
-import com.openminis.app.ui.terminal.canvas.TerminalInputView
-import com.openminis.app.ui.terminal.canvas.rememberTerminalInputController
-import com.openminis.app.ui.terminal.emulator.TerminalEmulator
+import com.termux.view.TerminalView
+import com.termux.view.TerminalViewClient
 import kotlinx.coroutines.launch
 
 // iOS-matched palette
@@ -75,66 +75,33 @@ private val AccButtonBg = Color(0xFF404040)
 private val AccButtonActive = Color(0xFF007AFF)
 private val TopButtonBg = Color(0xFF2C2C2E)
 
+/**
+ * Full-screen terminal — now backed by [Termux TerminalView] instead of the
+ * hand-rolled emulator. Ctrl and Alt are persistent toggle states that inject
+ * into the [TerminalViewClient] so pressing e.g. Ctrl then 'c' sends 0x03
+ * exactly like a physical keyboard.
+ */
 @Composable
 fun TerminalScreen(
     terminalSession: TerminalSession,
     onBack: () -> Unit,
     initCommand: String? = null,
-    /**
-     * When non-null, binds this terminal to the given chat session —
-     * TerminalSession.start() will chdir into /var/minis and pick up the
-     * session's env vars (mirrors iOS "Open Terminal" from chat).
-     */
     sessionId: String? = null,
 ) {
-    val emulator = remember { TerminalEmulator() }
-    val inputController = rememberTerminalInputController()
     val scope = rememberCoroutineScope()
-    var ctrlActive by remember { mutableStateOf(false) }
 
-    // Pipe PTY output → emulator.
-    LaunchedEffect(terminalSession) {
-        terminalSession.outputBytes.collect { bytes ->
-            emulator.feed(bytes)
-        }
-    }
+    // ── Ctrl / Alt persistent toggles ──────────────────────────────────────
+    var ctrlDown by remember { mutableStateOf(false) }
+    var altDown by remember { mutableStateOf(false) }
 
-    // Wire emulator responses (DSR etc.) back to the PTY.
-    DisposableEffect(terminalSession, emulator) {
-        emulator.onResponse = { data -> terminalSession.sendRawBytes(data) }
-        onDispose { emulator.onResponse = null }
-    }
-
-    // Clear emulator when session clearOutput() ticks.
-    val clearVersion by terminalSession.clearVersion.collectAsStateEffect()
-    LaunchedEffect(clearVersion) {
-        if (clearVersion > 0) {
-            emulator.feed("\u001Bc".toByteArray())   // RIS — full reset
-        }
-    }
-
-    // Start session + optional initCommand.
+    // ── Lifecycle ──────────────────────────────────────────────────────────
     LaunchedEffect(Unit) {
         if (!terminalSession.isRunning) terminalSession.start(sessionId = sessionId)
         if (!initCommand.isNullOrBlank()) {
-            // Pre-fill at the prompt without newline so the user can review.
             kotlinx.coroutines.delay(500)
             terminalSession.sendText(initCommand)
         }
     }
-
-    // T-android-terminal-keyboard-3a8f5e0b: Do NOT auto-focus the hidden input
-    // EditText on open. Previously a 20-tick retry loop here force-popped the
-    // IME on entry (matching iOS becomeFirstResponder), but on Android that
-    // caused two issues: (1) keyboard pops up unsolicited when the user just
-    // wants to read terminal output, (2) the back gesture's first press hides
-    // the IME, then the still-living retry loop (or a focus-restore on next
-    // composition) re-pops it, requiring a second back press to actually
-    // leave the screen. Android convention for read-eval shells is to let the
-    // user tap the canvas (handled below via `onTap = { requestFocus() }`) or
-    // the keyboard-toggle button in the accessory bar to deliberately invoke
-    // the IME — that single user action handles both opening the keyboard
-    // and (via the toggle) closing it, and a single back press now exits.
 
     DisposableEffect(Unit) {
         onDispose { terminalSession.stop() }
@@ -148,12 +115,7 @@ fun TerminalScreen(
         onDispose { MinisOpenUrlBroker.setTerminalVisible(false) }
     }
 
-    // OSC 1337 MinisOpenURL emitted by `/usr/local/bin/minis-open` is parsed
-    // by TerminalEmulator and forwarded to MinisOpenUrlBroker. From the
-    // standalone terminal we only route web schemes (http(s)/about) into an
-    // in-app WebView preview; minis://-style chat resources need ChatScreen's
-    // resolver and aren't reachable here, so we still consume them to avoid
-    // leaking a stale pendingUrl back to chat on next attach.
+    // ── OSC 1337 MinisOpenURL ──────────────────────────────────────────────
     var previewUrl by remember { mutableStateOf<String?>(null) }
     val pendingUrl by MinisOpenUrlBroker.pendingUrl.collectAsStateEffect()
     LaunchedEffect(pendingUrl) {
@@ -164,20 +126,10 @@ fun TerminalScreen(
         MinisOpenUrlBroker.consume()
     }
 
-    // T290: Layered layout — top bar fixed, canvas fills middle, accessory
-    // bar pinned to bottom and lifted above the IME via Modifier.imePadding().
-    //
-    // Pre-T290 this was an off-window Popup + manually-tracked IME height
-    // built around a Pixel/Gboard PAN-mode quirk. That misfired on pixel6
-    // (bar still under the keyboard). With windowSoftInputMode=adjustResize
-    // already set in the manifest, edge-to-edge enabled, and modern Pixel
-    // builds reporting WindowInsets.ime correctly, a plain in-window Box +
-    // imePadding does the right thing without any custom tracking.
     val accessoryBarHeightDp = 40.dp
 
     Box(modifier = Modifier.fillMaxSize().background(TerminalBg)) {
-        // Main content: top bar + canvas. imePadding() lifts the canvas
-        // above the keyboard so it's never covered.
+        // ── Main content ───────────────────────────────────────────────────
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -187,40 +139,34 @@ fun TerminalScreen(
         ) {
             Spacer(modifier = Modifier.height(52.dp))
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                // T194 part-2: native Android View backing gives us long-press
-                // selection + ActionMode + ClipboardManager copy. The old
-                // TerminalCanvasView is left in the package as a Compose-only
-                // fallback if anything regresses with the View interop path.
-                TerminalNativeViewCompose(
-                    emulator = emulator,
-                    onResize = { cols, rows ->
-                        emulator.resize(cols, rows)
-                        terminalSession.setWindowSize(cols, rows)
-                    },
-                    onTap = { inputController.requestFocus() },
-                )
-                TerminalInputView(
-                    onInput = { bytes ->
-                        // Any user input snaps back to live tail so typing is visible.
-                        emulator.scrollOffset = 0
-                        if (ctrlActive && bytes.size == 1) {
-                            val ch = bytes[0].toInt().toChar().uppercaseChar()
-                            if (ch in 'A'..'Z') {
-                                terminalSession.sendRawBytes(byteArrayOf((ch - 'A' + 1).toByte()))
-                                ctrlActive = false
-                                return@TerminalInputView
-                            }
+                // Termux's TerminalView — full VT-100 / xterm emulation with
+                // text selection, copy/paste, pinch-to-zoom, and URL detection
+                // baked in. The view is created once and survives recomposition.
+                AndroidView(
+                    factory = { ctx ->
+                        TerminalView(ctx, null).apply {
+                            setTextSize(24)          // px; ≈ 12 sp at 2x density
+                            setTypeface(jetBrainsMonoTypeface(ctx))
+                            backgroundColor = 0xFF000000.toInt()
+                            textColor = 0xFFD4D4D4.toInt()
+                            setTerminalViewClient(MinisTerminalViewClient(
+                                getControlDown = { ctrlDown },
+                                getAltDown = { altDown },
+                            ))
                         }
-                        terminalSession.sendRawBytes(bytes)
                     },
-                    applicationCursorKeys = emulator.applicationCursorKeys,
-                    controller = inputController,
-                    modifier = Modifier.size(1.dp),
+                    update = { view ->
+                        val session = terminalSession.termuxSession
+                        if (session != null && view.mTermSession != session) {
+                            view.attachSession(session)
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize(),
                 )
             }
         }
 
-        // Top bar pinned at top — never moves with IME.
+        // ── Top bar ────────────────────────────────────────────────────────
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -235,21 +181,14 @@ fun TerminalScreen(
                     onBack()
                 },
                 onClear = {
-                    // T310: send Ctrl+U (NAK, 0x15) so readline kills any
-                    // half-typed line in the shell. Otherwise those chars
-                    // stay in the line buffer and get prepended to the
-                    // user's next command after the visual clear.
-                    terminalSession.sendRawBytes(byteArrayOf(0x15))
+                    // Kill any half-typed line + full terminal reset.
+                    terminalSession.sendRawBytes(byteArrayOf(0x15)) // Ctrl+U
                     terminalSession.clearOutput()
-                    emulator.feed("\u001Bc".toByteArray())
                 },
             )
         }
 
-        // T290: accessory bar — anchored to bottom of the parent Box and
-        // lifted above the IME via imePadding(). When the keyboard is
-        // closed, windowInsetsPadding(navigationBars) keeps it above the
-        // gesture / nav bar. No Popup, no manual IME tracking.
+        // ── Keyboard accessory bar ─────────────────────────────────────────
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -258,23 +197,16 @@ fun TerminalScreen(
                 .windowInsetsPadding(WindowInsets.navigationBars),
         ) {
             KeyboardAccessoryBar(
-                ctrlActive = ctrlActive,
-                keyboardVisible = inputController.isFocused,
-                onCtrlToggle = { ctrlActive = !ctrlActive },
-                onToggleKeyboard = {
-                    if (inputController.isFocused) inputController.clearFocus()
-                    else inputController.requestFocus()
-                },
+                ctrlDown = ctrlDown,
+                altDown = altDown,
+                onCtrlToggle = { ctrlDown = !ctrlDown },
+                onAltToggle = { altDown = !altDown },
                 onSendRaw = { bytes ->
-                    emulator.scrollOffset = 0
                     terminalSession.sendRawBytes(bytes)
-                },
-                onArrow = { dir ->
-                    emulator.scrollOffset = 0
-                    val prefix = if (emulator.applicationCursorKeys)
-                        byteArrayOf(0x1B, 'O'.code.toByte())
-                    else byteArrayOf(0x1B, '['.code.toByte())
-                    terminalSession.sendRawBytes(prefix + byteArrayOf(dir.code.toByte()))
+                    // Auto-release toggles after use so the next key isn't
+                    // accidentally modified.
+                    ctrlDown = false
+                    altDown = false
                 },
             )
         }
@@ -288,7 +220,64 @@ fun TerminalScreen(
     }
 }
 
-// ── Tiny helper: collectAsState for StateFlow<Int> without pulling all of androidx.lifecycle ──
+// ── Termux TerminalViewClient with Ctrl/Alt relay ─────────────────────────────
+
+private class MinisTerminalViewClient(
+    private val getControlDown: () -> Boolean,
+    private val getAltDown: () -> Boolean,
+) : TerminalViewClient {
+    // ── Modifier queries read by Termux's IME / key-event processing ──
+
+    override fun readControlKey(): Boolean = getControlDown()
+    override fun readAltKey(): Boolean = getAltDown()
+    override fun readShiftKey(): Boolean = false
+    override fun readFnKey(): Boolean = false
+
+    // ── Touch / gesture ──
+
+    override fun onSingleTapUp(e: MotionEvent) {}
+    override fun onLongPress(event: MotionEvent): Boolean = false
+    override fun onScale(scale: Float): Float = scale
+    override fun onScrollUp(e: MotionEvent, distance: Float): Boolean = false
+    override fun onScrollDown(e: MotionEvent, distance: Float): Boolean = false
+
+    // ── Keyboard ──
+
+    override fun onCodePoint(
+        codePoint: Int,
+        ctrlDownFromEvent: Boolean,
+        altDownFromEvent: Boolean,
+        session: com.termux.terminal.TerminalSession,
+    ): Boolean = false
+
+    override fun onKeyDown(
+        keyCode: Int, event: KeyEvent,
+        session: com.termux.terminal.TerminalSession,
+    ): Boolean = false
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean = false
+
+    // ── Session lifecycle ──
+
+    override fun onTextChanged(session: com.termux.terminal.TerminalSession) {}
+    override fun onTitleChanged(session: com.termux.terminal.TerminalSession) {}
+    override fun onSessionFinished(session: com.termux.terminal.TerminalSession, exitMessage: String) {}
+    override fun onBell(session: com.termux.terminal.TerminalSession) {}
+    override fun onColorsChanged(session: com.termux.terminal.TerminalSession) {}
+    override fun onTerminalCursorStateChanged(state: Int) {}
+    override fun copyModeChanged(copyMode: Boolean) {}
+    override fun getCurrentSession(): com.termux.terminal.TerminalSession? = null
+    override fun getPasteText(session: com.termux.terminal.TerminalSession): String? = null
+    override fun shouldEnforceCharBasedInput(): Boolean = false
+
+    // ── Clear-version counter for MinisOpenUrlBroker ──
+
+    @Volatile var clearVersion: Int = 0; private set
+    fun bumpClear() { clearVersion++ }
+}
+
+// ── Tiny helper: collectAsState for StateFlow ─────────────────────────────────
+
 @Composable
 private fun <T> kotlinx.coroutines.flow.StateFlow<T>.collectAsStateEffect(): androidx.compose.runtime.State<T> {
     val state = remember { androidx.compose.runtime.mutableStateOf(value) }
@@ -363,12 +352,11 @@ private fun CircularIconButton(
 
 @Composable
 private fun KeyboardAccessoryBar(
-    ctrlActive: Boolean,
-    keyboardVisible: Boolean,
+    ctrlDown: Boolean,
+    altDown: Boolean,
     onCtrlToggle: () -> Unit,
-    onToggleKeyboard: () -> Unit,
+    onAltToggle: () -> Unit,
     onSendRaw: (ByteArray) -> Unit,
-    onArrow: (Char) -> Unit,
 ) {
     val scrollState = rememberScrollState()
     Box(
@@ -385,27 +373,21 @@ private fun KeyboardAccessoryBar(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-        QuickCommandButton(
-            label = stringResource(if (keyboardVisible) R.string.terminal_hide_keyboard else R.string.terminal_show_keyboard),
-            icon = if (keyboardVisible) Icons.Default.KeyboardHide else Icons.Outlined.Keyboard,
-            onClick = onToggleKeyboard,
-        )
-        QuickCommandButton("Esc", iconText = "⎋") { onSendRaw(byteArrayOf(0x1B)) }
-        QuickCommandButton("Tab", icon = Icons.AutoMirrored.Filled.KeyboardTab) { onSendRaw(byteArrayOf(0x09)) }
-        // [T-android-shell-toolbar-enter-key] The soft keyboard's Return
-        // inserts a newline inside the terminal, so it can't send a real
-        // carriage return to run a command line / trigger an in-CLI prompt.
-        // This writes CR (0x0D) on the same raw-PTY path as Esc/Tab/C-c.
-        // Placed right after Tab, mirroring iOS fa3d2f8c.
-        QuickCommandButton("⏎", iconText = "⏎") { onSendRaw(byteArrayOf(0x0D)) }
-        QuickCommandButton("Ctrl", iconText = "^", isActive = ctrlActive, onClick = onCtrlToggle)
-        QuickCommandButton("\u2191", icon = Icons.Default.KeyboardArrowUp) { onArrow('A') }
-        QuickCommandButton("\u2193", icon = Icons.Default.KeyboardArrowDown) { onArrow('B') }
-        QuickCommandButton("\u2190", icon = Icons.AutoMirrored.Filled.KeyboardArrowLeft) { onArrow('D') }
-        QuickCommandButton("\u2192", icon = Icons.AutoMirrored.Filled.KeyboardArrowRight) { onArrow('C') }
-        QuickCommandButton("C-c", icon = Icons.Outlined.Cancel) { onSendRaw(byteArrayOf(0x03)) }
-        QuickCommandButton("C-d", icon = Icons.Default.Eject) { onSendRaw(byteArrayOf(0x04)) }
-        QuickCommandButton("C-z", icon = Icons.Outlined.PauseCircle) { onSendRaw(byteArrayOf(0x1A)) }
+            QuickCommandButton("Esc", iconText = "⎋") { onSendRaw(byteArrayOf(0x1B)) }
+            QuickCommandButton("Tab", icon = Icons.AutoMirrored.Filled.KeyboardTab) { onSendRaw(byteArrayOf(0x09)) }
+            QuickCommandButton("⏎", iconText = "⏎") { onSendRaw(byteArrayOf(0x0D)) }
+            // Ctrl and Alt are persistent toggles — tap to enable, tap again
+            // to disable. When enabled, the next typed character is sent with
+            // the modifier applied by Termux's input pipeline.
+            QuickCommandButton("Ctrl", iconText = "^", isActive = ctrlDown, onClick = onCtrlToggle)
+            QuickCommandButton("Alt", iconText = "⌥", isActive = altDown, onClick = onAltToggle)
+            QuickCommandButton("\u2191", icon = Icons.Default.KeyboardArrowUp) { onSendRaw(byteArrayOf(0x1B, 0x5B, 0x41)) }
+            QuickCommandButton("\u2193", icon = Icons.Default.KeyboardArrowDown) { onSendRaw(byteArrayOf(0x1B, 0x5B, 0x42)) }
+            QuickCommandButton("\u2190", icon = Icons.AutoMirrored.Filled.KeyboardArrowLeft) { onSendRaw(byteArrayOf(0x1B, 0x5B, 0x44)) }
+            QuickCommandButton("\u2192", icon = Icons.AutoMirrored.Filled.KeyboardArrowRight) { onSendRaw(byteArrayOf(0x1B, 0x5B, 0x43)) }
+            QuickCommandButton("C-c", icon = Icons.Outlined.Cancel) { onSendRaw(byteArrayOf(0x03)) }
+            QuickCommandButton("C-d", icon = Icons.Default.Eject) { onSendRaw(byteArrayOf(0x04)) }
+            QuickCommandButton("C-z", icon = Icons.Outlined.PauseCircle) { onSendRaw(byteArrayOf(0x1A)) }
         }
     }
 }

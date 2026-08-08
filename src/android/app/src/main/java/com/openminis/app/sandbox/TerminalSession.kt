@@ -87,7 +87,9 @@ class TerminalSession(private val context: Context) {
 
     /** Underlying Termux portable terminal session (PTY + emulator in one). */
     @Volatile
-    var termuxSession: com.termux.terminal.TerminalSession? = null
+    /** Attached by [start]; used by [TerminalScreen] to wire its TerminalView. */
+    internal var termuxSession: com.termux.terminal.TerminalSession? = null
+        private set
         private set
 
     /** Track last transcript length so we can emit delta bytes on text changes. */
