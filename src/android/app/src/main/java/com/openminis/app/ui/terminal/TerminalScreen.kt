@@ -240,6 +240,8 @@ private class MinisTerminalViewClient(
     override fun readAltKey(): Boolean = getAltDown()
     override fun onEmulatorSet() {}
 
+    override fun shouldBackButtonBeMappedToEscape(): Boolean = false
+
     @Volatile var clearVersion: Int = 0; private set
     fun bumpClear() { clearVersion++ }
 }

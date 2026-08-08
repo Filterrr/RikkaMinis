@@ -367,5 +367,10 @@ class TerminalSession(private val context: Context) {
         override fun onPasteTextFromClipboard(
             session: com.termux.terminal.TerminalSession,
         ): Unit {} // returns Unit in Termux 0.118.0
+
+        override fun onCopyTextToClipboard(
+            session: com.termux.terminal.TerminalSession,
+            text: String,
+        ) {}
     }
 }
