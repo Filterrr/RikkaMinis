@@ -596,7 +596,6 @@
     <string name="provider_detail_manual_bearer_token">手動Bearerトークン</string>
     <string name="provider_detail_use_a_static_bearer_token_instead_of_the">OAuth ログインフローではなく、静的なベアラートークンを使用します。</string>
     <string name="provider_detail_custom_api_base">カスタムAPIベース</string>
-    <string name="provider_detail_auto_append_v1">/v1 を自動的に付加</string>
     <string name="provider_detail_api_format">API Format</string>
     <string name="provider_detail_chat_completions">Chat Completions</string>
     <string name="provider_detail_responses_api">Responses API</string>
@@ -617,6 +616,11 @@
     <string name="provider_detail_status">ステータス</string>
     <string name="provider_detail_enabled">有効</string>
     <string name="provider_detail_refresh_models">モデルを更新</string>
+    <string name="provider_detail_manage_models">すべてのモデルを管理</string>
+    <string name="provider_detail_api_connection">API と接続</string>
+    <string name="provider_detail_manage_models_search_hint">モデルを検索…</string>
+    <string name="provider_detail_manage_models_all_header">すべてのモデル (%1$d)</string>
+    <string name="provider_detail_models_title">すべてのモデル</string>
     <string name="provider_detail_add_custom_model">カスタムモデルを追加</string>
     <string name="provider_detail_delete_provider">AIプロバイダーを削除</string>
     <string name="provider_detail_delete_model">Delete Model</string>
@@ -733,7 +737,6 @@
     <string name="add_custom_model_eg_id_placeholder">例: gpt-4o-custom</string>
     <string name="add_provider_built_in_models_count">%1$d 個の組み込みモデル</string>
     <string name="add_provider_configure_provider">%1$s を設定</string>
-    <string name="add_provider_auto_append_v1_quoted">\"/v1\" を自動的に付加</string>
     <string name="add_models_to_group_add_count">追加 (%1$d)</string>
     <string name="provider_detail_https_api_example_placeholder">https://api.example.com</string>
     <string name="provider_detail_models_count_header">モデル (%1$d)</string>

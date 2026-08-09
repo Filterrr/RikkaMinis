@@ -40,6 +40,7 @@ import com.openminis.app.ui.settings.AddProviderScreen
 import com.openminis.app.ui.settings.ModelEntryDetailScreen
 import com.openminis.app.ui.settings.ModelGroupDetailScreen
 import com.openminis.app.ui.settings.ModelGroupsScreen
+import com.openminis.app.ui.settings.ProviderConnectionScreen
 import com.openminis.app.ui.settings.ProviderDetailScreen
 import com.openminis.app.ui.settings.ProviderListScreen
 import com.openminis.app.ui.sandbox.FileBrowserScreen
@@ -104,6 +105,10 @@ object Routes {
     const val PROVIDER_LIST = "providers"
     const val ADD_PROVIDER = "add_provider"
     const val PROVIDER_DETAIL = "provider/{instanceId}"
+    /** [T-provider-connection-screen] Connection/credential sub-page for a
+     *  provider (API key, OAuth, custom base URL, format, image endpoint).
+     *  Reached from the "API & Connection" row on ProviderDetailScreen. */
+    const val PROVIDER_CONNECTION = "provider_connection/{instanceId}"
     /** [T-android-provider-voice] Read-only shadow Voice Service detail. */
     const val MODEL_GROUPS = "model_groups"
     const val MODEL_GROUP_DETAIL = "model_group/{groupId}"
@@ -198,6 +203,7 @@ object Routes {
         return "$base?focusMessageId=$enc"
     }
     fun providerDetail(instanceId: String) = "provider/$instanceId"
+    fun providerConnection(instanceId: String) = "provider_connection/$instanceId"
     fun modelGroupDetail(groupId: String) = "model_group/$groupId"
     fun addModelsToGroup(groupId: String) = "add_models_to_group/$groupId"
     // [T-android-model-entry-route-slash-crash] entryId is a composite key
@@ -714,6 +720,21 @@ fun AppNavigation(
                 onAddCustomModel = {
                     navController.safeNavigate(Routes.addCustomModel(instanceId))
                 },
+                onConnectionClick = {
+                    navController.safeNavigate(Routes.providerConnection(instanceId))
+                },
+            )
+        }
+
+        composable(
+            route = Routes.PROVIDER_CONNECTION,
+            arguments = listOf(navArgument("instanceId") { type = NavType.StringType }),
+        ) { backStackEntry ->
+            val cInstanceId = backStackEntry.arguments?.getString("instanceId") ?: return@composable
+            ProviderConnectionScreen(
+                instanceId = cInstanceId,
+                providerRepository = providerRepository,
+                onBack = { navController.safePopBackStack() },
             )
         }
 
