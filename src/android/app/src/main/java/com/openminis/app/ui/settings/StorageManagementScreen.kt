@@ -46,6 +46,9 @@ import androidx.compose.ui.res.stringResource
 import com.openminis.app.data.db.ChatDao
 import com.openminis.app.data.db.ChatSessionEntity
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -70,15 +73,18 @@ fun StorageManagementScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    var isLoading by remember { mutableStateOf(true) }
+    var isSizingSessions by remember { mutableStateOf(true) }
     var shellSize by remember { mutableLongStateOf(0L) }
     var shellBreakdown by remember { mutableStateOf<List<com.openminis.app.sandbox.RootfsUsageScanner.Entry>>(emptyList()) }
     var dbSize by remember { mutableLongStateOf(0L) }
+    var sessionCount by remember { mutableStateOf(0) }
     var sessions by remember { mutableStateOf<List<SessionStorageInfo>>(emptyList()) }
 
     fun reload() {
         scope.launch {
-            isLoading = true
+            // Reset state so a re-entry / manual reload shows a fresh skeleton.
+            isSizingSessions = true
+            sessions = emptyList()
             withContext(Dispatchers.IO) {
                 // [rootfs-usage-v1] Real on-disk footprint (lstat + st_blocks,
                 // no symlink following, hardlink dedupe). The old recursive
@@ -105,18 +111,26 @@ fun StorageManagementScreen(
                 val mediaDir = File(context.filesDir, "media")
 
                 val mediaSizes = mediaSizesBySession(mediaDir, allSessions.map { it.id }.toSet())
+                sessionCount = allSessions.size
 
-                sessions = allSessions.map { session ->
-                    val minisDir = File(sessionsDir, session.id)
-                    SessionStorageInfo(
-                        id = session.id,
-                        title = session.title,
-                        minisSize = directorySize(minisDir),
-                        mediaSize = mediaSizes[session.id] ?: 0L,
-                    )
+                // Size every session directory in parallel (async) instead of
+                // the previous serial map, so the whole list appears roughly
+                // as fast as the slowest single session.
+                sessions = coroutineScope {
+                    allSessions.map { session ->
+                        async {
+                            val minisDir = File(sessionsDir, session.id)
+                            SessionStorageInfo(
+                                id = session.id,
+                                title = session.title,
+                                minisSize = directorySize(minisDir),
+                                mediaSize = mediaSizes[session.id] ?: 0L,
+                            )
+                        }
+                    }.awaitAll()
                 }.sortedByDescending { it.totalSize }
             }
-            isLoading = false
+            isSizingSessions = false
         }
     }
 
@@ -163,7 +177,51 @@ fun StorageManagementScreen(
 
         SettingsSection(header = stringResource(R.string.storage_section_sessions)) {
             when {
-                isLoading -> Row(
+                // Phase 2 still loading: show skeleton rows matching the
+                // known session count so the user sees the page structure
+                // immediately instead of a spinner.
+                isSizingSessions && sessionCount > 0 -> {
+                    val skeletonAlpha = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
+                    sessionCount.coerceAtMost(20).let { count ->
+                        // Show at most 20 skeletons so a user with hundreds
+                        // of sessions doesn't scroll forever before the real
+                        // data arrives.
+                        repeat(count) { index ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(16.dp)
+                                        .clip(MaterialTheme.shapes.small)
+                                        .background(skeletonAlpha),
+                                )
+                                Spacer(Modifier.width(12.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .width(64.dp)
+                                        .height(16.dp)
+                                        .clip(MaterialTheme.shapes.small)
+                                        .background(skeletonAlpha),
+                                )
+                            }
+                            if (index < count - 1) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(0.5.dp)
+                                        .padding(start = 16.dp)
+                                        .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.08f)),
+                                )
+                            }
+                        }
+                    }
+                }
+                isSizingSessions -> Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(16.dp),
