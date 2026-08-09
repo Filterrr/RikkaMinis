@@ -277,6 +277,12 @@ class ChatViewModel(
          * the summary's distilled form. Mirrors iOS `compactKeepRecentUserTurns`.
          */
         private const val COMPACT_KEEP_RECENT_USER_TURNS = 3
+        /// [T-context-limit-enforce] Minimum number of newest complete turns the
+        /// hard-cap trim preserves. Smaller = more aggressive trimming (cheaper),
+        /// larger = safer for the current task's context. Chosen to mirror the
+        /// `COMPACT_KEEP_RECENT_USER_TURNS` philosophy (current task stays warm)
+        /// while trimming much more greedily than compact's 3-turn lookback.
+        private const val MIN_CONTEXT_TURNS_TO_KEEP = 6
         /// Max per-tool-call retained `accumulated` JSON snapshots from
         /// `ToolInputDelta`. Drained on preflight failure for diagnosis.
         private const val TOOL_INPUT_CHUNK_RING_MAX = 10
@@ -2570,11 +2576,19 @@ class ChatViewModel(
     }
 
     /**
-     * Consult [ContextPolicy] before sending. Returns true to proceed. The
-     * Android MVP doesn't surface a "Compact before send" dialog (iOS does),
-     * so we only warn via [appendSystemInfo] at the `needsCompact` /
-     * `exhausted` boundaries and still allow the send. That gives the user
-     * a signal to invoke `/compact` explicitly without blocking their turn.
+     * Consult [ContextPolicy] before sending. Returns true to proceed.
+     *
+     * [T-context-limit-enforce] Behaviour:
+     *   - Below the compact line → OK, proceed.
+     *   - At/between compact and hard ceiling → NEEDS_COMPACT, warn via
+     *     [appendSystemInfo] but still proceed (advisory — the user may keep
+     *     going until the hard stop, choosing to /compact when ready).
+     *   - At/past the hard window ceiling → EXHAUSTED, warn AND block the
+     *     send (`false`). This is what makes the group's `contextLimitTokens`
+     *     a genuine hard cap: the request never goes out with more context
+     *     than the limit. Small-window tiers also stop earlier at their
+     *     `exhaustedOnly` line.
+     * The user resolves EXHAUSTED via explicit `/compact` or a new chat.
      */
     private fun checkContextBeforeSend(): Boolean {
         val tokens = _lastTurnContextTokens.value
@@ -6173,6 +6187,171 @@ class ChatViewModel(
         }
     }
 
+    /**
+     * [T-context-limit-enforce] Hard-cap fallback after offload: if the
+     * estimate of [agentHistory] still exceeds the effective context window
+     * (which is clamped by the group's `contextLimitTokens`), drop complete
+     * turns from the OLDEST end until we're back under budget.
+     *
+     * Why this is safe & loss-minimal:
+     *   - Ordering guarantee: `offloadContextIfNeeded` runs BEFORE this in
+     *     `runAgentLoop`, so large tool outputs are already replaced by short
+     *     disk stubs — what gets dropped here is mostly already-slimmed.
+     *   - Turn-granularity: we never split a tool_use / tool_result pair or
+     *     slice inside a user/assistant round. A "turn" = one real user prompt
+     *     plus every following assistant / synthetic tool_result carrier until
+     *     the next real user prompt.
+     *   - Recent context preserved: at least [MIN_CONTEXT_TURNS_TO_KEEP]
+     *     newest turns survive untouched, so the model always sees the current
+     *     task's active region.
+     *   - Audit trail intact: only [agentHistory] (the LLM-facing working copy)
+     *     is trimmed — the UI message list `_messages` keeps the full history
+     *     the user can still scroll and read.
+     *
+     * @param contextWindow the effective window (group `contextLimitTokens`
+     *   clamped against the model's real window). A hard cap of 0 means
+     *   "unlimited" — caller skips us entirely.
+     * @param lastContextTokens API-reported context from the previous turn,
+     *   0 on the first turn.
+     */
+    private fun trimContextHistoryWindow(
+        contextWindow: Int,
+        lastContextTokens: Int,
+    ) {
+        if (contextWindow <= 0 || agentHistory.isEmpty()) return
+        // Headroom: trim to 95% of window so local underestimation (char-based
+        // estimate vs real tokenizer) doesn't immediately blow past the cap on
+        // the very call we're about to send.
+        val budget = (contextWindow.toLong() * 95 / 100).toInt()
+
+        // Prefer the API-reported count over local estimation when available;
+        // both are imperfect but API truth is closer for long formed content.
+        val baseTokens =
+            if (lastContextTokens > 0) lastContextTokens else estimateContextHistoryTokens()
+        if (baseTokens <= 0 || baseTokens <= budget) return
+
+        // Walk back from the newest real user prompt to find the boundary of
+        // the NEWEST complete turn — we always keep at least that many.
+        val keepTurns = MIN_CONTEXT_TURNS_TO_KEEP
+        val keepFrom = findTurnStartIndexFromEnd(keepTurns)
+        if (keepFrom <= 0) return // whole history is within keep window — nothing to trim
+
+        // Drop messages [0, keepFrom) — each message is a whole turn's message
+        // so no tool pair is ever split.
+        // Copy the slices BEFORE mutating — `subList` is a live view and would
+        // be invalidated by clear(). droppedTokens is estimated on the copy.
+        val dropped = agentHistory.take(keepFrom)
+        val kept = agentHistory.drop(keepFrom)
+        val droppedCount = dropped.size
+        val droppedTokens = estimateHistoryTokens(dropped)
+        agentHistory.clear()
+        agentHistory.addAll(kept)
+
+        AppLogger.info(
+            TAG,
+            "[ContextTrim] dropped $droppedCount messages (~$droppedTokens tokens) to fit $contextWindow limit; " +
+            "history ${kept.size + droppedCount}→${kept.size} msgs, kept $keepTurns newest turn(s)"
+        )
+        appendSystemInfo(
+            text = "上下文已达 $contextWindow 限制，已自动裁剪 $droppedCount 条最老的对话以继续任务。",
+            iconKind = "compact",
+        )
+    }
+
+    /**
+     * Estimate the token count of [agentHistory] from the start through all
+     * messages (text chars / 3.5 + image tokens) — mirrors [estimateContextTokens]
+     * but without the assumption that every current message matters for offload.
+     */
+    private fun estimateContextHistoryTokens(): Int {
+        var totalChars = 0
+        var imageTokens = 0
+        for (msg in agentHistory) {
+            for (part in msg.contentParts) {
+                when (part) {
+                    is AgentContentPart.Text -> totalChars += part.text.length
+                    is AgentContentPart.ToolUse -> totalChars += part.input.toString().length
+                    is AgentContentPart.ToolResult -> {
+                        totalChars += part.content.length
+                        part.imageData?.let { imageTokens += BPETokenizer.countImageTokens(it) }
+                    }
+                    is AgentContentPart.ImageData -> imageTokens += BPETokenizer.countImageTokens(part.data)
+                }
+            }
+        }
+        return (totalChars / 3.5).toInt() + imageTokens
+    }
+
+    /** Estimate tokens for an explicit message slice (used for the dropped portion). */
+    private fun estimateHistoryTokens(messages: List<LLMMessage>): Int {
+        var totalChars = 0
+        var imageTokens = 0
+        for (msg in messages) {
+            for (part in msg.contentParts) {
+                when (part) {
+                    is AgentContentPart.Text -> totalChars += part.text.length
+                    is AgentContentPart.ToolUse -> totalChars += part.input.toString().length
+                    is AgentContentPart.ToolResult -> {
+                        totalChars += part.content.length
+                        part.imageData?.let { imageTokens += BPETokenizer.countImageTokens(it) }
+                    }
+                    is AgentContentPart.ImageData -> imageTokens += BPETokenizer.countImageTokens(part.data)
+                }
+            }
+        }
+        return (totalChars / 3.5).toInt() + imageTokens
+    }
+
+    /**
+     * Find the index in [agentHistory] from which to keep the newest
+     * [turnsToKeep] complete turns. A "real user prompt" is a user message
+     * carrying text or non-ToolResult parts — synthetic tool_result carriers
+     * (user messages whose only parts are ToolResult) belong to the preceding
+     * assistant's turn and don't count as a new turn.
+     *
+     * @return the index of the oldest kept turn's first message (i.e. drop
+     *   indices [0, return)). Returns 0 when the entire history is needed to
+     *   keep [turnsToKeep] turns.
+     */
+    private fun findTurnStartIndexFromEnd(turnsToKeep: Int): Int {
+        if (turnsToKeep <= 0) return 0
+        var turnsSeen = 0
+        // Walk from the newest message backward, counting real user prompts.
+        for (i in agentHistory.indices.reversed()) {
+            val msg = agentHistory[i]
+            if (msg.role != LLMMessage.Role.USER) continue
+            // Real user prompt? (anything other than a pure ToolResult carrier)
+            val hasRealContent = msg.content.isNotBlank() ||
+                msg.contentParts.any { p ->
+                    p is AgentContentPart.Text ||
+                    p is AgentContentPart.ImageData ||
+                    (p is AgentContentPart.ToolUse)
+                }
+            // A user message with ONLY ToolResult parts is a synthetic carrier.
+            val onlyToolResults = msg.contentParts.isNotEmpty() &&
+                msg.contentParts.all { it is AgentContentPart.ToolResult } &&
+                msg.content.isBlank()
+            if (hasRealContent && !onlyToolResults) {
+                turnsSeen++
+                if (turnsSeen >= turnsToKeep) {
+                    // i is the first message (the user prompt) of a kept turn.
+                    // Anything before i (indices < i) belongs to older turns.
+                    return i
+                }
+            }
+        }
+        // Fewer turns than we want to keep → inspect @return by walking forward:
+        // return index of the first real user prompt (or 0 if none).
+        for (i in 0 until agentHistory.size) {
+            val msg = agentHistory[i]
+            if (msg.role != LLMMessage.Role.USER) continue
+            val hasRealContent = msg.content.isNotBlank() ||
+                msg.contentParts.any { p -> p is AgentContentPart.Text || p is AgentContentPart.ImageData }
+            if (hasRealContent) return i
+        }
+        return 0
+    }
+
     private suspend fun runAgentLoop(
         provider: LLMProvider,
         systemPrompt: String?,
@@ -6313,6 +6492,17 @@ class ChatViewModel(
             // fcc22b66 item-3 bug.
             effectiveContextWindowTokens()?.takeIf { it > 0 }?.let { window ->
                 offloadContextIfNeeded(
+                    contextWindow = window,
+                    lastContextTokens = lastContextTokens,
+                )
+                // [T-context-limit-enforce] After offload, what remains in the
+                // estimate must still fit the (possibly group-clamped) window.
+                // Offload only rewrites large tool outputs to short stubs; a
+                // long verbose chat can still exceed the cap, so trim oldest
+                // complete turns as the last-resort structural shrink. This is
+                // what makes the group's `contextLimitTokens` a true hard cap
+                // on the request actually sent to the API.
+                trimContextHistoryWindow(
                     contextWindow = window,
                     lastContextTokens = lastContextTokens,
                 )

@@ -29,12 +29,23 @@ data class ContextPolicy(
 
     /**
      * Classify the current turn's token pressure. Priority:
-     *   1. If compact is available and tokens crossed [compactThreshold] → NEEDS_COMPACT.
-     *   2. If this is a small-window tier (`exhaustedOnly`) and we're past the
+     *   1. [T-context-limit-enforce] At/past the hard window ceiling (ALL tiers,
+     *      not just `exhaustedOnly`) → EXHAUSTED. This makes the group's
+     *      `contextLimitTokens` a true "send blocked at or past this point"
+     *      hard cap for large windows (128K/200K/1M) that previously never
+     *      reached EXHAUSTED because `exhaustedOnly` was false and the compact
+     *      warning (below) fired first — so context could grow unbounded past
+     *      the user-visible "limit".
+     *   2. If compact is available and tokens crossed [compactThreshold] (still
+     *      below the ceiling) → NEEDS_COMPACT (advisory warn only).
+     *   3. If this is a small-window tier (`exhaustedOnly`) and we're past the
      *      offload line or 90% of the window → EXHAUSTED.
-     *   3. Otherwise OK.
+     *   4. Otherwise OK.
      */
     fun check(estimatedTokens: Int, contextWindow: Int): CheckResult {
+        if (contextWindow > 0 && estimatedTokens >= contextWindow) {
+            return CheckResult.EXHAUSTED
+        }
         if (compactThreshold > 0 && estimatedTokens >= compactThreshold) {
             return CheckResult.NEEDS_COMPACT
         }
