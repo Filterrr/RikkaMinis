@@ -20,7 +20,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.foundation.relocation.bringIntoViewOnFocus
+import com.openminis.app.ui.util.bringIntoViewOnFocus
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -303,7 +303,7 @@ fun ProviderConnectionScreen(
                                 }
                             },
                             shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3),
-                        ) { Text(stringResource(R.string.provider_detail_image_endpoint_images)) }
+                        ) { Text(stringResource(R.string.provider_detail_image_endpoint_images_api)) }
                         SegmentedButton(
                             selected = mode == ImageEndpointMode.chatCompletions,
                             onClick = {

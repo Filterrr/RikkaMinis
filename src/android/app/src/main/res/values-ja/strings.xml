@@ -618,6 +618,7 @@
     <string name="provider_detail_enabled">有効</string>
     <string name="provider_detail_refresh_models">モデルを更新</string>
     <string name="provider_detail_manage_models">すべてのモデルを管理</string>
+    <string name="provider_detail_api_connection">API と接続</string>
     <string name="provider_detail_manage_models_search_hint">モデルを検索…</string>
     <string name="provider_detail_manage_models_all_header">すべてのモデル (%1$d)</string>
     <string name="provider_detail_models_title">すべてのモデル</string>
