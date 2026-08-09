@@ -3946,7 +3946,7 @@ class ChatViewModel(
             AppLogger.warning(TAG, "switchModelAndRerun: no currentProvider after switch — aborting restart")
             return
         }
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 val sid = realSessionId.takeIf { it.isNotEmpty() } ?: sessionId
                 val dbMessages = chatRepository.loadMessages(sid)
@@ -4324,7 +4324,7 @@ class ChatViewModel(
         AppLogger.info(TAG_STREAM, "rerunFromToolBlock _isStreaming=true (sync, sid=$activeSessionId)")
         _isStreaming.value = true
 
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             var streamLaunched = false
             try {
                 val sid = realSessionId.takeIf { it.isNotEmpty() } ?: sessionId
@@ -4511,7 +4511,7 @@ class ChatViewModel(
         AppLogger.info(TAG_STREAM, "retry _isStreaming=true (sync, sid=$activeSessionId)")
         _isStreaming.value = true
 
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             // If setup throws before the inner streamJob is launched, the
             // streaming flag would be stuck true forever. Reset on the
             // unhappy paths; happy path resets in the streamJob's tail.
@@ -5223,7 +5223,7 @@ class ChatViewModel(
         val editingId = _editingMessageId.value
         if (editingId != null) _editingMessageId.value = null
 
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             var streamLaunched = false
             try {
             // Ensure session exists in DB (creates on first message for draft sessions)
@@ -5614,7 +5614,7 @@ class ChatViewModel(
         AppLogger.info(TAG_STREAM, "retryLast _isStreaming=true (sync, sid=$activeSessionId)")
         _isStreaming.value = true
 
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             var streamLaunched = false
             try {
             val sid = realSessionId.takeIf { it.isNotEmpty() } ?: sessionId
@@ -9492,7 +9492,7 @@ Environment variables:
      * prompt drain after cancel uses the same plumbing as a fresh send.
      */
     private fun resumeQueueAfterCancel() {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             kotlinx.coroutines.delay(200)
             if (_promptQueue.value.isEmpty()) return@launch
             if (_isStreaming.value) return@launch
@@ -9804,7 +9804,7 @@ Environment variables:
             }
         }
 
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             val baseSystemPrompt = buildSystemPrompt()
             val systemPrompt =
                 if ((provider as? com.openminis.app.provider.anthropic.AnthropicProvider)?.isOAuth == true) {
