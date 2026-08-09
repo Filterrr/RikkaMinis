@@ -28,8 +28,9 @@ OpenMinis 核心把领先的模型——Claude、GPT、Gemini 等——带进原
 
 **→ [下载最新 APK](https://github.com/logicflow-GYW/RikkaMinis/releases/tag/android-latest)**
 
-每次推送到 `main` 都会构建一个发布版 APK 并重新发布到该链接，所以这个
-URL 始终指向最新构建。要求：
+每次推送到 `main` 的**代码改动**（`src/android/**`、`src/shared/**`、`deps/**`
+或 workflow 文件）都会构建一个发布版 APK 并重新发布到该链接——纯文档改动
+（README / 许可证等）不触发构建。所以这个 URL 始终指向最新构建。要求：
 
 - **arm64-v8a** 设备（任意现代手机），**Android 8.0+**
 - 设备提示时允许"安装未知来源应用"
@@ -80,16 +81,22 @@ SHA-256  FC:0C:40:0D:B7:7E:C1:81:A3:35:18:C2:E8:13:6A:AE
   手势 / 底部导航处理；编辑、向导与权限流程页面保留返回箭头。
 - **更简洁的输入栏。** 专用的语音聊天快捷入口及其内嵌 UI 已被移除。
   Android 面向智能体的语音工具不受影响。
+- **Termux 驱动的终端。** 应用内终端从自研 ANSI 仿真器（约 2200 行）换成
+  [Termux](https://github.com/termux/termux-app) 的 `terminal-view` 0.118.0
+  引擎（JitPack 依赖）：PTY 生命周期、ANSI/CSI/OSC 解析、TUI 兼容性、
+  键盘与文本选择全部交给上游引擎处理。输出经两层截断（PersistentShell
+  层 128KB + 终端消毒层 50KB），防止海量输出刷爆界面。
 - **提供商置顶。** 提供商列表支持将常用提供商固定到顶部的「常用」专区，行尾菜单一键设/取消常用。
 - **记忆页管理改进。** 记忆页文件列表支持「查看更多」展开/收起，文件记忆按文件名排序，过期失败记录自动清理。
 - **设置一致性修复。** 恢复的偏好会刷新实时设置界面，此前缺失/断连的设置键
   现已注册并纳入备份。
 - **三大平台内置集成（GitHub / Cloudflare / Hugging Face）。** 完整能力见下文
   [内置平台集成](#内置平台集成github--cloudflare--hugging-face)。简单说：三个
-  平台技能（语义记忆、GitHub 自动化、Cloudflare 运维）直接打进 APK，应用启动时
-  根据你是否配置了对应的 API token（`HF_TOKEN` / `GITHUB_TOKEN` / `CF_API_TOKEN`）
-  动态计算每个平台的可用能力等级，并把「内置集成」表格注入系统提示词——智能体
-  一上来就清楚知道每个平台能做什么、不能做什么，不用靠试错猜测。
+  平台技能（语义记忆、GitHub 自动化、Cloudflare 运维）直接打进 APK，构建系统
+  提示词时根据你是否配置了对应的 API token（`HF_TOKEN` / `GITHUB_TOKEN` /
+  `CF_API_TOKEN`）动态计算每个平台的可用能力等级，并把「内置集成」表格注入
+  系统提示词——智能体一上来就清楚知道每个平台能做什么、不能做什么，不用靠
+  试错猜测。
 
 ### 构建与发布改动
 
@@ -98,7 +105,7 @@ SHA-256  FC:0C:40:0D:B7:7E:C1:81:A3:35:18:C2:E8:13:6A:AE
   完全可复现。
 - **其他原生库保持 vendored。** `libpty_bridge.so`、`libminis_crash_handler.so`
   和 `libjieba_jni.so` 按原样提交。
-- **备份测试在 CI 中运行。** 备份负载测试在 APK 构建之前执行。
+- **单元测试在 CI 中运行。** 完整的 JVM 单元测试套件——含备份/恢复（ConfigBackupPayloadTest 等）、终端消毒、Provider 适配器、LLM 错误处理等全部测试——在 APK 构建之前执行，任何一条失败都会中止构建（无静默跳过）。
 - **iOS 源码已移除。** `src/ios/` 已删除；本树仅限 Android。
 - **自动发布。** 成功构建会把 APK 发布到 `android-latest` release。
 - **平台技能打进资产包。** `semantic-memory`、`github-ops`、
@@ -136,8 +143,8 @@ pty_bridge / crash_handler / jieba 库。
 ### 一句话
 
 RikkaMinis 打包了三个**平台技能**——每个技能封装一个外部平台的常用操作，
-通过各自的 `requirements.json` 声明它依赖的环境变量。应用启动时读取你配置的
-token，为每个平台算出一个当前能力等级（零配置 / 只读 / 完整），把结论
+通过各自的 `requirements.json` 声明它依赖的环境变量。构建系统提示词时读取你
+配置的 token，为每个平台算出一个当前能力等级（零配置 / 只读 / 完整），把结论
 **动态注入 system prompt**，让智能体不用靠试错就知道自己此刻能碰哪些平台。
 
 ### 三平台各管什么
@@ -150,7 +157,7 @@ token，为每个平台算出一个当前能力等级（零配置 / 只读 / 完
 
 配置入口：**Settings → Environments**（或 `minis-config envvars`）。三个 token
 都是标准的个人 API token，各自平台的 dashboard 里创建。**注意：token 直接存储在
-本地（供应用启动时读取判级），不会出现在任何日志里，默认也不纳入备份导出——
+本地（供判级时读取），不会出现在任何日志里，默认也不纳入备份导出——
 除非你在备份里显式勾选"包含机密"。**
 
 ### 能力等级怎么算（`buildIntegrationStatus`）
@@ -167,9 +174,10 @@ token，为每个平台算出一个当前能力等级（零配置 / 只读 / 完
 1. 以 **`[IntegrationStatus]` 日志行**输出（`logcat | grep IntegrationStatus`），
    附带 `declared=` 和 `found=` 的环境变量清单——排查"以为配了却显示需配置"时
    一眼定位是哪个变量没被读到，不用瞎猜。
-2. 以**「内置集成」表格**注入 system prompt 的可用工具区，智能体据此决定
-   用哪种方式干活。没配置 token 的平台会标成 "🔒 需配置"，绝不虚标为
-   "⚡ 零配置可用"——宁可让它什么都不干，也不能让它误导智能体去操作。
+2. 以**「内置集成」表格**注入 system prompt（紧跟技能列表之后、MCP 服务器
+   之前，独立的 `## 内置集成` 区块），智能体据此决定用哪种方式干活。没配置
+   token 的平台会标成 "🔒 需配置"，绝不虚标为 "⚡ 零配置可用"——宁可让它
+   什么都不干，也不能让它误导智能体去操作。
 
 ### 三个技能怎么升级
 
@@ -300,6 +308,10 @@ chroot，经由 [OpenMinis 的 fork](https://github.com/OpenMinis/proot)；
 
 **文本与渲染** — [cppjieba](https://github.com/yanyiwu/cppjieba)（MIT）、
 [KaTeX](https://katex.org)（MIT）。
+
+**终端** — [Termux](https://github.com/termux/termux-app) 的 `terminal-view`
+0.118.0（JitPack，`com.termux.termux-app:terminal-view`）提供应用内终端的
+ANSI/CSI/OSC 解析与 TUI 渲染引擎。
 
 **交互参考 — [RikkaHub](https://github.com/rikkahub/rikkahub)**（AGPL-3.0），Android
 多 LLM 客户端，为 RikkaMinis 的聊天 UI 与交互逻辑提供设计灵感（借鉴灵感，
