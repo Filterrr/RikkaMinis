@@ -583,8 +583,19 @@ class ProviderRepository(private val context: Context) {
         val shouldSeed = instance.credentialType == ProviderCredential.oauth ||
             !isThirdPartyOpenAICompat(instance)
         if (shouldSeed) {
+            // [T-provider-default-hidden] Seeded entries come in HIDDEN by default
+            // (isHidden = true), matching refreshModels' "new models hidden, user
+            // unpicks them on the Manage All Models sheet" contract — so an OAuth
+            // provider like Gemini or an API-key provider on the official OpenAI
+            // endpoint shows an EMPTY model list at first run, exactly like the
+            // third-party OpenAI-compat providers that skip the seed entirely.
+            // Without this, Google Gemini (OAuth) shows its 5 built-ins visible
+            // while e.g. DeepSeek-via-openai-shim shows none — the inconsistency
+            // the user spotted. Hidden seeds still act as `prior` on refresh so
+            // refreshModels() carries their hidden state forward and never
+            // re-surfaces them; the user pulls models in from Manage All Models.
             val entries = instance.providerType.builtInModels.map { model ->
-                ModelEntry(providerInstanceId = instance.id, baseModel = model)
+                ModelEntry(providerInstanceId = instance.id, baseModel = model, isHidden = true)
             }
             config.modelEntries.addAll(entries)
         } else {
