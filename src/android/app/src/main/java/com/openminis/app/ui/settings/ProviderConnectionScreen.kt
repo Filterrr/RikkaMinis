@@ -71,16 +71,19 @@ fun ProviderConnectionScreen(
     var customUserAgent by rememberSaveable { mutableStateOf(instance.customUserAgent ?: "") }
 
     fun saveBaseURLSettings() {
+        // /v1 is appended automatically for all non-Gemini providers (Gemini
+        // uses v1beta full-path URLs). effectiveBaseURL guards double-append.
+        val appendV1 = instance.providerType != ProviderType.gemini
         providerRepository.updateInstance(
             instance.copy(
                 customBaseURL = customBaseURL.ifBlank { null },
-                appendV1Suffix = true,
+                appendV1Suffix = appendV1,
                 customUserAgent = customUserAgent.ifBlank { null },
             )
         )
         AppLogger.info(
             TAG,
-            "Saved base URL for ${instance.id}: url='${customBaseURL.ifBlank { "<default>" }}', appendV1=true, ua='${customUserAgent.ifBlank { "<default>" }}'",
+            "Saved base URL for ${instance.id}: url='${customBaseURL.ifBlank { "<default>" }}', appendV1=$appendV1, ua='${customUserAgent.ifBlank { "<default>" }}'",
         )
     }
 
