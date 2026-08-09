@@ -89,6 +89,7 @@ fun ProviderDetailScreen(
     onBack: () -> Unit,
     onModelEntryClick: (String) -> Unit = {},
     onAddCustomModel: () -> Unit = {},
+    onConnectionClick: () -> Unit = {},
 ) {
     val config by providerRepository.config.collectAsState()
     val instance = config.instances.find { it.id == instanceId }
@@ -121,50 +122,46 @@ fun ProviderDetailScreen(
     // navigation-transition frame. Initial state is null; the key populates
     // asynchronously on the next frame — fast enough that no visible flash
     // occurs during the slide-in animation (~300 ms).
+    //
+    // [T-provider-connection-screen] Only the masked summary is needed on the
+    // detail screen now — the actual key editing moved to
+    // ProviderConnectionScreen. loadApiKey stays here (cheap, async) so the
+    // "API & Connection" row can show "sk-…4242" without a sub-screen hop.
     var storedKey by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(instanceId) {
         storedKey = withContext(Dispatchers.IO) { providerRepository.loadApiKey(instanceId) }
     }
-    var isEditingKey by remember { mutableStateOf(false) }
-    var editKeyValue by remember { mutableStateOf("") }
-    var keyVisible by remember { mutableStateOf(false) }
+
+    // [T-provider-detail-visible-models] Manage All Models opens as a
+    // ModalBottomSheet (low-frequency one-time action). No navigation route —
+    // the sheet lives inside this screen.
+    var showManageModelsSheet by remember { mutableStateOf(false) }
 
     var isEnabled by remember { mutableStateOf(instance.isEnabled) }
-    var customBaseURL by remember { mutableStateOf(instance.customBaseURL ?: "") }
-    var appendV1Suffix by remember { mutableStateOf(instance.appendV1Suffix) }
-    // [T-provider-custom-user-agent] Per-provider UA override input. Only the
-    // OpenAI-/Anthropic-compat custom-base section surfaces it (see gate below).
-    var customUserAgent by remember { mutableStateOf(instance.customUserAgent ?: "") }
 
     // saveBaseURLSettings(): single source of truth for persisting the three
-    // Custom Base URL fields (URL, /v1 switch, custom UA). Invoked on focus
-    // loss and on the /v1 toggle, keeping these consistent with the instant-save
-    // behavior of every other control on this screen. Blank URL/UA collapse to
-    // null (= default). Declared AFTER the vars it captures (customBaseURL,
-    // appendV1Suffix, customUserAgent) — a local function can't forward-reference
-    // a later-declared local `var`.
-    fun saveBaseURLSettings(appendV1: Boolean = appendV1Suffix) {
-        providerRepository.updateInstance(
-            instance.copy(
-                customBaseURL = customBaseURL.ifBlank { null },
-                appendV1Suffix = appendV1,
-                customUserAgent = customUserAgent.ifBlank { null },
-            )
-        )
-        AppLogger.info(
-            TAG,
-            "Saved base URL for ${instance.id}: " +
-                "url='${customBaseURL.ifBlank { "<default>" }}', appendV1=$appendV1, " +
-                "ua='${customUserAgent.ifBlank { "<default>" }}'",
-        )
-    }
-
     // [perf-provider-detail-models] Cache the entry list per (instanceId, config)
     // instead of re-filtering the whole modelEntries collection on EVERY
     // recomposition. With a 300+ model provider, the old `entriesFor` call ran
     // a full-list scan on each recomposition (every keystroke, every toggle),
     // O(n) of the catalog for a screen that already renders all of them.
+    //
+    // [T-provider-detail-visible-models] The detail screen now shows ONLY the
+    // models the user has selected (isHidden == false) — mirrors rikkahub's
+    // "pull everything, display the chosen few" model. The full catalog stays
+    // in the repository (modelEntries) and is reachable via the "Manage All
+    // Models" row that opens the ManageProviderModelsSheet; refresh keeps
+    // downloading everything so nothing is lost, and refreshModels() preserves
+    // each entry's isHidden/overrides/uuid across refreshes (ProviderRepository
+    // L959-987). `visibleEntries` lives on the repo and filters the same
+    // StateFlow-backed list, so toggling visibility in the manager screen
+    // updates this list reactively with zero extra wiring.
     val entries = remember(instanceId, config) {
+        providerRepository.visibleEntries(instanceId)
+    }
+    // Full catalog size, for the section header + refresh toast. Computed the
+    // same remembered way so it doesn't rescan on every recomposition either.
+    val allEntries = remember(instanceId, config) {
         providerRepository.entriesFor(instanceId)
     }
     var isRefreshing by remember { mutableStateOf(false) }
@@ -207,269 +204,6 @@ fun ProviderDetailScreen(
             }
         }
 
-        // ─── Credential / API Key ───────────────────────────────────
-        val isOAuthProvider =
-            instance.credentialType == com.openminis.app.data.model.ProviderCredential.oauth
-        SettingsSection(
-            header = if (isOAuthProvider) stringResource(R.string.add_provider_credential) else stringResource(R.string.provider_list_api_key),
-            footer = if (isOAuthProvider) {
-                "OAuth tokens are stored securely in encrypted storage."
-            } else {
-                null
-            },
-        ) {
-            SettingsCardBlock {
-                if (isOAuthProvider) {
-                    OAuthCredentialBlock(
-                        instance = instance,
-                        storedKey = storedKey,
-                        providerRepository = providerRepository,
-                    )
-                } else {
-                    ApiKeyCredentialBlock(
-                        storedKey = storedKey,
-                        keyVisible = keyVisible,
-                        onToggleVisibility = { keyVisible = !keyVisible },
-                        isEditing = isEditingKey,
-                        editValue = editKeyValue,
-                        onEditValueChange = { editKeyValue = it },
-                        onBeginEdit = {
-                            isEditingKey = true
-                            editKeyValue = storedKey ?: ""
-                        },
-                        onCancelEdit = {
-                            isEditingKey = false
-                            editKeyValue = ""
-                            keyVisible = false
-                        },
-                        onSave = {
-                            providerRepository.saveApiKey(instanceId, editKeyValue)
-                            // [T-android-provider-apikey-save-stale] Reflect the
-                            // just-saved value in UI state immediately rather than
-                            // re-reading the async-written prefs on recomposition.
-                            storedKey = editKeyValue
-                            AppLogger.info(TAG, "Saved API key for ${instance.id}")
-                            isEditingKey = false
-                            editKeyValue = ""
-                            keyVisible = false
-                        },
-                    )
-                }
-            }
-        }
-
-        // Manual Bearer Token (OAuth providers only — proxy override)
-        if (isOAuthProvider) {
-            SettingsSection(
-                header = stringResource(R.string.provider_detail_manual_bearer_token),
-                footer = stringResource(R.string.provider_detail_use_a_static_bearer_token_instead_of_the) +
-                    stringResource(R.string.provider_detail_manual_bearer_footer),
-            ) {
-                SettingsCardBlock {
-                    ManualBearerTokenSection(
-                        instance = instance,
-                        context = androidx.compose.ui.platform.LocalContext.current,
-                    )
-                }
-            }
-        }
-
-        // ─── Custom Base URL ────────────────────────────────────────
-        if (instance.providerType != ProviderType.openRouter) {
-            SettingsSection(header = stringResource(R.string.provider_detail_custom_api_base)) {
-                SettingsCardBlock {
-                    // URL input row — tighter vertical padding to match T226's
-                    // SectionTextField height shrink (~-20%). Saved on focus loss
-                    // so changes to Custom Base URL take effect immediately,
-                    // consistent with the instant-save of every other control.
-                    Column(modifier = Modifier.padding(vertical = 8.dp)) {
-                        SectionTextField(
-                            value = customBaseURL,
-                            onValueChange = { customBaseURL = it },
-                            singleLine = true,
-                            placeholder = stringResource(R.string.provider_detail_https_api_example_placeholder),
-                            fieldModifier = Modifier
-                                .bringIntoViewOnFocus()
-                                .onFocusChanged { focusState ->
-                                    if (!focusState.isFocused) saveBaseURLSettings()
-                                },
-                        )
-                    }
-                    val showUserAgentField = instance.providerType == ProviderType.openAI ||
-                        instance.providerType == ProviderType.anthropic
-                    SettingsSwitchRow(
-                        title = stringResource(R.string.provider_detail_auto_append_v1),
-                        checked = appendV1Suffix,
-                        onCheckedChange = { newVal ->
-                            appendV1Suffix = newVal
-                            saveBaseURLSettings(newVal)
-                        },
-                        showDivider = showUserAgentField,
-                    )
-                    // [T-provider-custom-user-agent] Custom User-Agent input —
-                    // only for OpenAI-/Anthropic-compat (relay) protocols. Some
-                    // gateways reject Minis' default UA and only allow official
-                    // clients (e.g. Claude Code). Blank → default UA.
-                    if (showUserAgentField) {
-                        Column(modifier = Modifier.padding(vertical = 8.dp)) {
-                            Text(
-                                text = stringResource(R.string.provider_detail_custom_user_agent),
-                                style = MaterialTheme.typography.bodyLarge,
-                            )
-                            Spacer(Modifier.height(4.dp))
-                            SectionTextField(
-                                value = customUserAgent,
-                                onValueChange = { customUserAgent = it },
-                                singleLine = true,
-                                placeholder = stringResource(R.string.provider_detail_custom_user_agent_placeholder),
-                                fieldModifier = Modifier
-                                    .bringIntoViewOnFocus()
-                                    .onFocusChanged { focusState ->
-                                        if (!focusState.isFocused) saveBaseURLSettings()
-                                    },
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        // ─── API Format (OpenAI API-key only) ───────────────────────
-        if (instance.providerType == ProviderType.openAI &&
-            instance.credentialType != com.openminis.app.data.model.ProviderCredential.oauth
-        ) {
-            SettingsSection(
-                header = stringResource(R.string.provider_detail_api_format),
-                footer = if (instance.useResponsesAPI) {
-                    stringResource(R.string.provider_detail_api_format_responses_footer)
-                } else {
-                    stringResource(R.string.provider_detail_api_format_chat_footer)
-                },
-            ) {
-                SettingsCardBlock {
-                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                        SegmentedButton(
-                            selected = !instance.useResponsesAPI,
-                            onClick = {
-                                if (instance.useResponsesAPI) {
-                                    providerRepository.updateInstance(instance.copy(useResponsesAPI = false))
-                                }
-                            },
-                            shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-                        ) { Text(stringResource(R.string.provider_detail_chat_completions)) }
-                        SegmentedButton(
-                            selected = instance.useResponsesAPI,
-                            onClick = {
-                                if (!instance.useResponsesAPI) {
-                                    providerRepository.updateInstance(instance.copy(useResponsesAPI = true))
-                                }
-                            },
-                            shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-                        ) { Text(stringResource(R.string.provider_detail_responses_api)) }
-                    }
-                }
-            }
-        }
-
-        // ─── Azure OpenAI ───────────────────────────────────────────
-        // [T-android-azure-openai] Orthogonal to the API Format picker above —
-        // Azure changes only the auth header (api-key:) and URL style (the user
-        // pastes the full Azure endpoint, incl. ?api-version, into Custom API
-        // Base). OpenAI API-key instances only. Ports iOS azureModeSection.
-        if (instance.supportsAzureMode) {
-            SettingsSection(
-                header = stringResource(R.string.provider_detail_azure_openai),
-                footer = stringResource(R.string.provider_detail_azure_openai_footer),
-            ) {
-                SettingsSwitchRow(
-                    title = stringResource(R.string.provider_detail_azure_openai),
-                    checked = instance.azureMode,
-                    onCheckedChange = { on ->
-                        providerRepository.updateInstance(instance.copy(azureMode = on))
-                        AppLogger.info(TAG, "Set azureMode=$on for ${instance.id}")
-                    },
-                    showDivider = false,
-                )
-            }
-        }
-
-        // ─── Image Generation Endpoint ──────────────────────────────
-        // [T-android-image-endpoint-mode] OpenAI-compatible providers only.
-        // Picks how minis-model-use routes image-output models:
-        // auto-probe / forced Images API / forced Chat Completions. Mirrors
-        // iOS ProviderInstanceDetailView.imageEndpointSection.
-        if (instance.supportsImageEndpointSetting) {
-            val mode = instance.imageEndpointMode
-            SettingsSection(
-                header = stringResource(R.string.provider_detail_image_generation),
-                footer = when (mode) {
-                    com.openminis.app.data.model.ImageEndpointMode.auto ->
-                        if (instance.imageEndpointResolved != null) {
-                            val resolved = if (instance.imageEndpointResolved ==
-                                com.openminis.app.data.model.ImageEndpointMode.imagesGenerations
-                            ) "/v1/images/generations" else "/v1/chat/completions"
-                            stringResource(
-                                R.string.provider_detail_image_endpoint_auto_footer_resolved,
-                                resolved,
-                            )
-                        } else {
-                            stringResource(R.string.provider_detail_image_endpoint_auto_footer)
-                        }
-                    com.openminis.app.data.model.ImageEndpointMode.imagesGenerations ->
-                        stringResource(R.string.provider_detail_image_endpoint_images_footer)
-                    com.openminis.app.data.model.ImageEndpointMode.chatCompletions ->
-                        stringResource(R.string.provider_detail_image_endpoint_chat_footer)
-                },
-            ) {
-                SettingsCardBlock {
-                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                        SegmentedButton(
-                            selected = mode == com.openminis.app.data.model.ImageEndpointMode.auto,
-                            onClick = {
-                                if (mode != com.openminis.app.data.model.ImageEndpointMode.auto) {
-                                    providerRepository.updateInstance(
-                                        instance.copy(
-                                            imageEndpointMode = com.openminis.app.data.model.ImageEndpointMode.auto,
-                                        ),
-                                    )
-                                }
-                            },
-                            shape = SegmentedButtonDefaults.itemShape(index = 0, count = 3),
-                        ) { Text(stringResource(R.string.provider_detail_image_endpoint_auto)) }
-                        SegmentedButton(
-                            selected = mode == com.openminis.app.data.model.ImageEndpointMode.imagesGenerations,
-                            onClick = {
-                                if (mode != com.openminis.app.data.model.ImageEndpointMode.imagesGenerations) {
-                                    providerRepository.updateInstance(
-                                        instance.copy(
-                                            imageEndpointMode = com.openminis.app.data.model.ImageEndpointMode.imagesGenerations,
-                                            // User-forced mode supersedes any cached probe result.
-                                            imageEndpointResolved = null,
-                                        ),
-                                    )
-                                }
-                            },
-                            shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3),
-                        ) { Text(stringResource(R.string.provider_detail_image_endpoint_images_api)) }
-                        SegmentedButton(
-                            selected = mode == com.openminis.app.data.model.ImageEndpointMode.chatCompletions,
-                            onClick = {
-                                if (mode != com.openminis.app.data.model.ImageEndpointMode.chatCompletions) {
-                                    providerRepository.updateInstance(
-                                        instance.copy(
-                                            imageEndpointMode = com.openminis.app.data.model.ImageEndpointMode.chatCompletions,
-                                            imageEndpointResolved = null,
-                                        ),
-                                    )
-                                }
-                            },
-                            shape = SegmentedButtonDefaults.itemShape(index = 2, count = 3),
-                        ) { Text(stringResource(R.string.provider_detail_image_endpoint_chat)) }
-                    }
-                }
-            }
-        }
-
         // ─── Status ─────────────────────────────────────────────────
         SettingsSection(header = stringResource(R.string.provider_detail_status)) {
             SettingsSwitchRow(
@@ -484,36 +218,40 @@ fun ProviderDetailScreen(
             )
         }
 
+        // ─── API & Connection ────────────────────────────────────────
+        // [T-provider-connection-screen] All connection/credential controls
+        // (API key, OAuth, manual bearer, custom base URL, API format, Azure,
+        // image endpoint) live on the dedicated ProviderConnectionScreen —
+        // opened from this row. This detail page stays focused on the daily
+        // driver stuff: enable toggle + model picker. The summary line shows
+        // the credential endpoint at a glance without the full card stack.
+        SettingsSection(header = stringResource(R.string.provider_detail_api_connection)) {
+            SettingsRow(
+                title = stringResource(R.string.provider_detail_api_connection),
+                subtitle = connectionSummary(instance, storedKey),
+                onClick = onConnectionClick,
+                showChevron = true,
+                showDivider = false,
+            )
+        }
+
         // ─── Models ─────────────────────────────────────────────────
         SettingsSection(
             header = stringResource(R.string.provider_detail_models_count_header, entries.size),
         ) {
-            // Refresh action sits as the first row, mirroring the iOS
-            // tap-to-refresh affordance in the section header area.
+            // [T-provider-detail-visible-models] "Manage All Models" opens the
+            // full-catalog manager (search + visibility toggles). Placed as the
+            // FIRST row of the section: the visible list is now the daily-driver
+            // view, and this row is the escape hatch for browsing everything the
+            // provider actually offers. Chevron signals "more inside". The
+            // refresh affordance rides as this row's trailing icon (compact —
+            // no separate full-width refresh row any more).
             SettingsRow(
-                title = if (isRefreshing) stringResource(R.string.provider_detail_refreshing) else stringResource(R.string.provider_detail_refresh_models_list),
-                onClick = if (isRefreshing) {
-                    null
-                } else {
-                    {
-                        isRefreshing = true
-                        val toastContext = exportContext
-                        scope.launch {
-                            try {
-                                val result = providerRepository.refreshModels(instance)
-                                Toast.makeText(
-                                    toastContext,
-                                    refreshResultMessage(result, entries.size, toastContext),
-                                    Toast.LENGTH_SHORT,
-                                ).show()
-                                AppLogger.info(TAG, "Refreshed models for ${instance.id}: $result")
-                            } finally {
-                                isRefreshing = false
-                            }
-                        }
-                    }
-                },
-                showChevron = false,
+                title = stringResource(R.string.provider_detail_manage_models),
+                subtitle = stringResource(R.string.provider_detail_models_count_header, allEntries.size),
+                onClick = { showManageModelsSheet = true },
+                showChevron = true,
+                showDivider = false,
                 trailing = {
                     if (isRefreshing) {
                         androidx.compose.material3.CircularProgressIndicator(
@@ -521,15 +259,32 @@ fun ProviderDetailScreen(
                             strokeWidth = 2.dp,
                         )
                     } else {
-                        Icon(
-                            Icons.Default.Refresh,
-                            contentDescription = stringResource(R.string.provider_detail_refresh_models),
-                            tint = MaterialTheme.colorScheme.primary,
-                        )
+                        IconButton(onClick = {
+                            isRefreshing = true
+                            val toastContext = exportContext
+                            scope.launch {
+                                try {
+                                    val result = providerRepository.refreshModels(instance)
+                                    Toast.makeText(
+                                        toastContext,
+                                        refreshResultMessage(result, allEntries.size, toastContext),
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                    AppLogger.info(TAG, "Refreshed models for ${instance.id}: $result")
+                                } finally {
+                                    isRefreshing = false
+                                }
+                            }
+                        }) {
+                            Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.provider_detail_refresh_models_list))
+                        }
                     }
                 },
-                showDivider = entries.isNotEmpty() || true,
             )
+
+            // Model list follows. The Refresh / Manage controls now live in the
+            // single header row above (trailing icon + chevron), so the list is
+            // the visual bulk of this section.
 
             // [perf-provider-detail-models] Render the model list either as a
             // plain Column (small catalogs) or a height-capped LazyColumn
@@ -655,12 +410,27 @@ fun ProviderDetailScreen(
             },
         )
     }
+
+    // [T-provider-detail-visible-models] Manage All Models opens as a
+    // ModalBottomSheet — low-frequency one-time action, half-screen sheet
+    // instead of a full navigation destination.
+    if (showManageModelsSheet) {
+        ManageProviderModelsSheet(
+            instanceId = instanceId,
+            providerRepository = providerRepository,
+            onDismiss = { showManageModelsSheet = false },
+            onModelEntryClick = { entryId ->
+                showManageModelsSheet = false
+                onModelEntryClick(entryId)
+            },
+        )
+    }
 }
 
 // ─── Credential blocks ─────────────────────────────────────────────────────────
 
 @Composable
-private fun OAuthCredentialBlock(
+internal fun OAuthCredentialBlock(
     instance: com.openminis.app.data.model.ProviderInstance,
     storedKey: String?,
     providerRepository: ProviderRepository,
@@ -803,7 +573,7 @@ private fun OAuthCredentialBlock(
 }
 
 @Composable
-private fun ApiKeyCredentialBlock(
+internal fun ApiKeyCredentialBlock(
     storedKey: String?,
     keyVisible: Boolean,
     onToggleVisibility: () -> Unit,
@@ -884,6 +654,39 @@ private fun maskedKey(key: String?): String {
 }
 
 /**
+ * [T-provider-connection-screen] One-line summary for the "API & Connection"
+ * row: masked API key (or credential type label for OAuth / manual bearer)
+ * plus the effective base URL. Keeps the detail screen glanceable — the full
+ * editing surface lives on ProviderConnectionScreen.
+ */
+private fun connectionSummary(
+    instance: com.openminis.app.data.model.ProviderInstance,
+    storedKey: String?,
+): String {
+    val credPart = when {
+        storedKey.isNullOrEmpty() ->
+            instance.credentialType.name.lowercase()
+        else -> maskedKey(storedKey)
+    }
+    val endpoint = instance.customBaseURL?.takeIf { it.isNotBlank() }
+        ?.let { instance.effectiveBaseURL }
+        ?: instance.providerType.name
+    // Show only the hostname (and port if non-standard) for readability.
+    // Long URLs in the subtitle row are cramped and ugly; the hostname is
+    // enough context at a glance. Fall back to a 40-char truncation.
+    val hostname = try {
+        java.net.URI(endpoint).let { uri ->
+            if (uri.port > 0 && uri.port != 443 && uri.port != 80)
+                "${uri.host}:${uri.port}"
+            else uri.host
+        } ?: endpoint.take(40)
+    } catch (_: Exception) {
+        endpoint.take(40)
+    }
+    return "$credPart · $hostname"
+}
+
+/**
  * Export the provider instance as JSON and hand it to the system share sheet
  * via FileProvider. Mirrors iOS `ProviderShareSheet` — writes a <label>.json
  * file to app-scoped cache and emits ACTION_SEND with a content:// URI.
@@ -928,7 +731,7 @@ private fun exportProviderInstance(
  * refresh flow entirely and is sent verbatim as `Authorization: Bearer …`.
  */
 @Composable
-private fun ManualBearerTokenSection(
+internal fun ManualBearerTokenSection(
     instance: com.openminis.app.data.model.ProviderInstance,
     context: android.content.Context,
 ) {
@@ -1038,10 +841,10 @@ private fun ManualBearerTokenSection(
 }
 
 /** Input modalities that get a (muted) capability badge in the model list. */
-private val modalityIconKeys = setOf("image", "pdf", "audio", "video")
+internal val modalityIconKeys = setOf("image", "pdf", "audio", "video")
 
 /** Output modalities that get a (tinted, generate-style) badge in the model list. */
-private val modalityOutputIconKeys = setOf("image", "audio", "video")
+internal val modalityOutputIconKeys = setOf("image", "audio", "video")
 
 /**
  * One model row in the provider detail list — shared by both the plain
@@ -1127,7 +930,7 @@ private fun ProviderModelRow(
  * that modality as input. Mirrors iOS ProviderInstanceDetailView.modalityIcons.
  */
 @Composable
-private fun ModalityIconsRow(
+internal fun ModalityIconsRow(
     inputModalities: List<String>,
     outputModalities: List<String>,
 ) {

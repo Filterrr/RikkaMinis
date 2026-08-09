@@ -596,7 +596,6 @@
     <string name="provider_detail_manual_bearer_token">수동 Bearer Token</string>
     <string name="provider_detail_use_a_static_bearer_token_instead_of_the">OAuth 로그인 플로 대신 정적 베어러 토큰을 사용합니다.</string>
     <string name="provider_detail_custom_api_base">사용자 정의 API 주소</string>
-    <string name="provider_detail_auto_append_v1">/v1 자동 추가</string>
     <string name="provider_detail_api_format">API Format</string>
     <string name="provider_detail_chat_completions">Chat Completions</string>
     <string name="provider_detail_responses_api">Responses API</string>
@@ -617,6 +616,11 @@
     <string name="provider_detail_status">상태</string>
     <string name="provider_detail_enabled">활성화됨</string>
     <string name="provider_detail_refresh_models">모델 새로 고침</string>
+    <string name="provider_detail_manage_models">모든 모델 관리</string>
+    <string name="provider_detail_api_connection">API 및 연결</string>
+    <string name="provider_detail_manage_models_search_hint">모델 검색…</string>
+    <string name="provider_detail_manage_models_all_header">전체 모델 (%1$d)</string>
+    <string name="provider_detail_models_title">전체 모델</string>
     <string name="provider_detail_add_custom_model">사용자 정의 모델 추가</string>
     <string name="provider_detail_delete_provider">AI 공급자 삭제</string>
     <string name="provider_detail_delete_model">Delete Model</string>
@@ -733,7 +737,6 @@
     <string name="add_custom_model_eg_id_placeholder">예: gpt-4o-custom</string>
     <string name="add_provider_built_in_models_count">내장 모델 %1$d 개</string>
     <string name="add_provider_configure_provider">%1$s 구성</string>
-    <string name="add_provider_auto_append_v1_quoted">\"/v1\" 자동 추가</string>
     <string name="add_models_to_group_add_count">추가 (%1$d)</string>
     <string name="provider_detail_https_api_example_placeholder">https://api.example.com</string>
     <string name="provider_detail_models_count_header">모델 (%1$d)</string>

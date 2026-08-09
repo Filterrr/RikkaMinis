@@ -242,7 +242,6 @@
     <string name="provider_detail_manual_bearer_token">手動 Bearer Token</string>
     <string name="provider_detail_use_a_static_bearer_token_instead_of_the">使用靜態 bearer token,而不是 OAuth 登入流程。</string>
     <string name="provider_detail_custom_api_base">自定義 API 地址</string>
-    <string name="provider_detail_auto_append_v1">自動附加 /v1</string>
     <string name="provider_detail_api_format">API Format</string>
     <string name="provider_detail_chat_completions">Chat Completions</string>
     <string name="provider_detail_responses_api">Responses API</string>
@@ -263,6 +262,11 @@
     <string name="provider_detail_status">狀態</string>
     <string name="provider_detail_enabled">已啓用</string>
     <string name="provider_detail_refresh_models">重新整理模型</string>
+    <string name="provider_detail_manage_models">管理全部模型</string>
+    <string name="provider_detail_api_connection">API 與連線</string>
+    <string name="provider_detail_manage_models_search_hint">搜尋模型…</string>
+    <string name="provider_detail_manage_models_all_header">全部模型 (%1$d)</string>
+    <string name="provider_detail_models_title">全部模型</string>
     <string name="provider_detail_add_custom_model">添加自定義模型</string>
     <string name="provider_detail_delete_provider">刪除 AI 服務商</string>
     <string name="provider_detail_delete_model">Delete Model</string>
@@ -402,7 +406,6 @@
     <string name="add_provider_subtitle_openrouter">聚合 GPT、Claude、Gemini、Llama 等主流模型</string>
     <string name="add_provider_subtitle_xai">支援 Grok 系列模型</string>
     <string name="add_provider_configure_provider">設定 %1$s</string>
-    <string name="add_provider_auto_append_v1_quoted">自動附加 \"/v1\"</string>
     <string name="add_models_to_group_add_count">新增 (%1$d)</string>
     <string name="provider_detail_https_api_example_placeholder">https://api.example.com</string>
     <string name="provider_detail_models_count_header">模型 (%1$d)</string>
