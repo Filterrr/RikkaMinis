@@ -49,9 +49,7 @@ SHA-256  FC:0C:40:0D:B7:7E:C1:81:A3:35:18:C2:E8:13:6A:AE
          1A:3F:6C:79:4A:1A:A7:9F:DB:67:63:8F:C6:B1:61:13
 ```
 
-Verify a download with `python3 scripts/apk_cert_sha256.py <apk>`. Note this
-differs from the official build's key, so if you currently have the official
-APK installed you must uninstall it first.
+Verify a download with `python3 scripts/apk_cert_sha256.py <apk>`.
 
 ---
 
@@ -114,8 +112,7 @@ Android-specific product changes that are not present upstream.
   "Favorites" section at the top of the provider list, toggled from the row's
   trailing menu.
 - **Memory page management improvements.** The memory page file list supports
-  "show more" expand/collapse; file memories are sorted by name, and stale
-  failed entries are auto-pruned.
+  "show more" expand/collapse.
 - **Settings consistency fixes.** Restored preferences refresh the live
   settings UI, and previously disconnected/missing settings keys are now
   registered and included in backups.
@@ -138,7 +135,10 @@ See [docs/DEVELOPMENT_LIFECYCLE.md](docs/DEVELOPMENT_LIFECYCLE.md).
 
 - **proot is built from source.** The sandbox engine comes from the
   `deps/proot` submodule + `deps/build_proot.sh` + vendored `deps/talloc`,
-  compiled with NDK r28 in CI — no committed binary blobs, fully reproducible.
+  compiled with NDK r28 in CI. The Alpine rootfs (`alpine-minirootfs.tar`,
+  8.5 MB) is committed as a prebuilt asset and unpacked at runtime by
+  `RootfsManager` — the proot binary itself is not committed, fully
+  reproducible.
 - **Other native libs stay vendored.** `libpty_bridge.so`,
   `libminis_crash_handler.so` and `libjieba_jni.so` are committed as-is.
 - **Backup tests run in CI.** The full JVM unit-test suite — backup/restore
@@ -160,16 +160,15 @@ See [docs/DEVELOPMENT_LIFECYCLE.md](docs/DEVELOPMENT_LIFECYCLE.md).
   the system prompt.
 
 
-### Why build proot from source?
-
-The sandbox engine `libproot.so` needs upstream's Android 10+ W^X bypass
-patches. Building it through AGP's CMake block produces a binary that compiles
-fine and then fails at runtime with `execve("/bin/sh"): Permission denied` —
-the terminal never opens. This fork therefore builds it with
-`deps/build_proot.sh` (the upstream-supported path — same source, same NDK
-toolchain the official binary is built with) instead of CMake.
-`externalNativeBuild` stays disabled so AGP never overwrites the vendored
-pty_bridge / crash_handler / jieba libraries with unpatched CI-built copies.
+**Why build proot from source?** The sandbox engine `libproot.so` needs to be
+built with upstream's Android 10+ W^X bypass patches. Building it through
+AGP's CMake block produces a binary that compiles fine and then fails at
+runtime with `execve("/bin/sh"): Permission denied` — the terminal never
+opens. This fork therefore builds it with `deps/build_proot.sh` (the
+upstream-supported path — same source, same NDK toolchain the official
+binary is built with) instead of CMake. `externalNativeBuild` stays disabled
+so AGP never overwrites the vendored pty_bridge / crash_handler / jieba
+libraries with unpatched CI-built copies.
 
 **Trade-off:** edits under `src/android/app/src/main/cpp/` are not compiled —
 only `deps/proot` is built, via `build_proot.sh`. Changing the other native
