@@ -59,7 +59,11 @@ data class SoulMetadata(
         const val DISPLAY_EMOJI = "✨"
 
         val DEFAULT = SoulMetadata(
-            name = "Minis",
+            // Default personality name is aligned with the app name
+            // (R.string.app_name = "RikkaMinis"). Kept as a plain literal
+            // here because SoulMetadata.DEFAULT is a Context-free constant;
+            // every UI surface falls back to this single source of truth.
+            name = "RikkaMinis",
             // Default emoji is intentionally empty — UI uses the fixed
             // [displayEmoji] sparkle and [SoulMDParser.serialize] no longer
             // writes the `emoji:` line. The field is kept on the struct only
@@ -286,7 +290,7 @@ object SoulStore {
      * `SoulStore.defaultContent` byte-for-byte (74c0daf).
      */
     val DEFAULT_CONTENT: String = """---
-name: "Minis"
+name: "RikkaMinis"
 style: ""
 lang: "auto"
 ---
@@ -450,7 +454,7 @@ object SystemPromptBuilder {
         val file = SoulStore.load(context)
         val name = (file?.metadata?.name ?: SoulMetadata.DEFAULT.name)
             .trim()
-            .ifEmpty { "Minis" }
+            .ifEmpty { SoulMetadata.DEFAULT.name }
 
         val style = (file?.metadata?.style ?: "").trim()
         // [T-soul-lang-wire] The `lang` frontmatter field (auto / zh / en) is
