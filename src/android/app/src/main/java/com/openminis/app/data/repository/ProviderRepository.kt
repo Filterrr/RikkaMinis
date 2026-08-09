@@ -984,7 +984,14 @@ class ProviderRepository(private val context: Context) {
                 baseModel = resolved,
                 overrides = prior?.overrides ?: ModelOverrides(),
                 isCustom = false,
-                isHidden = prior?.isHidden ?: false,
+                // [T-provider-default-hidden] Newly refreshed models come in hidden by
+                // default — mirrors rikkahub "pull everything, show the chosen
+                // few". The user unpicks them on the Manage All Models sheet;
+                // the provider detail page starts empty for new providers, which
+                // is the intended low-noise first-run. Existing entries carry
+                // their prior isHidden forward so a refresh never resets what
+                // the user already toggled.
+                isHidden = prior?.isHidden ?: true,
                 uuid = prior?.id ?: java.util.UUID.randomUUID().toString(),
                 userModifiedAt = prior?.userModifiedAt,
             )
