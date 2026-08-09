@@ -617,6 +617,10 @@
     <string name="provider_detail_status">ステータス</string>
     <string name="provider_detail_enabled">有効</string>
     <string name="provider_detail_refresh_models">モデルを更新</string>
+    <string name="provider_detail_manage_models">すべてのモデルを管理</string>
+    <string name="provider_detail_manage_models_search_hint">モデルを検索…</string>
+    <string name="provider_detail_manage_models_all_header">すべてのモデル (%1$d)</string>
+    <string name="provider_detail_models_title">すべてのモデル</string>
     <string name="provider_detail_add_custom_model">カスタムモデルを追加</string>
     <string name="provider_detail_delete_provider">AIプロバイダーを削除</string>
     <string name="provider_detail_delete_model">Delete Model</string>

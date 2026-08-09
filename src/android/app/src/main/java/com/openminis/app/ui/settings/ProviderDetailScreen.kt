@@ -89,6 +89,7 @@ fun ProviderDetailScreen(
     onBack: () -> Unit,
     onModelEntryClick: (String) -> Unit = {},
     onAddCustomModel: () -> Unit = {},
+    onManageAllModels: () -> Unit = {},
 ) {
     val config by providerRepository.config.collectAsState()
     val instance = config.instances.find { it.id == instanceId }
@@ -164,7 +165,23 @@ fun ProviderDetailScreen(
     // recomposition. With a 300+ model provider, the old `entriesFor` call ran
     // a full-list scan on each recomposition (every keystroke, every toggle),
     // O(n) of the catalog for a screen that already renders all of them.
+    //
+    // [T-provider-detail-visible-models] The detail screen now shows ONLY the
+    // models the user has selected (isHidden == false) — mirrors rikkahub's
+    // "pull everything, display the chosen few" model. The full catalog stays
+    // in the repository (modelEntries) and is reachable via the "Manage All
+    // Models" row that opens ManageProviderModelsScreen; refresh keeps
+    // downloading everything so nothing is lost, and refreshModels() preserves
+    // each entry's isHidden/overrides/uuid across refreshes (ProviderRepository
+    // L959-987). `visibleEntries` lives on the repo and filters the same
+    // StateFlow-backed list, so toggling visibility in the manager screen
+    // updates this list reactively with zero extra wiring.
     val entries = remember(instanceId, config) {
+        providerRepository.visibleEntries(instanceId)
+    }
+    // Full catalog size, for the section header + refresh toast. Computed the
+    // same remembered way so it doesn't rescan on every recomposition either.
+    val allEntries = remember(instanceId, config) {
         providerRepository.entriesFor(instanceId)
     }
     var isRefreshing by remember { mutableStateOf(false) }
@@ -488,6 +505,19 @@ fun ProviderDetailScreen(
         SettingsSection(
             header = stringResource(R.string.provider_detail_models_count_header, entries.size),
         ) {
+            // [T-provider-detail-visible-models] "Manage All Models" opens the
+            // full-catalog manager (search + visibility toggles). Placed as the
+            // FIRST row of the section: the visible list is now the daily-driver
+            // view, and this row is the escape hatch for browsing everything the
+            // provider actually offers. Chevron signals "more inside".
+            SettingsRow(
+                title = stringResource(R.string.provider_detail_manage_models),
+                subtitle = stringResource(R.string.provider_detail_models_count_header, allEntries.size),
+                onClick = onManageAllModels,
+                showChevron = true,
+                showDivider = true,
+            )
+
             // Refresh action sits as the first row, mirroring the iOS
             // tap-to-refresh affordance in the section header area.
             SettingsRow(
@@ -503,7 +533,7 @@ fun ProviderDetailScreen(
                                 val result = providerRepository.refreshModels(instance)
                                 Toast.makeText(
                                     toastContext,
-                                    refreshResultMessage(result, entries.size, toastContext),
+                                    refreshResultMessage(result, allEntries.size, toastContext),
                                     Toast.LENGTH_SHORT,
                                 ).show()
                                 AppLogger.info(TAG, "Refreshed models for ${instance.id}: $result")
@@ -1038,10 +1068,10 @@ private fun ManualBearerTokenSection(
 }
 
 /** Input modalities that get a (muted) capability badge in the model list. */
-private val modalityIconKeys = setOf("image", "pdf", "audio", "video")
+internal val modalityIconKeys = setOf("image", "pdf", "audio", "video")
 
 /** Output modalities that get a (tinted, generate-style) badge in the model list. */
-private val modalityOutputIconKeys = setOf("image", "audio", "video")
+internal val modalityOutputIconKeys = setOf("image", "audio", "video")
 
 /**
  * One model row in the provider detail list — shared by both the plain
@@ -1127,7 +1157,7 @@ private fun ProviderModelRow(
  * that modality as input. Mirrors iOS ProviderInstanceDetailView.modalityIcons.
  */
 @Composable
-private fun ModalityIconsRow(
+internal fun ModalityIconsRow(
     inputModalities: List<String>,
     outputModalities: List<String>,
 ) {

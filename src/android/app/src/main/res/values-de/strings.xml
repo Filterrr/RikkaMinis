@@ -617,6 +617,10 @@
     <string name="provider_detail_status">Status</string>
     <string name="provider_detail_enabled">Aktiviert</string>
     <string name="provider_detail_refresh_models">Modelle aktualisieren</string>
+    <string name="provider_detail_manage_models">Alle Modelle verwalten</string>
+    <string name="provider_detail_manage_models_search_hint">Modelle suchen…</string>
+    <string name="provider_detail_manage_models_all_header">Alle Modelle (%1$d)</string>
+    <string name="provider_detail_models_title">Alle Modelle</string>
     <string name="provider_detail_add_custom_model">Benutzerdefiniertes Modell hinzufügen</string>
     <string name="provider_detail_delete_provider">KI-Anbieter löschen</string>
     <string name="provider_detail_delete_model">Delete Model</string>
