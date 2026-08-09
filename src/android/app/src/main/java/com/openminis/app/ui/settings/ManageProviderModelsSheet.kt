@@ -83,8 +83,20 @@ fun ManageProviderModelsSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        modifier = Modifier.fillMaxHeight(0.75f),
     ) {
+        // [T-fix-sheet-bottom-clip] The height constraint must live on a wrapping
+        // Column INSIDE the sheet content, NOT on the ModalBottomSheet modifier.
+        // ModalBottomSheet internally applies wrapContentHeight() after the user
+        // modifier, so fillMaxHeight(0.75f) on it gets overridden, the content
+        // Column is measured at unconstrained height, and the Surface then clips
+        // the bottom at 75% — "bottom suddenly cut off". Constraining the inner
+        // Column keeps the LazyColumn's weight(1f) inside a bounded height, and
+        // the sheet wraps to exactly that height. No clipping.
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.75f),
+        ) {
         // Header: title + count, Done button
         Row(
             modifier = Modifier
@@ -161,6 +173,7 @@ fun ManageProviderModelsSheet(
                     }
                 }
             }
+        }
         }
     }
 }
