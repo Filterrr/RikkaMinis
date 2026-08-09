@@ -699,7 +699,6 @@
     <string name="provider_detail_manual_bearer_token">Ручной Bearer-токен</string>
     <string name="provider_detail_use_a_static_bearer_token_instead_of_the">Использовать статический Bearer-токен вместо входа через OAuth. </string>
     <string name="provider_detail_custom_api_base">Свой базовый URL API</string>
-    <string name="provider_detail_auto_append_v1">Автодобавление /v1</string>
     <string name="provider_detail_api_format">Формат API</string>
     <string name="provider_detail_chat_completions">Chat Completions</string>
     <string name="provider_detail_responses_api">Responses API</string>
@@ -855,7 +854,6 @@
     <string name="add_custom_model_eg_id_placeholder">например, gpt-4o-custom</string>
     <string name="add_provider_built_in_models_count">Встроенных моделей: %1$d</string>
     <string name="add_provider_configure_provider">Настроить %1$s</string>
-    <string name="add_provider_auto_append_v1_quoted">Автодобавление \"/v1\"</string>
     <string name="add_models_to_group_add_count">Добавить (%1$d)</string>
     <string name="provider_detail_https_api_example_placeholder">https://api.example.com</string>
     <string name="provider_detail_models_count_header">Модели (%1$d)</string>

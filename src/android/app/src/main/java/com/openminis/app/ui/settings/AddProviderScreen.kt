@@ -410,16 +410,13 @@ private fun ColumnScope.ApiKeyConfigSection(
     customBaseURL: String,
     onCustomBaseURLChange: (String) -> Unit,
     providerRepository: ProviderRepository,
-    // [T-android-provider-voice] Voice templates carry their own v1-suffix
-    // policy (e.g. MiMo appends /v1, ElevenLabs must not). null = type default.
-    initialAppendV1: Boolean? = null,
     onSaved: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var showApiKeyPlaintext by remember { mutableStateOf(false) }
-    var appendV1Suffix by remember {
-        mutableStateOf(initialAppendV1 ?: (providerType != ProviderType.gemini))
-    }
+    // /v1 is appended automatically for all non-Gemini providers (Gemini uses
+    // v1beta full-path URLs). effectiveBaseURL already guards against double-append.
+    val appendV1Suffix = providerType != ProviderType.gemini
     // OpenAI API Format: false = Chat Completions, true = Responses API
     var useResponsesAPI by remember { mutableStateOf(false) }
 
@@ -477,10 +474,8 @@ private fun ColumnScope.ApiKeyConfigSection(
             "Leave empty to use the default Google endpoint. Enter the full base URL including version path."
         } else if (providerType == ProviderType.anthropic) {
             stringResource(R.string.add_provider_endpoint_anthropic_hint)
-        } else if (appendV1Suffix) {
-            "Leave empty to use the default endpoint. \"/v1\" is appended automatically — enter the base host only."
         } else {
-            "The URL is used verbatim. Include the full path up to (but not including) the endpoint."
+            "Leave empty to use the default endpoint. \"/v1\" is appended automatically — enter the base host only."
         }
         SettingsSection(
             header = stringResource(R.string.add_provider_endpoint),
@@ -493,15 +488,6 @@ private fun ColumnScope.ApiKeyConfigSection(
                     onValueChange = onCustomBaseURLChange,
                     placeholder = defaultUrl,
                     singleLine = true,
-                )
-            }
-            // Auto Append "/v1" toggle (not for Gemini — Gemini uses full path)
-            if (providerType != ProviderType.gemini) {
-                SettingsSwitchRow(
-                    title = stringResource(R.string.add_provider_auto_append_v1_quoted),
-                    checked = appendV1Suffix,
-                    onCheckedChange = { appendV1Suffix = it },
-                    showDivider = false,
                 )
             }
         }
@@ -582,7 +568,9 @@ private fun ColumnScope.OAuthConfigSection(
     // Manual OAuth token entry state
     var manualToken by remember { mutableStateOf("") }
     var customBaseURL by remember { mutableStateOf("") }
-    var appendV1Suffix by remember { mutableStateOf(providerType != ProviderType.gemini) }
+    // /v1 is appended automatically for all non-Gemini providers (Gemini uses
+    // v1beta full-path URLs). effectiveBaseURL already guards against double-append.
+    val appendV1Suffix = providerType != ProviderType.gemini
 
     val signInLabel = when (providerType) {
         ProviderType.anthropic -> "Sign in with Claude"
@@ -787,14 +775,6 @@ private fun ColumnScope.OAuthConfigSection(
                     onValueChange = { manualToken = it },
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
-                )
-            }
-            if (providerType != ProviderType.gemini) {
-                SettingsSwitchRow(
-                    title = stringResource(R.string.add_provider_auto_append_v1_quoted),
-                    checked = appendV1Suffix,
-                    onCheckedChange = { appendV1Suffix = it },
-                    showDivider = false,
                 )
             }
         }

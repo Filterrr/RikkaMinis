@@ -596,7 +596,6 @@
     <string name="provider_detail_manual_bearer_token">Manuelles Bearer Token</string>
     <string name="provider_detail_use_a_static_bearer_token_instead_of_the">Statisches Bearer-Token statt des OAuth-Anmeldevorgangs verwenden.</string>
     <string name="provider_detail_custom_api_base">Benutzerdefinierte API-Basis</string>
-    <string name="provider_detail_auto_append_v1">/v1 automatisch anhängen</string>
     <string name="provider_detail_api_format">API Format</string>
     <string name="provider_detail_chat_completions">Chat Completions</string>
     <string name="provider_detail_responses_api">Responses API</string>
@@ -738,7 +737,6 @@
     <string name="add_custom_model_eg_id_placeholder">z. B. gpt-4o-custom</string>
     <string name="add_provider_built_in_models_count">%1$d integrierte Modelle</string>
     <string name="add_provider_configure_provider">%1$s konfigurieren</string>
-    <string name="add_provider_auto_append_v1_quoted">\"/v1\" automatisch anhängen</string>
     <string name="add_models_to_group_add_count">Hinzufügen (%1$d)</string>
     <string name="provider_detail_https_api_example_placeholder">https://api.example.com</string>
     <string name="provider_detail_models_count_header">Modelle (%1$d)</string>
