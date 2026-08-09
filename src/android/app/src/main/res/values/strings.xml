@@ -860,7 +860,6 @@
     <string name="provider_detail_manual_bearer_token">Manual Bearer Token</string>
     <string name="provider_detail_use_a_static_bearer_token_instead_of_the">Use a static bearer token instead of the OAuth sign-in flow. </string>
     <string name="provider_detail_custom_api_base">Custom API Base</string>
-    <string name="provider_detail_auto_append_v1">Auto-append /v1</string>
     <string name="provider_detail_custom_user_agent">Custom User-Agent</string>
     <string name="provider_detail_custom_user_agent_placeholder">Leave blank for default</string>
     <string name="provider_detail_api_format">API Format</string>
@@ -1058,7 +1057,6 @@
     <string name="add_provider_subtitle_openrouter">Aggregates GPT, Claude, Gemini, Llama and other mainstream models</string>
     <string name="add_provider_subtitle_xai">Works with the Grok series of models</string>
     <string name="add_provider_configure_provider">Configure %1$s</string>
-    <string name="add_provider_auto_append_v1_quoted">Auto Append \"/v1\"</string>
     <string name="add_models_to_group_add_count">Add (%1$d)</string>
     <string name="provider_detail_https_api_example_placeholder">https://api.example.com</string>
     <string name="provider_detail_models_count_header">Models (%1$d)</string>
