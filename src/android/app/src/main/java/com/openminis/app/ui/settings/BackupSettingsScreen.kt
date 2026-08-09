@@ -118,6 +118,13 @@ fun BackupSettingsScreen(
     var showWebDavConfig by remember { mutableStateOf(false) }
     var showRemoteList by remember { mutableStateOf(false) }
     var webDavBusy by remember { mutableStateOf(false) }
+    // Mutual-exclusion guard across ALL backup paths (local SAF export, WebDAV
+    // upload, and the pre-restore snapshot export). Each path builds the full
+    // 70MB+ payload into memory; running two concurrently (e.g. tapping local
+    // export while a WebDAV upload is in flight) stacks two full payloads and
+    // can blow the 512MB Java heap. Every backup button is disabled while this
+    // is true.
+    var backupBusy by remember { mutableStateOf(false) }
     // When true, the next secret-warning confirmation uploads to WebDAV
     // instead of launching the SAF file picker.
     var webDavUploadPending by remember { mutableStateOf(false) }
@@ -308,7 +315,7 @@ fun BackupSettingsScreen(
                 title = stringResource(R.string.backup_export),
                 subtitle = stringResource(R.string.backup_export_sub),
                 icon = Icons.Default.Download,
-                onClick = { showSecretWarning = true },
+                onClick = if (!backupBusy && !webDavBusy) { showSecretWarning = true } else null,
             )
             SettingsRow(
                 title = stringResource(R.string.backup_chat_window_title),
@@ -367,7 +374,7 @@ fun BackupSettingsScreen(
                 title = stringResource(R.string.webdav_upload),
                 subtitle = stringResource(R.string.webdav_upload_sub),
                 icon = Icons.Filled.CloudUpload,
-                onClick = if (webDavConfig != null && !webDavBusy) {
+                onClick = if (webDavConfig != null && !backupBusy && !webDavBusy) {
                     { webDavUploadPending = true; showSecretWarning = true }
                 } else {
                     null
@@ -377,7 +384,7 @@ fun BackupSettingsScreen(
                 title = stringResource(R.string.webdav_remote),
                 subtitle = stringResource(R.string.webdav_remote_sub),
                 icon = Icons.Outlined.CloudDownload,
-                onClick = if (webDavConfig != null && !webDavBusy) openRemoteList else null,
+                onClick = if (webDavConfig != null && !backupBusy && !webDavBusy) openRemoteList else null,
                 showDivider = false,
             )
         }
@@ -391,6 +398,13 @@ fun BackupSettingsScreen(
     // the destination differs (SAF picker vs. WebDAV PUT).
     if (showSecretWarning) {
         val runExport: (Boolean) -> Unit = runExport@{ withSecrets ->
+            // Claim the mutual-exclusion flag synchronously, BEFORE the async
+            // launch below — otherwise a second tap between "confirm dialog
+            // closes" and "coroutine starts" starts a second concurrent export
+            // (two full payloads in memory → OOM). Every rebuild of the
+            // payload (config/chat changed since last time) keeps the value;
+            // the flag clears in the shared finally below.
+            backupBusy = true
             showSecretWarning = false
             val toWebDav = webDavUploadPending
             webDavUploadPending = false
@@ -420,7 +434,6 @@ fun BackupSettingsScreen(
                     withContext(Dispatchers.Main) {
                         if (toWebDav) {
                             val cfg = webDavConfig ?: return@withContext
-                            webDavBusy = true
                             try {
                                 // Run off-thread so the upload finishes even if
                                 // the user navigates away mid-transfer; notify
@@ -447,8 +460,6 @@ fun BackupSettingsScreen(
                                     title = context.getString(R.string.webdav_notify_title_failed),
                                     body = webDavErrorMessage(context, t),
                                 )
-                            } finally {
-                                webDavBusy = false
                             }
                         } else {
                             pendingExport = payload
@@ -457,6 +468,14 @@ fun BackupSettingsScreen(
                     }
                 } catch (t: Throwable) {
                     errorMessage = String.format(errGenerateFmt, t.message ?: errUnknown)
+                } finally {
+                    // Release the mutual-exclusion guard on every exit path:
+                    // success (local SAF write / WebDAV upload), error, and
+                    // early return (e.g. webDavConfig unexpectedly null).
+                    // Back to Main: this runs on the applicationScope (IO)
+                    // dispatcher, and writing Compose state off-main is the
+                    // same race the WebDAV path guards against explicitly.
+                    withContext(Dispatchers.Main) { backupBusy = false }
                 }
             }
         }
