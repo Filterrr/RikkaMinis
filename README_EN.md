@@ -129,6 +129,11 @@ Android-specific product changes that are not present upstream.
   knows up front what each platform can and cannot do, no trial-and-error
   guessing.
 
+**Collaboration pattern.** This fork is itself developed through a
+human–AI closed loop: you (decide/verify) + AI agent (execute/iterate) +
+external platforms (compile/release/persist), cycling until convergence.
+See [docs/DEVELOPMENT_LIFECYCLE.md](docs/DEVELOPMENT_LIFECYCLE.md).
+
 ### Build and release changes
 
 - **proot is built from source.** The sandbox engine comes from the

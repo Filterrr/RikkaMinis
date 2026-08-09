@@ -98,6 +98,10 @@ SHA-256  FC:0C:40:0D:B7:7E:C1:81:A3:35:18:C2:E8:13:6A:AE
   系统提示词——智能体一上来就清楚知道每个平台能做什么、不能做什么，不用靠
   试错猜测。
 
+**协作模式。** 这个 fork 本身是在人机协作闭环中用它自己开发的——你（决策/验证）
++ AI agent（执行/迭代）+ 外挂平台（编译/发布/存储），循环迭代。详见
+[docs/DEVELOPMENT_LIFECYCLE.md](docs/DEVELOPMENT_LIFECYCLE.md)。
+
 ### 构建与发布改动
 
 - **proot 从源码构建。** 沙箱引擎来自 `deps/proot` 子模块 + `deps/build_proot.sh`
