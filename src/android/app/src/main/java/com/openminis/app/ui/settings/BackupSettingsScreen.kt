@@ -315,7 +315,7 @@ fun BackupSettingsScreen(
                 title = stringResource(R.string.backup_export),
                 subtitle = stringResource(R.string.backup_export_sub),
                 icon = Icons.Default.Download,
-                onClick = if (!backupBusy && !webDavBusy) { showSecretWarning = true } else null,
+                onClick = if (backupBusy || webDavBusy) null else ({ showSecretWarning = true }),
             )
             SettingsRow(
                 title = stringResource(R.string.backup_chat_window_title),
