@@ -56,7 +56,11 @@ internal object ProviderMutationMethods {
         val appendV1Suffix = params.optBoolean("appendV1Suffix", true)
         val isEnabled = params.optBoolean("isEnabled", true)
         val useResponsesAPI = params.optBoolean("useResponsesAPI", false)
-        val seedBuiltInModels = params.optBoolean("seedBuiltInModels", true)
+        // [T-provider-no-static-seed] Default OFF: a fresh provider starts with
+        // an empty model list; refreshModels() populates it from upstream.
+        // Kept as an explicit opt-in for callers that know what they're doing
+        // (e.g. a custom sync that wants the built-in static list verbatim).
+        val seedBuiltInModels = params.optBoolean("seedBuiltInModels", false)
 
         // Mirrors iOS gating: customBaseURL only honored on OpenAI-shape types.
         if (customBaseURL != null && type != ProviderType.openAI) {
@@ -81,27 +85,15 @@ internal object ProviderMutationMethods {
             customUserAgent = customUserAgent,
         )
 
-        // Inline copy of repo.addInstance with the seedBuiltInModels switch —
-        // we want to support both "create empty for custom-base endpoints"
-        // and the standard "seed with built-ins" path.
-        val cfg = repo.config.value
-        cfg.instances.add(instance)
+        // [T-provider-no-static-seed] addInstance no longer seeds anything —
+        // a fresh instance starts empty and refreshModels() populates it from
+        // upstream. seedBuiltInModels is a legacy opt-in: callers that still
+        // want the static LLMModel.all* list verbatim add it manually here.
+        repo.addInstance(instance)
         if (seedBuiltInModels) {
             for (m in instance.providerType.builtInModels) {
-                cfg.modelEntries.add(ModelEntry(providerInstanceId = instance.id, baseModel = m))
+                repo.addEntry(ModelEntry(providerInstanceId = instance.id, baseModel = m))
             }
-        }
-        // Save via the public addInstance to trigger StateFlow re-emit. We
-        // already added above so use updateInstance to re-publish; equivalent
-        // because addInstance dedupes via list semantics.
-        // Simpler: call repo's setter pair manually — repo doesn't expose
-        // saveConfig, so use addInstance for a fresh insert path.
-        cfg.instances.removeAll { it.id == instance.id }
-        cfg.modelEntries.removeAll { it.providerInstanceId == instance.id }
-        repo.addInstance(instance)
-        if (!seedBuiltInModels) {
-            // addInstance always seeds — if user opted out, sweep the seeds.
-            for (entry in repo.entriesFor(instance.id).toList()) repo.removeEntry(entry.id)
         }
 
         // Credential write (write-only — never returned).

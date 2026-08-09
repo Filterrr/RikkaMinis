@@ -34,6 +34,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,12 +43,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.openminis.app.data.model.ModelEntry
 import com.openminis.app.data.model.ModelGroup
 import com.openminis.app.data.model.ProviderInstance
 import com.openminis.app.data.model.ProviderType
 import com.openminis.app.data.repository.ProviderRepository
 import com.openminis.app.ui.components.MinisButton
+import kotlinx.coroutines.launch
 import com.openminis.app.ui.components.MinisTextButton
 
 /**
@@ -105,6 +106,7 @@ private fun ApiKeyStep(
     onNext: () -> Unit,
     onSkip: () -> Unit,
 ) {
+    val scope = rememberCoroutineScope()
     var selectedType by remember { mutableStateOf(ProviderType.anthropic) }
     var apiKey by remember { mutableStateOf("") }
     var saved by remember { mutableStateOf(false) }
@@ -178,12 +180,12 @@ private fun ApiKeyStep(
                         )
                         providerRepository.addInstance(instance)
                         providerRepository.saveApiKey(instance.id, apiKey.trim())
-                        // Add built-in models
-                        for (model in selectedType.builtInModels) {
-                            providerRepository.addEntry(
-                                ModelEntry(providerInstanceId = instance.id, baseModel = model)
-                            )
-                        }
+                        // [T-provider-no-static-seed] No built-in model seeding —
+                        // a fresh provider starts empty and refreshModels() pulls
+                        // the real upstream /v1/models list. The onboarding's
+                        // ModelSelectionStep shows what's fetched; the picker's
+                        // stale-while-revalidate covers the rest.
+                        scope.launch { providerRepository.refreshModels(instance) }
                         saved = true
                     }
                 },
