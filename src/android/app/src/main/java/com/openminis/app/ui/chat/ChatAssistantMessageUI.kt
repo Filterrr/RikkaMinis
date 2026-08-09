@@ -281,7 +281,8 @@ internal fun AssistantHeader() {
     // SOUL.md-driven `name`. The emoji-customization field was removed,
     // so we no longer branch on `SoulMetadata.emoji`; the icon stays the
     // canonical sparkle (iOS: sparkles SF Symbol + gradient). Only the
-    // `name` field is user-customizable — defaults to "Minis" when
+    // `name` field is user-customizable — defaults to the app name
+    // ("RikkaMinis", see SoulMetadata.DEFAULT.name) when
     // SOUL.md is missing the field or set to the default value.
     val soulMeta by com.openminis.app.agent.SoulStore.cachedMetadata.collectAsState()
     val displayName = soulMeta.name.ifBlank { com.openminis.app.agent.SoulMetadata.DEFAULT.name }
