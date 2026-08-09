@@ -153,6 +153,15 @@ fun ProviderConnectionScreen(
 
         // ─── Custom Base URL ────────────────────────────────────────
         if (instance.providerType != ProviderType.openRouter) {
+            // Provider-aware placeholder so the field suggests the real
+            // default endpoint for the selected provider instead of the
+            // generic example (mirrors AddProviderScreen.defaultUrl).
+            val baseUrlPlaceholder = when (instance.providerType) {
+                ProviderType.gemini -> "https://generativelanguage.googleapis.com/v1beta"
+                ProviderType.anthropic -> "https://api.anthropic.com"
+                ProviderType.openAI -> "https://api.openai.com"
+                else -> stringResource(R.string.provider_detail_https_api_example_placeholder)
+            }
             SettingsSection(header = stringResource(R.string.provider_detail_custom_api_base)) {
                 SettingsCardBlock {
                     Column(modifier = Modifier.padding(vertical = 8.dp)) {
@@ -160,7 +169,7 @@ fun ProviderConnectionScreen(
                             value = customBaseURL,
                             onValueChange = { customBaseURL = it },
                             singleLine = true,
-                            placeholder = stringResource(R.string.provider_detail_https_api_example_placeholder),
+                            placeholder = baseUrlPlaceholder,
                             fieldModifier = Modifier
                                 .bringIntoViewOnFocus()
                                 .onFocusChanged { focusState ->
