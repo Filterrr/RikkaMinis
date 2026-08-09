@@ -5153,6 +5153,24 @@ class ChatViewModel(
         // While streaming, enqueue instead of silently dropping (iOS: send vs enqueuePrompt).
         if (_isStreaming.value) {
             enqueuePrompt(text)
+            // [T-user-message-preempts-agent] User messages win over the
+            // running agent task: immediately cancel the in-flight stream so
+            // the queued prompt drains as a fresh turn (cancelStream() ->
+            // resumeQueueAfterCancel()) instead of sitting behind however
+            // many tool calls the current plan still has.
+            //
+            // Previously the queued bubble waited for the agent loop to reach
+            // its post-tool-result QueueInterrupt checkpoint, which is far
+            // from "now" when a single tool call is long-running (yt-dlp,
+            // gradle, gh release upload...) — so the user's message could be
+            // visibly delayed for minutes while the task kept going. The user
+            // had to manually tap Stop first, THEN the queue drained.
+            // Now sending IS the preempt: same cancel semantics as the Stop
+            // button (stream job killed, current shell stopped), and the
+            // injected bridge tells the model to decide for itself whether
+            // the abandoned task should continue after addressing the new
+            // message.
+            cancelStream()
             return
         }
         // T180: allow attachments-only sends (no caption). Mirrors iOS, where
