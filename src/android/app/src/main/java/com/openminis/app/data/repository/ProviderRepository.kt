@@ -566,46 +566,22 @@ class ProviderRepository(private val context: Context) {
         ensureConfigLoaded()
         val config = mutationSnapshot(_config.value)
         config.instances.add(instance)
-        // Seed built-in model entries ONLY when the seed is appropriate for this
-        // instance. Mirrors iOS ProviderConfigStore.addInstance:
-        //   - OAuth instances always get seeded (their /v1/models often requires
-        //     a manual token or isn't reachable, so the static list is the
-        //     baseline UX).
-        //   - API-key instances on a third-party OpenAI-compatible base URL
-        //     (e.g. xAI Grok https://api.x.ai, vLLM, Ollama, LiteLLM, DeepSeek
-        //     via OpenAI shim) MUST NOT inherit `LLMModel.allOpenAI` — that's
-        //     where the "Refresh on Grok returns GPT-5.5/5.3-codex" bug came
-        //     from. For these, leave entries empty and let refreshModels()
-        //     populate from the upstream /v1/models call.
-        //   - API-key instances on an official endpoint (no customBaseURL, or
-        //     a customBase that points at the canonical host) keep the seed so
-        //     UI isn't blank during the first refresh round-trip.
-        val shouldSeed = instance.credentialType == ProviderCredential.oauth ||
-            !isThirdPartyOpenAICompat(instance)
-        if (shouldSeed) {
-            // [T-provider-default-hidden] Seeded entries come in HIDDEN by default
-            // (isHidden = true), matching refreshModels' "new models hidden, user
-            // unpicks them on the Manage All Models sheet" contract — so an OAuth
-            // provider like Gemini or an API-key provider on the official OpenAI
-            // endpoint shows an EMPTY model list at first run, exactly like the
-            // third-party OpenAI-compat providers that skip the seed entirely.
-            // Without this, Google Gemini (OAuth) shows its 5 built-ins visible
-            // while e.g. DeepSeek-via-openai-shim shows none — the inconsistency
-            // the user spotted. Hidden seeds still act as `prior` on refresh so
-            // refreshModels() carries their hidden state forward and never
-            // re-surfaces them; the user pulls models in from Manage All Models.
-            val entries = instance.providerType.builtInModels.map { model ->
-                ModelEntry(providerInstanceId = instance.id, baseModel = model, isHidden = true)
-            }
-            config.modelEntries.addAll(entries)
-        } else {
-            android.util.Log.i(
-                "ProviderRepo",
-                "[ModelList] addInstance: skip built-in seed for third-party OpenAI-compat base " +
-                    "(label=${instance.label} base=${instance.effectiveBaseURL}) — " +
-                    "models will populate from upstream /v1/models on refresh",
-            )
-        }
+        // [T-provider-no-static-seed] NO built-in model seeding, ever. A fresh
+        // provider starts with an EMPTY model list (count 0) — the only source
+        // of models is refreshModels() pulling the upstream /v1/models (or the
+        // models.dev fallback). Rationale:
+        //   - The static LLMModel.all* lists go stale: models get renamed,
+        //     retired, added. Seeding them shows entries that don't exist
+        //     upstream and hides the ones that do.
+        //   - Every creation path (AddProviderScreen api-key + OAuth,
+        //     Onboarding, RPC) follows addInstance with an immediate
+        //     refreshModels() call, so the "UI is blank during first refresh"
+        //     window is a fraction of a second — seeding for that is
+        //     unnecessary, and it produced the inconsistent "Gemini shows 5
+        //     built-ins, third-party OpenAI-compat shows 0" the user saw.
+        // Voice-template seeds below are the ONLY exception: TTS/ASR vendors
+        // (ElevenLabs, MiMo…) expose no /v1/models for their voices, so the
+        // template is the sole source for those functional entries.
         // [T-android-provider-voice] Seed voice-template mock models when the
         // base URL matches a voice vendor (MiMo / MiniMax / Doubao …). These
         // vendors have no /v1/models for their voices, so the template list is
@@ -697,20 +673,6 @@ class ProviderRepository(private val context: Context) {
             }
         }
         if (changed) saveConfig(config)
-    }
-
-    /**
-     * Whether [instance] points at a third-party OpenAI-compatible host
-     * (xAI Grok, vLLM, Ollama, LiteLLM, DeepSeek via OpenAI shim, etc.).
-     * For these instances we must never substitute `LLMModel.allOpenAI` as a
-     * fallback / seed — those are GPT-only IDs that don't exist upstream.
-     * Mirrors iOS `ProviderConfigStore.isThirdPartyOpenAICompat`.
-     */
-    private fun isThirdPartyOpenAICompat(instance: ProviderInstance): Boolean {
-        if (instance.providerType != ProviderType.openAI) return false
-        val custom = instance.customBaseURL?.lowercase() ?: return false
-        val officialHosts = listOf("api.openai.com", "chatgpt.com")
-        return officialHosts.none { custom.contains(it) }
     }
 
     fun updateInstance(instance: ProviderInstance) = synchronized(configLock) {
