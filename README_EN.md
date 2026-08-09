@@ -32,8 +32,11 @@ persistent memory, and deep system integration.
 
 **→ [Download the latest APK](https://github.com/logicflow-GYW/RikkaMinis/releases/tag/android-latest)**
 
-Every push to `main` builds a release APK and republishes it to that link, so
-the URL always points at the newest build. Requirements:
+Every push to `main` with **code changes** (`src/android/**`,
+`src/shared/**`, `deps/**` or workflow files) builds a release APK and
+republishes it to that link — pure doc changes (README / licenses) do
+not trigger a build. So the URL always points at the latest build.
+Requirements:
 
 - **arm64-v8a** device (any modern phone), **Android 8.0+**
 - Enable "install from unknown sources" when your device prompts
@@ -100,6 +103,13 @@ Android-specific product changes that are not present upstream.
   edit, wizard and permission-flow screens keep theirs.
 - **Simpler composer.** The dedicated voice-chat shortcut and its inline UI
   have been removed. Android's agent-facing speech tools are unaffected.
+- **Termux-powered terminal.** The in-app terminal swapped its hand-rolled
+  ANSI emulator (~2,200 lines) for Termux's `terminal-view` 0.118.0 engine
+  (JitPack dependency): PTY lifecycle, ANSI/CSI/OSC parsing, TUI
+  compatibility, keyboard and text-selection handling all come from the
+  upstream engine. Output is truncated at two layers (128 KB at the
+  PersistentShell level + 50 KB at the terminal sanitizer) so bulk output
+  cannot flood the UI.
 - **Pin favorite providers.** Frequently used providers can be pinned into a
   "Favorites" section at the top of the provider list, toggled from the row's
   trailing menu.
@@ -112,11 +122,12 @@ Android-specific product changes that are not present upstream.
 - **Bundled platform integrations (GitHub / Cloudflare / Hugging Face).**
   Full detail in [Built-in platform integrations](#built-in-platform-integrationsgithub--cloudflare--hugging-face).
   In short: three platform skills (semantic memory, GitHub automation, and
-  Cloudflare ops) ship inside the APK. At startup the app works out each
-  platform's current capability tier from which API tokens
-  (`HF_TOKEN` / `GITHUB_TOKEN` / `CF_API_TOKEN`) you have configured, and
-  injects a "Integrations" table into the system prompt — the agent knows
-  up front what each platform can and cannot do, no trial-and-error guessing.
+  Cloudflare ops) ship inside the APK. When the system prompt is assembled
+  the app works out each platform's current capability tier from which API
+  tokens (`HF_TOKEN` / `GITHUB_TOKEN` / `CF_API_TOKEN`) you have configured,
+  and injects an "Integrations" table into the system prompt — the agent
+  knows up front what each platform can and cannot do, no trial-and-error
+  guessing.
 
 ### Build and release changes
 
@@ -125,8 +136,10 @@ Android-specific product changes that are not present upstream.
   compiled with NDK r28 in CI — no committed binary blobs, fully reproducible.
 - **Other native libs stay vendored.** `libpty_bridge.so`,
   `libminis_crash_handler.so` and `libjieba_jni.so` are committed as-is.
-- **Backup tests run in CI.** The backup payload tests run before the APK
-  build.
+- **Backup tests run in CI.** The full JVM unit-test suite — backup/restore
+  (ConfigBackupPayloadTest and friends), terminal sanitization, provider
+  adapters, LLM error handling and more — runs before the APK build, and any
+  failure aborts the build (no silent scoping).
 - **iOS sources removed.** `src/ios/` is gone; this tree is Android only.
 - **Automatic releases.** Successful builds publish the APK to the
   `android-latest` release.
@@ -174,11 +187,11 @@ prompts and model integrations are unaffected — build normally.
 
 RikkaMinis bundles three **platform skills** — each encapsulates the common
 operations of one external platform and declares the env vars it depends on in
-its own `requirements.json`. At startup the app reads the tokens you've
-configured, derives a per-platform capability tier (zero-config / read-only /
-full), and **injects the result into the system prompt**, so the agent knows
-exactly which platforms it can touch right now — no guessing from
-trial-and-error.
+its own `requirements.json`. When the system prompt is assembled the app reads
+the tokens you've configured, derives a per-platform capability tier
+(zero-config / read-only / full), and **injects the result into the system
+prompt**, so the agent knows exactly which platforms it can touch right now —
+no guessing from trial-and-error.
 
 ### What each platform handles
 
@@ -190,10 +203,10 @@ trial-and-error.
 
 Configuration entry point: **Settings → Environments** (or `minis-config
 envvars`). All three tokens are standard personal API tokens created in each
-platform's dashboard. **Note: token values are stored locally on-device (so the
-app can read them at startup to compute tiers); they never appear in any log,
-and by default they are not included in backup exports — unless you explicitly
-check "include secrets" in Backup.**
+platform's dashboard. **Note: token values are stored locally on-device (read
+at tier-computation time); they never appear in any log, and by default they
+are not included in backup exports — unless you explicitly check "include
+secrets" in Backup.**
 
 ### How the capability tier is computed (`buildIntegrationStatus`)
 
@@ -214,11 +227,12 @@ The current tier is surfaced two ways:
    annotated with `declared=` and `found=` environment-variable sets — when
    you hit a "thought I configured it but it says not configured" mismatch,
    you can see in one line which variable wasn't read, instead of guessing.
-2. As an **"Integrations" table** in the system prompt's tool section, which
-   the agent uses to decide how to do its work. A platform with no
-   configured token is labelled "🔒 Needs config" — never falsely labelled
-   "⚡ zero-config usable". Better to refuse than to mislead the agent into
-   operating it.
+2. As an **"Integrations" table** in the system prompt (a standalone
+   `## 内置集成` block right after the skills list and before MCP servers —
+   the heading is hardcoded Chinese in the codebase), which the agent uses
+   to decide how to do its work. A platform with no configured token is
+   labelled "🔒 Needs config" — never falsely labelled "⚡ zero-config
+   usable". Better to refuse than to mislead the agent into operating it.
 
 ### How the three skills are upgraded
 
@@ -361,6 +375,10 @@ chroot for the Android sandbox, via [OpenMinis' fork](https://github.com/OpenMin
 
 **Text & rendering** — [cppjieba](https://github.com/yanyiwu/cppjieba) (MIT),
 [KaTeX](https://katex.org) (MIT).
+
+**Terminal** — [Termux](https://github.com/termux/termux-app)'s `terminal-view`
+0.118.0 (JitPack, `com.termux.termux-app:terminal-view`) provides the
+in-app terminal's ANSI/CSI/OSC parsing and TUI rendering engine.
 
 **Interaction reference** — [RikkaHub](https://github.com/rikkahub/rikkahub)
 (AGPL-3.0), an Android multi-LLM client whose design informed RikkaMinis' chat
