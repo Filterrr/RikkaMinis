@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -63,7 +62,7 @@ fun ManageProviderModelsSheet(
     onModelEntryClick: (String) -> Unit = {},
 ) {
     val config by providerRepository.config.collectAsState()
-    val instance = remember(instanceId) { config.providers.firstOrNull { it.id == instanceId } }
+    val instance = remember(instanceId) { config.instances.firstOrNull { it.id == instanceId } }
     if (instance == null) {
         // Provider deleted while the sheet was open -> just close
         LaunchedEffect(Unit) { onDismiss() }
@@ -74,8 +73,8 @@ fun ManageProviderModelsSheet(
     val filtered = remember(query, allEntries) {
         if (query.isBlank()) allEntries
         else allEntries.filter {
-            it.displayName.contains(query.trim(), ignoreCase = true) ||
-                it.id.contains(query.trim(), ignoreCase = true)
+            it.model.displayName.contains(query.trim(), ignoreCase = true) ||
+                it.model.id.contains(query.trim(), ignoreCase = true)
         }
     }
 
@@ -147,14 +146,14 @@ fun ManageProviderModelsSheet(
                     .fillMaxWidth()
                     .weight(1f),
             ) {
-                itemsIndexed(filtered, key = { _, e -> e.id }) { index, entry ->
+                itemsIndexed(filtered, key = { _, e -> e.uuid }) { index, entry ->
                     ModelVisibilityRow(
                         entry = entry,
                         visible = !entry.isHidden,
-                        onClick = { onModelEntryClick(entry.id) },
+                        onClick = { onModelEntryClick(entry.uuid) },
                         onToggle = {
                             providerRepository.updateEntry(entry.copy(isHidden = !entry.isHidden))
-                            AppLogger.info(SHEET_TAG, "Toggled ${entry.displayName} hidden=${entry.isHidden}")
+                            AppLogger.info(SHEET_TAG, "Toggled ${entry.model.displayName} hidden=${entry.isHidden}")
                         },
                     )
                     if (index < filtered.lastIndex) {
@@ -182,14 +181,14 @@ private fun ModelVisibilityRow(
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = entry.displayName,
+                text = entry.model.displayName,
                 style = MaterialTheme.typography.bodyLarge,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (entry.id != entry.displayName && entry.id.isNotBlank()) {
+            if (entry.model.id != entry.model.displayName && entry.model.id.isNotBlank()) {
                 Text(
-                    text = entry.id,
+                    text = entry.model.id,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,

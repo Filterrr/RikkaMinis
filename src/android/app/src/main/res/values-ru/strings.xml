@@ -721,6 +721,7 @@
     <string name="provider_detail_enabled">Включено</string>
     <string name="provider_detail_refresh_models">Обновить модели</string>
     <string name="provider_detail_manage_models">Управлять всеми моделями</string>
+    <string name="provider_detail_api_connection">API и подключение</string>
     <string name="provider_detail_manage_models_search_hint">Поиск моделей…</string>
     <string name="provider_detail_manage_models_all_header">Все модели (%1$d)</string>
     <string name="provider_detail_models_title">Все модели</string>

@@ -744,6 +744,7 @@
     <string name="provider_detail_enabled">已启用</string>
     <string name="provider_detail_refresh_models">刷新模型</string>
     <string name="provider_detail_manage_models">管理全部模型</string>
+    <string name="provider_detail_api_connection">API 与连接</string>
     <string name="provider_detail_manage_models_search_hint">搜索模型…</string>
     <string name="provider_detail_manage_models_all_header">全部模型 (%1$d)</string>
     <string name="provider_detail_models_title">全部模型</string>
