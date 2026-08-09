@@ -1146,7 +1146,7 @@
     <string name="model_group_routing_loadbalance_footer">Distribute sessions across models in the group.</string>
     <string name="model_group_fallback_default_footer">Fall back on rate limits (429) and server errors (5xx) only.</string>
     <string name="model_group_fallback_always_footer">Fall back on any error, including network and auth failures.</string>
-    <string name="model_group_recovery_continue_footer">Stay on the fallback member permanently (default).</string>
+    <string name="model_group_recovery_continue_footer">Keep using the current fallback model for subsequent requests (default).</string>
     <string name="model_group_recovery_honorfirst_footer">Always try the first member first; rate-limited members are skipped until their cooldown expires.</string>
     <string name="model_group_recovery_cooldown_footer">Keep the current binding, but temporarily skip rate-limited members.</string>
     <string name="model_group_no_models">No models in this group.</string>
