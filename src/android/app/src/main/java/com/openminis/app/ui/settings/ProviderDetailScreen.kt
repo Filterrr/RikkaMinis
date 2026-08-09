@@ -671,7 +671,19 @@ private fun connectionSummary(
     val endpoint = instance.customBaseURL?.takeIf { it.isNotBlank() }
         ?.let { instance.effectiveBaseURL }
         ?: instance.providerType.name
-    return "$credPart · $endpoint"
+    // Show only the hostname (and port if non-standard) for readability.
+    // Long URLs in the subtitle row are cramped and ugly; the hostname is
+    // enough context at a glance. Fall back to a 40-char truncation.
+    val hostname = try {
+        java.net.URI(endpoint).let { uri ->
+            if (uri.port > 0 && uri.port != 443 && uri.port != 80)
+                "${uri.host}:${uri.port}"
+            else uri.host
+        } ?: endpoint.take(40)
+    } catch (_: Exception) {
+        endpoint.take(40)
+    }
+    return "$credPart · $hostname"
 }
 
 /**
