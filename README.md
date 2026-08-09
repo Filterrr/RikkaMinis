@@ -42,8 +42,7 @@ SHA-256  FC:0C:40:0D:B7:7E:C1:81:A3:35:18:C2:E8:13:6A:AE
          1A:3F:6C:79:4A:1A:A7:9F:DB:67:63:8F:C6:B1:61:13
 ```
 
-用 `python3 scripts/apk_cert_sha256.py <apk>` 校验下载。注意此密钥与官方构建
-不同，如果你当前安装的是官方 APK，必须先卸载再安装。
+用 `python3 scripts/apk_cert_sha256.py <apk>` 校验下载。
 
 ---
 
@@ -87,7 +86,7 @@ SHA-256  FC:0C:40:0D:B7:7E:C1:81:A3:35:18:C2:E8:13:6A:AE
   键盘与文本选择全部交给上游引擎处理。输出经两层截断（PersistentShell
   层 128KB + 终端消毒层 50KB），防止海量输出刷爆界面。
 - **提供商置顶。** 提供商列表支持将常用提供商固定到顶部的「常用」专区，行尾菜单一键设/取消常用。
-- **记忆页管理改进。** 记忆页文件列表支持「查看更多」展开/收起，文件记忆按文件名排序，过期失败记录自动清理。
+- **记忆页管理改进。** 记忆页文件列表支持「查看更多」展开/收起。
 - **设置一致性修复。** 恢复的偏好会刷新实时设置界面，此前缺失/断连的设置键
   现已注册并纳入备份。
 - **三大平台内置集成（GitHub / Cloudflare / Hugging Face）。** 完整能力见下文
@@ -105,8 +104,9 @@ SHA-256  FC:0C:40:0D:B7:7E:C1:81:A3:35:18:C2:E8:13:6A:AE
 ### 构建与发布改动
 
 - **proot 从源码构建。** 沙箱引擎来自 `deps/proot` 子模块 + `deps/build_proot.sh`
-  + vendored 的 `deps/talloc`，在 CI 中用 NDK r28 编译——不提交二进制文件，
-  完全可复现。
+  + vendored 的 `deps/talloc`，在 CI 中用 NDK r28 编译。Alpine rootfs
+  （`alpine-minirootfs.tar`，8.5 MB）作为预置资产随仓库提交，运行时由
+  `RootfsManager` 解包——proot 二进制本身不提交，完全可复现。
 - **其他原生库保持 vendored。** `libpty_bridge.so`、`libminis_crash_handler.so`
   和 `libjieba_jni.so` 按原样提交。
 - **单元测试在 CI 中运行。** 完整的 JVM 单元测试套件——含备份/恢复（ConfigBackupPayloadTest 等）、终端消毒、Provider 适配器、LLM 错误处理等全部测试——在 APK 构建之前执行，任何一条失败都会中止构建（无静默跳过）。
@@ -120,15 +120,12 @@ SHA-256  FC:0C:40:0D:B7:7E:C1:81:A3:35:18:C2:E8:13:6A:AE
   `[IntegrationStatus]` 日志输出 + 「内置集成」表格注入系统提示词。
 
 
-### 为什么要从源码构建 proot？
-
-沙箱引擎 `libproot.so` 需要上游的 Android 10+ W^X 绕过补丁。通过 AGP 的
-CMake 块构建，产出的二进制能编译通过，却在运行时以
-`execve("/bin/sh"): Permission denied` 失败——终端永远打不开。因此本 fork
-改用 `deps/build_proot.sh`（上游支持的路径——与官方二进制相同的源码、
-相同的 NDK 工具链）而非 CMake 来构建它。`externalNativeBuild` 保持禁用，
-这样 AGP 永远不会用未打补丁的 CI 构建版覆盖 vendored 的
-pty_bridge / crash_handler / jieba 库。
+**为什么 proot 从源码构建？** 沙箱引擎 `libproot.so` 需要用上游的 Android 10+
+W^X 绕过补丁构建。通过 AGP 的 CMake 块产出的二进制能编译通过，却在运行时以
+`execve("/bin/sh"): Permission denied` 失败——终端永远打不开。因此本 fork 用
+`deps/build_proot.sh`（上游支持的路径——与官方二进制相同的源码、相同的 NDK
+工具链）而非 CMake 来构建它。`externalNativeBuild` 保持禁用，AGP 因此不会用
+未打补丁的 CI 构建版覆盖 vendored 的 pty_bridge / crash_handler / jieba 库。
 
 **权衡：** `src/android/app/src/main/cpp/` 下的改动不会被编译——只有
 `deps/proot` 通过 `build_proot.sh` 构建。改动其他原生代码意味着要恢复 CMake
