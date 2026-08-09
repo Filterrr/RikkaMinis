@@ -11,9 +11,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -56,6 +59,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.stringResource
 import com.openminis.app.data.model.ProviderType
@@ -156,7 +160,14 @@ fun ProviderDetailScreen(
         )
     }
 
-    val entries = providerRepository.entriesFor(instanceId)
+    // [perf-provider-detail-models] Cache the entry list per (instanceId, config)
+    // instead of re-filtering the whole modelEntries collection on EVERY
+    // recomposition. With a 300+ model provider, the old `entriesFor` call ran
+    // a full-list scan on each recomposition (every keystroke, every toggle),
+    // O(n) of the catalog for a screen that already renders all of them.
+    val entries = remember(instanceId, config) {
+        providerRepository.entriesFor(instanceId)
+    }
     var isRefreshing by remember { mutableStateOf(false) }
 
     val exportContext = androidx.compose.ui.platform.LocalContext.current
@@ -521,70 +532,96 @@ fun ProviderDetailScreen(
                 showDivider = entries.isNotEmpty() || true,
             )
 
-            entries.forEachIndexed { idx, entry ->
-                // Drive both tap and long-press from a Box wrapper so we
-                // don't have to expand SettingsRow's signature. Long-press
-                // is a no-op for built-in entries (they reappear on the next
-                // model refresh anyway).
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        // [T-android-hidden-model-visual-state] Dim hidden
-                        // entries so the list visually distinguishes them from
-                        // active models — the " • Hidden" subtitle suffix alone
-                        // wasn't enough for users to tell them apart. alpha is
-                        // visual-only, so the row stays tappable to re-show the
-                        // model from its detail screen.
-                        .then(if (entry.isHidden) Modifier.alpha(0.45f) else Modifier)
-                        .combinedClickable(
-                            onClick = { onModelEntryClick(entry.id) },
-                            onLongClick = if (entry.isCustom) {
-                                { entryToDelete = entry }
-                            } else null,
-                        ),
-                ) {
-                    // [T-android-model-capability-output-tags] (XIN msg 38847)
-                    // The list previously read INPUT modalities only, so a
-                    // generator like gpt-image-2 (image_output) or an
-                    // audio_output model showed no capability badge at all.
-                    // Surface both directions — input badges are muted, output
-                    // badges use a tinted "generate"-style glyph so they read
-                    // distinctly. Mirrors iOS #669.
-                    val inputModalities = entry.model.inputModalities.orEmpty()
-                    val outputModalities = entry.model.outputModalities.orEmpty()
-                    val hasBadge = inputModalities.any { it in modalityIconKeys } ||
-                        outputModalities.any { it in modalityOutputIconKeys }
-                    SettingsRow(
-                        title = entry.model.displayName,
-                        subtitle = buildString {
-                            append(entry.model.id)
-                            if (entry.isHidden) append(" • Hidden")
-                        },
-                        // onClick = null so SettingsRow doesn't add a second
-                        // clickable that would swallow the long-press. The
-                        // wrapping Box owns both gestures.
-                        onClick = null,
-                        showChevron = true,
-                        showDivider = idx != entries.lastIndex,
-                        // [T-android-settings-ui-md3] #8 two-line row (name + id)
-                        // uses the MD3 double-line height (72dp).
-                        minHeight = 72.dp,
-                        // #9 The capability-icon area has a FIXED width so the
-                        // trailing chevron lands at the same x on every row,
-                        // regardless of how many badges (0–4) a model has —
-                        // previously the chevron slid left/right per row and the
-                        // column looked ragged. Icons right-align within the slot.
-                        trailing = {
-                            Box(
-                                modifier = Modifier.width(72.dp),
-                                contentAlignment = Alignment.CenterEnd,
-                            ) {
-                                if (hasBadge) {
-                                    ModalityIconsRow(inputModalities, outputModalities)
+            // [perf-provider-detail-models] Render the model list in a
+            // height-capped LazyColumn instead of a plain forEach inside the
+            // outer verticalScroll Column. Providers with large catalogs
+            // (OpenRouter: 300+) previously composed EVERY row up-front —
+            // each with its own combinedClickable Box + SettingsRow +
+            // modality badge evaluation — freezing the first frame and making
+            // every recomposition (typing a label, toggling switches) rebuild
+            // the whole list. The cap caps the composed window to what fits
+            // on screen (~5-6 rows); rows recycle on scroll. Rows still
+            // render bare (no card wrapper) to keep the iOS look: the section
+            // card background lives on the LazyColumn container below. When
+            // the catalog is small (<= 12) the height cap is lifted so the
+            // list behaves exactly like the old single-column render.
+            //
+            // The cap is expressed as heightIn(max=...) — smallest visible
+            // portion wins, so a small catalog shows fully while a huge one
+            // scrolls internally. 400.dp ≈ 5-6 two-line 72dp rows + breathing
+            // room, enough context without page-wide jumpiness.
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = if (entries.size > 12) 400.dp else Dp.Unspecified),
+            ) {
+                itemsIndexed(entries, key = { _, entry -> entry.id }) { idx, entry ->
+                    // Drive both tap and long-press from a Box wrapper so we
+                    // don't have to expand SettingsRow's signature. Long-press
+                    // is a no-op for built-in entries (they reappear on the next
+                    // model refresh anyway).
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            // [T-android-hidden-model-visual-state] Dim hidden
+                            // entries so the list visually distinguishes them
+                            // from active models — the " • Hidden" subtitle
+                            // suffix alone wasn't enough for users to tell them
+                            // apart. alpha is visual-only, so the row stays
+                            // tappable to re-show the model from its detail
+                            // screen.
+                            .then(if (entry.isHidden) Modifier.alpha(0.45f) else Modifier)
+                            .combinedClickable(
+                                onClick = { onModelEntryClick(entry.id) },
+                                onLongClick = if (entry.isCustom) {
+                                    { entryToDelete = entry }
+                                } else null,
+                            ),
+                    ) {
+                        // [T-android-model-capability-output-tags] (XIN msg 38847)
+                        // The list previously read INPUT modalities only, so a
+                        // generator like gpt-image-2 (image_output) or an
+                        // audio_output model showed no capability badge at all.
+                        // Surface both directions — input badges are muted,
+                        // output badges use a tinted "generate"-style glyph so
+                        // they read distinctly. Mirrors iOS #669.
+                        val inputModalities = entry.model.inputModalities.orEmpty()
+                        val outputModalities = entry.model.outputModalities.orEmpty()
+                        val hasBadge = inputModalities.any { it in modalityIconKeys } ||
+                            outputModalities.any { it in modalityOutputIconKeys }
+                        SettingsRow(
+                            title = entry.model.displayName,
+                            subtitle = buildString {
+                                append(entry.model.id)
+                                if (entry.isHidden) append(" • Hidden")
+                            },
+                            // onClick = null so SettingsRow doesn't add a second
+                            // clickable that would swallow the long-press. The
+                            // wrapping Box owns both gestures.
+                            onClick = null,
+                            showChevron = true,
+                            showDivider = idx != entries.lastIndex,
+                            // [T-android-settings-ui-md3] #8 two-line row (name
+                            // + id) uses the MD3 double-line height (72dp).
+                            minHeight = 72.dp,
+                            // #9 The capability-icon area has a FIXED width so
+                            // the trailing chevron lands at the same x on every
+                            // row, regardless of how many badges (0–4) a model
+                            // has — previously the chevron slid left/right per
+                            // row and the column looked ragged. Icons right-align
+                            // within the slot.
+                            trailing = {
+                                Box(
+                                    modifier = Modifier.width(72.dp),
+                                    contentAlignment = Alignment.CenterEnd,
+                                ) {
+                                    if (hasBadge) {
+                                        ModalityIconsRow(inputModalities, outputModalities)
+                                    }
                                 }
-                            }
-                        },
-                    )
+                            },
+                        )
+                    }
                 }
             }
         }
