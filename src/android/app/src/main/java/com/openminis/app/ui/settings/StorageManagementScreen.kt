@@ -47,6 +47,7 @@ import com.openminis.app.data.db.ChatDao
 import com.openminis.app.data.db.ChatSessionEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
