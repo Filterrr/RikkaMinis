@@ -263,6 +263,10 @@
     <string name="provider_detail_status">狀態</string>
     <string name="provider_detail_enabled">已啓用</string>
     <string name="provider_detail_refresh_models">重新整理模型</string>
+    <string name="provider_detail_manage_models">管理全部模型</string>
+    <string name="provider_detail_manage_models_search_hint">搜尋模型…</string>
+    <string name="provider_detail_manage_models_all_header">全部模型 (%1$d)</string>
+    <string name="provider_detail_models_title">全部模型</string>
     <string name="provider_detail_add_custom_model">添加自定義模型</string>
     <string name="provider_detail_delete_provider">刪除 AI 服務商</string>
     <string name="provider_detail_delete_model">Delete Model</string>

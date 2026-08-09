@@ -884,6 +884,10 @@
     <string name="provider_detail_status">Status</string>
     <string name="provider_detail_enabled">Enabled</string>
     <string name="provider_detail_refresh_models">Refresh Models</string>
+    <string name="provider_detail_manage_models">Manage All Models</string>
+    <string name="provider_detail_manage_models_search_hint">Search models…</string>
+    <string name="provider_detail_manage_models_all_header">All Models (%1$d)</string>
+    <string name="provider_detail_models_title">All Models</string>
     <string name="provider_detail_add_custom_model">Add Custom Model</string>
     <string name="provider_detail_delete_provider">Delete Provider</string>
     <string name="provider_detail_delete_model">Delete Model</string>

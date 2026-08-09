@@ -720,6 +720,10 @@
     <string name="provider_detail_status">Статус</string>
     <string name="provider_detail_enabled">Включено</string>
     <string name="provider_detail_refresh_models">Обновить модели</string>
+    <string name="provider_detail_manage_models">Управлять всеми моделями</string>
+    <string name="provider_detail_manage_models_search_hint">Поиск моделей…</string>
+    <string name="provider_detail_manage_models_all_header">Все модели (%1$d)</string>
+    <string name="provider_detail_models_title">Все модели</string>
     <string name="provider_detail_add_custom_model">Добавить свою модель</string>
     <string name="provider_detail_delete_provider">Удалить провайдера</string>
     <string name="provider_detail_delete_model">Удалить модель</string>

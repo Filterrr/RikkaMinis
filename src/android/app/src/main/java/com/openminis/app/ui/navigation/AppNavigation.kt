@@ -37,6 +37,7 @@ import com.openminis.app.ui.settings.AddCustomModelScreen
 import com.openminis.app.ui.settings.BackgroundSettingsScreen
 import com.openminis.app.ui.settings.AddModelsToGroupScreen
 import com.openminis.app.ui.settings.AddProviderScreen
+import com.openminis.app.ui.settings.ManageProviderModelsScreen
 import com.openminis.app.ui.settings.ModelEntryDetailScreen
 import com.openminis.app.ui.settings.ModelGroupDetailScreen
 import com.openminis.app.ui.settings.ModelGroupsScreen
@@ -104,6 +105,10 @@ object Routes {
     const val PROVIDER_LIST = "providers"
     const val ADD_PROVIDER = "add_provider"
     const val PROVIDER_DETAIL = "provider/{instanceId}"
+    /** [T-provider-detail-visible-models] Full-catalog visibility manager for
+     *  one provider — reached from the "Manage All Models" row on the provider
+     *  detail screen. */
+    const val PROVIDER_MODELS = "provider_models/{instanceId}"
     /** [T-android-provider-voice] Read-only shadow Voice Service detail. */
     const val MODEL_GROUPS = "model_groups"
     const val MODEL_GROUP_DETAIL = "model_group/{groupId}"
@@ -198,6 +203,7 @@ object Routes {
         return "$base?focusMessageId=$enc"
     }
     fun providerDetail(instanceId: String) = "provider/$instanceId"
+    fun providerModels(instanceId: String) = "provider_models/$instanceId"
     fun modelGroupDetail(groupId: String) = "model_group/$groupId"
     fun addModelsToGroup(groupId: String) = "add_models_to_group/$groupId"
     // [T-android-model-entry-route-slash-crash] entryId is a composite key
@@ -713,6 +719,24 @@ fun AppNavigation(
                 },
                 onAddCustomModel = {
                     navController.safeNavigate(Routes.addCustomModel(instanceId))
+                },
+                onManageAllModels = {
+                    navController.safeNavigate(Routes.providerModels(instanceId))
+                },
+            )
+        }
+
+        composable(
+            route = Routes.PROVIDER_MODELS,
+            arguments = listOf(navArgument("instanceId") { type = NavType.StringType }),
+        ) { backStackEntry ->
+            val instanceId = backStackEntry.arguments?.getString("instanceId") ?: return@composable
+            ManageProviderModelsScreen(
+                instanceId = instanceId,
+                providerRepository = providerRepository,
+                onBack = { navController.safePopBackStack() },
+                onModelEntryClick = { entryId ->
+                    navController.safeNavigate(Routes.modelEntryDetail(instanceId, entryId))
                 },
             )
         }
