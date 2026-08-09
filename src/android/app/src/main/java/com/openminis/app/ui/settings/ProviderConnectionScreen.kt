@@ -68,20 +68,19 @@ fun ProviderConnectionScreen(
     var keyVisible by remember { mutableStateOf(false) }
 
     var customBaseURL by rememberSaveable { mutableStateOf(instance.customBaseURL ?: "") }
-    var appendV1Suffix by remember { mutableStateOf(instance.appendV1Suffix) }
     var customUserAgent by rememberSaveable { mutableStateOf(instance.customUserAgent ?: "") }
 
-    fun saveBaseURLSettings(appendV1: Boolean = appendV1Suffix) {
+    fun saveBaseURLSettings() {
         providerRepository.updateInstance(
             instance.copy(
                 customBaseURL = customBaseURL.ifBlank { null },
-                appendV1Suffix = appendV1,
+                appendV1Suffix = true,
                 customUserAgent = customUserAgent.ifBlank { null },
             )
         )
         AppLogger.info(
             TAG,
-            "Saved base URL for ${instance.id}: url='${customBaseURL.ifBlank { "<default>" }}', appendV1=$appendV1, ua='${customUserAgent.ifBlank { "<default>" }}'",
+            "Saved base URL for ${instance.id}: url='${customBaseURL.ifBlank { "<default>" }}', appendV1=true, ua='${customUserAgent.ifBlank { "<default>" }}'",
         )
     }
 
@@ -168,15 +167,6 @@ fun ProviderConnectionScreen(
                     }
                     val showUserAgentField = instance.providerType == ProviderType.openAI ||
                         instance.providerType == ProviderType.anthropic
-                    SettingsSwitchRow(
-                        title = stringResource(R.string.provider_detail_auto_append_v1),
-                        checked = appendV1Suffix,
-                        onCheckedChange = { newVal ->
-                            appendV1Suffix = newVal
-                            saveBaseURLSettings(newVal)
-                        },
-                        showDivider = showUserAgentField,
-                    )
                     if (showUserAgentField) {
                         Column(modifier = Modifier.padding(vertical = 8.dp)) {
                             Text(
