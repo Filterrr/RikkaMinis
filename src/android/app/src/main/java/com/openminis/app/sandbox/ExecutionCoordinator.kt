@@ -1,6 +1,7 @@
 package com.openminis.app.sandbox
 
 import android.content.Context
+import android.os.Debug
 import android.os.SystemClock
 import android.util.Log
 import com.openminis.app.data.repository.EnvVarRepository
@@ -29,16 +30,37 @@ object ExecutionCoordinator {
     private const val TAG = "ExecutionCoordinator"
 
     // [P2-proot-native-leak]
-    // High-water mark (MB). Normal operation is ~35-55MB native heap.
-    // A long-lived PRoot persistent shell leaks native memory monotonically
+    // High-water mark (MB) for PRoot *child process* RSS. Normal operation is
+    // ~35-55MB. A long-lived PRoot tracer leaks native memory monotonically
     // (measured 6.2-6.9GB on 2026-08-07, enough to OOM the device). We read
-    // the *PRoot child process* RSS directly (PersistentShell.nativeRssMB),
-    // not Debug.getNativeHeapAllocatedSize() — that reports the app-process
-    // heap, which never sees the leaked memory held by the forked PRoot
-    // tracer. When a command returns (or while it runs) and the child RSS
-    // exceeds this, we recycle the session's shell so the next
-    // getOrCreateShell spawns a fresh PRoot at baseline.
+    // the child process RSS via PersistentShell.nativeRssMB — NOT
+    // Debug.getNativeHeapAllocatedSize(), which reports the *app-process*
+    // heap and never sees the leaked memory held by the forked PRoot tracer.
+    // When a command returns (or while it runs) and the child RSS exceeds
+    // this, we recycle the session's shell so the next getOrCreateShell
+    // spawns a fresh PRoot at baseline.
     private const val NATIVE_HEAP_HIGH_WATER_MARK_MB = 512L
+
+    // [P2-app-native-oom] High-water mark for app-process native heap
+    // (Debug.getNativeHeapAllocatedSize). This catches the actual OOM path
+    // that nativeRssMB() misses: the PRoot tracer stays at 3MB while the
+    // app process's own native heap (talloc inside PRoot's in-process
+    // components, DirectByteBuffers, LOS objects) balloons past Scudo's
+    // limit. Normal is ~50-100MB; 200MB leaves buffer before the 512MB
+    // Java heap limit which indirectly pressures native allocation.
+    private const val APP_NATIVE_HEAP_HIGH_WATER_MARK_MB = 200L
+
+    // [P2-app-native-oom] Java heap utilization threshold. When the agent
+    // runs a dense tool-call sequence, Java heap climbs (crash case:
+    // 395MB/512MB = 77%). Recycle the shell at 70% to prevent the
+    // NativeAlloc GC storms that precede Scudo OOM.
+    private const val JAVA_HEAP_PRESSURE_THRESHOLD = 0.70
+
+    // [P2-app-native-oom] Maximum commands on a single shell before
+    // forced recycle. The crash case was ~20 git/shell commands in 2.5
+    // minutes. 30 is a safe upper bound — well above normal usage but
+    // well below the accumulation that triggers Scudo OOM.
+    private const val MAX_COMMANDS_PER_SHELL = 30
     // A shell idle this long is terminated to release its PRoot native
     // footprint. Generous above any agent transition gap (model thinking).
     private const val SHELL_IDLE_TIMEOUT_MS = 10 * 60 * 1000L  // 10 min
@@ -127,7 +149,20 @@ object ExecutionCoordinator {
                 command = command,
                 timeout = timeout,
                 lineCallback = lineCallback,
-                memoryMonitor = { rssMB -> midCommandRecycleIfOversized(shell, sessionId, rssMB) },
+                memoryMonitor = { rssMB ->
+                    midCommandRecycleIfOversized(shell, sessionId, rssMB)
+                    // [P2-app-native-oom] Also watch the app-process native
+                    // heap in-flight: Debug.getNativeHeapAllocatedSize is a
+                    // cheap O(1) read, and the actual Scudo OOM happens
+                    // *during* a command (crash case: 12s of NativeAlloc GC
+                    // storms right before SIGABRT). PRoot-child RSS alone
+                    // stays flat at 3MB while this grows.
+                    val appNativeMB = Debug.getNativeHeapAllocatedSize() / (1024L * 1024L)
+                    if (appNativeMB > APP_NATIVE_HEAP_HIGH_WATER_MARK_MB) {
+                        Log.w(TAG, "[$sessionId] App native heap ${appNativeMB}MB crossed mark in-flight — recycling shell")
+                        sessionDidTerminate(sessionId)
+                    }
+                },
             )
 
             val durationMs = System.currentTimeMillis() - startTime
@@ -146,11 +181,45 @@ object ExecutionCoordinator {
             // reads the real child (PersistentShell.nativeRssMB) — NOT app
             // Debug.getNativeHeapAllocatedSize(), which misses the leak.
             lastActiveMs[sessionId] = SystemClock.elapsedRealtime()
-            if (shell.nativeRssMB() > NATIVE_HEAP_HIGH_WATER_MARK_MB) {
+            val prootRssMB = shell.nativeRssMB()
+            if (prootRssMB > NATIVE_HEAP_HIGH_WATER_MARK_MB) {
                 Log.w(TAG, "[$sessionId] PRoot child RSS > ${NATIVE_HEAP_HIGH_WATER_MARK_MB}MB after command — recycling PRoot shell")
                 sessionDidTerminate(sessionId)
             } else {
-                Log.d(TAG, "[$sessionId] PRoot child RSS ${shell.nativeRssMB()}MB — within mark")
+                Log.d(TAG, "[$sessionId] PRoot child RSS ${prootRssMB}MB — within mark")
+            }
+
+            // [P2-app-native-oom] Post-command pressure check. The PRoot child
+            // RSS monitor above is blind to app-process native heap growth
+            // (crash case 2026-08-09: child RSS constant 3MB while app native
+            // heap + Java heap climbed to Scudo OOM in 12s of NativeAlloc GC
+            // storms). Recycle on any of: app native heap > 200MB, Java heap
+            // utilization > 70%, or > MAX_COMMANDS_PER_SHELL commands on one
+            // shell. Recycling tears down the PRoot tracer so its in-process
+            // talloc/mmap reservations are returned to the OS, restoring
+            // memory to baseline for the next command.
+            val nativeHeapMB = Debug.getNativeHeapAllocatedSize() / (1024L * 1024L)
+            val runtime = Runtime.getRuntime()
+            val javaHeapUsed = runtime.totalMemory() - runtime.freeMemory()
+            val javaHeapFrac = if (runtime.maxMemory() > 0L) javaHeapUsed.toDouble() / runtime.maxMemory().toDouble() else 0.0
+
+            val nativeOversized = nativeHeapMB > APP_NATIVE_HEAP_HIGH_WATER_MARK_MB
+            val javaPressured = javaHeapFrac > JAVA_HEAP_PRESSURE_THRESHOLD
+            val cmdOverLimit = shell.commandCount >= MAX_COMMANDS_PER_SHELL
+
+            when {
+                nativeOversized -> Log.w(
+                    TAG, "[$sessionId] App native heap ${nativeHeapMB}MB > ${APP_NATIVE_HEAP_HIGH_WATER_MARK_MB}MB — recycling shell"
+                )
+                javaPressured -> Log.w(
+                    TAG, "[$sessionId] Java heap ${(javaHeapFrac * 100).toInt()}% > ${(JAVA_HEAP_PRESSURE_THRESHOLD * 100).toInt()}% — recycling shell"
+                )
+                cmdOverLimit -> Log.w(
+                    TAG, "[$sessionId] Shell command count ${shell.commandCount} >= $MAX_COMMANDS_PER_SHELL — recycling shell"
+                )
+            }
+            if (nativeOversized || javaPressured || cmdOverLimit) {
+                sessionDidTerminate(sessionId)
             }
 
             CommandResult(output = output, exitCode = result.exitCode, durationMs = durationMs, truncated = outputTruncated)
