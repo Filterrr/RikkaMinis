@@ -68,6 +68,17 @@ class PersistentShell(
         get() = process?.isAlive == true
 
     /**
+     * [P2-app-native-oom] Number of commands executed on this shell instance.
+     * Reset to 0 by [stop]. ExecutionCoordinator uses this to recycle the
+     * shell after a dense tool-call sequence (e.g. 20+ git/shell commands
+     * in 2.5 minutes) to prevent app-process native heap pressure from
+     * accumulating past Scudo's limit.
+     */
+    @Volatile
+    var commandCount: Int = 0
+        private set
+
+    /**
      * [P2-proot-native-leak] Resident set size (MB) of the live PRoot child
      * process, read from /proc/<pid>/status VmRSS. This is the authoritative
      * signal for the PRoot tracer's native leak — NOT Debug.getNativeHeap-
@@ -357,6 +368,9 @@ class PersistentShell(
             return CommandResult("[Shell not running]", -1)
         }
 
+        // [P2-app-native-oom] Track command count for dense-call recycling.
+        commandCount++
+
         val marker = UUID.randomUUID().toString().take(8)
 
         // [T-termux-terminal-engine] Pass command via heredoc with a quoted
@@ -480,6 +494,8 @@ class PersistentShell(
             it.onComplete?.invoke(it.output.toString(), -1, it.truncated)
         }
         pendingCallback = null
+        // [P2-app-native-oom] Reset command count for fresh shell.
+        commandCount = 0
         Log.i(TAG, "Persistent shell stopped")
     }
 }
