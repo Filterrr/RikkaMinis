@@ -69,11 +69,17 @@ object ChatMenuPrefs {
     /** SharedPreferences key for the "..." menu display order. */
     const val ORDER_KEY = "chatMenu.order"
 
+    /** SharedPreferences key for the attach ("+") menu display order. */
+    const val ATTACH_ORDER_KEY = "chatMenu.attachOrder"
+
     /** SharedPreferences key for the footer pin order. */
     const val PIN_ORDER_KEY = "chatMenu.pinOrder"
 
     /** SharedPreferences key storing the persisted visibility of an entry. */
     fun visibilityKey(entryKey: String): String = "chatMenu.$entryKey.visible"
+
+    /** SharedPreferences key storing the persisted attach visibility. */
+    fun attachVisibilityKey(entryKey: String): String = "chatMenu.attach.$entryKey.visible"
 
     /** SharedPreferences key storing the persisted footer-pin of an entry. */
     fun pinKey(entryKey: String): String = "chatMenu.$entryKey.pinned"
@@ -81,14 +87,25 @@ object ChatMenuPrefs {
     /** Config-registry path for an entry's visibility field. */
     fun visibilityPath(entryKey: String): String = "appearance.chatMenu.$entryKey"
 
+    /** Config-registry path for an attach entry's visibility field. */
+    fun attachVisibilityPath(entryKey: String): String = "appearance.chatMenuAttach.$entryKey"
+
     /** Config-registry path for an entry's pinned field. */
     fun pinPath(entryKey: String): String = "appearance.chatMenuPin.$entryKey"
 
     /** Config-registry path for the menu order field. */
     const val ORDER_PATH = "appearance.chatMenuOrder"
 
+    /** Config-registry path for the attach menu order field. */
+    const val ATTACH_ORDER_PATH = "appearance.chatMenuAttachOrder"
+
     /** Config-registry path for the footer pin order field. */
     const val PIN_ORDER_PATH = "appearance.chatMenuPinOrder"
+
+    /**
+     * Default visibility: every attach action is visible.
+     */
+    fun defaultAttachVisible(entryKey: String): Boolean = true
 
     /**
      * Default visibility: every original menu entry is visible; the two
@@ -117,6 +134,26 @@ object ChatMenuPrefs {
 
     fun setVisible(prefs: SharedPreferences, entryKey: String, visible: Boolean) {
         prefs.edit().putBoolean(visibilityKey(entryKey), visible).apply()
+    }
+
+    fun attachPrefs(context: Context): SharedPreferences = prefs(context)
+
+    fun isAttachVisible(prefs: SharedPreferences, entryKey: String): Boolean =
+        prefs.getBoolean(attachVisibilityKey(entryKey), defaultAttachVisible(entryKey))
+
+    fun setAttachVisible(prefs: SharedPreferences, entryKey: String, visible: Boolean) {
+        prefs.edit().putBoolean(attachVisibilityKey(entryKey), visible).apply()
+    }
+
+    /** Resolve the persisted attach ("+") menu order over the three attach keys. */
+    fun resolveAttachOrder(prefs: SharedPreferences): List<String> =
+        normalizeOrder(prefs.getString(ATTACH_ORDER_KEY, null), AttachActionCatalog.DEFAULT_ORDER)
+
+    /** Persist a new attach menu order (comma-separated, sanitized). */
+    fun writeAttachOrder(prefs: SharedPreferences, order: List<String>) {
+        prefs.edit()
+            .putString(ATTACH_ORDER_KEY, sanitizeForWrite(order, AttachActionCatalog.DEFAULT_ORDER).joinToString(","))
+            .apply()
     }
 
     fun setPinned(prefs: SharedPreferences, entryKey: String, pinned: Boolean) {
@@ -224,6 +261,26 @@ object ChatMenuPrefs {
 
     fun setTopBarInputHistoryVisible(prefs: SharedPreferences, visible: Boolean) {
         prefs.edit().putBoolean(TOP_BAR_INPUT_HISTORY_PREF, visible).apply()
+    }
+
+    // -- Composer model-picker button visibility --
+
+    /**
+     * Key for the composer's circular model-picker button (the up-arrow circle
+     * at the left edge of the input row). Like Input History this is a fixed
+     * slot with its own boolean, NOT part of the action pool: the model name +
+     * status dot stay visible in the top-bar subtitle (tap it to open the same
+     * picker), so hiding this button only removes the redundant composer
+     * trigger. Default: true (visible).
+     */
+    const val COMPOSER_MODEL_PICKER_BUTTON = "composer.modelPickerButton"
+    private const val COMPOSER_MODEL_PICKER_BUTTON_PREF = "composer.modelPickerButton.visible"
+
+    fun isComposerModelPickerVisible(prefs: SharedPreferences): Boolean =
+        prefs.getBoolean(COMPOSER_MODEL_PICKER_BUTTON_PREF, true)
+
+    fun setComposerModelPickerVisible(prefs: SharedPreferences, visible: Boolean) {
+        prefs.edit().putBoolean(COMPOSER_MODEL_PICKER_BUTTON_PREF, visible).apply()
     }
 
     // -- Persist helpers --

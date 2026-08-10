@@ -2,8 +2,13 @@
 <resources>
     <!--
       T-android-shortcut-icons-blank: night-theme glyph color for the
-      app-icon shortcut adaptive icons — light glyph on the dark night
-      @color/ic_launcher_background (#2C3034). See values/colors.xml.
+      app-icon shortcut adaptive icons. Same light glyph as the light
+      theme (values/colors.xml) — the shortcut background is the
+      fixed dark @color/ic_launcher_background in every theme, so the
+      glyph stays light in both. This file now only exists to keep the
+      two themes in sync explicitly; removing it would keep the same
+      value via the light default, but keeping both files makes the
+      intent visible.
     -->
     <color name="shortcut_icon_fg">#E6E8EB</color>
 </resources>

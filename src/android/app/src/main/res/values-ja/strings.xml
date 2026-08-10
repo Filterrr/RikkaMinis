@@ -1138,6 +1138,10 @@
     <string name="input_history_no_match">一致するメッセージなし</string>
     <string name="appearance_chat_menu_section_menu">Top-right menu</string>
     <string name="appearance_chat_menu_section_footer">History drawer footer</string>
+    <string name="appearance_chat_menu_section_attach">添付 (＋) メニュー</string>
+    <string name="appearance_chat_menu_footer_attach">コンポーザーの「＋」メニューに表示する添付アクションとその順序を選択します。すべてのアクションを非表示にすると「＋」ボタン自体が消え、1つだけ残すと送信ボタンの隣にそのボタンが直接表示されます。</string>
+    <string name="composer_model_picker_button_title">モデル選択ボタン</string>
+    <string name="composer_model_picker_button_description">入力行の左端に上矢印の丸ボタンを表示し、モデル選択をワンタップで開きます。右上のサブタイトルにあるモデル名はどちらの場合もタップ可能です。</string>
     <string name="chat_menu_pin_to_footer">Pin to footer</string>
     <string name="chat_menu_settings_always_last">Always last</string>
     <string name="back_to_exit_press_again">Press back again to exit</string>

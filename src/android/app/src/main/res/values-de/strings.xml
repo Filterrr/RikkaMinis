@@ -1131,6 +1131,10 @@
     <string name="input_history_no_match">Keine passenden Nachrichten</string>
     <string name="appearance_chat_menu_section_menu">Top-right menu</string>
     <string name="appearance_chat_menu_section_footer">History drawer footer</string>
+    <string name="appearance_chat_menu_section_attach">Attach (＋) Menü</string>
+    <string name="appearance_chat_menu_footer_attach">Wählen Sie, welche Anhänge-Aktionen im „＋"-Menü des Eingabefelds erscheinen und deren Reihenfolge. Wenn jede Aktion ausgeblendet wird, verschwindet die „＋"-Schaltfläche; bleibt genau eine übrig, wird sie direkt neben Senden als Schaltfläche angezeigt.</string>
+    <string name="composer_model_picker_button_title">Modellauswahl-Schaltfläche</string>
+    <string name="composer_model_picker_button_description">Zeigt die Kreis-Schaltfläche mit Pfeil nach oben links im Eingabefeld für den Ein-Tipp-Zugriff auf die Modellauswahl. Der Modellname in der oberen rechten Untertitel bleibt in jedem Fall antippbar.</string>
     <string name="chat_menu_pin_to_footer">Pin to footer</string>
     <string name="chat_menu_settings_always_last">Always last</string>
     <string name="back_to_exit_press_again">Press back again to exit</string>

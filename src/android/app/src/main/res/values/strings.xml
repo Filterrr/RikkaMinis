@@ -1536,6 +1536,10 @@
     <string name="appearance_chat_menu_section_topbar">Top bar buttons</string>
     <string name="appearance_chat_menu_section_menu">Top-right menu</string>
     <string name="appearance_chat_menu_section_footer">History drawer footer</string>
+    <string name="appearance_chat_menu_section_attach">Attach (＋) menu</string>
+    <string name="appearance_chat_menu_footer_attach">Choose which attach actions appear in the composer "＋" menu and their order. Hiding every action removes the "＋" button; leaving exactly one promotes it to a direct button beside Send.</string>
+    <string name="composer_model_picker_button_title">Model picker button</string>
+    <string name="composer_model_picker_button_description">Show the up-arrow circle button at the left of the input row for one-tap access to the model picker. The model name in the top-right subtitle stays tappable either way.</string>
     <string name="input_history_title">Input History</string>
     <string name="input_history_topbar_description">Show a searchable message list in the top bar. Tap any entry to jump straight to that message.</string>
     <string name="input_history_search_hint">Search messages…</string>
