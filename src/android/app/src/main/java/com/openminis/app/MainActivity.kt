@@ -339,7 +339,7 @@ class MainActivity : ComponentActivity() {
             // Prefs are NOT written — "Auto" stays "Auto"; the alias is
             // merely the launcher-visible projection of the theme.
             LaunchedEffect(darkTheme) {
-                AppIconRepository.syncWithSystemTheme(this, effectiveDark = darkTheme)
+                AppIconRepository.syncWithSystemTheme(this@MainActivity, effectiveDark = darkTheme)
             }
 
             SideEffect {
