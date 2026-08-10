@@ -15,6 +15,8 @@ import android.os.PowerManager
 import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
+import androidx.core.graphics.drawable.IconCompat
 import com.openminis.app.MinisApp
 import com.openminis.app.R
 import kotlinx.coroutines.CoroutineScope
@@ -745,6 +747,12 @@ class AgentForegroundService : Service() {
 
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(toolSmallIconRes(toolName))
+            // [T-notification-brand] Brand tint + large app icon so the
+            // ongoing row reads as "Minis" at a glance instead of a generic
+            // system service notification. setColor tints the small icon +
+            // title; setLargeIcon adds the app icon to the row.
+            .setColor(ContextCompat.getColor(this, R.color.notification_brand_color))
+            .setLargeIcon(IconCompat.createWithResource(this, R.mipmap.ic_launcher).toIcon())
             .setContentTitle(titleText)
             .setContentText(collapsedText)
             .setStyle(NotificationCompat.BigTextStyle().bigText(collapsedText))
@@ -812,6 +820,12 @@ class AgentForegroundService : Service() {
 
         val builder = Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(smallIcon)
+            // [T-notification-brand] Same brand tint + large app icon as the
+            // non-promoted builder. setColor (flat tint) is distinct from
+            // setColorized(true) (system-default coloring) — the latter is
+            // what would disqualify promotion, so setColor stays safe here.
+            .setColor(ContextCompat.getColor(this, R.color.notification_brand_color))
+            .setLargeIcon(IconCompat.createWithResource(this, R.mipmap.ic_launcher).toIcon())
             .setContentTitle(titleText)
             .setContentText(collapsedText)
             .setStyle(progressStyle)
