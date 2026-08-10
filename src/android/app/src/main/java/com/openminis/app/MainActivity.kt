@@ -32,7 +32,7 @@ import androidx.navigation.compose.rememberNavController
 import com.openminis.app.deeplink.DeepLinkAction
 import com.openminis.app.deeplink.DeepLinkCoordinator
 import com.openminis.app.deeplink.DeepLinkHandler
-import com.openminis.app.data.repository.AppIconRepository
+
 import com.openminis.app.logging.AppLogger
 import com.openminis.app.service.SessionActivityTracker
 import com.openminis.app.ui.navigation.AppNavigation
@@ -326,21 +326,6 @@ class MainActivity : ComponentActivity() {
                 else -> isSystemInDarkTheme()
             }
             val fontScale = fontScaleForLevel(appBaseLevel)
-
-            // [T-icon-auto-follow-system] Keep the launcher icon in sync
-            // with the *effective* theme whenever it changes. Covers:
-            //   - startup: process was dead, prefs say Auto → project the
-            //     current theme onto the Classic alias (the launcher icon
-            //     would otherwise stay whatever it was before the crash).
-            //   - in-app theme switch (themeMode 1/2): user explicitly
-            //     picked Light/Dark → mirror that onto the icon.
-            //   - system night-mode flip while app is foreground: Compose
-            //     re-evaluates isSystemInDarkTheme() → darkTheme flips.
-            // Prefs are NOT written — "Auto" stays "Auto"; the alias is
-            // merely the launcher-visible projection of the theme.
-            LaunchedEffect(darkTheme) {
-                AppIconRepository.syncWithSystemTheme(this@MainActivity, effectiveDark = darkTheme)
-            }
 
             SideEffect {
                 val barStyle = if (darkTheme) {

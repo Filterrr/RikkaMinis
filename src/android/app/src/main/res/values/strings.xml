@@ -542,11 +542,6 @@
     <string name="appearance_section_language">Language</string>
     <string name="appearance_language_footer">Override the display language for this app. \"System\" follows your device language.</string>
     <!-- T-android-dynamic-app-icon: launcher-icon picker section. -->
-    <string name="appearance_section_app_icon">App Icon</string>
-    <string name="appearance_app_icon_footer">Change the launcher icon. The home-screen icon may take a few seconds to refresh after a tap.</string>
-    <string name="appearance_app_icon_auto">Automatic</string>
-    <string name="appearance_app_icon_light">Light</string>
-    <string name="appearance_app_icon_dark">Dark</string>
     <string name="env_var_title">Environment Variables</string>
     <string name="env_var_add">Add</string>
     <string name="env_var_privacy_header">Privacy</string>
