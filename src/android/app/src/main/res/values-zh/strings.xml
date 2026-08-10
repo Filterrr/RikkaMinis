@@ -1101,6 +1101,8 @@
     <string name="backup_secret_body">导出的文件含有提供商的 API 密钥和登录凭据，可被任何拿到该文件的人使用。请妥善保管，不要分享。</string>
     <string name="backup_secret_confirm">包含密钥并导出</string>
     <string name="backup_secret_without">不含密钥</string>
+    <string name="backup_generating_title">正在生成备份…</string>
+    <string name="backup_generating_body">正在构建备份文件。聊天记录较多时可能需要数秒。</string>
     <string name="backup_done_title">恢复完成</string>
     <string name="backup_err_write">写入失败：%1$s</string>
     <string name="backup_err_generate">生成备份失败：%1$s</string>

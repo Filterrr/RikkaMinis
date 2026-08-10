@@ -1254,6 +1254,8 @@
     <string name="backup_secret_body">The exported file contains provider API keys and login credentials, usable by anyone who obtains it. Keep it safe and do not share it.</string>
     <string name="backup_secret_confirm">Include keys and export</string>
     <string name="backup_secret_without">Without keys</string>
+    <string name="backup_generating_title">Generating backup…</string>
+    <string name="backup_generating_body">Building the backup file. This can take a few seconds on large chat histories.</string>
     <string name="backup_done_title">Restore complete</string>
     <string name="backup_err_write">Failed to write file: %1$s</string>
     <string name="backup_err_generate">Failed to create backup: %1$s</string>
