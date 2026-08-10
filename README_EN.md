@@ -364,7 +364,7 @@ scripts/          Binary sync and developer tooling
 
 ## Acknowledgements
 
-OpenMinis stands on a great deal of open-source work — full inventory in
+RikkaMinis stands on a great deal of open-source work — full inventory in
 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md). This fork is derived from
 **[OpenMinis/OpenMinis](https://github.com/OpenMinis/OpenMinis)** and builds its
 sandbox binaries from source: the `deps/proot` submodule (OpenMinis' PRoot
@@ -399,7 +399,7 @@ UI and interaction logic (conceptual inspiration, not code reuse).
 
 ## License
 
-OpenMinis is licensed under the **[GNU General Public License v3.0](LICENSE)**.
+RikkaMinis is licensed under the **[GNU General Public License v3.0](LICENSE)**.
 
 The app links GPL-licensed components — [PRoot](https://github.com/OpenMinis/proot)
 (GPLv2) — so the combined work is distributed under GPLv3. Bundled third-party
