@@ -133,6 +133,12 @@ fun BackupSettingsScreen(
     // can blow the 512MB Java heap. Every backup button is disabled while this
     // is true.
     var backupBusy by remember { mutableStateOf(false) }
+    // [fix-backup-feedback] While a local SAF backup's full payload is being
+    // generated, show a visible "generating…" modal so the user knows the app
+    // is working instead of hung. The SAF file picker only appears once the
+    // (multi-second on large histories) payload is ready; without this the gap
+    // between confirming and the picker reading like a broken/stuck backup.
+    var exportGenerating by remember { mutableStateOf(false) }
     // When true, the next secret-warning confirmation uploads to WebDAV
     // instead of launching the SAF file picker.
     var webDavUploadPending by remember { mutableStateOf(false) }
@@ -444,6 +450,12 @@ fun BackupSettingsScreen(
             // the flag clears in the shared finally below.
             backupBusy = true
             showSecretWarning = false
+            // [fix-backup-feedback] Surface a visible "generating…" modal the
+            // moment the user confirms, so the multi-second payload build
+            // reads as work-in-progress rather than a stuck/failed backup. It
+            // clears once the payload is ready (before the SAF picker opens)
+            // or on any error/early-exit path below.
+            exportGenerating = true
             val toWebDav = webDavUploadPending
             webDavUploadPending = false
             // Payload generation is expensive: it walks the whole config
@@ -470,6 +482,9 @@ fun BackupSettingsScreen(
                     // Back on Main for state writes, the SAF picker and toasts
                     // (ActivityResultLauncher.launch requires the main thread).
                     withContext(Dispatchers.Main) {
+                        // Payload is ready — dismiss the "generating…" modal
+                        // before the SAF picker (or WebDAV upload) proceeds.
+                        exportGenerating = false
                         if (toWebDav) {
                             val cfg = webDavConfig ?: return@withContext
                             try {
@@ -513,7 +528,10 @@ fun BackupSettingsScreen(
                     // Back to Main: this runs on the applicationScope (IO)
                     // dispatcher, and writing Compose state off-main is the
                     // same race the WebDAV path guards against explicitly.
-                    withContext(Dispatchers.Main) { backupBusy = false }
+                    withContext(Dispatchers.Main) {
+                        backupBusy = false
+                        exportGenerating = false
+                    }
                 }
             }
         }
@@ -531,6 +549,22 @@ fun BackupSettingsScreen(
                     Text(stringResource(R.string.backup_secret_without))
                 }
             },
+        )
+    }
+
+    // [fix-backup-feedback] Modal "generating backup…" shown while the full
+    // payload is being built (heaviest on large chat histories). Dismissed by
+    // runExport the instant the payload is ready (just before the SAF picker
+    // opens or the WebDAV upload starts). Non-cancelable on purpose: the work
+    // is already in flight and the mutual-exclusion guard is set, so letting
+    // the user dismiss would leave them with no way to observe completion.
+    if (exportGenerating) {
+        AlertDialog(
+            onDismissRequest = {},
+            icon = { CircularProgressIndicator() },
+            title = { Text(stringResource(R.string.backup_generating_title)) },
+            text = { Text(stringResource(R.string.backup_generating_body)) },
+            confirmButton = {},
         )
     }
 

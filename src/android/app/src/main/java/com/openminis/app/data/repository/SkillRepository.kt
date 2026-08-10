@@ -1357,6 +1357,31 @@ class SkillRepository(private val context: Context) {
         }
         cursor.close()
 
+        // [fix-backup-feedback] Prune stale DB rows whose on-disk directory is
+        // gone (e.g. a bundled skill renamed on disk — github-sync-helper →
+        // github-ops — while the old row lingered in SQLite). A phantom row
+        // has no scripts to back up, so every export degrades it to
+        // "SKILL.md only" and the restored skill is broken; and it shows up in
+        // the skills list forever because nothing else removes it. The column
+        // list can't be trusted after a rename (WE only discover disk→DB), so
+        // sweep DB rows whose directory no longer exists. Only prune when the
+        // directory is fully absent — a dir without SKILL.md still deserves
+        // the auto-discover path below.
+        val staleIds = dbSkills.map { it.id }.filter { id ->
+            val dir = File(skillsDir, id)
+            !dir.isDirectory
+        }
+        for (id in staleIds) {
+            Log.w(TAG, "Pruning stale skill $id: on-disk directory missing (renamed or deleted?)")
+            db.execSQL("DELETE FROM skills WHERE id=?", arrayOf(id))
+            db.execSQL("DELETE FROM session_skill_overrides WHERE skill_id=?", arrayOf(id))
+        }
+        if (staleIds.isNotEmpty()) {
+            // Remove pruned ids from the in-memory list; delete() would
+            // re-trigger recursion into loadAll, so drop them directly.
+            dbSkills.removeAll { it.id in staleIds }
+        }
+
         // Auto-discover skills on disk without DB entries
         val onDisk = skillsDir.listFiles()?.filter { it.isDirectory } ?: emptyList()
         for (dir in onDisk) {
