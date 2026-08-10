@@ -29,7 +29,7 @@ RikkaMinis 不是用传统 IDE 写的，而是用 **RikkaMinis 本身** 写的�
 在这个闭环中，三个外挂平台充当 agent 的"手"：
 
 - **GitHub** — 代码仓库 + CI 构建（自动编译 APK 并发布到 `android-latest`）
-- **Cloudflare** — Workers 边缘计算（`rikka-ci-bridge` 提供 CI 状态查询端点，零 token 开销）
+- **Cloudflare** — Workers 边缘计算（一个私有 Worker 提供 CI 状态查询端点，零 token 开销）
 - **HuggingFace** — 语义记忆数据持久化（跨设备、不依赖本地文件）
 
 三者共同构成了 agent 的操作边界：**一端脑（设备）、三平台手（GitHub + CF + HF）**。
