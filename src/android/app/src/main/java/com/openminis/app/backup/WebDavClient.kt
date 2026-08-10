@@ -214,8 +214,8 @@ class WebDavClient(
 
     /** Create the backup directory. 201 (created) and 405 (already exists)
      *  both count as success. */
-    fun mkcol() {
-        val url = buildUrl()
+    fun mkcol(vararg segs: String) {
+        val url = buildUrl(*segs)
         val request = Request.Builder().url(url).method("MKCOL", null).auth().build()
         client.newCall(request).execute().useSafe { response ->
             val code = response.code
@@ -227,14 +227,14 @@ class WebDavClient(
 
     /** Ensure the backup directory exists — PROPFIND depth 0; MKCOL only on
      *  a genuine 404 (auth/other errors propagate untouched). */
-    fun ensureCollectionExists() {
+    fun ensureCollectionExists(vararg segs: String) {
         val exists = try {
-            propfind(depth = 0)
+            propfind(path = segs.joinToString("/"), depth = 0)
             true
         } catch (e: WebDavException) {
             if (e.statusCode == 404) false else throw e
         }
-        if (!exists) mkcol()
+        if (!exists) mkcol(*segs)
     }
 
     /** Verify the server answers: PROPFIND depth 0 on the backup directory.
