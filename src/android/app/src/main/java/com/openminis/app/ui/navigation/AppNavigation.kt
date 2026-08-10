@@ -1,6 +1,8 @@
 package com.openminis.app.ui.navigation
 
 import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -19,6 +21,7 @@ import com.openminis.app.deeplink.DeepLinkAction
 import com.openminis.app.deeplink.DeepLinkCoordinator
 import com.openminis.app.ui.settings.KEY_LAUNCH_SESSION
 import com.openminis.app.ui.settings.getAppearancePrefs
+import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.compose.ui.window.DialogProperties
@@ -85,6 +88,27 @@ import com.openminis.app.ui.onboarding.OnboardingModelSelectionScreen
 // Source: m3.material.io/styles/motion/easing-and-duration/tokens-specs
 private val EmphasizedDecelerate = CubicBezierEasing(0.05f, 0.7f, 0.1f, 1.0f)
 private val EmphasizedAccelerate = CubicBezierEasing(0.3f, 0.0f, 0.8f, 0.15f)
+
+/**
+ * Cold-start placeholder detection.
+ *
+ * [AppNavigation] always mounts the NavHost at a throwaway "__new__" draft
+ * chat (startDestination), then the launch-mode dispatcher immediately
+ * re-navigates to the real target (last session / fresh draft / restored
+ * session). That post-mount hop is an implementation detail of startup —
+ * playing the M3 shared-axis slide for it reads as a bogus "enter the app"
+ * gesture: the user taps the launcher icon and the whole screen slides left
+ * into the chat instead of just being there.
+ *
+ * Real session ids are plain UUIDs (ChatRepository); only the draft
+ * placeholder carries the "__new__" prefix, so the match is unambiguous.
+ * The gate applies to the outgoing side (initialState) — on every cold-start
+ * hop the placeholder is the entry being replaced. In-app navigations
+ * (drawer session switch, New Chat from a real session, settings, …) have a
+ * real chat on the outgoing side and keep the slide.
+ */
+private val NavBackStackEntry.isColdStartPlaceholder: Boolean
+    get() = arguments?.getString("sessionId")?.startsWith("__new__") == true
 
 object Routes {
     /**
@@ -470,28 +494,46 @@ fun AppNavigation(
         // flashes; the slightly longer enter spec (300ms vs 220ms) is
         // covered by the same guard.
         enterTransition = {
-            slideIntoContainer(
-                AnimatedContentTransitionScope.SlideDirection.Start,
-                animationSpec = tween(300, easing = EmphasizedDecelerate),
-            ) + fadeIn(animationSpec = tween(300, easing = EmphasizedDecelerate))
+            // Cold-start hop → instant, no directional motion (see
+            // isColdStartPlaceholder). Everything else → M3 shared-axis X.
+            if (initialState.isColdStartPlaceholder) {
+                EnterTransition.None
+            } else {
+                slideIntoContainer(
+                    AnimatedContentTransitionScope.SlideDirection.Start,
+                    animationSpec = tween(300, easing = EmphasizedDecelerate),
+                ) + fadeIn(animationSpec = tween(300, easing = EmphasizedDecelerate))
+            }
         },
         exitTransition = {
-            slideOutOfContainer(
-                AnimatedContentTransitionScope.SlideDirection.Start,
-                animationSpec = tween(200, easing = EmphasizedAccelerate),
-            ) + fadeOut(animationSpec = tween(200, easing = EmphasizedAccelerate))
+            if (initialState.isColdStartPlaceholder) {
+                ExitTransition.None
+            } else {
+                slideOutOfContainer(
+                    AnimatedContentTransitionScope.SlideDirection.Start,
+                    animationSpec = tween(200, easing = EmphasizedAccelerate),
+                ) + fadeOut(animationSpec = tween(200, easing = EmphasizedAccelerate))
+            }
         },
         popEnterTransition = {
-            slideIntoContainer(
-                AnimatedContentTransitionScope.SlideDirection.End,
-                animationSpec = tween(300, easing = EmphasizedDecelerate),
-            ) + fadeIn(animationSpec = tween(300, easing = EmphasizedDecelerate))
+            if (initialState.isColdStartPlaceholder) {
+                EnterTransition.None
+            } else {
+                slideIntoContainer(
+                    AnimatedContentTransitionScope.SlideDirection.End,
+                    animationSpec = tween(300, easing = EmphasizedDecelerate),
+                ) + fadeIn(animationSpec = tween(300, easing = EmphasizedDecelerate))
+            }
         },
         popExitTransition = {
-            slideOutOfContainer(
-                AnimatedContentTransitionScope.SlideDirection.End,
-                animationSpec = tween(200, easing = EmphasizedAccelerate),
-            ) + fadeOut(animationSpec = tween(200, easing = EmphasizedAccelerate))
+            if (initialState.isColdStartPlaceholder) {
+                ExitTransition.None
+            } else {
+                slideOutOfContainer(
+                    AnimatedContentTransitionScope.SlideDirection.End,
+                    animationSpec = tween(200, easing = EmphasizedAccelerate),
+                ) + fadeOut(animationSpec = tween(200, easing = EmphasizedAccelerate))
+            }
         },
     ) {
         composable(
