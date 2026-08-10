@@ -28,6 +28,7 @@ import androidx.navigation.compose.dialog
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.openminis.app.data.repository.ChatRepository
+import com.openminis.app.data.repository.AppIconRepository
 import com.openminis.app.data.repository.ProviderRepository
 import com.openminis.app.ui.chat.ChatScreen
 import com.openminis.app.ui.settings.AddAgentLoopGroupsScreen
@@ -1172,6 +1173,23 @@ fun AppNavigation(
             AppearanceScreen(
                 onBack = { navController.safePopBackStack() },
                 onChatMenuClick = { navController.safeNavigate(Routes.CHAT_MENU) },
+                // [T-icon-follows-app-theme] When the user is on the "Auto"
+                // launcher icon and switches the in-app appearance theme to a
+                // forced Light/Dark, mirror that choice onto the launcher icon
+                // (ClassicLight/ClassicDark). Theme=System maps back to Auto.
+                // We deliberately only act when the icon is Auto, so a manual
+                // Classic pin is never overwritten by a theme change.
+                onThemeChanged = { idx ->
+                    val ctx = context.applicationContext
+                    if (AppIconRepository.current(ctx) == AppIconRepository.Variant.Auto) {
+                        val target = when (idx) {
+                            1 -> AppIconRepository.Variant.ClassicLight
+                            2 -> AppIconRepository.Variant.ClassicDark
+                            else -> AppIconRepository.Variant.Auto
+                        }
+                        AppIconRepository.apply(ctx, target)
+                    }
+                },
             )
         }
 
