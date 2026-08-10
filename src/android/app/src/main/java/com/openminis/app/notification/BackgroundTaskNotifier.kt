@@ -14,6 +14,7 @@ import android.os.Vibrator
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.drawable.IconCompat
 import com.openminis.app.R
 import com.openminis.app.data.repository.BackgroundSettingsRepository
 import com.openminis.app.data.repository.ChatRepository
@@ -172,6 +173,11 @@ class BackgroundTaskNotifier(
                 }
                 val notification = NotificationCompat.Builder(context, CHANNEL_ID)
                     .setSmallIcon(R.mipmap.ic_launcher)
+                    // [T-notification-brand] Brand tint + large app icon on
+                    // task-completion notifications, same treatment as the
+                    // ongoing FGS notification.
+                    .setColor(ContextCompat.getColor(context, R.color.notification_brand_color))
+                    .setLargeIcon(IconCompat.createWithResource(context, R.mipmap.ic_launcher))
                     .setContentTitle(title)
                     .setContentText(body)
                     .setStyle(NotificationCompat.BigTextStyle().bigText(body))
@@ -281,6 +287,10 @@ class BackgroundTaskNotifier(
 
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
+            // [T-notification-brand] Brand tint + large app icon (mirror of
+            // the first builder).
+            .setColor(ContextCompat.getColor(context, R.color.notification_brand_color))
+            .setLargeIcon(IconCompat.createWithResource(context, R.mipmap.ic_launcher))
             .setContentTitle(title)
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))

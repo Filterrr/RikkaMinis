@@ -15,4 +15,12 @@
       icons and can't resolve the app's ?attr tints.
     -->
     <color name="shortcut_icon_fg">#E6E8EB</color>
+    <!--
+      T-notification-brand: brand tint for notification small-icon/title
+      coloring. Matches the app's teal primary (Theme.kt TealPrimary
+      #2E8B8B). Fixed non-theme color because the notification tint applies
+      in both light & dark system themes and the system shades the small
+      icon itself; a theme-dependent value here buys nothing.
+    -->
+    <color name="notification_brand_color">#2E8B8B</color>
 </resources>
