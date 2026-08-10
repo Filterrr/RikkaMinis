@@ -15,6 +15,9 @@ import org.acra.data.StringFormat
 import coil.ImageLoader
 import coil.ImageLoaderFactory
 import com.openminis.app.browser.BrowserTabPool
+import com.openminis.app.backup.MultiDeviceSync
+import com.openminis.app.backup.WebDavClient
+import com.openminis.app.backup.WebDavConfigStore
 import com.openminis.app.data.db.AppDatabase
 import com.openminis.app.data.repository.BackgroundSettingsRepository
 import com.openminis.app.data.repository.ChatRepository
@@ -107,6 +110,38 @@ class MinisApp : Application(), ImageLoaderFactory {
     private var foregroundActivityCount: Int = 0
 
     fun isAppForeground(): Boolean = foregroundActivityCount > 0
+
+    /**
+     * T-multidevice: kick off a multi-device auto-sync when the app comes to
+     * the foreground, but ONLY if the user turned the feature on. The actual
+     * WebDAV round-trip runs on [applicationScope] so it never blocks activity
+     * startup, and is fully guarded — a failure (network down, bad creds, no
+     * folder) is logged and swallowed, never allowed to surface into normal
+     * app operation. First launch is naturally covered: the first Activity's
+     * onActivityStarted reports wasBackgrounded=true.
+     */
+    fun syncMultiDeviceIfEnabled() {
+        if (!MultiDeviceSync.isEnabled(this)) return
+        applicationScope.launch {
+            runCatching {
+                val config = WebDavConfigStore(this@MinisApp).load()
+                if (config == null) {
+                    AppLogger.info("MultiDeviceSync", "enabled but no WebDAV config; not starting")
+                    return@launch
+                }
+                val result = MultiDeviceSync.syncNow(
+                    providerRepo = providerRepository,
+                    envVarRepo = envVarRepository,
+                    memoryRepo = memoryRepository,
+                    config = config,
+                    client = WebDavClient.defaultClient(),
+                )
+                AppLogger.info("MultiDeviceSync", result)
+            }.onFailure {
+                AppLogger.warning("MultiDeviceSync", "sync failed: ${it.message}")
+            }
+        }
+    }
 
     /**
      * T-bg-overlay phase 2: live "is the app foreground?" stream so the
@@ -504,6 +539,12 @@ class MinisApp : Application(), ImageLoaderFactory {
                 val wasBackgrounded = foregroundActivityCount == 0
                 foregroundActivityCount++
                 if (wasBackgrounded) _isAppForegroundFlow.value = true
+                // T-multidevice: app came to the foreground (first launch or
+                // background→foreground). Trigger an auto-sync if enabled —
+                // the first launch pulls the latest remote snapshot, a resume
+                // after edits refetches any sibling changes. Cheap no-op when
+                // the feature is off or no WebDAV is configured.
+                if (wasBackgrounded) syncMultiDeviceIfEnabled()
                 // T298: as soon as the app transitions background → foreground,
                 // clear any task-completed notifications still in the tray.
                 // The user is back in front of the app — there's no point
