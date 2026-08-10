@@ -177,7 +177,7 @@ class BackgroundTaskNotifier(
                     // task-completion notifications, same treatment as the
                     // ongoing FGS notification.
                     .setColor(ContextCompat.getColor(context, R.color.notification_brand_color))
-                    .setLargeIcon(IconCompat.createWithResource(context, R.mipmap.ic_launcher))
+                    .setLargeIcon(IconCompat.createWithResource(context, R.mipmap.ic_launcher).toIcon())
                     .setContentTitle(title)
                     .setContentText(body)
                     .setStyle(NotificationCompat.BigTextStyle().bigText(body))
@@ -290,7 +290,7 @@ class BackgroundTaskNotifier(
             // [T-notification-brand] Brand tint + large app icon (mirror of
             // the first builder).
             .setColor(ContextCompat.getColor(context, R.color.notification_brand_color))
-            .setLargeIcon(IconCompat.createWithResource(context, R.mipmap.ic_launcher))
+            .setLargeIcon(IconCompat.createWithResource(context, R.mipmap.ic_launcher).toIcon())
             .setContentTitle(title)
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))

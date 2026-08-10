@@ -752,7 +752,7 @@ class AgentForegroundService : Service() {
             // system service notification. setColor tints the small icon +
             // title; setLargeIcon adds the app icon to the row.
             .setColor(ContextCompat.getColor(this, R.color.notification_brand_color))
-            .setLargeIcon(IconCompat.createWithResource(this, R.mipmap.ic_launcher))
+            .setLargeIcon(IconCompat.createWithResource(this, R.mipmap.ic_launcher).toIcon())
             .setContentTitle(titleText)
             .setContentText(collapsedText)
             .setStyle(NotificationCompat.BigTextStyle().bigText(collapsedText))
