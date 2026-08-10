@@ -245,11 +245,6 @@
     <string name="appearance_section_language">语言</string>
     <string name="appearance_language_footer">自定义此 App 的显示语言。选择「系统」将跟随设备语言设置。</string>
     <!-- T-android-dynamic-app-icon: 启动图标选择项。 -->
-    <string name="appearance_section_app_icon">应用图标</string>
-    <string name="appearance_app_icon_footer">更换桌面图标。切换后桌面图标可能需要几秒钟才会刷新。</string>
-    <string name="appearance_app_icon_auto">自动</string>
-    <string name="appearance_app_icon_light">浅色</string>
-    <string name="appearance_app_icon_dark">深色</string>
     <string name="env_var_title">环境变量</string>
     <string name="env_var_add">添加</string>
     <string name="env_var_privacy_header">隐私</string>

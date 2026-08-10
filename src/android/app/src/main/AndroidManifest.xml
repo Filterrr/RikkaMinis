@@ -175,83 +175,26 @@
             android:launchMode="singleTask"
             android:theme="@style/Theme.Minis"
             android:windowSoftInputMode="adjustResize">
-            <!-- T-android-dynamic-app-icon: LAUNCHER intent-filter moved
-                 to the <activity-alias> entries below so the user can pick
-                 an alternate icon. Exactly one alias is enabled at a time
-                 (PackageManager.setComponentEnabledSetting); MainActivity
-                 itself never appears in the launcher directly, but all
-                 internal Intent(this, MainActivity::class.java) startActivity
-                 calls keep working because MainActivity is always enabled.
-                 The minis:// deep-link filter stays on MainActivity since
-                 deep-links never go through the LAUNCHER category. -->
+            <!-- minis:// deep-link filter. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="minis" />
             </intent-filter>
+            <!-- Launcher entry. MainActivity is the single launcher target
+                 (the dynamic app-icon activity-alias mechanism was removed:
+                 the launcher icon is one fixed adaptive icon, no variants). -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- App-icon long-press quick actions (new_chat / voice_chat /
+                 camera_chat), mirroring iOS QuickActionRouter. -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
         </activity>
-
-        <!-- T-android-dynamic-app-icon: launcher-icon aliases. Exactly
-             ONE of these three is enabled at any time; AppIconRepository
-             flips the enabled state in response to a Settings → App Icon
-             tap. All three target MainActivity, so the user-visible
-             launcher entry just swaps icon + label, no actual activity
-             change. Pre-install state: "auto" is enabled in the manifest
-             (android:enabled="true"), the other two are disabled. -->
-        <activity-alias
-            android:name=".MainActivityIconAuto"
-            android:targetActivity=".MainActivity"
-            android:enabled="true"
-            android:exported="true"
-            android:icon="@mipmap/ic_launcher"
-            android:label="@string/app_name">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-            <!-- T-android-app-icon-shortcuts: app-icon long-press quick
-                 actions (mirrors iOS QuickActionRouter / UIApplicationShortcutItem).
-                 Three static shortcuts (new_chat / voice_chat / camera_chat)
-                 launch MainActivity via minis://action/<name> deep-link.
-                 The shortcuts meta-data must live on the alias that owns
-                 the LAUNCHER filter, not on MainActivity itself. -->
-            <meta-data
-                android:name="android.app.shortcuts"
-                android:resource="@xml/shortcuts" />
-        </activity-alias>
-
-        <activity-alias
-            android:name=".MainActivityIconLight"
-            android:targetActivity=".MainActivity"
-            android:enabled="false"
-            android:exported="true"
-            android:icon="@mipmap/ic_launcher_classic_light"
-            android:label="@string/app_name">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-            <meta-data
-                android:name="android.app.shortcuts"
-                android:resource="@xml/shortcuts" />
-        </activity-alias>
-
-        <activity-alias
-            android:name=".MainActivityIconDark"
-            android:targetActivity=".MainActivity"
-            android:enabled="false"
-            android:exported="true"
-            android:icon="@mipmap/ic_launcher_classic_dark"
-            android:label="@string/app_name">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-            <meta-data
-                android:name="android.app.shortcuts"
-                android:resource="@xml/shortcuts" />
-        </activity-alias>
 
         <!-- Share receiver activity -->
         <activity

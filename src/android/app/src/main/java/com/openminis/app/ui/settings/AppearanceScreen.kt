@@ -1,7 +1,6 @@
 package com.openminis.app.ui.settings
 
 import com.openminis.app.R
-import com.openminis.app.data.repository.AppIconRepository
 import com.openminis.app.ui.components.MinisTextButton
 
 import android.content.Context
@@ -190,7 +189,6 @@ fun AppearanceScreen(
     var messageLevel by remember { mutableIntStateOf(prefs.getInt(KEY_FONT_MESSAGE, 0)) }
     var appBaseLevel by remember { mutableIntStateOf(prefs.getInt(KEY_FONT_APP_BASE, 0)) }
     var selectedLanguage by remember { mutableStateOf(prefs.getString(KEY_LANGUAGE, "") ?: "") }
-    var selectedAppIcon by remember { mutableStateOf(AppIconRepository.current(context)) }
 
     val fontsModified = chatInputLevel != 0 || messageLevel != 0 || appBaseLevel != 0
 
@@ -551,133 +549,7 @@ fun AppearanceScreen(
         // the currently-selected tile gets a checkmark badge in the
         // top-right corner. Tapping a tile flips the corresponding
         // activity-alias enabled state via PackageManager — the launcher
-        // refreshes its icon cache within a few seconds.
-        SettingsSection(
-            header = stringResource(R.string.appearance_section_app_icon),
-            footer = stringResource(R.string.appearance_app_icon_footer),
-        ) {
-            data class IconOption(
-                val variant: AppIconRepository.Variant,
-                val titleRes: Int,
-                val mipmapRes: Int,
-            )
-            val iconOptions = listOf(
-                IconOption(
-                    AppIconRepository.Variant.Auto,
-                    R.string.appearance_app_icon_auto,
-                    R.mipmap.ic_launcher,
-                ),
-                IconOption(
-                    AppIconRepository.Variant.ClassicLight,
-                    R.string.appearance_app_icon_light,
-                    R.mipmap.ic_launcher_classic_light,
-                ),
-                IconOption(
-                    AppIconRepository.Variant.ClassicDark,
-                    R.string.appearance_app_icon_dark,
-                    R.mipmap.ic_launcher_classic_dark,
-                ),
-            )
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                for (option in iconOptions) {
-                    val isSelected = selectedAppIcon == option.variant
-                    val iconPainter: Painter = remember(option.mipmapRes) {
-                        // painterResource() can't decode adaptive-icon
-                        // XML drawables (mipmap-anydpi-v26), so rasterize
-                        // the drawable into a Bitmap first.
-                        val drawable = ResourcesCompat.getDrawable(
-                            context.resources,
-                            option.mipmapRes,
-                            context.theme,
-                        )
-                        if (drawable != null) {
-                            BitmapPainter(
-                                drawable.toBitmap(width = 192, height = 192).asImageBitmap()
-                            )
-                        } else {
-                            BitmapPainter(
-                                android.graphics.Bitmap
-                                    .createBitmap(1, 1, android.graphics.Bitmap.Config.ARGB_8888)
-                                    .asImageBitmap()
-                            )
-                        }
-                    }
-                    Column(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clickable {
-                                if (selectedAppIcon != option.variant) {
-                                    selectedAppIcon = option.variant
-                                    AppIconRepository.apply(context, option.variant)
-                                }
-                            },
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .aspectRatio(1f)
-                                .clip(RoundedCornerShape(18.dp))
-                                .border(
-                                    width = if (isSelected) 2.dp else 0.5.dp,
-                                    color = if (isSelected) {
-                                        MaterialTheme.colorScheme.primary
-                                    } else {
-                                        MaterialTheme.colorScheme.outlineVariant
-                                    },
-                                    shape = RoundedCornerShape(18.dp),
-                                ),
-                        ) {
-                            Image(
-                                painter = iconPainter,
-                                contentDescription = null,
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .clip(RoundedCornerShape(18.dp)),
-                            )
-                            if (isSelected) {
-                                Box(
-                                    modifier = Modifier
-                                        .align(Alignment.TopEnd)
-                                        .padding(4.dp)
-                                        .size(22.dp)
-                                        .background(
-                                            color = Color.White,
-                                            shape = CircleShape,
-                                        ),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    Icon(
-                                        Icons.Filled.CheckCircle,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(22.dp),
-                                    )
-                                }
-                            }
-                        }
-                        Text(
-                            stringResource(option.titleRes),
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                            color = if (isSelected) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurface
-                            },
-                        )
-                    }
-                }
-            }
-        }
-
-        // -- Language --
+        // refreshes its icon cache within a few seconds.        // -- Language --
         SettingsSection(
             header = stringResource(R.string.appearance_section_language),
             footer = stringResource(R.string.appearance_language_footer),

@@ -31,7 +31,6 @@ import androidx.navigation.compose.dialog
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.openminis.app.data.repository.ChatRepository
-import com.openminis.app.data.repository.AppIconRepository
 import com.openminis.app.data.repository.ProviderRepository
 import com.openminis.app.ui.chat.ChatScreen
 import com.openminis.app.ui.settings.AddAgentLoopGroupsScreen
