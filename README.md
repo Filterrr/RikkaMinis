@@ -295,7 +295,7 @@ scripts/          二进制同步与开发者工具
 
 ## 致谢
 
-OpenMinis 建立在大量开源工作之上——完整清单见
+RikkaMinis 建立在大量开源工作之上——完整清单见
 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)。本 fork 派生自
 **[OpenMinis/OpenMinis](https://github.com/OpenMinis/OpenMinis)**，并从头构建其
 沙箱二进制：`deps/proot` 子模块（OpenMinis 的 PRoot fork，含其 native-offload
@@ -329,7 +329,7 @@ ANSI/CSI/OSC 解析与 TUI 渲染引擎。
 
 ## 许可证
 
-OpenMinis 以 **[GNU General Public License v3.0](LICENSE)** 许可。
+RikkaMinis 以 **[GNU General Public License v3.0](LICENSE)** 许可。
 
 应用链接了 GPL 许可的组件——[PRoot](https://github.com/OpenMinis/proot)
 （GPLv2）——因此合并后的作品以 GPLv3 分发。捆绑的第三方许可证列在
