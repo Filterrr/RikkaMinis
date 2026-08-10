@@ -1392,6 +1392,7 @@
 
     <!-- [T-android-overlay-landscape-width-rotation-drift] Scheduled Tasks localization -->
     <string name="error_empty_response_generic">模型返回了空响应。请重试或切换模型。</string>
+    <string name="error_output_truncated_repeated">模型多次达到输出长度上限被截断。请尝试在模型设置中调低上下文限制，或将问题拆分成更小的部分。</string>
     <string name="error_empty_response_context_large">模型返回了空响应。会话上下文可能过大 —— 请尝试压缩上下文或开启新会话。</string>
     <string name="error_empty_response_after_tool">在工具结果之后，即使经过提醒，模型仍未返回任何响应。它可能已过载 —— 请重试或切换模型。</string>
     <string name="thinking_truncated_hint">显示最后 %1$dK / 共 %2$dK 字符</string>

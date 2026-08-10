@@ -1216,6 +1216,7 @@
     <string name="session_mcps_empty_title">Нет серверов MCP</string>
     <string name="session_mcps_empty_subtitle">Добавьте серверы в Настройки → Интеграции MCP.</string>
     <string name="error_empty_response_generic">Модель вернула пустой ответ. Попробуйте ещё раз или смените модель.</string>
+    <string name="error_output_truncated_repeated">Модель неоднократно достигала предела длины вывода. Попробуйте снизить лимит контекста в настройках модели или разбейте вопрос на более мелкие части.</string>
     <string name="error_empty_response_context_large">Модель вернула пустой ответ. Контекст беседы может быть слишком большим — попробуйте сжать его или начать новую сессию.</string>
     <string name="error_empty_response_after_tool">Модель не вернула ответ после результата инструмента, даже после напоминания. Возможно, она перегружена — попробуйте ещё раз или смените модель.</string>
     <string name="thinking_truncated_hint">Показаны последние %1$dK из %2$dK символов</string>
