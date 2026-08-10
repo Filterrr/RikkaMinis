@@ -14,7 +14,6 @@ import android.os.Vibrator
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
-import androidx.core.graphics.drawable.IconCompat
 import com.openminis.app.R
 import com.openminis.app.data.repository.BackgroundSettingsRepository
 import com.openminis.app.data.repository.ChatRepository
@@ -173,11 +172,12 @@ class BackgroundTaskNotifier(
                 }
                 val notification = NotificationCompat.Builder(context, CHANNEL_ID)
                     .setSmallIcon(R.mipmap.ic_launcher)
-                    // [T-notification-brand] Brand tint + large app icon on
-                    // task-completion notifications, same treatment as the
-                    // ongoing FGS notification.
+                    // [T-notification-brand] Brand tint so the tray row reads
+                    // as "Minis" at a glance. The large app icon
+                    // (setLargeIcon) was dropped per user request — the small
+                    // status-bar icon carries the identity, keeping the row
+                    // compact (same treatment as the FGS notification).
                     .setColor(ContextCompat.getColor(context, R.color.notification_brand_color))
-                    .setLargeIcon(IconCompat.createWithResource(context, R.mipmap.ic_launcher).toIcon())
                     .setContentTitle(title)
                     .setContentText(body)
                     .setStyle(NotificationCompat.BigTextStyle().bigText(body))
@@ -287,10 +287,9 @@ class BackgroundTaskNotifier(
 
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
-            // [T-notification-brand] Brand tint + large app icon (mirror of
-            // the first builder).
+            // [T-notification-brand] Brand tint (mirror of the first
+            // builder). Large app icon dropped per user request.
             .setColor(ContextCompat.getColor(context, R.color.notification_brand_color))
-            .setLargeIcon(IconCompat.createWithResource(context, R.mipmap.ic_launcher).toIcon())
             .setContentTitle(title)
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
