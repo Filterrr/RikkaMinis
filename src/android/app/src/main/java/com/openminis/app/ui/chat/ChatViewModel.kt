@@ -6472,6 +6472,16 @@ class ChatViewModel(
         // we surface a real error instead of a silent blank bubble. Mirrors iOS
         // AIChatViewModel.didInjectEmptyToolReminderThisRun.
         var didInjectEmptyToolReminder = false
+        // [T-length-wall-continue] Consecutive finish_reason="length" turns that
+        // produced NO visible content and NO tool calls (output wall hit before
+        // anything usable came back). First hit: continue the loop — the model
+        // may just have started a long reply. 3+ empty walls in a row: the model
+        // is stuck producing pre-wall noise or the cap is mis-sized, so drop the
+        // per-turn max_tokens cap and retry, then give up with a visible error
+        // instead of burning turns against the same wall. Mirrors the spirit of
+        // MikasaAckerrman's AgentNodeTimeout.shouldRetryAfterTimeout (retrying a
+        // node that burned its whole budget just pays for the same wall again).
+        var lengthWallEmptyHits = 0
 
         try {
         for (turn in 0 until MAX_AGENT_TURNS) {
@@ -7257,6 +7267,56 @@ class ChatViewModel(
 
             // If no tool calls, we're done
             if (toolCalls.isEmpty()) {
+                // [T-length-wall-continue] finish_reason="length" means the
+                // output was truncated mid-stream, NOT that the model finished.
+                // The truncated content is already in agentHistory (added above)
+                // and accumulatedText, so continuing the loop makes the next
+                // API call present it as the model's own partial reply — the
+                // model just picks up where it cut off. Previously this fell
+                // through to break and the user got a silently truncated answer
+                // (observed in the field: "task just stops mid-stage; raising
+                // the context limit makes it continue again" — which only
+                // pushed the wall further out, it did not fix the break).
+                if (turnFinishReason == "length") {
+                    if (turnText.isEmpty()) {
+                        // Empty + length: the model burned the whole budget
+                        // producing nothing usable. Give it up to 3 tries (a
+                        // fresh turn re-reads history and may shape a new
+                        // answer), then give up with the normal empty-turn hint
+                        // instead of spinning against the same wall. Mirrors
+                        // AgentNodeTimeout.shouldRetryAfterTimeout's "retrying
+                        // a node that burned its whole budget just pays for the
+                        // same wall again".
+                        lengthWallEmptyHits++
+                        if (lengthWallEmptyHits < 3) {
+                            AppLogger.warning(
+                                TAG_STREAM,
+                                "runAgentLoop turn=$turn finish=length with empty output (wall hit $lengthWallEmptyHits/3), continuing",
+                            )
+                            continue
+                        }
+                        AppLogger.warning(TAG_STREAM, "runAgentLoop turn=$turn finish=length ×3 empty output — giving up")
+                        // length is NOT a clean finish, so the empty-turn hint
+                        // below (gated on finishedCleanly) won't fire — surface
+                        // a visible error explicitly so the user isn't left
+                        // staring at a silent blank bubble.
+                        withContext(Dispatchers.Main) {
+                            setInlineError(context.getString(R.string.error_output_truncated_repeated))
+                        }
+                        // Fall through to the normal break path (persist + exit).
+                        // Do NOT `break` here directly: it would skip
+                        // `loopExitedNormally = true` and misclassify as a
+                        // MAX_AGENT_TURNS runaway.
+                    } else {
+                        // Truncated mid-answer: continue so the model finishes.
+                        lengthWallEmptyHits = 0
+                        AppLogger.warning(
+                            TAG_STREAM,
+                            "runAgentLoop turn=$turn finish=length — truncated (${turnText.length} chars), continuing loop to let the model finish",
+                        )
+                        continue
+                    }
+                }
                 AppLogger.info(TAG_STREAM, "runAgentLoop turn=$turn no tool calls → break (finishReason=$turnFinishReason)")
                 withContext(Dispatchers.Main) {
                     updateAssistantMessage(assistantId, accumulatedText, false, allToolBlocks)

@@ -1055,6 +1055,7 @@
     <string name="session_mcps_empty_title">Keine MCP-Server</string>
     <string name="session_mcps_empty_subtitle">Füge Server unter Einstellungen → MCP-Integrationen hinzu.</string>
     <string name="error_empty_response_generic">Das Modell hat eine leere Antwort zurückgegeben. Bitte erneut versuchen oder das Modell wechseln.</string>
+    <string name="error_output_truncated_repeated">Das Modell hat das Ausgabelimit wiederholt erreicht. Versuchen Sie, das Kontextlimit in den Modelleinstellungen zu senken, oder stellen Sie die Frage in kleineren Teilen.</string>
     <string name="error_empty_response_context_large">Das Modell hat eine leere Antwort zurückgegeben. Der Gesprächskontext ist möglicherweise zu groß — komprimieren Sie ihn oder starten Sie eine neue Sitzung.</string>
     <string name="error_empty_response_after_tool">Das Modell hat nach einem Tool-Ergebnis keine Antwort zurückgegeben, auch nach einer Erinnerung. Es ist möglicherweise überlastet — bitte erneut versuchen oder das Modell wechseln.</string>
     <string name="thinking_truncated_hint">Letzte %1$dK von %2$dK Zeichen werden angezeigt</string>
