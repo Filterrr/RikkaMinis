@@ -39,7 +39,6 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN_DIR="$REPO_ROOT/src/android/app/src/main"
 JNI_DIR="$MAIN_DIR/jniLibs/arm64-v8a"
 ASSETS_DIR="$MAIN_DIR/assets"
-GRADLE_FILE="$REPO_ROOT/src/android/app/build.gradle.kts"
 
 # The exact set this fork vendors. Keep in sync with build.gradle.kts.
 # proot (libproot.so, libproot-loader*.so, assets/proot-aarch64) is NOT here:
@@ -151,43 +150,18 @@ for f in $ASSET_FILES; do
   printf '    %s  %s\n' "$(sha256sum "$ASSETS_DIR/$f" | cut -c1-16)" "assets/$f"
 done
 
-# --- 4. Align versionName / versionCode with the binaries -------------------
-# Keeps "which upstream release is this built from" answerable from the app's
-# About screen. versionCode is derived from the numeric part of the tag.
-# Tags look like "0.22-preview": the MINOR component is what upstream tracks as
-# versionCode (0.22 -> 22). Taking the first number instead would yield 0, and a
-# versionCode that low blocks upgrade-installs over an existing build.
+# --- 4. Version alignment (DISABLED) ---------------------------------------
+# Historically this section rewrote versionName/versionCode in
+# build.gradle.kts to mirror the upstream tag (0.22-preview -> versionCode 22).
+# That alignment is obsolete: RikkaMinis owns its own version line now
+# (1.0.0 base; CI injects a monotonically increasing versionCode). Rewriting
+# the gradle file here would clobber that, so version fields are left alone.
+# "Which upstream release are these binaries from" stays answerable through
+# the commit message produced by the Report step below.
 VERSION_NAME="${TAG}"
-VERSION_CODE="$(printf '%s' "$TAG" | sed -n 's/^[0-9]*\.\([0-9]*\).*/\1/p')"
-# Fall back to the largest number in the tag if it isn't in MAJOR.MINOR form.
-[ -n "$VERSION_CODE" ] || VERSION_CODE="$(
-  printf '%s' "$TAG" | grep -oE '[0-9]+' | sort -rn | head -1 || true
-)"
-VERSION_CODE="$(printf '%s' "$VERSION_CODE" | sed 's/^0*//')"
-[ -n "$VERSION_CODE" ] || VERSION_CODE=""
-# Never let versionCode go backwards: Android refuses to install an APK whose
-# versionCode is lower than the installed one, which would break upgrades.
-CURRENT_CODE="$(grep -oE 'versionCode = [0-9]+' "$GRADLE_FILE" | head -1 | grep -oE '[0-9]+' || echo 0)"
-if [ -n "$VERSION_CODE" ] && [ "$VERSION_CODE" -lt "$CURRENT_CODE" ]; then
-  echo "==> Computed versionCode $VERSION_CODE < current $CURRENT_CODE; keeping $CURRENT_CODE."
-  VERSION_CODE="$CURRENT_CODE"
-fi
 
-if [ -n "$VERSION_CODE" ]; then
-  echo "==> Aligning version to $VERSION_NAME (versionCode $VERSION_CODE)"
-  python3 - "$GRADLE_FILE" "$VERSION_NAME" "$VERSION_CODE" <<'PY'
-import re, sys
-path, name, code = sys.argv[1], sys.argv[2], sys.argv[3]
-src = open(path).read()
-src, n1 = re.subn(r'versionCode = \d+', f'versionCode = {code}', src, count=1)
-src, n2 = re.subn(r'versionName = "[^"]*"', f'versionName = "{name}"', src, count=1)
-open(path, "w").write(src)
-if not (n1 and n2):
-    sys.exit("WARNING: could not rewrite version fields — check build.gradle.kts")
-PY
-else
-  echo "==> Tag '$TAG' has no numeric part; leaving version fields alone."
-fi
+echo "==> Version fields left untouched (RikkaMinis owns its version line)."
+echo "==> Binaries are from upstream $VERSION_NAME — record that in the commit message."
 
 # --- 5. Report --------------------------------------------------------------
 cat <<EOF

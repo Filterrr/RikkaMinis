@@ -28,7 +28,7 @@ fun customizationValue(key: String): String =
 //                              and distinguishable by versionCode.
 //   MINIS_VERSION_NAME_SUFFIX — per-build tag, e.g. "-beta.42", so sideloaders
 //                              can tell builds apart without opening the APK.
-// Local builds fall back to the base values (22 / "0.22-preview").
+// Local builds fall back to the base values (22 / "1.0.0").
 val ciVersionCode: Int? = System.getenv("MINIS_VERSION_CODE")?.toIntOrNull()
 val ciVersionSuffix: String? = System.getenv("MINIS_VERSION_NAME_SUFFIX")
 
@@ -48,7 +48,7 @@ android {
         targetSdk = 35
         versionCode = ciVersionCode ?: 22
         versionName =
-            if (ciVersionSuffix.isNullOrBlank()) "0.22-preview" else "0.22-preview$ciVersionSuffix"
+            if (ciVersionSuffix.isNullOrBlank()) "1.0.0" else "1.0.0$ciVersionSuffix"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
