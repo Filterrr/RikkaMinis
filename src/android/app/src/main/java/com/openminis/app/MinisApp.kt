@@ -556,6 +556,13 @@ class MinisApp : Application(), ImageLoaderFactory {
                     // while a config-confirm dialog may still be showing — nudge
                     // them so they can come back before the 120s timeout.
                     com.openminis.app.config.confirm.ConfigConfirmationGate.notifyPending()
+                    // [T-android-dynamic-icon-phase2] The app has fully left
+                    // the foreground. Any icon swap that happened while the
+                    // user was inside (apply / auto-sync) can now safely
+                    // disable the other aliases — the current task is hidden,
+                    // so PM state changes can't bounce the user out (the task
+                    // teardown trap from toggling the running alias).
+                    com.openminis.app.data.repository.AppIconRepository.flushPendingCleanup(this@MinisApp)
                 }
             }
             override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
@@ -754,6 +761,35 @@ class MinisApp : Application(), ImageLoaderFactory {
             Log.w("MinisApp", "LaunchCycleBeacon.recordCleanExit failed: ${t.message}")
         }
         super.onTerminate()
+    }
+
+    /**
+     * T-android-dynamic-icon-auto: react to system-level configuration
+     * changes — primarily night-mode flips (auto-brightness / scheduled
+     * dark mode). When the user has the launcher icon set to "Auto" the
+     * Application-level callbacks keep the ClassicLight/ClassicDark
+     * activity-alias in sync with the effective night mode even while the
+     * app is backgrounded (MainActivity's Compose uiMode updates only run
+     * while an Activity is alive).
+     *
+     * Runs on every config change (rotation, density, fontScale, …) — the
+     * icon sync itself is a cheap no-op when the effective theme didn't
+     * actually flip (AppIconRepository skips unchanged toggles internally).
+     */
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        try {
+            val night = newConfig.uiMode and
+                android.content.res.Configuration.UI_MODE_NIGHT_MASK ==
+                android.content.res.Configuration.UI_MODE_NIGHT_YES
+            com.openminis.app.data.repository.AppIconRepository.syncWithSystemTheme(
+                this,
+                effectiveDark = night,
+                appForeground = isAppForeground(),
+            )
+        } catch (t: Throwable) {
+            Log.w("MinisApp", "icon sync on config change failed: ${t.message}")
+        }
     }
 
 }
