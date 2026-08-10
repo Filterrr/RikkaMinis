@@ -36,6 +36,15 @@ object WebDavSync {
      */
     const val SYNC_PREFIX = "rikkaminis-sync-"
 
+    /**
+     * On the WebDAV server the auto-sync snapshots live in their own
+     * *subdirectory* (`<backup-path>/sync/`) rather than mixed alongside the
+     * manual full backups in the backup root. That way the sync snapshots —
+     * auto-generated, pruned, and key-bearing — never share a folder with the
+     * curated manual backups the user chooses to keep.
+     */
+    const val SYNC_SUBDIR = "sync"
+
     /** Verify the server + credentials. Throws on failure. */
     fun testConnection(config: WebDavConfig, client: OkHttpClient = WebDavClient.defaultClient()) {
         WebDavClient(config, client).testConnection()
@@ -101,13 +110,17 @@ object WebDavSync {
             .toString(Charsets.UTF_8)
     }
 
-    /** Remove a remote backup. */
+    /** Remove a remote backup. [subdir] scopes the delete to a child folder
+     *  of the configured backup path (used for auto-sync snapshots kept in
+     *  [SYNC_SUBDIR]); leave empty to delete a file in the backup root. */
     fun deleteBackupFile(
         config: WebDavConfig,
         item: WebDavBackupItem,
         client: OkHttpClient = WebDavClient.defaultClient(),
+        subdir: String = "",
     ) {
-        WebDavClient(config, client).delete(item.displayName)
+        val path = if (subdir.isBlank()) item.displayName else "$subdir/${item.displayName}"
+        WebDavClient(config, client).delete(path)
     }
 
     /**
@@ -124,37 +137,44 @@ object WebDavSync {
     ): String {
         val dav = WebDavClient(config, client)
         dav.ensureCollectionExists()
+        dav.ensureCollectionExists(SYNC_SUBDIR)
         val name = "$SYNC_PREFIX${
             java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
                 .format(java.util.Date())
         }$BACKUP_SUFFIX"
-        dav.put(name, payload.toByteArray(Charsets.UTF_8), "application/json")
+        dav.put("$SYNC_SUBDIR/$name", payload.toByteArray(Charsets.UTF_8), "application/json")
         return name
     }
 
-    /** Remote auto-sync snapshots, newest first. Never mixed with manual
-     *  full backups. */
+    /** Remote auto-sync snapshots, newest first. They live in the
+     *  [SYNC_SUBDIR] subdirectory, isolated from manual full backups.
+     *  Returns an empty list when the subdirectory does not exist yet
+     *  (nothing has ever been synced). */
     fun listSyncFiles(
         config: WebDavConfig,
         client: OkHttpClient = WebDavClient.defaultClient(),
     ): List<WebDavBackupItem> {
         val dav = WebDavClient(config, client)
         dav.ensureCollectionExists()
-        return dav.list()
-            .filter {
-                !it.isCollection &&
-                    it.displayName.startsWith(SYNC_PREFIX) &&
-                    it.displayName.endsWith(BACKUP_SUFFIX)
-            }
-            .map {
-                WebDavBackupItem(
-                    href = it.href,
-                    displayName = it.displayName,
-                    size = it.contentLength,
-                    lastModified = it.lastModified ?: Instant.EPOCH,
-                )
-            }
-            .sortedByDescending { it.lastModified }
+        return try {
+            dav.list(SYNC_SUBDIR)
+                .filter {
+                    !it.isCollection &&
+                        it.displayName.startsWith(SYNC_PREFIX) &&
+                        it.displayName.endsWith(BACKUP_SUFFIX)
+                }
+                .map {
+                    WebDavBackupItem(
+                        href = it.href,
+                        displayName = it.displayName,
+                        size = it.contentLength,
+                        lastModified = it.lastModified ?: Instant.EPOCH,
+                    )
+                }
+                .sortedByDescending { it.lastModified }
+        } catch (e: WebDavException) {
+            if (e.statusCode == 404) emptyList() else throw e
+        }
     }
 
     /** Download the newest auto-sync snapshot, or null when the folder has
@@ -165,7 +185,7 @@ object WebDavSync {
     ): String? {
         return listSyncFiles(config, client).firstOrNull()?.let {
             WebDavClient(config, client)
-                .get(it.displayName)
+                .get("$SYNC_SUBDIR/${it.displayName}")
                 .toString(Charsets.UTF_8)
         }
     }

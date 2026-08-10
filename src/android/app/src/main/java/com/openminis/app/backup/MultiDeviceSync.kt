@@ -101,7 +101,7 @@ object MultiDeviceSync {
         val remote = WebDavSync.listSyncFiles(config, client)
         if (remote.size <= MAX_REMOTE_SYNC_FILES) return
         for (stale in remote.drop(MAX_REMOTE_SYNC_FILES)) {
-            runCatching { WebDavSync.deleteBackupFile(config, stale, client) }
+            runCatching { WebDavSync.deleteBackupFile(config, stale, client, WebDavSync.SYNC_SUBDIR) }
         }
     }
 
