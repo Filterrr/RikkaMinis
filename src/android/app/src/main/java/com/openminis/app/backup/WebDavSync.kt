@@ -27,6 +27,15 @@ object WebDavSync {
 
     const val BACKUP_SUFFIX = ".json"
 
+    /**
+     * Filename convention for multi-device auto-sync snapshots
+     * ([MultiDeviceSync]). Distinct from [BACKUP_PREFIX] on purpose: automatic
+     * sync produces a *subset* payload (config + providers + env vars + memory,
+     * no skills / chat) named under its own prefix, so it never mixes with the
+     * full manual backups a user chooses to keep in the same folder.
+     */
+    const val SYNC_PREFIX = "rikkaminis-sync-"
+
     /** Verify the server + credentials. Throws on failure. */
     fun testConnection(config: WebDavConfig, client: OkHttpClient = WebDavClient.defaultClient()) {
         WebDavClient(config, client).testConnection()
@@ -99,5 +108,65 @@ object WebDavSync {
         client: OkHttpClient = WebDavClient.defaultClient(),
     ) {
         WebDavClient(config, client).delete(item.displayName)
+    }
+
+    /**
+     * Push a multi-device sync snapshot ([MultiDeviceSync]) as a new
+     * timestamped file named under [SYNC_PREFIX]. Same transport and
+     * auto-create semantics as [backup] — the only difference is the filename,
+     * which keeps auto-sync snapshots out of the manual remote-backup list.
+     * Returns the created displayName.
+     */
+    fun pushSync(
+        config: WebDavConfig,
+        payload: String,
+        client: OkHttpClient = WebDavClient.defaultClient(),
+    ): String {
+        val dav = WebDavClient(config, client)
+        dav.ensureCollectionExists()
+        val name = "$SYNC_PREFIX${
+            java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
+                .format(java.util.Date())
+        }$BACKUP_SUFFIX"
+        dav.put(name, payload.toByteArray(Charsets.UTF_8), "application/json")
+        return name
+    }
+
+    /** Remote auto-sync snapshots, newest first. Never mixed with manual
+     *  full backups. */
+    fun listSyncFiles(
+        config: WebDavConfig,
+        client: OkHttpClient = WebDavClient.defaultClient(),
+    ): List<WebDavBackupItem> {
+        val dav = WebDavClient(config, client)
+        dav.ensureCollectionExists()
+        return dav.list()
+            .filter {
+                !it.isCollection &&
+                    it.displayName.startsWith(SYNC_PREFIX) &&
+                    it.displayName.endsWith(BACKUP_SUFFIX)
+            }
+            .map {
+                WebDavBackupItem(
+                    href = it.href,
+                    displayName = it.displayName,
+                    size = it.contentLength,
+                    lastModified = it.lastModified ?: Instant.EPOCH,
+                )
+            }
+            .sortedByDescending { it.lastModified }
+    }
+
+    /** Download the newest auto-sync snapshot, or null when the folder has
+     *  none yet. */
+    fun pullLatestSync(
+        config: WebDavConfig,
+        client: OkHttpClient = WebDavClient.defaultClient(),
+    ): String? {
+        return listSyncFiles(config, client).firstOrNull()?.let {
+            WebDavClient(config, client)
+                .get(it.displayName)
+                .toString(Charsets.UTF_8)
+        }
     }
 }

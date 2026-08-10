@@ -1077,6 +1077,8 @@
     <string name="browser_downloads_open">열기</string>
     <string name="webdav_section">WebDAV 백업</string>
     <string name="webdav_section_footer">백업을 모든 WebDAV 서버(Nextcloud, 坚果云, Synology 등)에 업로드하고 어느 기기에서든 복원하세요.</string>
+    <string name="multidevice_sync_title">기기 간 자동 동기화</string>
+    <string name="multidevice_sync_sub">WebDAV 서버를 통해 내 기기 간에 설정, 제공자, 메모리를 동기화합니다.</string>
     <string name="webdav_server">서버</string>
     <string name="webdav_server_not_configured">구성되지 않음</string>
     <string name="webdav_upload">백업 업로드</string>

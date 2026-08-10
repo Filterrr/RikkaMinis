@@ -1244,6 +1244,8 @@
     <string name="browser_downloads_open">Открыть</string>
     <string name="webdav_section">Резервное копирование WebDAV</string>
     <string name="webdav_section_footer">Отправляйте резервные копии на любой сервер WebDAV (Nextcloud, 坚果云, Synology…) и восстанавливайте их с любого устройства.</string>
+    <string name="multidevice_sync_title">Автосинхронизация между устройствами</string>
+    <string name="multidevice_sync_sub">Синхронизирует конфигурацию, провайдеров и память между своими устройствами через сервер WebDAV.</string>
     <string name="webdav_server">Сервер</string>
     <string name="webdav_server_not_configured">Не настроено</string>
     <string name="webdav_upload">Загрузить резервную копию</string>

@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Restore
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.History
@@ -29,6 +30,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -118,6 +120,12 @@ fun BackupSettingsScreen(
     var showWebDavConfig by remember { mutableStateOf(false) }
     var showRemoteList by remember { mutableStateOf(false) }
     var webDavBusy by remember { mutableStateOf(false) }
+    // T-multidevice: master switch for auto-syncing light config + memory
+    // across the user's own devices via WebDAV, driven at app foreground by
+    // MinisApp.syncMultiDeviceIfEnabled().
+    var multiDeviceSyncEnabled by remember {
+        mutableStateOf(com.openminis.app.backup.MultiDeviceSync.isEnabled(context))
+    }
     // Mutual-exclusion guard across ALL backup paths (local SAF export, WebDAV
     // upload, and the pre-restore snapshot export). Each path builds the full
     // 70MB+ payload into memory; running two concurrently (e.g. tapping local
@@ -363,6 +371,36 @@ fun BackupSettingsScreen(
             header = stringResource(R.string.webdav_section),
             footer = stringResource(R.string.webdav_section_footer),
         ) {
+            // T-multidevice: auto-sync light config + memory across the user's
+            // own devices via the same WebDAV server. Off by default; when on,
+            // MinisApp triggers syncNow() at app foreground and the settings
+            // screens push after edits. Requires a WebDAV server configured
+            // below.
+            SettingsRow(
+                title = stringResource(R.string.multidevice_sync_title),
+                subtitle = stringResource(R.string.multidevice_sync_sub),
+                icon = Icons.Filled.Sync,
+                onClick = null,
+                showDivider = false,
+                trailing = {
+                    Switch(
+                        checked = multiDeviceSyncEnabled,
+                        onCheckedChange = { checked ->
+                            multiDeviceSyncEnabled = checked
+                            context.getSharedPreferences(
+                                "backup_prefs", android.content.Context.MODE_PRIVATE
+                            ).edit().putBoolean(
+                                com.openminis.app.backup.MultiDeviceSync.PREF_KEY_ENABLED,
+                                checked,
+                            ).apply()
+                            // Flipping it on immediately does a sync cycle so
+                            // the device converges right away, not on next
+                            // foreground.
+                            if (checked) application.syncMultiDeviceIfEnabled()
+                        },
+                    )
+                },
+            )
             SettingsRow(
                 title = stringResource(R.string.webdav_server),
                 subtitle = webDavConfig?.url
