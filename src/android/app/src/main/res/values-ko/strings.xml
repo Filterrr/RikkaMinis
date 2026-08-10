@@ -1130,6 +1130,10 @@
     <string name="input_history_no_match">일치하는 메시지 없음</string>
     <string name="appearance_chat_menu_section_menu">Top-right menu</string>
     <string name="appearance_chat_menu_section_footer">History drawer footer</string>
+    <string name="appearance_chat_menu_section_attach">첨부 (＋) 메뉴</string>
+    <string name="appearance_chat_menu_footer_attach">입력줄의 "＋" 메뉴에 표시할 첨부 작업과 순서를 선택합니다. 모든 작업을 숨기면 "＋" 버튼이 사라지고, 정확히 하나만 남기면 보내기 버튼 옆에 해당 버튼이 직접 표시됩니다.</string>
+    <string name="composer_model_picker_button_title">모델 선택 버튼</string>
+    <string name="composer_model_picker_button_description">입력줄 왼쪽에 위쪽 화살표 원형 버튼을 표시해 모델 선택을 한 번의 탭으로 엽니다. 오른쪽 위 부제의 모델 이름은 어느 경우든 탭할 수 있습니다.</string>
     <string name="chat_menu_pin_to_footer">Pin to footer</string>
     <string name="chat_menu_settings_always_last">Always last</string>
     <string name="back_to_exit_press_again">Press back again to exit</string>

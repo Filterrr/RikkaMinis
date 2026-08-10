@@ -1429,6 +1429,10 @@
     <string name="input_history_no_match">无匹配消息</string>
     <string name="appearance_chat_menu_section_menu">右上角菜单</string>
     <string name="appearance_chat_menu_section_footer">历史抽屉底栏</string>
+    <string name="appearance_chat_menu_section_attach">添加 (＋) 菜单</string>
+    <string name="appearance_chat_menu_footer_attach">选择输入栏 "＋" 菜单中显示的添加操作及其顺序。隐藏所有操作时 "＋" 按钮消失；只保留一个时会直接显示为发送按钮旁的独立按钮。</string>
+    <string name="composer_model_picker_button_title">模型选择按钮</string>
+    <string name="composer_model_picker_button_description">在输入栏左侧显示向上箭头的圆形按钮，一键打开模型选择。右上角副标题中的模型名无论何时都可点击。</string>
     <string name="chat_menu_pin_to_footer">置于底栏</string>
     <string name="chat_menu_settings_always_last">固定最右</string>
     <string name="back_to_exit_press_again">再按一次返回退出</string>

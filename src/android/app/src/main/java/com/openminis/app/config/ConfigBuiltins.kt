@@ -496,6 +496,33 @@ internal object ConfigBuiltins {
                 maxLength = 512,
             )
         )
+        // Attach ("+") menu customization (Settings → Appearance → Chat Menu).
+        // Independent domain from the "..." menu pool: three attach actions each
+        // get one visibility bool plus one order string, all in appearance_prefs
+        // so they round-trip through minis-config and local backups too.
+        for (entryKey in AttachActionCatalog.DEFAULT_ORDER) {
+            r.register(
+                PrefsBoolField(
+                    path = ChatMenuPrefs.attachVisibilityPath(entryKey),
+                    displayName = "Chat attach: show $entryKey",
+                    description = "When ON, the \"$entryKey\" attach action is shown in the composer \"+\" menu.",
+                    prefs = appearancePrefs,
+                    key = ChatMenuPrefs.attachVisibilityKey(entryKey),
+                    defaultValue = true,
+                )
+            )
+        }
+        r.register(
+            PrefsStringField(
+                path = ChatMenuPrefs.ATTACH_ORDER_PATH,
+                displayName = "Chat attach order",
+                description = "Comma-separated stable keys defining the display order of composer attach \"+\" menu actions. Unknown keys are ignored; missing keys fall back to their default position.",
+                prefs = appearancePrefs,
+                key = ChatMenuPrefs.ATTACH_ORDER_KEY,
+                defaultValue = AttachActionCatalog.DEFAULT_ORDER.joinToString(","),
+                maxLength = 256,
+            )
+        )
         // Top-bar pinned-button visibility (independent of the "..." menu pool).
         r.register(
             PrefsBoolField(
@@ -506,6 +533,19 @@ internal object ConfigBuiltins {
                     "Hiding it does not disable the feature — it can still be re-enabled here.",
                 prefs = appearancePrefs,
                 key = "topBar.inputHistory.visible",
+                defaultValue = true,
+            )
+        )
+        // Composer model-picker button visibility (independent fixed slot).
+        r.register(
+            PrefsBoolField(
+                path = "appearance.composer.modelPickerButton",
+                displayName = "Composer: show model-picker button",
+                description = "When ON, the up-arrow circle button appears at the left of the input row " +
+                    "for one-tap access to the model picker. Hiding it does not disable the feature — " +
+                    "the model name in the top-right subtitle stays tappable and opens the same picker.",
+                prefs = appearancePrefs,
+                key = "composer.modelPickerButton.visible",
                 defaultValue = true,
             )
         )

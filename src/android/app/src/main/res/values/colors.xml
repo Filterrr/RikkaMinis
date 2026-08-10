@@ -3,12 +3,16 @@
     <color name="seed">#6750A4</color>
     <!--
       T-android-shortcut-icons-blank: foreground glyph color for the
-      app-icon shortcut adaptive icons. Dark glyph on the light
-      @color/ic_launcher_background (#EFF2F6); the values-night variant
-      flips to a light glyph on the dark night background (#2C3034) so
-      the shortcuts stay legible in both themes. Fixed colors (not theme
-      attrs) because the launcher process renders shortcut icons and
-      can't resolve the app's ?attr tints.
+      app-icon shortcut adaptive icons. The shortcut background is always
+      @color/ic_launcher_background (#05101F — the app icon's dark navy
+      base in BOTH light and dark themes), so the glyph must be a fixed
+      LIGHT color in every theme: a dark glyph would vanish on the dark
+      base, which is exactly the "light theme shows a dark-mode icon"
+      mismatch reported against the previous light/dark flip. One fixed
+      light color keeps the shortcuts legible and visually identical in
+      both themes, matching the app icon's dark-base design. Fixed colors
+      (not theme attrs) because the launcher process renders shortcut
+      icons and can't resolve the app's ?attr tints.
     -->
-    <color name="shortcut_icon_fg">#1F2933</color>
+    <color name="shortcut_icon_fg">#E6E8EB</color>
 </resources>

@@ -1297,6 +1297,10 @@
     <string name="input_history_no_match">Нет совпадений</string>
     <string name="appearance_chat_menu_section_menu">Top-right menu</string>
     <string name="appearance_chat_menu_section_footer">History drawer footer</string>
+    <string name="appearance_chat_menu_section_attach">Меню вложений (＋)</string>
+    <string name="appearance_chat_menu_footer_attach">Выберите, какие действия вложений показывать в меню «＋» поля ввода и их порядок. Если скрыть все действия, кнопка «＋» исчезнет; если останется ровно одно, оно станет отдельной кнопкой рядом с «Отправить».</string>
+    <string name="composer_model_picker_button_title">Кнопка выбора модели</string>
+    <string name="composer_model_picker_button_description">Показывать круглую кнопку со стрелкой вверх слева в строке ввода для открытия выбора модели одним касанием. Название модели в правом верхнем подзаголовке остаётся нажимаемым в любом случае.</string>
     <string name="chat_menu_pin_to_footer">Pin to footer</string>
     <string name="chat_menu_settings_always_last">Always last</string>
     <string name="back_to_exit_press_again">Press back again to exit</string>

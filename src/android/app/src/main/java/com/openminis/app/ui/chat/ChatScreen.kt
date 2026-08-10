@@ -139,6 +139,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Switch
 import com.openminis.app.BuildConfig
 import com.openminis.app.R
+import com.openminis.app.config.AttachActionCatalog
 import com.openminis.app.config.ChatActionCatalog
 import com.openminis.app.config.ChatMenuPrefs
 import com.openminis.app.config.isChatActionAvailable
@@ -5093,13 +5094,21 @@ fun ChatScreen(
                         // resolved-status dot live in the nav-bar subtitle;
                         // this is just a compact trigger that can't be
                         // mistaken for the text field (no long text label).
-                        InputCircleButton(onClick = { showModelPicker = true }) {
-                            Icon(
-                                Icons.Default.KeyboardArrowUp,
-                                contentDescription = stringResource(R.string.model_picker_default_badge),
-                                tint = ChatColors.secondaryText,
-                                modifier = Modifier.size(18.dp),
-                            )
+                        //
+                        // [T-composer-model-picker-hide] Hideable via Settings
+                        // → Appearance → Chat Menu → "Model picker button": the
+                        // nav-bar subtitle (model name + status dot) remains
+                        // tappable and opens the same picker, so hiding this
+                        // button only removes the redundant in-composer trigger.
+                        if (chatActions.composerModelPickerVisible) {
+                            InputCircleButton(onClick = { showModelPicker = true }) {
+                                Icon(
+                                    Icons.Default.KeyboardArrowUp,
+                                    contentDescription = stringResource(R.string.model_picker_default_badge),
+                                    tint = ChatColors.secondaryText,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
                         }
 
                         // The "/" slash-command circle button used to sit here.
@@ -5140,69 +5149,112 @@ fun ChatScreen(
                         // with the send affordance keeps the
                         // "compose -> attach -> send" gesture inside one
                         // thumb arc instead of spanning the full width.
-                        Box {
-                            InputCircleButton(
-                                onClick = { showAttachMenu = true },
-                            ) {
-                                Icon(
-                                    Icons.Default.Add,
-                                    contentDescription = "Attach",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(20.dp),
-                                )
+                        //
+                        // [T-attach-menu-customizable] The "+" menu mirrors
+                        // the top-right "..." menu pattern: the three attach
+                        // actions are individually hideable and reorderable
+                        // from Settings → Appearance → Chat Menu → Attach.
+                        // Rendering follows chatActions.visibleAttachOrder
+                        // (user order filtered by visibility) and converges:
+                        //   • 2+ visible → "+" opens a menu of exactly those;
+                        //   • exactly 1 visible → promoted to a direct
+                        //     InputCircleButton (one tap instead of two,
+                        //     mirroring the "..." menu's soloCustomKey);
+                        //   • 0 visible → no "+" renders at all (it would
+                        //     open an empty menu — a dead control).
+                        // Taps funnel through launchAttach() so the promoted
+                        // button and the menu share one implementation.
+                        val attachKeys = chatActions.visibleAttachOrder
+                        fun launchAttach(key: String) {
+                            when (key) {
+                                AttachActionCatalog.CHOOSE_PHOTOS ->
+                                    mediaPickerLauncher.launch(
+                                        androidx.activity.result.PickVisualMediaRequest(
+                                            ActivityResultContracts.PickVisualMedia.ImageAndVideo,
+                                        ),
+                                    )
+                                AttachActionCatalog.ADD_FILE ->
+                                    // OpenMultipleDocuments takes a mime-
+                                    // type array; "*/*" stays the wildcard.
+                                    filePickerLauncher.launch(arrayOf("*/*"))
+                                AttachActionCatalog.TAKE_PHOTO -> {
+                                    val granted = ContextCompat.checkSelfPermission(
+                                        context,
+                                        android.Manifest.permission.CAMERA,
+                                    ) == PackageManager.PERMISSION_GRANTED
+                                    if (granted) {
+                                        launchCamera()
+                                    } else {
+                                        cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA)
+                                    }
+                                }
                             }
-                            MinisMenu(
-                                expanded = showAttachMenu,
-                                onDismissRequest = { showAttachMenu = false },
-                            ) {
-                                // Order: Choose Photos & Videos / Add File / Take
-                                // Photo. Diverges from the iOS ordering on
-                                // purpose — picking existing media is by far the
-                                // most frequent attach action, so it takes the
-                                // first slot (closest to the thumb, and the
-                                // default highlighted row), while Take Photo is
-                                // the rarest and also the only destructive-ish
-                                // one (it opens the camera and can lose the
-                                // draft on some OEM camera apps), so it sits
-                                // last where it can't be hit by accident.
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.chat_attach_choose_photos_videos)) },
-                                    leadingIcon = { Icon(Icons.Default.PhotoLibrary, contentDescription = null) },
+                        }
+                        // Solo attach key → direct button (no "+" menu).
+                        val soloAttachKey = attachKeys.singleOrNull()
+                        if (attachKeys.isNotEmpty()) {
+                            Box {
+                                InputCircleButton(
                                     onClick = {
-                                        showAttachMenu = false
-                                        mediaPickerLauncher.launch(
-                                            androidx.activity.result.PickVisualMediaRequest(
-                                                ActivityResultContracts.PickVisualMedia.ImageAndVideo,
-                                            ),
-                                        )
-                                    },
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.chat_attach_add_file)) },
-                                    leadingIcon = { Icon(Icons.Default.Description, contentDescription = null) },
-                                    onClick = {
-                                        showAttachMenu = false
-                                        // OpenMultipleDocuments takes a mime-
-                                        // type array; "*/*" stays the wildcard.
-                                        filePickerLauncher.launch(arrayOf("*/*"))
-                                    },
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.chat_attach_take_photo)) },
-                                    leadingIcon = { Icon(Icons.Default.CameraAlt, contentDescription = null) },
-                                    onClick = {
-                                        showAttachMenu = false
-                                        val granted = ContextCompat.checkSelfPermission(
-                                            context,
-                                            android.Manifest.permission.CAMERA,
-                                        ) == PackageManager.PERMISSION_GRANTED
-                                        if (granted) {
-                                            launchCamera()
+                                        if (soloAttachKey != null) {
+                                            launchAttach(soloAttachKey)
                                         } else {
-                                            cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA)
+                                            showAttachMenu = true
                                         }
                                     },
-                                )
+                                ) {
+                                    if (soloAttachKey != null) {
+                                        val soloSpec = AttachActionCatalog.spec(soloAttachKey)
+                                        Icon(
+                                            soloSpec?.icon ?: Icons.Default.Add,
+                                            contentDescription = soloSpec?.let {
+                                                stringResource(it.titleRes)
+                                            } ?: "Attach",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(20.dp),
+                                        )
+                                    } else {
+                                        Icon(
+                                            Icons.Default.Add,
+                                            contentDescription = "Attach",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(20.dp),
+                                        )
+                                    }
+                                }
+                                if (soloAttachKey == null) {
+                                    MinisMenu(
+                                        expanded = showAttachMenu,
+                                        onDismissRequest = { showAttachMenu = false },
+                                    ) {
+                                        // Orders differ per user; the default is
+                                        // Choose Photos & Videos / Add File / Take
+                                        // Photo. Picking existing media is by far
+                                        // the most frequent attach action (first
+                                        // slot, closest to the thumb), while Take
+                                        // Photo is the rarest and also the only
+                                        // destructive-ish one (opens the camera,
+                                        // can lose the draft on some OEM camera
+                                        // apps), so it sits last where it can't be
+                                        // hit by accident — unless the user
+                                        // reorders it in Chat Menu settings.
+                                        for (entryKey in attachKeys) {
+                                            val spec = AttachActionCatalog.spec(entryKey) ?: continue
+                                            key(entryKey) {
+                                                DropdownMenuItem(
+                                                    text = { Text(stringResource(spec.titleRes)) },
+                                                    leadingIcon = {
+                                                        Icon(spec.icon, contentDescription = null)
+                                                    },
+                                                    onClick = {
+                                                        showAttachMenu = false
+                                                        launchAttach(entryKey)
+                                                    },
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
 

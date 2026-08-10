@@ -1,6 +1,7 @@
 package com.openminis.app.ui.settings
 
 import com.openminis.app.R
+import com.openminis.app.config.AttachActionCatalog
 import com.openminis.app.config.ChatActionCatalog
 import com.openminis.app.config.ChatMenuPrefs
 
@@ -31,6 +32,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
@@ -92,6 +94,14 @@ fun ChatMenuSettingsScreen(
             ChatMenuPrefs.settingsPinOrder(prefs),
         )
     }
+    // Section C: composer attach ("+") menu — the three attach actions each
+    // have a visibility Switch; the order defines the "+" menu rendering.
+    // Unlike sections A/B this list is a plain order over AttachActionCatalog.
+    var attachOrder by remember {
+        mutableStateOf(
+            ChatMenuPrefs.resolveAttachOrder(prefs),
+        )
+    }
     var draggingEntry by remember { mutableStateOf<String?>(null) }
     var dragOffset by remember { mutableFloatStateOf(0f) }
     // Tick to trigger Switch state re-read on external prefs changes
@@ -107,14 +117,19 @@ fun ChatMenuSettingsScreen(
         ChatMenuPrefs.writePinOrder(prefs, newOrder)
     }
 
+    fun commitAttachOrder(newOrder: List<String>) {
+        attachOrder = newOrder
+        ChatMenuPrefs.writeAttachOrder(prefs, newOrder)
+    }
+
     SettingsScaffold(
         title = stringResource(R.string.appearance_section_chat_menu),
         onBack = onBack,
         navigation = {},
     ) {
-        // Section 0: Top bar pinned buttons — high-frequency actions always
-        // visible in the top bar (alongside New Chat), independent of the "..."
-        // menu pool.
+        // Section 0: fixed composer/top-bar button visibility — high-frequency
+        // fixed slots, each with a single Switch (few options, kept near the
+        // top). Independent of the "..." menu pool below.
         SettingsSection(
             header = stringResource(R.string.appearance_chat_menu_section_topbar),
             footer = null,
@@ -134,8 +149,64 @@ fun ChatMenuSettingsScreen(
                     prefsTick++
                 },
             )
+            SettingsSwitchRow(
+                title = stringResource(R.string.composer_model_picker_button_title),
+                subtitle = stringResource(R.string.composer_model_picker_button_description),
+                checked = ChatMenuPrefs.isComposerModelPickerVisible(prefs),
+                onCheckedChange = { newValue ->
+                    ChatMenuPrefs.setComposerModelPickerVisible(prefs, newValue)
+                    prefsTick++
+                },
+            )
         }
 
+        // Section C: composer attach ("+") menu
+        SettingsSection(
+            header = stringResource(R.string.appearance_chat_menu_section_attach),
+            footer = stringResource(R.string.appearance_chat_menu_footer_attach),
+        ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                attachOrder.forEachIndexed { index, entryKey ->
+                    key(entryKey) {
+                        AttachActionCatalog.spec(entryKey)?.let { spec ->
+                            DraggableActionRow(
+                                entryKey = entryKey,
+                                icon = spec.icon,
+                                title = stringResource(spec.titleRes),
+                                index = index,
+                                isLast = index == attachOrder.lastIndex,
+                                draggable = true,
+                                rowHeightPx = rowHeightPx,
+                                order = attachOrder,
+                                draggingEntry = draggingEntry,
+                                dragOffset = dragOffset,
+                                onDragStart = { draggingEntry = it; dragOffset = 0f },
+                                onDragEnd = { draggingEntry = null; dragOffset = 0f },
+                                onDragOffsetChange = { dragOffset = it },
+                                onCommitOrder = ::commitAttachOrder,
+                                prefsTick = prefsTick,
+                            ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    Icons.Outlined.DragHandle,
+                                    contentDescription = stringResource(R.string.chat_menu_drag_handle),
+                                    modifier = Modifier.padding(end = 4.dp).size(28.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Switch(
+                                    checked = ChatMenuPrefs.isAttachVisible(prefs, entryKey),
+                                    onCheckedChange = { newValue ->
+                                        ChatMenuPrefs.setAttachVisible(prefs, entryKey, newValue)
+                                        prefsTick++
+                                    },
+                                )
+                            }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         // Section A: top-right "..." menu
         SettingsSection(
             header = stringResource(R.string.appearance_chat_menu_section_menu),
@@ -144,20 +215,23 @@ fun ChatMenuSettingsScreen(
             Column(modifier = Modifier.fillMaxWidth()) {
                 menuOrder.forEachIndexed { index, entryKey ->
                     key(entryKey) {
-                        DraggableActionRow(
-                            entryKey = entryKey,
-                            index = index,
-                            isLast = index == menuOrder.lastIndex,
-                            draggable = true,
-                            rowHeightPx = rowHeightPx,
-                            order = menuOrder,
-                            draggingEntry = draggingEntry,
-                            dragOffset = dragOffset,
-                            onDragStart = { draggingEntry = it; dragOffset = 0f },
-                            onDragEnd = { draggingEntry = null; dragOffset = 0f },
-                            onDragOffsetChange = { dragOffset = it },
-                            onCommitOrder = ::commitMenuOrder,
-                            prefsTick = prefsTick,
+                        ChatActionCatalog.spec(entryKey)?.let { spec ->
+                            DraggableActionRow(
+                                entryKey = entryKey,
+                                icon = spec.icon,
+                                title = stringResource(spec.titleRes),
+                                index = index,
+                                isLast = index == menuOrder.lastIndex,
+                                draggable = true,
+                                rowHeightPx = rowHeightPx,
+                                order = menuOrder,
+                                draggingEntry = draggingEntry,
+                                dragOffset = dragOffset,
+                                onDragStart = { draggingEntry = it; dragOffset = 0f },
+                                onDragEnd = { draggingEntry = null; dragOffset = 0f },
+                                onDragOffsetChange = { dragOffset = it },
+                                onCommitOrder = ::commitMenuOrder,
+                                prefsTick = prefsTick,
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(
@@ -174,6 +248,7 @@ fun ChatMenuSettingsScreen(
                                     },
                                 )
                             }
+                            }
                         }
                     }
                 }
@@ -189,20 +264,23 @@ fun ChatMenuSettingsScreen(
                 footerOrder.forEachIndexed { index, entryKey ->
                     key(entryKey) {
                         val isSettings = entryKey == ChatMenuPrefs.SETTINGS
-                        DraggableActionRow(
-                            entryKey = entryKey,
-                            index = index,
-                            isLast = index == footerOrder.lastIndex,
-                            draggable = !isSettings,
-                            rowHeightPx = rowHeightPx,
-                            order = footerOrder,
-                            draggingEntry = draggingEntry,
-                            dragOffset = dragOffset,
-                            onDragStart = { draggingEntry = it; dragOffset = 0f },
-                            onDragEnd = { draggingEntry = null; dragOffset = 0f },
-                            onDragOffsetChange = { dragOffset = it },
-                            onCommitOrder = ::commitFooterOrder,
-                            prefsTick = prefsTick,
+                        ChatActionCatalog.spec(entryKey)?.let { spec ->
+                            DraggableActionRow(
+                                entryKey = entryKey,
+                                icon = spec.icon,
+                                title = stringResource(spec.titleRes),
+                                index = index,
+                                isLast = index == footerOrder.lastIndex,
+                                draggable = !isSettings,
+                                rowHeightPx = rowHeightPx,
+                                order = footerOrder,
+                                draggingEntry = draggingEntry,
+                                dragOffset = dragOffset,
+                                onDragStart = { draggingEntry = it; dragOffset = 0f },
+                                onDragEnd = { draggingEntry = null; dragOffset = 0f },
+                                onDragOffsetChange = { dragOffset = it },
+                                onCommitOrder = ::commitFooterOrder,
+                                prefsTick = prefsTick,
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 if (isSettings && ChatMenuPrefs.isPinned(prefs, entryKey)) {
@@ -236,11 +314,13 @@ fun ChatMenuSettingsScreen(
                                     },
                                 )
                             }
+                            }
                         }
                     }
                 }
             }
         }
+
     }
 }
 
@@ -254,6 +334,8 @@ fun ChatMenuSettingsScreen(
 @Composable
 private fun DraggableActionRow(
     entryKey: String,
+    icon: ImageVector,
+    title: String,
     index: Int,
     isLast: Boolean,
     draggable: Boolean,
@@ -275,7 +357,6 @@ private fun DraggableActionRow(
     val currentDraggingEntry by rememberUpdatedState(draggingEntry)
     val currentDragOffset by rememberUpdatedState(dragOffset)
     val isDragging = draggingEntry == entryKey
-    val spec = ChatActionCatalog.spec(entryKey) ?: return
 
     // Read prefsTick to establish re-composition dependency when prefs change
     @Suppress("UNUSED_EXPRESSION")
@@ -321,9 +402,9 @@ private fun DraggableActionRow(
             ),
     ) {
         SettingsRow(
-            icon = spec.icon,
+            icon = icon,
             iconColor = MaterialTheme.colorScheme.primary,
-            title = stringResource(spec.titleRes),
+            title = title,
             onClick = null,
             showChevron = false,
             showDivider = !isLast,

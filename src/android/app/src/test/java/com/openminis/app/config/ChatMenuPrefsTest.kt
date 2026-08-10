@@ -340,4 +340,72 @@ class ChatMenuPrefsTest {
         assertEquals(12, result.size)
         assertEquals(ChatMenuPrefs.TERMINAL, result[0])
     }
+
+    // ── Attach ("+") menu domain ──────────────────────────────────────────────
+
+    @Test
+    fun `attach actions default to visible`() {
+        assertTrue(ChatMenuPrefs.defaultAttachVisible(AttachActionCatalog.CHOOSE_PHOTOS))
+        assertTrue(ChatMenuPrefs.defaultAttachVisible(AttachActionCatalog.ADD_FILE))
+        assertTrue(ChatMenuPrefs.defaultAttachVisible(AttachActionCatalog.TAKE_PHOTO))
+    }
+
+    @Test
+    fun `attach visibility roundtrip`() {
+        val prefs = FakePrefs()
+        ChatMenuPrefs.setAttachVisible(prefs, AttachActionCatalog.TAKE_PHOTO, false)
+        assertFalse(ChatMenuPrefs.isAttachVisible(prefs, AttachActionCatalog.TAKE_PHOTO))
+        assertTrue(ChatMenuPrefs.isAttachVisible(prefs, AttachActionCatalog.CHOOSE_PHOTOS))
+        assertTrue(ChatMenuPrefs.isAttachVisible(prefs, AttachActionCatalog.ADD_FILE))
+    }
+
+    @Test
+    fun `resolveAttachOrder on empty prefs yields default attach order`() {
+        val prefs = FakePrefs()
+        assertEquals(AttachActionCatalog.DEFAULT_ORDER, ChatMenuPrefs.resolveAttachOrder(prefs))
+    }
+
+    @Test
+    fun `writeAttachOrder roundtrip preserves order`() {
+        val prefs = FakePrefs()
+        val custom = listOf(
+            AttachActionCatalog.ADD_FILE,
+            AttachActionCatalog.TAKE_PHOTO,
+            AttachActionCatalog.CHOOSE_PHOTOS,
+        )
+        ChatMenuPrefs.writeAttachOrder(prefs, custom)
+        assertEquals(custom, ChatMenuPrefs.resolveAttachOrder(prefs))
+    }
+
+    @Test
+    fun `attach order ignores unknown keys and appends missing`() {
+        val prefs = FakePrefs()
+        ChatMenuPrefs.writeAttachOrder(prefs, listOf("unknown", AttachActionCatalog.TAKE_PHOTO))
+        val result = ChatMenuPrefs.resolveAttachOrder(prefs)
+        // Unknown dropped, TAKE_PHOTO first, the other two appended in default order
+        assertEquals(AttachActionCatalog.TAKE_PHOTO, result[0])
+        assertEquals(AttachActionCatalog.DEFAULT_ORDER.size, result.size)
+        assertTrue(AttachActionCatalog.CHOOSE_PHOTOS in result)
+        assertTrue(AttachActionCatalog.ADD_FILE in result)
+    }
+
+    @Test
+    fun `attach keys never collide with menu pool keys`() {
+        // Domain isolation: attach keys must not appear in the "..." menu pool,
+        // and menu-pool keys must not appear in the attach default order.
+        for (key in AttachActionCatalog.DEFAULT_ORDER) {
+            assertFalse(key in ChatMenuPrefs.ALL_ENTRIES)
+            assertFalse(key in ChatMenuPrefs.DEFAULT_ORDER)
+        }
+    }
+
+    @Test
+    fun `composer model picker button defaults visible and roundtrips`() {
+        val prefs = FakePrefs()
+        assertTrue(ChatMenuPrefs.isComposerModelPickerVisible(prefs))
+        ChatMenuPrefs.setComposerModelPickerVisible(prefs, false)
+        assertFalse(ChatMenuPrefs.isComposerModelPickerVisible(prefs))
+        ChatMenuPrefs.setComposerModelPickerVisible(prefs, true)
+        assertTrue(ChatMenuPrefs.isComposerModelPickerVisible(prefs))
+    }
 }

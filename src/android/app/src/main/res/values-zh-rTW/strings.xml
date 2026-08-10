@@ -867,6 +867,10 @@
     <string name="input_history_no_match">無符合訊息</string>
     <string name="appearance_chat_menu_section_menu">右上角選單</string>
     <string name="appearance_chat_menu_section_footer">歷史抽屜底欄</string>
+    <string name="appearance_chat_menu_section_attach">新增 (＋) 選單</string>
+    <string name="appearance_chat_menu_footer_attach">選擇輸入欄「＋」選單中顯示的新增動作及其順序。隱藏所有動作時「＋」按鈕消失；只保留一個時，會直接顯示為傳送按鈕旁的獨立按鈕。</string>
+    <string name="composer_model_picker_button_title">模型選擇按鈕</string>
+    <string name="composer_model_picker_button_description">在輸入欄左側顯示向上箭頭的圓形按鈕，一鍵開啟模型選擇。右上角副標題中的模型名稱無論何時都可點擊。</string>
     <string name="chat_menu_pin_to_footer">置於底欄</string>
     <string name="chat_menu_settings_always_last">固定最右</string>
     <string name="back_to_exit_press_again">再按一次返回退出</string>
