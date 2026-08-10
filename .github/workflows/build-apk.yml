@@ -143,7 +143,7 @@ jobs:
       #     upgrade-installable over the previous one AND distinguishable.
       #   - MINIS_VERSION_NAME_SUFFIX: "-beta.<run>" so sideloaders can tell
       #     builds apart from the version shown in the app's About page.
-      # Local builds keep the hardcoded 22 / "0.22-preview".
+      # Local builds keep the hardcoded 22 / "1.0.0".
       - name: Inject build version
         run: |
           VC=$((220000000 + GITHUB_RUN_NUMBER))
@@ -232,9 +232,9 @@ jobs:
       - name: Stage release asset
         id: stage
         run: |
-          VN="0.22-preview${MINIS_VERSION_NAME_SUFFIX:-}"
+          VN="1.0.0${MINIS_VERSION_NAME_SUFFIX:-}"
           VC="${MINIS_VERSION_CODE:-22}"
-          OUT="RikkaMinis-0.22-preview-arm64-v8a.apk"
+          OUT="RikkaMinis-arm64-v8a.apk"
           cp src/android/app/build/outputs/apk/release/app-release.apk "$OUT"
           echo "version=$VN" >> "$GITHUB_OUTPUT"
           echo "versionCode=$VC" >> "$GITHUB_OUTPUT"
