@@ -26,6 +26,15 @@ jobs:
         with:
           submodules: recursive
 
+      # Pre-build static scan gate: four-way sync, i18n orphan keys, bare
+      # valueOf. Fails the build early on structural data-loss bugs that the
+      # compiler cannot catch. Runs before JDK/SDK setup — pure Python, no
+      # toolchain needed.
+      - name: Run pre-build scan gate
+        run: |
+          python3 --version || (echo "::error::python3 is required for the scan gate" && exit 1)
+          sh scripts/scan/scan.sh
+
       - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:
