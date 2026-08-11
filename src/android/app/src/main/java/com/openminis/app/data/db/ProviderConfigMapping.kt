@@ -198,8 +198,16 @@ fun ProviderConfigSnapshot.toProviderConfig(jsonForBlobs: Json): ProviderConfig 
         ProviderInstance(
             id = row.id,
             label = row.label,
-            providerType = ProviderType.valueOf(row.providerType),
-            credentialType = ProviderCredential.valueOf(row.credentialType),
+            providerType = runCatching { ProviderType.valueOf(row.providerType) }
+                .getOrElse { ProviderType.anthropic },
+            // [T-android-enum-safe-parse] Safe parse: an unknown enum name
+            // persisted by a NEWER build must not throw — it would blow up the
+            // whole DB load, fall back to the JSON mirror (which fails
+            // identically on the same value), and wipe providers/groups from
+            // the UI. Same rationale as ThinkingLevel.decoded() below and
+            // ImageEndpointMode's runCatching above. Unknown → first value.
+            credentialType = runCatching { ProviderCredential.valueOf(row.credentialType) }
+                .getOrElse { ProviderCredential.apiKey },
             isEnabled = row.isEnabled != 0,
             createdAt = row.createdAt,
             customBaseURL = row.customBaseURL,
@@ -245,9 +253,17 @@ fun ProviderConfigSnapshot.toProviderConfig(jsonForBlobs: Json): ProviderConfig 
             memberEntryIds = jsonForBlobs
                 .decodeFromString(stringListSerializer, row.memberEntryIdsJson)
                 .toMutableList(),
-            strategy = RoutingStrategy.valueOf(row.strategy),
-            fallbackStrategy = FallbackStrategy.valueOf(row.fallbackStrategy),
-            recovery = RecoveryStrategy.valueOf(row.recovery),
+            // [T-android-enum-safe-parse] Safe parse — same rationale as the
+            // ThinkingLevel.decoded() note below: an unknown strategy name
+            // from a NEWER build must not throw and blow up the whole DB load.
+            // Unknown → first value (fallback / default / continueLast),
+            // matching the pre-existing semantics those defaults had.
+            strategy = runCatching { RoutingStrategy.valueOf(row.strategy) }
+                .getOrElse { RoutingStrategy.fallback },
+            fallbackStrategy = runCatching { FallbackStrategy.valueOf(row.fallbackStrategy) }
+                .getOrElse { FallbackStrategy.default },
+            recovery = runCatching { RecoveryStrategy.valueOf(row.recovery) }
+                .getOrElse { RecoveryStrategy.continueLast },
             // [T-android-thinking-level-arch] decoded() (not valueOf()) so a
             // level string a NEWER build persisted (e.g. "MAX"/"ULTRA") can't
             // throw and blow up the whole DB load — which would fall back to the
