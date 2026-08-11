@@ -242,6 +242,76 @@ class ConfigBackupPayloadTest {
     }
 
     @Test
+    fun `toolResult output is truncated and snapshot preview dropped`() {
+        val huge = "x".repeat(10_000)
+        val json = """
+            [
+              {"type":"text","value":"keep me"},
+              {"type":"toolResult","value":{
+                  "toolUseId":"call_1",
+                  "name":"shell_execute",
+                  "success":true,
+                  "output":"$huge",
+                  "snapshot":{"type":"text","text":"$huge"}
+              }}
+            ]
+        """.trimIndent()
+
+        val out = ConfigBackup.sanitizeChatParts(json)
+        assertNotNull(out)
+        val arr = JSONArray(out!!)
+        assertEquals(2, arr.length())
+        val tr = arr.getJSONObject(1).getJSONObject("value")
+        assertTrue("snapshot must be dropped from backup",
+            !tr.has("snapshot"))
+        val output = tr.optString("output")
+        assertTrue("output must be truncated to cap",
+            output.length <= ConfigBackup.MAX_BACKUP_TOOL_OUTPUT_CHARS + 64)
+        assertTrue("truncated output must carry a marker",
+            output.contains("truncated"))
+        assertEquals("toolUseId must survive", "call_1", tr.optString("toolUseId"))
+        assertEquals("name must survive", "shell_execute", tr.optString("name"))
+        assertTrue("small toolResult output stays intact",
+            "keep me" in (0 until arr.length()).map { arr.getJSONObject(it).optString("value") })
+    }
+
+    @Test
+    fun `small toolResult output is left untouched`() {
+        val json = """
+            [
+              {"type":"toolResult","value":{
+                  "toolUseId":"call_9",
+                  "name":"shell_execute",
+                  "success":true,
+                  "output":"tiny output",
+                  "snapshot":{"type":"text","text":"tiny output"}
+              }}
+            ]
+        """.trimIndent()
+        val out = ConfigBackup.sanitizeChatParts(json)
+        assertNotNull(out)
+        val arr = JSONArray(out!!)
+        val tr = arr.getJSONObject(0).getJSONObject("value")
+        assertTrue(!tr.has("snapshot"))
+        assertEquals("tiny output", tr.optString("output"))
+    }
+
+    @Test
+    fun `reasoning content is capped at backup limit`() {
+        val short = "short reasoning"
+        assertEquals(short, ConfigBackup.capReasoningContent(short))
+        assertNull(ConfigBackup.capReasoningContent(null))
+        assertNull(ConfigBackup.capReasoningContent(""))
+        assertTrue(ConfigBackup.capReasoningContent("") == null)
+
+        val long = "r".repeat(ConfigBackup.MAX_BACKUP_REASONING_CHARS + 500)
+        val capped = ConfigBackup.capReasoningContent(long)
+        assertNotNull(capped)
+        assertTrue("long reasoning must be cut", capped!!.length < long.length)
+        assertTrue("marker must be present", capped.contains("truncated"))
+    }
+
+    @Test
     fun `chat window of zero yields no history in export payload`() {
         // chatWindowDays <= 0 is the "off" switch: the export must carry the
         // chatSessions/chatMessages keys (so the reader knows the section was

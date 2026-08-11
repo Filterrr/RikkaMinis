@@ -374,7 +374,7 @@ object ConfigBackup {
                         put("partsJson", cleaned)
                         put("createdAt", message.createdAt)
                         put("sortOrder", message.sortOrder)
-                        put("reasoningContent", message.reasoningContent)
+                        put("reasoningContent", capReasoningContent(message.reasoningContent))
                     })
                 }
             }
@@ -1055,6 +1055,19 @@ object ConfigBackup {
     /** Hard cap on messages carried per session in a chat-history backup. */
     internal const val MAX_CHAT_MESSAGES_PER_SESSION = 200
 
+    /** [T-backup-chat-slim] Tool outputs in backups are truncated to this
+     *  many characters. Full tool results are transient execution traces —
+     *  on another device they are rarely useful at full size, and they are
+     *  the dominant cost of a chat-history backup (measured: ~22MB of a
+     *  67MB chatMessages payload on 2026-08-11). */
+    internal const val MAX_BACKUP_TOOL_OUTPUT_CHARS = 500
+
+    /** [T-backup-chat-slim] Model reasoning chains are capped at this many
+     *  characters per message. Reasoning is a nice-to-have on restore, not
+     *  a payload that justifies megabytes (measured: ~7.4MB across 29k
+     *  messages). */
+    internal const val MAX_BACKUP_REASONING_CHARS = 2000
+
     /** [fix-audit-p0-3] How many pre-restore snapshots to keep on disk.
      *  Rollback candidates; older ones are pruned by [writeSnapshot]. */
     const val SNAPSHOT_KEEP = 5
@@ -1130,9 +1143,34 @@ object ConfigBackup {
                 if (cleaned.isBlank()) continue
                 el.put("value", cleaned)
             }
+            if (type == "toolResult" || type == "tool_result") {
+                val value = el.optJSONObject("value") ?: el
+                // Drop the snapshot preview: it duplicates the tail of
+                // output and no UI code reads it (verified 2026-08-11).
+                value.remove("snapshot")
+                val output = value.optString("output")
+                if (output.length > MAX_BACKUP_TOOL_OUTPUT_CHARS) {
+                    value.put(
+                        "output",
+                        output.take(MAX_BACKUP_TOOL_OUTPUT_CHARS) +
+                            "\n… [truncated ${output.length - MAX_BACKUP_TOOL_OUTPUT_CHARS} chars]"
+                    )
+                }
+            }
             kept.put(el)
         }
         return if (kept.length() == 0) null else kept.toString()
+    }
+
+    /** [T-backup-chat-slim] Cuts model reasoning content to a sane size.
+     *  Full reasoning chains are nice on restore but not worth megabytes:
+     *  after [MAX_BACKUP_REASONING_CHARS] the rest cannot meaningfully
+     *  change a restored conversation. Pure so it is JVM-testable. */
+    internal fun capReasoningContent(rc: String?): String? {
+        if (rc.isNullOrBlank()) return rc
+        if (rc.length <= MAX_BACKUP_REASONING_CHARS) return rc
+        return rc.take(MAX_BACKUP_REASONING_CHARS) +
+            "\n… [truncated ${rc.length - MAX_BACKUP_REASONING_CHARS} chars]"
     }
 
     /** Default filename for a fresh export, e.g. `rikkaminis-backup-20260802.json`. */
