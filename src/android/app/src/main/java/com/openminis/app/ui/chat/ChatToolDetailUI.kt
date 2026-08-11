@@ -567,7 +567,12 @@ internal fun ToolDetailSheet(
                                             color = Color(0xFF34C759),  // iOS .green
                                         )
                                         Text(
-                                            text = sheetMonitor.formattedMem(),
+                                            // compact: shows only this process's PSS (e.g. "MEM 0.2G").
+                                            // The full form's denominator (totalMem = whole-device RAM)
+                                            // reads like an app-usable budget but isn't — Java heap is
+                                            // capped (~512MB largeHeap), native is guarded separately.
+                                            // Keep both HUDs identical to the thumbnail ribbon.
+                                            text = sheetMonitor.formattedMem(compact = true),
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.Medium,
                                             fontFamily = FontFamily.Monospace,
