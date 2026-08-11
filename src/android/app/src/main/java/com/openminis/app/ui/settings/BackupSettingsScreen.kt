@@ -519,27 +519,33 @@ fun BackupSettingsScreen(
                                 chatWindowDays = chatWindowDays,
                             )
                         }
-                        withContext(Dispatchers.IO) {
-                            val cfg = webDavConfig ?: run {
-                                withContext(Dispatchers.Main) {
-                                    errorMessage = context.getString(R.string.webdav_server_not_configured)
-                                }
-                                return@launch
-                            }
-                            WebDavSync.backup(
-                                config = cfg,
-                                payload = payload,
-                                client = webDavHttpClient,
-                            )
-                        }
-                        withContext(Dispatchers.Main) {
-                            val msg = context.getString(R.string.webdav_uploaded)
-                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                        // Resolve config on Main (it reads SharedPreferences and
+                        // Compose state); bail with an inline error if unset.
+                        val cfg = webDavConfig
+                        if (cfg == null) {
+                            errorMessage = context.getString(R.string.webdav_server_not_configured)
                             notifier.notifyWorkCompleted(
                                 tag = "webdav-upload",
-                                title = context.getString(R.string.webdav_notify_title),
-                                body = msg,
+                                title = context.getString(R.string.webdav_notify_title_failed),
+                                body = context.getString(R.string.webdav_server_not_configured),
                             )
+                        } else {
+                            withContext(Dispatchers.IO) {
+                                WebDavSync.backup(
+                                    config = cfg,
+                                    payload = payload,
+                                    client = webDavHttpClient,
+                                )
+                            }
+                            withContext(Dispatchers.Main) {
+                                val msg = context.getString(R.string.webdav_uploaded)
+                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                notifier.notifyWorkCompleted(
+                                    tag = "webdav-upload",
+                                    title = context.getString(R.string.webdav_notify_title),
+                                    body = msg,
+                                )
+                            }
                         }
                     } catch (t: Throwable) {
                         withContext(Dispatchers.Main) {
