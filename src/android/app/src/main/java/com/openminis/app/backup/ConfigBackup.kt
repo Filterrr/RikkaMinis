@@ -116,6 +116,7 @@ object ConfigBackup {
         mcpRepo: MCPRepository? = null,
         chatRepo: ChatRepository? = null,
         chatWindowDays: Int = 90,
+        includeHiddenModels: Boolean = true,
     ): String {
         val registry = ConfigRegistry.get()
 
@@ -167,8 +168,41 @@ object ConfigBackup {
             // uuid positionally. `_`-prefixed to signal a backup-layer annotation;
             // importInstanceJSON ignores unknown keys, so the provider wire
             // format is untouched.
+            //
+            // [T-sync-hide-prune] When includeHiddenModels=false (multi-device
+            // auto-sync snapshots), hidden non-custom models are part of the
+            // provider's *public catalog cache*, not the user's state — they are
+            // re-pullable from the provider's /models endpoint and account for
+            // the bulk of the payload (an OpenRouter catalog can be hundreds of
+            // entries). Dropping them shrinks the snapshot to (connection +
+            // visible models + custom models) + their overrides, and keeps the
+            // sibling device from learning models the user never selected. The
+            // `models` array and `_entryIds` MUST be filtered in lockstep — they
+            // are positional-paired (visible first, then hidden) for import's
+            // old→new uuid remap. [filterHiddenModels] handles both sides.
             val entryIds = JSONArray()
-            for (id in orderedEntryIds(providerRepo, instance.id)) entryIds.put(id)
+            if (includeHiddenModels) {
+                for (id in orderedEntryIds(providerRepo, instance.id)) entryIds.put(id)
+            } else {
+                val dropped = dropHiddenModelIds(providerRepo, instance.id)
+                val srcModels = obj.optJSONArray("models")
+                if (srcModels != null) {
+                    val visibleModels = JSONArray()
+                    for (k in 0 until srcModels.length()) {
+                        val m = srcModels.getJSONObject(k)
+                        if (dropped.contains(m.optString("modelId", ""))) continue
+                        visibleModels.put(m)
+                    }
+                    obj.put("models", visibleModels)
+                }
+                for (id in orderedEntryIds(providerRepo, instance.id)) {
+                    val entry = providerRepo.config.value.modelEntries
+                        .find { it.id == id } ?: continue
+                    val modelId = entry.baseModel.id
+                    if (dropped.contains(modelId)) continue
+                    entryIds.put(id)
+                }
+            }
             obj.put("_entryIds", entryIds)
             providers.put(obj)
         }
@@ -380,6 +414,21 @@ object ConfigBackup {
             it.providerInstanceId == instanceId && it.isHidden
         }
         return (visible + hidden).map { it.id }
+    }
+
+    /**
+     * Returns the set of base-model ids to DROP from a sync snapshot.
+     * See [isCatalogCacheModel] for the decision rule.
+     */
+    internal fun dropHiddenModelIds(
+        providerRepo: ProviderRepository,
+        instanceId: String,
+    ): Set<String> {
+        return providerRepo.config.value.modelEntries
+            .asSequence()
+            .filter { it.providerInstanceId == instanceId && isCatalogCacheModel(it.isHidden, it.isCustom) }
+            .map { it.baseModel.id }
+            .toSet()
     }
 
     /**
@@ -1077,3 +1126,16 @@ object ConfigBackup {
         return "rikkaminis-backup-${fmt.format(java.util.Date(now))}.json"
     }
 }
+
+/**
+ * [T-sync-hide-prune] Pure predicate deciding whether a model entry is part of
+ * a provider's *public catalog cache* (hidden & not user-created) and should
+ * therefore be excluded from an auto-sync snapshot / local retention. Hidden
+ * custom models are user data and stay; hidden plain catalog entries are
+ * re-pullable from the provider's /models endpoint and are dropped so a
+ * snapshot carries only the user's selections, never the full catalog. Kept a
+ * top-level function so the decision logic is JVM-unit-testable without an
+ * Android [ProviderRepository].
+ */
+internal fun isCatalogCacheModel(isHidden: Boolean, isCustom: Boolean): Boolean =
+    isHidden && !isCustom
