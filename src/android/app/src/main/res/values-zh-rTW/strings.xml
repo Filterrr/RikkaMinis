@@ -558,6 +558,7 @@
     <string name="backup_err_generate">產生備份失敗：%1$s</string>
     <string name="backup_err_read">無法讀取所選檔案</string>
     <string name="backup_err_import">匯入失敗</string>
+    <string name="backup_err_busy">備份或還原正在進行中，請等待其完成</string>
     <string name="backup_err_title">發生錯誤</string>
     <string name="backup_done_summary">已匯入 %1$d 項設定、%2$d 個提供商。</string>
     <string name="backup_done_groups">已還原 %1$d 個模型分組。</string>

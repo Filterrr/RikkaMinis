@@ -176,7 +176,17 @@ fun BackupSettingsScreen(
     // after a mistaken restore. Best-effort: a failed snapshot never blocks
     // the restore, it only reports via snapshotNote.
     // Declared before the launchers below because their callbacks invoke it.
-    val restoreWithSnapshot: (String) -> Unit = { json ->
+    val restoreWithSnapshot: (String) -> Unit = doRestore@{ json ->
+        // [fix restore-mutex] Reject a restore while any backup/restore path is
+        // already in flight. The pre-restore snapshot export builds another full
+        // 70MB+ payload; two such exports concurrently (e.g. restoring while a
+        // local backup upload is running) stacks two payloads and blows the
+        // 512MB heap. This is the last line of defense behind the button-level
+        // guards — the snapshot-restore dialog and WebDAV sheet reach here too.
+        if (backupBusy || webDavBusy) {
+            errorMessage = context.getString(R.string.backup_err_busy)
+            return@doRestore
+        }
         snapshotNote = null
         webDavBusy = true
         // Restore must complete even if the user navigates away; run on the
@@ -341,7 +351,7 @@ fun BackupSettingsScreen(
                 title = stringResource(R.string.backup_import),
                 subtitle = stringResource(R.string.backup_import_sub),
                 icon = Icons.Default.Upload,
-                onClick = { importLauncher.launch(arrayOf("application/json", "*/*")) },
+                onClick = if (backupBusy || webDavBusy) null else ({ importLauncher.launch(arrayOf("application/json", "*/*")) }),
                 showDivider = false,
             )
         }
