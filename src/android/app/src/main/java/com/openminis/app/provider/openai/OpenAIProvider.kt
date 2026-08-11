@@ -699,6 +699,7 @@ class OpenAIProvider private constructor(
         var toolCallEventCount = 0
         var sawFinishReason = false
         var sawUsageBlock = false
+        var lastUsageJson: JSONObject? = null
 
         try {
             send(LLMStreamChunk.Started)
@@ -745,7 +746,9 @@ class OpenAIProvider private constructor(
                     )
                     continue
                 }
-                android.util.Log.d("ToolChain[Provider]", "RAW SSE: $payload")
+                if (com.openminis.app.BuildConfig.DEBUG) {
+                    android.util.Log.d("ToolChain[Provider]", "RAW SSE: $payload")
+                }
                 sseEventCount++
 
                 // T321: per-event delta-field summary. Only counts/lengths,
@@ -947,10 +950,7 @@ class OpenAIProvider private constructor(
                             }
                             resp?.optJSONObject("usage")?.let { usage ->
                                 sawUsageBlock = true
-                                com.openminis.app.logging.AppLogger.info(
-                                    "OpenAIProvider",
-                                    "[T321] Responses usage block: $usage"
-                                )
+                                lastUsageJson = usage
                                 send(LLMStreamChunk.Usage(parseResponsesAPIUsage(usage)))
                             }
                         }
@@ -1063,10 +1063,7 @@ class OpenAIProvider private constructor(
 
                     event.optJSONObject("usage")?.let { usage ->
                         sawUsageBlock = true
-                        com.openminis.app.logging.AppLogger.info(
-                            "OpenAIProvider",
-                            "[T321] usage block: $usage"
-                        )
+                        lastUsageJson = usage
                         send(LLMStreamChunk.Usage(parseChatCompletionsUsage(usage)))
                     }
                 }
@@ -1109,6 +1106,14 @@ class OpenAIProvider private constructor(
                 }
             }
             responsesToolCalls.clear()
+
+            // Final usage summary — printed once at stream end instead of per-delta.
+            if (lastUsageJson != null) {
+                com.openminis.app.logging.AppLogger.info(
+                    "OpenAIProvider",
+                    "[T321] usage final: $lastUsageJson"
+                )
+            }
 
             // T321: stream ended — final tally + warning if we never saw a
             // finish_reason. The latter is the strongest signal of a server-
