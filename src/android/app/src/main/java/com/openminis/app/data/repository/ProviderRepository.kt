@@ -39,6 +39,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 // Modality bit layout — must match src/ios/Providers/LLMTypes.swift
@@ -97,6 +98,13 @@ class ProviderRepository(private val context: Context) {
 
         /** Per-instance `lastFetchAt` pref key. */
         private fun lastFetchKey(instanceId: String) = "modelsLastFetchAt_$instanceId"
+
+        /** [T-sync-hide-prune] Retained overrides for pruned hidden models. */
+        private const val RETIRED_OVERRIDES_KEY = "retired_hidden_overrides"
+        /** [T-sync-hide-prune] baseModel.id → last /models sighting (ms). */
+        private const val CATALOG_SEEN_AT_KEY = "catalog_seen_at"
+        /** [T-sync-hide-prune] Hidden non-custom models not re-seen for this long are pruned locally. */
+        private const val HIDDEN_MODEL_PRUNE_TTL_MS = 7 * 24 * 60 * 60 * 1000L
 
         /** [T-newchat-default-model-fallback-android] Global last-used model entry id. */
         private const val KEY_LAST_USED_ENTRY = "lastUsedModelEntryId"
@@ -180,6 +188,94 @@ class ProviderRepository(private val context: Context) {
      */
     fun invalidateModelCache(instanceId: String) {
         prefs.edit().remove(lastFetchKey(instanceId)).apply()
+    }
+
+    // ── [T-sync-hide-prune] Hidden-model catalog retention ───────────────
+    //
+    // Hidden non-custom models are part of a provider's *public catalog
+    // cache*, not user state: refreshModels() re-pulls them from /models on
+    // demand, and they dominate local modelEntries (an OpenRouter catalog can
+    // be hundreds of entries). They also dominate exported sync snapshots.
+    //
+    // Strategy: hidden non-custom models that stopped appearing in /models
+    // for [HIDDEN_MODEL_PRUNE_TTL_MS] are pruned from local storage. Their
+    // user-tuned overrides (contextWindow / maxOutputTokens / displayName /
+    // modalities) are retained in a small persisted map keyed by base model
+    // id — [takeRetiredOverrides] re-applies them when the model reappears at
+    // the next refresh, so a pruned model never silently loses the user's
+    // tuning. Custom models are NEVER pruned (they're user-created data, not
+    // catalog cache).
+    //
+    // `catalogSeenAt` is stamped whenever a model id shows up in [replaceEntries]
+    // (i.e. a /models refresh). Pruning only touches ids whose stamp is older
+    // than the TTL — so a freshly-refreshed catalog is never thrashed.
+
+    /** Returns the retained overrides for a model id, removing the entry. */
+    private fun takeRetiredOverrides(modelId: String): ModelOverrides {
+        val retired = retiredOverridesMap()
+        val overrides = retired.remove(modelId) ?: return ModelOverrides()
+        prefs.edit()
+            .putString(RETIRED_OVERRIDES_KEY, json.encodeToString(RetiredOverridesBlob.serializer(), RetiredOverridesBlob(retired)))
+            .apply()
+        return overrides
+    }
+
+    private fun retiredOverridesMap(): MutableMap<String, ModelOverrides> {
+        val raw = prefs.getString(RETIRED_OVERRIDES_KEY, null) ?: return mutableMapOf()
+        return runCatching {
+            json.decodeFromString(RetiredOverridesBlob.serializer(), raw).map.toMutableMap()
+        }.getOrElse { mutableMapOf() }
+    }
+
+    /**
+     * Prune hidden non-custom models whose catalog entry hasn't been seen in
+     * [HIDDEN_MODEL_PRUNE_TTL_MS]. Retains their overrides in the retired map
+     * so a later refresh re-applies them. Call after model refresh paths (and
+     * opportunistically at startup). Returns the number of pruned entries.
+     */
+    fun pruneStaleHiddenModels(): Int = synchronized(configLock) {
+        ensureConfigLoaded()
+        val now = System.currentTimeMillis()
+        val seenAt = parseSeenAtMap()
+        val prunable = _config.value.modelEntries.filter { e ->
+            isPrunableCatalogCache(
+                isHidden = e.isHidden,
+                isCustom = e.isCustom,
+                elapsedMs = now - (seenAt[e.baseModel.id] ?: 0L),
+                ttlMs = HIDDEN_MODEL_PRUNE_TTL_MS,
+            )
+        }
+        if (prunable.isEmpty()) return@synchronized 0
+        val retained = retiredOverridesMap()
+        val prunedIds = mutableSetOf<String>()
+        for (e in prunable) {
+            if (!e.overrides.isEmpty) retained[e.baseModel.id] = e.overrides
+            prunedIds.add(e.id)
+        }
+        val config = mutationSnapshot(_config.value)
+        config.modelEntries.removeAll { it.id in prunedIds }
+        // Persist both the pruned list and the retained overrides atomically-ish.
+        prefs.edit()
+            .putString(RETIRED_OVERRIDES_KEY, json.encodeToString(RetiredOverridesBlob.serializer(), RetiredOverridesBlob(retained)))
+            .putString(CATALOG_SEEN_AT_KEY, json.encodeToString(CatalogSeenAtBlob.serializer(), CatalogSeenAtBlob(pruneSeenAtMap(seenAt, prunable))))
+            .apply()
+        saveConfig(config)
+        prunable.size
+    }
+
+    private fun parseSeenAtMap(): MutableMap<String, Long> {
+        val raw = prefs.getString(CATALOG_SEEN_AT_KEY, null) ?: return mutableMapOf()
+        return runCatching {
+            json.decodeFromString(CatalogSeenAtBlob.serializer(), raw).map.toMutableMap()
+        }.getOrElse { mutableMapOf() }
+    }
+
+    private fun pruneSeenAtMap(
+        seenAt: MutableMap<String, Long>,
+        prunable: List<ModelEntry>,
+    ): Map<String, Long> {
+        for (e in prunable) seenAt.remove(e.baseModel.id)
+        return seenAt
     }
 
     private val encryptedPrefs: SharedPreferences by lazy {
@@ -955,7 +1051,7 @@ class ProviderRepository(private val context: Context) {
             ModelEntry(
                 providerInstanceId = instanceId,
                 baseModel = resolved,
-                overrides = prior?.overrides ?: ModelOverrides(),
+                overrides = prior?.overrides ?: takeRetiredOverrides(model.id),
                 isCustom = false,
                 // [T-provider-default-hidden] Newly refreshed models come in hidden by
                 // default — mirrors rikkahub "pull everything, show the chosen
@@ -1024,8 +1120,27 @@ class ProviderRepository(private val context: Context) {
         }
 
         saveConfig(config)
+        // [T-sync-hide-prune] Refresh success means every returned model id was
+        // just seen in the live catalog. Stamp catalogSeenAt for them so the TTL
+        // prune above doesn't immediately reap freshly-fetched entries. Pruning
+        // only targets ids whose stamp is older than the TTL (i.e. no longer in
+        // /models) — so this both keeps their cache warm and anchors the prune.
+        stampCatalogSeenAt(models.map { it.id })
+        // Also prune opportunistically now that the catalog is fresh.
+        pruneStaleHiddenModels()
         // Stamp so staleness checks know this instance just refreshed.
         markInstanceFetched(instanceId)
+    }
+
+    /** Record the current time as the last catalog sighting for [modelIds]. */
+    private fun stampCatalogSeenAt(modelIds: List<String>) {
+        if (modelIds.isEmpty()) return
+        val seenAt = parseSeenAtMap()
+        val now = System.currentTimeMillis()
+        for (id in modelIds) seenAt[id] = now
+        prefs.edit()
+            .putString(CATALOG_SEEN_AT_KEY, json.encodeToString(CatalogSeenAtBlob.serializer(), CatalogSeenAtBlob(seenAt)))
+            .apply()
     }
 
     // --- Model Entry management ---
@@ -2382,3 +2497,37 @@ enum class ModelRefreshResult {
     /** All known sources failed. */
     FAILURE,
 }
+
+/**
+ * [T-sync-hide-prune] A model is prunable when it's catalog-cache (hidden &
+ * non-custom) AND its last catalog sighting is older than the TTL. Hidden
+ * custom models and freshly-seen catalog entries are never pruned. Top-level
+ * so the staleness rule is JVM-unit-testable.
+ */
+internal fun isPrunableCatalogCache(
+    isHidden: Boolean,
+    isCustom: Boolean,
+    elapsedMs: Long,
+    ttlMs: Long,
+): Boolean = isHidden && !isCustom && elapsedMs > ttlMs
+
+/**
+ * [T-sync-hide-prune] Serializable wrapper for the retained-overrides blob
+ * (model id → tuned overrides of pruned hidden models). Wrapped in a
+ * @Serializable data class instead of a bare Map so kotlinx can resolve the
+ * serializer at compile time.
+ */
+@Serializable
+internal data class RetiredOverridesBlob(
+    val map: Map<String, ModelOverrides> = emptyMap(),
+)
+
+/**
+ * [T-sync-hide-prune] Serializable wrapper for the catalog-seen-at blob
+ * (base model id → last /models sighting epoch ms). Wrapped for the same
+ * compile-time serializer resolution as [RetiredOverridesBlob].
+ */
+@Serializable
+internal data class CatalogSeenAtBlob(
+    val map: Map<String, Long> = emptyMap(),
+)

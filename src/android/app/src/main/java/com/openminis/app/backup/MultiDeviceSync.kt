@@ -70,6 +70,12 @@ object MultiDeviceSync {
         // NOTE: chatWindowDays is irrelevant here (no chatRepo) but kept to a
         // non-zero default for symmetry; passing 0 explicitly documents the
         // intent that chat is never part of an auto-sync snapshot.
+        //
+        // includeHiddenModels=false: a sync snapshot carries only what the user
+        // actually selected (visible + custom models), never the provider's
+        // full public catalog cache. Hidden non-custom models are re-pullable
+        // from the provider's /models endpoint, dominate the payload size, and
+        // must not leak to sibling devices as if they were user state. [T-sync-hide-prune]
         return ConfigBackup.export(
             providerRepo = providerRepo,
             includeSecrets = includeSecrets,
@@ -79,6 +85,7 @@ object MultiDeviceSync {
             mcpRepo = null,            // MCP excluded (OAuth needs re-auth)
             chatRepo = null,           // chat excluded (per-device audit copy)
             chatWindowDays = 0,
+            includeHiddenModels = false,
         )
     }
 
