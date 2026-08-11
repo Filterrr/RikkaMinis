@@ -1148,6 +1148,7 @@
     <string name="backup_snapshot_restore_confirm_text">Die aktuelle Konfiguration wird durch den Snapshot vom %1$s ersetzt. Zuvor wird ein neuer Snapshot der aktuellen Konfiguration gespeichert.</string>
     <string name="backup_snapshot_restore">Wiederherstellen</string>
     <string name="backup_done_fatal">Wiederherstellung fehlgeschlagen — die Konfiguration wurde nur teilweise wiederhergestellt. Stellen Sie über einen Snapshot wieder her.</string>
+    <string name="backup_err_busy">Eine Sicherung oder Wiederherstellung läuft bereits — bitte warten Sie, bis sie abgeschlossen ist.</string>
     <!-- 英文兜底 (2026-08-08) -->
     <string name="model_group_name_saved">Name saved</string>
     <string name="model_group_routing_fallback_footer">Try models in order. If one fails, advance to the next.</string>
