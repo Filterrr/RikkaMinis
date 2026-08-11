@@ -1167,7 +1167,7 @@ object ConfigBackup {
      *  after [MAX_BACKUP_REASONING_CHARS] the rest cannot meaningfully
      *  change a restored conversation. Pure so it is JVM-testable. */
     internal fun capReasoningContent(rc: String?): String? {
-        if (rc.isNullOrBlank()) return rc
+        if (rc.isNullOrBlank()) return null
         if (rc.length <= MAX_BACKUP_REASONING_CHARS) return rc
         return rc.take(MAX_BACKUP_REASONING_CHARS) +
             "\n… [truncated ${rc.length - MAX_BACKUP_REASONING_CHARS} chars]"
