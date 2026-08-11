@@ -539,6 +539,14 @@ class MinisApp : Application(), ImageLoaderFactory {
                 val wasBackgrounded = foregroundActivityCount == 0
                 foregroundActivityCount++
                 if (wasBackgrounded) _isAppForegroundFlow.value = true
+                // T-MIUI-FGS-race: app came to the foreground — unhide FG
+                // service starts and refresh it if a session was running.
+                // Must set the flag BEFORE the sync / badge work so a
+                // concurrent setActive in the stream can start the service.
+                if (wasBackgrounded) {
+                    SessionActivityTracker.setAppForeground(true)
+                    SessionActivityTracker.maybeRefreshService()
+                }
                 // T-multidevice: app came to the foreground (first launch or
                 // background→foreground). Trigger an auto-sync if enabled —
                 // the first launch pulls the latest remote snapshot, a resume
@@ -593,6 +601,10 @@ class MinisApp : Application(), ImageLoaderFactory {
                 foregroundActivityCount = (foregroundActivityCount - 1).coerceAtLeast(0)
                 if (foregroundActivityCount == 0) {
                     _isAppForegroundFlow.value = false
+                    // T-MIUI-FGS-race: app is now fully invisible — stop
+                    // initiating new FG-service starts so a background
+                    // kill can't race a startForeground deadline.
+                    SessionActivityTracker.setAppForeground(false)
                     // [T-android-config-confirm-timeout] The user switched away
                     // while a config-confirm dialog may still be showing — nudge
                     // them so they can come back before the 120s timeout.

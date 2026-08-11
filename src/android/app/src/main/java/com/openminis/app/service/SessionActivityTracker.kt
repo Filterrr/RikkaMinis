@@ -155,6 +155,37 @@ object SessionActivityTracker {
     private var appContext: Context? = null
 
     /**
+     * T-MIUI-FGS-race: set by [MinisApp]'s lifecycle callbacks so the
+     * tracker knows whether the user can see the app. When false, we
+     * skip FG-service start/update calls (the 5-second
+     * startForeground deadline is un-catchable from the app side, and
+     * HyperOS aggressively reclaims background processes — any
+     * startForegroundService call that races a kill will throw
+     * ForegroundServiceDidNotStartInTimeException). The service can
+     * still be alive from a pre-background session; we just don't
+     * initiate new ones while the app is invisible.
+     * Memory state (flows) always updates regardless of foreground
+     * status — the user sees the correct state when they return.
+     * Default true (first launch is always in the foreground).
+     */
+    private var isAppForeground: Boolean = true
+
+    fun setAppForeground(foreground: Boolean) {
+        isAppForeground = foreground
+    }
+
+    /**
+     * Called when the app returns to the foreground. If sessions are
+     * still active (streaming or presence), re-start the FG service
+     * so it reflects the current state. No-op if nothing needs it.
+     */
+    fun maybeRefreshService() {
+        if (isAppForeground && shouldRunService()) {
+            startServiceIfNeeded()
+        }
+    }
+
+    /**
      * The service should run iff at least one session is streaming OR
      * the user is currently present in at least one chat. Both inputs
      * are independently mutated, so we always recompute from the live
@@ -496,6 +527,14 @@ object SessionActivityTracker {
             Log.w(TAG, "Context not initialized, cannot start service")
             return
         }
+        // T-MIUI-FGS-race: never initiate a foreground service while the
+        // app is invisible. The app-side can't catch the system's
+        // ForegroundServiceDidNotStartInTimeException, so the only way to
+        // avoid it is to not start a FG service from the background at all.
+        if (!isAppForeground) {
+            Log.d(TAG, "skipping FG service start while app is backgrounded")
+            return
+        }
         AgentForegroundService.startService(
             context,
             sessionCountForNotification(),
@@ -505,6 +544,16 @@ object SessionActivityTracker {
 
     private fun updateService() {
         val context = appContext ?: return
+        // T-MIUI-FGS-race: updating an already-running FG service from the
+        // background is fine (it reuses the existing notification). But if
+        // for some reason the service was torn down while backgrounded, a
+        // from-background start here would race the kill. Skip when the
+        // app is invisible — memory state still updates, and the service
+        // will be refreshed on next foreground via [maybeRefreshService].
+        if (!isAppForeground) {
+            Log.d(TAG, "skipping FG service update while app is backgrounded")
+            return
+        }
         AgentForegroundService.startService(
             context,
             sessionCountForNotification(),
