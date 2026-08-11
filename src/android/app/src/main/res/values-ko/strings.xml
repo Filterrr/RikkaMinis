@@ -138,6 +138,8 @@
     <string name="token_usage_section_context">컨텍스트</string>
     <string name="token_usage_context_used">사용된 컨텍스트</string>
     <string name="token_usage_context_window">컨텍스트 윈도우</string>
+    <string name="token_usage_context_window_group_limit"> (그룹 제한 %1$s)</string>
+    <string name="token_usage_context_window_group_unlimited"> (무제한)</string>
     <string name="token_usage_max_output">최대 출력</string>
     <string name="token_usage_section_thinking">사고</string>
     <string name="token_usage_thinking_label">사고</string>

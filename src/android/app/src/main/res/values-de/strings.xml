@@ -138,6 +138,8 @@
     <string name="token_usage_section_context">Kontext</string>
     <string name="token_usage_context_used">Genutzter Kontext</string>
     <string name="token_usage_context_window">Kontextfenster</string>
+    <string name="token_usage_context_window_group_limit"> (Gruppenlimit %1$s)</string>
+    <string name="token_usage_context_window_group_unlimited"> (unbegrenzt)</string>
     <string name="token_usage_max_output">Max. Ausgabe</string>
     <string name="token_usage_section_thinking">Denken</string>
     <string name="token_usage_thinking_label">Denken</string>

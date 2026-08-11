@@ -138,6 +138,8 @@
     <string name="token_usage_section_context">コンテキスト</string>
     <string name="token_usage_context_used">使用済みコンテキスト</string>
     <string name="token_usage_context_window">コンテキストウィンドウ</string>
+    <string name="token_usage_context_window_group_limit">（グループ上限 %1$s）</string>
+    <string name="token_usage_context_window_group_unlimited">（無制限）</string>
     <string name="token_usage_max_output">最大出力</string>
     <string name="token_usage_section_thinking">思考</string>
     <string name="token_usage_thinking_label">思考</string>

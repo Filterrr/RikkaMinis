@@ -284,6 +284,8 @@
     <string name="token_usage_section_context">Context</string>
     <string name="token_usage_context_used">Context Used</string>
     <string name="token_usage_context_window">Context Window</string>
+    <string name="token_usage_context_window_group_limit"> (group limit %1$s)</string>
+    <string name="token_usage_context_window_group_unlimited"> (unlimited)</string>
     <string name="token_usage_max_output">Max Output</string>
     <string name="token_usage_section_thinking">Thinking</string>
     <string name="token_usage_thinking_label">Thinking</string>

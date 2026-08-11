@@ -51,6 +51,7 @@ fun TokenUsageSheet(
 ) {
     var stats by remember { mutableStateOf<ChatViewModel.SessionTokenStats?>(null) }
     val contextWindow = remember { viewModel.currentModelContextWindow }
+    val groupLimit = remember { viewModel.currentGroupContextLimit }
     val maxOutput = remember { viewModel.currentModelMaxOutputTokens }
     val thinking = remember { viewModel.thinkingInfo() }
 
@@ -85,7 +86,31 @@ fun TokenUsageSheet(
             val noText = stringResource(R.string.common_no)
             StatSection(title = stringResource(R.string.token_usage_section_context)) {
                 StatRow(stringResource(R.string.token_usage_context_used), formatTokens(s?.context ?: 0))
-                contextWindow?.let { StatRow(stringResource(R.string.token_usage_context_window), formatTokens(it)) }
+                contextWindow?.let { w ->
+                    // T-token-sheet-group-limit-annotation: when the effective
+                    // window is clamped by the model's physical window below
+                    // the group-configured limit (or the group is "Unlimited"),
+                    // annotate so the row doesn't look like it disagrees with
+                    // the group editor. The minOf clamp itself stays — capacity
+                    // judgment must never assume a window larger than the
+                    // model actually supports.
+                    val annotation = groupLimit?.let { gl ->
+                        when {
+                            gl.unlimited ->
+                                stringResource(R.string.token_usage_context_window_group_unlimited)
+                            w < gl.tokens ->
+                                stringResource(
+                                    R.string.token_usage_context_window_group_limit,
+                                    formatTokens(gl.tokens),
+                                )
+                            else -> null
+                        }
+                    }
+                    StatRow(
+                        stringResource(R.string.token_usage_context_window),
+                        if (annotation != null) formatTokens(w) + annotation else formatTokens(w),
+                    )
+                }
                 maxOutput?.let { StatRow(stringResource(R.string.token_usage_max_output), formatTokens(it)) }
             }
 
