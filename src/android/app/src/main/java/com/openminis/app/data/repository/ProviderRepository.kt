@@ -291,6 +291,7 @@ class ProviderRepository(private val context: Context) {
      * hash check above re-syncs DB to whatever JSON looks like now.
      */
     private suspend fun loadConfigSuspending(): ProviderConfig {
+        val tLoad = System.nanoTime()
         val rawJson = prefs.getString("config", null)
         val instanceCount = try {
             providerDao.instanceCount()
@@ -301,6 +302,7 @@ class ProviderRepository(private val context: Context) {
 
         val (dbConfig, dbHashStored) = if (instanceCount > 0) {
             try {
+                val tDb = System.nanoTime()
                 val snapshot = ProviderConfigSnapshot(
                     instances = providerDao.loadInstances(),
                     entries = providerDao.loadEntries(),
@@ -308,7 +310,16 @@ class ProviderRepository(private val context: Context) {
                     loopIds = providerDao.loadAgentLoopIds(),
                     meta = providerDao.loadMeta(),
                 )
+                val dbMs = (System.nanoTime() - tDb) / 1_000_000
+                val tAssemble = System.nanoTime()
                 val cfg = snapshot.toProviderConfig(json)
+                val assembleMs = (System.nanoTime() - tAssemble) / 1_000_000
+                android.util.Log.i(
+                    "ProviderPerf",
+                    "loadConfigSuspending: instances=${snapshot.instances.size} " +
+                        "entries=${snapshot.entries.size} groups=${snapshot.groups.size} " +
+                        "db=${dbMs}ms assemble=${assembleMs}ms",
+                )
                 val storedHash = snapshot.meta.firstOrNull {
                     it.key == ProviderConfigMetaKeys.JSON_SYNC_HASH
                 }?.value
@@ -322,7 +333,10 @@ class ProviderRepository(private val context: Context) {
         }
 
         if (dbConfig != null) {
+            val tHash = System.nanoTime()
             val liveHash = rawJson?.let(::hashJsonMirror)
+            val hashMs = (System.nanoTime() - tHash) / 1_000_000
+            android.util.Log.i("ProviderPerf", "hashJsonMirror: ${hashMs}ms (jsonLen=${rawJson?.length})")
             if (liveHash == dbHashStored) {
                 return dbConfig
             }
@@ -336,12 +350,16 @@ class ProviderRepository(private val context: Context) {
         }
 
         if (rawJson != null) {
+            val jsonLen = rawJson.length
+            val tDecode = System.nanoTime()
             val parsed = try {
                 json.decodeFromString<ProviderConfig>(rawJson)
             } catch (e: Exception) {
                 android.util.Log.w("ProviderRepo", "[ProviderStore] JSON decode failed: ${e.message}")
                 null
             }
+            val decodeMs = (System.nanoTime() - tDecode) / 1_000_000
+            android.util.Log.i("ProviderPerf", "JSON fallback decode: ${decodeMs}ms (jsonLen=$jsonLen)")
             if (parsed != null) {
                 val mirrored = try {
                     persistToDbAndMirror(parsed)
