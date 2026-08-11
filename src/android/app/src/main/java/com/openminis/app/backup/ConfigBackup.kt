@@ -466,6 +466,7 @@ object ConfigBackup {
         memoryRepo: MemoryRepository? = null,
         mcpRepo: MCPRepository? = null,
         chatRepo: ChatRepository? = null,
+        isSyncMerge: Boolean = false,
     ): ImportResult {
         // [fix-audit-p1-2] Reject oversized documents BEFORE any parsing /
         // decoding: a backup with embedded skill archives or chat history is
@@ -703,6 +704,13 @@ object ConfigBackup {
         // -- Stage 3: scalar fields (defaults.* group/entry ids remapped) --
         val fields = root.optJSONObject("fields")
         if (fields != null) {
+            // [T-sync-merge-guard] On a multi-device auto-sync merge, personality
+            // fields (soul.*) are strong per-device identity — name, style, body,
+            // lang — and must not be overwritten by a sibling's snapshot. Persist
+            // them only on a full manual restore (isSyncMerge=false); never on a
+            // sync pull. This mirrors the same "user-personalization stays on the
+            // device" principle that keeps hidden models & OAuth credentials out
+            // of the sync payload.
             val keys = fields.keys()
             while (keys.hasNext()) {
                 val path = keys.next()
@@ -710,6 +718,13 @@ object ConfigBackup {
                 if (field == null) {
                     // Field was removed or renamed since the backup was taken.
                     skipped.add("$path: no longer exists in this version")
+                    continue
+                }
+                // [T-sync-merge-guard] Strongly per-device personality fields are
+                // never merged in from a sibling device's auto-sync snapshot.
+                // Only a full manual restore may write them.
+                if (shouldSkipSyncField(path, isSyncMerge)) {
+                    skipped.add("$path: personality not overwritten by auto-sync")
                     continue
                 }
                 if (field.scope !in BACKED_UP_SCOPES) {
@@ -1139,3 +1154,12 @@ object ConfigBackup {
  */
 internal fun isCatalogCacheModel(isHidden: Boolean, isCustom: Boolean): Boolean =
     isHidden && !isCustom
+
+/**
+ * [T-sync-merge-guard] On a multi-device auto-sync merge, strongly per-device
+ * personality fields (soul.*) are never written from a sibling's snapshot —
+ * only a full manual restore (isSyncMerge=false) may persist them. Plain
+ * config fields always pass. Top-level so the gate is JVM-unit-testable.
+ */
+internal fun shouldSkipSyncField(path: String, isSyncMerge: Boolean): Boolean =
+    isSyncMerge && path.startsWith("soul.")
