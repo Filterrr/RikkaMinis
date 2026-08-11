@@ -164,10 +164,22 @@ class MainActivity : ComponentActivity() {
         // throw UninitializedPropertyAccessException and overwrite the
         // very crash logs we're trying to ship.
         //
+        // We gate on isSafeMode() OR isInitSkipped(). The latch matters
+        // because finishClose() clears `_safeMode` (so the NEXT cold start
+        // boots fresh), which momentarily makes isSafeMode() return false
+        // while this exact process has still skipped init. If the activity
+        // recreates in that window (config change while the dialog is up),
+        // the isSafeMode()==false branch would happily setContent() and
+        // throw on the still-uninitialized `lateinit chatRepository`. The
+        // latch is one-way for the process, so it stays true for the whole
+        // life of this process no matter how often _safeMode flips.
+        //
         // Pop the share/dismiss dialog directly and finish() on close so
         // the user's next launch starts fresh. The dialog UI uses
         // AlertDialog (system-level) which doesn't touch MinisApp state.
-        if (com.openminis.app.crash.CrashFrequencyDetector.isSafeMode()) {
+        if (com.openminis.app.crash.CrashFrequencyDetector.isSafeMode() ||
+            com.openminis.app.crash.CrashFrequencyDetector.isInitSkipped()
+        ) {
             android.util.Log.w("MainActivity", "safe-mode ON — showing crash share dialog and finishing")
             com.openminis.app.crash.CrashFrequencyDetector.maybeShowOnActivity(
                 activity = this,

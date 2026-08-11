@@ -193,8 +193,30 @@ object CrashFrequencyDetector {
      */
     private val _safeMode = java.util.concurrent.atomic.AtomicBoolean(false)
 
+    // [fix/crash-storm-double-resume-latch] Process-wide one-way latch.
+    // Unlike [_safeMode] (which is cleared by finishClose once the user
+    // dismisses the share dialog), this latch is set the moment
+    // checkAtLaunch decides safe-mode and can NEVER be cleared for this
+    // process. Rationale: when safe-mode trips, MinisApp.onCreate
+    // short-circuits and skips ALL heavy init — every `lateinit` repo
+    // (chatRepository, providerRepository, …) stays uninitialized for the
+    // life of the process. The subsystem init can never be re-run later,
+    // so once we skip it there is no safe moment to leave the safe-mode
+    // path. But finishClose clears [_safeMode] to let the NEXT cold start
+    // boot fresh — with a small window where an Activity recreates (e.g. a
+    // config change during the dialog) and sees isSafeMode()==false, then
+    // goes on to setContent() / ChatViewModel and dies on a lateinit read.
+    // This latch closes that window: MainActivity gates on
+    // isSafeMode() || isInitSkipped(), so any process that skipped init
+    // can never re-enter the composition path. Fresh process → fresh
+    // AtomicBoolean(false) → normal boot.
+    private val _initSkipped = java.util.concurrent.atomic.AtomicBoolean(false)
+
     @JvmStatic
     fun isSafeMode(): Boolean = _safeMode.get()
+
+    @JvmStatic
+    fun isInitSkipped(): Boolean = _initSkipped.get()
 
     /**
      * Inspect `filesDir/logs/` and remember recent crash files for the
@@ -263,6 +285,11 @@ object CrashFrequencyDetector {
             // starts restoring sessions. Cleared once the user dismisses
             // the share dialog in [maybeShowOnActivity].
             setSafeMode(true)
+            // [fix/crash-storm-double-resume-latch] Lock the process-wide
+            // init-skip latch so no Activity reconstruction later in this
+            // process can re-enter the composition path (see
+            // [isInitSkipped]). One-way: never cleared for this process.
+            _initSkipped.set(true)
             // Persist a "force Home on launch" grace window. After the
             // user resolves the dialog and the app boots normally, the
             // launch resolver in AppNavigation honours this flag and
