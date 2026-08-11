@@ -6511,6 +6511,7 @@ class ChatViewModel(
         // we surface a real error instead of a silent blank bubble. Mirrors iOS
         // AIChatViewModel.didInjectEmptyToolReminderThisRun.
         var didInjectEmptyToolReminder = false
+        var didRetryTruncatedTurn = false
         // [T-length-wall-continue] Consecutive finish_reason="length" turns that
         // produced NO visible content and NO tool calls (output wall hit before
         // anything usable came back). First hit: continue the loop — the model
@@ -6604,6 +6605,7 @@ class ChatViewModel(
             // T321: capture finish_reason from LLMStreamChunk.Finished so we can
             // log it at turn-end alongside the empty-turn warning.
             var turnFinishReason: String? = null
+            var turnTruncated = false
             var lastUsage: LLMUsage? = null
             val maxTokens = dynamicMaxTokens(provider, lastContextTokens)
             val toolCalls = mutableListOf<Triple<String, String, JSONObject>>() // id, name, args
@@ -6978,6 +6980,7 @@ class ChatViewModel(
                     is LLMStreamChunk.Finished -> {
                         // T321: stash for empty-turn diagnostic logging below.
                         turnFinishReason = chunk.stopReason
+                        turnTruncated = chunk.truncated
                     }
                     is LLMStreamChunk.Started -> { /* no-op */ }
                     is LLMStreamChunk.MediaAttachment -> {
@@ -7372,8 +7375,13 @@ class ChatViewModel(
                 // survives a reload too.
                 val hasVisibleContent = accumulatedText.isNotBlank() ||
                     allToolBlocks.any { it.kind == "tool_use" || (it.kind == "text" && it.content.isNotBlank()) }
-                val finishedCleanly = turnFinishReason == null ||
-                    turnFinishReason == "stop" || turnFinishReason == "end_turn"
+                val finishedCleanly = (turnFinishReason == null ||
+                    turnFinishReason == "stop" || turnFinishReason == "end_turn") &&
+                    // [T-truncated-stream-retry] a truncated turn (EOF without
+                    // finish_reason) is NOT a clean finish even though
+                    // stopReason is null — the retry branch below owns it, so
+                    // the empty-turn path must not swallow it with an error hint.
+                    !turnTruncated
                 if (!hasVisibleContent && finishedCleanly) {
                     // [T-android-empty-after-toolresult-reminder] Special case: the
                     // server returned an empty turn right after a tool result. The
@@ -7429,6 +7437,31 @@ class ChatViewModel(
                 }
                 // Auto-title after first exchange
                 if (turn == 0) generateSessionTitleIfNeeded()
+
+                // [T-truncated-stream-retry] The provider signalled the model
+                // turn ended WITHOUT a server finish_reason (EOF / connection
+                // drop mid-stream). The user may have seen a partial answer
+                // (or a blank bubble) that never got a proper end — silently
+                // accepting it loses the tail of the reply. Retry ONCE with the
+                // accumulated context re-appended, mirroring the empty-turn
+                // one-shot guard: it can never loop, and a second truncation
+                // falls through to the normal break below (the user keeps the
+                // partial content + an inline hint is surfaced by the caller).
+                if (turnTruncated && !didRetryTruncatedTurn) {
+                    didRetryTruncatedTurn = true
+                    AppLogger.warning(
+                        TAG_STREAM,
+                        "truncated turn detected (no finish_reason) — retrying one round (turn=$turn) hasVisibleContent=$hasVisibleContent"
+                    )
+                    // Drop this turn's just-appended assistant role from
+                    // agentHistory so the retry continuations cleanly. The
+                    // partial text is NOT persisted as the final assistant
+                    // message — the retry either completes it or the second
+                    // truncation leaves the in-progress bubble intact.
+                    agentHistory.removeAt(agentHistory.size - 1)
+                    continue
+                }
+
                 loopExitedNormally = true
                 break
             }
