@@ -955,7 +955,7 @@ class ProviderRepository(private val context: Context) {
             ModelEntry(
                 providerInstanceId = instanceId,
                 baseModel = resolved,
-                overrides = prior?.overrides,
+                overrides = prior?.overrides ?: ModelOverrides(),
                 isCustom = false,
                 // [T-provider-default-hidden] Newly refreshed models come in hidden by
                 // default — mirrors rikkahub "pull everything, show the chosen
