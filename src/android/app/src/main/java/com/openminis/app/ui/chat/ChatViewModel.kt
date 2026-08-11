@@ -1234,6 +1234,29 @@ class ChatViewModel(
     val currentModelMaxOutputTokens: Int?
         get() = currentModel?.maxOutputTokens
 
+    /**
+     * The bound group's configured context limit for the current session,
+     * exposed for the Token Usage sheet's transparency annotation. Lets the
+     * sheet explain when the effective window is smaller than the group
+     * limit — the model's physical window is the binding constraint (see
+     * [effectiveContextWindowTokens]'s minOf clamp), which would otherwise
+     * look like the sheet "disagrees" with the group editor. `unlimited` is
+     * true when the group's limit is the "Unlimited" sentinel
+     * (Int.MAX_VALUE), in which case the sheet shows the model's native
+     * window without a numeric annotation.
+     */
+    val currentGroupContextLimit: GroupContextLimit?
+        get() {
+            val tokens = _selectedGroupId.value
+                ?.let { gid -> providerRepository.config.value.modelGroups.find { it.id == gid }?.contextLimitTokens }
+                ?: return null
+            if (tokens <= 0) return null
+            return GroupContextLimit(
+                tokens = tokens,
+                unlimited = tokens >= UNLIMITED_GROUP_CONTEXT_LIMIT,
+            )
+        }
+
     // ── Session token usage (iOS parity: TokenUsageSheet data) ─────────────
 
     /**
@@ -1259,6 +1282,22 @@ class ChatViewModel(
         val enabled: Boolean,
         val level: String,
     )
+
+    /**
+     * The bound group's context-limit configuration for the current session,
+     * as read live by [currentGroupContextLimit]. `tokens` is the raw
+     * `contextLimitTokens` value; `unlimited` is true when it is the
+     * "Unlimited" slider stop (Int.MAX_VALUE sentinel — the runtime consumer
+     * treats it as "no override, use the model's native window").
+     */
+    data class GroupContextLimit(
+        val tokens: Int,
+        val unlimited: Boolean,
+    )
+
+    /** Sentinel used by the group editor's "Unlimited" stop; mirrors
+     * ModelGroupDetailScreen.CONTEXT_LIMIT_UNLIMITED_SENTINEL. */
+    private const val UNLIMITED_GROUP_CONTEXT_LIMIT: Int = Int.MAX_VALUE
 
     /** Read-only view of the current thinking configuration for the model. */
     fun thinkingInfo(): ThinkingInfo? {

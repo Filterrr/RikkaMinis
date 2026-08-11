@@ -32,6 +32,8 @@
     <string name="token_usage_section_context">上下文</string>
     <string name="token_usage_context_used">已用上下文</string>
     <string name="token_usage_context_window">上下文窗口</string>
+    <string name="token_usage_context_window_group_limit">（組限制 %1$s）</string>
+    <string name="token_usage_context_window_group_unlimited">（組設定：不限）</string>
     <string name="token_usage_max_output">最大輸出</string>
     <string name="token_usage_section_thinking">思考</string>
     <string name="token_usage_thinking_label">思考</string>
