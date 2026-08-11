@@ -99,9 +99,10 @@ fun BackupSettingsScreen(
         mutableStateOf(chatPrefs.getInt("chat_window_days", 90))
     }
     var showWindowDialog by remember { mutableStateOf(false) }
-    // Payload is built BEFORE the file picker opens, then written in the
-    // callback: SAF gives us a write handle, not a chance to compute content.
-    var pendingExport by remember { mutableStateOf<String?>(null) }
+    // [T-backend-export] Local SAF export is picker-first: the launcher
+    // callback runs AFTER the user picks a file, so it must remember which
+    // confirmation (with/without secrets) triggered this picker instance.
+    var exportWithSecrets by remember { mutableStateOf(false) }
     var showSecretWarning by remember { mutableStateOf(false) }
     var importReport by remember { mutableStateOf<ConfigBackup.ImportResult?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
@@ -134,12 +135,6 @@ fun BackupSettingsScreen(
     var multiDeviceSyncEnabled by remember {
         mutableStateOf(com.openminis.app.backup.MultiDeviceSync.isEnabled(context))
     }
-    // [fix-backup-feedback] While a local SAF backup's full payload is being
-    // generated, show a visible "generating…" modal so the user knows the app
-    // is working instead of hung. The SAF file picker only appears once the
-    // (multi-second on large histories) payload is ready; without this the gap
-    // between confirming and the picker reading like a broken/stuck backup.
-    var exportGenerating by remember { mutableStateOf(false) }
     // When true, the next secret-warning confirmation uploads to WebDAV
     // instead of launching the SAF file picker.
     var webDavUploadPending by remember { mutableStateOf(false) }
@@ -167,7 +162,6 @@ fun BackupSettingsScreen(
 
     val savedToast = stringResource(R.string.backup_saved)
     val errWriteFmt = stringResource(R.string.backup_err_write)
-    val errGenerateFmt = stringResource(R.string.backup_err_generate)
     val errRead = stringResource(R.string.backup_err_read)
     val errImport = stringResource(R.string.backup_err_import)
     val errUnknown = stringResource(R.string.backup_err_unknown)
@@ -280,16 +274,60 @@ fun BackupSettingsScreen(
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/json"),
     ) { uri: Uri? ->
-        val payload = pendingExport
-        pendingExport = null
-        if (uri == null || payload == null) return@rememberLauncherForActivityResult
-        try {
-            context.contentResolver.openOutputStream(uri)?.use { out ->
-                out.write(payload.toByteArray())
+        // [T-backend-export] Local SAF export is now picker-first: the file
+        // picker opens the moment the user confirms, and the payload is built
+        // only after they pick a location — so the picker never waits on the
+        // (multi-second) build, and the user can leave the screen while the
+        // build+write finishes. Completion/failure lands in the tray as a
+        // notification (the user may be off this screen by then).
+        if (uri == null) {
+            // User cancelled the picker — nothing was built, release the gate.
+            operationBusy = false
+            return@rememberLauncherForActivityResult
+        }
+        application.applicationScope.launch {
+            try {
+                val payload = withContext(Dispatchers.Default) {
+                    ConfigBackup.export(
+                        providerRepo = providerRepository,
+                        includeSecrets = exportWithSecrets,
+                        envVarRepo = envVarRepository,
+                        skillRepo = skillRepository,
+                        memoryRepo = memoryRepository,
+                        mcpRepo = mcpRepository,
+                        chatRepo = chatRepository,
+                        chatWindowDays = chatWindowDays,
+                    )
+                }
+                withContext(Dispatchers.IO) {
+                    context.contentResolver.openOutputStream(uri)?.use { out ->
+                        out.write(payload.toByteArray())
+                    } ?: throw IllegalStateException("no output stream")
+                }
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, savedToast, Toast.LENGTH_SHORT).show()
+                    notifier.notifyWorkCompleted(
+                        tag = "local-export",
+                        title = context.getString(R.string.backup_saved),
+                        body = uri.lastPathSegment ?: savedToast,
+                    )
+                }
+            } catch (t: Throwable) {
+                withContext(Dispatchers.Main) {
+                    val msg = String.format(errWriteFmt, t.message ?: errUnknown)
+                    errorMessage = msg
+                    notifier.notifyWorkCompleted(
+                        tag = "local-export",
+                        title = context.getString(R.string.backup_notify_failed),
+                        body = msg,
+                    )
+                }
+                // SAF created an empty file at pick time; best-effort cleanup
+                // so a failed export doesn't litter Documents with 0-byte files.
+                runCatching { context.contentResolver.delete(uri, null, null) }
+            } finally {
+                withContext(Dispatchers.Main) { operationBusy = false }
             }
-            Toast.makeText(context, savedToast, Toast.LENGTH_SHORT).show()
-        } catch (t: Throwable) {
-            errorMessage = String.format(errWriteFmt, t.message ?: errUnknown)
         }
     }
 
@@ -461,89 +499,69 @@ fun BackupSettingsScreen(
             // the flag clears in the shared finally below.
             operationBusy = true
             showSecretWarning = false
-            // [fix-backup-feedback] Surface a visible "generating…" modal the
-            // moment the user confirms, so the multi-second payload build
-            // reads as work-in-progress rather than a stuck/failed backup. It
-            // clears once the payload is ready (before the SAF picker opens)
-            // or on any error/early-exit path below.
-            exportGenerating = true
             val toWebDav = webDavUploadPending
             webDavUploadPending = false
-            // Payload generation is expensive: it walks the whole config
-            // registry, zips every skill and base64-encodes the archives,
-            // reads memory files and up to chatWindowDays of chat history,
-            // then serializes the lot into one JSON document. It used to run
-            // on the main thread — the backup button froze the UI for seconds
-            // (hang detector fired, 180 frames skipped). Generate off-thread,
-            // exactly like the restore/snapshot path does.
-            application.applicationScope.launch {
-                try {
-                    val payload = withContext(Dispatchers.Default) {
-                        ConfigBackup.export(
-                            providerRepo = providerRepository,
-                            includeSecrets = withSecrets,
-                            envVarRepo = envVarRepository,
-                            skillRepo = skillRepository,
-                            memoryRepo = memoryRepository,
-                            mcpRepo = mcpRepository,
-                            chatRepo = chatRepository,
-                            chatWindowDays = chatWindowDays,
-                        )
-                    }
-                    // Back on Main for state writes, the SAF picker and toasts
-                    // (ActivityResultLauncher.launch requires the main thread).
-                    withContext(Dispatchers.Main) {
-                        // Payload is ready — dismiss the "generating…" modal
-                        // before the SAF picker (or WebDAV upload) proceeds.
-                        exportGenerating = false
-                        if (toWebDav) {
-                            val cfg = webDavConfig ?: return@withContext
-                            try {
-                                // Run off-thread so the upload finishes even if
-                                // the user navigates away mid-transfer; notify
-                                // via the system tray when the settings screen
-                                // is no longer visible.
-                                withContext(Dispatchers.IO) {
-                                    WebDavSync.backup(
-                                        config = cfg,
-                                        payload = payload,
-                                        client = webDavHttpClient,
-                                    )
-                                }
-                                val msg = context.getString(R.string.webdav_uploaded)
-                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                                notifier.notifyWorkCompleted(
-                                    tag = "webdav-upload",
-                                    title = context.getString(R.string.webdav_notify_title),
-                                    body = msg,
-                                )
-                            } catch (t: Throwable) {
-                                errorMessage = webDavErrorMessage(context, t)
-                                notifier.notifyWorkCompleted(
-                                    tag = "webdav-upload",
-                                    title = context.getString(R.string.webdav_notify_title_failed),
-                                    body = webDavErrorMessage(context, t),
-                                )
-                            }
-                        } else {
-                            pendingExport = payload
-                            exportLauncher.launch(ConfigBackup.suggestedFileName())
+            if (toWebDav) {
+                // WebDAV upload: already fully background — the payload is
+                // built off-thread, the PUT runs on IO, and completion/failure
+                // lands in the tray. The user can leave the screen immediately.
+                application.applicationScope.launch {
+                    try {
+                        val payload = withContext(Dispatchers.Default) {
+                            ConfigBackup.export(
+                                providerRepo = providerRepository,
+                                includeSecrets = withSecrets,
+                                envVarRepo = envVarRepository,
+                                skillRepo = skillRepository,
+                                memoryRepo = memoryRepository,
+                                mcpRepo = mcpRepository,
+                                chatRepo = chatRepository,
+                                chatWindowDays = chatWindowDays,
+                            )
                         }
-                    }
-                } catch (t: Throwable) {
-                    errorMessage = String.format(errGenerateFmt, t.message ?: errUnknown)
-                } finally {
-                    // Release the mutual-exclusion guard on every exit path:
-                    // success (local SAF write / WebDAV upload), error, and
-                    // early return (e.g. webDavConfig unexpectedly null).
-                    // Back to Main: this runs on the applicationScope (IO)
-                    // dispatcher, and writing Compose state off-main is the
-                    // same race the WebDAV path guards against explicitly.
-                    withContext(Dispatchers.Main) {
-                        operationBusy = false
-                        exportGenerating = false
+                        withContext(Dispatchers.IO) {
+                            val cfg = webDavConfig ?: run {
+                                withContext(Dispatchers.Main) {
+                                    errorMessage = context.getString(R.string.webdav_server_not_configured)
+                                }
+                                return@launch
+                            }
+                            WebDavSync.backup(
+                                config = cfg,
+                                payload = payload,
+                                client = webDavHttpClient,
+                            )
+                        }
+                        withContext(Dispatchers.Main) {
+                            val msg = context.getString(R.string.webdav_uploaded)
+                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                            notifier.notifyWorkCompleted(
+                                tag = "webdav-upload",
+                                title = context.getString(R.string.webdav_notify_title),
+                                body = msg,
+                            )
+                        }
+                    } catch (t: Throwable) {
+                        withContext(Dispatchers.Main) {
+                            errorMessage = webDavErrorMessage(context, t)
+                            notifier.notifyWorkCompleted(
+                                tag = "webdav-upload",
+                                title = context.getString(R.string.webdav_notify_title_failed),
+                                body = webDavErrorMessage(context, t),
+                            )
+                        }
+                    } finally {
+                        withContext(Dispatchers.Main) { operationBusy = false }
                     }
                 }
+            } else {
+                // Local SAF export: fire the picker immediately — only the
+                // suggested filename is needed up front, the full payload is
+                // built in the picker callback (after the user chooses a
+                // location) so the picker never waits on generation. The
+                // callback remembers this request's withSecrets.
+                exportWithSecrets = withSecrets
+                exportLauncher.launch(ConfigBackup.suggestedFileName())
             }
         }
         AlertDialog(
@@ -560,22 +578,6 @@ fun BackupSettingsScreen(
                     Text(stringResource(R.string.backup_secret_without))
                 }
             },
-        )
-    }
-
-    // [fix-backup-feedback] Modal "generating backup…" shown while the full
-    // payload is being built (heaviest on large chat histories). Dismissed by
-    // runExport the instant the payload is ready (just before the SAF picker
-    // opens or the WebDAV upload starts). Non-cancelable on purpose: the work
-    // is already in flight and the mutual-exclusion guard is set, so letting
-    // the user dismiss would leave them with no way to observe completion.
-    if (exportGenerating) {
-        AlertDialog(
-            onDismissRequest = {},
-            icon = { CircularProgressIndicator() },
-            title = { Text(stringResource(R.string.backup_generating_title)) },
-            text = { Text(stringResource(R.string.backup_generating_body)) },
-            confirmButton = {},
         )
     }
 

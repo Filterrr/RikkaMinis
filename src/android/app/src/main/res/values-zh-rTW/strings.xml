@@ -547,6 +547,7 @@
     <string name="backup_chat_window_days">%1$d 天</string>
     <string name="backup_done_chat">已還原 %1$d 個會話、%2$d 條訊息</string>
     <string name="backup_saved">備份已儲存</string>
+    <string name="backup_notify_failed">備份失敗</string>
     <string name="backup_secret_title">備份將包含 API 金鑰</string>
     <string name="backup_secret_body">匯出的檔案含有提供商的 API 金鑰與登入憑證，任何取得該檔案的人都能使用。請妥善保管，勿分享。</string>
     <string name="backup_secret_confirm">包含金鑰並匯出</string>
@@ -555,7 +556,6 @@
     <string name="backup_generating_body">正在建置備份檔案。聊天記錄較多時可能需要數秒。</string>
     <string name="backup_done_title">還原完成</string>
     <string name="backup_err_write">寫入失敗：%1$s</string>
-    <string name="backup_err_generate">產生備份失敗：%1$s</string>
     <string name="backup_err_read">無法讀取所選檔案</string>
     <string name="backup_err_import">匯入失敗</string>
     <string name="backup_err_busy">備份或還原正在進行中，請等待其完成</string>

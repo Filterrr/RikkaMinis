@@ -1101,6 +1101,7 @@
     <string name="webdav_uploaded">백업이 업로드되었습니다</string>
     <string name="backup_restored_notify_body">%1$d개 제공자와 %2$d개 그룹을 복원했습니다.</string>
     <string name="webdav_notify_title_failed">WebDAV 작업 실패</string>
+    <string name="backup_notify_failed">백업 실패</string>
     <string name="webdav_notify_title_restored">WebDAV 복원</string>
     <string name="webdav_notify_title">WebDAV 백업</string>
     <string name="webdav_loading">백업을 불러오는 중…</string>
