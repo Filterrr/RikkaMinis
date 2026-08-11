@@ -1103,6 +1103,7 @@
     <string name="backup_err_generate">生成备份失败：%1$s</string>
     <string name="backup_err_read">无法读取所选文件</string>
     <string name="backup_err_import">导入失败</string>
+    <string name="backup_err_busy">备份或恢复正在进行中，请等待其完成</string>
     <string name="backup_err_title">出错了</string>
     <string name="backup_done_summary">已导入 %1$d 项设置、%2$d 个提供商。</string>
     <string name="backup_done_groups">已恢复 %1$d 个模型分组。</string>
