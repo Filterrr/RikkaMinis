@@ -3,6 +3,7 @@ package com.openminis.app.data.repository
 import com.openminis.app.data.db.ProviderConfigSnapshot
 import com.openminis.app.data.db.ProviderInstanceEntity
 import com.openminis.app.data.db.ProviderModelGroupEntity
+import com.openminis.app.data.db.toProviderConfig
 import com.openminis.app.data.model.FallbackStrategy
 import com.openminis.app.data.model.ProviderCredential
 import com.openminis.app.data.model.ProviderType
