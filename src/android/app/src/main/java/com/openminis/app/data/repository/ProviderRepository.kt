@@ -428,15 +428,25 @@ class ProviderRepository(private val context: Context) {
         // First serialize without the hash so the meta row reflects the
         // exact string we put into prefs (the hash sees the mirror that
         // older builds will read, not a hash-of-itself).
+        val t0 = System.nanoTime()
         val mirrorStr = json.encodeToString(ProviderConfig.serializer(), config)
+        val serializeMs = (System.nanoTime() - t0) / 1_000_000
         val mirrorHash = hashJsonMirror(mirrorStr)
         val snapshot = config.toSnapshot(json, jsonSyncHash = mirrorHash)
-        providerDao.replaceAll(
+        val t1 = System.nanoTime()
+        providerDao.syncAllIncremental(
             instances = snapshot.instances,
             entries = snapshot.entries,
             groups = snapshot.groups,
             loopIds = snapshot.loopIds,
             meta = snapshot.meta,
+        )
+        val dbMs = (System.nanoTime() - t1) / 1_000_000
+        android.util.Log.i(
+            "ProviderPerf",
+            "persistToDbAndMirror: entries=${snapshot.entries.size} " +
+                "instances=${snapshot.instances.size} groups=${snapshot.groups.size} " +
+                "mirror=${mirrorStr.length / 1024}KB serialize=${serializeMs}ms db=${dbMs}ms",
         )
         // commit() not apply(): the json_sync_hash we just stored to DB is
         // a hash of THIS mirror string. If apply() queues the disk write
@@ -1023,7 +1033,18 @@ class ProviderRepository(private val context: Context) {
             }
         }
 
+        val tReplaceStart = System.nanoTime()
         saveConfig(config)
+        val tReplaceMs = (System.nanoTime() - tReplaceStart) / 1_000_000
+        if (models.size >= 20) {
+            android.util.Log.i(
+                "ProviderPerf",
+                "replaceEntries: instance=$instanceId " +
+                    "refreshed=${models.size} before=${existing.size} " +
+                    "custom-preserved=${remainingCustom.size} " +
+                    "saveConfig=${tReplaceMs}ms",
+            )
+        }
         // Stamp so staleness checks know this instance just refreshed.
         markInstanceFetched(instanceId)
     }

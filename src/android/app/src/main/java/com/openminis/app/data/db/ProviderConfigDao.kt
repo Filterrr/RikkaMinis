@@ -45,6 +45,81 @@ interface ProviderConfigDao {
     @Query("DELETE FROM provider_agent_loop_ids") suspend fun clearAgentLoopIds()
     @Query("DELETE FROM provider_config_meta") suspend fun clearMeta()
 
+    @Query("DELETE FROM provider_instances WHERE id NOT IN (:keepIds)")
+    suspend fun deleteInstancesNotIn(keepIds: List<String>)
+
+    @Query("DELETE FROM provider_model_entries WHERE id NOT IN (:keepIds)")
+    suspend fun deleteEntriesNotIn(keepIds: List<String>)
+
+    @Query("DELETE FROM provider_model_groups WHERE id NOT IN (:keepIds)")
+    suspend fun deleteGroupsNotIn(keepIds: List<String>)
+
+    @Query("DELETE FROM provider_config_meta WHERE key NOT IN (:keepKeys)")
+    suspend fun deleteMetaNotIn(keepKeys: List<String>)
+
+    /**
+     * Atomic incremental replace — upsert the incoming rows, then delete only
+     * the rows that are no longer present. Unlike [replaceAll], rows that are
+     * unchanged keep their position/rowid, so SQLite doesn't pay an
+     * delete+reinsert (page churn, index maintenance) for untouched data.
+     *
+     * Order matters because provider_model_entries has an FK CASCADE to
+     * provider_instances:
+     *   1. upsert instances first (so every referenced instance exists),
+     *   2. delete vanished instances (their entries go away via CASCADE),
+     *   3. upsert entries, then delete entries whose composite key vanished,
+     *   4. groups / loop-ids / meta have no FK between them, order is free.
+     *
+     * Empty incoming lists use the clear* calls because SQLite rejects
+     * "NOT IN ()" as a syntax error.
+     */
+    @Transaction
+    suspend fun syncAllIncremental(
+        instances: List<ProviderInstanceEntity>,
+        entries: List<ProviderModelEntryEntity>,
+        groups: List<ProviderModelGroupEntity>,
+        loopIds: List<ProviderAgentLoopIdEntity>,
+        meta: List<ProviderConfigMetaEntity>,
+    ) {
+        if (instances.isEmpty()) {
+            clearInstances() // CASCADE wipes their entries too
+        } else {
+            upsertInstances(instances)
+            deleteInstancesNotIn(instances.map { it.id })
+        }
+
+        if (entries.isEmpty()) {
+            clearEntries()
+        } else {
+            upsertEntries(entries)
+            deleteEntriesNotIn(entries.map { it.id })
+        }
+
+        if (groups.isEmpty()) {
+            clearGroups()
+        } else {
+            upsertGroups(groups)
+            deleteGroupsNotIn(groups.map { it.id })
+        }
+
+        if (loopIds.isEmpty()) {
+            clearAgentLoopIds()
+        } else {
+            // composite PK (kind, target_id); the table is tiny (a handful
+            // of agent-loop rows) so clear + upsert is simpler and safer
+            // than a NOT-IN delete on a composite key.
+            clearAgentLoopIds()
+            upsertAgentLoopIds(loopIds)
+        }
+
+        if (meta.isEmpty()) {
+            clearMeta()
+        } else {
+            upsertMeta(meta)
+            deleteMetaNotIn(meta.map { it.key })
+        }
+    }
+
     /**
      * Atomic full replace. Entry FK CASCADE means clearing instances first
      * would wipe entries via cascade; we still clearEntries explicitly to
