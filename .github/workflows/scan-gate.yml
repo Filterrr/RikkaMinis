@@ -1,0 +1,29 @@
+name: Scan Gate (PR)
+
+# Lightweight pre-merge consistency checks for pull requests. Runs only the
+# static scanners — no Gradle build, no NDK, no signing. Merges to main are
+# already gated by the full build (build-apk.yml runs the same scan first);
+# this gives PR authors fast feedback without burning a 15-minute build.
+#
+# NOTE: scan.sh exits 1 on issues, so a red check here blocks the merge.
+
+on:
+  pull_request:
+    types: [ opened, synchronize, reopened ]
+    paths:
+      - 'src/android/**'
+      - 'scripts/scan/**'
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Run static scan gate
+        run: |
+          python3 --version || (echo "::error::python3 is required for the scan gate" && exit 1)
+          sh scripts/scan/scan.sh
