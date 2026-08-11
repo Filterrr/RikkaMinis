@@ -1297,7 +1297,7 @@ class ChatViewModel(
 
     /** Sentinel used by the group editor's "Unlimited" stop; mirrors
      * ModelGroupDetailScreen.CONTEXT_LIMIT_UNLIMITED_SENTINEL. */
-    private const val UNLIMITED_GROUP_CONTEXT_LIMIT: Int = Int.MAX_VALUE
+    private val UNLIMITED_GROUP_CONTEXT_LIMIT: Int = Int.MAX_VALUE
 
     /** Read-only view of the current thinking configuration for the model. */
     fun thinkingInfo(): ThinkingInfo? {
