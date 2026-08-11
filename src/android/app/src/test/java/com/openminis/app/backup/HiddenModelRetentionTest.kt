@@ -104,4 +104,25 @@ class HiddenModelRetentionTest {
             )
         )
     }
+
+    // ── shouldSkipSyncField (sync-merge guard: personality not overwritten) ──
+
+    @Test
+    fun `soul field skipped during sync merge - personality stays per-device`() {
+        assertTrue(shouldSkipSyncField("soul.name", isSyncMerge = true))
+        assertTrue(shouldSkipSyncField("soul.style", isSyncMerge = true))
+        assertTrue(shouldSkipSyncField("soul.lang", isSyncMerge = true))
+    }
+
+    @Test
+    fun `plain config field is never skipped even during sync merge`() {
+        assertFalse(shouldSkipSyncField("appearance.theme", isSyncMerge = true))
+        assertFalse(shouldSkipSyncField("defaults.primaryGroup", isSyncMerge = true))
+    }
+
+    @Test
+    fun `soul field written on a full manual restore`() {
+        // isSyncMerge=false (manual restore) ⇒ personality fields apply.
+        assertFalse(shouldSkipSyncField("soul.name", isSyncMerge = false))
+    }
 }

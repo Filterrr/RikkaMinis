@@ -146,6 +146,7 @@ object MultiDeviceSync {
                     memoryRepo = memoryRepo,
                     mcpRepo = null,
                     chatRepo = null,
+                    isSyncMerge = true,
                 )
             }
         }
