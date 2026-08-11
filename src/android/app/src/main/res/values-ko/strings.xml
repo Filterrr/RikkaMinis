@@ -1147,6 +1147,7 @@
     <string name="backup_snapshot_restore_confirm_text">현재 설정이 %1$s의 스냅샷으로 대체됩니다. 현재 설정은 먼저 새 스냅샷으로 저장됩니다.</string>
     <string name="backup_snapshot_restore">복원</string>
     <string name="backup_done_fatal">복원이 중간에 실패했습니다 — 설정이 부분적으로만 복원되었습니다. 스냅샷에서 롤백하세요.</string>
+    <string name="backup_err_busy">백업 또는 복원이 진행 중입니다. 완료될 때까지 기다려 주세요.</string>
     <!-- 英文兜底 (2026-08-08) -->
     <string name="model_group_name_saved">Name saved</string>
     <string name="model_group_routing_fallback_footer">Try models in order. If one fails, advance to the next.</string>

@@ -1155,6 +1155,7 @@
     <string name="backup_snapshot_restore_confirm_text">現在の設定は %1$s のスナップショットに置き換わります。現在の設定は先に新しいスナップショットとして保存されます。</string>
     <string name="backup_snapshot_restore">復元</string>
     <string name="backup_done_fatal">復元が途中で失敗しました — 設定は部分的に復元されています。スナップショットからロールバックしてください。</string>
+    <string name="backup_err_busy">バックアップまたは復元が進行中です。完了するまでお待ちください。</string>
     <!-- 英文兜底 (2026-08-08) -->
     <string name="model_group_name_saved">Name saved</string>
     <string name="model_group_routing_fallback_footer">Try models in order. If one fails, advance to the next.</string>
