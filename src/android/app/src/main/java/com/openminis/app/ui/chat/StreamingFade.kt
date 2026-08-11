@@ -74,6 +74,29 @@ internal class FadeController {
     var lastPlainText: String = ""
         private set
 
+    /**
+     * Monotonic mutation counter. Bumped ONLY when NEW fade work arrives
+     * (ingest actually added word ranges) — this is the "wake up the frame
+     * driver" signal. Hard-resets/flushes that just cancel work do NOT bump:
+     * the driver notices the empty range set by itself and idles on the
+     * counter until the next bump.
+     *
+     * Why drive on a counter at all: the previous boolean-keyed restart had
+     * a lost-wakeup race. The driver looped on a snapshot read of
+     * `hasActiveRanges`; when the final tick emptied the range set inside
+     * withFrameNanos, the loop broke on the now-stale read. If a new ingest
+     * landed in the same snapshot (true → … → true, never passing false),
+     * the boolean key compared equal and the effect was NOT restarted —
+     * those fresh ranges sat at α=0 forever until the composable was
+     * disposed/recreated. The scroll-away-and-back recovery the user saw is
+     * exactly that recreate. A monotonic counter cannot compare equal across
+     * two different range-set generations, so the driver always wakes and
+     * drains the pending ranges.
+     */
+    var generation = mutableStateOf(0)
+        private set
+    private fun bumpGeneration() { generation.value++ }
+
     /** Active animating ranges. Frozen at α=1 ranges are removed each tick. */
     private val rangesState: SnapshotStateList<FadeRange> = mutableListOf<FadeRange>().toMutableStateList()
 
@@ -143,6 +166,7 @@ internal class FadeController {
             rangesState.add(FadeRange(absStart, absEnd, staggerMs))
             rangeStartNanos.addLast(System.nanoTime())
         }
+        bumpGeneration()
     }
 
     /**
@@ -210,11 +234,16 @@ internal fun rememberFadeController(): FadeController =
  */
 @Composable
 internal fun FadeFrameDriver(controller: FadeController) {
-    // ticker is read inside withFrameNanos so the body re-suspends when no
-    // ranges are active; a state read on hasActiveRanges restarts it.
-    val active = controller.hasActiveRanges
-    LaunchedEffect(active) {
-        if (!active) return@LaunchedEffect
+    // Key the restart on the monotonically increasing GENERATION counter
+    // rather than the hasActiveRanges boolean: a boolean key misses the
+    // "drained → refilled within the same snapshot" transition (true … true),
+    // leaving the new ranges permanently stuck at α=0. Every structural
+    // change bumps the counter, so any range-set mutation since the last
+    // restart is guaranteed to restart the loop and drain the pending
+    // ranges. The lambda itself never reads the key; the key's only job is
+    // to force the effect to restart when the range set changes.
+    val gen = controller.generation.value
+    LaunchedEffect(gen) {
         while (true) {
             val anyActive = withFrameNanos { now -> controller.tick(now) }
             if (!anyActive) break
