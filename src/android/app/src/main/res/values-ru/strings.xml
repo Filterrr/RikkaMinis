@@ -1263,6 +1263,7 @@
     <string name="webdav_uploaded">Резервная копия загружена</string>
     <string name="backup_restored_notify_body">Восстановлено %1$d провайдеров и %2$d групп.</string>
     <string name="webdav_notify_title_failed">Ошибка операции WebDAV</string>
+    <string name="backup_notify_failed">Ошибка резервного копирования</string>
     <string name="webdav_notify_title_restored">Восстановление WebDAV</string>
     <string name="webdav_notify_title">Резервная копия WebDAV</string>
     <string name="webdav_loading">Загрузка резервных копий…</string>

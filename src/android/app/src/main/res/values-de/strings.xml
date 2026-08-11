@@ -1102,6 +1102,7 @@
     <string name="webdav_uploaded">Backup hochgeladen</string>
     <string name="backup_restored_notify_body">%1$d Anbieter und %2$d Gruppen wiederhergestellt.</string>
     <string name="webdav_notify_title_failed">WebDAV-Vorgang fehlgeschlagen</string>
+    <string name="backup_notify_failed">Sicherung fehlgeschlagen</string>
     <string name="webdav_notify_title_restored">WebDAV-Wiederherstellung</string>
     <string name="webdav_notify_title">WebDAV-Backup</string>
     <string name="webdav_loading">Lade Backups…</string>
