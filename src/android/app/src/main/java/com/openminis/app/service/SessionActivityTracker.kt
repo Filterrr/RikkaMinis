@@ -1,6 +1,8 @@
 package com.openminis.app.service
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -153,6 +155,32 @@ object SessionActivityTracker {
     }
 
     private var appContext: Context? = null
+
+    /**
+     * Route replacement briefly removes the draft session before adding the
+     * persisted session. Stopping an FGS in that gap and immediately starting
+     * it again can leave an unsatisfied startForegroundService() record on
+     * Android 16 (especially HyperOS), which crashes the process with
+     * ForegroundServiceDidNotStartInTimeException even though the replacement
+     * service instance called startForeground(). Debounce only the idle stop;
+     * a new active/present session cancels it synchronously.
+     */
+    private const val IDLE_STOP_DELAY_MS = 500L
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val pendingIdleStop = Runnable {
+        if (!shouldRunService()) {
+            stopServiceNow()
+        }
+    }
+
+    private fun cancelPendingIdleStop() {
+        mainHandler.removeCallbacks(pendingIdleStop)
+    }
+
+    private fun scheduleIdleStop() {
+        mainHandler.removeCallbacks(pendingIdleStop)
+        mainHandler.postDelayed(pendingIdleStop, IDLE_STOP_DELAY_MS)
+    }
 
     /**
      * T-MIUI-FGS-race: set by [MinisApp]'s lifecycle callbacks so the
@@ -523,6 +551,7 @@ object SessionActivityTracker {
     }
 
     private fun startServiceIfNeeded() {
+        cancelPendingIdleStop()
         val context = appContext ?: run {
             Log.w(TAG, "Context not initialized, cannot start service")
             return
@@ -543,6 +572,7 @@ object SessionActivityTracker {
     }
 
     private fun updateService() {
+        cancelPendingIdleStop()
         val context = appContext ?: return
         // T-MIUI-FGS-race: updating an already-running FG service from the
         // background is fine (it reuses the existing notification). But if
@@ -610,11 +640,19 @@ object SessionActivityTracker {
     }
 
     private fun stopService() {
+        // Do not stop synchronously. Compose/navigation can replace a draft
+        // session id with its persisted id in adjacent frames; a synchronous
+        // stop followed by startForegroundService() is the Android 16 crash
+        // race documented above.
+        scheduleIdleStop()
+    }
+
+    private fun stopServiceNow() {
         val context = appContext ?: run {
             Log.w(TAG, "Context not initialized, cannot stop service")
             return
         }
         AgentForegroundService.stopService(context)
-        Log.d(TAG, "All sessions complete, service stopped")
+        Log.d(TAG, "All sessions complete, service stopped after idle debounce")
     }
 }
