@@ -6,7 +6,13 @@ sealed class LLMStreamChunk {
     data object Started : LLMStreamChunk()
     data class Text(val text: String) : LLMStreamChunk()
     data class Usage(val usage: LLMUsage) : LLMStreamChunk()
-    data class Finished(val stopReason: String?) : LLMStreamChunk()
+    data class Finished(
+        val stopReason: String?,
+        /** True when the model response ended without a server-emitted
+         *  finish_reason (EOF / connection drop mid-stream). Distinct from a
+         *  clean finish where stopReason is legitimately null. */
+        val truncated: Boolean = false,
+    ) : LLMStreamChunk()
 
     /** Thinking/reasoning streaming event */
     data class ThinkingDelta(val text: String) : LLMStreamChunk()

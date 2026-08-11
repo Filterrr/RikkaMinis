@@ -735,7 +735,7 @@ class OpenAIProvider private constructor(
                     if (sawReasoningField) {
                         send(LLMStreamChunk.ReasoningContent(reasoningAccum.toString()))
                     }
-                    send(LLMStreamChunk.Finished(finishReason))
+                    send(LLMStreamChunk.Finished(finishReason, truncated = !sawFinishReason))
                     break
                 }
 
