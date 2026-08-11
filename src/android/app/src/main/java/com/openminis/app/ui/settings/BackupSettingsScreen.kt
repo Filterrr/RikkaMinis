@@ -119,20 +119,21 @@ fun BackupSettingsScreen(
     var webDavConfig by remember { mutableStateOf(webDavStore.load()) }
     var showWebDavConfig by remember { mutableStateOf(false) }
     var showRemoteList by remember { mutableStateOf(false) }
-    var webDavBusy by remember { mutableStateOf(false) }
+    // [refactor-backup-gate] SINGLE mutual-exclusion flag for ALL backup paths
+    // (local SAF export, WebDAV upload, WebDAV restore, pre-restore snapshot
+    // export, WebDAV delete). Previously backupBusy + webDavBusy were two
+    // independent bools that every button had to check (`!backupBusy &&
+    // !webDavBusy`) — a missed check on one entry (the local restore button)
+    // let two full 70MB+ payloads build concurrently and OOM. Consolidating to
+    // ONE gate removes the entire class of "forgot to gate this entry" bugs:
+    // there is now exactly one flag everyone reads and sets.
+    var operationBusy by remember { mutableStateOf(false) }
     // T-multidevice: master switch for auto-syncing light config + memory
     // across the user's own devices via WebDAV, driven at app foreground by
     // MinisApp.syncMultiDeviceIfEnabled().
     var multiDeviceSyncEnabled by remember {
         mutableStateOf(com.openminis.app.backup.MultiDeviceSync.isEnabled(context))
     }
-    // Mutual-exclusion guard across ALL backup paths (local SAF export, WebDAV
-    // upload, and the pre-restore snapshot export). Each path builds the full
-    // 70MB+ payload into memory; running two concurrently (e.g. tapping local
-    // export while a WebDAV upload is in flight) stacks two full payloads and
-    // can blow the 512MB Java heap. Every backup button is disabled while this
-    // is true.
-    var backupBusy by remember { mutableStateOf(false) }
     // [fix-backup-feedback] While a local SAF backup's full payload is being
     // generated, show a visible "generating…" modal so the user knows the app
     // is working instead of hung. The SAF file picker only appears once the
@@ -183,17 +184,17 @@ fun BackupSettingsScreen(
         // local backup upload is running) stacks two payloads and blows the
         // 512MB heap. This is the last line of defense behind the button-level
         // guards — the snapshot-restore dialog and WebDAV sheet reach here too.
-        if (backupBusy || webDavBusy) {
+        if (operationBusy) {
             errorMessage = context.getString(R.string.backup_err_busy)
             return@doRestore
         }
         snapshotNote = null
-        webDavBusy = true
+        operationBusy = true
         // Restore must complete even if the user navigates away; run on the
         // app scope and fall back to a tray notification once done.
         // [fix-audit-p1-1] All Compose state writes are hopped back to Main
         // explicitly — the old code wrote snapshotNote / importReport /
-        // errorMessage / webDavBusy straight from Dispatchers.IO (the
+        // errorMessage / operationBusy straight from Dispatchers.IO (the
         // applicationScope dispatcher), racing recomposition. The export
         // path in this same file already did withContext(Dispatchers.Main);
         // this restores the same discipline here.
@@ -261,7 +262,7 @@ fun BackupSettingsScreen(
                     restoredMsg = t.message ?: errImport
                 }
             } finally {
-                withContext(Dispatchers.Main) { webDavBusy = false }
+                withContext(Dispatchers.Main) { operationBusy = false }
             }
             // Always notify completion from the tray; harmless if the screen is
             // still foregrounded (Toast + inline report already covered it).
@@ -339,7 +340,7 @@ fun BackupSettingsScreen(
                 title = stringResource(R.string.backup_export),
                 subtitle = stringResource(R.string.backup_export_sub),
                 icon = Icons.Default.Download,
-                onClick = if (backupBusy || webDavBusy) null else ({ showSecretWarning = true }),
+                onClick = if (operationBusy) null else ({ showSecretWarning = true }),
             )
             SettingsRow(
                 title = stringResource(R.string.backup_chat_window_title),
@@ -351,7 +352,7 @@ fun BackupSettingsScreen(
                 title = stringResource(R.string.backup_import),
                 subtitle = stringResource(R.string.backup_import_sub),
                 icon = Icons.Default.Upload,
-                onClick = if (backupBusy || webDavBusy) null else ({ importLauncher.launch(arrayOf("application/json", "*/*")) }),
+                onClick = if (operationBusy) null else ({ importLauncher.launch(arrayOf("application/json", "*/*")) }),
                 showDivider = false,
             )
         }
@@ -428,7 +429,7 @@ fun BackupSettingsScreen(
                 title = stringResource(R.string.webdav_upload),
                 subtitle = stringResource(R.string.webdav_upload_sub),
                 icon = Icons.Filled.CloudUpload,
-                onClick = if (webDavConfig != null && !backupBusy && !webDavBusy) {
+                onClick = if (webDavConfig != null && !operationBusy) {
                     { webDavUploadPending = true; showSecretWarning = true }
                 } else {
                     null
@@ -438,7 +439,7 @@ fun BackupSettingsScreen(
                 title = stringResource(R.string.webdav_remote),
                 subtitle = stringResource(R.string.webdav_remote_sub),
                 icon = Icons.Outlined.CloudDownload,
-                onClick = if (webDavConfig != null && !backupBusy && !webDavBusy) openRemoteList else null,
+                onClick = if (webDavConfig != null && !operationBusy) openRemoteList else null,
                 showDivider = false,
             )
         }
@@ -458,7 +459,7 @@ fun BackupSettingsScreen(
             // (two full payloads in memory → OOM). Every rebuild of the
             // payload (config/chat changed since last time) keeps the value;
             // the flag clears in the shared finally below.
-            backupBusy = true
+            operationBusy = true
             showSecretWarning = false
             // [fix-backup-feedback] Surface a visible "generating…" modal the
             // moment the user confirms, so the multi-second payload build
@@ -539,7 +540,7 @@ fun BackupSettingsScreen(
                     // dispatcher, and writing Compose state off-main is the
                     // same race the WebDAV path guards against explicitly.
                     withContext(Dispatchers.Main) {
-                        backupBusy = false
+                        operationBusy = false
                         exportGenerating = false
                     }
                 }
@@ -605,22 +606,21 @@ fun BackupSettingsScreen(
                 items = remoteItems,
                 loading = remoteLoading,
                 error = remoteError,
-                busy = webDavBusy,
+                busy = operationBusy,
                 onDismiss = { showRemoteList = false },
                 onRefresh = openRemoteList,
                 onRestore = { item ->
-                    // Set busy synchronously on entry, BEFORE the async gap that
-                    // downloads the payload — otherwise the restore button stays
-                    // enabled during the network window and a fast double-tap
-                    // launches two concurrent restores (each triggers its own
-                    // pre-restore snapshot export and the two imports then
-                    // clobber each other). restoreWithSnapshot() sets busy again
-                    // (idempotent) and clears it in its finally on the happy path.
-                    if (!webDavBusy) {
-                        webDavBusy = true
-                        // The download must survive navigation away too — the
-                        // whole restore (download → snapshot → import) runs on
-                        // the app scope so leaving the screen cannot abort it.
+                    // [refactor-backup-gate] Do NOT claim the global operationBusy
+                    // here. The async download must show progress (sheet busy) but
+                    // must not hold the single mutual-exclusion gate — restoreWith
+                    // Snapshot() is the one-and-only claim entry for restores, so
+                    // its own gate check (reject if a backup is already in flight)
+                    // still works. Holding the gate across the network gap would
+                    // make that check see "busy" and wrongly refuse this very
+                    // restore (self-collision). The download re-enables the sheet
+                    // via remoteLoading to prevent double-taps.
+                    if (!operationBusy) {
+                        remoteLoading = true
                         application.applicationScope.launch {
                             try {
                                 val json = withContext(Dispatchers.IO) {
@@ -630,14 +630,13 @@ fun BackupSettingsScreen(
                                 restoreWithSnapshot(json)
                             } catch (t: Throwable) {
                                 errorMessage = webDavErrorMessage(context, t)
-                                // Download failed before restoreWithSnapshot ran,
-                                // so its finally won't reset us — do it here.
-                                webDavBusy = false
                                 notifier.notifyWorkCompleted(
                                     tag = "webdav-restore",
                                     title = context.getString(R.string.webdav_notify_title_failed),
                                     body = webDavErrorMessage(context, t),
                                 )
+                            } finally {
+                                remoteLoading = false
                             }
                         }
                     }
@@ -660,7 +659,7 @@ fun BackupSettingsScreen(
                     onClick = {
                         val cfg = webDavConfig ?: return@TextButton
                         deletePending = null
-                        webDavBusy = true
+                        operationBusy = true
                         scope.launch {
                             try {
                                 withContext(Dispatchers.IO) {
@@ -675,7 +674,7 @@ fun BackupSettingsScreen(
                             } catch (t: Throwable) {
                                 errorMessage = webDavErrorMessage(context, t)
                             } finally {
-                                webDavBusy = false
+                                operationBusy = false
                             }
                         }
                     },
