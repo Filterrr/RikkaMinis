@@ -124,7 +124,29 @@ class PersistentShell(
         val lineCallback: ((String) -> Unit)?,
         var onComplete: ((String, Int, Boolean) -> Unit)? = null,
         var truncated: Boolean = false,
-    )
+    ) {
+        // [fix/crash-storm-double-resume] Completion can be signalled from
+        // two threads racing each other: `stop()` (running on the memory-
+        // monitor coroutine after it recycles the shell) and the reader
+        // loop (PersistentShell-reader thread exiting after the process is
+        // killed). Both used to call `onComplete` → `cont.resume` directly,
+        // so when they raced the SAME continuation got resumed twice and the
+        // process crashed with IllegalStateException: Already resumed.
+        // `cont.isActive` is NOT a safe guard here — after one resume() it
+        // turns false only after the suspension point is deregistered, which
+        // happens asynchronously on the coroutine dispatcher, leaving a
+        // window where a second resume still sees isActive==true. We use an
+        // atomic compare-and-set so exactly one thread wins; the loser is a
+        // benign no-op (the shell is gone, the command already reported).
+        private val completeOnce = java.util.concurrent.atomic.AtomicBoolean(false)
+
+        /** Signal completion, but only the first caller wins. */
+        fun finishOnce(output: String, exitCode: Int, truncated: Boolean) {
+            if (completeOnce.compareAndSet(false, true)) {
+                onComplete?.invoke(output, exitCode, truncated)
+            }
+        }
+    }
 
     /**
      * Ensure the persistent shell process is running.
@@ -284,7 +306,7 @@ class PersistentShell(
                         val exitCode = parseExitCode(afterMarker, cb.marker)
 
                         // Signal completion with truncated flag
-                        cb.onComplete?.invoke(cb.output.toString(), exitCode, cb.truncated)
+                        cb.finishOnce(cb.output.toString(), exitCode, cb.truncated)
                         pendingCallback = null
                     } else {
                         cb.appendOutput(text)
@@ -302,7 +324,7 @@ class PersistentShell(
         // Process exited
         val cb = pendingCallback
         if (cb != null) {
-            cb.onComplete?.invoke(cb.output.toString(), -1, cb.truncated)
+            cb.finishOnce(cb.output.toString(), -1, cb.truncated)
             pendingCallback = null
         }
 
@@ -491,7 +513,7 @@ class PersistentShell(
         process?.destroyForcibly()
         process = null
         pendingCallback?.let {
-            it.onComplete?.invoke(it.output.toString(), -1, it.truncated)
+            it.finishOnce(it.output.toString(), -1, it.truncated)
         }
         pendingCallback = null
         // [P2-app-native-oom] Reset command count for fresh shell.
