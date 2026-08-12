@@ -156,7 +156,7 @@ object ContextCompactor {
      * 这里是为了：(1) 单测锁定“路径/URL/UUID 原文保留”指令存在（T5 验收 4）；
      * (2) 自动/手动压缩共用同一提示词，不漂移。
      */
-    const val COMPACT_SUMMARY_SYSTEM_PROMPT: String = """
+    val COMPACT_SUMMARY_SYSTEM_PROMPT: String = """
         You are a context compaction engine. Your summary will REPLACE the original messages in the conversation context window. The agent will read your summary as past context, then proceed based on the user's NEXT message — your summary is background, not a standing work order. Write the summary in the same language the user used in the conversation.
 
         MUST PRESERVE (never omit or shorten):
