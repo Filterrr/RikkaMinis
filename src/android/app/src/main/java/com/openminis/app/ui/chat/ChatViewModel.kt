@@ -10786,6 +10786,11 @@ Environment variables:
         if (activeSessionId != sessionId) {
             ExecutionCoordinator.sessionDidTerminate(sessionId)
         }
+        // [T-android-trim-memory] Permanently dispose the browser tab pool:
+        // unregister ComponentCallbacks2 and destroy every WebView so renderer
+        // processes are freed when the ViewModel goes away.
+        _browserTabPoolRef?.dispose()
+        _browserTabPoolRef = null
     }
 
     /**
