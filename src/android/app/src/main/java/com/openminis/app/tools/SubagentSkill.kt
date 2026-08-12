@@ -193,8 +193,12 @@ object SubagentSkill {
                 .indexOfFirst { it.trim().startsWith("---") }
                 .takeIf { it >= 0 }
                 ?.plus(1)
-            if (endIdx != null && endIdx + 1 < lines.size) {
-                val contentLines = lines.subList(endIdx + 1, lines.size)
+            if (endIdx != null) {
+                val contentLines = if (endIdx + 1 < lines.size) {
+                    lines.subList(endIdx + 1, lines.size)
+                } else {
+                    emptyList()
+                }
                 val content = contentLines.joinToString("\n").trim()
                 if (content.isNotBlank()) return content
                 // Frontmatter-only skill (no body content) → fall back to description.
