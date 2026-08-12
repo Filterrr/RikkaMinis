@@ -64,7 +64,7 @@ object MemoryRollupEngine {
 
         val matches = TIMESTAMP_MARKER.findAll(text).toList()
         if (matches.isEmpty()) {
-            return listOf(Entry(null, text.trim()))
+            return listOf(Entry(null, text.trim(), extractTitle(text.trim())))
         }
 
         val entries = mutableListOf<Entry>()
@@ -89,18 +89,26 @@ object MemoryRollupEngine {
 
     // ── Classification heuristics ────────────────────────────────────────
 
-    /** Signals that the note is still in-flight (to-do, unimplemented, pending). */
+    /** Signals that a note is still in-flight (to-do, unimplemented, pending). */
     private val UNFINISHED_SIGNALS = listOf(
-        "待办", "待做", "待验证", "待查", "待用户", "待确认", "待决定", "待后续", "待定",
-        "未实施", "未提交", "未推送", "未合并", "未定位", "未决定", "未开始", "未测试", "未验证", "未完成",
-        "进行中", "尚未", "下一步", "未落地",
+        "待办", "待做", "TODO",
+        "待验证", "待查", "待用户", "待确认", "待决定", "待后续", "待定",
+        "未实施", "未提交", "未推送", "未合并", "未定位", "未决定", "未开始", "未测试", "未验证", "未完成", "未落地",
+        "进行中", "尚未", "下一步",
     )
 
-    /** Signals that the note converged — something finished, was confirmed, or produced knowledge. */
-    private val CONVERGED_SIGNALS = listOf(
-        "✅", "完成", "已确认", "已合并", "已修复", "已上线", "已生效", "已落地", "已建立", "已创建", "已交付", "已固化",
-        "验证通过", "闭环", "根因", "结论", "经验", "教训", "踩坑", "关键", "机制", "原则", "生效", "修复成功",
-        "确认", "决定", "合并 main", "合并到", "已记录", "已抽", "已补",
+    /**
+     * Strict convergence signals: the note records a completed / confirmed /
+     * distilled fact. Ambiguous words such as bare "确认" and "决定" that
+     * could be part of an unfinished phrase ("待确认", "未决定") are
+     * excluded — they are covered by the unfinished check.
+     */
+    private val STRICT_CONVERGED_SIGNALS = listOf(
+        "✅", "完成", "已确认", "已合并", "已修复", "已上线", "已生效", "已落地",
+        "已建立", "已创建", "已交付", "已固化",
+        "验证通过", "闭环", "根因", "结论", "经验", "教训", "踩坑",
+        "关键", "机制", "原则", "生效", "修复成功",
+        "已记录", "已抽", "已补",
     )
 
     /** Signals that the note states a standing convention / discipline / protocol. */
@@ -115,29 +123,58 @@ object MemoryRollupEngine {
         "用户观察", "用户提出", "用户诉", "用户认为",
     )
 
-    fun isUnfinishedSignal(text: String): Boolean = containsAny(text, UNFINISHED_SIGNALS)
-    fun isConvergedSignal(text: String): Boolean = containsAny(text, CONVERGED_SIGNALS)
+    // ── Classification heuristics ────────────────────────────────────────
+
+    /**
+     * Whether the entry's title (or the first 20 chars of body, for
+     * marker-less entries) starts with an unfinished signal — a strong
+     * indicator this note is a to-do or pending item, not a finished rule.
+     *
+     * A strong-unfinished entry is always filtered regardless of whether
+     * the body also contains convergence words (e.g. "待办：合并到 main"
+     * has a convergence word "合并到" but should still be filtered).
+     */
+    private fun isStrongUnfinished(entry: Entry): Boolean {
+        // Check title first
+        if (entry.title != null && containsAny(entry.title, UNFINISHED_SIGNALS)) return true
+        // Check body start (first 20 characters)
+        val bodyStart = entry.body.take(20)
+        return containsAny(bodyStart, UNFINISHED_SIGNALS)
+    }
+
+    /** Whether the body contains an unfinished signal anywhere. */
+    private fun isWeakUnfinished(body: String): Boolean = containsAny(body, UNFINISHED_SIGNALS)
+
+    /** Whether the body contains a strict convergence signal. */
+    private fun isStrictlyConverged(body: String): Boolean = containsAny(body, STRICT_CONVERGED_SIGNALS)
 
     /**
      * Assign an entry to a rollup bucket.
      *
-     * Rule order matters:
-     * 1. Unfinished and not yet converged → TRANSIENT (a pending to-do is not a rule).
-     * 2. Convention signals → CONVENTION.
-     * 3. User signals → USER_DECISION.
-     * 4. Everything else with a title (or a reasonably long body) → LESSON.
-     * 5. Short marker-less noise → TRANSIENT.
+     * Decision order (lowest to highest priority):
+     * 1. Strong unfinished (title or body start) → TRANSIENT (always filter).
+     * 2. Weak unfinished without strict convergence → TRANSIENT.
+     * 3. Convention signals → CONVENTION.
+     * 4. User signals → USER_DECISION.
+     * 5. Titled or reasonably long body → LESSON.
+     * 6. Strict convergence alone → LESSON.
+     * 7. Short untitled noise → TRANSIENT.
      */
     fun classify(entry: Entry): RollupClass {
         if (entry.body.isBlank()) return RollupClass.TRANSIENT
 
-        val unfinished = isUnfinishedSignal(entry.body)
-        val converged = isConvergedSignal(entry.body)
-        if (unfinished && !converged) return RollupClass.TRANSIENT
+        // 1. Strong unfinished → always transient
+        if (isStrongUnfinished(entry)) return RollupClass.TRANSIENT
 
+        // 2. Weak unfinished without convergence → transient
+        if (isWeakUnfinished(entry.body) && !isStrictlyConverged(entry.body))
+            return RollupClass.TRANSIENT
+
+        // 3-5. Bucket assignment
         if (containsAny(entry.body, CONVENTION_SIGNALS)) return RollupClass.CONVENTION
         if (containsAny(entry.body, USER_SIGNALS)) return RollupClass.USER_DECISION
         if (entry.title != null || entry.body.length >= 40) return RollupClass.LESSON
+        if (isStrictlyConverged(entry.body)) return RollupClass.LESSON
         return RollupClass.TRANSIENT
     }
 
