@@ -387,8 +387,8 @@ private fun FileItemRow(
 
     // [T-android-file-context-copy-abs-path] File context menu, anchored to
     // the row's bounding Box. Always offers "Copy Absolute Path"; the
-    // HTML-only "Add to Home" item below stays gated behind the unvalidated
-    // WebApp entry point (TODO webapp-hidden).
+    // HTML-only "Add to Home" item below stays gated behind the
+    // intentionally-hidden WebApp entry point.
     run {
         val context = LocalContext.current
         com.openminis.app.ui.components.MinisMenu(
@@ -416,9 +416,7 @@ private fun FileItemRow(
                     ).show()
                 },
             )
-            // TODO(webapp-hidden): WebApp / "Add to Home Screen" item temporarily
-            // hidden — feature not yet validated/complete. Re-enable by removing
-            // `false &&` from the guard below.
+            // Intentionally hidden (WebApp entry point).
             if (false && isHtml) {
             DropdownMenuItem(
                 text = { Text(stringResource(R.string.webapp_add_to_home)) },

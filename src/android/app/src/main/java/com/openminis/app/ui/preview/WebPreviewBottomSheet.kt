@@ -83,9 +83,7 @@ import com.openminis.app.logging.AppLogger
  * dismisses every preview surface, so a sheet → fullscreen → close
  * sequence still routes through one teardown.
  */
-// TODO(webapp-hidden): flip to `true` to restore the WebApp "Pin to Home
-// Screen" entry in the web preview "..." menu. Feature is intentionally
-// hidden until validation/development completes.
+// Intentionally hidden (WebApp entry point).
 private const val WEBAPP_PIN_ENTRY_ENABLED = false
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -206,10 +204,7 @@ fun WebPreviewBottomSheet(
                     openExternalFromSheet(context, holder.currentUrl)
                 },
                 onToggleDesktop = { holder.toggleDesktopMode() },
-                // TODO(webapp-hidden): WebApp "Pin to Home Screen" entry
-                // temporarily hidden — feature not yet validated/complete.
-                // Re-enable by removing the `@Suppress` block and restoring
-                // the original `if (pinSessionId != null && …)` guard.
+                // Intentionally hidden (WebApp entry point).
                 onPinToHome = if (pinSessionId != null && holder.currentUrl.startsWith("file://") && WEBAPP_PIN_ENTRY_ENABLED) {
                     {
                         com.openminis.app.ui.preview.WebPreviewShortcut.pin(
