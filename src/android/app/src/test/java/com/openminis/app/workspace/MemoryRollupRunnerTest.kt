@@ -8,33 +8,48 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
+import java.text.SimpleDateFormat
 import java.util.Date
+import java.util.Locale
 import java.util.UUID
 
 /**
  * JVM integration tests for [MemoryRollupRunner] against a real temp directory.
  * Verifies the full I/O pipeline: reading yesterday's log, distilling, writing
  * the rollup file, and idempotency. The source log is never modified.
+ *
+ * Dates are DERIVED from the fixed clock through the same formatter the runner
+ * uses, so the tests stay correct in any default timezone (CI runs in UTC).
  */
 class MemoryRollupRunnerTest {
 
     private val tempDir = File(System.getProperty("java.io.tmpdir"), "t6-test-${UUID.randomUUID().take(8)}")
     private val memoryDir = File(tempDir, "minis-global/memory")
 
+    /** Fixed clock: 2026-08-12 00:00:00 UTC. */
+    private val fixedNow: Date = Date(1786492800000L)
+    private val fixedClock: () -> Date = { fixedNow }
+    private val dayMs = 86_400_000L
+    private val dateFmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+
+    /** Yesterday's file name as the runner computes it (same formatter, same timezone). */
+    private fun yesterdayFile(): String = "${dateFmt.format(Date(fixedNow.time - dayMs))}.md"
+
+    /** Today's file name (used for negative tests). */
+    private fun todayFile(): String = "${dateFmt.format(fixedNow)}.md"
+
+    private fun yesterdayRollupHeader(): String = "## Rollup ${dateFmt.format(Date(fixedNow.time - dayMs))}"
+
     @After
     fun tearDown() {
         tempDir.deleteRecursively()
     }
 
-    /** Fixed clock so "yesterday" is always 2026-08-11. */
-    private val fixedClock = { Date(1723411200000L) } // 2026-08-12 12:00:00 GMT
-
     // ─── ROLLED_UP ────────────────────────────────────────────────────
 
     @Test fun rolledUp_producesRollupFile_withStableRules() {
-        // Write today's log (not yesterday's — runner reads yesterday)
-        // runner reads yesterday = 2026-08-11
-        val yesterdayLog = """
+        memoryDir.mkdirs()
+        File(memoryDir, yesterdayFile()).writeText("""
             <!-- 2026-08-11 09:00:00 -->
             ## 分支隔离纪律
             任何代码修改必须在独立分支上完成，不得直接在 main 工作
@@ -47,9 +62,7 @@ class MemoryRollupRunnerTest {
             ## 待办事项
             待用户确认方案后再动
 
-        """.trimIndent()
-        memoryDir.mkdirs()
-        File(memoryDir, "2026-08-11.md").writeText(yesterdayLog)
+        """.trimIndent())
 
         val runner = MemoryRollupRunner(memoryDir, clock = fixedClock)
         val outcome = runner.runOnce()
@@ -62,7 +75,7 @@ class MemoryRollupRunnerTest {
         val content = rollupFile.readText()
 
         // Contains the stable rules (convention + lesson)
-        assertTrue(content.contains("## Rollup 2026-08-11"))
+        assertTrue(content.contains(yesterdayRollupHeader()))
         assertTrue(content.contains("### 约定与纪律"))
         assertTrue(content.contains("分支隔离纪律"))
         assertTrue(content.contains("### 经验与知识点"))
@@ -72,23 +85,26 @@ class MemoryRollupRunnerTest {
         assertFalse(content.contains("待办事项"))
 
         // Original log untouched
-        assertEquals(yesterdayLog, File(memoryDir, "2026-08-11.md").readText())
+        assertEquals(
+            "<!-- 2026-08-11 09:00:00 -->\n## 分支隔离纪律\n任何代码修改必须在独立分支上完成，不得直接在 main 工作\n\n<!-- 2026-08-11 10:00:00 -->\n## 踩坑\n顶层扩展函数 toProviderConfig 需要显式 import\n\n<!-- 2026-08-11 11:00:00 -->\n## 待办事项\n待用户确认方案后再动",
+            File(memoryDir, yesterdayFile()).readText().trim(),
+        )
     }
 
     // ─── SKIPPED_ALREADY ──────────────────────────────────────────────
 
     @Test fun alreadyRolledUp_skipsIdempotently() {
         memoryDir.mkdirs()
-        File(memoryDir, "2026-08-11.md").writeText("## 纪律\n必须使用分支")
+        File(memoryDir, yesterdayFile()).writeText("## 纪律\n必须使用分支")
         // Pre-existing rollup file with the date section
-        File(memoryDir, ROLLUP_FILE).writeText("## Rollup 2026-08-11\n\n### 约定与纪律\n- **纪律**：必须使用分支\n")
+        File(memoryDir, ROLLUP_FILE).writeText("${yesterdayRollupHeader()}\n\n### 约定与纪律\n- **纪律**：必须使用分支\n")
 
         val runner = MemoryRollupRunner(memoryDir, clock = fixedClock)
         assertEquals(Outcome.SKIPPED_ALREADY, runner.runOnce())
 
         // File unchanged (no second append)
         assertEquals(
-            "## Rollup 2026-08-11\n\n### 约定与纪律\n- **纪律**：必须使用分支\n",
+            "${yesterdayRollupHeader()}\n\n### 约定与纪律\n- **纪律**：必须使用分支\n",
             File(memoryDir, ROLLUP_FILE).readText(),
         )
     }
@@ -98,7 +114,7 @@ class MemoryRollupRunnerTest {
     @Test fun noLogYesterday_returnsNoLog() {
         memoryDir.mkdirs()
         // Only today's log, no yesterday's
-        File(memoryDir, "2026-08-12.md").writeText("## 今天\n内容")
+        File(memoryDir, todayFile()).writeText("## 今天\n内容")
 
         val runner = MemoryRollupRunner(memoryDir, clock = fixedClock)
         assertEquals(Outcome.NO_LOG_YESTERDAY, runner.runOnce())
@@ -109,7 +125,7 @@ class MemoryRollupRunnerTest {
 
     @Test fun emptyLogYesterday_returnsNoLog() {
         memoryDir.mkdirs()
-        File(memoryDir, "2026-08-11.md").writeText("")
+        File(memoryDir, yesterdayFile()).writeText("")
         assertEquals(Outcome.NO_LOG_YESTERDAY, MemoryRollupRunner(memoryDir, clock = fixedClock).runOnce())
     }
 
@@ -117,7 +133,7 @@ class MemoryRollupRunnerTest {
 
     @Test fun nothingToDistill_whenAllEntriesAreTransient() {
         memoryDir.mkdirs()
-        File(memoryDir, "2026-08-11.md").writeText("""
+        File(memoryDir, yesterdayFile()).writeText("""
             <!-- 2026-08-11 09:00:00 -->
             **待办**：CI 绿 → 合并
 
@@ -138,15 +154,15 @@ class MemoryRollupRunnerTest {
     @Test fun sourceLog_neverModified_afterRollup() {
         memoryDir.mkdirs()
         val log = "<!-- 2026-08-11 08:00:00 -->\n## 规则\n必须使用分支\n"
-        File(memoryDir, "2026-08-11.md").writeText(log)
+        File(memoryDir, yesterdayFile()).writeText(log)
 
         MemoryRollupRunner(memoryDir, clock = fixedClock).runOnce()
-        assertEquals(log, File(memoryDir, "2026-08-11.md").readText())
+        assertEquals(log, File(memoryDir, yesterdayFile()).readText())
     }
 
     @Test fun multipleRuns_idempotent() {
         memoryDir.mkdirs()
-        File(memoryDir, "2026-08-11.md").writeText("## 规则\n必须使用分支")
+        File(memoryDir, yesterdayFile()).writeText("## 规则\n必须使用分支")
         val runner = MemoryRollupRunner(memoryDir, clock = fixedClock)
 
         assertEquals(Outcome.ROLLED_UP, runner.runOnce())
@@ -157,19 +173,20 @@ class MemoryRollupRunnerTest {
     @Test fun rollupFile_accumulatesMultipleDays() {
         memoryDir.mkdirs()
 
-        // Day 1: yesterday = 2026-08-11
-        File(memoryDir, "2026-08-11.md").writeText("## 纪律\n使用分支")
-        val clock1 = { Date(1723411200000L) } // 2026-08-12
-        assertEquals(Outcome.ROLLED_UP, MemoryRollupRunner(memoryDir, clock = clock1).runOnce())
+        // Day 1: clock = fixedNow (yesterday = day A)
+        val dayA = yesterdayFile()
+        File(memoryDir, dayA).writeText("## 纪律\n使用分支")
+        assertEquals(Outcome.ROLLED_UP, MemoryRollupRunner(memoryDir, clock = fixedClock).runOnce())
 
-        // Day 2: yesterday = 2026-08-12 (time advanced by 24h)
-        File(memoryDir, "2026-08-12.md").writeText("## 经验\n根因是跨层 gap")
-        val clock2 = { Date(1723497600000L) } // 2026-08-13
+        // Day 2: clock advanced by 24h (yesterday = day B)
+        val clock2 = { Date(fixedNow.time + dayMs) }
+        val dayB = dateFmt.format(Date(fixedNow.time)) + ".md"
+        File(memoryDir, dayB).writeText("## 经验\n根因是跨层 gap")
         assertEquals(Outcome.ROLLED_UP, MemoryRollupRunner(memoryDir, clock = clock2).runOnce())
 
         val content = File(memoryDir, ROLLUP_FILE).readText()
-        assertTrue(content.contains("## Rollup 2026-08-11"))
-        assertTrue(content.contains("## Rollup 2026-08-12"))
+        assertTrue(content.contains("## Rollup ${dayA.removeSuffix(".md")}"))
+        assertTrue(content.contains("## Rollup ${dayB.removeSuffix(".md")}"))
         assertTrue(content.contains("使用分支"))
         assertTrue(content.contains("根因是跨层 gap"))
     }
