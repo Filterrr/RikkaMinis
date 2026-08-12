@@ -318,6 +318,24 @@ ANSI/CSI/OSC 解析与 TUI 渲染引擎。
 多 LLM 客户端，为 RikkaMinis 的聊天 UI 与交互逻辑提供设计灵感（借鉴灵感，
 非代码复制）。
 
+**Android 端侧 AI 智能体参考** — 以下项目为 RikkaMinis 的 agent 运行时、
+自动化与系统集成能力提供了设计参考（借鉴思路，非代码复制）：
+
+- **[OmniBot](https://github.com/omnimind-ai/OmniBot)** — 工具并发、回合折叠、
+  自动压缩、记忆 rollup、子代理系统
+- **[肉包 Roubao](https://github.com/Turbo1123/roubao)** — 宏脚本、执行追踪
+- **[AppAgent](https://github.com/TencentQQGYLab/AppAgent)**
+- **[MobileAgent-Android](https://github.com/GiggleWang/MobileAgent-Android)**
+- **[mobAgent](https://github.com/sudharsanacernitro/mobAgent)**
+- **[anthroid](https://github.com/k-l-lambda/anthroid)**
+- **[OpenPhone](https://github.com/HKUDS/OpenPhone)**
+- **[MobileAgent](https://github.com/X-PLUG/MobileAgent)**
+- **[Open-AutoGLM](https://github.com/zai-org/Open-AutoGLM)**
+- **[OpenGUI](https://github.com/Core-Mate/OpenGUI)**
+- **[mobilerun](https://github.com/droidrun/mobilerun)**
+- **[locanara](https://github.com/hyodotdev/locanara)**
+- **[deliteAI](https://github.com/NimbleEdge/deliteAI)**
+
 **Android** — [AndroidX & Jetpack Compose](https://developer.android.com/jetpack)、
 [OkHttp](https://square.github.io/okhttp/)、[Coil](https://coil-kt.github.io/coil/)、
 [kotlinx](https://github.com/Kotlin) 序列化与协程、
