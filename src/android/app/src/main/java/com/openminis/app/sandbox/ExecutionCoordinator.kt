@@ -196,7 +196,7 @@ object ExecutionCoordinator {
             // command. At most 2 attempts total — guards against infinite retry
             // loops. The agent/user sees a single successful result for
             // transient infra failures.
-            val result = executeWithShellRetry(
+            val (result, shell) = executeWithShellRetry(
                 sessionId = sessionId,
                 command = command,
                 timeout = timeout,
@@ -219,7 +219,7 @@ object ExecutionCoordinator {
             // reads the real child (PersistentShell.nativeRssMB) — NOT app
             // Debug.getNativeHeapAllocatedSize(), which misses the leak.
             lastActiveMs[sessionId] = SystemClock.elapsedRealtime()
-            val prootRssMB = shell.nativeRssMB()
+            val prootRssMB = shell?.nativeRssMB() ?: 0L
             if (prootRssMB > NATIVE_HEAP_HIGH_WATER_MARK_MB) {
                 Log.w(TAG, "[$sessionId] PRoot child RSS > ${NATIVE_HEAP_HIGH_WATER_MARK_MB}MB after command — recycling PRoot shell")
                 sessionDidTerminate(sessionId)
@@ -243,7 +243,7 @@ object ExecutionCoordinator {
 
             val nativeOversized = nativeHeapMB > APP_NATIVE_HEAP_HIGH_WATER_MARK_MB
             val javaPressured = javaHeapFrac > JAVA_HEAP_PRESSURE_THRESHOLD
-            val cmdOverLimit = shell.commandCount >= MAX_COMMANDS_PER_SHELL
+            val cmdOverLimit = (shell?.commandCount ?: 0) >= MAX_COMMANDS_PER_SHELL
 
             when {
                 nativeOversized -> Log.w(
@@ -289,11 +289,13 @@ object ExecutionCoordinator {
         command: String,
         timeout: Long,
         lineCallback: ((String) -> Unit)?,
-    ): CommandResult {
+    ): Pair<CommandResult, PersistentShell?> {
         var attempt = 0
+        var lastShell: PersistentShell? = null
         while (true) {
             attempt++
             val shell = getOrCreateShell(sessionId)
+            lastShell = shell
 
             // Inject environment variables as a full snapshot (T124a).
             val envVars = envVarRepository?.allAsDict() ?: emptyMap()
@@ -320,7 +322,10 @@ object ExecutionCoordinator {
             // Shell died mid-command — rebuild once and retry.
             val shellDied = result.exitCode == -1 || !shell.isAlive
             if (!shellDied || attempt >= 2) {
-                return result
+                if (shellDied && attempt >= 2) {
+                    lastShell = null // shell is dead and we're out of retries
+                }
+                return result to lastShell
             }
 
             Log.w(
