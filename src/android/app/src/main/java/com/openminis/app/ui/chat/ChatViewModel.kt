@@ -50,6 +50,7 @@ import com.openminis.app.sandbox.ExecutionCoordinator
 import com.openminis.app.sandbox.PRootKernel
 import com.openminis.app.terminal.MinisOpenUrlBroker
 import com.openminis.app.terminal.MinisUrlMarker
+import com.openminis.app.tools.AgentTraceRecorder
 import com.openminis.app.tools.AgentTools
 import com.openminis.app.tools.FileEditTool
 import com.openminis.app.tools.FileReadTool
@@ -84,6 +85,10 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 // [T-android-split-chat] StreamingDelta / ChatMessage / QueuedPrompt /
 // ToolBlockStatus / SlashCommand / AssistantBlock moved verbatim to ChatModels.kt.
@@ -124,6 +129,9 @@ class ChatViewModel(
          * AIChatViewModel.preflightEmptyStringAllowedFields.
          * [T-preflight-empty-string-allowed]
          */
+        /** T9: trace retention cap per session (oldest pruned first). */
+        const val MAX_TRACE_FILES_PER_SESSION = 20
+
         private val PREFLIGHT_EMPTY_STRING_ALLOWED_FIELDS: Map<String, Set<String>> = mapOf(
             "file_edit" to setOf("new_string"),
         )
@@ -834,6 +842,30 @@ class ChatViewModel(
      * touches the ToolExecutionResult returned to the LLM.
      */
     private val toolFailureHook = ToolFailureHook(writeErrorBlock = { block -> appendToolFailureBlock(block) })
+
+    /**
+     * T9: agent execution trace recorder. Side-channel only — records one
+     * JSONL line per event into the session's `workspace/.traces/agent-<ts>.jsonl`
+     * so a full agent run (turns → tool calls → results → token usage) can be
+     * replayed / filtered / exported afterwards. The trace NEVER alters the
+     * LLM result path; a write failure is swallowed like the failure hook.
+     */
+    private val agentTraceRecorder = AgentTraceRecorder(appendLine = { line -> appendTraceLine(line) })
+
+    /**
+     * Host-side state backing [agentTraceRecorder]:
+     *  - [traceRunFile] — the file of the run currently being recorded
+     *    (null when no run is active). Captured at runAgentLoop entry so every
+     *    event of one run lands in the same file even though the recorder's
+     *    sink is a stateless callback.
+     *  - [activeTraceTurn] — current loop turn index, read by executeTool so
+     *    tool events carry the turn they belong to.
+     */
+    @Volatile
+    private var traceRunFile: File? = null
+
+    @Volatile
+    private var activeTraceTurn = -1
 
     /**
      * Cached reference to the lazily-created [BrowserTabPool] so
@@ -6494,6 +6526,17 @@ class ChatViewModel(
         fallbackStrategy: com.openminis.app.data.model.FallbackStrategy = com.openminis.app.data.model.FallbackStrategy.default,
     ) {
         AppLogger.info(TAG_STREAM, "runAgentLoop ENTER provider=${provider.javaClass.simpleName} historySize=${agentHistory.size}")
+        // T9: start a fresh trace for this run. The file is captured once so
+        // every event of the run lands in the same JSONL file; the loop's
+        // per-turn / per-tool hooks below append to it.
+        val traceStartMs = System.currentTimeMillis()
+        traceRunFile = newTraceFile()
+        activeTraceTurn = -1
+        agentTraceRecorder.traceStart(
+            sessionId = activeSessionId,
+            provider = provider.javaClass.simpleName,
+            prompt = agentHistory.lastOrNull { it.role == LLMMessage.Role.USER && it.content.isNotBlank() }?.content.orEmpty(),
+        )
         // [T-android-queued-message-interrupt-on-toolclose] `assistantId` is
         // normally a single message id for the whole agent loop (iOS-parity:
         // multiple tool/text turns folded into one bubble). It is reassigned
@@ -6623,6 +6666,11 @@ class ChatViewModel(
         for (turn in 0 until MAX_AGENT_TURNS) {
             // Sanitize history before each API call (mirrors iOS pre-API validation)
             sanitizeAgentHistory()
+
+            // T9: per-turn trace hook
+            val turnStartMs = System.currentTimeMillis()
+            activeTraceTurn = turn
+            agentTraceRecorder.turnStart(turn)
 
             // Context window management: offload large tool outputs in older
             // messages to disk when the policy threshold for this model's
@@ -7427,6 +7475,14 @@ class ChatViewModel(
                         // same wall again".
                         lengthWallEmptyHits++
                         if (lengthWallEmptyHits < 3) {
+                            // T9: log the wasted empty-length iteration
+                            agentTraceRecorder.turnEnd(
+                                turn = turn,
+                                tokensIn = lastUsage?.inputTokens,
+                                tokensOut = lastUsage?.outputTokens,
+                                finishReason = turnFinishReason,
+                                durationMs = System.currentTimeMillis() - turnStartMs,
+                            )
                             AppLogger.warning(
                                 TAG_STREAM,
                                 "runAgentLoop turn=$turn finish=length with empty output (wall hit $lengthWallEmptyHits/3), continuing",
@@ -7448,6 +7504,14 @@ class ChatViewModel(
                     } else {
                         // Truncated mid-answer: continue so the model finishes.
                         lengthWallEmptyHits = 0
+                        // T9: log the truncated turn before continuing
+                        agentTraceRecorder.turnEnd(
+                            turn = turn,
+                            tokensIn = lastUsage?.inputTokens,
+                            tokensOut = lastUsage?.outputTokens,
+                            finishReason = turnFinishReason,
+                            durationMs = System.currentTimeMillis() - turnStartMs,
+                        )
                         AppLogger.warning(
                             TAG_STREAM,
                             "runAgentLoop turn=$turn finish=length — truncated (${turnText.length} chars), continuing loop to let the model finish",
@@ -7558,6 +7622,14 @@ class ChatViewModel(
                     continue
                 }
 
+                // T9: close out the final turn (no tool calls → normal completion)
+                agentTraceRecorder.turnEnd(
+                    turn = turn,
+                    tokensIn = lastUsage?.inputTokens,
+                    tokensOut = lastUsage?.outputTokens,
+                    finishReason = turnFinishReason,
+                    durationMs = System.currentTimeMillis() - turnStartMs,
+                )
                 loopExitedNormally = true
                 break
             }
@@ -7900,6 +7972,15 @@ class ChatViewModel(
                 generateSessionTitleIfNeeded()
             }
 
+            // T9: close out this tool-running turn (tokens + finish + elapsed)
+            agentTraceRecorder.turnEnd(
+                turn = turn,
+                tokensIn = lastUsage?.inputTokens,
+                tokensOut = lastUsage?.outputTokens,
+                finishReason = turnFinishReason,
+                durationMs = System.currentTimeMillis() - turnStartMs,
+            )
+
             // [T-android-queued-message-interrupt-on-toolclose] iOS d14174d3
             // parity. User report: "怎么样了" queued bubble (dashed border,
             // red X) stayed pending behind a long sync→export→read→gh-issue
@@ -7980,12 +8061,42 @@ class ChatViewModel(
         } else {
             AppLogger.info(TAG_STREAM, "runAgentLoop EXIT (loop body ended naturally)")
         }
+        // T9: close the trace for this run
+        agentTraceRecorder.traceEnd(
+            normalExit = loopExitedNormally,
+            turnCount = (activeTraceTurn + 1).coerceAtLeast(0),
+            durationMs = System.currentTimeMillis() - traceStartMs,
+            error = if (!loopExitedNormally) "MAX_AGENT_TURNS" else null,
+        )
+        traceRunFile = null
         } catch (e: CancellationException) {
+            // T9: cancel is intentional — trace the interruption
+            runCatching {
+                agentTraceRecorder.error(turn = activeTraceTurn, phase = "cancel", message = "runAgentLoop cancelled")
+                agentTraceRecorder.traceEnd(
+                    normalExit = false,
+                    turnCount = (activeTraceTurn + 1).coerceAtLeast(0),
+                    durationMs = System.currentTimeMillis() - traceStartMs,
+                    error = "cancelled",
+                )
+            }
+            traceRunFile = null
             // Job cancelled mid-task (user stop / session switch / queue
             // takeover): rethrow so cancellation propagates as before (e.g.
             // the queue switch handler depends on it).
             throw e
         } catch (e: Exception) {
+            // T9: log the unexpected error, then rethrow
+            runCatching {
+                agentTraceRecorder.error(turn = activeTraceTurn, phase = "exception", message = "${e.javaClass.simpleName}: ${e.message}")
+                agentTraceRecorder.traceEnd(
+                    normalExit = false,
+                    turnCount = (activeTraceTurn + 1).coerceAtLeast(0),
+                    durationMs = System.currentTimeMillis() - traceStartMs,
+                    error = "${e.javaClass.simpleName}: ${e.message}",
+                )
+            }
+            traceRunFile = null
             // Unexpected failure: rethrow so the caller's error handling
             // behaves exactly as before.
             throw e
@@ -8059,6 +8170,10 @@ class ChatViewModel(
         // bridge, which is now where checkPermission runs.
         val toolTitle = try { JSONObject(argsJson).optString("tool_title", name) } catch (_: Exception) { name }
 
+        // T9: record tool call event
+        val etStartMs = System.currentTimeMillis()
+        agentTraceRecorder.toolCall(activeTraceTurn, toolId, name, argsJson)
+
         val result = when (name) {
             FileReadTool.NAME -> {
                 val result = FileReadTool.execute(argsJson, activeSessionId, context)
@@ -8094,6 +8209,16 @@ class ChatViewModel(
             "memory_rollup" -> executeMemoryRollupTool()
             else -> ToolExecutionResult("Unknown tool: $name", false)
         }
+
+        // T9: record tool result event
+        agentTraceRecorder.toolResult(
+            turn = activeTraceTurn,
+            toolId = toolId,
+            name = name,
+            success = result.success,
+            output = result.output,
+            durationMs = System.currentTimeMillis() - etStartMs,
+        )
 
         // T3: failure-learning automation hook. Side-channel only — the
         // failed result still flows to the LLM exactly as before; this just
@@ -8132,6 +8257,62 @@ class ChatViewModel(
             ) ?: return
             file.parentFile?.mkdirs()
             file.appendText(block)
+        }
+    }
+
+    /**
+     * T9: persist one trace line into the run's trace file. The file is
+     * captured once at runAgentLoop entry ([newTraceFile]) so a single run
+     * never fragments across files. Failures are swallowed — tracing must
+     * never break the agent loop.
+     */
+    private fun appendTraceLine(line: String) {
+        runCatching {
+            val file = traceRunFile ?: return
+            file.appendText("$line\n")
+        }
+    }
+
+    /**
+     * T9: allocate the trace file for a new run:
+     * `minis-sessions/<sid>/workspace/.traces/agent-<stamp>.jsonl`.
+     * Collision-safe (appends -2/-3…) and applies a simple retention cap
+     * (oldest files pruned beyond [MAX_TRACE_FILES_PER_SESSION]) so a chatty
+     * session can't accumulate unbounded trace data.
+     */
+    private fun newTraceFile(): File? {
+        return runCatching {
+            val stamps = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US)
+            val baseName = "agent-${stamps.format(Date())}"
+            val dir = PRootKernel.resolveSessionHostPath(
+                activeSessionId,
+                "/var/minis/workspace/.traces",
+                context,
+            ) ?: return null
+            dir.mkdirs()
+            var file = File(dir, "$baseName.jsonl")
+            var n = 2
+            while (file.exists()) {
+                file = File(dir, "$baseName-$n.jsonl")
+                n++
+            }
+            // Allocate the file now so its timestamp marks it as the newest —
+            // retention (which prunes oldest FIRST) then never kills the file
+            // we are about to write into.
+            file.createNewFile()
+            retainTraceFiles(dir)
+            file
+        }.getOrNull()
+    }
+
+    /** Keep at most [MAX_TRACE_FILES_PER_SESSION] files in [dir], oldest first. */
+    private fun retainTraceFiles(dir: File) {
+        runCatching {
+            val files = dir.listFiles { f -> f.isFile && f.name.endsWith(".jsonl") }
+                ?.sortedBy { it.lastModified() }?.toMutableList() ?: return
+            while (files.size > MAX_TRACE_FILES_PER_SESSION) {
+                files.removeAt(0).delete()
+            }
         }
     }
 
