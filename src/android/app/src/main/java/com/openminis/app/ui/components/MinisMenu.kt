@@ -12,7 +12,6 @@ import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.IntrinsicSize
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -22,13 +21,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.MenuDefaults
-import androidx.compose.material3.MenuItemColors
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalDensity
@@ -216,29 +212,4 @@ fun MinisMenuDivider(modifier: Modifier = Modifier) {
     )
 }
 
-/**
- * Consistent row padding + colors for menu items. Use this to tighten the
- * default Material3 48dp row to 44dp and give the leading icon breathing room
- * that matches the iOS context-menu look.
- */
-object MinisMenuDefaults {
-    val ItemPadding: PaddingValues = PaddingValues(horizontal = 14.dp, vertical = 0.dp)
 
-    @Composable
-    fun itemColors(
-        textColor: Color = MaterialTheme.colorScheme.onSurface,
-        leadingIconColor: Color = MaterialTheme.colorScheme.primary,
-        trailingIconColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
-    ): MenuItemColors = MenuDefaults.itemColors(
-        textColor = textColor,
-        leadingIconColor = leadingIconColor,
-        trailingIconColor = trailingIconColor,
-    )
-
-    @Composable
-    fun destructiveItemColors(): MenuItemColors = MenuDefaults.itemColors(
-        textColor = MaterialTheme.colorScheme.error,
-        leadingIconColor = MaterialTheme.colorScheme.error,
-        trailingIconColor = MaterialTheme.colorScheme.error,
-    )
-}
