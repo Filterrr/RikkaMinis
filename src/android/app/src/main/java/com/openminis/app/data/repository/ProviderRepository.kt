@@ -1741,7 +1741,7 @@ class ProviderRepository(private val context: Context) {
         if (instance.providerType == ProviderType.openAI
             && instance.credentialType == ProviderCredential.oauth
         ) {
-            val models = OpenAIModelsApi.fetchModelsOAuth()
+            val models = ModelListProviderRegistry.oauthModels(instance)
             if (models.isNotEmpty()) {
                 replaceEntries(instance.id, models)
                 return ModelRefreshResult.SUCCESS_OAUTH
@@ -1891,7 +1891,7 @@ class ProviderRepository(private val context: Context) {
             ProviderType.openAI -> "https://api.openai.com/v1"
             ProviderType.openRouter -> "https://openrouter.ai/api/v1"
             ProviderType.xAI -> "https://api.x.ai/v1"
-            ProviderType.kimiCode -> "${com.openminis.app.auth.KimiDeviceFlow.CODING_API_BASE}/v1"
+            ProviderType.kimiCode -> "https://api.kimi.com/coding/v1"
         }
     }
 
