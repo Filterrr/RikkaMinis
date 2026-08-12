@@ -45,7 +45,7 @@ class ChatViewModelCompanionTest {
     // ── preflightValidateToolCallImpl ──────────────────────────────────────
 
     private fun toolDef(name: String, required: List<String> = emptyList()) =
-        AgentToolDefinition(name = name, description = "test", required = required)
+        AgentToolDefinition(name = name, description = "test", parameters = emptyMap(), required = required)
 
     private fun preflightBlocking(name: String, args: JSONObject, tools: List<AgentToolDefinition>): String {
         val result = ChatViewModel.preflightValidateToolCallImpl(name, args, tools)
