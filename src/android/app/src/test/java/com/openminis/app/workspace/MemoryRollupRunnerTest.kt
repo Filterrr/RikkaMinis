@@ -23,7 +23,7 @@ import java.util.UUID
  */
 class MemoryRollupRunnerTest {
 
-    private val tempDir = File(System.getProperty("java.io.tmpdir"), "t6-test-${UUID.randomUUID().take(8)}")
+    private val tempDir = File(System.getProperty("java.io.tmpdir"), "t6-test-${UUID.randomUUID().toString().take(8)}")
     private val memoryDir = File(tempDir, "minis-global/memory")
 
     /** Fixed clock: 2026-08-12 00:00:00 UTC. */
