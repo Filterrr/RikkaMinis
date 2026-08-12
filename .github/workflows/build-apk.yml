@@ -179,6 +179,15 @@ jobs:
           cd src/android
           ./gradlew testReleaseUnitTest --stacktrace
 
+      # Compile instrumented (on-device) tests — they require a real device
+      # to run, so CI only validates compilation. The task assembles the
+      # debug test APK (including the ui-test-manifest dependency) and
+      # catches syntax/type errors in the androidTest sources.
+      - name: Compile instrumented tests (compile-time gate)
+        run: |
+          cd src/android
+          ./gradlew compileDebugAndroidTestKotlin --stacktrace
+
       - name: Build APK with Gradle
         run: |
           cd src/android
