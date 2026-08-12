@@ -65,4 +65,50 @@ class RootfsHealthTest {
             h.missing,
         )
     }
+
+    // ── Integrity manifest parsing tests ──────────────────────────────
+
+    @Test
+    fun `parse empty manifest yields empty map`() {
+        assertTrue(RootfsManager.parseIntegrityManifest("").isEmpty())
+        assertTrue(RootfsManager.parseIntegrityManifest("   \n\n  ").isEmpty())
+    }
+
+    @Test
+    fun `parse valid manifest lines`() {
+        val manifest = """
+            bin/bash=1234567
+            bin/sh=890123
+            lib/ld-musl-aarch64.so.1=456789
+        """.trimIndent()
+        val map = RootfsManager.parseIntegrityManifest(manifest)
+        assertEquals(3, map.size)
+        assertEquals(1234567L, map["bin/bash"])
+        assertEquals(890123L, map["bin/sh"])
+        assertEquals(456789L, map["lib/ld-musl-aarch64.so.1"])
+    }
+
+    @Test
+    fun `parse manifest skips malformed lines`() {
+        val manifest = """
+            bin/bash=1234567
+            no-equals-here
+            =nokey
+            libc=badvalue
+            bin/sh=890123
+        """.trimIndent()
+        val map = RootfsManager.parseIntegrityManifest(manifest)
+        assertEquals(2, map.size)
+        assertEquals(1234567L, map["bin/bash"])
+        assertEquals(890123L, map["bin/sh"])
+    }
+
+    @Test
+    fun `parse manifest with trailing newline and whitespace`() {
+        val manifest = "  bin/bash=100  \n  bin/sh=200  \n"
+        val map = RootfsManager.parseIntegrityManifest(manifest)
+        assertEquals(2, map.size)
+        assertEquals(100L, map["bin/bash"])
+        assertEquals(200L, map["bin/sh"])
+    }
 }

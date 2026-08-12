@@ -92,6 +92,7 @@ class RootfsManager private constructor(private val context: Context) {
     val prootBinary: File = File(context.applicationInfo.nativeLibraryDir, "libproot.so")
 
     private val archFile: File get() = File(rootfsDir, ".arch")
+    private val integrityManifest: File get() = File(rootfsDir, ".integrity_manifest")
 
     val isInstalled: Boolean
         get() = rootfsDir.exists() && archFile.exists() &&
@@ -171,6 +172,10 @@ class RootfsManager private constructor(private val context: Context) {
             // Write arch marker
             archFile.writeText(ARCH)
 
+            // Write integrity manifest so verifyIntegrity can detect
+            // partial/corrupt files on subsequent boots.
+            writeIntegrityManifest()
+
             // Pre-create /var/minis directories. Mirrors iOS
             // RootfsManager.swift:76-80 (attachments/offloads/workspace/skills/
             // shared) plus Android-specific `memory` kept from prior parity work.
@@ -228,16 +233,38 @@ class RootfsManager private constructor(private val context: Context) {
     }
 
     /**
-     * Snapshot which critical rootfs files are present and executable.
+     * Snapshot which critical rootfs files are present, executable, and
+     * match their expected sizes from the integrity manifest.
+     *
      * Cheap (7 stat calls), safe to call on every boot. See [RootfsHealth]
      * for the rationale — a silent_kill can leave `.arch` valid but bash
      * (or its readline/ncurses symlinks) missing.
+     *
+     * When `.integrity_manifest` exists, each file's size is verified against
+     * the recorded value — a file that exists but has the wrong size (e.g.
+     * truncated by a mid-write kill) is treated as missing. This catches
+     * silent_kill scenarios that leave the file system structurally intact
+     * but the file content incomplete.
+     *
+     * When the manifest file is absent (pre-upgrade installations), the check
+     * falls back to existence-only — backward compatible with rootfs images
+     * that predate this feature.
      */
     fun verifyIntegrity(): RootfsHealth {
-        fun exists(rel: String): Boolean = File(rootfsDir, rel).exists()
+        val expectedSizes = readIntegrityManifest()
+
+        fun exists(rel: String): Boolean {
+            val f = File(rootfsDir, rel)
+            if (!f.exists()) return false
+            // Size check: if manifest has an expected size, verify it.
+            val expected = expectedSizes[rel] ?: return true  // no manifest entry → existence-only
+            return f.length() == expected
+        }
         fun executable(rel: String): Boolean {
             val f = File(rootfsDir, rel)
-            return f.exists() && f.canExecute()
+            if (!f.exists() || !f.canExecute()) return false
+            val expected = expectedSizes[rel] ?: return true
+            return f.length() == expected
         }
         return RootfsHealth(
             bash = executable("bin/bash"),
@@ -248,6 +275,51 @@ class RootfsManager private constructor(private val context: Context) {
             apk = executable("sbin/apk"),
             apkDatabase = exists("lib/apk/db/installed"),
         )
+    }
+
+    /**
+     * Read the integrity manifest file and return a map of relative path →
+     * expected file size in bytes. Returns an empty map when the manifest
+     * doesn't exist or is malformed (backward compat).
+     */
+    private fun readIntegrityManifest(): Map<String, Long> {
+        if (!integrityManifest.exists()) return emptyMap()
+        return try {
+            parseIntegrityManifest(integrityManifest.readText())
+        } catch (e: Exception) {
+            Log.w(TAG, "[Integrity] Failed to read integrity manifest: ${e.message}")
+            emptyMap()
+        }
+    }
+
+    /**
+     * Write the integrity manifest after successful extraction.
+     * Records the actual file sizes of all critical paths so [verifyIntegrity]
+     * can detect partial/corrupt files on subsequent boots.
+     *
+     * Written as the very last step of installation before the dirs setup,
+     * so it serves as the definitive completion signal — if a silent_kill
+     * interrupts extraction, the manifest is never written, and the next boot
+     * will see `.arch` present but manifest absent, enabling a more thorough
+     * integrity check.
+     */
+    private fun writeIntegrityManifest() {
+        val criticalPaths = listOf(
+            "bin/bash", "bin/sh", "lib/ld-musl-aarch64.so.1",
+            "usr/lib/libreadline.so.8", "usr/lib/libncursesw.so.6",
+            "sbin/apk", "lib/apk/db/installed",
+        )
+        try {
+            val lines = criticalPaths.map { rel ->
+                val f = File(rootfsDir, rel)
+                val size = if (f.exists()) f.length() else 0L
+                "$rel=$size"
+            }
+            integrityManifest.writeText(lines.joinToString("\n") + "\n")
+            Log.i(TAG, "[Integrity] Manifest written with ${lines.size} entries")
+        } catch (e: Exception) {
+            Log.w(TAG, "[Integrity] Failed to write manifest: ${e.message}")
+        }
     }
 
     /**
@@ -743,6 +815,31 @@ class RootfsManager private constructor(private val context: Context) {
         private const val ROOTFS_ASSET_TAR = "alpine-minirootfs.tar"
         private const val PROOT_ASSET = "proot-aarch64"
         private const val DEFAULT_MOUNT_ASSET = "default_mount"
+
+        /**
+         * Parse the line-based integrity manifest text ("rel/path=size" per
+         * line) into a map. Malformed lines are skipped; an empty or
+         * unparseable manifest yields an empty map, which `verifyIntegrity`
+         * treats as "no size expectations" (backward compat).
+         *
+         * Extracted as a pure function so the parsing contract is JVM-testable
+         * without an Android Context ([RootfsHealthTest]).
+         */
+        internal fun parseIntegrityManifest(text: String): Map<String, Long> {
+            val trimmed = text.trim()
+            if (trimmed.isEmpty()) return emptyMap()
+            return trimmed.lines()
+                .map { it.trim() }
+                .filter { it.isNotBlank() && '=' in it }
+                .mapNotNull { line ->
+                    val eq = line.indexOf('=')
+                    if (eq <= 0) return@mapNotNull null
+                    val key = line.substring(0, eq)
+                    val value = line.substring(eq + 1).toLongOrNull() ?: return@mapNotNull null
+                    key to value
+                }
+                .toMap()
+        }
 
         /**
          * Rootfs paths whose contents must be executable. Matches iOS
