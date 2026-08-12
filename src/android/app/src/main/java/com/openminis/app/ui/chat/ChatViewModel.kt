@@ -47,6 +47,7 @@ import com.openminis.app.agent.shell.BashismDetector
 import com.openminis.app.agent.shell.BashismReminder
 import com.openminis.app.agent.shell.OnDemandBash
 import com.openminis.app.sandbox.ExecutionCoordinator
+import com.openminis.app.sandbox.PRootKernel
 import com.openminis.app.terminal.MinisOpenUrlBroker
 import com.openminis.app.terminal.MinisUrlMarker
 import com.openminis.app.tools.AgentTools
@@ -57,6 +58,7 @@ import com.openminis.app.tools.MemoryTools
 import com.openminis.app.tools.ReadImageTool
 import com.openminis.app.tools.ToolConcurrencyPolicy
 import com.openminis.app.tools.ToolExecutionResult
+import com.openminis.app.tools.ToolFailureHook
 import com.openminis.app.offload.OffloadPermissionManager
 import com.openminis.app.service.SessionActivityTracker
 import com.openminis.app.service.SessionConcurrencyManager
@@ -822,6 +824,15 @@ class ChatViewModel(
      * can't bleed warnings into a fresh prompt.
      */
     private val toolLoopDetector = ToolLoopDetector()
+
+    /**
+     * Programmatic tool-failure logger (T3, ported from OmniBot's
+     * SelfImprovingSkillFailureHook). Side-channel only: records a structured
+     * block into the session's `.learnings/ERRORS.md` when a tool fails,
+     * deduplicated by (toolName + summary) within a 10-minute window. Never
+     * touches the ToolExecutionResult returned to the LLM.
+     */
+    private val toolFailureHook = ToolFailureHook { block -> appendToolFailureBlock(block) }
 
     /**
      * Cached reference to the lazily-created [BrowserTabPool] so
@@ -8047,7 +8058,7 @@ class ChatViewModel(
         // bridge, which is now where checkPermission runs.
         val toolTitle = try { JSONObject(argsJson).optString("tool_title", name) } catch (_: Exception) { name }
 
-        return when (name) {
+        val result = when (name) {
             FileReadTool.NAME -> {
                 val result = FileReadTool.execute(argsJson, activeSessionId, context)
                 // Record skill usage when SKILL.md under /var/minis/skills/<id>/ is read.
@@ -8081,6 +8092,20 @@ class ChatViewModel(
             "memory_get" -> executeMemoryGetTool(argsJson)
             else -> ToolExecutionResult("Unknown tool: $name", false)
         }
+
+        // T3: failure-learning automation hook. Side-channel only — the
+        // failed result still flows to the LLM exactly as before; this just
+        // appends a structured, deduplicated block to the session's
+        // `.learnings/ERRORS.md` so later agent turns can learn from it
+        // without relying on the agent remembering to check the skill.
+        if (!result.success) {
+            runCatching {
+                toolFailureHook.recordFailure(name, result.output, argsJson, activeSessionId)
+            }
+            // Deliberately swallowed: a logging failure must never break the
+            // tool-result path back to the model.
+        }
+        return result
     }
 
     /**
@@ -8089,6 +8114,25 @@ class ChatViewModel(
      * we ask SkillRepository to re-scan disk so the new skill is visible
      * immediately, without waiting for app restart.
      */
+    /**
+     * Persist a tool-failure block into this session's `.learnings/ERRORS.md`
+     * (host path resolved via PRootKernel so it lands in the session's own
+     * workspace, not the global bind-mount map). Mirrors OmniBot writing into
+     * its app data dir: the RikkaMinis equivalent of "app data" is the
+     * per-session workspace, which the agent's shell can read back.
+     */
+    private fun appendToolFailureBlock(block: String) {
+        runCatching {
+            val file = PRootKernel.resolveSessionHostPath(
+                activeSessionId,
+                "/var/minis/workspace/.learnings/ERRORS.md",
+                context,
+            ) ?: return
+            file.parentFile?.mkdirs()
+            file.appendText(block)
+        }
+    }
+
     private fun maybeReloadSkillsForPath(argsJson: String) {
         runCatching {
             val path = JSONObject(argsJson).optString("path", "")
