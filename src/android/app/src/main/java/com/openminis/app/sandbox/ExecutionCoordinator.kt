@@ -41,7 +41,7 @@ object ExecutionCoordinator {
     // When a command returns (or while it runs) and the child RSS exceeds
     // this, we recycle the session's shell so the next getOrCreateShell
     // spawns a fresh PRoot at baseline.
-    private const val NATIVE_HEAP_HIGH_WATER_MARK_MB = 512L
+    private const val NATIVE_HEAP_HIGH_WATER_MARK_MB = 256L
 
     // [P2-app-native-oom] High-water mark for app-process native heap
     // (Debug.getNativeHeapAllocatedSize). This catches the actual OOM path
@@ -319,8 +319,10 @@ object ExecutionCoordinator {
                 },
             )
 
-            // Shell died mid-command — rebuild once and retry.
-            val shellDied = result.exitCode == -1 || !shell.isAlive
+            // Shell died or timed out — rebuild once and retry.
+            // Timeout (124) can leave zombie processes in the PRoot tracer;
+            // rebuilding the shell is safer than leaving a dead shell around.
+            val shellDied = result.exitCode == -1 || result.exitCode == 124 || !shell.isAlive
             if (!shellDied || attempt >= 2) {
                 if (shellDied && attempt >= 2) {
                     lastShell = null // shell is dead and we're out of retries

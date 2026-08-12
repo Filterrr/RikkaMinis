@@ -510,13 +510,20 @@ class PersistentShell(
     fun stop() {
         try { stdinWriter?.close() } catch (_: Exception) {}
         stdinWriter = null
-        process?.destroyForcibly()
+        process?.let { proc ->
+            // [P2-pipe-leak] 关闭所有流防止管道泄漏
+            try { proc.inputStream.close() } catch (_: Exception) {}
+            try { proc.outputStream.close() } catch (_: Exception) {}
+            try { proc.errorStream.close() } catch (_: Exception) {}
+            proc.destroyForcibly()
+            // [P2-process-leak] 等待进程结束防止僵尸
+            try { proc.waitFor(3, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) {}
+        }
         process = null
         pendingCallback?.let {
             it.finishOnce(it.output.toString(), -1, it.truncated)
         }
         pendingCallback = null
-        // [P2-app-native-oom] Reset command count for fresh shell.
         commandCount = 0
         Log.i(TAG, "Persistent shell stopped")
     }
