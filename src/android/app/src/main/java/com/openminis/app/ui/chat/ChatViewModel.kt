@@ -22,6 +22,7 @@ import androidx.compose.material.icons.outlined.Extension
 import com.openminis.app.data.BPETokenizer
 import com.openminis.app.data.ContextOffload
 import com.openminis.app.data.ContextPolicy
+import com.openminis.app.conversation.ContextCompactor
 import com.openminis.app.logging.AppLogger
 import com.openminis.app.data.FileMentionIndex
 import com.openminis.app.data.db.CompactMarkerEntity
@@ -74,6 +75,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
@@ -2374,6 +2376,18 @@ class ChatViewModel(
     private var _cachedLatestMarker: com.openminis.app.data.db.CompactMarkerEntity? = null
 
     /**
+     * [T5-auto-compact] Session-scoped timestamp of the last AUTO compact
+     * (manual /compact does not touch it). Backs the
+     * `RECENT_AUTO_COMPACT` debounce in [ContextCompactor.decide] so a
+     * session near the compact line doesn't re-compact on every send.
+     * Not persisted across cold starts on purpose: the compact marker
+     * (lastCompactedMessageId) IS persisted, and after reload the tail-token
+     * estimator naturally sees a small tail → TAIL_TOO_SMALL → no repeat.
+     */
+    @Volatile
+    private var lastAutoCompactAtMs = Long.MIN_VALUE
+
+    /**
      * Result of a bounded walk-back. `priorIdx` is the agentHistory index
      * the caller should use as the start of preAnchor; `null` means even
      * the first user turn including anchor would exceed `maxMessages`, so
@@ -2662,31 +2676,86 @@ class ChatViewModel(
         }
     }
 
+    // ─────────────────────────────────────────────────────────────────
+    // [T5-auto-compact] Automatic compaction (OmniBot
+    // AgentConversationContextCompactor parity).
+    //
+    // Triggering happens synchronously in sendMessage BEFORE `_isStreaming`
+    // flips true (compactAll aborts on the in-stream guard); awaiting happens
+    // inside the send coroutine so the outgoing request sees
+    // summary + recent tail + the new user message.
+    // ─────────────────────────────────────────────────────────────────
+
+    /**
+     * Synchronous decision + fire-and-forget trigger. Must be called from the
+     * send path while `_isStreaming` is still false, otherwise compactAll's
+     * in-stream guard aborts. Decision is pure logic in [ContextCompactor];
+     * this function only enriches it with live state (marker anchor for the
+     * tail estimate) and runs the existing compact pipeline.
+     */
+    private fun maybeTriggerAutoCompact() {
+        val tokens = _lastTurnContextTokens.value
+        val window = effectiveContextWindowTokens() ?: return
+        val policy = ContextPolicy.forContextWindow(window)
+        val anchorId = _cachedLatestMarker?.lastCompactedMessageId
+        val tail = ContextCompactor.estimateTailTokens(agentHistory, anchorId)
+        val decision = ContextCompactor.decide(
+            estimatedTokens = tokens,
+            contextWindow = window,
+            policy = policy,
+            tailTokens = tail,
+            isCompacting = _isCompacting.value,
+            lastAutoCompactAtMs = lastAutoCompactAtMs,
+        )
+        if (decision != ContextCompactor.Decision.AUTO_COMPACT) {
+            // Log at debug-relevant level only when we were actually close —
+            // keeps the common OK path from spamming the log.
+            if (tokens > 0) {
+                AppLogger.info(TAG, "[AutoCompact] skipped: $decision tokens=$tokens window=$window tail=$tail")
+            }
+            return
+        }
+        lastAutoCompactAtMs = System.currentTimeMillis()
+        appendSystemInfo(
+            text = "Context is getting full ($tokens / $window tokens) — auto-compacting older turns into a summary.",
+            iconKind = "compact",
+        )
+        AppLogger.info(TAG, "[AutoCompact] triggering (tokens=$tokens window=$window tail=$tail)")
+        compactAll() // fire-and-forget; internally launches on Dispatchers.IO
+    }
+
+    /**
+     * Called at the top of the send coroutine: if [maybeTriggerAutoCompact]
+     * fired (or a compact is otherwise in flight), wait for it to finish so
+     * the persisted user message is appended AFTER the compacted range and
+     * the request the agent loop assembles is summary + tail + new message.
+     * Bounded by [ContextCompactor.AUTO_COMPACT_MAX_WAIT_MS] — on timeout we
+     * send anyway (provider-side too-large handling still applies).
+     */
+    private suspend fun awaitAutoCompactIfNeeded() {
+        if (!_isCompacting.value) return
+        val deadline = System.currentTimeMillis() + ContextCompactor.AUTO_COMPACT_MAX_WAIT_MS
+        while (_isCompacting.value) {
+            if (System.currentTimeMillis() > deadline) {
+                AppLogger.warning(TAG, "[AutoCompact] timed out waiting for compact ($deadline); sending without it")
+                return
+            }
+            delay(ContextCompactor.AUTO_COMPACT_POLL_MS)
+        }
+        AppLogger.info(TAG, "[AutoCompact] compact finished; proceeding with send")
+    }
+
     /**
      * System prompt for the single-shot summarisation call. Matches iOS
      * wording so cross-device summaries stay stylistically aligned.
+     *
+     * [T5-auto-compact] Single source of truth moved to
+     * `ContextCompactor.COMPACT_SUMMARY_SYSTEM_PROMPT` so the auto-compact
+     * path, the manual /compact path, and the unit test all pin the same
+     * MUST PRESERVE wording (file paths / URLs / UUIDs verbatim).
      */
-    private val compactSummarySystemPrompt: String = """
-        You are a context compaction engine. Your summary will REPLACE the original messages in the conversation context window. The agent will read your summary as past context, then proceed based on the user's NEXT message — your summary is background, not a standing work order. Write the summary in the same language the user used in the conversation.
-
-        MUST PRESERVE (never omit or shorten):
-        - All file paths, directory names, URLs, UUIDs, and identifiers — copy verbatim
-        - Commands executed and their outcomes (success/failure/output)
-        - What was requested and what was done (record as past events, not as ongoing goals)
-        - Key decisions made and their rationale
-        - Errors encountered and how they were resolved
-        - Important constraints, rules, or user preferences mentioned
-        - Any tool calls and their results that affect current state
-
-        STRUCTURE:
-        1. Start with a one-line description of what the conversation was about (use past tense — "User asked X, agent did Y", NOT "Goal: X").
-        2. Then a concise narrative of what happened, preserving technical details.
-        3. End with a "What had been done so far" section listing completed work — NOT a "todo" or "pending" list. Do not invent ongoing objectives or carry-over tasks from old turns; if the user wants to continue, they will say so in their next message.
-
-        PRIORITIZE recent context over older history — recent decisions and recent file/path references are most useful for continuity.
-
-        Do NOT translate or alter code snippets, file paths, identifiers, or error messages. Be concise but never lose information the agent needs.
-    """.trimIndent()
+    private val compactSummarySystemPrompt: String
+        get() = ContextCompactor.COMPACT_SUMMARY_SYSTEM_PROMPT
 
     // T203 part 2: these MUST be declared before `init { loadSession() }` below.
     // viewModelScope.launch defaults to Dispatchers.Main.immediate, which runs
@@ -5244,6 +5313,13 @@ class ChatViewModel(
         // BLOCKS the send at the exhausted threshold (mirroring iOS's
         // compact-before-send dialog). /compact folds history to continue.
         if (!checkContextBeforeSend()) return
+        // [T5-auto-compact] At the compact line but below the hard ceiling —
+        // trigger the existing compact pipeline automatically instead of only
+        // warning (OmniBot AgentConversationContextCompactor parity). Must
+        // happen BEFORE `_isStreaming` flips true below, or compactAll aborts
+        // on the in-stream guard; the send coroutine awaits completion before
+        // persisting the user message (see awaitAutoCompactIfNeeded).
+        maybeTriggerAutoCompact()
         // A fresh send supersedes any pending resume — mirror iOS which clears
         // canResume at the top of send().
         _canResume.value = false
@@ -5300,6 +5376,11 @@ class ChatViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             var streamLaunched = false
             try {
+            // [T5-auto-compact] If maybeTriggerAutoCompact() fired a compact
+            // above, wait for it to finish so the persisted user message is
+            // appended AFTER the compacted range. The outgoing request then
+            // sees: summary + recent tail + the new user message.
+            awaitAutoCompactIfNeeded()
             // Ensure session exists in DB (creates on first message for draft sessions)
             val activeSessionId = ensureSession()
 
