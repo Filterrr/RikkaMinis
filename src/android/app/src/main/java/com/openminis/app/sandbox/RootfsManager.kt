@@ -34,6 +34,55 @@ sealed class RootfsInstallState {
 }
 
 /**
+ * File-level integrity snapshot of the extracted rootfs.
+ *
+ * The install marker (`.arch`) only proves extraction happened — it says
+ * nothing about whether the files the runtime actually needs survived. A
+ * silent_kill mid-write (HyperOS memory pressure kills the app while a file
+ * write or apk operation is half-done) leaves the rootfs with a valid marker
+ * but missing/corrupt binaries — the classic symptom is the terminal dying
+ * with `'/bin/bash' not found` while the app still reports "installed".
+ *
+ * Each check is a single stat() — cheap enough to run on every boot.
+ */
+data class RootfsHealth(
+    /** /bin/bash — interactive terminal shell (readline-based). */
+    val bash: Boolean,
+    /** /bin/sh — busybox ash fallback (static-linked, near-unbreakable). */
+    val sh: Boolean,
+    /** /lib/ld-musl-aarch64.so.1 — dynamic loader every ELF needs. */
+    val libc: Boolean,
+    /** /usr/lib/libreadline.so.8 — bash's line editing (symlink to .so.8.2). */
+    val libreadline: Boolean,
+    /** /usr/lib/libncursesw.so.6 — readline's terminal rendering. */
+    val libncursesw: Boolean,
+    /** /sbin/apk — package manager, needed for in-place auto-repair. */
+    val apk: Boolean,
+    /** /lib/apk/db/installed — apk's package database. */
+    val apkDatabase: Boolean,
+) {
+    /** Everything needed for the sandbox to function. */
+    val healthy: Boolean
+        get() = bash && sh && libc && apk && apkDatabase
+
+    /** Everything needed for an interactive bash terminal. */
+    val terminalOk: Boolean
+        get() = bash && libc && libreadline && libncursesw
+
+    /** Human-readable list of missing paths (empty when fully healthy). */
+    val missing: List<String>
+        get() = buildList {
+            if (!bash) add("/bin/bash")
+            if (!sh) add("/bin/sh")
+            if (!libc) add("/lib/ld-musl-aarch64.so.1")
+            if (!libreadline) add("/usr/lib/libreadline.so.8")
+            if (!libncursesw) add("/usr/lib/libncursesw.so.6")
+            if (!apk) add("/sbin/apk")
+            if (!apkDatabase) add("/lib/apk/db/installed")
+        }
+}
+
+/**
  * Manages Alpine Linux rootfs installation and PRoot binary extraction.
  * Corresponds to iOS RootfsManager.swift.
  */
@@ -176,6 +225,107 @@ class RootfsManager private constructor(private val context: Context) {
         // in jniLibs and copied it here as libtalloc.so.2.
 
         Log.d(TAG, "PRoot binary available at $prootBinary")
+    }
+
+    /**
+     * Snapshot which critical rootfs files are present and executable.
+     * Cheap (7 stat calls), safe to call on every boot. See [RootfsHealth]
+     * for the rationale — a silent_kill can leave `.arch` valid but bash
+     * (or its readline/ncurses symlinks) missing.
+     */
+    fun verifyIntegrity(): RootfsHealth {
+        fun exists(rel: String): Boolean = File(rootfsDir, rel).exists()
+        fun executable(rel: String): Boolean {
+            val f = File(rootfsDir, rel)
+            return f.exists() && f.canExecute()
+        }
+        return RootfsHealth(
+            bash = executable("bin/bash"),
+            sh = executable("bin/sh"),
+            libc = exists("lib/ld-musl-aarch64.so.1"),
+            libreadline = exists("usr/lib/libreadline.so.8"),
+            libncursesw = exists("usr/lib/libncursesw.so.6"),
+            apk = executable("sbin/apk"),
+            apkDatabase = exists("lib/apk/db/installed"),
+        )
+    }
+
+    /**
+     * Attempt to repair a broken rootfs in place, least-to-most destructive:
+     *
+     *  1. `apk fix --no-cache` — restore missing/corrupt files owned by
+     *     installed packages (readline/ncursesw symlinks, bash, …). Uses the
+     *     local apk database; no network needed when `.apk` files are cached.
+     *  2. `apk add --no-cache bash readline ncurses` — belt-and-braces for
+     *     the terminal's dynamic-linking chain.
+     *  3. Full [reset] — delete + re-extract from the bundled asset. Last
+     *     resort (wipes user-installed packages), only when apk is unusable.
+     *
+     * Returns true when the rootfs is healthy after the attempt.
+     */
+    suspend fun autoRepair(): Boolean = withContext(Dispatchers.IO) {
+        val initial = verifyIntegrity()
+        if (initial.healthy) {
+            Log.i(TAG, "[Repair] rootfs healthy, nothing to do")
+            return@withContext true
+        }
+        Log.w(TAG, "[Repair] rootfs damaged, missing: ${initial.missing}")
+
+        // Stage 1+2: apk repair inside the guest via proot, so it operates on
+        // the real rootfs with the user's mirror config intact.
+        val prootFile = prootBinary
+        if (prootFile.exists() && initial.apk) {
+            val repairCmd = listOf(
+                prootFile.absolutePath,
+                "-0", "--link2symlink", "--kill-on-exit",
+                "-r", rootfsDir.absolutePath,
+                "-b", "/dev", "-b", "/proc", "-b", "/sys",
+                "-w", "/root",
+                "/bin/sh", "-c",
+                "apk fix --no-cache ; apk add --no-cache bash readline ncurses ; true"
+            )
+            // PROOT_LOADER[_32] MUST point at the standalone loaders in
+            // nativeLibraryDir — proot's embedded-loader fallback writes to
+            // PROOT_TMP_DIR and fails under Android noexec (see
+            // deps/build_proot.sh). Without these, proot aborts in ~20ms
+            // with status=1 and no output, and the repair silently no-ops.
+            val loaderEnv = mutableMapOf(
+                "PROOT_TMP_DIR" to PRootKernel.getProotTmpDir(context).absolutePath,
+                "LD_LIBRARY_PATH" to nativeLibDir.absolutePath,
+            )
+            val loader = File(nativeLibDir, "libproot-loader.so")
+            val loader32 = File(nativeLibDir, "libproot-loader32.so")
+            if (loader.exists()) loaderEnv["PROOT_LOADER"] = loader.absolutePath
+            if (loader32.exists()) loaderEnv["PROOT_LOADER_32"] = loader32.absolutePath
+
+            runCatching {
+                val p = ProcessBuilder(repairCmd)
+                    .redirectErrorStream(true)
+                    .apply { environment().putAll(loaderEnv) }
+                    .start()
+                val output = p.inputStream.readBytes().toString(Charset.forName("UTF-8"))
+                val code = p.waitFor()
+                Log.i(TAG, "[Repair] apk repair exit=$code output=${output.takeLast(500)}")
+            }.onFailure { t ->
+                Log.e(TAG, "[Repair] apk repair process failed", t)
+            }
+        }
+
+        val after = verifyIntegrity()
+        if (after.healthy) {
+            Log.i(TAG, "[Repair] rootfs healthy after apk repair")
+            return@withContext true
+        }
+
+        // Stage 3: last resort — full reset (apk itself is broken).
+        if (!after.apk || !after.apkDatabase) {
+            Log.w(TAG, "[Repair] apk unusable, falling back to full reset")
+            runCatching { reset() }
+        }
+
+        val final = verifyIntegrity()
+        Log.i(TAG, "[Repair] final health: ${final.missing.ifEmpty { listOf("OK") }}")
+        final.healthy
     }
 
     /**

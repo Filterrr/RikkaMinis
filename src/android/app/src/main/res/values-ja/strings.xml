@@ -421,6 +421,8 @@
     <string name="rootfs_browse_files_label">ファイルを閲覧</string>
     <string name="rootfs_mirrors_section">ミラー</string>
     <string name="rootfs_actions_section">アクション</string>
+    <string name="rootfs_repair_label">ターミナルを修復</string>
+    <string name="rootfs_repair_description">欠落・破損した bash、readline、ncurses を復元</string>
     <string name="rootfs_install_label">Rootfsをインストール</string>
     <string name="rootfs_reset_label">Rootfsをリセット</string>
     <string name="rootfs_reset_description">すべて削除して再インストール</string>

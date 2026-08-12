@@ -439,11 +439,19 @@ class TerminalSession(private val context: Context) {
         }
 
         // Login + interactive shell.
-        // Use bash, not busybox ash: interactive ash exits when it receives
-        // SIGINT while waiting at the prompt (pressing Ctrl+C in the terminal
-        // kills the whole session, exit=130). Bash ignores a pending SIGINT
-        // at the prompt and just clears the input line.
-        args.add("/bin/bash")
+        // Prefer bash (readline, Ctrl+C-at-prompt semantics), but fall back
+        // to busybox ash when bash or its dynamic deps are missing/corrupt.
+        // A broken bash must never take the whole terminal down — ash's
+        // Ctrl+C SIGINT quirk (ash exits at the prompt, bash just clears the
+        // line) is a minor UX regression vs a terminal that can't start.
+        val bashFile = File(rootfsManager.rootfsDir, "bin/bash")
+        val shell = if (bashFile.exists() && bashFile.canExecute()) {
+            "/bin/bash"
+        } else {
+            Log.w(TAG, "/bin/bash unavailable — falling back to /bin/sh")
+            "/bin/sh"
+        }
+        args.add(shell)
         args.add("-l")
         args.add("-i")
         return args

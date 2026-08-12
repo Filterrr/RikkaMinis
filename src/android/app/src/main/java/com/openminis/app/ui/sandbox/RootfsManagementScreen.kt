@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Cancel
@@ -191,6 +192,21 @@ fun RootfsManagementScreen(
                         colors = transparentListItemColors(),
                     )
                 } else {
+                    ListItem(
+                        headlineContent = { Text(stringResource(R.string.rootfs_repair_label)) },
+                        supportingContent = { Text(stringResource(R.string.rootfs_repair_description)) },
+                        leadingContent = {
+                            Icon(Icons.Filled.Build, contentDescription = null)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickableListItem(
+                                enabled = !state.isProcessing,
+                                onClick = { viewModel.repairRootfs(context) },
+                            ),
+                        colors = transparentListItemColors(),
+                    )
+                    SettingsRowDivider()
                     ListItem(
                         headlineContent = { Text(stringResource(R.string.rootfs_reset_label)) },
                         supportingContent = { Text(stringResource(R.string.rootfs_reset_description)) },

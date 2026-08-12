@@ -66,6 +66,23 @@ object PRootKernel {
         rootfsManager.installIfNeeded()
         rootfsManager.installProotIfNeeded()
 
+        // [T-rootfs-integrity] Verify critical files survived extraction.
+        // A silent_kill (HyperOS memory pressure) can leave the rootfs with
+        // a valid `.arch` marker but missing bash / readline / ncurses —
+        // the terminal dies with `'/bin/bash' not found` while the app still
+        // reports "installed". Repair in place when possible, falling back to
+        // ash in the terminal session if repair fails.
+        val health = rootfsManager.verifyIntegrity()
+        if (!health.healthy) {
+            Log.w(TAG, "Rootfs integrity check failed: missing=${health.missing}")
+            val repaired = rootfsManager.autoRepair()
+            if (repaired) {
+                Log.i(TAG, "Rootfs auto-repair succeeded")
+            } else {
+                Log.e(TAG, "Rootfs auto-repair failed — terminal will fall back to /bin/sh")
+            }
+        }
+
         // Overlay assets/default_mount/ onto the rootfs on every boot so
         // updated profile scripts and URL-interception wrappers ship with
         // each app update. Mirrors iOS RootfsManager.applyDefaultMountOverlay.

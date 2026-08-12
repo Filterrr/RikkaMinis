@@ -661,6 +661,8 @@
     <string name="rootfs_browse_files_label">Просмотр файлов</string>
     <string name="rootfs_mirrors_section">Зеркала</string>
     <string name="rootfs_actions_section">Действия</string>
+    <string name="rootfs_repair_label">Починить терминал</string>
+    <string name="rootfs_repair_description">Восстановить отсутствующие/повреждённые bash, readline и ncurses</string>
     <string name="rootfs_install_label">Установить Rootfs</string>
     <string name="rootfs_reset_label">Сбросить Rootfs</string>
     <string name="rootfs_reset_description">Удалить всё и переустановить</string>
