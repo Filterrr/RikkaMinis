@@ -316,4 +316,12 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     androidTestImplementation("junit:junit:4.13.2")
+
+    // Compose UI testing (on-device render tests). Version comes from the
+    // same BOM as main — no explicit versions here.
+    androidTestImplementation(composeBom)
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    // Host activity needed by createComposeRule; debugImplementation only so
+    // it never ships in release builds.
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
