@@ -9,6 +9,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Semaphore
+import java.util.concurrent.TimeUnit
 
 /**
  * Manages per-session persistent shell processes.
@@ -46,9 +48,25 @@ object ExecutionCoordinator {
     // that nativeRssMB() misses: the PRoot tracer stays at 3MB while the
     // app process's own native heap (talloc inside PRoot's in-process
     // components, DirectByteBuffers, LOS objects) balloons past Scudo's
-    // limit. Normal is ~50-100MB; 200MB leaves buffer before the 512MB
-    // Java heap limit which indirectly pressures native allocation.
-    private const val APP_NATIVE_HEAP_HIGH_WATER_MARK_MB = 200L
+    // limit. Normal is ~50-100MB; lowered from 200MB to 120MB after
+    // 2026-08-12 crash (native heap 542MB in 12s, recycle too late).
+    private const val APP_NATIVE_HEAP_HIGH_WATER_MARK_MB = 120L
+
+    // [P2-global-concurrency] Maximum number of persistent shells that can
+    // run commands concurrently across all sessions. 3-4 sessions each
+    // running dense tool-call sequences produce ~542MB app native heap in
+    // 12s (2026-08-12 crash). Limiting to 2 ensures the combined memory
+    // trajectory stays within the 512MB Java heap limit + 120MB native
+    // headroom. Excess sessions queue on the Semaphore and get a resource-
+    // busy error after 30s.
+    private const val MAX_CONCURRENT_SHELLS = 2
+
+    // [P2-app-native-hardcap] Hard cap for app-process native heap. When
+    // this is exceeded, new commands are rejected immediately (before
+    // acquiring the global concurrency slot) to prevent the process from
+    // reaching Scudo OOM. The crash case hit 542MB before the recycling
+    // mechanism could react — this is a last-line defence.
+    private const val APP_NATIVE_HEAP_HARD_CAP_MB = 350L
 
     // [P2-app-native-oom] Java heap utilization threshold. When the agent
     // runs a dense tool-call sequence, Java heap climbs (crash case:
@@ -100,6 +118,13 @@ object ExecutionCoordinator {
      */
     private val globalLock = Mutex()
 
+    // [P2-global-concurrency] Global semaphore that limits the number of
+    // sessions that can execute shell commands concurrently. Acquired before
+    // the per-session mutex so that a session waiting for the global slot
+    // does not block another session's per-session mutex. Fair ordering
+    // prevents starvation of any single session.
+    private val globalConcurrency = Semaphore(MAX_CONCURRENT_SHELLS, true)
+
     fun init(context: Context) {
         appContext = context.applicationContext
     }
@@ -108,10 +133,13 @@ object ExecutionCoordinator {
      * Execute a command in the session's persistent shell.
      *
      * Flow:
-     * 1. Get or create per-session Mutex (thread-safe via ConcurrentHashMap)
-     * 2. Acquire per-session Mutex (serializes commands within same session)
+     * 0. Pre-execution hard cap check (reject if native heap too high)
+     * 1. Acquire global concurrency Semaphore (limit cross-session parallelism)
+     * 2. Get or create per-session Mutex (serializes commands within same session)
      * 3. Get or create PersistentShell (protected by globalLock on creation)
      * 4. Execute command
+     * 5. Release global concurrency Semaphore in finally
+     * 6. Post-execution memory pressure check + GC recovery
      */
     suspend fun execute(
         sessionId: String,
@@ -119,17 +147,48 @@ object ExecutionCoordinator {
         timeout: Long = 600_000L,
         lineCallback: ((String) -> Unit)? = null
     ): CommandResult {
-        // ConcurrentHashMap.getOrPut is not atomic, use putIfAbsent pattern
-        val mutex = mutexes.getOrPut(sessionId) { Mutex() }
+        // [P2-app-native-hardcap] Pre-execution hard cap check. Reject the
+        // command immediately if the app-process native heap has already
+        // exceeded the safe ceiling — the Scudo OOM is minutes away and
+        // running another command will only accelerate it. Run GC before
+        // returning so the caller's next retry has a better chance.
+        val preExecNativeMB = Debug.getNativeHeapAllocatedSize() / (1024L * 1024L)
+        if (preExecNativeMB > APP_NATIVE_HEAP_HARD_CAP_MB) {
+            Log.w(TAG, "[$sessionId] Native heap ${preExecNativeMB}MB exceeds hard cap ${APP_NATIVE_HEAP_HARD_CAP_MB}MB — rejecting command")
+            postRecycleMemoryRecovery()
+            return CommandResult(
+                "[System memory pressure: native heap ${preExecNativeMB}MB exceeds safe limit. " +
+                    "Please reduce concurrent sessions or wait for memory to recover.]",
+                -1, 0, true
+            )
+        }
 
-        return mutex.withLock {
-            val startTime = System.currentTimeMillis()
+        // [P2-global-concurrency] Acquire the global shell slot. If all
+        // slots are occupied by other sessions, wait up to 60s before
+        // giving up — this prevents a third concurrent session from
+        // pushing the combined memory footprint past Scudo's limit.
+        val acquired = globalConcurrency.tryAcquire(60, TimeUnit.SECONDS)
+        if (!acquired) {
+            Log.w(TAG, "[$sessionId] Global concurrency slot timeout after 60s — rejecting command")
+            postRecycleMemoryRecovery()
+            return CommandResult(
+                "[System busy: too many concurrent sessions (limit $MAX_CONCURRENT_SHELLS). " +
+                    "Please wait for other sessions to complete and retry.]",
+                -1, 0, true
+            )
+        }
+        try {
+            // ConcurrentHashMap.getOrPut is not atomic, use putIfAbsent pattern
+            val mutex = mutexes.getOrPut(sessionId) { Mutex() }
 
-            // Auto-boot PRoot if not already booted
-            if (!PRootKernel.isBooted) {
-                Log.i(TAG, "[$sessionId] Auto-booting PRootKernel")
-                PRootKernel.boot(appContext)
-            }
+            return mutex.withLock {
+                val startTime = System.currentTimeMillis()
+
+                // Auto-boot PRoot if not already booted
+                if (!PRootKernel.isBooted) {
+                    Log.i(TAG, "[$sessionId] Auto-booting PRootKernel")
+                    PRootKernel.boot(appContext)
+                }
 
             // Get or create shell — protected by globalLock to avoid duplicate creation
             val shell = getOrCreateShell(sessionId)
@@ -224,6 +283,14 @@ object ExecutionCoordinator {
 
             CommandResult(output = output, exitCode = result.exitCode, durationMs = durationMs, truncated = outputTruncated)
         }
+    } finally {
+        // [P2-global-concurrency] Release the global concurrency slot.
+        // This runs after the per-session mutex is released (the mutex is
+        // inside the try block), so the next session waiting on the
+        // Semaphore does not contend with the just-finished session's
+        // mutex cleanup.
+        globalConcurrency.release()
+    }
     }
 
     /** [P2-proot-native-leak] If the PRoot child is already dead mid-command
@@ -343,7 +410,9 @@ object ExecutionCoordinator {
     }
 
     /**
-     * Called when a session is closed. Stops and removes the shell.
+     * Called when a session is closed. Stops and removes the shell, then
+     * triggers post-recycle memory recovery to release app-process native
+     * heap that the shell recycling didn't free.
      */
     fun sessionDidTerminate(sessionId: String) {
         val shell = shells.remove(sessionId)
@@ -355,6 +424,45 @@ object ExecutionCoordinator {
         lastActiveMs.remove(sessionId)
         shell?.stop()
         if (shell != null) Log.i(TAG, "[$sessionId] Shell terminated")
+        // [P2-app-native-oom] Recycle-driven GC: the shell is dead but app
+        // process native heap (DirectByteBuffers, LOS objects, talloc) is
+        // still held. Trigger GC + wait for it to settle so the next command
+        // starts with a lower baseline.
+        postRecycleMemoryRecovery()
+    }
+
+    /**
+     * [P2-app-native-oom] Trigger garbage collection and log the memory
+     * released. The 2026-08-12 crash showed that recycling the PRoot shell
+     * alone does NOT release the app process's own native heap (the actual
+     * OOM source). This forces the JVM GC to run and reports how much was
+     * freed, so the next command starts from a lower baseline.
+     *
+     * System.gc() + Runtime.getRuntime().gc() are both hints; on Android
+     * they trigger a concurrent GC. We also read Debug.getNativeHeap-
+     * AllocatedSize() before/after to log the effect. This is cheap enough
+     * to call on recycle and on pre-execution hard-cap rejection.
+     */
+    private fun postRecycleMemoryRecovery() {
+        if (!::appContext.isInitialized) return
+        try {
+            val beforeNative = Debug.getNativeHeapAllocatedSize() / (1024L * 1024L)
+            val runtime = Runtime.getRuntime()
+            val beforeJava = (runtime.totalMemory() - runtime.freeMemory()) / (1024L * 1024L)
+            System.gc()
+            Runtime.getRuntime().gc()
+            // Give the concurrent GC a moment to actually run before logging.
+            Thread.sleep(50)
+            val afterNative = Debug.getNativeHeapAllocatedSize() / (1024L * 1024L)
+            val afterJava = (runtime.totalMemory() - runtime.freeMemory()) / (1024L * 1024L)
+            Log.w(
+                TAG,
+                "Post-recycle GC: native ${beforeNative}MB→${afterNative}MB (freed ${beforeNative - afterNative}MB), " +
+                    "java ${beforeJava}MB→${afterJava}MB (freed ${beforeJava - afterJava}MB)"
+            )
+        } catch (_: Throwable) {
+            // Never let memory recovery break the calling flow.
+        }
     }
 
     /**
