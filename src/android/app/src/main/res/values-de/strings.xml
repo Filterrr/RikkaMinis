@@ -421,6 +421,8 @@
     <string name="rootfs_browse_files_label">Dateien durchsuchen</string>
     <string name="rootfs_mirrors_section">Mirrors</string>
     <string name="rootfs_actions_section">Aktionen</string>
+    <string name="rootfs_repair_label">Terminal reparieren</string>
+    <string name="rootfs_repair_description">Fehlende/beschädigte bash, readline und ncurses wiederherstellen</string>
     <string name="rootfs_install_label">Rootfs installieren</string>
     <string name="rootfs_reset_label">Rootfs zurücksetzen</string>
     <string name="rootfs_reset_description">Alles löschen und neu installieren</string>

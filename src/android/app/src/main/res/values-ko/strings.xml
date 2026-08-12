@@ -421,6 +421,8 @@
     <string name="rootfs_browse_files_label">파일 탐색</string>
     <string name="rootfs_mirrors_section">미러</string>
     <string name="rootfs_actions_section">작업</string>
+    <string name="rootfs_repair_label">터미널 복구</string>
+    <string name="rootfs_repair_description">누락/손상된 bash, readline, ncurses 복원</string>
     <string name="rootfs_install_label">Rootfs 설치</string>
     <string name="rootfs_reset_label">Rootfs 초기화</string>
     <string name="rootfs_reset_description">모두 삭제 후 재설치</string>

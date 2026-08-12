@@ -146,4 +146,54 @@ class RootfsManagementViewModel : ViewModel() {
             }
         }
     }
+
+    /**
+     * Verify critical rootfs files and repair in place when anything is
+     * missing. Less destructive than [resetRootfs]: runs `apk fix` inside the
+     * guest to restore bash/readline/ncurses, only falling back to a full
+     * reset when apk itself is unusable. The terminal falls back to /bin/sh
+     * independently if repair still leaves bash broken.
+     */
+    fun repairRootfs(context: Context) {
+        val manager = RootfsManager.getInstance(context)
+        val initial = manager.verifyIntegrity()
+        if (initial.healthy) {
+            _uiState.value = _uiState.value.copy(
+                lastOperationSuccess = true,
+                resultMessage = "Rootfs is healthy — no repair needed",
+            )
+            return
+        }
+
+        _uiState.value = _uiState.value.copy(
+            isProcessing = true,
+            statusMessage = "Repairing rootfs…",
+            resultMessage = null,
+            installProgress = 0f,
+        )
+        viewModelScope.launch {
+            try {
+                val repaired = manager.autoRepair()
+                val after = manager.verifyIntegrity()
+                _uiState.value = _uiState.value.copy(
+                    isProcessing = false,
+                    lastOperationSuccess = repaired,
+                    resultMessage = if (repaired) {
+                        "Rootfs repaired — missing files restored"
+                    } else {
+                        "Repair failed — still missing: ${after.missing.joinToString(", ")}"
+                    },
+                    installProgress = null,
+                )
+                refresh(context)
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    isProcessing = false,
+                    lastOperationSuccess = false,
+                    resultMessage = "Repair failed: ${e.message}",
+                    installProgress = null,
+                )
+            }
+        }
+    }
 }
