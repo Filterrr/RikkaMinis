@@ -56,7 +56,7 @@ class ProviderRepositoryCompanionTest {
         assertEquals("https://api.example.com", ProviderRepository.normalizedShadowKey("  https://api.example.com  "))
     }
 
-    @Test fun `normalizedShadowKey full pipeline: mixed case slash v1`() {
+    @Test fun `normalizedShadowKey full pipeline - mixed case slash v1`() {
         assertEquals("https://api.openai.com", ProviderRepository.normalizedShadowKey("https://API.OpenAI.COM/v1/"))
     }
 
