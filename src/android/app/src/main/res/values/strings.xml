@@ -771,6 +771,12 @@
     <string name="storage_clear_confirm_title">Clear Session Files?</string>
     <string name="storage_clear_confirm_text">This will delete %1$s of files. This action cannot be undone.</string>
     <string name="storage_clear_confirm_button">Clear %1$s</string>
+    <string name="storage_section_orphans">Reclaimable space</string>
+    <string name="storage_orphan_banner">%1$d orphaned item(s) from deleted sessions — %2$s</string>
+    <string name="storage_reclaim_button">Reclaim</string>
+    <string name="storage_reclaim_confirm_title">Reclaim orphaned files?</string>
+    <string name="storage_reclaim_confirm_text">This will permanently delete %1$d orphaned item(s) (%2$s) left over from deleted sessions. The remaining conversations are not affected. This cannot be undone.</string>
+    <string name="storage_reclaim_confirm_button">Reclaim</string>
     <string name="usage_title">Usage</string>
     <string name="usage_section_total">Total Usage</string>
     <string name="usage_label_total_input">Total Input (incl. Cache)</string>

@@ -334,7 +334,10 @@ class MinisApp : Application(), ImageLoaderFactory {
         com.openminis.app.diagnostics.HangDetector.start(this)
 
         database = AppDatabase.getInstance(this)
-        chatRepository = ChatRepository(database.chatDao())
+        chatRepository = ChatRepository(
+            database.chatDao(),
+            com.openminis.app.data.storage.SessionFileStore(this),
+        )
         providerRepository = ProviderRepository(this)
         envVarRepository = EnvVarRepository(this)
         skillRepository = SkillRepository(this)

@@ -618,6 +618,12 @@
     <string name="storage_clear_confirm_title">Очистить файлы сессии?</string>
     <string name="storage_clear_confirm_text">Будет удалено %1$s файлов. Это действие нельзя отменить.</string>
     <string name="storage_clear_confirm_button">Очистить %1$s</string>
+    <string name="storage_section_orphans">Освобождаемое место</string>
+    <string name="storage_orphan_banner">%1$d осиротевших элементов из удалённых сессий — %2$s</string>
+    <string name="storage_reclaim_button">Освободить</string>
+    <string name="storage_reclaim_confirm_title">Освободить осиротевшие файлы?</string>
+    <string name="storage_reclaim_confirm_text">Будет безвозвратно удалено %1$d осиротевших элементов (%2$s) из удалённых сессий. Остальные диалоги не затрагиваются. Это действие нельзя отменить.</string>
+    <string name="storage_reclaim_confirm_button">Освободить</string>
     <string name="usage_title">Использование</string>
     <string name="usage_section_total">Всего использовано</string>
     <string name="usage_label_total_input">Всего входных (вкл. кэш)</string>

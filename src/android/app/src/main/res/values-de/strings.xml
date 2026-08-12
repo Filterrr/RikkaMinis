@@ -378,6 +378,12 @@
     <string name="storage_clear_confirm_title">Sitzungsdateien löschen?</string>
     <string name="storage_clear_confirm_text">Es werden %1$s an Dateien gelöscht. Diese Aktion ist nicht umkehrbar.</string>
     <string name="storage_clear_confirm_button">%1$s leeren</string>
+    <string name="storage_section_orphans">Wiederverwendbarer Speicher</string>
+    <string name="storage_orphan_banner">%1$d verwaiste Einträge aus gelöschten Sitzungen — %2$s</string>
+    <string name="storage_reclaim_button">Freigeben</string>
+    <string name="storage_reclaim_confirm_title">Verwaiste Dateien freigeben?</string>
+    <string name="storage_reclaim_confirm_text">Dies löscht dauerhaft %1$d verwaiste Einträge (%2$s) aus gelöschten Sitzungen. Andere Unterhaltungen sind nicht betroffen. Dies kann nicht rückgängig gemacht werden.</string>
+    <string name="storage_reclaim_confirm_button">Freigeben</string>
     <string name="usage_title">Verbrauch</string>
     <string name="usage_section_total">Gesamtverbrauch</string>
     <string name="usage_label_total_input">Gesamteingabe (inkl. Cache)</string>

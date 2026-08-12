@@ -10258,7 +10258,9 @@ Environment variables:
                     TAG,
                     "cleanupIfEmptyOnExit: deleting empty session $sid (no persisted messages)",
                 )
-                chatRepository.deleteSession(sid)
+                // Row-only: an empty session's dir may hold user files uploaded
+                // before ever sending — never destroy those on an auto-sweep.
+                chatRepository.deleteSessionRowOnly(sid)
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                     ChatViewModelStore.release(sid)
                 }
