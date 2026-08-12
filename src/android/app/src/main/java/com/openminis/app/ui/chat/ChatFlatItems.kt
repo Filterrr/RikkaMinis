@@ -443,6 +443,44 @@ internal sealed class FlatChatItem {
         override val contentType = "tool"
     }
 
+    /**
+     * [T-android-tool-run-collapse] One collapsible row representing ALL
+     * tool_use blocks of a single assistant message. Emitted instead of
+     * individual [AssistantToolUse] rows when a message has >= 2 tool blocks.
+     *
+     * Renders as a foldable "tool run" card: while any tool is still
+     * streaming/pending/running the group stays expanded (so the user sees
+     * live progress); once every tool reached a terminal state the card
+     * auto-collapses into a single summary header ("N tools · total").
+     * Tapping the header expands it again (user takes over the state).
+     *
+     * Mirrors OmniBot's AgentRunHeader semantics: running forces open,
+     * completion collapses, user tap overrides either way.
+     *
+     * `isRunning` is derived here from the carried blocks rather than
+     * persisted: a tool is live while its status is STREAMING/PENDING/
+     * RUNNING. This keeps collapse/expand purely a UI concern — nothing in
+     * the data layer changes.
+     */
+    @Immutable
+    data class AssistantToolRunGroup(
+        val messageId: String,
+        val tools: List<AssistantBlock>,
+        /** True if ANY tool in the group is still live (STREAMING/PENDING/RUNNING). */
+        val isRunning: Boolean,
+        /** True if the last tool in the group is CANCELLED — drives the single Retry affordance. */
+        val isLastCancelled: Boolean,
+    ) : FlatChatItem() {
+        override val key = "toolrun:$messageId"
+        override val contentType = "toolrun"
+
+        /** Aggregate duration of all finished tools, ms. */
+        val totalDurationMs: Long
+            get() = tools.sumOf { it.durationMs }
+
+        val count: Int get() = tools.size
+    }
+
     @Immutable
     data class AssistantInfo(
         val messageId: String,
@@ -515,6 +553,7 @@ internal fun FlatChatItem.owningMessageId(): String = when (this) {
     is FlatChatItem.AssistantMarkdownBlock -> messageId
     is FlatChatItem.AssistantThinking -> messageId
     is FlatChatItem.AssistantToolUse -> messageId
+    is FlatChatItem.AssistantToolRunGroup -> messageId
     is FlatChatItem.AssistantInfo -> messageId
     is FlatChatItem.AssistantTyping -> messageId
     is FlatChatItem.AssistantError -> messageId
@@ -591,6 +630,7 @@ internal fun buildFlatChatItems(
             )
             is FlatChatItem.AssistantThinking -> item.copy(messageId = "${item.messageId}#$n")
             is FlatChatItem.AssistantToolUse -> item.copy(messageId = "${item.messageId}#$n")
+            is FlatChatItem.AssistantToolRunGroup -> item.copy(messageId = "${item.messageId}#$n")
             is FlatChatItem.AssistantInfo -> item.copy(messageId = "${item.messageId}#$n")
             is FlatChatItem.AssistantTyping -> item.copy(messageId = "${item.messageId}#$n")
             is FlatChatItem.AssistantError -> item.copy(messageId = "${item.messageId}#$n")
@@ -664,6 +704,9 @@ internal fun buildFlatChatItems(
         // Only the last cancelled tool_use in the message gets the Retry button —
         // retryLast() re-runs the whole turn, so one button is enough.
         val lastCancelledToolId = blocks.lastOrNull { it.kind == "tool_use" && it.toolStatus == ToolBlockStatus.CANCELLED }?.id
+        // [T-android-tool-run-collapse] First tool_use block index — the group
+        // row is emitted exactly once, at the first tool, and covers the rest.
+        val firstToolIndex = blocks.indexOfFirst { it.kind == "tool_use" }
 
         blocks.forEachIndexed { index, block ->
             when (block.kind) {
@@ -763,12 +806,38 @@ internal fun buildFlatChatItems(
                     messageId = message.id,
                     block = block,
                 )))
-                else -> out.add(dedupe(FlatChatItem.AssistantToolUse(
-                    messageId = message.id,
-                    block = block,
-                    allToolBlocks = toolPillBlocks,
-                    isLastCancelled = block.id == lastCancelledToolId,
-                )))
+                else -> {
+                    // [T-android-tool-run-collapse] Group >= 2 tool_use blocks
+                    // of one message into a single collapsible row. Single
+                    // tool stays a plain pill (no folding overhead for the
+                    // common one-shot case). isRunning derives from live
+                    // statuses — purely a UI fold, data layer untouched.
+                    // Emitted ONCE at the first tool_use block; subsequent
+                    // tool_use blocks of this message fall through to nothing
+                    // (their pills live inside the group).
+                    if (index == firstToolIndex) {
+                        if (toolPillBlocks.size >= 2) {
+                            out.add(dedupe(FlatChatItem.AssistantToolRunGroup(
+                                messageId = message.id,
+                                tools = toolPillBlocks,
+                                isRunning = toolPillBlocks.any {
+                                    it.toolStatus == ToolBlockStatus.STREAMING ||
+                                        it.toolStatus == ToolBlockStatus.PENDING ||
+                                        it.toolStatus == ToolBlockStatus.RUNNING
+                                },
+                                isLastCancelled = lastCancelledToolId != null &&
+                                    lastCancelledToolId == toolPillBlocks.lastOrNull()?.id,
+                            )))
+                        } else {
+                            out.add(dedupe(FlatChatItem.AssistantToolUse(
+                                messageId = message.id,
+                                block = block,
+                                allToolBlocks = toolPillBlocks,
+                                isLastCancelled = block.id == lastCancelledToolId,
+                            )))
+                        }
+                    }
+                }
             }
         }
 

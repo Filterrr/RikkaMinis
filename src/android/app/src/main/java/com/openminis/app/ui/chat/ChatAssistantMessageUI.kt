@@ -21,8 +21,10 @@ import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -834,6 +836,152 @@ internal fun ToolCallPill(
         // any more. retryLast() / retryFromMessage() remain reachable from
         // other entry points (long-press menu, etc.).
         // iOS: Spacer(minLength: 0) — pill stays content-width, not full-row-width
+    }
+}
+
+// ─── Tool Run Group (iOS-style collapsible "agent turn" card) ──────────────
+// [T-android-tool-run-collapse] One assistant message with >= 2 tool_use
+// blocks renders as a single foldable row. While any tool is live the group
+// stays expanded (live progress visible); once every tool reached a terminal
+// state the card auto-collapses to a one-line summary ("N tools · total"),
+// exactly like the ThinkingBlock does for long deep-think content. Tapping
+// the header expands it again and takes over the state.
+
+/**
+ * Header-only summary for a collapsed/expanded tool run group.
+ *
+ * Collapse semantics mirror OmniBot's AgentRunHeader:
+ * `effectiveExpanded = isRunning || userExpanded` — running forces open,
+ * completion collapses unless the user took over via a tap.
+ */
+@Composable
+internal fun ToolCallRunGroup(
+    group: FlatChatItem.AssistantToolRunGroup,
+    onRetry: (() -> Unit)? = null,
+    onStop: (() -> Unit)? = null,
+    onOpenTerminalWithCommand: (String) -> Unit = {},
+    onOpenDetail: (String) -> Unit = {},
+    onRerunFromHere: (() -> Unit)? = null,
+    onCopyDetails: (() -> Unit)? = null,
+    modifier: Modifier = Modifier,
+) {
+    val isRunning = group.isRunning
+    // User-takeover flag: a manual tap on the header permanently opts this
+    // group out of auto-collapse, so the stream-end flip doesn't fight the
+    // user (same contract as ThinkingBlock's `userTouched`).
+    var userTouched by remember(group.messageId) { mutableStateOf(false) }
+    var expanded by remember(group.messageId) { mutableStateOf(isRunning) }
+
+    LaunchedEffect(group.messageId, isRunning) {
+        if (!isRunning && !userTouched) expanded = false
+    }
+    // While running we always render expanded — even if the user collapsed a
+    // finished group and a new tool then starts streaming into it.
+    val effectiveExpanded = isRunning || expanded
+
+    val groupAccent = toolAccentColor("shell_execute")
+    val totalDurationText = when {
+        group.totalDurationMs > 0 -> {
+            val seconds = group.totalDurationMs / 1000.0
+            if (seconds < 10) String.format("%.1fs", seconds)
+            else String.format("%.0fs", seconds)
+        }
+        else -> null
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
+    ) {
+        // Header — always visible; the collapsing unit is the pill list below.
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(ChatColors.toolCapsuleBg, RoundedCornerShape(14.dp))
+                .border(0.5.dp, ChatColors.toolBorder, RoundedCornerShape(14.dp))
+                .clickable {
+                    userTouched = true
+                    expanded = !expanded
+                }
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+        ) {
+            if (isRunning) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(13.dp),
+                    color = groupAccent,
+                    strokeWidth = 1.5.dp,
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+            } else {
+                Icon(
+                    imageVector = Icons.Default.AutoAwesome,
+                    contentDescription = null,
+                    tint = groupAccent,
+                    modifier = Modifier.size(14.dp),
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+            }
+            Text(
+                text = if (isRunning) "Running ${group.count} tools" else "${group.count} tools",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            if (totalDurationText != null) {
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = totalDurationText,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    softWrap = false,
+                    maxLines = 1,
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+            }
+            Icon(
+                imageVector = if (effectiveExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                contentDescription = if (effectiveExpanded) "Collapse tools" else "Expand tools",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                modifier = Modifier.size(16.dp),
+            )
+        }
+
+        // Pill list — only shown when expanded. AnimatedVisibility gives the
+        // collapse/expand a smooth height + fade transition.
+        AnimatedVisibility(
+            visible = effectiveExpanded,
+            enter = expandVertically(
+                animationSpec = tween(durationMillis = 260),
+            ) + fadeIn(animationSpec = tween(durationMillis = 200)),
+            exit = shrinkVertically(
+                animationSpec = tween(durationMillis = 200),
+            ) + fadeOut(animationSpec = tween(durationMillis = 160)),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 8.dp),
+        ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                group.tools.forEach { block ->
+                    ToolCallPill(
+                        block = block,
+                        allToolBlocks = group.tools,
+                        onRetry = if (group.isLastCancelled && block.id == group.tools.lastOrNull()?.id) onRetry else null,
+                        onStop = onStop,
+                        onOpenTerminalWithCommand = onOpenTerminalWithCommand,
+                        onOpenDetail = onOpenDetail,
+                        onRerunFromHere = onRerunFromHere,
+                        onCopyDetails = onCopyDetails,
+                    )
+                }
+            }
+        }
     }
 }
 
