@@ -1,6 +1,7 @@
 package com.openminis.app.ui.settings
 
 import com.openminis.app.R
+import com.openminis.app.data.storage.SessionFileStore
 import com.openminis.app.ui.components.MinisTextButton
 
 import android.content.Context
@@ -56,22 +57,25 @@ import java.io.File
 private data class SessionStorageInfo(
     val id: String,
     val title: String?,
-    val minisSize: Long,
+    val sessionDirSize: Long,
     val mediaSize: Long,
+    val topSubdir: Pair<String, Long>?, // largest component inside session dir, e.g. workspace→1.9GB
 ) {
-    val totalSize: Long get() = minisSize + mediaSize
+    val minisSize: Long get() = sessionDirSize
+    val totalSize: Long get() = sessionDirSize + mediaSize
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StorageManagementScreen(
-    chatDao: ChatDao,
+    chatRepository: com.openminis.app.data.repository.ChatRepository,
     onBack: () -> Unit,
     onRootfsClick: () -> Unit,
     onSessionClick: (sessionId: String) -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val sessionFiles = remember { SessionFileStore(context) }
 
     var isSizingSessions by remember { mutableStateOf(true) }
     var shellSize by remember { mutableLongStateOf(0L) }
@@ -80,11 +84,23 @@ fun StorageManagementScreen(
     var sessionCount by remember { mutableStateOf(0) }
     var sessions by remember { mutableStateOf<List<SessionStorageInfo>>(emptyList()) }
 
+    // [B: orphan reclamation] Auto-scanned on entry; surfaced as a banner that
+    // the user explicitly confirms before anything is deleted. Never silent.
+    var orphanInfo by remember {
+        mutableStateOf<SessionFileStore.ReclaimReport?>(null)
+    }
+    var isScanningOrphans by remember { mutableStateOf(false) }
+    var isReclaiming by remember { mutableStateOf(false) }
+    var showReclaimDialog by remember { mutableStateOf(false) }
+
     fun reload() {
         scope.launch {
             // Reset state so a re-entry / manual reload shows a fresh skeleton.
             isSizingSessions = true
             sessions = emptyList()
+            // [B] fresh scan every reload so the banner reflects reality.
+            isScanningOrphans = true
+            orphanInfo = null
             withContext(Dispatchers.IO) {
                 // [rootfs-usage-v1] Real on-disk footprint (lstat + st_blocks,
                 // no symlink following, hardlink dedupe). The old recursive
@@ -106,12 +122,14 @@ fun StorageManagementScreen(
                     .take(8)
                 dbSize = databaseSize(context)
 
-                val allSessions = chatDao.listSessions()
-                val sessionsDir = File(context.filesDir, "minis-sessions")
-                val mediaDir = File(context.filesDir, "media")
-
-                val mediaSizes = mediaSizesBySession(mediaDir, allSessions.map { it.id }.toSet())
+                val allSessions = chatRepository.dao.listSessions()
+                val liveIds = allSessions.map { it.id }.toSet()
+                val mediaSizes = sessionFiles.mediaSizesBySessionBrief(liveIds)
                 sessionCount = allSessions.size
+
+                // [B] Scan for leftover dirs whose session no longer exists
+                // (measure only — nothing is deleted until the user confirms).
+                orphanInfo = sessionFiles.scanOrphans(liveIds)
 
                 // Size every session directory in parallel (async) instead of
                 // the previous serial map, so the whole list appears roughly
@@ -119,17 +137,20 @@ fun StorageManagementScreen(
                 sessions = coroutineScope {
                     allSessions.map { session ->
                         async {
-                            val minisDir = File(sessionsDir, session.id)
+                            val subdirs = sessionFiles.sessionSubdirSizes(session.id)
+                            val top = subdirs.maxByOrNull { it.value }?.toPair()
                             SessionStorageInfo(
                                 id = session.id,
                                 title = session.title,
-                                minisSize = directorySize(minisDir),
+                                sessionDirSize = subdirs.values.sum(),
                                 mediaSize = mediaSizes[session.id] ?: 0L,
+                                topSubdir = top?.takeIf { it.second > 0 },
                             )
                         }
                     }.awaitAll()
                 }.sortedByDescending { it.totalSize }
             }
+            isScanningOrphans = false
             isSizingSessions = false
         }
     }
@@ -171,6 +192,42 @@ fun StorageManagementScreen(
                         value = Formatter.formatFileSize(context, entry.bytes),
                         showDivider = index != shellBreakdown.lastIndex,
                     )
+                }
+            }
+        }
+
+        // [B: orphan reclamation] Auto-scanned banner. Discovery is automatic,
+        // deletion is always an explicit user confirmation — never silent.
+        if (orphanInfo != null && orphanInfo!!.totalBytes > 0) {
+            SettingsSection(header = stringResource(R.string.storage_section_orphans)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = !isScanningOrphans && !isReclaiming) {
+                            showReclaimDialog = true
+                        }
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        stringResource(
+                            R.string.storage_orphan_banner,
+                            orphanInfo!!.totalDirs,
+                            Formatter.formatFileSize(context, orphanInfo!!.totalBytes),
+                        ),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (!isScanningOrphans && !isReclaiming) {
+                        Text(
+                            stringResource(R.string.storage_reclaim_button),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    } else {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    }
                 }
             }
         }
@@ -236,9 +293,19 @@ fun StorageManagementScreen(
                     modifier = Modifier.padding(16.dp),
                 )
                 else -> sessions.forEachIndexed { index, session ->
+                    val valueLabel = buildString {
+                        append(Formatter.formatFileSize(context, session.totalSize))
+                        val top = session.topSubdir
+                        if (top != null) {
+                            val ratio = if (session.totalSize > 0) top.second.toFloat() / session.totalSize else 0f
+                            if (ratio >= 0.15f) {
+                                append(" (${top.first}: ${Formatter.formatFileSize(context, top.second)})")
+                            }
+                        }
+                    }
                     SettingsValueRow(
                         title = session.title ?: "Untitled",
-                        value = Formatter.formatFileSize(context, session.totalSize),
+                        value = valueLabel,
                         onClick = { onSessionClick(session.id) },
                         showDivider = index < sessions.size - 1,
                     )
@@ -247,6 +314,44 @@ fun StorageManagementScreen(
         }
 
         Spacer(Modifier.height(24.dp))
+    }
+
+    if (showReclaimDialog) {
+        AlertDialog(
+            onDismissRequest = { showReclaimDialog = false },
+            title = { Text(stringResource(R.string.storage_reclaim_confirm_title)) },
+            text = {
+                Text(
+                    stringResource(
+                        R.string.storage_reclaim_confirm_text,
+                        orphanInfo?.totalDirs ?: 0,
+                        Formatter.formatFileSize(context, orphanInfo?.totalBytes ?: 0L),
+                    ),
+                )
+            },
+            confirmButton = {
+                MinisTextButton(onClick = {
+                    showReclaimDialog = false
+                    isReclaiming = true
+                    scope.launch {
+                        withContext(Dispatchers.IO) {
+                            val live = chatRepository.dao.listSessions().map { it.id }.toSet()
+                            sessionFiles.reclaimOrphans(live)
+                        }
+                        orphanInfo = null
+                        isReclaiming = false
+                        reload()
+                    }
+                }) {
+                    Text(stringResource(R.string.storage_reclaim_confirm_button))
+                }
+            },
+            dismissButton = {
+                MinisTextButton(onClick = { showReclaimDialog = false }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            },
+        )
     }
 }
 
@@ -260,6 +365,7 @@ fun SessionStorageDetailScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val sessionFiles = remember { SessionFileStore(context) }
 
     var session by remember { mutableStateOf<ChatSessionEntity?>(null) }
     var minisSize by remember { mutableLongStateOf(0L) }
@@ -267,16 +373,12 @@ fun SessionStorageDetailScreen(
     var isClearing by remember { mutableStateOf(false) }
     var showClearDialog by remember { mutableStateOf(false) }
 
-    val sessionsDir = File(context.filesDir, "minis-sessions")
-    val mediaDir = File(context.filesDir, "media")
-
     fun reload() {
         scope.launch {
             withContext(Dispatchers.IO) {
                 session = chatDao.getSession(sessionId)
-                minisSize = directorySize(File(sessionsDir, sessionId))
-                val mediaSizes = mediaSizesBySession(mediaDir, setOf(sessionId))
-                mediaSize = mediaSizes[sessionId] ?: 0L
+                minisSize = sessionFiles.sizeOf(sessionFiles.sessionDir(sessionId))
+                mediaSize = sessionFiles.mediaSize(sessionId)
             }
         }
     }
@@ -293,7 +395,7 @@ fun SessionStorageDetailScreen(
                     title = stringResource(R.string.storage_browse_files),
                     value = Formatter.formatFileSize(context, minisSize),
                     onClick = {
-                        onBrowseFiles(File(sessionsDir, sessionId).absolutePath)
+                        onBrowseFiles(sessionFiles.sessionDir(sessionId).absolutePath)
                     },
                     valueColor = MaterialTheme.colorScheme.onSurfaceVariant,
                     showDivider = false,
@@ -378,8 +480,7 @@ fun SessionStorageDetailScreen(
                     isClearing = true
                     scope.launch {
                         withContext(Dispatchers.IO) {
-                            File(sessionsDir, sessionId).deleteRecursively()
-                            deleteSessionMedia(mediaDir, sessionId)
+                            sessionFiles.deleteSessionFiles(sessionId)
                         }
                         minisSize = 0L
                         mediaSize = 0L
@@ -447,15 +548,6 @@ private fun StorageOverviewRow(
     }
 }
 
-private fun directorySize(dir: File): Long {
-    if (!dir.exists()) return 0L
-    var total = 0L
-    dir.walkTopDown().forEach { file ->
-        if (file.isFile) total += file.length()
-    }
-    return total
-}
-
 private fun databaseSize(context: Context): Long {
     val dbFile = context.getDatabasePath("minis.db")
     var size = if (dbFile.exists()) dbFile.length() else 0L
@@ -464,28 +556,4 @@ private fun databaseSize(context: Context): Long {
     if (wal.exists()) size += wal.length()
     if (shm.exists()) size += shm.length()
     return size
-}
-
-private fun mediaSizesBySession(mediaDir: File, sessionIds: Set<String>): Map<String, Long> {
-    if (!mediaDir.exists()) return emptyMap()
-    val sizes = mutableMapOf<String, Long>()
-    mediaDir.walkTopDown().forEach { file ->
-        if (file.isFile) {
-            val parent = file.parentFile ?: return@forEach
-            val sid = parent.name
-            if (sessionIds.contains(sid)) {
-                sizes[sid] = (sizes[sid] ?: 0L) + file.length()
-            }
-        }
-    }
-    return sizes
-}
-
-private fun deleteSessionMedia(mediaDir: File, sessionId: String) {
-    if (!mediaDir.exists()) return
-    mediaDir.walkTopDown().forEach { dir ->
-        if (dir.isDirectory && dir.name == sessionId) {
-            dir.deleteRecursively()
-        }
-    }
 }

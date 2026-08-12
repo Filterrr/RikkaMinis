@@ -378,6 +378,12 @@
     <string name="storage_clear_confirm_title">세션 파일을 삭제하시겠습니까?</string>
     <string name="storage_clear_confirm_text">%1$s 의 파일을 삭제합니다. 이 작업은 되돌릴 수 없습니다.</string>
     <string name="storage_clear_confirm_button">%1$s 지우기</string>
+    <string name="storage_section_orphans">회수 가능한 공간</string>
+    <string name="storage_orphan_banner">삭제된 세션의 고아 항목 %1$d개 — %2$s</string>
+    <string name="storage_reclaim_button">회수</string>
+    <string name="storage_reclaim_confirm_title">고아 파일을 회수할까요?</string>
+    <string name="storage_reclaim_confirm_text">삭제된 세션에 남은 고아 항목 %1$d개(%2$s)를 영구 삭제합니다. 다른 대화에는 영향이 없습니다. 이 작업은 되돌릴 수 없습니다.</string>
+    <string name="storage_reclaim_confirm_button">회수</string>
     <string name="usage_title">사용량</string>
     <string name="usage_section_total">총 사용량</string>
     <string name="usage_label_total_input">총 입력 (캐시 포함)</string>

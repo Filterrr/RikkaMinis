@@ -895,7 +895,7 @@ fun AppNavigation(
 
         composable(Routes.STORAGE) {
             StorageManagementScreen(
-                chatDao = chatRepository.dao,
+                chatRepository = chatRepository,
                 onBack = { navController.safePopBackStack() },
                 onRootfsClick = { navController.safeNavigate(Routes.ROOTFS_MANAGEMENT) },
                 onSessionClick = { sessionId ->

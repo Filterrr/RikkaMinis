@@ -4,10 +4,23 @@ import android.database.sqlite.SQLiteBlobTooBigException
 import com.openminis.app.data.db.ChatDao
 import com.openminis.app.data.db.ChatSessionEntity
 import com.openminis.app.data.db.MessageEntity
+import com.openminis.app.data.storage.SessionFileStore
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 import java.util.UUID
 
-class ChatRepository(internal val dao: ChatDao) {
+/**
+ * @param sessionFiles owner of a session's on-disk footprint. Null only in
+ *   unit-test construction (no Android Context, no real filesystem); deleting
+ *   a session with a null store falls back to the legacy row-only behavior.
+ *   MinisApp always injects the real SessionFileStore.
+ */
+class ChatRepository(
+    internal val dao: ChatDao,
+    private val sessionFiles: SessionFileStore? = null,
+) {
 
     fun observeSessions(): Flow<List<ChatSessionEntity>> = dao.observeSessions()
 
@@ -143,6 +156,40 @@ class ChatRepository(internal val dao: ChatDao) {
     suspend fun deleteSession(id: String) {
         dao.deleteMessages(id)
         dao.deleteSession(id)
+        // [A: session file reclamation] Dropping the DB rows previously leaked
+        // the bind-mounted session dir (minis-sessions/<id>: workspace /
+        // attachments / offloads / browser) and any media, which kept burning
+        // disk invisibly — the exact runaway-accumulation that also feeds the
+        // backup-OOM (ConfigBackup.export bundles live session content).
+        // Deleting a session means deleting the whole session, not just its text.
+        sessionFiles?.deleteSessionFiles(id)
+    }
+
+    /**
+     * Row-only delete: drops the DB rows (and messages) but leaves the session's
+     * on-disk files (minis-sessions/<id>/ dir and media) untouched.
+     *
+     * Used by the empty-session sweep (`cleanupIfEmptyOnExit`) — an "empty"
+     * session is one with zero persisted messages, but its dir may still hold a
+     * user's uploaded attachments / workspace files that they attached before
+     * ever sending. We reclaim only when the USER deletes a session
+     * (deleteSession above); auto-swept dead rows leave files for the orphan
+     * reclamation path, which the user is shown and confirms explicitly.
+     */
+    suspend fun deleteSessionRowOnly(id: String) {
+        dao.deleteMessages(id)
+        dao.deleteSession(id)
+    }
+
+    /**
+     * [B: reclaim] Remove on-disk leftovers of sessions that no longer exist in
+     * the DB (deleted sessions whose dirs survive, draft sessions that never
+     * materialised). Returns a report of what was reclaimed.
+     */
+    suspend fun reclaimOrphanSessionFiles(): SessionFileStore.ReclaimReport {
+        val store = sessionFiles ?: return SessionFileStore.ReclaimReport()
+        val live = observeSessions().first().map { it.id }.toSet()
+        return withContext(Dispatchers.IO) { store.reclaimOrphans(live) }
     }
 
     /**

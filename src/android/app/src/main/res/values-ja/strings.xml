@@ -378,6 +378,12 @@
     <string name="storage_clear_confirm_title">セッションファイルを削除しますか？</string>
     <string name="storage_clear_confirm_text">%1$s のファイルを削除します。この操作は取り消せません。</string>
     <string name="storage_clear_confirm_button">%1$s をクリア</string>
+    <string name="storage_section_orphans">回収可能な容量</string>
+    <string name="storage_orphan_banner">削除済みセッションの孤立項目 %1$d 件 — %2$s</string>
+    <string name="storage_reclaim_button">回収</string>
+    <string name="storage_reclaim_confirm_title">孤立ファイルを回収しますか？</string>
+    <string name="storage_reclaim_confirm_text">削除済みセッションに残された孤立項目 %1$d 件（%2$s）を完全に削除します。他の会話には影響しません。この操作は元に戻せません。</string>
+    <string name="storage_reclaim_confirm_button">回収</string>
     <string name="usage_title">使用量</string>
     <string name="usage_section_total">合計使用量</string>
     <string name="usage_label_total_input">合計入力（キャッシュ含む）</string>
