@@ -29,6 +29,11 @@ object AgentTools {
             add(ReadImageTool.definition())
         }
         add(browserUseDefinition())
+        // [T7-subagent] spawn_agent: skill = independent sub-agent instance.
+        // Always exposed — the sub-agent's own tool set is filtered inside
+        // SubagentSkill.buildFilteredTools (spawn_agent itself is FORBIDDEN
+        // there, so recursion is structurally impossible).
+        add(SubagentSkill.definition())
         if (memoryEnabled) {
             add(memoryWriteDefinition())
             add(memoryGetDefinition())
