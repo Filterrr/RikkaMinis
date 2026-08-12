@@ -362,7 +362,7 @@ fun AppearanceScreen(
             )
         }
 
-        // -- Tool Status Bar --
+        // -- Tool Status Button --
         SettingsSection(
             header = stringResource(R.string.appearance_section_tool_preview),
             footer = stringResource(R.string.appearance_tool_preview_footer),

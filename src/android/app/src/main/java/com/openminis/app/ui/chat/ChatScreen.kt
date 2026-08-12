@@ -671,7 +671,7 @@ fun ChatScreen(
 
     var showModelPicker by remember { mutableStateOf(false) }
     // [T-android-thinking-badge-navbar] Whether the thinking-level sheet
-    // (opened by tapping the navbar thinking badge) is presented. Mirrors iOS
+    // (opened by tapping the right-side thinking button) is presented. Mirrors iOS
     // AIChatView.showThinkingLevelSheet.
     var showThinkingLevelSheet by remember { mutableStateOf(false) }
     var showAttachMenu by remember { mutableStateOf(false) }
@@ -2097,29 +2097,12 @@ fun ChatScreen(
                                     }
                                 }
                                 // Line 2: "provider · model" (iOS: "MiniMax ·
-                                // MiniMax-M2.7") + the thinking-level badge laid
-                                // out as a Row of two SEPARATE tappable siblings
-                                // (mirrors iOS AIChatView row-2 HStack).
-                                //
-                                // [T-android-thinking-badge-navbar] Gesture
-                                // separation: the whole subtitle Column above owns
-                                // `clickable { showModelPicker = true }`, so a tap
-                                // on the model text still opens the model picker.
-                                // The badge declares its OWN `clickable` (see
-                                // ThinkingLevelBadge), and in Compose the innermost
-                                // clickable consumes the down/up events — so a tap
-                                // that lands on the badge opens the thinking sheet
-                                // and never bubbles up to the Column's model-picker
-                                // handler. Two hit targets, zero gesture conflict,
-                                // no pointerInput plumbing needed.
-                                //
-                                // Sizing: the model text takes `weight(1f, fill =
-                                // false)` so it truncates first (Ellipsis) when the
+                                // MiniMax-M2.7"). The thinking-level badge has been
+                                // moved to a right-side floating button (see below).
                                 // navbar is narrow; the badge has no weight, so it
                                 // keeps its intrinsic width and always renders in
                                 // full — the level label never gets clipped.
                                 if (providerName.isNotEmpty() || modelName.isNotEmpty()) {
-                                    val thinkingLevelBadgeState by viewModel.thinkingLevel.collectAsState()
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -2163,29 +2146,7 @@ fun ChatScreen(
                                             // badge to the right stays intrinsic.
                                             modifier = Modifier.weight(1f, fill = false),
                                         )
-                                        // Show the badge ONLY when the model can
-                                        // think AND thinking is currently on:
-                                        //   - availableThinkingLevels non-empty →
-                                        //     the bound model actually supports
-                                        //     thinking (no badge for models that
-                                        //     can't reason);
-                                        //   - level.isEnabled (≠ Off) → thinking is
-                                        //     switched on right now.
-                                        // When Off we render NOTHING (no greyed
-                                        // placeholder): iOS found a grey "Off" pill
-                                        // read as ambiguous ("is thinking on or
-                                        // off?"), so the badge simply disappears.
-                                        // The sheet still lists Off, so users can
-                                        // turn thinking back off from there.
-                                        if (viewModel.availableThinkingLevels.isNotEmpty() &&
-                                            thinkingLevelBadgeState.isEnabled
-                                        ) {
-                                            ThinkingLevelBadge(
-                                                level = thinkingLevelBadgeState,
-                                                onClick = { showThinkingLevelSheet = true },
-                                            )
                                         }
-                                    }
                                 }
                             }
                         }
@@ -2736,103 +2697,9 @@ fun ChatScreen(
             // Messages + scroll-to-bottom button
             Box(modifier = Modifier.weight(1f)) {
                 var toolBarHeightPx by remember { mutableStateOf(0) }
-                val density = LocalDensity.current
-                val toolBarHeightDp = with(density) { toolBarHeightPx.toDp() }
-                // T166 / T170 / T173: bottomReserve must clear the visible
-                // top of the floating tool-status overlay. Layout primitives
-                // come from FloatingToolStatusBar:
-                //   - status bar height = 38 dp
-                //   - thumbnail floats over the bar with overhang = 27 dp
-                //   - thumbnail TOP = bar top - overhang = 65 dp above the
-                //     input bar's upper edge (which is also the LazyColumn
-                //     bottom edge under reverseLayout).
-                //
-                // `onGloballyPositioned` on the wrapper Box reports ~98 dp
-                // because it includes wrapper padding(bottom=6) + horizontal
-                // padding insets + shadow allowance — none of which are
-                // *visually occluding* the LazyColumn. Using the measured
-                // value + 8 dp left a ~25 dp gap above the thumbnail (red
-                // box in the user's report).
-                //
-                // Pin to the visual constant: thumbnail height (65 dp) + a
-                // visual buffer (18 dp) so the latest row's bottom has clear
-                // breathing room above the thumbnail top.
-                //
-                // T174: an earlier version gated reserve on `toolBarHeightPx
-                // > 0`, but `onGloballyPositioned` fires asynchronously after
-                // the first floating-bar layout pass; for one frame after
-                // toolBlocks appeared the reserve evaluated the small
-                // default (28 dp) and the just-arrived user bubble landed
-                // beneath the bar. Logcat showed the inverse glitch too:
-                // `toolBarHeightPx=258 toolBarHeightDp=0 reserve=28` — the
-                // px state and the dp/reserve values come from different
-                // recomposition snapshots. Drive the reserve directly off
-                // the same predicate used for *whether* the floating bar is
-                // emitted (`hasFloatingTools` below) so reserve and bar
-                // visibility flip on the same frame.
-                // [T-android-chat-cannot-scroll-bottom-many-tools]
-                // Bug 𝙓𝙄𝙉 TG36286: with 7+ tools the user couldn't scroll the
-                // last messages above the floating tool status bar.
-                //
-                // Asymmetry between the bar's render condition and its
-                // bottomReserve gate: [lastToolBlocks] (drives whether to
-                // mount FloatingToolStatusBar) merges `messages` with the
-                // streaming-side-channel `streamingById`, so during a live
-                // turn the in-flight tool's toolStatus shows up there →
-                // bar renders. [hasFloatingTools] (drives bottomReserve)
-                // only read `messages`, which the streaming architecture
-                // intentionally leaves stable during a turn — so the
-                // in-flight tool is invisible to this predicate → reserve
-                // collapsed to 20dp while a 65dp+6dp floating bar covered
-                // the bottom of the LazyColumn. The new arrivals (status
-                // pill, "Minis is thinking" indicator, inline retry banner) landed
-                // behind the bar with no way to scroll them into view.
-                //
-                // Fix: also subscribe to streamingById so the predicate
-                // matches the bar's actual mount condition. The bar's
-                // mount uses `lastToolBlocks.isNotEmpty()` over the merged
-                // view; we mirror that semantically by checking the same
-                // filter on both sources.
-                val streamingById by viewModel.streamingById.collectAsState()
-                // Also gated on toolStatusBarEnabled: when the user hides the
-                // whole floating bar, hasFloatingTools must report false so
-                // bottomReserve drops to the normal no-tool padding (otherwise
-                // an empty 65dp+ gap stays above the composer). Recompute on
-                // toggle so the reserve and bar flip together.
-                val hasFloatingTools = remember(messages, streamingById, toolStatusBarEnabled) {
-                    if (!toolStatusBarEnabled) return@remember false
-                    val merged = if (streamingById.isEmpty()) messages
-                                 else mergeStreamingOverlay(messages, streamingById)
-                    merged.any { msg ->
-                        msg.role == "assistant" && msg.toolBlocks.any { tb ->
-                            tb.toolStatus != null && tb.kind != "thinking" && tb.kind != "info"
-                        }
-                    }
-                }
-                val visualOverlayHeight = 65.dp  // thumbnailHeight in FloatingToolStatusBar
-                // Halve the breathing room above the input bar in both
-                // states — felt too sparse before. The thumbnail's 65dp
-                // physical height is preserved (it has to clear the
-                // floating overlay).
-                //
-                // T245: buffer raised 9dp → 14dp so the gap between the
-                // last LazyColumn tool row and the floating thumbnail's
-                // top reads at least as loose as the inter-tool spacing
-                // (each ToolCallPill carries padding(vertical = 3.dp) +
-                // LazyColumn spacedBy(2.dp) = ~8dp inter-tool gap; the
-                // 9dp buffer combined with the floating bar's internal
-                // overhang was visually tighter than 8dp). 14dp also
-                // matches the no-tool branch — single visual constant
-                // for "row-bottom → bottom chrome" breathing room.
-                // [T-bottom-occluded 0a6d3c92] No-tools branch bumped from
-                // 14dp → 20dp to give the last message bubble a comfortable
-                // gap above the composer's top edge. With 14dp the trailing
-                // line sat too close to the composer shadow / rounded edge
-                // (user reported "the bottom of the text is slightly clipped"). The floating-tools branch
-                // already reserves visualOverlayHeight (65dp) + buffer and
-                // was not part of the report; keep its +14 buffer.
-                val bottomReserve =
-                    if (hasFloatingTools) visualOverlayHeight + 14.dp else 20.dp
+                // No floating tool bar anymore (replaced by right-side button),
+                // so bottomReserve is always the standard 20dp breathing room.
+                val bottomReserve = 20.dp
                 // T120: removed three streaming-time LaunchedEffects that
                 // each called scrollToItem(0) on every chunk:
                 //   - LE(bottomReserve): toolbar resize re-snap
@@ -3899,32 +3766,121 @@ fun ChatScreen(
                     }.collect { lastToolBlocks = it }
                 }
                 val allToolBlocks = lastToolBlocks
-                // Whole-bar visibility gate: when the user disables the
-                // floating tool status bar in Appearance, skip both the render
-                // AND the height reserve (otherwise an empty gap lingers above
-                // the composer). Reserve and bar must flip on the same frame for
-                // the T174 reserve logic to stay consistent.
-                if (lastToolBlocks.isNotEmpty() && toolStatusBarEnabled) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .fillMaxWidth()
-                            .onGloballyPositioned { toolBarHeightPx = it.size.height }
-                            .padding(horizontal = 12.dp)
-                            .padding(bottom = 6.dp),
+
+                // ─── Right-side floating button bar (thinking level + tool status) ───
+                val thinkingLevelButtonState by viewModel.thinkingLevel.collectAsState()
+                val hasThinkingLevels = viewModel.availableThinkingLevels.isNotEmpty() &&
+                    thinkingLevelButtonState.isEnabled
+                var showToolStatusPanel by remember { mutableStateOf(false) }
+
+                // Tool button visibility: mirrors the tool bar condition
+                val hasToolStatus = lastToolBlocks.isNotEmpty() && toolStatusBarEnabled
+
+                // Float at the right edge, vertically centered, above the
+                // floating tool bar / scroll-to-bottom FABs.
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .padding(end = 6.dp),
+                ) {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        FloatingToolStatusBar(
-                            toolBlocks = lastToolBlocks,
-                            // T14: per-card stop on the floating bar — same
-                            // global cancel as the message-list pill button.
-                            onStop = { viewModel.cancelStream() },
-                            onOpenTerminalWithCommand = onOpenTerminalWithCommand,
-                            // T261: route detail open through the same VM
-                            // state as in-list pills so both surfaces share
-                            // one always-mounted sheet instance.
-                            onOpenDetail = { viewModel.openToolDetail(it) },
-                        )
+                        // Thinking level button
+                        if (hasThinkingLevels) {
+                            androidx.compose.material3.FilledIconButton(
+                                onClick = { showThinkingLevelSheet = true },
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .shadow(4.dp, CircleShape),
+                                colors = androidx.compose.material3.IconButtonDefaults.filledIconButtonColors(
+                                    containerColor = ChatColors.inputBg,
+                                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                ),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Lightbulb,
+                                    contentDescription = "Thinking level",
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
+                        }
+
+                        // Tool status button
+                        if (hasToolStatus) {
+                            val toolIcon = if (lastToolBlocks.any {
+                                    it.toolStatus == ToolBlockStatus.RUNNING ||
+                                    it.toolStatus == ToolBlockStatus.STREAMING ||
+                                    it.toolStatus == ToolBlockStatus.PENDING
+                                }) {
+                                Icons.Default.Build  // running
+                            } else {
+                                Icons.Default.CheckCircle  // done
+                            }
+                            androidx.compose.material3.FilledIconButton(
+                                onClick = { showToolStatusPanel = true },
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .shadow(4.dp, CircleShape),
+                                colors = androidx.compose.material3.IconButtonDefaults.filledIconButtonColors(
+                                    containerColor = ChatColors.inputBg,
+                                    contentColor = if (lastToolBlocks.any {
+                                            it.toolStatus == ToolBlockStatus.FAILED ||
+                                            it.toolStatus == ToolBlockStatus.TIMEOUT
+                                        }) ToolErrorColor
+                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                                ),
+                            ) {
+                                Icon(
+                                    imageVector = toolIcon,
+                                    contentDescription = "Tool status",
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
+                        }
                     }
+
+                    // Tool status bottom sheet
+                    if (showToolStatusPanel) {
+                        val toolSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+                        ModalBottomSheet(
+                            onDismissRequest = { showToolStatusPanel = false },
+                            sheetState = toolSheetState,
+                            containerColor = ChatColors.background,
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 16.dp),
+                            ) {
+                                Text(
+                                    text = "Tool Status",
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.padding(bottom = 12.dp),
+                                )
+                                lastToolBlocks.forEach { block ->
+                                    ToolCallPill(
+                                        block = block,
+                                        allToolBlocks = lastToolBlocks,
+                                        onStop = { viewModel.cancelStream() },
+                                        onOpenTerminalWithCommand = onOpenTerminalWithCommand,
+                                        onOpenDetail = { viewModel.openToolDetail(it) },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Gate: tool status button is visible when there are tools AND
+                // the user hasn't disabled the tool status bar in Appearance.
+                if (lastToolBlocks.isNotEmpty() && toolStatusBarEnabled) {
+                    // FloatingToolStatusBar removed — replaced by right-side button
+                    // (see above). Keep the reserve logic for backward compat.
+                    SideEffect { toolBarHeightPx = 0 }
                 } else {
                     SideEffect { toolBarHeightPx = 0 }
                 }
@@ -3980,7 +3936,7 @@ fun ChatScreen(
                 // spacing). Scrolls to the OLDEST message (highest index under
                 // reverseLayout).
                 if (messages.isNotEmpty() && isFarFromTop.value && isFarFromBottom.value) {
-                    val upBaseBottom = if (lastToolBlocks.isNotEmpty()) 80.dp else 8.dp
+                    val upBaseBottom = 8.dp
                     androidx.compose.material3.FilledIconButton(
                         onClick = {
                             coroutineScope.launch {
@@ -4011,7 +3967,7 @@ fun ChatScreen(
                 // history and the "return to newest" button should be available
                 // as the explicit resume-follow escape hatch.
                 if (!stickToBottom && contentOverflows.value && messages.isNotEmpty()) {
-                    val fabBottomPadding = if (lastToolBlocks.isNotEmpty()) 80.dp else 8.dp
+                    val fabBottomPadding = 8.dp
                     androidx.compose.material3.FilledIconButton(
                         onClick = {
                             // [T-android-scroll-fab-down-stuck] Re-engage follow
@@ -5572,7 +5528,7 @@ fun ChatScreen(
     }
 
     // [T-android-thinking-badge-navbar] Thinking-level sheet opened by tapping
-    // the navbar thinking badge. Mirrors iOS ThinkingLevelSheetView: an Off row
+    // opened by the right-side thinking button. Mirrors iOS ThinkingLevelSheetView: an Off row
     // plus every level the current model supports, each selectable.
     if (showThinkingLevelSheet) {
         val currentThinkingLevel by viewModel.thinkingLevel.collectAsState()
@@ -5828,72 +5784,8 @@ fun ChatScreen(
 // Sun May 24 11:01:25 CST 2026
 
 /**
- * [T-android-thinking-badge-navbar] Compact thinking-level pill shown on the
- * navbar's "provider · model" line (iOS AIChatView.thinkingLevelBadge parity).
- *
- * Deliberately smaller than the 11sp model-name text next to it — a 9dp
- * lightbulb + 9sp level label — so it reads as secondary auxiliary info and
- * never crowds out the model name. Uses [Icons.Default.Lightbulb], the same
- * glyph the `/thinking` slash command uses.
- *
- * Colors mirror iOS AIChatView.thinkingLevelBadge exactly — a NEUTRAL look, not
- * an accent one. iOS uses `foregroundStyle(secondaryText)` on a
- * `Capsule().fill(Color.secondary.opacity(0.10))` background; the Compose
- * equivalents are `onSurfaceVariant` (secondary grey) for the icon+label and
- * `onSurface.copy(alpha = 0.08f)` (a faint translucent grey) for the capsule.
- * We deliberately do NOT use `primary` / `primaryContainer` / the app's blue
- * thinking accent here: the badge is passive status ("thinking is on, at this
- * level"), not a call-to-action, so a blue highlight would over-emphasize it
- * and clash with the grey "provider · model" text it sits beside. Both colors
- * are theme tokens, so the badge adapts to light/dark automatically.
- *
- * The caller only mounts this when thinking is enabled, so the label is always
- * a real level (never "Off").
- *
- * It carries its OWN clickable (which consumes the tap) so a tap on the badge
- * opens the thinking-level sheet instead of the model picker owned by the
- * enclosing subtitle Column — see the call site for the full gesture-separation
- * rationale.
- */
-@Composable
-private fun ThinkingLevelBadge(
-    level: com.openminis.app.data.model.ThinkingLevel,
-    onClick: () -> Unit,
-) {
-    val context = LocalContext.current
-    // Secondary grey for icon + label (iOS secondaryText parity) — no accent.
-    val badgeColor = MaterialTheme.colorScheme.onSurfaceVariant
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
-        modifier = Modifier
-            .clip(RoundedCornerShape(50))
-            // Faint translucent-grey capsule (iOS Color.secondary.opacity(0.10)).
-            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
-            // Own clickable → consumes the tap, opens the thinking sheet.
-            .clickable(onClick = onClick)
-            .padding(horizontal = 5.dp, vertical = 1.dp),
-    ) {
-        Icon(
-            imageVector = Icons.Default.Lightbulb,
-            contentDescription = null,
-            tint = badgeColor,
-            modifier = Modifier.size(9.dp),
-        )
-        Text(
-            text = level.localizedName(context),
-            fontSize = 9.sp,
-            lineHeight = 11.sp,
-            fontWeight = FontWeight.Medium,
-            color = badgeColor,
-            maxLines = 1,
-        )
-    }
-}
-
-/**
  * [T-android-thinking-badge-navbar] Bottom-sheet thinking-level selector opened
- * from [ThinkingLevelBadge]. Mirrors iOS ThinkingLevelSheetView: an Off row
+ * from the right-side thinking button. Mirrors iOS ThinkingLevelSheetView: an Off row
  * followed by every level the current model supports; the active level shows a
  * trailing check. Selecting any row calls [onSelect] (which also dismisses).
  */
