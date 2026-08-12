@@ -2,7 +2,6 @@ package com.openminis.app.config
 
 import android.content.Context
 import com.openminis.app.config.collections.EnvVarsCollection
-import com.openminis.app.service.DynamicIslandSupport
 import com.openminis.app.config.collections.GroupsCollection
 import com.openminis.app.config.collections.ModelsCollection
 import com.openminis.app.config.collections.ProvidersCollection
@@ -19,7 +18,6 @@ import com.openminis.app.data.repository.ChatRepository
 import com.openminis.app.data.repository.EnvVarRepository
 import com.openminis.app.data.repository.ProviderRepository
 import com.openminis.app.data.model.ThinkingLevel
-import com.openminis.app.ui.chat.ChatViewModelStore
 import kotlinx.coroutines.runBlocking
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -33,18 +31,32 @@ import java.util.TimeZone
  */
 internal object ConfigBuiltins {
 
+    /**
+     * [T8-2] Dependency-injected registration. The config layer must not
+     * import service/UI classes — the two UI-coupled values are supplied
+     * by the caller instead:
+     *
+     * @param isDynamicIslandCapable computed once by the caller (MinisApp)
+     *   via the same service probe the UI uses; refines the
+     *   `background.dynamicIsland` field to an UnavailableField when false.
+     * @param sessionIdProvider live provider of the foregrounded chat
+     *   session id (null when no chat is open). ConfigBuiltins reads it at
+     *   field-read/write time, so it always reflects the current screen.
+     */
     fun registerInto(
         r: ConfigRegistry,
         context: Context,
         providerRepo: ProviderRepository,
         envVarRepo: EnvVarRepository,
         chatRepo: ChatRepository,
+        isDynamicIslandCapable: Boolean,
+        sessionIdProvider: () -> String?,
     ) {
         registerSelfMeta(r)
-        registerSession(r, providerRepo, chatRepo)
+        registerSession(r, providerRepo, chatRepo, sessionIdProvider)
         registerAppearance(r, context)
         registerChat(r, context)
-        registerBackground(r, context)
+        registerBackground(r, context, isDynamicIslandCapable)
         registerLogs(r, context)
         registerProviderCollections(r, providerRepo, envVarRepo)
         registerDefaults(r, providerRepo)
@@ -106,13 +118,14 @@ internal object ConfigBuiltins {
     //
     // Mirrors iOS `session.*` keys in ConfigRegistry+Builtins.swift. The
     // "current session" is whatever ChatScreen is composed with right now,
-    // tracked via `ChatViewModelStore.activeSessionId`. Reads return empty
+    // tracked via `sessionIdProvider()`. Reads return empty
     // / writes throw "No active session" when no chat is foregrounded.
 
     private fun registerSession(
         r: ConfigRegistry,
         providerRepo: ProviderRepository,
         chatRepo: ChatRepository,
+        sessionIdProvider: () -> String?,
     ) {
         r.register(
             ClosureField(
@@ -125,7 +138,7 @@ internal object ConfigBuiltins {
                 risk = ConfigRisk.NORMAL,
                 revertable = true,
                 reader = {
-                    val sid = ChatViewModelStore.activeSessionId
+                    val sid = sessionIdProvider()
                     if (sid == null) ConfigValue.Null
                     else {
                         val session = runBlocking { chatRepo.dao.getSession(sid) }
@@ -141,7 +154,7 @@ internal object ConfigBuiltins {
                         ?: throw ConfigError.TypeMismatch("string")
                     val level = thinkingLevelFromToken(token)
                         ?: throw ConfigError.InvalidValue("Unknown thinking level: $token")
-                    val sid = ChatViewModelStore.activeSessionId
+                    val sid = sessionIdProvider()
                         ?: throw ConfigError.InvalidValue("No active session — open a chat first")
                     runBlocking { chatRepo.dao.updateThinkingOverride(sid, level.name) }
                 },
@@ -156,7 +169,7 @@ internal object ConfigBuiltins {
                 risk = ConfigRisk.SENSITIVE,
                 revertable = true,
                 reader = {
-                    val sid = ChatViewModelStore.activeSessionId
+                    val sid = sessionIdProvider()
                     if (sid == null) ConfigValue.Str("")
                     else {
                         val session = runBlocking { chatRepo.dao.getSession(sid) }
@@ -166,7 +179,7 @@ internal object ConfigBuiltins {
                 writer = { v ->
                     val s = (v as? ConfigValue.Str)?.value
                         ?: throw ConfigError.TypeMismatch("string")
-                    val sid = ChatViewModelStore.activeSessionId
+                    val sid = sessionIdProvider()
                         ?: throw ConfigError.InvalidValue("No active session — open a chat first")
                     if (s.isEmpty()) {
                         // Clear the binding — fall back to default group/entry on next load.
@@ -603,7 +616,7 @@ internal object ConfigBuiltins {
 
     // -- Background --
 
-    private fun registerBackground(r: ConfigRegistry, context: Context) {
+    private fun registerBackground(r: ConfigRegistry, context: Context, isDynamicIslandCapable: Boolean) {
         val prefs = context.getSharedPreferences("background_settings", Context.MODE_PRIVATE)
         r.register(
             PrefsBoolField(
@@ -634,7 +647,7 @@ internal object ConfigBuiltins {
         // and write is refused with `feature_unavailable`.
         //
         // Capability = Android 16+ AND the per-app Live-Updates grant, probed
-        // via the same DynamicIslandSupport the UI uses. The grant can be
+        // via the same capability probe the UI uses. The grant can be
         // revoked at runtime, so the probe runs at REGISTRATION time here and
         // the registry is rebuilt on the paths that re-register — matching how
         // the UI re-probes on resume. Mirrors iOS gating background.liveActivity
@@ -653,7 +666,7 @@ internal object ConfigBuiltins {
             defaultValue = false,
         )
         r.register(
-            if (DynamicIslandSupport.isDynamicIslandCapable(context)) {
+            if (isDynamicIslandCapable) {
                 dynamicIslandField
             } else {
                 UnavailableField(
