@@ -190,38 +190,17 @@ object ExecutionCoordinator {
                     PRootKernel.boot(appContext)
                 }
 
-            // Get or create shell — protected by globalLock to avoid duplicate creation
-            val shell = getOrCreateShell(sessionId)
-
-            // Inject user-defined environment variables as a *full snapshot*
-            // (T124a). Pass the previously-injected key set so applyEnvironment
-            // can `unset` anything the user has since removed from settings;
-            // otherwise the long-lived shell would keep stale values.
-            val envVars = envVarRepository?.allAsDict() ?: emptyMap()
-            val previousKeys = lastInjectedKeys[sessionId] ?: emptySet()
-            if (envVars.isNotEmpty() || previousKeys.isNotEmpty()) {
-                shell.applyEnvironment(envVars, previousKeys = previousKeys)
-                lastInjectedKeys[sessionId] = envVars.keys.toSet()
-            }
-
-            val result = shell.executeCommand(
+            // [P3-shell-auto-retry] Execute with one automatic retry: if the
+            // PRoot shell process itself died mid-command (HyperOS silent_kill,
+            // tracer OOM, idle-recycle race), rebuild the shell and re-run the
+            // command. At most 2 attempts total — guards against infinite retry
+            // loops. The agent/user sees a single successful result for
+            // transient infra failures.
+            val result = executeWithShellRetry(
+                sessionId = sessionId,
                 command = command,
                 timeout = timeout,
                 lineCallback = lineCallback,
-                memoryMonitor = { rssMB ->
-                    midCommandRecycleIfOversized(shell, sessionId, rssMB)
-                    // [P2-app-native-oom] Also watch the app-process native
-                    // heap in-flight: Debug.getNativeHeapAllocatedSize is a
-                    // cheap O(1) read, and the actual Scudo OOM happens
-                    // *during* a command (crash case: 12s of NativeAlloc GC
-                    // storms right before SIGABRT). PRoot-child RSS alone
-                    // stays flat at 3MB while this grows.
-                    val appNativeMB = Debug.getNativeHeapAllocatedSize() / (1024L * 1024L)
-                    if (appNativeMB > APP_NATIVE_HEAP_HIGH_WATER_MARK_MB) {
-                        Log.w(TAG, "[$sessionId] App native heap ${appNativeMB}MB crossed mark in-flight — recycling shell")
-                        sessionDidTerminate(sessionId)
-                    }
-                },
             )
 
             val durationMs = System.currentTimeMillis() - startTime
@@ -291,6 +270,66 @@ object ExecutionCoordinator {
         // mutex cleanup.
         globalConcurrency.release()
     }
+    }
+
+    /**
+     * [P3-shell-auto-retry] Execute a command in the session's persistent shell
+     * with ONE automatic retry when the shell process itself died mid-command
+     * (exitCode == -1 from PersistentShell.readLoop, or the process is no longer
+     * alive). The crash cases: HyperOS silent_kill, PRoot tracer OOM,
+     * idle-recycle race. Rebuilding the shell and re-running the command
+     * transparently heals all of these; the agent sees a single successful result.
+     *
+     * At most 2 attempts total — the loop immediately exits on success (exitCode
+     * != -1 with alive shell) or after the second attempt, so infinite retry
+     * loops are impossible.
+     */
+    private suspend fun executeWithShellRetry(
+        sessionId: String,
+        command: String,
+        timeout: Long,
+        lineCallback: ((String) -> Unit)?,
+    ): CommandResult {
+        var attempt = 0
+        while (true) {
+            attempt++
+            val shell = getOrCreateShell(sessionId)
+
+            // Inject environment variables as a full snapshot (T124a).
+            val envVars = envVarRepository?.allAsDict() ?: emptyMap()
+            val previousKeys = lastInjectedKeys[sessionId] ?: emptySet()
+            if (envVars.isNotEmpty() || previousKeys.isNotEmpty()) {
+                shell.applyEnvironment(envVars, previousKeys = previousKeys)
+                lastInjectedKeys[sessionId] = envVars.keys.toSet()
+            }
+
+            val result = shell.executeCommand(
+                command = command,
+                timeout = timeout,
+                lineCallback = lineCallback,
+                memoryMonitor = { rssMB ->
+                    midCommandRecycleIfOversized(shell, sessionId, rssMB)
+                    val appNativeMB = Debug.getNativeHeapAllocatedSize() / (1024L * 1024L)
+                    if (appNativeMB > APP_NATIVE_HEAP_HIGH_WATER_MARK_MB) {
+                        Log.w(TAG, "[$sessionId] App native heap ${appNativeMB}MB crossed mark in-flight — recycling shell")
+                        sessionDidTerminate(sessionId)
+                    }
+                },
+            )
+
+            // Shell died mid-command — rebuild once and retry.
+            val shellDied = result.exitCode == -1 || !shell.isAlive
+            if (!shellDied || attempt >= 2) {
+                return result
+            }
+
+            Log.w(
+                TAG,
+                "[$sessionId] Shell died mid-command (exit=${result.exitCode}, alive=${shell.isAlive}) " +
+                    "— rebuilding and retrying (attempt $attempt/2)"
+            )
+            sessionDidTerminate(sessionId)
+        }
     }
 
     /** [P2-proot-native-leak] If the PRoot child is already dead mid-command
