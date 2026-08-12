@@ -3167,6 +3167,7 @@ fun ChatScreen(
                     is FlatChatItem.AssistantMarkdownBlock -> grayedMap[originalMessageId(messageId)] == true
                     is FlatChatItem.AssistantThinking -> grayedMap[originalMessageId(messageId)] == true
                     is FlatChatItem.AssistantToolUse -> grayedMap[originalMessageId(messageId)] == true
+                    is FlatChatItem.AssistantToolRunGroup -> grayedMap[originalMessageId(messageId)] == true
                     is FlatChatItem.AssistantInfo -> false  // system rows never grayed
                     is FlatChatItem.AssistantTyping -> false
                     is FlatChatItem.AssistantError -> grayedMap[originalMessageId(messageId)] == true
@@ -3660,6 +3661,36 @@ fun ChatScreen(
                                     )
                                 }
                             }
+                            is FlatChatItem.AssistantToolRunGroup -> ToolCallRunGroup(
+                                group = item,
+                                onRetry = if (item.isLastCancelled && !isStreaming && !canResume) ({ safeMutate { viewModel.retryLast() } }) else null,
+                                onStop = { viewModel.cancelStream() },
+                                onOpenTerminalWithCommand = onOpenTerminalWithCommand,
+                                onOpenDetail = { viewModel.openToolDetail(it) },
+                                onRerunFromHere = if (!isStreaming) ({
+                                    val anchorId = item.tools.firstOrNull()?.id
+                                    if (anchorId != null) {
+                                        coroutineScope.launch {
+                                            tracedScrollToItem("RERUN-FROM-TOOLRUN", 0, 0)
+                                        }
+                                        safeMutate { viewModel.rerunFromToolBlock(item.messageId, anchorId) }
+                                    }
+                                }) else null,
+                                // T288: same long-press copy menu as single pills —
+                                // copies the whole group's tool list summary.
+                                onCopyDetails = if (!isStreaming) ({
+                                    val text = item.tools.joinToString("\n") { b ->
+                                        "${b.toolTitle.ifEmpty { b.toolName }} - ${b.toolStatus}"
+                                    }
+                                    val cb = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                    cb.setPrimaryClip(android.content.ClipData.newPlainText("toolrun", text))
+                                    android.widget.Toast.makeText(
+                                        context,
+                                        context.getString(R.string.tool_longpress_copied_toast),
+                                        android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
+                                }) else null,
+                            )
                             is FlatChatItem.AssistantToolUse -> ToolCallPill(
                                 block = item.block,
                                 allToolBlocks = item.allToolBlocks,
