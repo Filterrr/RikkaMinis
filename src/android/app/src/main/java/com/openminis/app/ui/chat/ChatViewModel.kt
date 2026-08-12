@@ -58,6 +58,8 @@ import com.openminis.app.tools.FileWriteTool
 import com.openminis.app.tools.MemoryRollupTool
 import com.openminis.app.tools.MemoryTools
 import com.openminis.app.tools.ReadImageTool
+import com.openminis.app.tools.SubagentSkill
+import com.openminis.app.tools.SubagentToolCall
 import com.openminis.app.tools.ToolConcurrencyPolicy
 import com.openminis.app.tools.ToolExecutionResult
 import com.openminis.app.tools.ToolFailureHook
@@ -8207,6 +8209,12 @@ class ChatViewModel(
             "memory_write" -> executeMemoryWriteTool(argsJson)
             "memory_get" -> executeMemoryGetTool(argsJson)
             "memory_rollup" -> executeMemoryRollupTool()
+            // [T7-subagent] spawn_agent: delegate to an independent sub-agent
+            // instance running the named skill. The sub-agent runs its own
+            // loop with a filtered tool set and budget, and returns a
+            // structured result. Context is isolated — nothing it does
+            // touches the main agent's agentHistory.
+            SubagentSkill.NAME -> executeSpawnAgentTool(argsJson)
             else -> ToolExecutionResult("Unknown tool: $name", false)
         }
 
@@ -8233,6 +8241,191 @@ class ChatViewModel(
             // tool-result path back to the model.
         }
         return result
+    }
+
+    /**
+     * [T7-subagent] Execute [SubagentSkill.NAME] — spawn an independent
+     * sub-agent using the named skill. The sub-agent gets its own system
+     * prompt (from the skill body), a filtered tool set, and runs its own
+     * independent loop with its own budget. Context is fully isolated from
+     * the main agent's [agentHistory].
+     */
+    private suspend fun executeSpawnAgentTool(argsJson: String): ToolExecutionResult {
+        val args = try { JSONObject(argsJson) } catch (_: Exception) { JSONObject() }
+        val skillName = args.optString("skill_name", "").trim()
+        val query = args.optString("query", "").trim()
+        val title = args.optString("tool_title", "Sub-agent").ifBlank { "Sub-agent" }
+
+        if (skillName.isBlank()) {
+            return ToolExecutionResult("Error: spawn_agent requires 'skill_name'", false, toolTitle = title)
+        }
+        if (query.isBlank()) {
+            return ToolExecutionResult("Error: spawn_agent requires 'query'", false, toolTitle = title)
+        }
+
+        val repo = skillRepository ?: return ToolExecutionResult(
+            "Error: Skill system unavailable", false, toolTitle = title,
+        )
+
+        // 1. Look up the skill
+        val skill = repo.skills.value.find {
+            it.name == skillName || it.id == skillName || it.name.equals(skillName, ignoreCase = true)
+        } ?: return ToolExecutionResult(
+            "Error: Skill '$skillName' not found. Make sure it is installed and the name is correct.",
+            false, toolTitle = title,
+        )
+
+        if (!repo.isEnabledForSession(skill.id, activeSessionId)) {
+            return ToolExecutionResult(
+                "Error: Skill '$skillName' is disabled for this session",
+                false, toolTitle = title,
+            )
+        }
+
+        // 2. Parse subagent config
+        val config = SubagentSkill.parseSubagentConfig(skill)
+        if (!config.isSubagent) {
+            return ToolExecutionResult(
+                "Error: Skill '$skillName' is not a sub-agent skill. " +
+                    "Add `subagent: true` to its SKILL.md frontmatter to enable sub-agent mode.",
+                false, toolTitle = title,
+            )
+        }
+
+        // 3. Build filtered tool set
+        val subagentTools = SubagentSkill.buildFilteredTools(agentTools, config.allowedTools)
+        if (subagentTools.isEmpty()) {
+            return ToolExecutionResult(
+                "Error: Skill '$skillName' has no usable tools (all filtered out by forbidden/allowlist)",
+                false, toolTitle = title,
+            )
+        }
+
+        // 4. Build system prompt + history
+        val systemPrompt = SubagentSkill.buildSystemPrompt(skill)
+        val history = mutableListOf(LLMMessage(role = LLMMessage.Role.USER, content = query))
+        val provider = currentProvider ?: return ToolExecutionResult(
+            "Error: No active provider available", false, toolTitle = title,
+        )
+
+        // 5. Run the sub-agent loop
+        val resultSb = StringBuilder()
+        var turns = 0
+        var lastText = ""
+
+        try {
+            while (turns < config.maxTurns) {
+                turns++
+                val chunks = provider.streamMessage(
+                    messages = history.toList(),
+                    systemPrompt = systemPrompt,
+                    maxTokens = config.maxOutputTokens,
+                    tools = subagentTools,
+                    thinkingLevel = ThinkingLevel.OFF,
+                ).toList()
+
+                val textSb = StringBuilder()
+                val toolCalls = mutableListOf<SubagentToolCall>()
+
+                for (chunk in chunks) {
+                    when (chunk) {
+                        is LLMStreamChunk.Text -> textSb.append(chunk.text)
+                        is LLMStreamChunk.ToolCallComplete -> {
+                            toolCalls.add(SubagentToolCall(chunk.id, chunk.name, chunk.args))
+                        }
+                        else -> {}
+                    }
+                }
+
+                val text = textSb.toString()
+                lastText = text
+                if (text.isNotBlank()) {
+                    if (resultSb.isNotEmpty()) resultSb.append('\n')
+                    resultSb.append(text)
+                }
+
+                if (toolCalls.isEmpty()) {
+                    // Model finished naturally — no more tool calls
+                    break
+                }
+
+                // Append assistant turn with tool uses to history
+                history.add(LLMMessage(
+                    role = LLMMessage.Role.ASSISTANT,
+                    content = text,
+                    contentParts = toolCalls.map { call ->
+                        AgentContentPart.ToolUse(id = call.id, name = call.name, input = call.args)
+                    },
+                ))
+
+                // Execute tools sequentially
+                for (call in toolCalls) {
+                    val result = executeSubagentTool(call.name, call.args.toString())
+                    val resultContent = if (result.success) {
+                        result.output
+                    } else {
+                        "Error: ${result.output}"
+                    }
+                    history.add(LLMMessage(
+                        role = LLMMessage.Role.USER,
+                        content = "Result of ${call.name} (${call.id}):\n$resultContent",
+                        contentParts = listOf(AgentContentPart.ToolResult(
+                            id = call.id, name = call.name,
+                            content = resultContent, isError = !result.success,
+                        )),
+                    ))
+                }
+            }
+        } catch (e: Exception) {
+            val msg = e.message ?: e.javaClass.simpleName
+            AppLogger.warning(TAG, "[Subagent] '$skillName' error after $turns turn(s): $msg")
+            val partial = resultSb.toString().ifBlank { "" }
+            val summary = buildString {
+                append("Sub-agent '$skillName' encountered an error after $turns turn(s).\n")
+                if (partial.isNotBlank()) {
+                    append("\nPartial output:\n---\n$partial\n---\n")
+                }
+                append("\nError: $msg")
+            }
+            return ToolExecutionResult(summary, false, toolTitle = "Sub-agent: ${skill.name}")
+        }
+
+        if (turns >= config.maxTurns && lastText.isNotBlank()) {
+            resultSb.append("\n\n[Sub-agent reached max turns (${config.maxTurns})]")
+        }
+
+        val finalText = resultSb.toString().trim()
+        if (finalText.isBlank()) {
+            return ToolExecutionResult(
+                "Sub-agent '$skillName' completed in $turns turn(s) with no output.",
+                true, toolTitle = "Sub-agent: ${skill.name}",
+            )
+        }
+
+        val summary = "Sub-agent '$skillName' completed in $turns turn(s).\n\n---\n$finalText"
+        return ToolExecutionResult(summary, true, toolTitle = "Sub-agent: ${skill.name}")
+    }
+
+    /**
+     * [T7-subagent] Execute a tool inside a sub-agent's loop. Mirrors the
+     * main [executeTool] dispatch but without UI updates (toolBlocks,
+     * assistantId, etc.) — the sub-agent produces file/memory results only.
+     * Tools that are FORBIDDEN for sub-agents never reach this method
+     * because [SubagentSkill.buildFilteredTools] excludes them.
+     */
+    private fun executeSubagentTool(name: String, argsJson: String): ToolExecutionResult = when (name) {
+        FileReadTool.NAME -> FileReadTool.execute(argsJson, activeSessionId, context)
+        FileWriteTool.NAME -> FileWriteTool.execute(argsJson, activeSessionId, context).also {
+            if (it.success) maybeReloadSkillsForPath(argsJson)
+        }
+        FileEditTool.NAME -> FileEditTool.execute(argsJson, activeSessionId, context).also {
+            if (it.success) maybeReloadSkillsForPath(argsJson)
+        }
+        ReadImageTool.NAME -> ReadImageTool.execute(argsJson, activeSessionId, context)
+        "memory_write" -> executeMemoryWriteTool(argsJson)
+        "memory_get" -> executeMemoryGetTool(argsJson)
+        "memory_rollup" -> executeMemoryRollupTool()
+        else -> ToolExecutionResult("Error: Unknown or forbidden tool: $name", false)
     }
 
     /**
