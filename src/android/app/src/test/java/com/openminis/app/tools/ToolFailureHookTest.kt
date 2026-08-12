@@ -164,7 +164,7 @@ class ToolFailureHookTest {
         val summaryEnd = block.indexOf("\n", summaryStart)
         val summary = block.substring(summaryStart, summaryEnd).trim()
         assertTrue("summary truncated to 120", summary.length <= ToolFailureHook.SUMMARY_MAX_LENGTH)
-        assertEquals(ToolFailureHook.SUMMARY_MAX_LENGTH, summary.length, "summary should be exactly 120 chars for 300-char input")
+        assertEquals("summary should be exactly 120 chars for 300-char input", ToolFailureHook.SUMMARY_MAX_LENGTH, summary.length.toLong())
     }
 
     // ─── multi-line output: summary is first line ───────────────────────────
