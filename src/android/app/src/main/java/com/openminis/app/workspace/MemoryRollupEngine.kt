@@ -28,7 +28,7 @@ object MemoryRollupEngine {
         /** Entry body (title lines included). */
         val body: String,
         /** First `## ...` heading found in the body. */
-        val title: String?,
+        val title: String? = null,
     )
 
     /** Distillation bucket an entry lands in. */
