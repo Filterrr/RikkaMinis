@@ -8090,6 +8090,7 @@ class ChatViewModel(
             "browser_use" -> executeBrowserUseTool(argsJson)
             "memory_write" -> executeMemoryWriteTool(argsJson)
             "memory_get" -> executeMemoryGetTool(argsJson)
+            "memory_rollup" -> executeMemoryRollupTool()
             else -> ToolExecutionResult("Unknown tool: $name", false)
         }
 
@@ -8500,6 +8501,21 @@ class ChatViewModel(
             preview = if (keywords.isNotBlank()) "Search: $keywords" else result.output.take(100),
             output = result.output,
             keywords = keywords,
+        )
+        return ToolExecutionResult(result.output, result.success, toolTitle = result.toolTitle)
+    }
+
+    // [T6-rollup] On-demand memory rollup: distills the previous day's daily
+    // log into MEMORY-ROLLUP.md. Uses the same memory dir as the repository.
+    private fun executeMemoryRollupTool(): ToolExecutionResult {
+        val repo = memoryRepository ?: return ToolExecutionResult("Error: Memory not available", false)
+        val memoryDir = repo.memoryDirectory()
+        val result = MemoryRollupTool.execute(memoryDir)
+        _memoryToolRecords.value = _memoryToolRecords.value + MemoryToolRecord(
+            title = result.toolTitle,
+            isWrite = false,
+            preview = result.output.take(100),
+            output = result.output,
         )
         return ToolExecutionResult(result.output, result.success, toolTitle = result.toolTitle)
     }
@@ -9045,7 +9061,8 @@ class ChatViewModel(
         val toolListMemoryBullets = if (memoryOn) {
             """
 - memory_write: Save a memory entry to today's daily log (YYYY-MM-DD.md). Use proactively to note user preferences, project patterns, and important context.
-- memory_get: Recall memories with keyword search. Check memory at the start of new topics to leverage past knowledge."""
+- memory_get: Recall memories with keyword search. Check memory at the start of new topics to leverage past knowledge.
+- memory_rollup: On-demand memory distillation — run this when daily logs are large to extract stable rules into MEMORY-ROLLUP.md. Idempotent."""
         } else {
             // Empty — no memory_write / memory_get bullets when disabled.
             // The "Memory system:" section below also collapses, so the
@@ -9058,6 +9075,7 @@ class ChatViewModel(
 
 Memory system (currently ENABLED):
 - memory_write writes to today's daily log (YYYY-MM-DD.md) — use it for session notes, key facts, project context, things learned, and action items.
+- memory_rollup: Distill stable rules from the previous day's daily log into MEMORY-ROLLUP.md. Call this when daily logs are growing large — it surfaces reusable knowledge concisely. Idempotent; skips dates already rolled up.
 - GLOBAL.md (/var/minis/memory/GLOBAL.md) stores persistent preferences, settings, and general-purpose conventions. To read it, use file_read (NOT memory_get). To update it, use file_read first then file_edit. If GLOBAL.md does not exist yet, use file_write to create it directly.
 - IMPORTANT: Only write to GLOBAL.md when the user explicitly asks (e.g. 'remember this globally', 'save to global memory'). Before editing, deduplicate and clean up — avoid ambiguity, repetition, or daily-log-style entries. GLOBAL.md should contain only concise, reusable knowledge (preferences, settings, conventions), NOT session logs or transient context.
 - Use memory_get to recall past knowledge before starting tasks — check if there are relevant memories that can help.
@@ -9193,6 +9211,18 @@ Environment variables:
         // to the memory feature.
         val globalMemoryFragment = if (memoryOn) memoryRepository?.loadGlobalMemoryFragment() else null
         val dailyMemoryFragment = if (memoryOn) memoryRepository?.loadRecentDailyMemoryFragment() else null
+        // [T6-rollup] Daily log size hint + MEMORY-ROLLUP.md injection.
+        // When the largest daily log is large, suggest the agent run
+        // memory_rollup to distill stable rules. MEMORY-ROLLUP.md (if it
+        // exists) is injected as a compact alternative to raw logs.
+        val rollupSizeHint = if (memoryOn) memoryRepository?.dailyLogSizeSummary() else null
+        val rollupBytes = if (memoryOn) memoryRepository?.largestDailyLogBytes() ?: 0L else 0L
+        val rollupFragment = if (memoryOn) {
+            val rollupFile = java.io.File(memoryRepository?.memoryDirectory(), "MEMORY-ROLLUP.md")
+            if (rollupFile.exists() && rollupFile.length() > 0) {
+                try { rollupFile.readText() } catch (_: Exception) { null }
+            } else null
+        } else null
 
         return buildString {
             append(base)
@@ -9215,6 +9245,18 @@ Environment variables:
             if (dailyMemoryFragment != null) {
                 append("\n\n")
                 append(dailyMemoryFragment)
+            }
+            // [T6-rollup] Inject MEMORY-ROLLUP.md (distilled stable rules)
+            // as a compact memory fragment, plus a size hint to trigger
+            // on-demand rollup when daily logs grow large.
+            if (rollupFragment != null) {
+                append("\n\nMemory rollup (MEMORY-ROLLUP.md — stable rules distilled from daily logs):\n")
+                append(rollupFragment)
+            }
+            if (rollupSizeHint != null && rollupBytes >= 50_000L) {
+                append("\n\nNote: Daily logs are large ($rollupSizeHint). ")
+                append("Consider calling memory_rollup to distill stable rules if you haven't already. ")
+                append("The tool is idempotent — it skips dates already rolled up.")
             }
             // Runtime context goes last so the prefix above stays byte-stable
             // across requests within the same day. Keep ordering deterministic

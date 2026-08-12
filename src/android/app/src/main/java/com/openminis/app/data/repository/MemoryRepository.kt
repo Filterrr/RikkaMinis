@@ -46,6 +46,41 @@ class MemoryRepository(private val memoryDir: File) {
         memoryDir.mkdirs()
     }
 
+    /** Expose the memory directory (used by the memory_rollup tool). */
+    fun memoryDirectory(): File = memoryDir
+
+    /**
+     * Compact per-file size summary of daily logs, used by the system prompt
+     * to decide whether a memory_rollup is worth triggering. Returns the
+     * largest daily log (name + size) plus the total, or null when empty.
+     */
+    fun dailyLogSizeSummary(): String? {
+        val sizes = dailyLogSizes() ?: return null
+        val total = sizes.sumOf { it.second }
+        val largest = sizes.first()
+        return "largest daily log ${largest.first} (${formatFileSize(largest.second)}), " +
+            "total ${sizes.size} logs ${formatFileSize(total)}"
+    }
+
+    /**
+     * Largest daily log size in bytes (0 when no daily logs exist). Used by
+     * the system prompt to decide whether to suggest memory_rollup.
+     */
+    fun largestDailyLogBytes(): Long {
+        return dailyLogSizes()?.firstOrNull()?.second ?: 0L
+    }
+
+    private fun dailyLogSizes(): List<Pair<String, Long>>? {
+        return memoryDir.listFiles()
+            ?.filter {
+                it.extension == "md" &&
+                    it.name != GLOBAL_FILE &&
+                    it.name != com.openminis.app.workspace.MemoryRollupEngine.ROLLUP_FILE
+            }
+            ?.map { it.name to it.length() }
+            ?.sortedByDescending { it.second }
+    }
+
     // -- memory_write --
 
     /**
