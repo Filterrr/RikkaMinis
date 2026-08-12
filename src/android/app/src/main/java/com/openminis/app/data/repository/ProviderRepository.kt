@@ -28,10 +28,7 @@ import com.openminis.app.data.model.hasVoiceModality
 import com.openminis.app.data.model.isVoiceTemplateSeedShape
 import com.openminis.app.data.model.withInferredVoiceModality
 import com.openminis.app.provider.ModelsDevApi
-import com.openminis.app.provider.anthropic.AnthropicModelsApi
-import com.openminis.app.provider.gemini.GeminiModelsApi
-import com.openminis.app.provider.openai.OpenAIModelsApi
-import com.openminis.app.provider.openrouter.OpenRouterModelsApi
+import com.openminis.app.provider.registerModelListProviders
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -229,6 +226,10 @@ class ProviderRepository(private val context: Context) {
     suspend fun awaitConfigLoaded() = configLoadComplete.await()
 
     init {
+        // [T8-1] One-time registration of provider API adapters so the
+        // data layer never imports provider implementations directly.
+        // Idempotent (last-registration-wins per type).
+        registerModelListProviders()
         loadScope.launch {
             val loaded = loadConfig()
             synchronized(configLock) {
@@ -1740,7 +1741,7 @@ class ProviderRepository(private val context: Context) {
         if (instance.providerType == ProviderType.openAI
             && instance.credentialType == ProviderCredential.oauth
         ) {
-            val models = OpenAIModelsApi.fetchModelsOAuth()
+            val models = ModelListProviderRegistry.oauthModels(instance)
             if (models.isNotEmpty()) {
                 replaceEntries(instance.id, models)
                 return ModelRefreshResult.SUCCESS_OAUTH
@@ -1755,36 +1756,12 @@ class ProviderRepository(private val context: Context) {
             }
 
         if (apiKey != null) {
-            val baseURL = instance.effectiveBaseURL
             val models = try {
-                when (instance.providerType) {
-                    ProviderType.anthropic -> AnthropicModelsApi.fetchModels(
-                        apiKey, baseURL,
-                        isOAuth = instance.credentialType == com.openminis.app.data.model.ProviderCredential.oauth,
-                        // [T-provider-custom-user-agent] models-list UA override.
-                        customUserAgent = instance.customUserAgent,
-                    )
-                    ProviderType.gemini -> GeminiModelsApi.fetchModels(apiKey)
-                    // [T-provider-custom-user-agent] models-list UA override.
-                    ProviderType.openAI -> OpenAIModelsApi.fetchModels(apiKey, baseURL, customUserAgent = instance.customUserAgent)
-                    ProviderType.openRouter -> OpenRouterModelsApi.fetchModels(apiKey)
-                    // xAI: the OAuth model list is fixed (no /v1/models gating
-                    // call needed — XAIModelsApi exposes the spec-mandated set).
-                    // For API-key users we still call the same static list; if
-                    // xAI later exposes a dynamic /v1/models endpoint this is
-                    // the place to swap in OpenAI-compatible fetch.
-                    ProviderType.xAI -> com.openminis.app.provider.xai.XAIModelsApi.fetchModelsOAuth()
-                    // [T-kimi-oauth] Kimi Code: unlike Codex OAuth, the Kimi
-                    // OAuth token CAN call the models endpoint — real fetch
-                    // from GET /coding/v1/models (OpenAI-compatible shape).
-                    // The upstream lineup shifts across generations, so the
-                    // live list replaces the minimal built-in fallback.
-                    ProviderType.kimiCode -> OpenAIModelsApi.fetchModels(
-                        apiKey,
-                        baseURL ?: "${com.openminis.app.auth.KimiDeviceFlow.CODING_API_BASE}/v1",
-                        customUserAgent = instance.customUserAgent,
-                    )
-                }
+                // [T8-1] Dispatch through the registry instead of importing
+                // provider implementations directly (data→provider reverse
+                // dependency). Registry returns empty list for types without
+                // a registered fetcher.
+                ModelListProviderRegistry.fetchModels(instance, apiKey, isThirdParty)
             } catch (e: Exception) {
                 android.util.Log.e("ProviderRepo", "refreshModels fetch error: ${e.message}", e)
                 emptyList()
@@ -1914,7 +1891,7 @@ class ProviderRepository(private val context: Context) {
             ProviderType.openAI -> "https://api.openai.com/v1"
             ProviderType.openRouter -> "https://openrouter.ai/api/v1"
             ProviderType.xAI -> "https://api.x.ai/v1"
-            ProviderType.kimiCode -> "${com.openminis.app.auth.KimiDeviceFlow.CODING_API_BASE}/v1"
+            ProviderType.kimiCode -> "https://api.kimi.com/coding/v1"
         }
     }
 
