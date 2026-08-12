@@ -362,6 +362,10 @@ class MinisApp : Application(), ImageLoaderFactory {
         com.openminis.app.config.audit.ConfigAuditLog.init(this)
         com.openminis.app.config.ConfigRegistry.init(
             this, providerRepository, envVarRepository, chatRepository,
+            // [T8-2] Config layer no longer imports service/UI classes —
+            // capability probe + session-id provider are injected here.
+            com.openminis.app.service.DynamicIslandSupport.isDynamicIslandCapable(this),
+            { com.openminis.app.ui.chat.ChatViewModelStore.activeSessionId },
         )
 
         // Initialize models.dev registry (loads from bundled asset, refreshes in background)
