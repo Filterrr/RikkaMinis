@@ -58,6 +58,7 @@ import com.openminis.app.tools.FileWriteTool
 import com.openminis.app.tools.MemoryRollupTool
 import com.openminis.app.tools.MemoryTools
 import com.openminis.app.tools.ReadImageTool
+import com.openminis.app.trace.TraceLogger
 import com.openminis.app.tools.SubagentSkill
 import com.openminis.app.tools.SubagentToolCall
 import com.openminis.app.tools.ToolConcurrencyPolicy
@@ -79,6 +80,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay

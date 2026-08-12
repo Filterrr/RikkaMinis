@@ -98,14 +98,14 @@ class SkillRepository(private val context: Context) {
 
     data class Skill(
         val id: String = UUID.randomUUID().toString(),
-        val name: String,
-        val description: String = "",
+        override val name: String,
+        override val description: String = "",
         val version: String = "1.0.0",
         val importSource: ImportSource = ImportSource.FILE,
         val isEnabled: Boolean = true,
         val installedAt: Long = System.currentTimeMillis(),
         val updatedAt: Long = System.currentTimeMillis(),
-        val body: String = "",
+        override val body: String = "",
         /** Original GitHub URL when importSource is URL (null otherwise). */
         val sourceURL: String? = null,
         /** Cumulative read count of this skill's SKILL.md; normalized to 0–100 after exceeding 1000. */
