@@ -388,6 +388,26 @@ in-app terminal's ANSI/CSI/OSC parsing and TUI rendering engine.
 (AGPL-3.0), an Android multi-LLM client whose design informed RikkaMinis' chat
 UI and interaction logic (conceptual inspiration, not code reuse).
 
+**Android on-device AI agent references** — the following projects informed
+RikkaMinis' agent runtime, automation, and system-integration capabilities
+(conceptual inspiration, not code reuse):
+
+- **[OmniBot](https://github.com/omnimind-ai/OmniBot)** — tool concurrency,
+  run folding, auto-compaction, memory rollup, sub-agent system
+- **[肉包 Roubao](https://github.com/Turbo1123/roubao)** — macro scripts,
+  execution tracing
+- **[AppAgent](https://github.com/TencentQQGYLab/AppAgent)**
+- **[MobileAgent-Android](https://github.com/GiggleWang/MobileAgent-Android)**
+- **[mobAgent](https://github.com/sudharsanacernitro/mobAgent)**
+- **[anthroid](https://github.com/k-l-lambda/anthroid)**
+- **[OpenPhone](https://github.com/HKUDS/OpenPhone)**
+- **[MobileAgent](https://github.com/X-PLUG/MobileAgent)**
+- **[Open-AutoGLM](https://github.com/zai-org/Open-AutoGLM)**
+- **[OpenGUI](https://github.com/Core-Mate/OpenGUI)**
+- **[mobilerun](https://github.com/droidrun/mobilerun)**
+- **[locanara](https://github.com/hyodotdev/locanara)**
+- **[deliteAI](https://github.com/NimbleEdge/deliteAI)**
+
 **Android** — [AndroidX & Jetpack Compose](https://developer.android.com/jetpack),
 [OkHttp](https://square.github.io/okhttp/), [Coil](https://coil-kt.github.io/coil/),
 [kotlinx](https://github.com/Kotlin) serialization & coroutines,
