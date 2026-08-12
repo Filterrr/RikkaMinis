@@ -1,6 +1,8 @@
 package com.openminis.app.browser
 
+import android.content.ComponentCallbacks2
 import android.content.Context
+import android.content.res.Configuration
 import android.os.Message
 import android.util.Log
 import android.webkit.WebView
@@ -29,7 +31,7 @@ import java.util.concurrent.ConcurrentHashMap
  * Manages up to 3 browser tabs for the agent, mirroring iOS BrowserTabPool.
  * All tabs share the same cookie store by default on Android.
  */
-class BrowserTabPool(private val context: Context) {
+class BrowserTabPool(private val context: Context) : ComponentCallbacks2 {
 
     companion object {
         private const val TAG = "BrowserTabPool"
@@ -93,6 +95,16 @@ class BrowserTabPool(private val context: Context) {
          */
         private const val IMPLICIT_TAB_WAIT_MS = 20_000L
         private const val IMPLICIT_TAB_WAIT_POLL_MS = 250L
+
+        /**
+         * [T-android-trim-memory] Threshold note: [ComponentCallbacks2.onTrimMemory]
+         * tiers (MODERATE=5, LOW=10, CRITICAL=15, UI_HIDDEN=20, BACKGROUND=40+).
+         * We treat any level >= RUNNING aggressive enough to shed idle tabs;
+         * the selected tab is always the last to go because the agent's JS
+         * evaluation state lives in it (window.innerWidth etc. after
+         * set_viewport / reloadAndWait).
+         */
+        private const val TRIM_MAX_IDLE_TABS_TO_KEEP = 1
     }
 
     /**
@@ -224,6 +236,12 @@ class BrowserTabPool(private val context: Context) {
                 withContext(Dispatchers.Main) { evictIdleTabs() }
             }
         }
+
+        // [T-android-trim-memory] Register for system low-memory callbacks.
+        // WebViews are expensive (50-100 MB per tab). When the OS signals
+        // pressure we release idle tabs before the process is killed.
+        // Unregistered in [dispose].
+        context.applicationContext.registerComponentCallbacks(this)
     }
 
     /**
@@ -849,7 +867,7 @@ class BrowserTabPool(private val context: Context) {
         val idx = currentTabs.indexOfFirst { it.id == id }
         if (idx < 0) return@withContext BrowserActionResult.error("Tab $id not found")
 
-        currentTabs.removeAt(idx)
+        destroyTab(currentTabs, currentTabs[idx])
         _tabs.value = currentTabs
 
         // Select next tab
@@ -912,12 +930,12 @@ class BrowserTabPool(private val context: Context) {
         val idx = currentTabs.indexOfFirst { it.manager === manager }
         if (idx >= 0) {
             val closedId = currentTabs[idx].id
-            currentTabs.removeAt(idx)
+            destroyTab(currentTabs, currentTabs[idx])
             _tabs.value = currentTabs
             if (_selectedTabId.value == closedId && currentTabs.isNotEmpty()) {
                 _selectedTabId.value = currentTabs.first().id
             }
-            Log.i(TAG, "window.close → removed tab $closedId")
+            Log.i(TAG, "window.close → destroyed tab $closedId")
         }
     }
 
@@ -949,7 +967,7 @@ class BrowserTabPool(private val context: Context) {
         val currentTabs = _tabs.value.toMutableList()
         val idx = currentTabs.indexOfFirst { it.id == tabId }
         if (idx < 0) return@withContext
-        currentTabs.removeAt(idx)
+        destroyTab(currentTabs, currentTabs[idx])
         _tabs.value = currentTabs
         if (_selectedTabId.value == tabId && currentTabs.isNotEmpty()) {
             _selectedTabId.value = currentTabs.first().id
@@ -1045,6 +1063,102 @@ class BrowserTabPool(private val context: Context) {
         saveState()
     }
 
+    /**
+     * [T-android-trim-memory] Central tab teardown. Removes the tab from the
+     * supplied list and destroys its WebView so the renderer process actually
+     * frees memory (50-100 MB/tab). Must be called on the main thread (WebView
+     * APIs are main-thread only) — all call sites ([closeTab], [closeTabFromUI],
+     * [handleCloseWindow], [evictIdleTabs], trim callbacks) run on Main.
+     */
+    private fun destroyTab(tabs: MutableList<Tab>, tab: Tab) {
+        tab.inUseGraceJob?.cancel()
+        tab.inUseGraceJob = null
+        tabs.remove(tab)
+        tab.manager.destroy()
+    }
+
+    /**
+     * [T-android-trim-memory] Permanently dispose the pool: unregister the
+     * low-memory callback and destroy every tab's WebView. Call when the owning
+     * ViewModel is cleared / the app no longer needs browser tabs. After this
+     * the pool must not be used again (create a fresh instance instead).
+     */
+    fun dispose() {
+        evictionJob?.cancel()
+        evictionJob = null
+        runCatching { context.applicationContext.unregisterComponentCallbacks(this) }
+            .onFailure { Log.w(TAG, "dispose(): unregister failed: ${it.message}") }
+        val current = _tabs.value
+        if (current.isNotEmpty()) {
+            val mutable = current.toMutableList()
+            for (tab in current) {
+                destroyTab(mutable, tab)
+                Log.i(TAG, "dispose(): destroyed tab ${tab.id}")
+            }
+            _tabs.value = emptyList()
+        }
+        saveState()
+    }
+
+    // -- ComponentCallbacks2 (low-memory handling) --
+
+    /** Required by [ComponentCallbacks2]; the pool has no config handling. */
+    override fun onConfigurationChanged(newConfig: Configuration) = Unit
+
+    /**
+     * [T-android-trim-memory] Android invokes this when the system is low on
+     * memory. WebViews are the pool's biggest consumer (one renderer process
+     * per tab, 50-100 MB each), so we sacrifice idle tabs before the OS kills
+     * the whole process. Tiers:
+     *  - RUNNING_MODERATE (5): drop the single least-recently-active idle tab.
+     *  - RUNNING_LOW (10) / UI_HIDDEN (20)+: drop every idle tab.
+     *  - RUNNING_CRITICAL (15): drop everything except the selected tab —
+     *    the agent's active context survives a near-kill.
+     * Tabs in use (an agent action is mid-flight) and the selected tab are
+     * protected so ongoing work isn't corrupted mid-evaluation. Dropped tab
+     * URLs are saved to [savedURLs] so state persists and a later implicit tab
+     * acquire can restore them, mirroring [evictIdleTabs].
+     */
+    override fun onTrimMemory(level: Int) {
+        if (_tabs.value.isEmpty()) return
+        val victims = when {
+            level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL -> {
+                // Keep only the selected tab.
+                _tabs.value.filter { it.id != _selectedTabId.value }
+            }
+            level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW -> {
+                // Drop all idle tabs.
+                _tabs.value.filter { !it.inUse }
+            }
+            level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE -> {
+                // Light pressure: drop the single LRU idle tab.
+                _tabs.value.filter { !it.inUse }
+                    .minByOrNull { it.lastActivityDate.time }
+                    ?.let { listOf(it) } ?: emptyList()
+            }
+            else -> emptyList()
+        }
+        if (victims.isEmpty()) return
+        Log.i(TAG, "onTrimMemory($level): destroying ${victims.size} tab(s)")
+        val currentTabs = _tabs.value.toMutableList()
+        for (tab in victims) {
+            val url = tab.manager.currentURL.value
+            if (url.isNotEmpty()) savedURLs[tab.id] = url
+            destroyTab(currentTabs, tab)
+            Log.i(TAG, "Trimmed tab ${tab.id} (level $level)")
+        }
+        _tabs.value = currentTabs
+        if (currentTabs.isNotEmpty() && currentTabs.none { it.id == _selectedTabId.value }) {
+            _selectedTabId.value = currentTabs.first().id
+        }
+        saveState()
+    }
+
+    /** [T-android-trim-memory] Old-style callback; map to the CRITICAL tier. */
+    override fun onLowMemory() {
+        onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL)
+    }
+
     // -- Idle Eviction (call from a timer) --
 
     fun evictIdleTabs() {
@@ -1055,7 +1169,7 @@ class BrowserTabPool(private val context: Context) {
         for (tab in toRemove) {
             val url = tab.manager.currentURL.value
             if (url.isNotEmpty()) savedURLs[tab.id] = url
-            currentTabs.remove(tab)
+            destroyTab(currentTabs, tab)
             Log.i(TAG, "Evicted idle tab ${tab.id}")
         }
         if (toRemove.isNotEmpty()) {
