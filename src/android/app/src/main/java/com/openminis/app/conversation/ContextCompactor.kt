@@ -107,7 +107,13 @@ object ContextCompactor {
         if (policy.check(estimatedTokens, contextWindow) != ContextPolicy.CheckResult.NEEDS_COMPACT) {
             return Decision.OK
         }
-        if (nowMs - lastAutoCompactAtMs < minIntervalMs) return Decision.RECENT_AUTO_COMPACT
+        // Guard against Long underflow: `lastAutoCompactAtMs` is
+        // Long.MIN_VALUE when never auto-compacted, so `nowMs - last` would
+        // wrap negative and spuriously look like "just compacted". Only apply
+        // the debounce once we have a real timestamp.
+        if (lastAutoCompactAtMs > 0 && nowMs - lastAutoCompactAtMs < minIntervalMs) {
+            return Decision.RECENT_AUTO_COMPACT
+        }
         if (tailTokens < minTailTokens) return Decision.TAIL_TOO_SMALL
         return Decision.AUTO_COMPACT
     }

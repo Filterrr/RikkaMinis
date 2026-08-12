@@ -123,12 +123,12 @@ class AutoCompactPolicyTest {
             content = "a".repeat(40), // 10 tokens
             contentParts = listOf(
                 AgentContentPart.Text("b".repeat(80)),        // 20 tokens
-                AgentContentPart.ToolResult("tool", "c".repeat(160), "d".repeat(80)), // 40+20
-                AgentContentPart.ToolUse("t1", "tool", JSONObject("{\"x\":\"eee\"}")), // small
+                AgentContentPart.ToolResult("t1", "tool", "c".repeat(160)), // content 40 tokens
+                AgentContentPart.ToolUse("t2", "tool", JSONObject()), // {} → 0 tokens
             ),
         )
-        // 10 + 20 + 60 + ~2 = 92 (each rounded down by integer division)
-        assertEquals(10 + 20 + (160 / 4) + (80 / 4) + (28 / 4), ContextCompactor.estimateMessageTokens(msg).toInt())
+        // 10 (content) + 20 (Text) + 40 (ToolResult.content) + 0 (empty ToolUse input)
+        assertEquals(70, ContextCompactor.estimateMessageTokens(msg).toInt())
     }
 
     @Test
