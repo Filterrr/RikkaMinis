@@ -86,11 +86,10 @@ class StreamingMarkdownTextTest {
             ```
         """.trimIndent()
         val result = splitMarkdownIntoBlockTexts(input)
-        assertEquals(4, result.size)
+        assertEquals(3, result.size)
         assertTrue(result[0].startsWith("```json"))
         assertEquals("Middle text.", result[1])
         assertTrue(result[2].startsWith("```bash"))
-        // last is empty due to trailing fence
     }
 
     @Test fun `split no blank lines returns single fragment`() {
