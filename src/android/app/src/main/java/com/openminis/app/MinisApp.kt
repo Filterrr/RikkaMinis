@@ -343,6 +343,15 @@ class MinisApp : Application(), ImageLoaderFactory {
         skillRepository = SkillRepository(this)
         mcpRepository = MCPRepository(this)
         memoryRepository = MemoryRepository(java.io.File(filesDir, "minis-global/memory"))
+
+        // T6 memory rollup: schedule the daily 03:00 distillation of the
+        // previous day's log into MEMORY-ROLLUP.md. AlarmManager (exact),
+        // chain-rescheduled, degrading to inexact when the exact-alarm
+        // permission is missing — more survive-able than WorkManager under
+        // aggressive OEM (HyperOS) background killing. Idempotent.
+        runCatching {
+            com.openminis.app.workspace.WorkspaceMemoryRollupScheduler(this).scheduleDaily()
+        }.onFailure { Log.w("MinisApp", "memory rollup schedule failed: ${it.message}") }
         webAppShortcutRepository = WebAppShortcutRepository(database.webAppShortcutDao())
 
         // [T-soul-md] Seed SOUL.md with the default content on first launch

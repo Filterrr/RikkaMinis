@@ -395,6 +395,18 @@
             </intent-filter>
         </receiver>
 
+        <!-- Memory rollup receiver — fires the daily memory distillation at
+             03:00 (chain-scheduled via AlarmManager). Also listens for
+             BOOT_COMPLETED / MY_PACKAGE_REPLACED to re-establish the alarm. -->
+        <receiver
+            android:name=".workspace.WorkspaceMemoryRollupReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
         <!-- Scheduled notification receiver — fires `android-notification schedule`
              alarms so the deferred notification posts at the requested time. -->
         <receiver
