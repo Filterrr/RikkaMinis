@@ -866,18 +866,13 @@ internal fun ToolCallRunGroup(
     modifier: Modifier = Modifier,
 ) {
     val isRunning = group.isRunning
-    // User-takeover flag: a manual tap on the header permanently opts this
-    // group out of auto-collapse, so the stream-end flip doesn't fight the
-    // user (same contract as ThinkingBlock's `userTouched`).
-    var userTouched by remember(group.messageId) { mutableStateOf(false) }
-    var expanded by remember(group.messageId) { mutableStateOf(isRunning) }
-
-    LaunchedEffect(group.messageId, isRunning) {
-        if (!isRunning && !userTouched) expanded = false
-    }
-    // While running we always render expanded — even if the user collapsed a
-    // finished group and a new tool then starts streaming into it.
-    val effectiveExpanded = isRunning || expanded
+    // Default collapsed — no auto-expand when running, no auto-collapse
+    // when done. The header always shows running status via spinner +
+    // "Running N tools" text, so the user doesn't need the pills visible
+    // to know tools are in flight. A manual tap expands/collapses and
+    // the state stays what the user left it.
+    var expanded by remember(group.messageId) { mutableStateOf(false) }
+    val effectiveExpanded = expanded
 
     val groupAccent = toolAccentColor("shell_execute")
     val totalDurationText = when {
@@ -903,7 +898,6 @@ internal fun ToolCallRunGroup(
                 .background(ChatColors.toolCapsuleBg, RoundedCornerShape(14.dp))
                 .border(0.5.dp, ChatColors.toolBorder, RoundedCornerShape(14.dp))
                 .clickable {
-                    userTouched = true
                     expanded = !expanded
                 }
                 .padding(horizontal = 12.dp, vertical = 8.dp),
