@@ -32,6 +32,10 @@ object AgentTools {
         if (memoryEnabled) {
             add(memoryWriteDefinition())
             add(memoryGetDefinition())
+            // [T6-rollup] memory_rollup: on-demand distillation of the
+            // previous day's daily log into MEMORY-ROLLUP.md. Gated with the
+            // memory tools — rolling up makes no sense when memory is off.
+            add(MemoryRollupTool.agentToolDefinition())
         }
     }
 

@@ -11,9 +11,9 @@ import java.util.Locale
  * log, distills the stable rules via [MemoryRollupEngine], and appends them to
  * [MemoryRollupEngine.ROLLUP_FILE] inside the memory directory.
  *
- * Why "yesterday": the daily alarm fires at 03:00, when today has barely
- * started — the last *complete* log day is yesterday. Rolling up a fully
- * finished day avoids distilling a half-written log.
+ * Defaults to rolling up "yesterday" (the last fully completed day). When
+ * invoked by the agent via the memory_rollup tool, the caller can pass a
+ * specific date or let it default to yesterday.
  *
  * The source log is never modified — the rollup product (MEMORY-ROLLUP.md)
  * is a distilled index on top of it. Idempotency is file-based:
