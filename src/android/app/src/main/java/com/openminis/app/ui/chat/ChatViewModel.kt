@@ -71,6 +71,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
@@ -7490,6 +7492,37 @@ class ChatViewModel(
 
             // Execute all tool calls
             val resultParts = mutableListOf<AgentContentPart>()
+
+            // ------------------------------------------------------------------
+            // Tool dispatch — split into passes so a batch of read-only tools
+            // (file_read / read_image) can run concurrently.
+            //
+            // Pass 1 (sequential): per-call preflight + loop-detect. CRITICAL /
+            // preflight rejections synthesize their tool_result right here and
+            // `continue` — exactly as the original loop did. Calls that pass are
+            // collected into `pending`.
+            // Pass 2 (execute): a batch of ONLY parallel-safe tools runs
+            // concurrently (async, awaited in original order). Anything else runs
+            // sequentially — identical to the old single-loop behavior.
+            // Pass 3 (sequential): per-call post-execution — loop-detect.record,
+            // block content/status update, resultParts, UI refresh — kept in the
+            // original tool-call order.
+            //
+            // Observable behavior is unchanged vs the old loop; only the
+            // wall-clock time of Pass 2 varies. Pass 1/3 stay sequential so
+            // loop-detect ordering and block update semantics never race. Pass 2
+            // parallel tools are pure reads that never mutate shared state.
+            // ------------------------------------------------------------------
+            data class PendingTool(
+                val id: String,
+                val name: String,
+                val args: JSONObject,
+                val argsStr: String,
+                val paramsMap: Map<String, Any?>,
+            )
+            val pending = mutableListOf<PendingTool>()
+
+            // ============================ Pass 1 ============================
             for ((id, name, args) in toolCalls) {
                 // [T-android-overlay-tool-title] Pull tool_title uniformly
                 // from args for ALL tools — without this browser_use's
@@ -7617,8 +7650,39 @@ class ChatViewModel(
                     continue
                 }
 
-                android.util.Log.d("ToolChain[VM]", "[turn=$turn] executeTool START name=$name args=${argsStr.take(200)}")
-                val result = executeTool(name, argsStr, id, allToolBlocks, assistantId, accumulatedText)
+                pending.add(PendingTool(id, name, args, argsStr, paramsMap))
+            }
+
+            // ============================ Pass 2 ============================
+            val resultsById = LinkedHashMap<String, ToolExecutionResult>()
+            if (pending.size > 1 && pending.all { ToolConcurrencyPolicy.isParallelSafe(it.name, it.argsStr) }) {
+                // All pending tools are parallel-safe pure reads. Launch them
+                // concurrently, then pull each result in the original order so
+                // Pass 3 observes the same sequence as the old sequential loop.
+                val deferred = coroutineScope {
+                    pending.map { p ->
+                        p.id to async {
+                            executeTool(p.name, p.argsStr, p.id, allToolBlocks, assistantId, accumulatedText)
+                        }
+                    }
+                }
+                for ((pid, d) in deferred) {
+                    resultsById[pid] = d.await()
+                }
+            } else {
+                // Any non-parallel tool (or a single call) → sequential, exactly
+                // like the original loop.
+                pending.forEach { p ->
+                    resultsById[p.id] = executeTool(p.name, p.argsStr, p.id, allToolBlocks, assistantId, accumulatedText)
+                }
+            }
+
+            // ============================ Pass 3 ============================
+            for (p in pending) {
+                val id = p.id
+                val name = p.name
+                val paramsMap = p.paramsMap
+                val result = resultsById[id]!!
                 android.util.Log.d("ToolChain[VM]", "[turn=$turn] executeTool END name=$name success=${result.success} title=${result.toolTitle} outputLen=${result.output.length} output=${result.output.take(200)}")
 
                 // Record post-execution. WARNING text is appended to the tool
