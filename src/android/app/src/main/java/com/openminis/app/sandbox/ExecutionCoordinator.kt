@@ -253,7 +253,7 @@ object ExecutionCoordinator {
                     TAG, "[$sessionId] Java heap ${(javaHeapFrac * 100).toInt()}% > ${(JAVA_HEAP_PRESSURE_THRESHOLD * 100).toInt()}% — recycling shell"
                 )
                 cmdOverLimit -> Log.w(
-                    TAG, "[$sessionId] Shell command count ${shell.commandCount} >= $MAX_COMMANDS_PER_SHELL — recycling shell"
+                    TAG, "[$sessionId] Shell command count ${shell?.commandCount ?: 0} >= $MAX_COMMANDS_PER_SHELL — recycling shell"
                 )
             }
             if (nativeOversized || javaPressured || cmdOverLimit) {
@@ -325,7 +325,7 @@ object ExecutionCoordinator {
                 if (shellDied && attempt >= 2) {
                     lastShell = null // shell is dead and we're out of retries
                 }
-                return result to lastShell
+                return CommandResult(output = result.output, exitCode = result.exitCode, durationMs = 0L, truncated = result.truncated) to lastShell
             }
 
             Log.w(

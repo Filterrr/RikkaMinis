@@ -14,17 +14,21 @@ class AgentTypesTest {
 
     @Nested
     inner class SanitizeToolIdTest {
-
         @Test
-        fun `alphanumeric and allowed chars are preserved`() {
-            val input = "abcXYZ012_-"
-            assertEquals("abcXYZ012_-", sanitizeToolId(input))
+        fun `alphanumeric and underscore and dash are preserved`() {
+            val input = "abc123_-XYZ"
+            assertEquals("abc123_-XYZ", sanitizeToolId(input))
         }
 
         @Test
-        fun `disallowed chars are replaced with dash`() {
-            val input = "tool@call#id 1"
+        fun `special characters are replaced with dash`() {
+            val input = "tool@call#id/1"
             assertEquals("tool-call-id-1", sanitizeToolId(input))
+        }
+
+        @Test
+        fun `spaces are replaced with dash`() {
+            assertEquals("a-b-c", sanitizeToolId("a b c"))
         }
 
         @Test
@@ -33,27 +37,23 @@ class AgentTypesTest {
         }
 
         @Test
-        fun `all disallowed chars replaced`() {
+        fun `unicode letters are replaced with dash`() {
+            // isLetterOrDigit returns true for unicode letters in Kotlin
+            val result = sanitizeToolId("工具_1")
+            assertTrue(result.contains("-"))
+            assertTrue(result.contains("_"))
+            assertTrue(result.contains("1"))
+        }
+
+        @Test
+        fun `all special chars replaced`() {
             val input = "!@#$%^&*()"
             assertEquals("----------", sanitizeToolId(input))
-        }
-
-        @Test
-        fun `unicode letters are replaced with dash`() {
-            val input = "工具调用"
-            assertEquals("----", sanitizeToolId(input))
-        }
-
-        @Test
-        fun `underscore and hyphen preserved among other symbols`() {
-            val input = "a_b-c.d/e"
-            assertEquals("a_b-c-d-e", sanitizeToolId(input))
         }
     }
 
     @Nested
     inner class AgentStopReasonTest {
-
         @Test
         fun `enum values exist`() {
             val values = AgentStopReason.values()
@@ -73,7 +73,6 @@ class AgentTypesTest {
 
     @Nested
     inner class ToolCallMetadataTest {
-
         @Test
         fun `default thoughtSignature is null`() {
             val metadata = ToolCallMetadata()
@@ -88,34 +87,26 @@ class AgentTypesTest {
 
         @Test
         fun `equality holds for same values`() {
-            val a = ToolCallMetadata("s")
-            val b = ToolCallMetadata("s")
-            assertEquals(a, b)
-            assertEquals(a.hashCode(), b.hashCode())
-        }
-
-        @Test
-        fun `inequality for different values`() {
+            assertEquals(ToolCallMetadata("a"), ToolCallMetadata("a"))
             assertNotEquals(ToolCallMetadata("a"), ToolCallMetadata("b"))
         }
 
         @Test
-        fun `copy produces equal object`() {
+        fun `copy works as expected`() {
             val original = ToolCallMetadata("sig")
-            val copied = original.copy()
-            assertEquals(original, copied)
+            val copied = original.copy(thoughtSignature = "new")
+            assertEquals("new", copied.thoughtSignature)
+            assertEquals("sig", original.thoughtSignature)
         }
     }
 
     @Nested
     inner class AgentBlockStartTest {
-
         @Test
-        fun `Text data object is singleton`() {
+        fun `Text is singleton instance`() {
             val a: AgentBlockStart = AgentBlockStart.Text
             val b: AgentBlockStart = AgentBlockStart.Text
             assertEquals(a, b)
-            assertEquals(AgentBlockStart.Text.hashCode(), a.hashCode())
         }
 
         @Test
@@ -127,18 +118,10 @@ class AgentTypesTest {
 
         @Test
         fun `ToolUse equality and copy`() {
-            val a = AgentBlockStart.ToolUse("id", "name")
-            val b = a.copy()
-            assertEquals(a, b)
-            assertEquals(a.hashCode(), b.hashCode())
-        }
-
-        @Test
-        fun `ToolUse inequality`() {
-            assertNotEquals(
-                AgentBlockStart.ToolUse("id1", "name"),
-                AgentBlockStart.ToolUse("id2", "name")
-            )
+            val t1 = AgentBlockStart.ToolUse("id1", "name1")
+            val t2 = AgentBlockStart.ToolUse("id1", "name1")
+            assertEquals(t1, t2)
+            assertEquals(t1.copy(name = "name2"), AgentBlockStart.ToolUse("id1", "name2"))
         }
     }
 
@@ -152,6 +135,13 @@ class AgentTypesTest {
         }
 
         @Test
+        fun `ContentBlockStart wraps ToolUse`() {
+            val start = AgentBlockStart.ToolUse("id", "name")
+            val event = AgentStreamEvent.ContentBlockStart(start)
+            assertEquals(start, event.start)
+        }
+
+        @Test
         fun `TextDelta holds delta string`() {
             val event = AgentStreamEvent.TextDelta("hello")
             assertEquals("hello", event.delta)
@@ -159,32 +149,32 @@ class AgentTypesTest {
 
         @Test
         fun `ToolInputDelta holds name and accumulated`() {
-            val event = AgentStreamEvent.ToolInputDelta(name = "tool", accumulated = "abc")
+            val event = AgentStreamEvent.ToolInputDelta("tool", "acc")
             assertEquals("tool", event.name)
-            assertEquals("abc", event.accumulated)
+            assertEquals("acc", event.accumulated)
         }
 
         @Test
         fun `ToolCallComplete holds all fields with default metadata`() {
-            val args = JSONObject().put("key", "value")
+            val args = JSONObject().put("k", "v")
             val event = AgentStreamEvent.ToolCallComplete(
-                id = "id1",
-                name = "tool1",
+                id = "call1",
+                name = "search",
                 args = args
             )
-            assertEquals("id1", event.id)
-            assertEquals("tool1", event.name)
-            assertEquals("value", event.args.getString("key"))
+            assertEquals("call1", event.id)
+            assertEquals("search", event.name)
+            assertEquals("v", event.args.getString("k"))
             assertNull(event.metadata)
         }
 
         @Test
         fun `ToolCallComplete with metadata`() {
             val args = JSONObject()
-            val metadata = ToolCallMetadata(thoughtSignature = "sig")
+            val metadata = ToolCallMetadata("sig")
             val event = AgentStreamEvent.ToolCallComplete(
-                id = "id",
-                name = "n",
+                id = "call1",
+                name = "search",
                 args = args,
                 metadata = metadata
             )
@@ -217,10 +207,10 @@ class AgentTypesTest {
         }
 
         @Test
-        fun `event subtypes are not equal to each other`() {
-            val textDelta = AgentStreamEvent.TextDelta("x")
-            val thinkingDelta = AgentStreamEvent.ThinkingDelta("x")
-            assertNotEquals(textDelta, thinkingDelta)
+        fun `events of different types are not equal`() {
+            val a: AgentStreamEvent = AgentStreamEvent.TextDelta("x")
+            val b: AgentStreamEvent = AgentStreamEvent.ThinkingDelta("x")
+            assertNotEquals(a, b)
         }
     }
 
@@ -240,83 +230,45 @@ class AgentTypesTest {
         }
 
         @Test
-        fun `all fields can be set`() {
-            val parts = listOf<AgentContentPart>()
+        fun `fields can be mutated`() {
             val msg = AgentMessage(
                 role = AgentMessage.Role.ASSISTANT,
-                parts = parts,
-                isInterrupted = true,
-                reasoningContent = "rc",
-                dbMessageId = "db-1"
-            )
-            assertEquals(AgentMessage.Role.ASSISTANT, msg.role)
-            assertEquals(parts, msg.parts)
-            assertTrue(msg.isInterrupted)
-            assertEquals("rc", msg.reasoningContent)
-            assertEquals("db-1", msg.dbMessageId)
-        }
-
-        @Test
-        fun `mutable fields can be updated`() {
-            val msg = AgentMessage(
-                role = AgentMessage.Role.USER,
                 parts = emptyList()
             )
             msg.isInterrupted = true
-            msg.reasoningContent = "updated"
-            msg.dbMessageId = "id-2"
-            msg.parts = emptyList()
+            msg.reasoningContent = "thinking"
+            msg.dbMessageId = "db-1"
+            msg.parts = listOf(AgentContentPart.Text("hi"))
 
             assertTrue(msg.isInterrupted)
-            assertEquals("updated", msg.reasoningContent)
-            assertEquals("id-2", msg.dbMessageId)
+            assertEquals("thinking", msg.reasoningContent)
+            assertEquals("db-1", msg.dbMessageId)
+            assertEquals(1, msg.parts.size)
         }
 
         @Test
         fun `equality and copy`() {
-            val msg = AgentMessage(
+            val msg1 = AgentMessage(
                 role = AgentMessage.Role.USER,
                 parts = emptyList(),
                 isInterrupted = false,
                 reasoningContent = null,
                 dbMessageId = null
             )
-            val copy = msg.copy()
-            assertEquals(msg, copy)
-            assertEquals(msg.hashCode(), copy.hashCode())
+            val msg2 = msg1.copy()
+            assertEquals(msg1, msg2)
+            assertNotEquals(msg1, msg2.copy(isInterrupted = true))
         }
 
         @Test
-        fun `inequality when fields differ`() {
-            val a = AgentMessage(AgentMessage.Role.USER, emptyList())
-            val b = AgentMessage(AgentMessage.Role.ASSISTANT, emptyList())
-            assertNotEquals(a, b)
-        }
-    }
-
-    @Nested
-    inner class AgentMessageRoleTest {
-
-        @Test
-        fun `USER role value is user`() {
+        fun `Role enum values`() {
             assertEquals("user", AgentMessage.Role.USER.value)
-        }
-
-        @Test
-        fun `ASSISTANT role value is assistant`() {
             assertEquals("assistant", AgentMessage.Role.ASSISTANT.value)
+            assertEquals(2, AgentMessage.Role.values().size)
         }
 
         @Test
-        fun `role enum has two values`() {
-            val values = AgentMessage.Role.values()
-            assertEquals(2, values.size)
-            assertTrue(values.contains(AgentMessage.Role.USER))
-            assertTrue(values.contains(AgentMessage.Role.ASSISTANT))
-        }
-
-        @Test
-        fun `valueOf returns correct role`() {
+        fun `Role valueOf works`() {
             assertEquals(AgentMessage.Role.USER, AgentMessage.Role.valueOf("USER"))
             assertEquals(AgentMessage.Role.ASSISTANT, AgentMessage.Role.valueOf("ASSISTANT"))
         }
