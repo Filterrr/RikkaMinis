@@ -58,7 +58,6 @@ import com.openminis.app.tools.FileWriteTool
 import com.openminis.app.tools.MemoryRollupTool
 import com.openminis.app.tools.MemoryTools
 import com.openminis.app.tools.ReadImageTool
-import com.openminis.app.trace.TraceLogger
 import com.openminis.app.tools.SubagentSkill
 import com.openminis.app.tools.SubagentToolCall
 import com.openminis.app.tools.ToolConcurrencyPolicy
@@ -8212,10 +8211,7 @@ class ChatViewModel(
             "memory_get" -> executeMemoryGetTool(argsJson)
             "memory_rollup" -> executeMemoryRollupTool()
             // [T7-subagent] spawn_agent: delegate to an independent sub-agent
-            // instance running the named skill. The sub-agent runs its own
-            // loop with a filtered tool set and budget, and returns a
-            // structured result. Context is isolated — nothing it does
-            // touches the main agent's agentHistory.
+            // instance running the named skill.
             SubagentSkill.NAME -> executeSpawnAgentTool(argsJson)
             else -> ToolExecutionResult("Unknown tool: $name", false)
         }
