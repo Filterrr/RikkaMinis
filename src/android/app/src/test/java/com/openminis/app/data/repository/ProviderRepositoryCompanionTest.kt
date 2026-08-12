@@ -117,8 +117,9 @@ class ProviderRepositoryCompanionTest {
         val items = listOf(Named("a", "Alpha"))
         val result = ProviderRepository.permuteById(items, listOf("a")) { it.id }
         assertNotNull(result)
-        assertEquals(1, result!!.size)
-        assertEquals("Alpha", result[0].name)
+        val r = result!!
+        assertEquals(1, r.size)
+        assertEquals("Alpha", r[0].name)
     }
 
     @Test fun `permuteById reverse order`() {
@@ -133,7 +134,8 @@ class ProviderRepositoryCompanionTest {
         val result = ProviderRepository.permuteById(items, listOf("b", "a")) { it.id }
         assertNotNull(result)
         // Same object references
-        assert(result!![0] === items[1])
-        assert(result[1] === items[0])
+        val r = result!!
+        assert(r[0] === items[1])
+        assert(r[1] === items[0])
     }
 }
