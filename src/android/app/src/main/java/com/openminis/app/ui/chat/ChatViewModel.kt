@@ -832,7 +832,7 @@ class ChatViewModel(
      * deduplicated by (toolName + summary) within a 10-minute window. Never
      * touches the ToolExecutionResult returned to the LLM.
      */
-    private val toolFailureHook = ToolFailureHook { block -> appendToolFailureBlock(block) }
+    private val toolFailureHook = ToolFailureHook(writeErrorBlock = { block -> appendToolFailureBlock(block) })
 
     /**
      * Cached reference to the lazily-created [BrowserTabPool] so
