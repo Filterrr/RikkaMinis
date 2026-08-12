@@ -795,16 +795,20 @@ internal fun buildFlatChatItems(
                     }
                 }
                 "thinking" -> {
-                    // Merge consecutive thinking blocks of the same message
-                    // into one FlatChatItem, so there's no unnecessary divider
-                    // between them. Appends content and updates the trailing
-                    // flags (isLast / isLastBlockOverall).
-                    val lastOut = out.lastOrNull()
-                    if (lastOut is FlatChatItem.AssistantThinking && lastOut.messageId == message.id) {
-                        val mergedBlock = lastOut.block.copy(
-                            content = lastOut.block.content + "\n" + block.content
+                    // Merge ALL thinking blocks of the same message into one
+                    // FlatChatItem — not just consecutive ones. A text or
+                    // tool_use block between two thinking blocks no longer
+                    // creates a separate thinking item. Traverses backwards
+                    // to find the last AssistantThinking for this message.
+                    val lastThinkingIdx = out.indexOfLast {
+                        it is FlatChatItem.AssistantThinking && it.messageId == message.id
+                    }
+                    if (lastThinkingIdx >= 0) {
+                        val lastThinking = out[lastThinkingIdx] as FlatChatItem.AssistantThinking
+                        val mergedBlock = lastThinking.block.copy(
+                            content = lastThinking.block.content + "\n" + block.content
                         )
-                        out[out.lastIndex] = lastOut.copy(
+                        out[lastThinkingIdx] = lastThinking.copy(
                             block = mergedBlock,
                             isLast = block.id == lastThinkingId,
                             isLastBlockOverall = block.id == lastBlockId,
