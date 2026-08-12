@@ -3,10 +3,11 @@ package com.openminis.app.ui.chat
 import com.openminis.app.data.model.AgentToolDefinition
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 /**
@@ -46,6 +47,12 @@ class ChatViewModelCompanionTest {
     private fun toolDef(name: String, required: List<String> = emptyList()) =
         AgentToolDefinition(name = name, description = "test", required = required)
 
+    private fun preflightBlocking(name: String, args: JSONObject, tools: List<AgentToolDefinition>): String {
+        val result = ChatViewModel.preflightValidateToolCallImpl(name, args, tools)
+        assertNotNull("expected a blocking reason for $name", result)
+        return result!!
+    }
+
     @Test fun `preflight well-formed call returns null`() {
         val tools = listOf(toolDef("file_read", required = listOf("path")))
         val args = JSONObject().put("path", "/tmp/test.txt")
@@ -54,29 +61,23 @@ class ChatViewModelCompanionTest {
 
     @Test fun `preflight empty args with required fields returns error`() {
         val tools = listOf(toolDef("file_read", required = listOf("path")))
-        val args = JSONObject()
-        val result = ChatViewModel.preflightValidateToolCallImpl("file_read", args, tools)
-        assertNotNull(result)
-        assertTrue(result!!.contains("empty arguments"))
+        val result = preflightBlocking("file_read", JSONObject(), tools)
+        assertTrue(result.contains("empty arguments"))
         assertTrue(result.contains("path"))
     }
 
     @Test fun `preflight missing required field returns error`() {
         val tools = listOf(toolDef("file_write", required = listOf("path", "content")))
-        val args = JSONObject().put("path", "/tmp/test.txt")
-        val result = ChatViewModel.preflightValidateToolCallImpl("file_write", args, tools)
-        assertNotNull(result)
-        assertTrue(result!!.contains("missing required parameter"))
+        val result = preflightBlocking("file_write", JSONObject().put("path", "/tmp/test.txt"), tools)
+        assertTrue(result.contains("missing required parameter"))
         assertTrue(result.contains("content"))
         assertFalse(result.contains("path"))
     }
 
     @Test fun `preflight missing multiple fields lists all`() {
         val tools = listOf(toolDef("multi", required = listOf("a", "b", "c")))
-        val args = JSONObject()
-        val result = ChatViewModel.preflightValidateToolCallImpl("multi", args, tools)
-        assertNotNull(result)
-        assertTrue(result!!.contains("a"))
+        val result = preflightBlocking("multi", JSONObject(), tools)
+        assertTrue(result.contains("a"))
         assertTrue(result.contains("b"))
         assertTrue(result.contains("c"))
     }
@@ -84,17 +85,14 @@ class ChatViewModelCompanionTest {
     @Test fun `preflight null field treated as missing`() {
         val tools = listOf(toolDef("file_edit", required = listOf("old_string", "new_string")))
         val args = JSONObject().put("old_string", JSONObject.NULL).put("new_string", "replacement")
-        val result = ChatViewModel.preflightValidateToolCallImpl("file_edit", args, tools)
-        assertNotNull(result)
-        assertTrue(result!!.contains("old_string"))
+        val result = preflightBlocking("file_edit", args, tools)
+        assertTrue(result.contains("old_string"))
     }
 
     @Test fun `preflight empty string on non-allowed field returns error`() {
         val tools = listOf(toolDef("file_read", required = listOf("path")))
-        val args = JSONObject().put("path", "")
-        val result = ChatViewModel.preflightValidateToolCallImpl("file_read", args, tools)
-        assertNotNull(result)
-        assertTrue(result!!.contains("missing required parameter"))
+        val result = preflightBlocking("file_read", JSONObject().put("path", ""), tools)
+        assertTrue(result.contains("missing required parameter"))
     }
 
     @Test fun `preflight empty string on allowed field returns null`() {
@@ -116,10 +114,8 @@ class ChatViewModelCompanionTest {
     @Test fun `preflight tool_title non-blocking field not enforced`() {
         val tools = listOf(toolDef("my_tool", required = listOf("tool_title", "path")))
         // Only "path" is enforced — tool_title is non-blocking.
-        val args = JSONObject().put("tool_title", "My Tool")
-        val result = ChatViewModel.preflightValidateToolCallImpl("my_tool", args, tools)
-        assertNotNull(result)
-        assertTrue(result!!.contains("path"))
+        val result = preflightBlocking("my_tool", JSONObject().put("tool_title", "My Tool"), tools)
+        assertTrue(result.contains("path"))
         assertFalse(result.contains("tool_title"))
     }
 
@@ -142,10 +138,8 @@ class ChatViewModelCompanionTest {
     @Test fun `preflight explicit null in JSONObject is rejected`() {
         // org.json: JSONObject.NULL is a sentinel, not a String
         val tools = listOf(toolDef("file_read", required = listOf("path")))
-        val args = JSONObject().put("path", JSONObject.NULL)
-        val result = ChatViewModel.preflightValidateToolCallImpl("file_read", args, tools)
-        assertNotNull(result)
-        assertTrue(result!!.contains("path"))
+        val result = preflightBlocking("file_read", JSONObject().put("path", JSONObject.NULL), tools)
+        assertTrue(result.contains("path"))
     }
 
     @Test fun `preflight non-string value passes through`() {
