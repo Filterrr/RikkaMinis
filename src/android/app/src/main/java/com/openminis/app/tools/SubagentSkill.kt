@@ -106,8 +106,11 @@ object SubagentSkill {
         val lines = body.lines()
         if (lines.size < 2 || !lines[0].trim().startsWith("---")) return SubagentConfig()
 
-        val endIdx = lines.indexOfFirst { it != lines[0] && it.trim().startsWith("---") }
-        if (endIdx < 0) return SubagentConfig()
+        val endIdx = lines.subList(1, lines.size)
+            .indexOfFirst { it.trim().startsWith("---") }
+            .takeIf { it >= 0 }
+            ?.plus(1)
+        if (endIdx == null) return SubagentConfig()
 
         val frontmatter = lines.subList(1, endIdx)
         var isSubagent = false
@@ -115,19 +118,41 @@ object SubagentSkill {
         var maxOutputTokens = DEFAULT_MAX_OUTPUT_TOKENS
         var allowedTools: Set<String>? = null
 
-        for (line in frontmatter) {
-            val trimmed = line.trim()
-            if (trimmed.startsWith("subagent:")) {
-                val value = trimmed.substringAfter(":").trim()
-                isSubagent = value == "true" || value == "yes"
-            } else if (trimmed.startsWith("max_turns:")) {
-                maxTurns = trimmed.substringAfter(":").trim().toIntOrNull() ?: DEFAULT_MAX_TURNS
-            } else if (trimmed.startsWith("max_output_tokens:")) {
-                maxOutputTokens = trimmed.substringAfter(":").trim().toIntOrNull() ?: DEFAULT_MAX_OUTPUT_TOKENS
-            } else if (trimmed.startsWith("allowed_tools:")) {
-                val listStr = trimmed.substringAfter(":").trim()
-                allowedTools = parseListValue(listStr)
+        var i = 0
+        while (i < frontmatter.size) {
+            val trimmed = frontmatter[i].trim()
+            when {
+                trimmed.startsWith("subagent:") -> {
+                    val value = trimmed.substringAfter(":").trim()
+                    isSubagent = value == "true" || value == "yes"
+                }
+                trimmed.startsWith("max_turns:") -> {
+                    maxTurns = trimmed.substringAfter(":").trim().toIntOrNull() ?: DEFAULT_MAX_TURNS
+                }
+                trimmed.startsWith("max_output_tokens:") -> {
+                    maxOutputTokens = trimmed.substringAfter(":").trim().toIntOrNull() ?: DEFAULT_MAX_OUTPUT_TOKENS
+                }
+                trimmed.startsWith("allowed_tools:") -> {
+                    val listStr = trimmed.substringAfter(":").trim()
+                    val tools = mutableSetOf<String>()
+                    if (listStr.isNotEmpty()) {
+                        parseListValue(listStr)?.let { tools.addAll(it) }
+                    }
+                    // Multi-line form: subsequent lines starting with "- "
+                    var j = i + 1
+                    while (j < frontmatter.size) {
+                        val item = frontmatter[j].trim()
+                        if (item.startsWith("- ")) {
+                            tools.add(item.removePrefix("- ").trim().trim('"', '\''))
+                            j++
+                        } else {
+                            break
+                        }
+                    }
+                    allowedTools = tools.ifEmpty { emptySet() }
+                }
             }
+            i++
         }
 
         return SubagentConfig(
@@ -164,11 +189,16 @@ object SubagentSkill {
 
         val lines = body.lines()
         if (lines.size >= 2 && lines[0].trim().startsWith("---")) {
-            val endIdx = lines.indexOfFirst { it != lines[0] && it.trim().startsWith("---") }
-            if (endIdx >= 0 && endIdx + 1 < lines.size) {
+            val endIdx = lines.subList(1, lines.size)
+                .indexOfFirst { it.trim().startsWith("---") }
+                .takeIf { it >= 0 }
+                ?.plus(1)
+            if (endIdx != null && endIdx + 1 < lines.size) {
                 val contentLines = lines.subList(endIdx + 1, lines.size)
                 val content = contentLines.joinToString("\n").trim()
                 if (content.isNotBlank()) return content
+                // Frontmatter-only skill (no body content) → fall back to description.
+                return skill.description
             }
         }
         return body
