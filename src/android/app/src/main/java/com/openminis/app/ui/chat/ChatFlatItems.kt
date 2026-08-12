@@ -794,14 +794,32 @@ internal fun buildFlatChatItems(
                         }
                     }
                 }
-                "thinking" -> out.add(dedupe(FlatChatItem.AssistantThinking(
-                    messageId = message.id,
-                    block = block,
-                    isLast = block.id == lastThinkingId,
-                    messageIsStreaming = message.isStreaming,
-                    messageThinkingLevel = message.thinkingLevel,
-                    isLastBlockOverall = block.id == lastBlockId,
-                )))
+                "thinking" -> {
+                    // Merge consecutive thinking blocks of the same message
+                    // into one FlatChatItem, so there's no unnecessary divider
+                    // between them. Appends content and updates the trailing
+                    // flags (isLast / isLastBlockOverall).
+                    val lastOut = out.lastOrNull()
+                    if (lastOut is FlatChatItem.AssistantThinking && lastOut.messageId == message.id) {
+                        val mergedBlock = lastOut.block.copy(
+                            content = lastOut.block.content + "\n" + block.content
+                        )
+                        out[out.lastIndex] = lastOut.copy(
+                            block = mergedBlock,
+                            isLast = block.id == lastThinkingId,
+                            isLastBlockOverall = block.id == lastBlockId,
+                        )
+                    } else {
+                        out.add(dedupe(FlatChatItem.AssistantThinking(
+                            messageId = message.id,
+                            block = block,
+                            isLast = block.id == lastThinkingId,
+                            messageIsStreaming = message.isStreaming,
+                            messageThinkingLevel = message.thinkingLevel,
+                            isLastBlockOverall = block.id == lastBlockId,
+                        )))
+                    }
+                }
                 "info" -> out.add(dedupe(FlatChatItem.AssistantInfo(
                     messageId = message.id,
                     block = block,
