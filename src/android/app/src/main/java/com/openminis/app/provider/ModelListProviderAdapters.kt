@@ -59,6 +59,10 @@ private object OpenAIModelListAdapter : ModelListProvider {
             customUserAgent = instance.customUserAgent,
         )
     }
+
+    // [T8-1] OpenAI Codex OAuth: static model list (OAuth tokens can't
+    // call /v1/models). Mirrors the old ProviderRepository short-circuit.
+    override suspend fun oauthModels(): List<LLMModel> = OpenAIModelsApi.fetchModelsOAuth()
 }
 
 private object OpenRouterModelListAdapter : ModelListProvider {
