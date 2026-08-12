@@ -1723,4 +1723,44 @@ class BrowserUseManager(
         return BrowserActionResult(text = text)
     }
 
+    // -- Teardown --
+
+    /**
+     * Permanently release this manager's WebView. Must be called on the main
+     * thread. Detaches the WebView from the view hierarchy first, then calls
+     * [WebView.destroy] so its renderer process and native heap are actually
+     * freed — merely dropping the Tab from the pool's list leaves the WebView
+     * reachable and leaks 50-100 MB per tab.
+     *
+     * Re-entrancy-safe: destroying an already-destroyed WebView throws
+     * "Attempt to perform WebView method on a destroyed WebView", so callers
+     * that race (trim callback vs. user close) are protected by the flag.
+     */
+    @Volatile
+    private var destroyed = false
+
+    fun destroy() {
+        if (destroyed) return
+        destroyed = true
+        try {
+            // Remove from any parent before destroying — WebView.destroy() on
+            // an attached view is undefined behavior on some OEMs and can
+            // crash the app (ConnectionTerminated / missing renderer).
+            (webView.parent as? android.view.ViewGroup)?.removeView(webView)
+            webView.stopLoading()
+            webView.loadUrl("about:blank")
+            webView.removeAllViews()
+            webView.settings.javaScriptEnabled = false
+            // Assign a no-op implementation instead of null — the Kotlin
+            // Android SDK bindings expose webViewClient/webChromeClient as
+            // non-null types (API 26+), so "= null" won't compile.
+            webView.webChromeClient = object : android.webkit.WebChromeClient() {}
+            webView.webViewClient = object : android.webkit.WebViewClient() {}
+            webView.destroy()
+        } catch (e: Exception) {
+            Log.w(TAG, "destroy() error: ${e.message}")
+        }
+        Log.i(TAG, "BrowserUseManager WebView destroyed")
+    }
+
 }
