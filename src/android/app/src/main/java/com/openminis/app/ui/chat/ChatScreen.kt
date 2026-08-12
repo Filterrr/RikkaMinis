@@ -4719,10 +4719,7 @@ fun ChatScreen(
                                 AttachmentChip(
                                     attachment = attachment,
                                     onRemove = { viewModel.removeAttachment(attachment.id) },
-                                    // TODO(webapp-hidden): long-press opened
-                                    // the WebApp "Add to Home Screen" menu —
-                                    // disabled while entry point is hidden.
-                                    // Re-enable by restoring `if (isHtmlAttachment)`.
+                                    // Intentionally hidden (WebApp entry point).
                                     onLongClick = if (false && isHtmlAttachment) {
                                         { webAppMenuExpanded = true }
                                     } else null,
@@ -4808,10 +4805,7 @@ fun ChatScreen(
                                         }
                                     },
                                 )
-                                // TODO(webapp-hidden): WebApp / "Add to Home
-                                // Screen" entry point temporarily hidden —
-                                // feature not yet validated/complete. Re-enable
-                                // by removing `false &&` from the guard below.
+                                // Intentionally hidden (WebApp entry point).
                                 if (false && isHtmlAttachment) {
                                     com.openminis.app.ui.components.MinisMenu(
                                         expanded = webAppMenuExpanded,
