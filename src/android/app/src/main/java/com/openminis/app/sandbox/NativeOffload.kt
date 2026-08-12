@@ -13,6 +13,54 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
 
 /**
+ * Hard cap on the total encoded size of a single incoming offload request
+ * frame (header + argv + env + cwd) read from the unix socket. The per-field
+ * limits in [readLEString] bound individual strings but not the aggregate:
+ * a hostile or buggy guest could stream thousands of near-1 MiB entries
+ * and OOM the host while the arg/env maps grow. Mirrors the shell-output
+ * cap precedent ([PersistentShell.MAX_OUTPUT_CHARS]) — real offload
+ * requests are a few KB, so 1 MiB is generous headroom.
+ */
+internal const val MAX_REQUEST_BYTES = 1024 * 1024  // 1 MiB
+
+/**
+ * Monotonic byte counter for decoding one offload request frame. Aborts
+ * with [IllegalStateException] as soon as the cumulative frame size
+ * exceeds [maxBytes] — before the offending string is materialized —
+ * so oversized requests fail fast instead of ballooning host memory.
+ */
+internal class OffloadRequestBudget(private val maxBytes: Int) {
+    /** Cumulative bytes charged for the current frame. */
+    var total: Int = 0
+        private set
+
+    /** Charge [bytes] toward the budget; throws once the cap is exceeded. */
+    fun charge(bytes: Int) {
+        total += bytes
+        check(total <= maxBytes) {
+            "offload request too large: $total bytes > $maxBytes limit"
+        }
+    }
+}
+
+internal fun DataInputStream.readLEInt(budget: OffloadRequestBudget): Int {
+    budget.charge(4)
+    val buf = ByteArray(4)
+    readFully(buf)
+    return ByteBuffer.wrap(buf).order(ByteOrder.LITTLE_ENDIAN).int
+}
+
+internal fun DataInputStream.readLEString(budget: OffloadRequestBudget): String {
+    val len = readLEInt(budget)
+    if (len < 0 || len > 1 shl 20) throw IllegalStateException("bad string len $len")
+    if (len == 0) return ""
+    budget.charge(len)
+    val buf = ByteArray(len)
+    readFully(buf)
+    return String(buf, Charsets.UTF_8)
+}
+
+/**
  * Host-side endpoint of the proot `native_offload` extension.
  *
  * The guest issues `execve("<handler-name>", argv, envp)`; the proot
@@ -149,32 +197,38 @@ object NativeOffloadServer {
         val input = DataInputStream(client.inputStream)
         val output = DataOutputStream(client.outputStream)
 
-        val magic = input.readLEInt()
+        // Bounded frame decode: every byte read (header, argv, env, cwd)
+        // is charged against MAX_REQUEST_BYTES and aborts the request the
+        // moment the cumulative size exceeds it — an oversized/hostile
+        // frame is rejected with a logged error instead of allocating
+        // unbounded arg/env strings on the host.
+        val budget = OffloadRequestBudget(MAX_REQUEST_BYTES)
+        val magic = input.readLEInt(budget)
         if (magic != MAGIC_REQ) {
             Log.w(TAG, "bad magic: 0x${magic.toUInt().toString(16)}")
             return
         }
-        val version = input.readLEInt()
+        val version = input.readLEInt(budget)
         if (version != VERSION) {
             Log.w(TAG, "unsupported version $version")
             return
         }
 
-        val pid = input.readLEInt()
-        val argc = input.readLEInt()
+        val pid = input.readLEInt(budget)
+        val argc = input.readLEInt(budget)
         if (argc < 0 || argc > 256) throw IllegalStateException("bad argc=$argc")
         val argv = ArrayList<String>(argc)
-        repeat(argc) { argv.add(input.readLEString()) }
+        repeat(argc) { argv.add(input.readLEString(budget)) }
 
-        val envc = input.readLEInt()
+        val envc = input.readLEInt(budget)
         if (envc < 0 || envc > 4096) throw IllegalStateException("bad envc=$envc")
         val env = LinkedHashMap<String, String>(envc)
         repeat(envc) {
-            val s = input.readLEString()
+            val s = input.readLEString(budget)
             val eq = s.indexOf('=')
             if (eq >= 0) env[s.substring(0, eq)] = s.substring(eq + 1) else env[s] = ""
         }
-        val cwd = input.readLEString()
+        val cwd = input.readLEString(budget)
 
         val name = argv.firstOrNull().orEmpty().substringAfterLast('/')
         Log.d(TAG, "recv pid=$pid name='$name' argc=$argc argv=$argv cwd=$cwd envc=$envc")
@@ -217,21 +271,6 @@ object NativeOffloadServer {
     }
 
     // ---- little-endian helpers ----
-
-    private fun DataInputStream.readLEInt(): Int {
-        val buf = ByteArray(4)
-        readFully(buf)
-        return ByteBuffer.wrap(buf).order(ByteOrder.LITTLE_ENDIAN).int
-    }
-
-    private fun DataInputStream.readLEString(): String {
-        val len = readLEInt()
-        if (len < 0 || len > 1 shl 20) throw IllegalStateException("bad string len $len")
-        if (len == 0) return ""
-        val buf = ByteArray(len)
-        readFully(buf)
-        return String(buf, Charsets.UTF_8)
-    }
 
     private fun DataOutputStream.writeLEInt(v: Int) {
         val buf = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(v).array()
