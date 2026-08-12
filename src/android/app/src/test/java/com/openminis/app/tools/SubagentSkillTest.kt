@@ -1,6 +1,7 @@
 package com.openminis.app.tools
 
-import com.openminis.app.data.repository.SkillRepository
+import com.openminis.app.data.model.AgentToolDefinition
+import com.openminis.app.data.model.AgentToolParam
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -9,14 +10,19 @@ import org.junit.Test
 
 class SubagentSkillTest {
 
-    private fun makeSkill(body: String): SkillRepository.Skill = SkillRepository.Skill(
-        id = "test-skill",
-        name = "TestSkill",
-        description = "A test skill",
-        body = body,
-    )
+    /**
+     * Minimal skill representation for test purposes.
+     * Implements [SkillInfo] so it can be passed to SubagentSkill methods.
+     */
+    private data class TestSkill(
+        override val name: String = "test-skill",
+        override val description: String = "A test skill",
+        override val body: String = "",
+    ) : SkillInfo
 
-    private fun makeTool(name: String) = com.openminis.app.data.model.AgentToolDefinition(
+    private fun makeSkill(body: String) = TestSkill(body = body)
+
+    private fun makeTool(name: String) = AgentToolDefinition(
         name = name,
         description = "tool $name",
         parameters = emptyMap(),
@@ -115,7 +121,7 @@ class SubagentSkillTest {
             """.trimIndent(),
         )
         val config = SubagentSkill.parseSubagentConfig(skill)
-        assertEquals(emptySet(), config.allowedTools)
+        assertEquals(emptySet<Any>(), config.allowedTools)
     }
 
     @Test
@@ -211,14 +217,16 @@ class SubagentSkillTest {
 
     @Test
     fun `system prompt falls back to description for frontmatter-only skill`() {
-        val skill = makeSkill(
-            """
-            ---
-            name: Empty
-            description: Fallback description
-            subagent: true
-            ---
-            """.trimIndent(),
+        val skill = TestSkill(
+            name = "Empty",
+            description = "Fallback description",
+            body = """
+                ---
+                name: Empty
+                description: Fallback description
+                subagent: true
+                ---
+                """.trimIndent(),
         )
         assertEquals("Fallback description", SubagentSkill.buildSystemPrompt(skill))
     }

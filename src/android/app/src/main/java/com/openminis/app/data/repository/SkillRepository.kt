@@ -1,6 +1,7 @@
 package com.openminis.app.data.repository
 
 import android.content.Context
+import com.openminis.app.tools.SkillInfo
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import android.net.Uri
@@ -109,7 +110,7 @@ class SkillRepository(private val context: Context) {
         val sourceURL: String? = null,
         /** Cumulative read count of this skill's SKILL.md; normalized to 0–100 after exceeding 1000. */
         val useCount: Double = 0.0,
-    )
+    ) : SkillInfo
 
     enum class UsageFrequency { NEVER, LOW, REGULAR, HIGH }
 

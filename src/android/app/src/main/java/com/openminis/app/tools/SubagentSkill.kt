@@ -2,8 +2,18 @@ package com.openminis.app.tools
 
 import com.openminis.app.data.model.AgentToolDefinition
 import com.openminis.app.data.model.AgentToolParam
-import com.openminis.app.data.repository.SkillRepository
 import org.json.JSONObject
+
+/**
+ * Minimal skill info required by sub-agent config parsing and prompt building.
+ * Implemented by `SkillRepository.Skill` in production; stubbed in tests to
+ * avoid pulling the Android-dependent SkillRepository into JVM unit tests.
+ */
+interface SkillInfo {
+    val name: String
+    val description: String
+    val body: String
+}
 
 /**
  * Sub-agent skill system — skill = independent agent instance.
@@ -88,7 +98,7 @@ object SubagentSkill {
      * Returns [SubagentConfig] with isSubagent=false for skills without
      * `subagent: true` in the frontmatter — existing skills are unaffected.
      */
-    fun parseSubagentConfig(skill: SkillRepository.Skill): SubagentConfig {
+    fun parseSubagentConfig(skill: SkillInfo): SubagentConfig {
         val body = skill.body
         if (body.isBlank()) return SubagentConfig()
 
@@ -148,7 +158,7 @@ object SubagentSkill {
      * Strips frontmatter, returns the raw body text.
      * Falls back to the skill description when the body is only frontmatter.
      */
-    fun buildSystemPrompt(skill: SkillRepository.Skill): String {
+    fun buildSystemPrompt(skill: SkillInfo): String {
         val body = skill.body
         if (body.isBlank()) return skill.description
 
