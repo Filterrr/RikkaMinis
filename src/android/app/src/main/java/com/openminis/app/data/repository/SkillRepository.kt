@@ -119,6 +119,11 @@ class SkillRepository(private val context: Context) {
     private val _skills = MutableStateFlow<List<Skill>>(emptyList())
     val skills: StateFlow<List<Skill>> = _skills.asStateFlow()
 
+    /** Lock serializing the check-then-act sequence in [add] so concurrent
+     *  calls with the same id don't create duplicate DB rows / SKILL.md
+     *  files or lose updates to the _skills StateFlow. */
+    private val addLock = Any()
+
     private val db: SQLiteDatabase by lazy {
         SkillDbHelper(context).writableDatabase
     }
@@ -133,26 +138,37 @@ class SkillRepository(private val context: Context) {
 
     // -- CRUD --
 
+    /**
+     * Adds a skill. The whole check-then-act sequence (existence check →
+     * create → insertDb → writeSkillMd → StateFlow update) runs inside
+     * [addLock] so concurrent calls with the same slug can't produce
+     * duplicate DB rows / on-disk dirs or lose the _skills update.
+     */
     fun add(name: String, description: String, body: String, version: String = "1.0.0", source: ImportSource = ImportSource.FILE, sourceURL: String? = null): Skill? {
         val id = slugify(name)
         if (id.isBlank()) return null
-        if (_skills.value.any { it.id == id }) return null
 
-        val skill = Skill(
-            id = id,
-            name = name,
-            description = description,
-            version = version,
-            importSource = source,
-            body = body,
-            sourceURL = sourceURL,
-        )
+        return synchronized(addLock) {
+            // Double-check inside the lock — a concurrent call may have just
+            // inserted the same id between our first read and lock acquisition.
+            if (_skills.value.any { it.id == id }) return@synchronized null
 
-        insertDb(skill)
-        writeSkillMd(skill)
-        _skills.value = _skills.value + skill
-        Log.i(TAG, "Added skill: ${skill.id}")
-        return skill
+            val skill = Skill(
+                id = id,
+                name = name,
+                description = description,
+                version = version,
+                importSource = source,
+                body = body,
+                sourceURL = sourceURL,
+            )
+
+            insertDb(skill)
+            writeSkillMd(skill)
+            _skills.value = _skills.value + skill
+            Log.i(TAG, "Added skill: ${skill.id}")
+            skill
+        }
     }
 
     fun update(id: String, name: String? = null, description: String? = null, body: String? = null): Boolean {
