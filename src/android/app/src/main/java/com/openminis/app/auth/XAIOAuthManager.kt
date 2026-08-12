@@ -275,20 +275,21 @@ class XAIOAuthManager(context: Context, instanceId: String) : OAuthManager(conte
     }
 
     /**
-     * Persist token bundle. Mirrors the base class's private `saveTokens`
-     * — same prefs key namespace ("oauth_tokens_<instance>") so the
-     * inherited `validAccessToken` / `refreshToken` / `isAuthenticated`
-     * helpers pick the bundle up automatically.
+     * Persist token bundle to the encrypted base-class store
+     * ("oauth_tokens_<instanceId>"), so inherited helpers like
+     * [validAccessToken], [refreshToken] and [isAuthenticated] pick it
+     * up automatically. Base [OAuthManager.saveTokens] is private, so
+     * we route through the protected [saveOAuthString] with the matching
+     * key suffix.
+     *
+     * [T-android-oauth-encrypted-storage] All OAuth tokens (access_token,
+     * refresh_token, id_token, manual_bearer_token, PKCE verifier, and
+     * state) are persisted via [EncryptedPrefsFactory] consuming
+     * [EncryptedSharedPreferences] (AES256_GCM values, AES256_SIV keys).
+     * No credential value ever reaches plaintext SharedPreferences on
+     * disk — verified by task2 (fix/oauth-secure-storage).
      */
     private fun saveTokensJson(json: JSONObject) {
-        // Stash under the base class's own key. We can't call the
-        // private member directly, so re-implement the single-line write
-        // with the same key format.
-        val pref = context.getSharedPreferences("dummy", Context.MODE_PRIVATE)
-        // Falls back to using the base class's saveOAuthString helper,
-        // but the canonical key the base reads from is "oauth_tokens_<id>".
-        // The helper saves under "oauth_<key>_<id>" — so key="tokens"
-        // → prefs key "oauth_tokens_<id>", which is what we want.
         saveOAuthString("tokens", json.toString())
     }
 
