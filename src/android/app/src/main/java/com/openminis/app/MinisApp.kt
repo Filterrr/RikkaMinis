@@ -130,6 +130,7 @@ class MinisApp : Application(), ImageLoaderFactory {
                     return@launch
                 }
                 val result = MultiDeviceSync.syncNow(
+                    context = this@MinisApp,
                     providerRepo = providerRepository,
                     envVarRepo = envVarRepository,
                     memoryRepo = memoryRepository,
