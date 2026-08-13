@@ -273,10 +273,12 @@ object ExecutionCoordinator {
             val nativeOversized = nativeHeapMB > APP_NATIVE_HEAP_HIGH_WATER_MARK_MB
             val javaPressured = javaHeapFrac > JAVA_HEAP_PRESSURE_THRESHOLD
             // [shell-generation-scheduler] Generation budget shrinks with
-            // memory pressure (30→15→5→2→1), so a dense tool-call sequence
-            // sheds the PRoot tracer progressively instead of riding it up to
-            // the 256MB RSS / 350MB hard cap (crash case 2026-08-12).
-            val generationBudget = internalGenerationBudget(nativeHeapMB)
+            // memory pressure (30→15→5→2→{8 light / 1 heavy-leaky}), so a
+            // dense tool-call sequence sheds the PRoot tracer progressively
+            // instead of riding it up to the 256MB RSS / 350MB hard cap
+            // (crash case 2026-08-12). Light commands keep a relaxed floor:
+            // they never fork, so recycling after each one only wastes ~200ms.
+            val generationBudget = internalGenerationBudget(nativeHeapMB, cmdClass)
             val cmdOverLimit = (shell?.commandCount ?: 0) >= generationBudget
             // [shell-generation-scheduler] Command-class-aware recycling:
             // known-leaky commands (minis-model-use) always recycle the shell
@@ -774,16 +776,24 @@ internal fun shouldRecycleByClass(
 
 /**
  * Shell generation budget (max commands before forced recycle), shrinking
- * as app native heap climbs. At ≥120MB literally every command recycles the
- * shell (budget 1), shedding the PRoot tracer after each execution.
+ * as app native heap climbs. At ≥120MB heavy/leaky commands recycle after
+ * every execution (budget 1) to shed the PRoot tracer, but lightweight
+ * commands (ls/cat/grep — no fork, no tracer growth) keep a relaxed budget
+ * of 8: recycling a shell after a pure read costs ~200ms per command with
+ * zero memory benefit. The class-aware recycle rule still bounds LIGHT
+ * shells eventually (budget 8) and HEAVY/LEAKY recycle-by-class remains
+ * the primary containment.
  */
-internal fun internalGenerationBudget(nativeMB: Long): Int {
+internal fun internalGenerationBudget(
+    nativeMB: Long,
+    cmdClass: CommandClass = CommandClass.LIGHT,
+): Int {
     return when {
         nativeMB < 50L -> 30
         nativeMB < 80L -> 15
         nativeMB < 100L -> 5
         nativeMB < 120L -> 2
-        else -> 1
+        else -> if (cmdClass == CommandClass.LIGHT) 8 else 1
     }
 }
 

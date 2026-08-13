@@ -150,10 +150,21 @@ class ExecutionCoordinatorSchedulerTest {
     }
 
     @Test
-    fun `budget is 1 at 120MB and above`() {
-        assertEquals(1, internalGenerationBudget(120))
-        assertEquals(1, internalGenerationBudget(350))
-        assertEquals(1, internalGenerationBudget(1000))
+    fun `budget keeps light at 8 while heavy and leaky drop to 1 at 120MB and above`() {
+        assertEquals(8, internalGenerationBudget(120, CommandClass.LIGHT))
+        assertEquals(8, internalGenerationBudget(350, CommandClass.LIGHT))
+        assertEquals(8, internalGenerationBudget(1000, CommandClass.LIGHT))
+        assertEquals(1, internalGenerationBudget(120, CommandClass.HEAVY))
+        assertEquals(1, internalGenerationBudget(350, CommandClass.LEAKY))
+        assertEquals(1, internalGenerationBudget(1000, CommandClass.HEAVY))
+    }
+
+    @Test
+    fun `budget is class-agnostic below 120MB`() {
+        assertEquals(30, internalGenerationBudget(0, CommandClass.HEAVY))
+        assertEquals(15, internalGenerationBudget(50, CommandClass.LEAKY))
+        assertEquals(5, internalGenerationBudget(80, CommandClass.HEAVY))
+        assertEquals(2, internalGenerationBudget(100, CommandClass.LEAKY))
     }
 
     // ── shouldRecycleByClass ──────────────────────────────────────────
