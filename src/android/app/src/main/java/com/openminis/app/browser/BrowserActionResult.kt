@@ -26,6 +26,18 @@ data class BrowserActionResult(
      * sometimes surfacing as empty get_text results.
      */
     val tabId: Int? = null,
+    /**
+     * [T-browser-risk-control] True when a risk challenge (Cloudflare,
+     * captcha, rate limit, etc.) was detected on the current page.
+     * The agent should stop retrying and either wait or ask the user.
+     */
+    val riskChallengeDetected: Boolean = false,
+    /** Machine-readable kind of risk challenge (e.g. "cloudflare_challenge"). */
+    val riskChallengeKind: String? = null,
+    /** Human-readable recommended next action for the agent. */
+    val recommendedNextAction: String? = null,
+    /** Throttle delay (ms) to wait before the next browser action. */
+    val throttleDelayMs: Long = 0,
 ) {
     companion object {
         fun error(message: String) = BrowserActionResult(
