@@ -14,6 +14,20 @@ import java.net.URLConnection
 // ── Throttle helpers ───────────────────────────────────────────────────────
 
 /**
+ * (was ChatViewModel.runAgentLoop → textDeltaThrottleMs)
+ * Adaptive throttle delay (ms) for text delta streaming, keyed on the
+ * length of the pending delta text. Longer deltas = more aggressive batching.
+ */
+internal fun textDeltaThrottleMs(len: Int): Long = when {
+    len < 500 -> 150L
+    len < 2_000 -> 300L
+    len < 32_000 -> 500L
+    len < 64_000 -> 1_000L
+    len < 128_000 -> 1_500L
+    else -> 2_000L
+}
+
+/**
  * (was ChatViewModel.streamFlushThrottleMs)
  * Adaptive throttle delay (ms) for stream-flush batching, keyed on the
  * length of the pending delta text. Longer deltas = more aggressive batching.
