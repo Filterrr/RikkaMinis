@@ -85,6 +85,19 @@ object ExecutionCoordinator {
     // Sweep cadence for idle shell recycling (public for MinisApp sweeper).
     const val IDLE_SWEEP_INTERVAL_MS = 60 * 1000L              // 1 min
 
+    // [P3-shell-auto-retry] At most 2 attempts total (original + 1 retry)
+    // before a command is reported as failed. Guards against infinite retry
+    // loops.
+    internal const val MAX_AUTO_RETRIES = 2
+
+    /**
+     * [P3-shell-auto-retry] Pure decision: should the command be re-run on a
+     * rebuilt shell? Delegates to the top-level [internalShouldRetryCommand].
+     */
+    internal fun shouldRetryCommand(exitCode: Int, shellAlive: Boolean, attempt: Int): Boolean {
+        return internalShouldRetryCommand(exitCode, shellAlive, attempt, MAX_AUTO_RETRIES)
+    }
+
     data class CommandResult(
         val output: String,
         val exitCode: Int,
@@ -323,8 +336,8 @@ object ExecutionCoordinator {
             // Timeout (124) can leave zombie processes in the PRoot tracer;
             // rebuilding the shell is safer than leaving a dead shell around.
             val shellDied = result.exitCode == -1 || result.exitCode == 124 || !shell.isAlive
-            if (!shellDied || attempt >= 2) {
-                if (shellDied && attempt >= 2) {
+            if (!shouldRetryCommand(result.exitCode, shell.isAlive, attempt)) {
+                if (shellDied && attempt >= MAX_AUTO_RETRIES) {
                     lastShell = null // shell is dead and we're out of retries
                 }
                 return CommandResult(output = result.output, exitCode = result.exitCode, durationMs = 0L, truncated = result.truncated) to lastShell
@@ -623,4 +636,27 @@ object ExecutionCoordinator {
         }
         TerminalSession.broadcastProxy(env)
     }
+}
+
+/**
+ * [P3-shell-auto-retry] Pure decision: should the command be re-run on a
+ * rebuilt shell? True only when the shell process died mid-command —
+ * HyperOS silent_kill, PRoot tracer OOM, idle-recycle race — or the
+ * command timed out (124, which can leave zombie processes in the PRoot
+ * tracer), AND we haven't exhausted [maxRetries]. A normal non-zero
+ * exit (script error) or a live shell never triggers a retry.
+ *
+ * Extracted as a top-level function so it can be JVM-tested without loading
+ * the [ExecutionCoordinator] object (which depends on `android.content.Context`
+ * and `android.os.Debug`).
+ */
+internal fun internalShouldRetryCommand(
+    exitCode: Int,
+    shellAlive: Boolean,
+    attempt: Int,
+    // Keep in sync with ExecutionCoordinator.MAX_AUTO_RETRIES (defaults to 2).
+    maxRetries: Int = 2,
+): Boolean {
+    val shellDied = exitCode == -1 || exitCode == 124 || !shellAlive
+    return shellDied && attempt < maxRetries
 }

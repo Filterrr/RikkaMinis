@@ -369,22 +369,7 @@ class TerminalSession(private val context: Context) {
     // ──────────────────────────────────────────────
 
     private fun normalizeLineEndings(text: String): String {
-        if ('\n' !in text && '\r' !in text) return text
-        val sb = StringBuilder(text.length)
-        var i = 0
-        val n = text.length
-        while (i < n) {
-            when (val c = text[i]) {
-                '\r' -> {
-                    sb.append('\r')
-                    if (i + 1 < n && text[i + 1] == '\n') i++
-                }
-                '\n' -> sb.append('\r')
-                else -> sb.append(c)
-            }
-            i++
-        }
-        return sb.toString()
+        return internalNormalizeLineEndings(text)
     }
 
     /**
@@ -547,4 +532,31 @@ class TerminalSession(private val context: Context) {
         override fun logStackTraceWithMessage(tag: String, message: String, e: java.lang.Exception) {}
         override fun logStackTrace(tag: String, e: java.lang.Exception) {}
     }
+}
+
+/**
+ * Normalize line endings for PTY output: converts `\n` to `\r`, collapses
+ * `\r\n` to `\r`, and passes bare `\r` through unchanged. The TTY's ICRNL
+ * termios flag will map the resulting `\r` to `\n` as usual.
+ *
+ * Extracted as a top-level function so it can be JVM-tested without loading
+ * Android classes ([TerminalSession] itself imports `android.content.Context`).
+ */
+internal fun internalNormalizeLineEndings(text: String): String {
+    if ('\n' !in text && '\r' !in text) return text
+    val sb = StringBuilder(text.length)
+    var i = 0
+    val n = text.length
+    while (i < n) {
+        when (val c = text[i]) {
+            '\r' -> {
+                sb.append('\r')
+                if (i + 1 < n && text[i + 1] == '\n') i++
+            }
+            '\n' -> sb.append('\r')
+            else -> sb.append(c)
+        }
+        i++
+    }
+    return sb.toString()
 }

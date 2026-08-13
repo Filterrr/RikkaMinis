@@ -345,28 +345,19 @@ class PersistentShell(
             }
         }
     }
-    /** Append text to output, capping at [MAX_OUTPUT_CHARS]. Sets [cb.truncated] when the
-     * limit is exceeded. The process continues reading (to avoid pipe back-pressure), but
-     * no further text is accumulated. */
-    private fun CommandCallback.appendOutput(text: String) {
-        val remaining = MAX_OUTPUT_CHARS - output.length
-        if (remaining <= 0) {
-            truncated = true
-            return
-        }
-        if (text.length > remaining) {
-            output.append(text, 0, remaining)
-            truncated = true
-        } else {
-            output.append(text)
-        }
+    private fun parseExitCode(text: String, marker: String): Int {
+        return internalParseMinisExitCode(text, marker)
     }
 
-    private fun parseExitCode(text: String, marker: String): Int {
-        // Pattern: __MINIS_DONE_{marker}_EXIT_{code}__
-        val regex = Regex("__MINIS_DONE_${Regex.escape(marker)}_EXIT_(\\d+)__")
-        val match = regex.find(text)
-        return match?.groupValues?.get(1)?.toIntOrNull() ?: -1
+    /**
+     * Append [text] to [output], capping at [maxChars]. Returns `true` when
+     * truncation occurred (the append was clipped or skipped entirely).
+     * Delegates to the top-level [internalTruncateOutput] for JVM testability.
+     */
+    private fun CommandCallback.appendOutput(text: String) {
+        if (internalTruncateOutput(output, text, MAX_OUTPUT_CHARS)) {
+            truncated = true
+        }
     }
 
     /**
@@ -527,4 +518,37 @@ class PersistentShell(
         commandCount = 0
         Log.i(TAG, "Persistent shell stopped")
     }
+}
+
+/**
+ * Pure function: parse the exit code from a `__MINIS_DONE_{marker}_EXIT_{code}__`
+ * marker string. Returns -1 when no valid code is found.
+ *
+ * Extracted as a top-level function so it can be JVM-tested without loading
+ * [PersistentShell] (which depends on `android.content.Context`).
+ */
+internal fun internalParseMinisExitCode(text: String, marker: String): Int {
+    val regex = Regex("__MINIS_DONE_${Regex.escape(marker)}_EXIT_(\\d+)__")
+    val match = regex.find(text)
+    return match?.groupValues?.get(1)?.toIntOrNull() ?: -1
+}
+
+/**
+ * Pure function: append [text] to [output], capping at [maxChars]. Returns
+ * `true` when truncation occurred (the append was clipped or skipped entirely).
+ * The process should continue reading (to avoid pipe back-pressure), but no
+ * further text is accumulated.
+ *
+ * Extracted as a top-level function so it can be JVM-tested without loading
+ * [PersistentShell] (which depends on `android.content.Context`).
+ */
+internal fun internalTruncateOutput(output: StringBuilder, text: String, maxChars: Int): Boolean {
+    val remaining = maxChars - output.length
+    if (remaining <= 0) return true
+    if (text.length > remaining) {
+        output.append(text, 0, remaining)
+        return true
+    }
+    output.append(text)
+    return false
 }
