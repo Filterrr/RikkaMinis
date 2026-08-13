@@ -220,6 +220,20 @@ class MinisApp : Application(), ImageLoaderFactory {
             return
         }
 
+        // [model-exec-service] The :modelservice process (ModelExecutionService)
+        // only runs short-lived LLM provider calls and must NEVER touch the
+        // heavy subsystems (Room DB, offload server, PRoot, repositories) —
+        // doing so would re-bind the native-offload abstract socket and race
+        // the main process, exactly like the :acra early-return above. It only
+        // needs: EncryptedPrefsFactory (api key), ProviderFactory, and the
+        // provider implementations. FastModePrefs is primed first (T-codex-
+        // fast-mode) because OpenAIProvider's request-build path reads it.
+        if (isModelServiceProcess()) {
+            Log.i("MinisApp", "skipping app init in :modelservice process")
+            com.openminis.app.data.FastModePrefs.prime(this)
+            return
+        }
+
         // [T-codex-fast-mode] Capture the app context + warm the Fast Mode
         // flag cache so the provider layer (no Context) can read it at
         // request-build time — including offload / title-gen calls that
@@ -730,6 +744,28 @@ class MinisApp : Application(), ImageLoaderFactory {
      * prefs blob that AlarmOffloadHandler previously read, so list/cancel
      * commands will no longer surface them.
      */
+    /**
+     * [model-exec-service] True when the current process is the isolated
+     * `:modelservice` process (see [ModelExecutionService]). Used by
+     * [onCreate] to skip the heavy subsystem initialisation that would
+     * otherwise race the main process for the native-offload abstract
+     * socket / Room / PRoot.
+     */
+    private fun isModelServiceProcess(): Boolean {
+        return try {
+            if (android.os.Build.VERSION.SDK_INT >= 28) {
+                Application.getProcessName()?.endsWith(":modelservice") == true
+            } else {
+                // minSdk 26 (< API 28): fall back to ActivityManager pid lookup.
+                val am = getSystemService(ACTIVITY_SERVICE) as? android.app.ActivityManager ?: return false
+                val pid = android.os.Process.myPid()
+                am.runningAppProcesses?.any { it.pid == pid && it.processName.endsWith(":modelservice") } == true
+            }
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
     private fun migrateGhostAlarms() {
         val prefs = getSharedPreferences("minis_alarms_prefs", Context.MODE_PRIVATE)
         val raw = prefs.getString("alarms_json", null) ?: return

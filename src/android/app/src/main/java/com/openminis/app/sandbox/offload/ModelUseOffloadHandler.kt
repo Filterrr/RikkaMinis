@@ -362,6 +362,78 @@ class ModelUseOffloadHandler(
         // OpenAIProvider's isCodexImageModel branch on the normal sendMessage
         // call below, and a Codex OAuth token can't reach the Images API. On a
         // route-missing failure (auto mode) we fall through to the chat path.
+        // [ModelExecutionService] Remote-first execution: run the provider
+        // call in the :modelservice process so its native heap (DirectByteBuffer
+        // response buffers, JSON/image decoding) dies with the process — the
+        // only leak containment for app-native heap that GC can't reclaim
+        // (logs showed Post-recycle GC freed 0MB). On any dispatch failure or
+        // unparseable result the call falls back to the in-process path below
+        // (behaviour unchanged, leak containment degraded).
+        val remoteRequestJson = ModelExecutionDispatcher.buildRequestJson(
+            instance = instance,
+            model = entry.model,
+            messages = messages,
+            systemPrompt = systemPrompt,
+            maxTokens = maxTokens,
+            temperature = temperature,
+            imageParts = imageParts,
+            inputJson = inputText,
+            outputExt = outputExt,
+        )
+        val remoteResult = runBlocking { ModelExecutionDispatcher.dispatch(context, remoteRequestJson) }
+        if (remoteResult != null) {
+            val remote = try { JSONObject(remoteResult) } catch (e: Throwable) { null }
+            if (remote != null) {
+                val remoteErr = remote.optString("error", "")
+                if (remoteErr.isNotEmpty()) {
+                    Log.w(TAG, "remote run failed: $remoteErr")
+                    return NativeOffloadResult(
+                        remote.optInt("exit_code", 1),
+                        JSONObject().put("error", remoteErr)
+                            .put("message", remote.optString("message", "")).toString() + "\n",
+                    )
+                }
+                val remoteMedia = (remote.optJSONArray("media_files") ?: JSONArray()).let { arr ->
+                    (0 until arr.length()).mapNotNull { i ->
+                        val m = arr.optJSONObject(i) ?: return@mapNotNull null
+                        val b64 = m.optString("data", "")
+                        if (b64.isEmpty()) return@mapNotNull null
+                        com.openminis.app.data.model.LLMMediaAttachment(
+                            type = com.openminis.app.data.model.LLMMediaAttachment.MediaType.values()
+                                .firstOrNull { it.value == m.optString("type", "") }
+                                ?: com.openminis.app.data.model.LLMMediaAttachment.MediaType.IMAGE,
+                            mimeType = m.optString("mime_type", "application/octet-stream"),
+                            data = Base64.decode(b64, Base64.DEFAULT),
+                        )
+                    }
+                }
+                val remoteUsage = remote.optJSONObject("usage")?.let { u ->
+                    com.openminis.app.data.model.LLMUsage(
+                        inputTokens = u.optInt("input_tokens", 0),
+                        outputTokens = u.optInt("output_tokens", 0),
+                    )
+                }
+                val remoteWarnings = (remote.optJSONArray("warnings") ?: JSONArray()).let { arr ->
+                    (0 until arr.length()).mapNotNull { arr.optString(it, "").ifEmpty { null } }.toMutableList()
+                }
+                val remoteExtras = remote.optJSONObject("applied_extras") ?: JSONObject()
+                return writeRunOutput(
+                    entry = entry,
+                    response = com.openminis.app.data.model.LLMResponse(
+                        text = remote.optString("text", ""),
+                        stopReason = remote.optString("stop_reason", "").ifEmpty { null },
+                        usage = remoteUsage,
+                        mediaAttachments = remoteMedia,
+                    ),
+                    outputPath = outputPath,
+                    outputExt = outputExt,
+                    request = request,
+                    callWarnings = remoteWarnings,
+                    appliedExtras = remoteExtras,
+                )
+            }
+            Log.w(TAG, "remote result unparseable — falling back in-process")
+        }
         val imageRouted = tryImageGenerationRoute(
             entry = entry,
             instance = instance,
@@ -401,82 +473,7 @@ class ModelUseOffloadHandler(
         // Write output — media-first if the model returned image/audio/video and
         // --output has a media extension, else fall back to text. Mirrors iOS
         // ModelUseOffloadBridge.performRun (non-streaming branch).
-        val sessionId = request.sessionId
-        val mediaFiles = JSONArray()
-        val ts = System.currentTimeMillis() / 1000
-        val modelSlug = entry.model.id.replace("/", "_")
-        if (outputPath != null) {
-            // [T-android-model-use-session-scoped-write] Prefer the caller
-            // session's own host dir; fall back to the global resolver only when
-            // sessionId is null or the path isn't a session-scoped /var/minis
-            // subdir. Guaranteed absolute here (relative --output rejected above).
-            val hostFile = sessionScopedHostFile(outputPath, sessionId)
-                ?: PRootKernel.resolveHostPath(outputPath)
-                ?: return NativeOffloadResult(
-                    2,
-                    "minis-model-use run: cannot resolve --output '$outputPath'\n",
-                )
-            val firstMedia = response.mediaAttachments.firstOrNull()
-            val outputIsMedia = isImageExt(outputExt) || isAudioExt(outputExt) || isVideoExt(outputExt)
-            if (firstMedia != null && outputIsMedia) {
-                hostFile.parentFile?.mkdirs()
-                hostFile.writeBytes(firstMedia.data)
-                logModelUseWrite(outputPath, hostFile, sessionId)
-                mediaFiles.put(JSONObject().apply {
-                    put("type", firstMedia.type.value)
-                    put("mime_type", firstMedia.mimeType)
-                    put("path", outputPath)
-                    put("size", firstMedia.data.size)
-                })
-            } else {
-                Log.d(
-                    "ModelUseImage",
-                    "handler text fallback: path=$outputPath textLen=${response.text.length} " +
-                        "mediaAttachments=${response.mediaAttachments.size} outputIsMedia=$outputIsMedia",
-                )
-                hostFile.parentFile?.mkdirs()
-                hostFile.writeText(response.text)
-            }
-        } else if (response.mediaAttachments.isNotEmpty()) {
-            // [T-android-model-use-session-scoped-write] Auto-save to the caller
-            // session's attachments dir, not the global (last-writer-wins) mount.
-            val attachDir = sessionScopedHostFile("/var/minis/attachments", sessionId)
-                ?: PRootKernel.resolveHostPath("/var/minis/attachments")
-            if (attachDir != null) {
-                attachDir.mkdirs()
-                for ((idx, media) in response.mediaAttachments.withIndex()) {
-                    val ext = mimeToExt(media.mimeType)
-                    val fileName = "model-use-$modelSlug-$ts-$idx.$ext"
-                    val hostFile = File(attachDir, fileName)
-                    hostFile.writeBytes(media.data)
-                    val responsePath = "/var/minis/attachments/$fileName"
-                    logModelUseWrite(responsePath, hostFile, sessionId)
-                    mediaFiles.put(JSONObject().apply {
-                        put("type", media.type.value)
-                        put("mime_type", media.mimeType)
-                        put("path", responsePath)
-                        put("size", media.data.size)
-                    })
-                }
-            }
-        }
-
-        val body = JSONObject().apply {
-            put("model", entry.model.id)
-            put("text", response.text)
-            response.usage?.let { u ->
-                put("usage", JSONObject().apply {
-                    put("input_tokens", u.inputTokens)
-                    put("output_tokens", u.outputTokens)
-                })
-            }
-            if (outputPath != null) put("output_file", outputPath)
-            if (mediaFiles.length() > 0) put("media_files", mediaFiles)
-        }
-        return attachCallFeedback(
-            NativeOffloadResult(0, body.toString(2) + "\n"),
-            callWarnings, appliedExtras,
-        )
+        return writeRunOutput(entry, response, outputPath, outputExt, request, callWarnings, appliedExtras)
     }
 
     /**
@@ -1187,6 +1184,93 @@ class ModelUseOffloadHandler(
      * standard model-use result JSON. Shared shape with cmdRun's media-write
      * branch.
      */
+    /**
+     * [ModelExecutionService] Shared output writer for both the remote and
+     * in-process run paths: media-first if the model returned image/audio/
+     * video and --output has a media extension, else fall back to text.
+     * Mirrors iOS ModelUseOffloadBridge.performRun (non-streaming branch).
+     */
+    private fun writeRunOutput(
+        entry: ModelEntry,
+        response: com.openminis.app.data.model.LLMResponse,
+        outputPath: String?,
+        outputExt: String,
+        request: NativeOffloadRequest,
+        callWarnings: MutableList<String>,
+        appliedExtras: JSONObject,
+    ): NativeOffloadResult {
+        val sessionId = request.sessionId
+        val mediaFiles = JSONArray()
+        val ts = System.currentTimeMillis() / 1000
+        val modelSlug = entry.model.id.replace("/", "_")
+        if (outputPath != null) {
+            val hostFile = sessionScopedHostFile(outputPath, sessionId)
+                ?: PRootKernel.resolveHostPath(outputPath)
+                ?: return NativeOffloadResult(
+                    2,
+                    "minis-model-use run: cannot resolve --output '$outputPath'\n",
+                )
+            val firstMedia = response.mediaAttachments.firstOrNull()
+            val outputIsMedia = isImageExt(outputExt) || isAudioExt(outputExt) || isVideoExt(outputExt)
+            if (firstMedia != null && outputIsMedia) {
+                hostFile.parentFile?.mkdirs()
+                hostFile.writeBytes(firstMedia.data)
+                logModelUseWrite(outputPath, hostFile, sessionId)
+                mediaFiles.put(JSONObject().apply {
+                    put("type", firstMedia.type.value)
+                    put("mime_type", firstMedia.mimeType)
+                    put("path", outputPath)
+                    put("size", firstMedia.data.size)
+                })
+            } else {
+                Log.d(
+                    "ModelUseImage",
+                    "handler text fallback: path=$outputPath textLen=${response.text.length} " +
+                        "mediaAttachments=${response.mediaAttachments.size} outputIsMedia=$outputIsMedia",
+                )
+                hostFile.parentFile?.mkdirs()
+                hostFile.writeText(response.text)
+            }
+        } else if (response.mediaAttachments.isNotEmpty()) {
+            val attachDir = sessionScopedHostFile("/var/minis/attachments", sessionId)
+                ?: PRootKernel.resolveHostPath("/var/minis/attachments")
+            if (attachDir != null) {
+                attachDir.mkdirs()
+                for ((idx, media) in response.mediaAttachments.withIndex()) {
+                    val ext = mimeToExt(media.mimeType)
+                    val fileName = "model-use-$modelSlug-$ts-$idx.$ext"
+                    val hostFile = File(attachDir, fileName)
+                    hostFile.writeBytes(media.data)
+                    val responsePath = "/var/minis/attachments/$fileName"
+                    logModelUseWrite(responsePath, hostFile, sessionId)
+                    mediaFiles.put(JSONObject().apply {
+                        put("type", media.type.value)
+                        put("mime_type", media.mimeType)
+                        put("path", responsePath)
+                        put("size", media.data.size)
+                    })
+                }
+            }
+        }
+
+        val body = JSONObject().apply {
+            put("model", entry.model.id)
+            put("text", response.text)
+            response.usage?.let { u ->
+                put("usage", JSONObject().apply {
+                    put("input_tokens", u.inputTokens)
+                    put("output_tokens", u.outputTokens)
+                })
+            }
+            if (outputPath != null) put("output_file", outputPath)
+            if (mediaFiles.length() > 0) put("media_files", mediaFiles)
+        }
+        return attachCallFeedback(
+            NativeOffloadResult(0, body.toString(2) + "\n"),
+            callWarnings, appliedExtras,
+        )
+    }
+
     private fun writeImageResult(
         entry: ModelEntry,
         response: com.openminis.app.data.model.LLMResponse,

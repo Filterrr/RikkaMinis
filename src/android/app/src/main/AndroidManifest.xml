@@ -386,6 +386,17 @@
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
 
+        <!-- [model-exec-service] Isolated process for LLM provider calls
+             (sendMessage / sendImageGeneration). Runs in its own process so
+             all native heap allocations (DirectByteBuffer for HTTP response
+             bodies, JSON parsing, image/audio decoding) die when the process
+             is killed after completing the request — the only reliable leak
+             containment for native heap that GC cannot reclaim. -->
+        <service
+            android:name=".sandbox.offload.ModelExecutionService"
+            android:process=":modelservice"
+            android:exported="false" />
+
         <!-- Alarm broadcast receiver (also handles BOOT_COMPLETED for re-scheduling) -->
         <receiver
             android:name=".offload.AlarmReceiver"
