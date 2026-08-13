@@ -115,11 +115,8 @@ fun ProviderConnectionScreen(
                         storedKey = editKeyValue
                         AppLogger.info(TAG, "Saved API key for ${instance.id}")
                         isEditingKey = false
-                            editKeyValue = ""
-                            keyVisible = false
-                        },
-                    )
-                }
+                    },
+                )
             }
         }
 
