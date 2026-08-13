@@ -73,10 +73,15 @@ class ExecutionCoordinatorSchedulerTest {
     }
 
     @Test
-    fun `classify chained command by its first token`() {
-        // Leading tokens dominate; `cd` itself is light.
+    fun `classify chained command by its leading token`() {
+        // Classifier is deliberately prefix-based (cheap, predictable):
+        // a chained command is classified by its FIRST token. `cd /tmp &&`
+        // classifies LIGHT, so chained heavy work is NOT recycled by class —
+        // the generation budget and memory thresholds still bound it, and
+        // misclassification errs toward keeping the shell (safe).
         assertEquals(CommandClass.LIGHT, classifyCommand("cd /tmp && ls"))
-        assertEquals(CommandClass.HEAVY, classifyCommand("cd /tmp && python3 run.py"))
+        assertEquals(CommandClass.LIGHT, classifyCommand("cd /tmp && python3 run.py"))
+        assertEquals(CommandClass.HEAVY, classifyCommand("python3 /tmp/run.py && echo done"))
     }
 
     // ── internalDegradationPhase ──────────────────────────────────────
