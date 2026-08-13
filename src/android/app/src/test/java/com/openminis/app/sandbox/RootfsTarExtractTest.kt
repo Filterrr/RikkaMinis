@@ -155,4 +155,35 @@ class RootfsTarExtractTest {
         assertFile("bin/bash", "#!/bin/bash\n")
         assertFile("etc/hosts", "127.0.0.1 localhost")
     }
+
+    @Test
+    fun `dot-slash prefixed entries match onlyPrefixes like the real archive`() {
+        // alpine-minirootfs.tar stores every entry with a "./" prefix
+        // ("./bin/bash", "./sbin/apk", ...). Regression for the targeted
+        // restore silently extracting nothing.
+        val entries = listOf(
+            tarEntry("./bin/bash", "#!/bin/bash\n".toByteArray()),
+            tarEntry("./sbin/apk", "APK-BIN".toByteArray()),
+            tarEntry("./usr/lib/libreadline.so.8", "READLINE".toByteArray()),
+            tarEntry("./etc/ignored", "skip".toByteArray()),
+        )
+        extract(entries, setOf("bin/bash", "sbin/apk", "usr/lib/libreadline"))
+        assertFile("bin/bash", "#!/bin/bash\n")
+        assertFile("sbin/apk", "APK-BIN")
+        assertFile("usr/lib/libreadline.so.8", "READLINE")
+        assertFalse(tmp.root.resolve("etc/ignored").exists())
+    }
+
+    @Test
+    fun `dot-slash prefixed symlink chain restores sh pointing at busybox`() {
+        val entries = listOf(
+            tarEntry("./bin/busybox", "BUSYBOX-BIN".toByteArray()),
+            tarEntry("./bin/sh", typeflag = '2', linkName = "/bin/busybox"),
+        )
+        extract(entries, setOf("bin/sh", "bin/busybox"))
+        assertFile("bin/busybox", "BUSYBOX-BIN")
+        val link = tmp.root.resolve("bin/sh")
+        assertTrue("missing symlink bin/sh", Files.isSymbolicLink(link))
+        assertEquals("/bin/busybox", Files.readSymbolicLink(link).toString())
+    }
 }

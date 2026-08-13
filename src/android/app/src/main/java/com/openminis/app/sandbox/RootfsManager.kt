@@ -842,7 +842,12 @@ internal fun extractTar(
 
         // Handle GNU/POSIX long names via prefix field (bytes 345-500)
         val prefix = extractString(header, 345, 155)
-        val fullName = if (prefix.isNotEmpty()) "$prefix/$name" else name
+        val rawName = if (prefix.isNotEmpty()) "$prefix/$name" else name
+        // GNU/bsd tar archives commonly prefix entries with "./" — normalize
+        // it away so onlyPrefixes matching and extraction paths are
+        // consistent with the on-disk rootfs layout (bin/bash, sbin/apk, ...).
+        var fullName = rawName
+        while (fullName.startsWith("./")) fullName = fullName.removePrefix("./")
 
         if (fullName.isEmpty()) break
 
