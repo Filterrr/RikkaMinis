@@ -1501,4 +1501,12 @@
     <string name="chat_resume_crash_warning">上次应用在流式输出时无响应。再次点击仍要继续。</string>
     <string name="ok">确定</string>
     <string name="chat_load_older_messages">↑ 加载更早的消息</string>
+    <string name="browser_ua_default">默认（按 UA 自动）</string>
+    <string name="browser_ua_custom">自定义</string>
+    <string name="browser_ua_custom_hint">自定义宽度 × 高度</string>
+    <string name="browser_viewport_width">宽度</string>
+    <string name="browser_viewport_height">高度</string>
+    <string name="common_loading">加载中…</string>
+    <string name="rootfs_reset_button">重置</string>
+    <string name="session_title_label">标题</string>
 </resources>
