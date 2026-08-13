@@ -218,7 +218,6 @@ class ModelExecutionService : Service() {
                         openAI.generateImage(prompt, genConfig.n, genConfig.size, genConfig.quality)
                     }
                     return JSONObject().apply {
-                    return JSONObject().apply {
                         put("model", model.id)
                         put("text", imgResult.text)
                         imgResult.usage?.let { u ->
