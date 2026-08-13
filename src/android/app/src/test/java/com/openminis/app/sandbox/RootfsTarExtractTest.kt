@@ -113,8 +113,8 @@ class RootfsTarExtractTest {
             prefixes = setOf("usr/lib/libreadline"),
         )
         val link = tmp.root.resolve("usr/lib/libreadline.so.8")
-        assertTrue("symlink must exist", Files.isSymbolicLink(link))
-        assertEquals("libreadline.so.8.2", Files.readSymbolicLink(link).toString())
+        assertTrue("symlink must exist", Files.isSymbolicLink(link.toPath()))
+        assertEquals("libreadline.so.8.2", Files.readSymbolicLink(link.toPath()).toString())
         assertFile("usr/lib/libreadline.so.8.2", "ELF-readline")
     }
 
@@ -127,7 +127,7 @@ class RootfsTarExtractTest {
             ),
             prefixes = setOf("bin/"),
         )
-        assertTrue(Files.isSymbolicLink(tmp.root.resolve("bin/sh")))
+        assertTrue(Files.isSymbolicLink(tmp.root.resolve("bin/sh").toPath()))
         assertFile("bin/busybox", "BUSYBOX")
     }
 
