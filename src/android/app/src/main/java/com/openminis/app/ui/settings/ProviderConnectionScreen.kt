@@ -21,7 +21,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import com.openminis.app.ui.util.bringIntoViewOnFocus
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
@@ -29,7 +28,6 @@ import kotlinx.coroutines.withContext
 
 import com.openminis.app.R
 import com.openminis.app.data.model.ImageEndpointMode
-import com.openminis.app.data.model.ProviderCredential
 import com.openminis.app.data.model.ProviderType
 import com.openminis.app.data.repository.ProviderRepository
 import com.openminis.app.logging.AppLogger
@@ -39,7 +37,7 @@ private const val TAG = "ProviderConnection"
 
 /**
  * [T-provider-connection-screen] Full configuration page for a single AI
- * provider instance — label, credentials (API key / OAuth), custom base URL,
+ * provider instance — label, credentials (API key), custom base URL,
  * API format, image endpoint, Azure mode. Opened from the "API & Connection"
  * row on ProviderDetailScreen; the detail screen itself stays focused on the
  * everyday stuff (enable toggle + model picker).
@@ -87,65 +85,39 @@ fun ProviderConnectionScreen(
         )
     }
 
-    val isOAuthProvider = instance.credentialType == ProviderCredential.oauth
-
     SettingsScaffold(
         title = instance.label,
         onBack = onBack,
     ) {
         // ─── Credential / API Key ───────────────────────────────────
         SettingsSection(
-            header = if (isOAuthProvider) stringResource(R.string.add_provider_credential) else stringResource(R.string.provider_list_api_key),
-            footer = if (isOAuthProvider) "OAuth tokens are stored securely in encrypted storage." else null,
+            header = stringResource(R.string.provider_list_api_key),
         ) {
             SettingsCardBlock {
-                if (isOAuthProvider) {
-                    OAuthCredentialBlock(
-                        instance = instance,
-                        storedKey = storedKey,
-                        providerRepository = providerRepository,
-                    )
-                } else {
-                    ApiKeyCredentialBlock(
-                        storedKey = storedKey,
-                        keyVisible = keyVisible,
-                        onToggleVisibility = { keyVisible = !keyVisible },
-                        isEditing = isEditingKey,
-                        editValue = editKeyValue,
-                        onEditValueChange = { editKeyValue = it },
-                        onBeginEdit = {
-                            isEditingKey = true
-                            editKeyValue = storedKey ?: ""
-                        },
-                        onCancelEdit = {
-                            isEditingKey = false
+                ApiKeyCredentialBlock(
+                    storedKey = storedKey,
+                    keyVisible = keyVisible,
+                    onToggleVisibility = { keyVisible = !keyVisible },
+                    isEditing = isEditingKey,
+                    editValue = editKeyValue,
+                    onEditValueChange = { editKeyValue = it },
+                    onBeginEdit = {
+                        isEditingKey = true
+                        editKeyValue = storedKey ?: ""
+                    },
+                    onCancelEdit = {
+                        isEditingKey = false
+                        editKeyValue = ""
+                        keyVisible = false
+                    },
+                    onSave = {
+                        providerRepository.saveApiKey(instanceId, editKeyValue)
+                        storedKey = editKeyValue
+                        AppLogger.info(TAG, "Saved API key for ${instance.id}")
+                        isEditingKey = false
                             editKeyValue = ""
                             keyVisible = false
                         },
-                        onSave = {
-                            providerRepository.saveApiKey(instanceId, editKeyValue)
-                            storedKey = editKeyValue
-                            AppLogger.info(TAG, "Saved API key for ${instance.id}")
-                            isEditingKey = false
-                            editKeyValue = ""
-                            keyVisible = false
-                        },
-                    )
-                }
-            }
-        }
-
-        // Manual Bearer Token (OAuth providers only)
-        if (isOAuthProvider) {
-            SettingsSection(
-                header = stringResource(R.string.provider_detail_manual_bearer_token),
-                footer = stringResource(R.string.provider_detail_use_a_static_bearer_token_instead_of_the) +
-                    stringResource(R.string.provider_detail_manual_bearer_footer),
-            ) {
-                SettingsCardBlock {
-                    ManualBearerTokenSection(
-                        instance = instance,
-                        context = LocalContext.current,
                     )
                 }
             }
@@ -203,10 +175,8 @@ fun ProviderConnectionScreen(
             }
         }
 
-        // ─── API Format (OpenAI API-key only) ───────────────────────
-        if (instance.providerType == ProviderType.openAI &&
-            instance.credentialType != ProviderCredential.oauth
-        ) {
+        // ─── API Format (OpenAI only) ───────────────────────────────
+        if (instance.providerType == ProviderType.openAI) {
             SettingsSection(
                 header = stringResource(R.string.provider_detail_api_format),
                 footer = if (instance.useResponsesAPI) {
