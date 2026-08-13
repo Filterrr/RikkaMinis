@@ -237,7 +237,7 @@ fun FileBrowserScreen(
             text = { Text(msg) },
             confirmButton = {
                 MinisTextButton(onClick = { viewModel.dismissError() }) {
-                    Text("OK")  // OK is locale-neutral
+                    Text(stringResource(R.string.ok))
                 }
             },
         )

@@ -254,7 +254,7 @@ internal fun SessionEditSheet(
             OutlinedTextField(
                 value = title,
                 onValueChange = { title = it },
-                label = { Text("Title") },
+                label = { Text(stringResource(R.string.session_title_label)) },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
             )

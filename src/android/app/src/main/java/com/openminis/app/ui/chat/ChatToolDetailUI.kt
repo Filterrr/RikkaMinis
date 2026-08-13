@@ -947,7 +947,7 @@ internal fun ToolDetailSheet(
                                             strokeWidth = 2.dp,
                                             color = ChatColors.link,
                                         )
-                                        Text("Loading...", fontSize = 12.sp, color = ChatColors.tertiaryText)
+                                        Text(stringResource(R.string.common_loading), fontSize = 12.sp, color = ChatColors.tertiaryText)
                                     }
                                 }
                             }

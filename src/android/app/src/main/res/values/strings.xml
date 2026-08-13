@@ -1568,4 +1568,12 @@
     <string name="backup_snapshot_restore_confirm_text">The current configuration is replaced by the snapshot from %1$s. A new snapshot of the current config is saved first.</string>
     <string name="backup_snapshot_restore">Restore</string>
     <string name="backup_done_fatal">Restore failed mid-way — the configuration is only partially restored. Roll back from a snapshot.</string>
+    <string name="browser_ua_default">Default (auto by UA)</string>
+    <string name="browser_ua_custom">Custom</string>
+    <string name="browser_ua_custom_hint">Set your own width × height</string>
+    <string name="browser_viewport_width">Width</string>
+    <string name="browser_viewport_height">Height</string>
+    <string name="common_loading">Loading…</string>
+    <string name="rootfs_reset_button">Reset</string>
+    <string name="session_title_label">Title</string>
 </resources>
