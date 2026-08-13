@@ -201,6 +201,13 @@ class RootfsManager private constructor(private val context: Context) {
                 .putBoolean("rootfs.freshInstall", true)
                 .apply()
 
+            // [Refactor-apk-world] A fresh extraction ships only the factory
+            // packages. Re-apply the host-side snapshot of user packages
+            // (recorded by dumpApkWorld) so a reset / rebuild doesn't wipe
+            // what the user installed. Skip is cheap (no snapshot = no-op);
+            // failures are queued for retryFailedApkWorld on next boot.
+            restoreApkWorld()
+
             Log.i(TAG, "Rootfs installation complete")
             _installState.value = RootfsInstallState.Installed
         } catch (t: Throwable) {
@@ -546,6 +553,195 @@ class RootfsManager private constructor(private val context: Context) {
         }
     }
 
+    // ── Apk world snapshot (user-package persistence) ─────────────────────
+    //
+    // The factory minirootfs ships no bash/readline/ncurses and no user
+    // packages — everything a user `apk add`s lives only inside the rootfs.
+    // A full rebuild (manual reset, or [autoRepair]'s Stage 3 after an
+    // unusable apk database) wipes it all. The snapshot makes user packages
+    // a recoverable state: [dumpApkWorld] persists `name=version` to the
+    // host side on every boot, and [restoreApkWorld] re-applies it right
+    // after a fresh extraction inside [installIfNeeded].
+
+    /** Host-side snapshot of installed packages (`name=version` per line). */
+    val apkWorldFile: File get() = File(context.filesDir, "apk-world.txt")
+
+    /** Host-side retry list for packages that failed to restore. */
+    val apkWorldFailedFile: File get() = File(context.filesDir, "apk-world-failed.txt")
+
+    /**
+     * Snapshot the currently installed packages to the host side
+     * (filesDir/apk-world.txt). Reads Alpine's `lib/apk/db/installed`
+     * directly on the host filesystem — no proot involved, cheap enough to
+     * run on every boot. A restorable snapshot is only meaningful when the
+     * rootfs is in its final state, so callers invoke this AFTER any
+     * auto-repair (PRootKernel.boot) or right before a wipe ([reset]).
+     */
+    suspend fun dumpApkWorld() = withContext(Dispatchers.IO) {
+        val db = File(rootfsDir, "lib/apk/db/installed")
+        if (!db.exists()) {
+            Log.d(TAG, "[ApkWorld] apk db not present — rootfs not installed, skip dump")
+            return@withContext
+        }
+        try {
+            val packages = parseApkDbInstalled(db.readText())
+            // Guard: an unreadable/corrupt apk db parses to an empty list.
+            // The factory rootfs always ships packages, so an empty parse
+            // means the db is broken (the classic pre-Stage-3-reset state) —
+            // overwriting the snapshot with it would erase user packages on
+            // the next restore. Keep the previous snapshot instead.
+            if (packages.isEmpty()) {
+                Log.w(TAG, "[ApkWorld] apk db unreadable (${db.length()} bytes, 0 packages) — keeping previous snapshot")
+                return@withContext
+            }
+            apkWorldFile.writeText(formatApkWorld(packages))
+            Log.i(TAG, "[ApkWorld] snapshot ${packages.size} packages -> ${apkWorldFile.name}")
+        } catch (t: Exception) {
+            Log.w(TAG, "[ApkWorld] dump failed: ${t.message}")
+        }
+    }
+
+    /**
+     * Re-apply the snapshot after a fresh extraction: `apk add name=version`
+     * for every recorded package (order preserved), skipping the offline
+     * trio (bash/readline/ncurses) which the bundled-APK Stage 2.6 path
+     * guarantees on every rebuild.
+     *
+     * Failure (offline, repo issue, pruned version) is NON-blocking: the
+     * failed list is persisted to [apkWorldFailedFile] for the next boot's
+     * [retryFailedApkWorld], and the rootfs stays usable — a missing user
+     * package just surfaces as "not installed".
+     */
+    suspend fun restoreApkWorld(): Boolean = withContext(Dispatchers.IO) {
+        if (!apkWorldFile.exists()) {
+            Log.d(TAG, "[ApkWorld] no snapshot file, nothing to restore")
+            return@withContext true
+        }
+        val packages = try {
+            parseApkWorld(apkWorldFile.readText())
+        } catch (t: Exception) {
+            Log.e(TAG, "[ApkWorld] failed to read snapshot, skip restore", t)
+            return@withContext false
+        }
+        val targets = excludeOfflinePackages(packages)
+        if (targets.isEmpty()) {
+            Log.i(TAG, "[ApkWorld] snapshot holds only offline-trio packages, nothing to restore")
+            return@withContext true
+        }
+        val args = targets.map { "${it.name}=${it.version}" }
+        Log.i(TAG, "[ApkWorld] restoring ${args.size} packages: ${args.take(6).joinToString()}")
+        val code = runApkAddInGuest(args)
+        if (code == 0) {
+            Log.i(TAG, "[ApkWorld] restore OK (${args.size} packages)")
+            try { apkWorldFailedFile.delete() } catch (_: Exception) {}
+            return@withContext true
+        }
+        writeApkWorldFailed(args)
+        Log.w(TAG, "[ApkWorld] restore failed (exit=$code) — ${args.size} pkg(s) queued for retry")
+        false
+    }
+
+    /**
+     * Retry the previously-failed packages at boot time, one by one
+     * (the list is usually small). Runs with the user's mirror config
+     * already applied, so packages that failed against the factory repos
+     * get a second chance. Clears the retry list on full success.
+     */
+    suspend fun retryFailedApkWorld(): Boolean = withContext(Dispatchers.IO) {
+        if (!apkWorldFailedFile.exists()) return@withContext true
+        val args = try {
+            apkWorldFailedFile.readLines()
+                .map { it.trim() }
+                .filter { it.isNotEmpty() && !it.startsWith("#") && '=' in it }
+        } catch (t: Exception) {
+            Log.w(TAG, "[ApkWorld] failed to read retry list", t)
+            return@withContext false
+        }
+        if (args.isEmpty()) {
+            try { apkWorldFailedFile.delete() } catch (_: Exception) {}
+            return@withContext true
+        }
+        Log.i(TAG, "[ApkWorld] retrying ${args.size} previously-failed package(s)")
+        var allOk = true
+        val stillFailed = mutableListOf<String>()
+        for (arg in args) {
+            val code = runApkAddInGuest(listOf(arg))
+            if (code == 0) {
+                Log.i(TAG, "[ApkWorld] retry OK: $arg")
+            } else {
+                allOk = false
+                stillFailed.add(arg)
+            }
+        }
+        if (stillFailed.isEmpty()) {
+            try { apkWorldFailedFile.delete() } catch (_: Exception) {}
+            Log.i(TAG, "[ApkWorld] retry fully succeeded")
+        } else {
+            writeApkWorldFailed(stillFailed)
+            Log.w(TAG, "[ApkWorld] ${stillFailed.size} package(s) still failing: ${stillFailed.take(5).joinToString()}")
+        }
+        allOk
+    }
+
+    /** Persist a failed `name=version` list for the next boot's retry. */
+    private fun writeApkWorldFailed(args: List<String>) {
+        try {
+            apkWorldFailedFile.writeText(
+                buildString {
+                    appendLine("# apk-world retry list — packages that failed to restore")
+                    args.forEach { appendLine(it) }
+                }
+            )
+        } catch (t: Exception) {
+            Log.w(TAG, "[ApkWorld] failed to write retry list: ${t.message}")
+        }
+    }
+
+    /**
+     * Run `apk add --no-cache <name>=<version>...` inside the guest via
+     * proot. Shares the loader-env boilerplate with [installOfflinePackages].
+     * Returns the apk exit code (0 = all installed), or -1 on process
+     * failure / timeout.
+     */
+    private suspend fun runApkAddInGuest(pkgArgs: List<String>): Int = withContext(Dispatchers.IO) {
+        if (!prootBinary.exists()) {
+            Log.w(TAG, "[ApkWorld] proot binary not available")
+            return@withContext -1
+        }
+        val cmd = listOf(
+            prootBinary.absolutePath, "-0", "--link2symlink", "--kill-on-exit",
+            "-r", rootfsDir.absolutePath,
+            "-b", "/dev", "-b", "/proc", "-b", "/sys", "-w", "/root",
+            "/bin/sh", "-c",
+            "apk add --no-cache ${pkgArgs.joinToString(" ")}"
+        )
+        val loaderEnv = mutableMapOf(
+            "PROOT_TMP_DIR" to PRootKernel.getProotTmpDir(context).absolutePath,
+            "LD_LIBRARY_PATH" to nativeLibDir.absolutePath,
+        )
+        File(nativeLibDir, "libproot-loader.so").takeIf { it.exists() }?.let {
+            loaderEnv["PROOT_LOADER"] = it.absolutePath
+        }
+        File(nativeLibDir, "libproot-loader32.so").takeIf { it.exists() }?.let {
+            loaderEnv["PROOT_LOADER_32"] = it.absolutePath
+        }
+        runCatching {
+            val p = ProcessBuilder(cmd)
+                .redirectErrorStream(true)
+                .apply { environment().putAll(loaderEnv) }
+                .start()
+            val output = p.inputStream.readBytes().toString(Charset.forName("UTF-8"))
+            val finished = p.waitFor(180, java.util.concurrent.TimeUnit.SECONDS)
+            val code = if (finished) p.exitValue() else -1
+            if (p.isAlive) p.destroyForcibly()
+            Log.i(TAG, "[ApkWorld] apk add exit=$code pkgs=${pkgArgs.size} output=${output.takeLast(400)}")
+            code
+        }.onFailure { t ->
+            Log.e(TAG, "[ApkWorld] apk add process failed", t)
+            -1
+        }.getOrDefault(-1)
+    }
+
     /**
      * Reset rootfs to factory state: delete everything and reinstall.
      *
@@ -566,6 +762,10 @@ class RootfsManager private constructor(private val context: Context) {
     }
 
     suspend fun reset(): Unit = withContext(Dispatchers.IO) {
+        // [Refactor-apk-world] Snapshot user packages BEFORE the wipe — the
+        // boot path also dumps, but a manual reset can happen mid-session
+        // between boots, so dump here too as the authoritative last state.
+        dumpApkWorld()
         rootfsDir.deleteRecursively()
         installIfNeeded()
     }
@@ -1082,3 +1282,95 @@ internal val CRITICAL_RESTORE_PREFIXES = setOf(
     "usr/lib/libncurses",
     "sbin/apk",
 )
+
+// ── Apk world snapshot — pure functions (JVM-testable) ─────────────────
+
+/**
+ * Package names guaranteed by the offline-install path
+ * (assets/apk-offline/ via [RootfsManager.installOfflinePackages],
+ * autoRepair Stage 2.6). The snapshot restore skips them: they are
+ * re-installed from bundled APK files on every rebuild anyway.
+ * File-level (private top-level) so [excludeOfflinePackages] can use it
+ * without an Android Context.
+ */
+private val OFFLINE_PACKAGE_NAMES = setOf("bash", "readline", "ncurses")
+
+/**
+ * A package name + version pair as recorded in Alpine's apk database.
+ * Canonical form for `apk add <name>=<version>`.
+ */
+data class ApkPackage(val name: String, val version: String)
+
+/**
+ * Parse Alpine's `/lib/apk/db/installed` (read host-side — no proot needed)
+ * into ordered (name, version) pairs. Each package is a block of
+ * `KEY:value` lines terminated by a blank line; the name lives under `P:`,
+ * the version under `V:` (apk writes P before V in every block). Blocks
+ * missing either field are skipped; a trailing block without a closing
+ * blank line is still captured.
+ */
+internal fun parseApkDbInstalled(text: String): List<ApkPackage> {
+    val result = mutableListOf<ApkPackage>()
+    var name: String? = null
+    var version: String? = null
+    fun flush() {
+        val n = name
+        val v = version
+        if (n != null && v != null) result.add(ApkPackage(n, v))
+        name = null
+        version = null
+    }
+    for (line in text.lines()) {
+        val t = line.trim()
+        if (t.isEmpty()) {
+            flush()
+            continue
+        }
+        when {
+            t.startsWith("P:") -> name = t.substring(2).trim()
+            t.startsWith("V:") -> version = t.substring(2).trim()
+        }
+    }
+    flush()
+    return result
+}
+
+/**
+ * Serialize packages as one `name=version` line each, with a header
+ * comment (parseable back by [parseApkWorld]).
+ */
+internal fun formatApkWorld(packages: List<ApkPackage>): String =
+    buildString {
+        appendLine("# apk-world snapshot — `<name>=<version>` per line, written by RootfsManager.dumpApkWorld()")
+        for (p in packages) appendLine("${p.name}=${p.version}")
+    }
+
+/**
+ * Parse an apk-world snapshot (or retry list) back into packages.
+ * Tolerates blank lines, `#` comments, and malformed lines (skipped).
+ */
+internal fun parseApkWorld(text: String): List<ApkPackage> {
+    val result = mutableListOf<ApkPackage>()
+    for (line in text.lines()) {
+        val t = line.trim()
+        if (t.isEmpty() || t.startsWith("#")) continue
+        val eq = t.indexOf('=')
+        if (eq <= 0) continue
+        val name = t.substring(0, eq).trim()
+        val version = t.substring(eq + 1).trim()
+        if (name.isNotEmpty() && version.isNotEmpty()) {
+            result.add(ApkPackage(name, version))
+        }
+    }
+    return result
+}
+
+/**
+ * Drop the offline trio (bash/readline/ncurses) from a snapshot before
+ * restoring: [RootfsManager.installOfflinePackages] (autoRepair Stage 2.6)
+ * re-installs them from bundled APK files on every rebuild — no network,
+ * always the same version — so the snapshot restore must not touch them
+ * (no duplicate work, no surprise version downgrades).
+ */
+internal fun excludeOfflinePackages(packages: List<ApkPackage>): List<ApkPackage> =
+    packages.filterNot { it.name in OFFLINE_PACKAGE_NAMES }
