@@ -207,6 +207,14 @@ class BrowserTabPool(private val context: Context) : ComponentCallbacks2 {
     @Volatile
     private var idleTimeoutMs: Long = DEFAULT_IDLE_TIMEOUT_MINUTES * 60_000L
 
+    /**
+     * [T-browser-risk-control] Timestamp (System.currentTimeMillis) of the last
+     * throttled browser action. Used by [computeThrottleDelayMs] to calculate the
+     * deficit between consecutive actions. -1L means "no previous action tracked".
+     */
+    @Volatile
+    private var lastActionTimeMs: Long = -1L
+
     init {
         // Restore persisted User-Agent profile from SharedPreferences so pool-owned
         // WebViews start in the correct mode (Mobile vs Desktop) and
@@ -648,13 +656,65 @@ class BrowserTabPool(private val context: Context) : ComponentCallbacks2 {
             ?: return BrowserActionResult.error("Failed to acquire browser tab")
         return try {
             val result = tab.manager.execute(input)
+
+            // [T-browser-risk-control] Detect risk challenges (Cloudflare,
+            // captcha, rate limits, etc.) from the current page title and URL.
+            // Body text is intentionally omitted — fetching it via JS on every
+            // action is too expensive. The title + URL patterns already cover
+            // the common cases (Cloudflare "Attention Required!" titles,
+            // captcha "Security check" titles, etc.).
+            val riskChallenge = BrowserRiskControl.detectChallenge(
+                title = tab.manager.pageTitle.value,
+                currentUrl = tab.manager.currentURL.value,
+            )
+
+            // [T-browser-risk-control] Compute throttle delay for the next
+            // action. Only applies to visual-change actions (navigate, click,
+            // type, scroll_and_collect). Non-throttled actions get 0 delay.
+            val throttleDelayMs = if (BrowserRiskControl.shouldThrottle(input.action)) {
+                val baseDelay = BrowserRiskControl.baseThrottleDelayMs(
+                    action = input.action,
+                    rawUrl = tab.manager.currentURL.value,
+                )
+                BrowserRiskControl.computeThrottleDelayMs(
+                    baseDelayMs = baseDelay,
+                    elapsedSinceLastActionMs = if (lastActionTimeMs >= 0L)
+                        System.currentTimeMillis() - lastActionTimeMs else null,
+                    jitterMs = 0L,
+                )
+            } else 0L
+
+            // Apply throttle delay before returning — this spreads out
+            // consecutive page-interactive actions so the target server
+            // sees a more human-like request cadence.
+            if (throttleDelayMs > 0L) {
+                delay(throttleDelayMs)
+            }
+
+            // Track the timestamp of this throttled action for the next call.
+            if (BrowserRiskControl.shouldThrottle(input.action)) {
+                lastActionTimeMs = System.currentTimeMillis()
+            }
+
             // [T-android-browser-result-tab-id] Stamp the VERIFIED tab id — the
             // id of the tab we actually acquired and dispatched on, NOT the
             // global selectedTabId, which the fan-out branch in acquireTab
             // overwrites mid-flight when it spawns a fresh tab for a concurrent
             // navigate. Without this the agent had to guess tab_id for its
             // follow-up reads/scrolls and routinely picked the wrong tab.
-            stampTabId(result.copy(pageURL = tab.manager.currentURL.value), tab.id)
+            val stamped = stampTabId(result.copy(pageURL = tab.manager.currentURL.value), tab.id)
+
+            // Stamp risk challenge info onto the result so the agent can react.
+            if (riskChallenge != null) {
+                stamped.copy(
+                    riskChallengeDetected = true,
+                    riskChallengeKind = riskChallenge.kind,
+                    recommendedNextAction = riskChallenge.recommendedNextAction,
+                    throttleDelayMs = throttleDelayMs,
+                )
+            } else {
+                stamped.copy(throttleDelayMs = throttleDelayMs)
+            }
         } finally {
             tab.lastActivityDate = Date()
             if (implicitTab) {
