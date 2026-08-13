@@ -1580,4 +1580,5 @@
     <string name="rootfs_reset_button">Reset</string>
     <string name="session_title_label">Title</string>
     <string name="backup_import_too_large">Backup file is too large (%1$d MB, max %2$d MB) — nothing was imported.</string>
+    <string name="backup_export_incomplete">Warning: %1$d field(s) failed to read — this backup may be incomplete.</string>
 </resources>

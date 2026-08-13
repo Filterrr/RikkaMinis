@@ -79,23 +79,29 @@ object WebDavSync {
         client: OkHttpClient = WebDavClient.defaultClient(),
     ): List<WebDavBackupItem> {
         val dav = WebDavClient(config, client)
-        dav.ensureCollectionExists()
-        return dav.list()
-            .filter {
-                !it.isCollection &&
-                    (it.displayName.startsWith(BACKUP_PREFIX) ||
-                        it.displayName.startsWith(LEGACY_BACKUP_PREFIX)) &&
-                    it.displayName.endsWith(BACKUP_SUFFIX)
-            }
-            .map {
-                WebDavBackupItem(
-                    href = it.href,
-                    displayName = it.displayName,
-                    size = it.contentLength,
-                    lastModified = it.lastModified ?: Instant.EPOCH,
-                )
-            }
-            .sortedByDescending { it.lastModified }
+        return try {
+            dav.list()
+                .filter {
+                    !it.isCollection &&
+                        (it.displayName.startsWith(BACKUP_PREFIX) ||
+                            it.displayName.startsWith(LEGACY_BACKUP_PREFIX)) &&
+                        it.displayName.endsWith(BACKUP_SUFFIX)
+                }
+                .map {
+                    WebDavBackupItem(
+                        href = it.href,
+                        displayName = it.displayName,
+                        size = it.contentLength,
+                        lastModified = it.lastModified ?: Instant.EPOCH,
+                    )
+                }
+                .sortedByDescending { it.lastModified }
+        } catch (e: WebDavException) {
+            // [T-backup-list-nomkcol] A read operation must not create the
+            // remote folder (that is upload's job); a missing folder is just
+            // an empty backup list, not an error.
+            if (e.statusCode == 404) emptyList() else throw e
+        }
     }
 
     /** Download a remote backup and return its JSON document, ready for
@@ -155,7 +161,6 @@ object WebDavSync {
         client: OkHttpClient = WebDavClient.defaultClient(),
     ): List<WebDavBackupItem> {
         val dav = WebDavClient(config, client)
-        dav.ensureCollectionExists()
         return try {
             dav.list(SYNC_SUBDIR)
                 .filter {
