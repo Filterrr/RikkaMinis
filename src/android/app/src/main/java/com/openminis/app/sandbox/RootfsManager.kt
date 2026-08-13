@@ -849,9 +849,21 @@ internal fun extractTar(
         var fullName = rawName
         while (fullName.startsWith("./")) fullName = fullName.removePrefix("./")
 
-        if (fullName.isEmpty()) break
-
         val size = sizeOctal.trim().toLongOrNull(8) ?: 0L
+
+        // A "./" root-directory entry (typeflag 5, size 0) normalizes to an
+        // empty path. It is a real archive entry (the root dir marker of GNU/
+        // bsd tars), NOT the end-of-archive marker — that is a zero-filled
+        // block already handled above. Skip it and keep extracting; aborting
+        // here used to yield an empty rootfs on every install/reset/repair
+        // once an archive's first entry was "./" (every real minirootfs).
+        if (fullName.isEmpty()) {
+            if (size > 0) {
+                val blocks = (size + 511) / 512 * 512
+                skipFully(input, blocks)
+            }
+            continue
+        }
         val outFile = File(targetDir, fullName)
         val isTarget = onlyPrefixes == null || onlyPrefixes.any { fullName.startsWith(it) }
 
