@@ -595,7 +595,6 @@
     <string name="share_provider_json_imported">제공자 \"%1$s\"을(를) 가져왔습니다</string>
     <string name="share_provider_json_import_failed">잘못된 제공자 구성 파일입니다</string>
     <string name="provider_list_api_key">API Key</string>
-    <string name="provider_list_oauth">OAuth</string>
     <string name="provider_list_no_api_key">API 키 없음</string>
     <string name="provider_list_disabled">비활성화됨</string>
     <string name="provider_list_favorites">즐겨찾기</string>
@@ -603,8 +602,6 @@
     <string name="provider_unset_favorite">즐겨찾기에서 제거</string>
     <string name="provider_detail_export">내보내기</string>
     <string name="provider_detail_label">라벨</string>
-    <string name="provider_detail_manual_bearer_token">수동 Bearer Token</string>
-    <string name="provider_detail_use_a_static_bearer_token_instead_of_the">OAuth 로그인 플로 대신 정적 베어러 토큰을 사용합니다.</string>
     <string name="provider_detail_custom_api_base">사용자 정의 API 주소</string>
     <string name="provider_detail_api_format">API Format</string>
     <string name="provider_detail_chat_completions">Chat Completions</string>
@@ -621,7 +618,6 @@
     <string name="provider_detail_image_endpoint_chat">채팅</string>
     <string name="provider_detail_api_format_responses_footer">/v1/responses 엔드포인트 형식을 사용합니다. Responses-API 전용 일부 서비스에서 필요합니다.</string>
     <string name="provider_detail_api_format_chat_footer">표준 /v1/chat/completions 형식. 대부분의 OpenAI 호환 서비스와 호환됩니다.</string>
-    <string name="provider_detail_manual_bearer_footer">사용자 지정 프록시 엔드포인트를 사용할 때 유용합니다.</string>
 
     <string name="provider_detail_status">상태</string>
     <string name="provider_detail_enabled">활성화됨</string>
@@ -634,19 +630,13 @@
     <string name="provider_detail_add_custom_model">사용자 정의 모델 추가</string>
     <string name="provider_detail_delete_provider">AI 공급자 삭제</string>
     <string name="provider_detail_delete_model">Delete Model</string>
-    <string name="provider_detail_sign_out">로그아웃</string>
-    <string name="provider_detail_sign_in">로그인</string>
     <string name="provider_detail_save_key">키 저장</string>
     <string name="provider_detail_paste_bearer_token">베어러 토큰 붙여넣기</string>
     <string name="provider_detail_save_token">토큰 저장</string>
     <string name="common_change">변경</string>
     <string name="common_remove">제거</string>
-    <string name="provider_detail_set_manual_bearer_token">수동 Bearer Token 설정</string>
     <string name="add_provider_choose_provider">AI 공급자 선택</string>
     <string name="add_provider_you_can_add_multiple_instances_of_the_sa">동일한 제공업체의 여러 인스턴스를 추가할 수 있습니다 (예: 업무용 및 개인 계정). OpenAI 와 Anthropic 은 호환되는 타사 엔드포인트와도 작동합니다 — 일치하는 프로토콜을 선택한 후 사용자 정의 API Base URL 을 설정하세요.</string>
-    <string name="add_provider_auth_method">인증 방식</string>
-    <string name="add_provider_choose_authentication">인증 방식 선택</string>
-    <string name="add_provider_pick_the_auth_method_that_matches_your_a">계정에 맞는 인증 방식을 선택하세요. OAuth 는 제공업체의 웹 플로를 통해 로그인하고, API Key 는 계정 대시보드의 키를 사용합니다.</string>
     <string name="add_provider_identity">식별</string>
     <string name="add_provider_the_label_is_shown_in_the_provider_list_">라벨은 제공업체 목록과 모델 선택기에 표시됩니다.</string>
     <string name="add_provider_credential">자격 증명</string>
@@ -751,7 +741,6 @@
     <string name="provider_detail_https_api_example_placeholder">https://api.example.com</string>
     <string name="provider_detail_models_count_header">모델 (%1$d)</string>
     <string name="provider_detail_refresh_success_api">새로고침됨 – 공급자에서 %1$d개 모델을 불러왔습니다.</string>
-    <string name="provider_detail_refresh_success_oauth">새로고침됨, OAuth로 모델 목록을 불러왔습니다.</string>
     <string name="provider_detail_refresh_success_models_dev">라이브 목록이 없어 models.dev 레지스트리 사용(%1$d개). 결과는 대략적일 수 있습니다.</string>
     <string name="provider_detail_refresh_no_key">API 키가 설정되지 않음 – 새로고침할 내용 없음.</string>
     <string name="provider_detail_refresh_preserved">일치하는 models.dev 항목 없음 – 기존 모델 목록 유지.</string>

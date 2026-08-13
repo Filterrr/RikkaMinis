@@ -232,7 +232,6 @@
     <string name="share_provider_json_imported">已匯入服務商「%1$s」</string>
     <string name="share_provider_json_import_failed">無效的服務商設定檔</string>
     <string name="provider_list_api_key">API Key</string>
-    <string name="provider_list_oauth">OAuth</string>
     <string name="provider_list_no_api_key">無 API 金鑰</string>
     <string name="provider_list_disabled">已停用</string>
     <string name="provider_list_favorites">常用</string>
@@ -241,8 +240,6 @@
     <string name="provider_detail_export">導出</string>
     <string name="provider_detail_label">標籤</string>
     <string name="common_save">保存</string>
-    <string name="provider_detail_manual_bearer_token">手動 Bearer Token</string>
-    <string name="provider_detail_use_a_static_bearer_token_instead_of_the">使用靜態 bearer token,而不是 OAuth 登入流程。</string>
     <string name="provider_detail_custom_api_base">自定義 API 地址</string>
     <string name="provider_detail_api_format">API Format</string>
     <string name="provider_detail_chat_completions">Chat Completions</string>
@@ -259,7 +256,6 @@
     <string name="provider_detail_image_endpoint_chat">聊天</string>
     <string name="provider_detail_api_format_responses_footer">使用 /v1/responses 端點格式。某些僅支援 Responses API 的服務需要此格式。</string>
     <string name="provider_detail_api_format_chat_footer">標準 /v1/chat/completions 格式。相容大部分 OpenAI 相容服務。</string>
-    <string name="provider_detail_manual_bearer_footer">對接自訂代理端點時使用。</string>
 
     <string name="provider_detail_status">狀態</string>
     <string name="provider_detail_enabled">已啓用</string>
@@ -272,8 +268,6 @@
     <string name="provider_detail_add_custom_model">添加自定義模型</string>
     <string name="provider_detail_delete_provider">刪除 AI 服務商</string>
     <string name="provider_detail_delete_model">Delete Model</string>
-    <string name="provider_detail_sign_out">退出登錄</string>
-    <string name="provider_detail_sign_in">登錄</string>
     <string name="common_cancel">取消</string>
     <string name="provider_detail_save_key">儲存金鑰</string>
     <string name="common_edit">編輯</string>
@@ -281,12 +275,8 @@
     <string name="provider_detail_save_token">儲存 Token</string>
     <string name="common_change">更換</string>
     <string name="common_remove">移除</string>
-    <string name="provider_detail_set_manual_bearer_token">設置手動 Bearer Token</string>
     <string name="add_provider_choose_provider">選擇 AI 服務商</string>
     <string name="add_provider_you_can_add_multiple_instances_of_the_sa">你可以新增同一供應商的多個實例（例如工作與個人帳號）。OpenAI 和 Anthropic 也支援相容的第三方端點 —— 選擇對應的通訊協定後再設定自訂 API Base URL。</string>
-    <string name="add_provider_auth_method">認證方式</string>
-    <string name="add_provider_choose_authentication">選擇身分驗證方式</string>
-    <string name="add_provider_pick_the_auth_method_that_matches_your_a">選擇與你帳號相符的身分驗證方式。OAuth 透過供應商的網頁流程登入；API Key 使用帳號面板中的金鑰。</string>
     <string name="add_provider_identity">標識</string>
     <string name="add_provider_the_label_is_shown_in_the_provider_list_">標籤會顯示在供應商列表和模型選擇器裡。</string>
     <string name="add_provider_credential">憑證</string>
@@ -412,7 +402,6 @@
     <string name="provider_detail_https_api_example_placeholder">https://api.example.com</string>
     <string name="provider_detail_models_count_header">模型 (%1$d)</string>
     <string name="provider_detail_refresh_success_api">已重新整理——已從提供者載入 %1$d 個模型。</string>
-    <string name="provider_detail_refresh_success_oauth">已重新整理，模型清單已透過 OAuth 載入。</string>
     <string name="provider_detail_refresh_success_models_dev">無即時清單；已使用 models.dev 註冊表（%1$d 個模型）。結果可能不精確。</string>
     <string name="provider_detail_refresh_no_key">未設定 API 金鑰——沒有可重新整理的內容。</string>
     <string name="provider_detail_refresh_preserved">無相符的 models.dev 項目——保留現有模型清單。</string>
