@@ -35,7 +35,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ProviderAgentLoopIdEntity::class,
         ProviderConfigMetaEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = false,
 )
 abstract class ProviderDatabase : RoomDatabase() {
@@ -104,6 +104,21 @@ abstract class ProviderDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * [T-four-way-sync-gate] recovery column was removed from the
+         * Entity (fff19a2) but MIGRATION_4_5 already added it to the
+         * database. Empty migration that re-hashes the schema to match
+         * the current Entity definition (which has no recovery column).
+         * The existing recovery column in the DB is harmlessly ignored.
+         */
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Empty — schema change is the removal of the recovery
+                // column from the Entity. The column already exists in
+                // the database and is simply not mapped anymore.
+            }
+        }
+
         fun getInstance(context: Context): ProviderDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -111,7 +126,7 @@ abstract class ProviderDatabase : RoomDatabase() {
                     ProviderDatabase::class.java,
                     "provider.db",
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                     .build()
                     .also { INSTANCE = it }
             }
