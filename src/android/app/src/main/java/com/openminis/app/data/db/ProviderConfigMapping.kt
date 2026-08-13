@@ -10,7 +10,6 @@ import com.openminis.app.data.model.ProviderConfig
 import com.openminis.app.data.model.ProviderCredential
 import com.openminis.app.data.model.ProviderInstance
 import com.openminis.app.data.model.ProviderType
-import com.openminis.app.data.model.FallbackStrategy
 import com.openminis.app.data.model.RoutingStrategy
 import com.openminis.app.data.model.ThinkingLevel
 import kotlinx.serialization.builtins.ListSerializer
