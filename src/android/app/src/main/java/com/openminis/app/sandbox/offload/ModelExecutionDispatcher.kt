@@ -75,24 +75,26 @@ object ModelExecutionDispatcher {
             model.outputModalities.orEmpty().let { if (it.isNotEmpty()) put("output_modalities", JSONArray(it)) }
             model.contextWindow?.let { put("context_window", it) }
 
-            put("messages", JSONArray().apply {
-                messages.forEach { m ->
-                    put(JSONObject().apply {
-                        put("role", m.role.value)
-                        put("content", m.content)
-                        if (m.audioParts.isNotEmpty()) {
-                            put("audio_parts", JSONArray().apply {
-                                m.audioParts.forEach { a ->
-                                    put(JSONObject().apply {
-                                        put("format", a.format)
-                                        put("data", a.base64Data)
-                                    })
-                                }
-                            })
-                        }
-                    })
-                }
-            })
+            if (messages.isNotEmpty()) {
+                put("messages", JSONArray().apply {
+                    messages.forEach { m ->
+                        put(JSONObject().apply {
+                            put("role", m.role.value)
+                            put("content", m.content)
+                            if (m.audioParts.isNotEmpty()) {
+                                put("audio_parts", JSONArray().apply {
+                                    m.audioParts.forEach { a ->
+                                        put(JSONObject().apply {
+                                            put("format", a.format)
+                                            put("data", a.base64Data)
+                                        })
+                                    }
+                                })
+                            }
+                        })
+                    }
+                })
+            }
             systemPrompt?.let { put("system_prompt", it) }
             put("max_tokens", maxTokens)
             temperature?.let { put("temperature", it) }
@@ -102,7 +104,7 @@ object ModelExecutionDispatcher {
                     imageParts.forEach { img ->
                         put(JSONObject().apply {
                             if (img.data.isNotEmpty()) {
-                                put("data", android.util.Base64.encodeToString(img.data, android.util.Base64.DEFAULT))
+                                put("data", java.util.Base64.getEncoder().encodeToString(img.data))
                             }
                             put("mime_type", img.mimeType)
                             img.linuxPath?.let { put("linux_path", it) }
