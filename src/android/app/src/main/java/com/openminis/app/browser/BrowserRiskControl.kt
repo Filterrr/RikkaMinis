@@ -98,9 +98,14 @@ internal object BrowserRiskControl {
     ): Long {
         if (baseDelayMs <= 0L) return 0L
         val normalizedJitter = jitterMs.coerceAtLeast(0L)
-        val deficit = elapsedSinceLastActionMs
-            ?.let { (baseDelayMs - it).coerceAtLeast(0L) }
-            ?: 0L
+        // When elapsedSinceLastActionMs is null (no previous action tracked),
+        // apply the full base delay. When it's non-null, compute the deficit
+        // (base minus elapsed, floor 0) and add jitter.
+        val deficit = if (elapsedSinceLastActionMs != null) {
+            (baseDelayMs - elapsedSinceLastActionMs).coerceAtLeast(0L)
+        } else {
+            baseDelayMs
+        }
         return deficit + normalizedJitter
     }
 
