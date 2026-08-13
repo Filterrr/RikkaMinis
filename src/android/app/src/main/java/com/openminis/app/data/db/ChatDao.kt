@@ -66,6 +66,9 @@ interface ChatDao {
     @Query("SELECT * FROM sessions WHERE id = :id")
     suspend fun getSession(id: String): ChatSessionEntity?
 
+    @Query("SELECT * FROM messages WHERE id = :id")
+    suspend fun getMessage(id: String): MessageEntity?
+
     @Query("SELECT * FROM sessions WHERE updated_at >= :cutoff ORDER BY updated_at DESC")
     suspend fun sessionsUpdatedSince(cutoff: Long): List<ChatSessionEntity>
 
