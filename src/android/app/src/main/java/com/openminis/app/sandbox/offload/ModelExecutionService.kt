@@ -87,8 +87,9 @@ class ModelExecutionService : Service() {
         val instance = com.openminis.app.data.model.ProviderInstance(
             id = req.optString("instance_id", "remote"),
             label = req.optString("instance_label", "remote"),
-            providerType = com.openminis.app.data.model.ProviderType.valueOf(
-                req.getString("provider_type")
+            providerType = safeEnum(
+                req.optString("provider_type", "openAI"),
+                com.openminis.app.data.model.ProviderType.openAI,
             ),
             credentialType = safeEnum(
                 req.optString("credential_type", "apiKey"),
@@ -103,10 +104,7 @@ class ModelExecutionService : Service() {
                 com.openminis.app.data.model.ImageEndpointMode.auto,
             ),
             imageEndpointResolved = req.optString("image_endpoint_resolved", "").let {
-                if (it.isNotEmpty()) {
-                    try { com.openminis.app.data.model.ImageEndpointMode.valueOf(it) }
-                    catch (_: Exception) { null }
-                } else null
+                if (it.isNotEmpty()) safeEnumOrNull<com.openminis.app.data.model.ImageEndpointMode>(it) else null
             },
             azureMode = req.optBoolean("azure_mode", false),
             pinned = false,
@@ -299,6 +297,9 @@ class ModelExecutionService : Service() {
 
     private inline fun <reified T : Enum<T>> safeEnum(name: String, default: T): T =
         try { java.lang.Enum.valueOf(T::class.java, name) } catch (_: Exception) { default }
+
+    private inline fun <reified T : Enum<T>> safeEnumOrNull(name: String): T? =
+        enumValues<T>().firstOrNull { it.name == name }
 
     private fun jsonStrList(arr: JSONArray?): List<String> =
         if (arr == null) emptyList() else (0 until arr.length()).map { arr.getString(it) }
