@@ -29,18 +29,15 @@ class WebDavConfigStore(context: Context) {
         )
     }
 
-    /** Save the server settings. An empty [WebDavConfig.password] keeps the
-     *  previously stored password (so editing the URL does not force a
-     *  re-entry of the secret). */
+    /** Save the server settings. A blank [WebDavConfig.password] CLEARS the
+     *  stored password — the config dialog pre-fills the stored value, so a
+     *  blank only happens when the user deliberately clears it (e.g. to
+     *  switch servers or remove credentials). */
     fun save(config: WebDavConfig) {
-        val previous = load()
         prefs.edit()
             .putString(KEY_URL, config.url.trim())
             .putString(KEY_USERNAME, config.username.trim())
-            .putString(
-                KEY_PASSWORD,
-                config.password.ifBlank { previous?.password.orEmpty() },
-            )
+            .putString(KEY_PASSWORD, config.password)
             .putString(KEY_PATH, config.path.trim().ifBlank { WebDavConfig.DEFAULT_BACKUP_DIR })
             .apply()
     }

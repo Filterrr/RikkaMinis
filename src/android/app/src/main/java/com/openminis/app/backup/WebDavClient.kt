@@ -180,8 +180,19 @@ class WebDavClient(
                 throw WebDavException("Upload failed (HTTP $code)", code)
             }
         }
-        // Parent collection missing (409 Conflict / 404) — create it once and retry.
-        ensureCollectionExists()
+        // Parent collection missing (409 Conflict / 404) — create the parent
+        // and retry. [T-backup-put-parent] The old code ensured only the root
+        // collection, so uploading into a nested path (e.g. "sync/<name>")
+        // whose parent dir didn't exist failed twice. Creating the parent of
+        // the target path (root for flat filenames) covers both cases.
+        val parentSegs = path.substringBeforeLast('/', "")
+            .split('/')
+            .filter { it.isNotBlank() }
+        if (parentSegs.isEmpty()) {
+            ensureCollectionExists()
+        } else {
+            ensureCollectionExists(*parentSegs.toTypedArray())
+        }
         client.newCall(request).execute().useSafe { response ->
             if (!response.isSuccessful) {
                 throw WebDavException("Upload failed (HTTP ${response.code})", response.code)
@@ -240,7 +251,15 @@ class WebDavClient(
     /** Verify the server answers: PROPFIND depth 0 on the backup directory.
      *  Throws [WebDavException] on any failure. */
     fun testConnection() {
-        propfind(depth = 0)
+        try {
+            propfind(depth = 0)
+        } catch (e: WebDavException) {
+            // [T-backup-testconn-404] A 404 just means the configured folder
+            // does not exist yet — the first backup / sync upload auto-creates
+            // it (WebDavClient.put → ensureCollectionExists). Credentials and
+            // URL are still valid, so this is NOT a connection failure.
+            if (e.statusCode != 404) throw e
+        }
     }
 
     // ── PROPFIND response parsing ──────────────────────────────────────────
