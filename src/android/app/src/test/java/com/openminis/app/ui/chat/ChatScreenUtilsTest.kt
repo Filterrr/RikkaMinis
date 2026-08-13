@@ -36,12 +36,13 @@ class ChatScreenUtilsTest {
     }
 
     @Test
-    fun `originalMessageId handles multiple hashes`() {
-        assertEquals("a#b", originalMessageId("a#b#2"))
+    fun `originalMessageId strips at first hash`() {
+        // substringBefore('#') drops everything from the FIRST hash onward
+        assertEquals("a", originalMessageId("a#b"))
     }
 
     @Test
-    fun `originalMessageId handles id with hash in middle`() {
-        assertEquals("a#b", originalMessageId("a#b"))
+    fun `originalMessageId strips all suffixes after first hash`() {
+        assertEquals("a", originalMessageId("a#b#2"))
     }
 }
