@@ -1103,10 +1103,8 @@ class ChatViewModel(
      * matches the official fast catalog gpt-5.6-sol/terra/luna, gpt-5.5,
      * gpt-5.4) AND the request travels the Responses path — the instance has
      * useResponsesAPI on (any credential/base; Responses relays like sub2api
-     * pass the tier through) OR it's the Codex OAuth route (OpenAI type +
-     * oauth credential + no custom base URL). Chat-completions providers stay
-     * excluded. Recomputes on entry/config changes like the Enhanced Cache
-     * gate above.
+     * pass the tier through). Chat-completions providers stay excluded.
+     * Recomputes on entry/config changes like the Enhanced Cache gate above.
      */
     val showFastModeToggle: StateFlow<Boolean> =
         kotlinx.coroutines.flow.combine(
@@ -1115,13 +1113,9 @@ class ChatViewModel(
         ) { entryId, config ->
             val entry = entryId?.let { id -> config.modelEntries.find { it.id == id } }
             val instance = entry?.let { e -> config.instances.find { it.id == e.providerInstanceId } }
-            val isCodexOAuth = instance != null &&
-                instance.providerType == com.openminis.app.data.model.ProviderType.openAI &&
-                instance.credentialType == com.openminis.app.data.model.ProviderCredential.oauth &&
-                instance.customBaseURL.isNullOrBlank()
             entry != null && instance != null &&
                 entry.model.id.contains("gpt", ignoreCase = true) &&
-                (instance.useResponsesAPI || isCodexOAuth)
+                instance.useResponsesAPI
         }.stateIn(
             viewModelScope,
             kotlinx.coroutines.flow.SharingStarted.Eagerly,
@@ -4689,37 +4683,9 @@ class ChatViewModel(
         label: String,
     ): Boolean {
         var provider = initialProvider
-        // Refresh OAuth token if needed
-        if ((provider as? com.openminis.app.provider.anthropic.AnthropicProvider)?.isOAuth == true) {
-            try {
-                val activeEntryId = _activeEntryId.value
-                val entry = activeEntryId?.let { id -> providerRepository.config.value.modelEntries.find { it.id == id } }
-                val instance = entry?.let { e -> providerRepository.config.value.instances.find { it.id == e.providerInstanceId } }
-                if (instance != null) {
-                    val manager = com.openminis.app.auth.OAuthManager.forInstance(context, instance)
-                    val freshToken = manager?.validAccessToken()
-                    if (freshToken != null) {
-                        val storedKey = providerRepository.loadApiKey(instance.id)
-                        if (freshToken != storedKey) {
-                            providerRepository.saveApiKey(instance.id, freshToken)
-                            provider = com.openminis.app.provider.ProviderFactory.create(
-                                instance, freshToken, currentModel ?: provider.model, context
-                            )
-                            currentProvider = provider
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "OAuth token refresh failed: ${e.message}")
-            }
-        }
 
         val baseSystemPrompt = buildSystemPrompt()
-        val systemPrompt = if ((provider as? com.openminis.app.provider.anthropic.AnthropicProvider)?.isOAuth == true) {
-            val prefix = com.openminis.app.auth.ClaudeOAuthManager.ANTHROPIC_OAUTH_IDENTIFIER_PROMPT
-            if (baseSystemPrompt?.startsWith(prefix) == true) baseSystemPrompt
-            else "$prefix\n\n${baseSystemPrompt ?: ""}"
-        } else baseSystemPrompt
+        val systemPrompt = baseSystemPrompt
 
         // _isStreaming was already set synchronously by the caller.
         val launchedProvider = provider
@@ -5405,41 +5371,9 @@ class ChatViewModel(
                 dbMessageId = persistedUser.id,
             ))
 
-            // Refresh OAuth token if needed before sending (mirrors iOS validAccessToken)
-            if ((provider as? com.openminis.app.provider.anthropic.AnthropicProvider)?.isOAuth == true) {
-                try {
-                    val activeEntryId = _activeEntryId.value
-                    val entry = activeEntryId?.let { id -> providerRepository.config.value.modelEntries.find { it.id == id } }
-                    val instance = entry?.let { e -> providerRepository.config.value.instances.find { it.id == e.providerInstanceId } }
-                    if (instance != null) {
-                        val manager = com.openminis.app.auth.OAuthManager.forInstance(context, instance)
-                        val freshToken = manager?.validAccessToken()
-                        if (freshToken != null) {
-                            val storedKey = providerRepository.loadApiKey(instance.id)
-                            if (freshToken != storedKey) {
-                                providerRepository.saveApiKey(instance.id, freshToken)
-                                // Recreate provider with fresh token
-                                provider = com.openminis.app.provider.ProviderFactory.create(
-                                    instance, freshToken, currentModel ?: provider.model, context
-                                )
-                                currentProvider = provider
-                                android.util.Log.i(TAG, "OAuth token refreshed before send")
-                            }
-                        }
-                    }
-                } catch (e: Exception) {
-                    android.util.Log.w(TAG, "OAuth token refresh failed: ${e.message}")
-                }
-            }
-
             // Build system prompt
-            // Anthropic OAuth requires the Claude Code prefix in the system prompt
             val baseSystemPrompt = buildSystemPrompt()
-            val systemPrompt = if ((provider as? com.openminis.app.provider.anthropic.AnthropicProvider)?.isOAuth == true) {
-                val prefix = com.openminis.app.auth.ClaudeOAuthManager.ANTHROPIC_OAUTH_IDENTIFIER_PROMPT
-                if (baseSystemPrompt?.startsWith(prefix) == true) baseSystemPrompt
-                else "$prefix\n\n${baseSystemPrompt ?: ""}"
-            } else baseSystemPrompt
+            val systemPrompt = baseSystemPrompt
 
             // Start agent loop with fallback. _isStreaming was set synchronously at top.
             streamLaunched = true
@@ -5775,35 +5709,8 @@ class ChatViewModel(
                 )
             }
 
-            // Refresh OAuth token if needed
-            if ((provider as? com.openminis.app.provider.anthropic.AnthropicProvider)?.isOAuth == true) {
-                try {
-                    val activeEntryId = _activeEntryId.value
-                    val entry = activeEntryId?.let { id -> providerRepository.config.value.modelEntries.find { it.id == id } }
-                    val instance = entry?.let { e -> providerRepository.config.value.instances.find { it.id == e.providerInstanceId } }
-                    if (instance != null) {
-                        val manager = com.openminis.app.auth.OAuthManager.forInstance(context, instance)
-                        val freshToken = manager?.validAccessToken()
-                        if (freshToken != null) {
-                            val storedKey = providerRepository.loadApiKey(instance.id)
-                            if (freshToken != storedKey) {
-                                providerRepository.saveApiKey(instance.id, freshToken)
-                                provider = ProviderFactory.create(instance, freshToken, currentModel ?: provider.model, context)
-                                currentProvider = provider
-                            }
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "OAuth token refresh failed: ${e.message}")
-                }
-            }
-
             val baseSystemPrompt = buildSystemPrompt()
-            val systemPrompt = if ((provider as? com.openminis.app.provider.anthropic.AnthropicProvider)?.isOAuth == true) {
-                val prefix = com.openminis.app.auth.ClaudeOAuthManager.ANTHROPIC_OAUTH_IDENTIFIER_PROMPT
-                if (baseSystemPrompt?.startsWith(prefix) == true) baseSystemPrompt
-                else "$prefix\n\n${baseSystemPrompt ?: ""}"
-            } else baseSystemPrompt
+            val systemPrompt = baseSystemPrompt
 
             // _isStreaming was already set synchronously at the top.
             streamLaunched = true
@@ -10170,29 +10077,8 @@ Environment variables:
         // every member sits behind a disabled provider.
         val entry = providerRepository.resolveTitleSubEntry() ?: return null
         val instance = providerRepository.instance(entry.providerInstanceId) ?: return null
-        var apiKey = providerRepository.loadApiKey(instance.id) ?: return null
+        val apiKey = providerRepository.loadApiKey(instance.id) ?: return null
 
-        // [T-android-titlegen-oauth-refresh] Refresh the OAuth token before
-        // building the provider — matches the manual Regenerate path
-        // (SessionListViewModel.regenerateTitle) and iOS. Without this, an
-        // OAuth sub-model (e.g. OAuth Anthropic Claude Code) with an expired
-        // cached token would 401 during auto-title-gen and silently drop to the
-        // first-message fallback title. A refresh failure is non-fatal: log it
-        // and proceed with the stale token so the request's own 401 flows into
-        // the existing error/fallback handling. runBlocking is safe here — this
-        // is only reached from the suspend agent loop on a background thread.
-        if (instance.credentialType == com.openminis.app.data.model.ProviderCredential.oauth) {
-            try {
-                val manager = com.openminis.app.auth.OAuthManager.forInstance(context, instance)
-                val freshToken = kotlinx.coroutines.runBlocking { manager?.validAccessToken() }
-                if (freshToken != null && freshToken != apiKey) {
-                    providerRepository.saveApiKey(instance.id, freshToken)
-                    apiKey = freshToken
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "TitleGen OAuth refresh failed: ${e.message}")
-            }
-        }
         return ProviderFactory.create(instance, apiKey, entry.model, context)
     }
 
@@ -10291,8 +10177,8 @@ Environment variables:
      * retried) → noop return.
      *
      * Provider / systemPrompt / fallback resolution mirrors [sendMessage]
-     * verbatim (incl. OAuth token refresh + Claude Code prefix), so a queued
-     * prompt drain after cancel uses the same plumbing as a fresh send.
+     * verbatim, so a queued prompt drain after cancel uses the same plumbing
+     * as a fresh send.
      */
     private fun resumeQueueAfterCancel() {
         viewModelScope.launch(Dispatchers.IO) {
@@ -10318,37 +10204,8 @@ Environment variables:
             }
             var provider: LLMProvider = initialProvider
 
-            // Refresh OAuth token if needed (mirrors sendMessage L2477-2501).
-            if ((provider as? com.openminis.app.provider.anthropic.AnthropicProvider)?.isOAuth == true) {
-                try {
-                    val activeEntryId = _activeEntryId.value
-                    val entry = activeEntryId?.let { id -> providerRepository.config.value.modelEntries.find { it.id == id } }
-                    val instance = entry?.let { e -> providerRepository.config.value.instances.find { it.id == e.providerInstanceId } }
-                    if (instance != null) {
-                        val manager = com.openminis.app.auth.OAuthManager.forInstance(context, instance)
-                        val freshToken = manager?.validAccessToken()
-                        if (freshToken != null) {
-                            val storedKey = providerRepository.loadApiKey(instance.id)
-                            if (freshToken != storedKey) {
-                                providerRepository.saveApiKey(instance.id, freshToken)
-                                provider = com.openminis.app.provider.ProviderFactory.create(
-                                    instance, freshToken, currentModel ?: provider.model, context
-                                )
-                                currentProvider = provider
-                            }
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "OAuth token refresh failed (resumeQueueAfterCancel): ${e.message}")
-                }
-            }
-
             val baseSystemPrompt = buildSystemPrompt()
-            val systemPrompt = if ((provider as? com.openminis.app.provider.anthropic.AnthropicProvider)?.isOAuth == true) {
-                val prefix = com.openminis.app.auth.ClaudeOAuthManager.ANTHROPIC_OAUTH_IDENTIFIER_PROMPT
-                if (baseSystemPrompt?.startsWith(prefix) == true) baseSystemPrompt
-                else "$prefix\n\n${baseSystemPrompt ?: ""}"
-            } else baseSystemPrompt
+            val systemPrompt = baseSystemPrompt
 
             // T145: claim the streaming flag synchronously before launching
             // the streamJob so a concurrent send/retry tap is rejected by the
@@ -10609,12 +10466,7 @@ Environment variables:
 
         viewModelScope.launch(Dispatchers.IO) {
             val baseSystemPrompt = buildSystemPrompt()
-            val systemPrompt =
-                if ((provider as? com.openminis.app.provider.anthropic.AnthropicProvider)?.isOAuth == true) {
-                    val prefix = com.openminis.app.auth.ClaudeOAuthManager.ANTHROPIC_OAUTH_IDENTIFIER_PROMPT
-                    if (baseSystemPrompt?.startsWith(prefix) == true) baseSystemPrompt
-                    else "$prefix\n\n${baseSystemPrompt ?: ""}"
-                } else baseSystemPrompt
+            val systemPrompt = baseSystemPrompt
 
             AppLogger.info(TAG_STREAM, "resume _isStreaming=true (sid=$activeSessionId)")
             _isStreaming.value = true
