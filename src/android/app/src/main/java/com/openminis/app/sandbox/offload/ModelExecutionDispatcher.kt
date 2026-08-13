@@ -153,18 +153,21 @@ object ModelExecutionDispatcher {
         }
 
         // Poll for the result file.
-        val result = withTimeoutOrNull(REQUEST_TIMEOUT_MS) {
+        val result: String? = withTimeoutOrNull(REQUEST_TIMEOUT_MS) {
+            var read: String? = null
             while (true) {
                 if (resultFile.exists()) {
-                    return@withTimeoutOrNull try {
+                    read = try {
                         resultFile.readText()
                     } catch (e: Exception) {
                         Log.w(TAG, "read result failed: ${e.message}")
                         null
                     }
+                    break
                 }
                 delay(POLL_INTERVAL_MS)
             }
+            read
         }
 
         if (result == null) {
