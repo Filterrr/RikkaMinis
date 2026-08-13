@@ -61,7 +61,6 @@ import kotlinx.coroutines.withContext
 import java.util.Calendar
 import java.util.Date
 import java.util.concurrent.TimeUnit
-import com.openminis.app.ui.theme.ChatColors
 
 /**
  * Bottom sheet listing all chat sessions except the current one. Tapping
@@ -203,10 +202,10 @@ private fun categoryStyle(category: String?): CategoryStyle {
         "research"     -> CategoryStyle(Icons.Outlined.Language, Color(0xFF30B0C7))
         "analysis"     -> CategoryStyle(Icons.Outlined.BarChart, Color(0xFF5856D6))
         "creative"     -> CategoryStyle(Icons.Outlined.Brush, Color(0xFFFF2D55))
-        "chat"         -> CategoryStyle(Icons.Outlined.Forum, ChatColors.success)
+        "chat"         -> CategoryStyle(Icons.Outlined.Forum, Color(0xFF34C759))
         "math"         -> CategoryStyle(Icons.Outlined.Calculate, Color(0xFF9B59B6))
         "translation"  -> CategoryStyle(Icons.Outlined.Translate, Color(0xFF00BCD4))
-        "health"       -> CategoryStyle(Icons.Outlined.Favorite, ChatColors.error)
+        "health"       -> CategoryStyle(Icons.Outlined.Favorite, Color(0xFFFF3B30))
         "finance"      -> CategoryStyle(Icons.Outlined.Payments, Color(0xFF00C7BE))
         "travel"       -> CategoryStyle(Icons.Outlined.Map, Color(0xFFF09A37))
         "education"    -> CategoryStyle(Icons.Outlined.Book, Color(0xFF3478F6))
