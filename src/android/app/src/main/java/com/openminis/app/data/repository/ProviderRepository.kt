@@ -1718,35 +1718,9 @@ class ProviderRepository(private val context: Context) {
 
 
     suspend fun refreshModels(instance: ProviderInstance): ModelRefreshResult {
-        var apiKey = loadApiKey(instance.id)
-
-        // For OAuth providers, try to refresh the token before using it (mirrors iOS validAccessToken)
-        if (instance.credentialType == com.openminis.app.data.model.ProviderCredential.oauth && apiKey != null) {
-            try {
-                val manager = com.openminis.app.auth.OAuthManager.forInstance(context, instance)
-                val freshToken = manager?.validAccessToken()
-                if (freshToken != null && freshToken != apiKey) {
-                    saveApiKey(instance.id, freshToken)
-                    apiKey = freshToken
-                    android.util.Log.i("ProviderRepo", "refreshModels: OAuth token refreshed")
-                }
-            } catch (e: Exception) {
-                android.util.Log.w("ProviderRepo", "OAuth token refresh failed: ${e.message}")
-            }
-        }
+        val apiKey = loadApiKey(instance.id)
 
         android.util.Log.i("ProviderRepo", "refreshModels: id=${instance.id} type=${instance.providerType} credential=${instance.credentialType} hasKey=${apiKey != null} keyLen=${apiKey?.length ?: 0} baseURL=${instance.effectiveBaseURL}")
-
-        // OpenAI Codex OAuth: use static model list (OAuth tokens can't call /v1/models)
-        if (instance.providerType == ProviderType.openAI
-            && instance.credentialType == ProviderCredential.oauth
-        ) {
-            val models = ModelListProviderRegistry.oauthModels(instance)
-            if (models.isNotEmpty()) {
-                replaceEntries(instance.id, models)
-                return ModelRefreshResult.SUCCESS_OAUTH
-            }
-        }
 
         // Step 1: Try provider API (requires API key)
         val customBase = instance.customBaseURL
@@ -1910,24 +1884,6 @@ class ProviderRepository(private val context: Context) {
 
     // -- Import / Export --
 
-    /**
-     * [T-android-provider-export-oauth-token] OAuth manager for [instance],
-     * covering EVERY OAuth provider type — including gemini / antigravity, which
-     * OAuthManager.forInstance deliberately omits (it's tuned for the
-     * login/logout/manual-bearer UI paths). Used only by the export/import
-     * round-trip so we don't widen forInstance's shared behavior.
-     */
-    private fun oauthManagerFor(
-        instance: ProviderInstance,
-    ): com.openminis.app.auth.OAuthManager? = when (instance.providerType) {
-        ProviderType.anthropic -> com.openminis.app.auth.ClaudeOAuthManager(context, instance.id)
-        ProviderType.openAI -> com.openminis.app.auth.OpenAIOAuthManager(context, instance.id)
-        ProviderType.xAI -> com.openminis.app.auth.XAIOAuthManager(context, instance.id)
-        ProviderType.gemini -> com.openminis.app.auth.GeminiOAuthManager(context, instance.id)
-        ProviderType.kimiCode -> com.openminis.app.auth.KimiOAuthManager(context, instance.id)
-        else -> null
-    }
-
     /** Export an instance as shareable JSON (includes base64-encoded API key). */
     fun exportInstanceJSON(instanceId: String): String? {
         ensureConfigLoaded()
@@ -2014,43 +1970,6 @@ class ProviderRepository(private val context: Context) {
             loadApiKey(instanceId)?.let { key ->
                 put("apiKey", Base64.encodeToString(key.toByteArray(), Base64.NO_WRAP))
             }
-            // Export manual OAuth bearer token (mirrors iOS `manualOAuthToken` key).
-            // Stored per-instance via OAuthManager; only present for OAuth providers
-            // where the user pasted a static token via the Manual Bearer Token UI.
-            run {
-                val mgr = com.openminis.app.auth.OAuthManager.forInstance(context, instance)
-                val manual = mgr?.loadManualBearerToken()
-                if (!manual.isNullOrEmpty()) {
-                    put("manualOAuthToken", Base64.encodeToString(manual.toByteArray(), Base64.NO_WRAP))
-                }
-            }
-            // [T-android-provider-export-oauth-token] (XIN 38955) Export the
-            // STRUCTURED OAuth-login credential (access_token / refresh_token /
-            // expire_at) saved by the OAuth login flow under a separate pref than
-            // apiKey / manualOAuthToken. Previously omitted, so an OAuth-logged-in
-            // Claude / OpenAI / Gemini / xAI provider exported with no usable
-            // credential and imported as not-authenticated. The whole token is one
-            // JSON blob on Android (OAuthManager.loadStoredTokens); JSON-encode +
-            // base64 it under "oauthToken", matching iOS 703ff4bc's field name and
-            // the existing apiKey / manualOAuthToken base64 encoding. Covers every
-            // OAuth provider type via oauthManagerFor (not just the forInstance set).
-            run {
-                val mgr = oauthManagerFor(instance)
-                mgr?.exportStoredTokensJson()?.let { tokenJson ->
-                    put("oauthToken", Base64.encodeToString(tokenJson.toByteArray(), Base64.NO_WRAP))
-                }
-                // Gemini also stores the resolved account email + GCP project as
-                // separate OAuth strings (mirrors iOS oauthEmail / oauthGcpProject);
-                // carry them so the imported instance can call the API.
-                if (instance.providerType == ProviderType.gemini && mgr != null) {
-                    mgr.exportOAuthString("email")?.takeIf { it.isNotEmpty() }?.let {
-                        put("oauthEmail", Base64.encodeToString(it.toByteArray(), Base64.NO_WRAP))
-                    }
-                    mgr.exportOAuthString("gcp_project")?.takeIf { it.isNotEmpty() }?.let {
-                        put("oauthGcpProject", Base64.encodeToString(it.toByteArray(), Base64.NO_WRAP))
-                    }
-                }
-            }
             instance.customBaseURL?.let { put("customBaseURL", it) }
             if (!instance.appendV1Suffix) put("appendV1Suffix", false)
             if (instance.useResponsesAPI) put("useResponsesAPI", true)
@@ -2132,11 +2051,10 @@ class ProviderRepository(private val context: Context) {
      * [T-backup-restore-credentials] Apply the credential fields of an
      * exported provider JSON onto [instance] (the instance id the credentials
      * must be stored under — a fresh append or an existing merge target).
-     * Covers: apiKey, manualOAuthToken, structured oauthToken, and Gemini
-     * account email / GCP project. Shared by [importInstanceJSON] (always
-     * applies on append) and [mergeImportInstanceJSON] (applies only when
-     * applyCredentials=true, i.e. a manual full restore — see
-     * ConfigBackup.import's isSyncMerge gating).
+     * Covers: apiKey (OAuth token fields were removed with the OAuth login
+     * flow). Shared by [importInstanceJSON] (always applies on append) and
+     * [mergeImportInstanceJSON] (applies only when applyCredentials=true, i.e.
+     * a manual full restore — see ConfigBackup.import's isSyncMerge gating).
      */
     private fun importInstanceCredentials(dict: JSONObject, instance: ProviderInstance) {
         // Decode API key (base64 or plain text)
@@ -2150,172 +2068,6 @@ class ProviderRepository(private val context: Context) {
             saveApiKey(instance.id, apiKey)
         }
 
-        // Decode manual OAuth bearer token (mirrors iOS `manualOAuthToken`).
-        // base64-encoded UTF-8 string, with plain-text fallback for older exports.
-        val manualTokenValue = dict.optString("manualOAuthToken", "").ifEmpty { null }
-        if (manualTokenValue != null) {
-            val manualToken = try {
-                String(Base64.decode(manualTokenValue, Base64.NO_WRAP))
-            } catch (_: Exception) {
-                manualTokenValue
-            }
-            val mgr = com.openminis.app.auth.OAuthManager.forInstance(context, instance)
-            mgr?.saveManualBearerToken(manualToken)
-        }
-
-        // [T-android-provider-export-oauth-token] (XIN 38955) Restore the
-        // structured OAuth-login credential so the imported instance is
-        // authenticated. Decode base64 → JSON → write back via the OAuth
-        // manager. Mirrors iOS 703ff4bc; purely additive alongside the
-        // apiKey / manualOAuthToken restore above.
-        val oauthTokenValue = dict.optString("oauthToken", "").ifEmpty { null }
-        if (oauthTokenValue != null) {
-            val tokenJson = try {
-                String(Base64.decode(oauthTokenValue, Base64.NO_WRAP))
-            } catch (_: Exception) {
-                oauthTokenValue // plain-text fallback for hand-edited exports
-            }
-            oauthManagerFor(instance)?.importStoredTokensJson(tokenJson)
-        }
-        // Gemini account email + GCP project (base64-encoded OAuth strings).
-        if (instance.providerType == ProviderType.gemini) {
-            val mgr = oauthManagerFor(instance)
-            dict.optString("oauthEmail", "").ifEmpty { null }?.let { b64 ->
-                val email = try { String(Base64.decode(b64, Base64.NO_WRAP)) } catch (_: Exception) { b64 }
-                mgr?.importOAuthString("email", email)
-            }
-            dict.optString("oauthGcpProject", "").ifEmpty { null }?.let { b64 ->
-                val project = try { String(Base64.decode(b64, Base64.NO_WRAP)) } catch (_: Exception) { b64 }
-                mgr?.importOAuthString("gcp_project", project)
-            }
-        }
-    }
-
-    /**
-     * [T-backup-dedup] Parse the `models` array of an exported provider JSON
-     * into [ModelEntry]s bound to [instanceId]. Shared by [importInstanceJSON]
-     * (which replaces the instance's entries wholesale) and
-     * [mergeImportInstanceJSON] (which upserts models missing from an existing
-     * instance). Returns an empty list when the payload carries no models.
-     */
-    private fun parseImportedModelEntries(dict: JSONObject, instanceId: String): List<ModelEntry> {
-        val models = dict.optJSONArray("models") ?: return emptyList()
-        val providerTypeRaw = dict.optString("providerType", "").ifEmpty { return emptyList() }
-        val providerType = try { ProviderType.valueOf(providerTypeRaw) } catch (_: Exception) { return emptyList() }
-        val entries = mutableListOf<ModelEntry>()
-        for (i in 0 until models.length()) {
-            val m = models.getJSONObject(i)
-            val modelId = m.optString("modelId", "")
-            if (modelId.isEmpty()) continue
-            val displayName = m.optString("displayName", modelId)
-            val isCustom = m.optBoolean("isCustom", false)
-            val isHidden = m.optBoolean("isHidden", false)
-            val contextWindow = if (m.has("contextWindow")) m.optInt("contextWindow").takeIf { it > 0 } else null
-            val maxOutputTokens = if (m.has("maxOutputTokens")) m.optInt("maxOutputTokens").takeIf { it > 0 } else null
-            val supportsReasoning = if (m.has("supportsReasoning")) m.optBoolean("supportsReasoning") else null
-            val interleavedReasoningField = m.optString("interleavedReasoningField", "").ifEmpty { null }
-            // [T-provider-export-model-overrides] Restore baseModel
-            // modalities. Android-native list fields win when present;
-            // otherwise fall back to iOS's `modalityOverride` bitfield so
-            // a provider exported on iOS retains its capability info.
-            val (baseIn, baseOut) = readModalitiesWithBitfieldFallback(m)
-            val model = LLMModel(
-                id = modelId,
-                displayName = displayName,
-                provider = providerType.displayName,
-                contextWindow = contextWindow,
-                maxOutputTokens = maxOutputTokens,
-                supportsReasoning = supportsReasoning,
-                interleavedReasoningField = interleavedReasoningField,
-                inputModalities = baseIn,
-                outputModalities = baseOut,
-            )
-            val overridesObj = m.optJSONObject("overrides")
-            val overrides = if (overridesObj != null) {
-                // [T-provider-export-model-overrides] Read the full
-                // overrides layer. Each key is read independently — a
-                // missing key (old export, partial object) simply stays
-                // null → the field falls back to baseModel / defaults.
-                val (ovIn, ovOut) = readModalitiesWithBitfieldFallback(overridesObj)
-                ModelOverrides(
-                    displayName = overridesObj.optString("displayName", "").ifEmpty { null },
-                    maxOutputTokens = if (overridesObj.has("maxOutputTokens")) overridesObj.optInt("maxOutputTokens").takeIf { it > 0 } else null,
-                    contextWindow = if (overridesObj.has("contextWindow")) overridesObj.optInt("contextWindow").takeIf { it > 0 } else null,
-                    supportsReasoning = if (overridesObj.has("supportsReasoning")) overridesObj.optBoolean("supportsReasoning") else null,
-                    inputModalities = ovIn,
-                    outputModalities = ovOut,
-                )
-            } else {
-                ModelOverrides()
-            }
-            entries.add(ModelEntry(
-                providerInstanceId = instanceId,
-                baseModel = model,
-                overrides = overrides,
-                isCustom = isCustom,
-                isHidden = isHidden,
-            ))
-        }
-        return entries
-    }
-
-    /**
-     * [T-backup-dedup] Restore a provider onto an install that already has it.
-     *
-     * The old backup import appended unconditionally: [importInstanceJSON]
-     * renames on label conflict, so restoring onto a non-empty install
-     * produced "OpenAI (2)" duplicates, and model groups referencing the
-     * original entries were remapped onto the freshly minted copies. This
-     * method instead *merges* into the existing instance when its
-     * (providerType, label) matches the export:
-     *   - the existing instance id is kept, so groups / defaults referencing
-     *     the backup's entries remap onto the live instance;
-     *   - models are upserted by baseModel.id: models the existing instance
-     *     lacks are added, models it already has are reused as-is (the local
-     *     overrides / customizations win);
-     *   - credentials (apiKey / OAuth / base URL) are deliberately NOT
-     *     touched — an instance that already exists on this device is presumed
-     *     to be the one in use, and silently swapping its key or endpoint on
-     *     restore would be worse than a duplicate label.
-     *
-     * @param srcEntryIds the backup-layer `_entryIds` annotation, positionally
-     *   paired with the `models` array (same visible-then-hidden order as
-     *   [exportInstanceJSON] emits). Used only to build the returned id map.
-     * @return the resolved (existing) instance id and a map of source entry id
-     *   → entry id on this install (existing or newly added); null when the
-     *   JSON is unparseable or no matching instance exists — the caller then
-     *   falls back to the classic append path.
-     */
-    /**
-     * [T-backup-dedup] Merge an exported provider JSON into the existing
-     * instance with the same (type, label), returning its id and a source
-     * entry id → restored entry id map. @param applyCredentials: when true
-     * (manual full restore — ConfigBackup passes !isSyncMerge) the backup's
-     * credentials (apiKey / OAuth / Gemini account) are written onto the
-     * existing instance instead of being deliberately left untouched; the
-     * sync-merge path keeps local credentials.
-     */
-    fun mergeImportInstanceJSON(
-        jsonStr: String,
-        srcEntryIds: List<String>,
-        applyCredentials: Boolean = false,
-    ): Pair<String, Map<String, String>>? {
-        ensureConfigLoaded()
-        val dict = try { JSONObject(jsonStr) } catch (_: Exception) { return null }
-        val providerTypeRaw = dict.optString("providerType", "").ifEmpty { return null }
-        val providerType = try { ProviderType.valueOf(providerTypeRaw) } catch (_: Exception) { return null }
-        val label = dict.optString("label", "").ifEmpty { return null }
-
-        val existing = _config.value.instances.firstOrNull {
-            it.providerType == providerType && it.label == label
-        } ?: return null
-
-        // [T-backup-restore-credentials] A full manual restore must bring the
-        // backup's keys with it even when the provider already exists under
-        // the same label; the sync merge deliberately keeps local secrets.
-        if (applyCredentials) {
-            importInstanceCredentials(dict, existing)
-        }
 
         val entries = parseImportedModelEntries(dict, existing.id)
         val entryMap = HashMap<String, String>()
@@ -2424,10 +2176,8 @@ class ProviderRepository(private val context: Context) {
  *  so refresh feedback (spinner → toast) can distinguish success source,
  *  no-key, and fallback. Added [provider-mgmt-opt]. */
 enum class ModelRefreshResult {
-    /** Live provider /v1/models (or OpenAI OAuth / switching provider) succeeded. */
+    /** Live provider /v1/models succeeded. */
     SUCCESS_API,
-    /** OAuth static model list (Codex) succeeded. */
-    SUCCESS_OAUTH,
     /** No live API results; used the models.dev registry by hostname. May be approximate. */
     SUCCESS_MODELS_DEV,
     /** No API key configured and no models.dev match — nothing loaded. */
