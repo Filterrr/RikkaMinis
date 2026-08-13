@@ -234,15 +234,15 @@ class BrowserUtilTest {
     // ── cookieNumber ───────────────────────────────────────────────────────
 
     @Test fun `cookieNumber int value`() {
-        assertEquals(123.0, cookieNumber(mapOf("expires" to 123), "expires"), 0.001)
+        assertEquals(123.0, cookieNumber(mapOf("expires" to 123), "expires")!!, 0.001)
     }
 
     @Test fun `cookieNumber double value`() {
-        assertEquals(123.45, cookieNumber(mapOf("expires" to 123.45), "expires"), 0.001)
+        assertEquals(123.45, cookieNumber(mapOf("expires" to 123.45), "expires")!!, 0.001)
     }
 
     @Test fun `cookieNumber numeric string`() {
-        assertEquals(123.0, cookieNumber(mapOf("expires" to "123"), "expires"), 0.001)
+        assertEquals(123.0, cookieNumber(mapOf("expires" to "123"), "expires")!!, 0.001)
     }
 
     @Test fun `cookieNumber non-numeric string returns null`() {
@@ -254,6 +254,6 @@ class BrowserUtilTest {
     }
 
     @Test fun `cookieNumber alias matching`() {
-        assertEquals(100.0, cookieNumber(mapOf("expirationDate" to 100.0), "expires", "expirationDate"), 0.001)
+        assertEquals(100.0, cookieNumber(mapOf("expirationDate" to 100.0), "expires", "expirationDate")!!, 0.001)
     }
 }
