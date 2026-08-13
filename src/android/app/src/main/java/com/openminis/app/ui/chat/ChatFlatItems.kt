@@ -708,11 +708,24 @@ internal fun buildFlatChatItems(
         // row is emitted exactly once, at the first tool, and covers the rest.
         val firstToolIndex = blocks.indexOfFirst { it.kind == "tool_use" }
 
+        // ─────────────────────────────────────────────────────────────────
+        // [T-android-process-below-answer] Emit the rows of one assistant
+        // message in a FIXED order regardless of the order the model produced
+        // the blocks in (models typically stream thinking → tool calls →
+        // final answer, which put the two collapsed bars — thinking + tool
+        // run — ABOVE the answer text; with a long answer they got pushed up
+        // and off the bottom of the viewport). Order here is: answer text
+        // first, then the merged thinking bar, then the collapsed tool-run
+        // bar, then info rows — so the two bars always sit BELOW the answer.
+        // The merge semantics are unchanged (all thinking blocks of one
+        // message collapse into a single bar; >= 2 tool_use blocks collapse
+        // into one "N tools" run card); only the relative row order moves.
+        //
+        // Pass 1 — text blocks (the answer), in model order.
         blocks.forEachIndexed { index, block ->
-            when (block.kind) {
-                "text" -> {
-                    if (block.content.isNotEmpty()) {
-                        val isLastText = index == lastTextIdx
+            if (block.kind != "text") return@forEachIndexed
+            if (block.content.isNotEmpty()) {
+                val isLastText = index == lastTextIdx
                         // Pattern A: split this text block's content into
                         // independent markdown fragments so each becomes its
                         // own LazyColumn item. Frozen prefix fragments are
@@ -794,72 +807,69 @@ internal fun buildFlatChatItems(
                         }
                     }
                 }
-                "thinking" -> {
-                    // Merge ALL thinking blocks of the same message into one
-                    // FlatChatItem — not just consecutive ones. A text or
-                    // tool_use block between two thinking blocks no longer
-                    // creates a separate thinking item. Traverses backwards
-                    // to find the last AssistantThinking for this message.
-                    val lastThinkingIdx = out.indexOfLast {
-                        it is FlatChatItem.AssistantThinking && it.messageId == message.id
-                    }
-                    if (lastThinkingIdx >= 0) {
-                        val lastThinking = out[lastThinkingIdx] as FlatChatItem.AssistantThinking
-                        val mergedBlock = lastThinking.block.copy(
-                            content = lastThinking.block.content + "\n" + block.content
-                        )
-                        out[lastThinkingIdx] = lastThinking.copy(
-                            block = mergedBlock,
-                            isLast = block.id == lastThinkingId,
-                            isLastBlockOverall = block.id == lastBlockId,
-                        )
-                    } else {
-                        out.add(dedupe(FlatChatItem.AssistantThinking(
-                            messageId = message.id,
-                            block = block,
-                            isLast = block.id == lastThinkingId,
-                            messageIsStreaming = message.isStreaming,
-                            messageThinkingLevel = message.thinkingLevel,
-                            isLastBlockOverall = block.id == lastBlockId,
-                        )))
-                    }
-                }
-                "info" -> out.add(dedupe(FlatChatItem.AssistantInfo(
+                // Pass 2 — thinking blocks: merged into a single collapsed bar. The
+        // merge previously interleaved with text/tool rows in model order; it
+        // now runs after ALL text rows so the collapsed thinking bar sits
+        // BELOW the answer. Semantics unchanged: every thinking block of the
+        // message folds into ONE AssistantThinking item; isLast /
+        // isLastBlockOverall end up reflecting the LAST thinking block, same
+        // result as the old out.indexOfLast merge.
+        var mergedThinking: FlatChatItem.AssistantThinking? = null
+        blocks.forEach { block ->
+            if (block.kind != "thinking") return@forEach
+            mergedThinking = mergedThinking?.let { prev ->
+                prev.copy(
+                    block = prev.block.copy(
+                        content = prev.block.content + "\n" + block.content
+                    ),
+                    isLast = block.id == lastThinkingId,
+                    isLastBlockOverall = block.id == lastBlockId,
+                )
+            } ?: FlatChatItem.AssistantThinking(
+                messageId = message.id,
+                block = block,
+                isLast = block.id == lastThinkingId,
+                messageIsStreaming = message.isStreaming,
+                messageThinkingLevel = message.thinkingLevel,
+                isLastBlockOverall = block.id == lastBlockId,
+            )
+        }
+        mergedThinking?.let { out.add(dedupe(it)) }
+
+        // Pass 3 — tool_use blocks: one collapsed "N tools" run card when the
+        // message has >= 2 tool_use blocks, a plain pill otherwise. Emitted
+        // once, covering every tool_use block of this message. Moved AFTER
+        // text + thinking so the collapsed run bar anchors the message tail.
+        if (firstToolIndex >= 0) {
+            if (toolPillBlocks.size >= 2) {
+                out.add(dedupe(FlatChatItem.AssistantToolRunGroup(
+                    messageId = message.id,
+                    tools = toolPillBlocks,
+                    isRunning = toolPillBlocks.any {
+                        it.toolStatus == ToolBlockStatus.STREAMING ||
+                            it.toolStatus == ToolBlockStatus.PENDING ||
+                            it.toolStatus == ToolBlockStatus.RUNNING
+                    },
+                    isLastCancelled = lastCancelledToolId != null &&
+                        lastCancelledToolId == toolPillBlocks.lastOrNull()?.id,
+                )))
+            } else {
+                out.add(dedupe(FlatChatItem.AssistantToolUse(
+                    messageId = message.id,
+                    block = toolPillBlocks.first(),
+                    allToolBlocks = toolPillBlocks,
+                    isLastCancelled = toolPillBlocks.first().id == lastCancelledToolId,
+                )))
+            }
+        }
+
+        // Pass 4 — info blocks (inline system notices), in model order.
+        blocks.forEach { block ->
+            if (block.kind == "info") {
+                out.add(dedupe(FlatChatItem.AssistantInfo(
                     messageId = message.id,
                     block = block,
                 )))
-                else -> {
-                    // [T-android-tool-run-collapse] Group >= 2 tool_use blocks
-                    // of one message into a single collapsible row. Single
-                    // tool stays a plain pill (no folding overhead for the
-                    // common one-shot case). isRunning derives from live
-                    // statuses — purely a UI fold, data layer untouched.
-                    // Emitted ONCE at the first tool_use block; subsequent
-                    // tool_use blocks of this message fall through to nothing
-                    // (their pills live inside the group).
-                    if (index == firstToolIndex) {
-                        if (toolPillBlocks.size >= 2) {
-                            out.add(dedupe(FlatChatItem.AssistantToolRunGroup(
-                                messageId = message.id,
-                                tools = toolPillBlocks,
-                                isRunning = toolPillBlocks.any {
-                                    it.toolStatus == ToolBlockStatus.STREAMING ||
-                                        it.toolStatus == ToolBlockStatus.PENDING ||
-                                        it.toolStatus == ToolBlockStatus.RUNNING
-                                },
-                                isLastCancelled = lastCancelledToolId != null &&
-                                    lastCancelledToolId == toolPillBlocks.lastOrNull()?.id,
-                            )))
-                        } else {
-                            out.add(dedupe(FlatChatItem.AssistantToolUse(
-                                messageId = message.id,
-                                block = block,
-                                allToolBlocks = toolPillBlocks,
-                                isLastCancelled = block.id == lastCancelledToolId,
-                            )))
-                        }
-                    }
-                }
             }
         }
 
