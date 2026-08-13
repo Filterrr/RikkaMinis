@@ -204,8 +204,11 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -869,17 +872,27 @@ internal fun rememberBrowserLiveSnapshot(
     // browserSnapshot on imageFilePath change, achieving the same result).
     if (!isLive) return null
     val tabPool = LocalBrowserTabPool.current ?: return null
+    val lifecycleOwner = LocalLifecycleOwner.current
     val snapshot by produceState<android.graphics.Bitmap?>(
         initialValue = null,
         block.id,
         tabPool,
+        lifecycleOwner,
     ) {
-        val first = tabPool.activeManager?.captureLiveSnapshot()
-        if (first != null) value = first
-        while (true) {
-            kotlinx.coroutines.delay(intervalMs)
-            val next = tabPool.activeManager?.captureLiveSnapshot() ?: continue
-            value = next
+        // [T-ui-lifecycle-polling] Gate the 3s WebView capture loop behind
+        // STARTED: while the app is backgrounded (below STARTED) the loop is
+        // cancelled and no frames are captured; returning to the foreground
+        // restarts it automatically. repeatOnLifecycle keeps the produceState
+        // coroutine alive across backgrounding — only the inner polling loop
+        // suspends/cancels.
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            val first = tabPool.activeManager?.captureLiveSnapshot()
+            if (first != null) value = first
+            while (true) {
+                kotlinx.coroutines.delay(intervalMs)
+                val next = tabPool.activeManager?.captureLiveSnapshot() ?: continue
+                value = next
+            }
         }
     }
     return snapshot
