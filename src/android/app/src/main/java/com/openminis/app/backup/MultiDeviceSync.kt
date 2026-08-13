@@ -174,12 +174,18 @@ object MultiDeviceSync {
         }
 
         // (2) Export the local light state and push it (with retention prune).
-        val payload = exportSyncPayload(
-            providerRepo = providerRepo,
-            envVarRepo = envVarRepo,
-            memoryRepo = memoryRepo,
-            includeSecrets = includeSecrets,
-        )
+        // Export failure (e.g. payload over MAX_PAYLOAD_BYTES) must degrade
+        // gracefully — never crash the foreground-triggered coroutine.
+        val payload = runCatching {
+            exportSyncPayload(
+                providerRepo = providerRepo,
+                envVarRepo = envVarRepo,
+                memoryRepo = memoryRepo,
+                includeSecrets = includeSecrets,
+            )
+        }.getOrElse {
+            return "export-failed: ${it.message}"
+        }
         return try {
             val name = pushSyncPayload(config, payload, client)
             "pushed: $name"

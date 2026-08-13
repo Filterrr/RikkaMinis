@@ -379,7 +379,7 @@ object ConfigBackup {
             }
         }
 
-        return JSONObject().apply {
+        val payload = JSONObject().apply {
             put("format", "openminis.config.backup")
             put("version", FORMAT_VERSION)
             put("createdAt", System.currentTimeMillis())
@@ -395,6 +395,20 @@ object ConfigBackup {
             put("chatMessages", chatMessages)
             if (readFailures > 0) put("readFailures", readFailures)
         }.toString(2)
+
+        // [T-backup-export-size-cap] Enforce the same ceiling on the export
+        // side that import already checks (MAX_PAYLOAD_BYTES). The doc
+        // comment on the constant claimed "export refuses to build beyond
+        // this", but nothing actually did — a giant payload (many chat
+        // sessions / huge memory files / large skills) could still be built
+        // and then OOM the import side on the receiving device. Refusing
+        // here keeps the failure local and actionable.
+        if (payload.length > MAX_PAYLOAD_BYTES) {
+            throw IllegalStateException(
+                "Backup too large (${payload.length} chars, max $MAX_PAYLOAD_BYTES)",
+            )
+        }
+        return payload
     }
 
     /**
