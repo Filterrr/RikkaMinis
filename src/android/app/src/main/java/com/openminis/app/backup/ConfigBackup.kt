@@ -939,57 +939,21 @@ object ConfigBackup {
         }
 
         // -- Stage 8: chat history (session metadata + text-only parts) --
-        // Sessions go in first — messages reference them via FK. REPLACE
-        // conflict strategy makes re-imports idempotent. Message ids are
-        // preserved so later references to a restored session stay valid.
+        // Sessions go in first — messages reference them via FK. Insertion is
+        // existence-guarded so re-imports are truly idempotent: an existing
+        // session row is kept as-is (its title / pin / updatedAt must not be
+        // clobbered by an older backup), and an existing message is kept
+        // (the local copy is the full version — backups carry sanitized /
+        // truncated parts). Message ids are preserved so later references to
+        // a restored session stay valid. Logic lives in [importChatSections]
+        // (unit-testable); Stage 8 only feeds it the parsed arrays.
         val chatSessionsArr = root.optJSONArray("chatSessions")
         val chatMessagesArr = root.optJSONArray("chatMessages")
         if (chatSessionsArr != null && chatRepo != null) {
-            for (i in 0 until chatSessionsArr.length()) {
-                val s = chatSessionsArr.optJSONObject(i) ?: continue
-                val label = s.optString("title", "session #${i + 1}").ifEmpty { "session #${i + 1}" }
-                try {
-                    val session = ChatSessionEntity(
-                        id = s.optString("id"),
-                        title = s.optString("title").ifEmpty { null },
-                        modelId = s.optString("modelId"),
-                        createdAt = s.optLong("createdAt"),
-                        updatedAt = s.optLong("updatedAt"),
-                        category = s.optString("category").ifEmpty { null },
-                        lastMessage = s.optString("lastMessage").ifEmpty { null },
-                        modelBinding = s.optString("modelBinding").ifEmpty { null },
-                        source = s.optString("source").ifEmpty { null },
-                        memoryEnabled = s.optInt("memoryEnabled", 1),
-                        pinnedAt = if (s.has("pinnedAt")) s.optLong("pinnedAt") else null,
-                        editCount = s.optInt("editCount", 0),
-                        thinkingOverride = if (s.has("thinkingOverride")) s.optString("thinkingOverride") else null,
-                    )
-                    chatRepo.dao.insertSession(session)
-                    chatSessionsImported++
-                } catch (t: Throwable) {
-                    skipped.add("chat session \"$label\": ${t.message ?: "import failed"}")
-                }
-            }
-            if (chatMessagesArr != null) {
-                for (i in 0 until chatMessagesArr.length()) {
-                    val m = chatMessagesArr.optJSONObject(i) ?: continue
-                    try {
-                        val message = MessageEntity(
-                            id = m.optString("id"),
-                            sessionId = m.optString("sessionId"),
-                            role = m.optString("role"),
-                            partsJson = m.optString("partsJson"),
-                            createdAt = m.optLong("createdAt"),
-                            sortOrder = m.optInt("sortOrder", i),
-                            reasoningContent = if (m.has("reasoningContent")) m.optString("reasoningContent") else null,
-                        )
-                        chatRepo.dao.insertMessage(message)
-                        chatMessagesImported++
-                    } catch (t: Throwable) {
-                        skipped.add("chat message #${i + 1}: ${t.message ?: "import failed"}")
-                    }
-                }
-            }
+            val (sessionsImported, messagesImported) =
+                importChatSections(chatRepo, chatSessionsArr, chatMessagesArr, skipped)
+            chatSessionsImported += sessionsImported
+            chatMessagesImported += messagesImported
         } else if (chatSessionsArr != null && chatSessionsArr.length() > 0 && chatRepo == null) {
             skipped.add("${chatSessionsArr.length()} chat session(s): not restorable here")
         }
@@ -1207,6 +1171,78 @@ object ConfigBackup {
  */
 internal fun isCatalogCacheModel(isHidden: Boolean, isCustom: Boolean): Boolean =
     isHidden && !isCustom
+
+/**
+ * [T-backup-chat-idempotent] Existence-guarded chat restore used by
+ * ConfigBackup Stage 8. Sessions are inserted only when absent (an existing
+ * row keeps its title / pin / updatedAt — re-importing an older backup must
+ * not clobber local metadata), and messages are inserted only when absent
+ * (the local copy is the full version; backups carry sanitized / truncated
+ * parts). This makes restore a true idempotent merge: first restore brings
+ * everything, later restores fill only the gaps. Returns
+ * (sessionsImported, messagesImported); per-item failures go to [skipped].
+ */
+internal suspend fun importChatSections(
+    chatRepo: ChatRepository,
+    chatSessionsArr: JSONArray?,
+    chatMessagesArr: JSONArray?,
+    skipped: MutableList<String>,
+): Pair<Int, Int> {
+    var chatSessionsImported = 0
+    var chatMessagesImported = 0
+    if (chatSessionsArr != null) {
+        for (i in 0 until chatSessionsArr.length()) {
+            val s = chatSessionsArr.optJSONObject(i) ?: continue
+            val label = s.optString("title", "session #${i + 1}").ifEmpty { "session #${i + 1}" }
+            try {
+                val session = ChatSessionEntity(
+                    id = s.optString("id"),
+                    title = s.optString("title").ifEmpty { null },
+                    modelId = s.optString("modelId"),
+                    createdAt = s.optLong("createdAt"),
+                    updatedAt = s.optLong("updatedAt"),
+                    category = s.optString("category").ifEmpty { null },
+                    lastMessage = s.optString("lastMessage").ifEmpty { null },
+                    modelBinding = s.optString("modelBinding").ifEmpty { null },
+                    source = s.optString("source").ifEmpty { null },
+                    memoryEnabled = s.optInt("memoryEnabled", 1),
+                    pinnedAt = if (s.has("pinnedAt")) s.optLong("pinnedAt") else null,
+                    editCount = s.optInt("editCount", 0),
+                    thinkingOverride = if (s.has("thinkingOverride")) s.optString("thinkingOverride") else null,
+                )
+                if (chatRepo.dao.getSession(session.id) == null) {
+                    chatRepo.dao.insertSession(session)
+                    chatSessionsImported++
+                }
+            } catch (t: Throwable) {
+                skipped.add("chat session \"$label\": ${t.message ?: "import failed"}")
+            }
+        }
+    }
+    if (chatMessagesArr != null) {
+        for (i in 0 until chatMessagesArr.length()) {
+            val m = chatMessagesArr.optJSONObject(i) ?: continue
+            try {
+                val message = MessageEntity(
+                    id = m.optString("id"),
+                    sessionId = m.optString("sessionId"),
+                    role = m.optString("role"),
+                    partsJson = m.optString("partsJson"),
+                    createdAt = m.optLong("createdAt"),
+                    sortOrder = m.optInt("sortOrder", i),
+                    reasoningContent = if (m.has("reasoningContent")) m.optString("reasoningContent") else null,
+                )
+                if (chatRepo.dao.getMessage(message.id) == null) {
+                    chatRepo.dao.insertMessage(message)
+                    chatMessagesImported++
+                }
+            } catch (t: Throwable) {
+                skipped.add("chat message #${i + 1}: ${t.message ?: "import failed"}")
+            }
+        }
+    }
+    return chatSessionsImported to chatMessagesImported
+}
 
 /**
  * [T-sync-merge-guard] On a multi-device auto-sync merge, strongly per-device
