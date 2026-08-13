@@ -1188,4 +1188,5 @@
     <string name="common_loading">Laden…</string>
     <string name="rootfs_reset_button">Zurücksetzen</string>
     <string name="session_title_label">Titel</string>
+    <string name="backup_import_too_large">Backupdatei ist zu groß (%1$d MB, max. %2$d MB) – es wurde nichts importiert.</string>
 </resources>

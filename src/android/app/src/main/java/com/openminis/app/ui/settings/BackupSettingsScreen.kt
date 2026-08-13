@@ -337,6 +337,31 @@ fun BackupSettingsScreen(
     ) { uri: Uri? ->
         if (uri == null) return@rememberLauncherForActivityResult
         try {
+            // [T-backup-import-memory] Reject oversized files BEFORE pulling
+            // them into memory. The exact char-count check (MAX_PAYLOAD_BYTES)
+            // inside ConfigBackup.import only runs after the whole file has
+            // been read into a String (UTF-16 doubles the allocation) and a
+            // full pre-restore snapshot export has been built — an OOM window
+            // for large backups. Byte size is a conservative bound (chars ≤
+            // bytes for UTF-8), so a file that passes here still gets the
+            // exact char check during import.
+            val sizeBytes = context.contentResolver.query(
+                uri, arrayOf(android.provider.OpenableColumns.SIZE), null, null, null,
+            )?.use { c ->
+                if (c.moveToFirst()) {
+                    val idx = c.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                    if (idx >= 0 && !c.isNull(idx)) c.getLong(idx) else null
+                } else null
+            }
+            if (sizeBytes != null &&
+                sizeBytes > com.openminis.app.backup.ConfigBackup.MAX_PAYLOAD_BYTES
+            ) {
+                val mb = sizeBytes / (1024 * 1024)
+                val maxMb = com.openminis.app.backup.ConfigBackup.MAX_PAYLOAD_BYTES / (1024 * 1024)
+                throw IllegalStateException(
+                    context.getString(R.string.backup_import_too_large, mb, maxMb),
+                )
+            }
             val json = context.contentResolver.openInputStream(uri)
                 ?.bufferedReader()?.readText()
                 ?: throw IllegalStateException(errRead)

@@ -1512,4 +1512,5 @@
     <string name="common_loading">加载中…</string>
     <string name="rootfs_reset_button">重置</string>
     <string name="session_title_label">标题</string>
+    <string name="backup_import_too_large">备份文件太大（%1$d MB，上限 %2$d MB）— 未导入任何内容。</string>
 </resources>

@@ -1187,4 +1187,5 @@
     <string name="common_loading">로딩 중…</string>
     <string name="rootfs_reset_button">초기화</string>
     <string name="session_title_label">제목</string>
+    <string name="backup_import_too_large">백업 파일이 너무 큽니다(%1$d MB, 최대 %2$d MB). 아무것도 가져오지 않았습니다.</string>
 </resources>
