@@ -216,11 +216,10 @@ class ExecutionCoordinatorSchedulerTest {
     }
 
     @Test
-    fun `severe phase rejects only leaky commands`() {
+    fun `severe phase rejects nothing since model calls are isolated`() {
         assertNull(preExecRejectionMessage(ShellPhase.SEVERE, CommandClass.LIGHT, 110))
         assertNull(preExecRejectionMessage(ShellPhase.SEVERE, CommandClass.HEAVY, 110))
-        val msg = preExecRejectionMessage(ShellPhase.SEVERE, CommandClass.LEAKY, 110)
-        assertTrue(msg != null && msg.contains("model calls"))
+        assertNull(preExecRejectionMessage(ShellPhase.SEVERE, CommandClass.LEAKY, 110))
     }
 
     @Test
