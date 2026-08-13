@@ -161,9 +161,6 @@ object ModelExecutionDispatcher {
                     } catch (e: Exception) {
                         Log.w(TAG, "read result failed: ${e.message}")
                         null
-                        null
-                        null
-                        null
                     }
                 }
                 delay(POLL_INTERVAL_MS)
