@@ -19,50 +19,6 @@ object OpenAIModelsApi {
     private val client = OkHttpClient()
     private val cache = ProviderModelsCache("openai")
 
-    /**
-     * Static model list for Codex OAuth (tokens can't call /v1/models).
-     * Matches iOS `LLMModel.allOpenAICodexOAuth` (Providers/LLMTypes.swift).
-     * Order is preserved so the model picker shows the same default rank.
-     */
-    // T119: every GPT-5.x model on Codex OAuth supports reasoning_effort
-    // (`/v1/responses` requires the `reasoning` object on this auth path),
-    // so set supportsReasoning = true up front. Without it the Thinking
-    // pill in chat is disabled and the user can't pick low/medium/high.
-    fun fetchModelsOAuth(): List<LLMModel> = listOf(
-        // [T-android-thinking-level-arch] GPT-5.6 family — Codex OAuth only
-        // (not in LLMModel.allOpenAI, matching iOS). sol/terra reach ULTRA,
-        // luna reaches MAX (see ThinkingLevelCatalog).
-        LLMModel("gpt-5.6-sol", "GPT-5.6 Sol", "OpenAI", supportsReasoning = true),
-        LLMModel("gpt-5.6-terra", "GPT-5.6 Terra", "OpenAI", supportsReasoning = true),
-        LLMModel("gpt-5.6-luna", "GPT-5.6 Luna", "OpenAI", supportsReasoning = true),
-        LLMModel("gpt-5.5", "GPT-5.5", "OpenAI", supportsReasoning = true),
-        LLMModel("gpt-5.4", "GPT-5.4", "OpenAI", supportsReasoning = true),
-        LLMModel("gpt-5.3-codex", "GPT-5.3 Codex", "OpenAI", supportsReasoning = true),
-        LLMModel("gpt-5.3-codex-spark", "GPT-5.3 Codex Spark", "OpenAI", supportsReasoning = true),
-        LLMModel("gpt-5-codex-mini", "GPT-5 Codex Mini", "OpenAI", supportsReasoning = true),
-        LLMModel("gpt-5.2", "GPT-5.2", "OpenAI", supportsReasoning = true),
-        LLMModel("gpt-5.3", "GPT-5.3", "OpenAI", supportsReasoning = true),
-        LLMModel("gpt-5", "GPT-5", "OpenAI", supportsReasoning = true),
-    ).let {
-        AppLogger.info(TAG, "Codex OAuth model list (${it.size} models): ${it.joinToString { m -> m.id }}")
-        ModelsDevApi.enrichModels(it)
-    } + listOf(
-        // [T-codex-gpt-image2-oauth-android] Special image-generation model on
-        // the Codex OAuth path. Appended AFTER enrichModels so its declared
-        // image input/output modalities survive (models.dev doesn't know it).
-        // It does NOT take the normal Chat Completions / Responses path — the
-        // gpt-image-2 branch in OpenAIProvider routes it through the Codex
-        // image_generation tool. Additive only: the GPT-5.x entries above and
-        // their existing OAuth flow are unchanged.
-        LLMModel(
-            id = "gpt-image-2",
-            displayName = "GPT Image 2",
-            provider = "OpenAI",
-            inputModalities = listOf("text", "image"),
-            outputModalities = listOf("image"),
-        ),
-    )
-
     // Chat-capable model prefixes (matching iOS)
     private val chatPrefixes = listOf("gpt-", "o1", "o3", "o4-", "codex-", "chatgpt-")
 
