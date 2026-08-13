@@ -2068,6 +2068,133 @@ class ProviderRepository(private val context: Context) {
             saveApiKey(instance.id, apiKey)
         }
 
+    }
+
+    /**
+     * [T-backup-dedup] Parse the `models` array of an exported provider JSON
+     * into [ModelEntry]s bound to [instanceId]. Shared by [importInstanceJSON]
+     * (which replaces the instance's entries wholesale) and
+     * [mergeImportInstanceJSON] (which upserts models missing from an existing
+     * instance). Returns an empty list when the payload carries no models.
+     */
+    private fun parseImportedModelEntries(dict: JSONObject, instanceId: String): List<ModelEntry> {
+        val models = dict.optJSONArray("models") ?: return emptyList()
+        val providerTypeRaw = dict.optString("providerType", "").ifEmpty { return emptyList() }
+        val providerType = try { ProviderType.valueOf(providerTypeRaw) } catch (_: Exception) { return emptyList() }
+        val entries = mutableListOf<ModelEntry>()
+        for (i in 0 until models.length()) {
+            val m = models.getJSONObject(i)
+            val modelId = m.optString("modelId", "")
+            if (modelId.isEmpty()) continue
+            val displayName = m.optString("displayName", modelId)
+            val isCustom = m.optBoolean("isCustom", false)
+            val isHidden = m.optBoolean("isHidden", false)
+            val contextWindow = if (m.has("contextWindow")) m.optInt("contextWindow").takeIf { it > 0 } else null
+            val maxOutputTokens = if (m.has("maxOutputTokens")) m.optInt("maxOutputTokens").takeIf { it > 0 } else null
+            val supportsReasoning = if (m.has("supportsReasoning")) m.optBoolean("supportsReasoning") else null
+            val interleavedReasoningField = m.optString("interleavedReasoningField", "").ifEmpty { null }
+            // [T-provider-export-model-overrides] Restore baseModel
+            // modalities. Android-native list fields win when present;
+            // otherwise fall back to iOS's `modalityOverride` bitfield so
+            // a provider exported on iOS retains its capability info.
+            val (baseIn, baseOut) = readModalitiesWithBitfieldFallback(m)
+            val model = LLMModel(
+                id = modelId,
+                displayName = displayName,
+                provider = providerType.displayName,
+                contextWindow = contextWindow,
+                maxOutputTokens = maxOutputTokens,
+                supportsReasoning = supportsReasoning,
+                interleavedReasoningField = interleavedReasoningField,
+                inputModalities = baseIn,
+                outputModalities = baseOut,
+            )
+            val overridesObj = m.optJSONObject("overrides")
+            val overrides = if (overridesObj != null) {
+                // [T-provider-export-model-overrides] Read the full
+                // overrides layer. Each key is read independently — a
+                // missing key (old export, partial object) simply stays
+                // null → the field falls back to baseModel / defaults.
+                val (ovIn, ovOut) = readModalitiesWithBitfieldFallback(overridesObj)
+                ModelOverrides(
+                    displayName = overridesObj.optString("displayName", "").ifEmpty { null },
+                    maxOutputTokens = if (overridesObj.has("maxOutputTokens")) overridesObj.optInt("maxOutputTokens").takeIf { it > 0 } else null,
+                    contextWindow = if (overridesObj.has("contextWindow")) overridesObj.optInt("contextWindow").takeIf { it > 0 } else null,
+                    supportsReasoning = if (overridesObj.has("supportsReasoning")) overridesObj.optBoolean("supportsReasoning") else null,
+                    inputModalities = ovIn,
+                    outputModalities = ovOut,
+                )
+            } else {
+                ModelOverrides()
+            }
+            entries.add(ModelEntry(
+                providerInstanceId = instanceId,
+                baseModel = model,
+                overrides = overrides,
+                isCustom = isCustom,
+                isHidden = isHidden,
+            ))
+        }
+        return entries
+    }
+
+    /**
+     * [T-backup-dedup] Restore a provider onto an install that already has it.
+     *
+     * The old backup import appended unconditionally: [importInstanceJSON]
+     * renames on label conflict, so restoring onto a non-empty install
+     * produced "OpenAI (2)" duplicates, and model groups referencing the
+     * original entries were remapped onto the freshly minted copies. This
+     * method instead *merges* into the existing instance when its
+     * (providerType, label) matches the export:
+     *   - the existing instance id is kept, so groups / defaults referencing
+     *     the backup's entries remap onto the live instance;
+     *   - models are upserted by baseModel.id: models the existing instance
+     *     lacks are added, models it already has are reused as-is (the local
+     *     overrides / customizations win);
+     *   - credentials (apiKey / OAuth / base URL) are deliberately NOT
+     *     touched — an instance that already exists on this device is presumed
+     *     to be the one in use, and silently swapping its key or endpoint on
+     *     restore would be worse than a duplicate label.
+     *
+     * @param srcEntryIds the backup-layer `_entryIds` annotation, positionally
+     *   paired with the `models` array (same visible-then-hidden order as
+     *   [exportInstanceJSON] emits). Used only to build the returned id map.
+     * @return the resolved (existing) instance id and a map of source entry id
+     *   → entry id on this install (existing or newly added); null when the
+     *   JSON is unparseable or no matching instance exists — the caller then
+     *   falls back to the classic append path.
+     */
+    /**
+     * [T-backup-dedup] Merge an exported provider JSON into the existing
+     * instance with the same (type, label), returning its id and a source
+     * entry id → restored entry id map. @param applyCredentials: when true
+     * (manual full restore — ConfigBackup passes !isSyncMerge) the backup's
+     * credentials (apiKey / OAuth / Gemini account) are written onto the
+     * existing instance instead of being deliberately left untouched; the
+     * sync-merge path keeps local credentials.
+     */
+    fun mergeImportInstanceJSON(
+        jsonStr: String,
+        srcEntryIds: List<String>,
+        applyCredentials: Boolean = false,
+    ): Pair<String, Map<String, String>>? {
+        ensureConfigLoaded()
+        val dict = try { JSONObject(jsonStr) } catch (_: Exception) { return null }
+        val providerTypeRaw = dict.optString("providerType", "").ifEmpty { return null }
+        val providerType = try { ProviderType.valueOf(providerTypeRaw) } catch (_: Exception) { return null }
+        val label = dict.optString("label", "").ifEmpty { return null }
+
+        val existing = _config.value.instances.firstOrNull {
+            it.providerType == providerType && it.label == label
+        } ?: return null
+
+        // [T-backup-restore-credentials] A full manual restore must bring the
+        // backup's keys with it even when the provider already exists under
+        // the same label; the sync merge deliberately keeps local secrets.
+        if (applyCredentials) {
+            importInstanceCredentials(dict, existing)
+        }
 
         val entries = parseImportedModelEntries(dict, existing.id)
         val entryMap = HashMap<String, String>()
