@@ -3,7 +3,7 @@ package com.openminis.app.mcp.oauth
 import android.content.Context
 import android.net.Uri
 import androidx.browser.customtabs.CustomTabsIntent
-import com.openminis.app.auth.OAuthCallbackServer
+import com.openminis.app.mcp.oauth.OAuthCallbackServer
 import com.openminis.app.logging.AppLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine

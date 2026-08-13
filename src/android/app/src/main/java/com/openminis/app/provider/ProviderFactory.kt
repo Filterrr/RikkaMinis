@@ -141,7 +141,7 @@ object ProviderFactory {
                 // ⚠️ The `/v1` is load-bearing: /coding/chat/completions 404s;
                 // only /coding/v1/chat/completions works (verified live on iOS).
                 // Custom bases go through effectiveBaseURL's /v1-append logic.
-                val base = basePath ?: "${com.openminis.app.auth.KimiDeviceFlow.CODING_API_BASE}/v1"
+                val base = basePath ?: "${com.openminis.app.provider.KimiConstants.CODING_API_BASE}/v1"
                 val manualBearer = if (context != null &&
                     instance.credentialType == ProviderCredential.oauth) {
                     com.openminis.app.auth.OAuthManager.forInstance(context, instance)?.loadManualBearerToken()

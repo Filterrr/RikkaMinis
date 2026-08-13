@@ -1,6 +1,6 @@
 package com.openminis.app.provider
 
-import com.openminis.app.auth.KimiDeviceFlow
+import com.openminis.app.provider.KimiConstants
 import com.openminis.app.data.model.LLMModel
 import com.openminis.app.data.model.ProviderCredential
 import com.openminis.app.data.model.ProviderInstance
@@ -88,7 +88,7 @@ private object KimiModelListAdapter : ModelListProvider {
         // lineup shifts across generations, so the live list replaces the
         // minimal built-in fallback.
         if (apiKey == null) return emptyList()
-        val baseURL = instance.effectiveBaseURL ?: "${KimiDeviceFlow.CODING_API_BASE}/v1"
+        val baseURL = instance.effectiveBaseURL ?: "${KimiConstants.CODING_API_BASE}/v1"
         return OpenAIModelsApi.fetchModels(
             apiKey,
             baseURL,
