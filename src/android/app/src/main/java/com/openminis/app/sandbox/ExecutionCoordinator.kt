@@ -90,7 +90,7 @@ object ExecutionCoordinator {
     //   NORMAL    < 50MB   — full budget (30 commands)
     //   MILD      < 80MB   — budget halves (15)
     //   MODERATE  < 100MB  — budget shrinks hard (5); heavy commands recycle at 80+
-    //   SEVERE    < 120MB  — budget 2; leaky commands rejected up front
+    //   SEVERE    < 120MB  — budget 2 (leaky no longer rejected: model calls isolated)
     //   CRITICAL  < 350MB  — budget 1; heavy/leaky rejected up front
     //   LOCKED    ≥ 350MB  — everything rejected (old hard cap)
     // A shell idle this long is terminated to release its PRoot native
@@ -178,10 +178,12 @@ object ExecutionCoordinator {
         // Instead of a single 350MB cliff that freezes ALL commands (even
         // `true`), degrade by tier: at CRITICAL (≥120MB) block only heavy
         // and leaky commands — lightweight ones (ls/file_read) still work so
-        // the agent can self-recover; at SEVERE (≥100MB) block leaky model
-        // calls; only at LOCKED (≥350MB) is everything rejected, same as the
-        // old hard cap. Run GC before returning so the caller's next retry
-        // has a better chance.
+        // the agent can self-recover; only at LOCKED (≥350MB) is everything
+        // rejected, same as the old hard cap. SEVERE (≥100MB) no longer
+        // rejects LEAKY: model calls run in the isolated :modelservice
+        // process, so they no longer bloat this process's native heap.
+        // Run GC before returning so the caller's next retry has a better
+        // chance.
         val preExecNativeMB = Debug.getNativeHeapAllocatedSize() / (1024L * 1024L)
         val preExecPhase = internalDegradationPhase(preExecNativeMB)
         val cmdClass = classifyCommand(command)
@@ -713,7 +715,7 @@ internal fun internalShouldRetryCommand(
  *   NORMAL    < 50MB   — full budget
  *   MILD      < 80MB   — budget halves
  *   MODERATE  < 100MB  — budget shrinks hard
- *   SEVERE    < 120MB  — leaky commands rejected up front
+ *   SEVERE    < 120MB  — budget 2; no up-front class rejection (model calls isolated)
  *   CRITICAL  < 350MB  — heavy/leaky rejected up front
  *   LOCKED    ≥ 350MB  — everything rejected (old hard cap)
  */
@@ -817,9 +819,10 @@ internal fun preExecRejectionMessage(
         ShellPhase.CRITICAL -> if (cmdClass == CommandClass.LIGHT) null else
             "[System memory pressure: native heap ${nativeMB}MB — only lightweight commands allowed. " +
             "Please reduce concurrent sessions or wait for memory to recover.]"
-        ShellPhase.SEVERE -> if (cmdClass == CommandClass.LEAKY)
-            "[System memory pressure: native heap ${nativeMB}MB — model calls are temporarily unavailable. " +
-            "Please wait for memory to recover.]" else null
+        // Model calls now run in the isolated :modelservice process (file
+        // protocol), so they no longer bloat this process's native heap —
+        // SEVERE no longer needs to reject LEAKY commands up front.
+        ShellPhase.SEVERE -> null
         else -> null
     }
 }
