@@ -192,7 +192,7 @@ internal object SharedFolderRegistry {
             linuxPath = "/var/minis/shared",
             writable = true,
             icon = Icons.Outlined.Folder,
-            iconColor = ChatColors.link,
+            iconColor = Color(0xFF007AFF),
         ),
         SharedFolderEntry(
             id = "skills",

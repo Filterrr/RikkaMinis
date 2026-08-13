@@ -97,9 +97,9 @@ enum class MirrorCategory(
 
     val iconColor: Color
         get() = when (this) {
-            ALPINE -> ChatColors.link
-            PIP -> ChatColors.success
-            NPM -> ChatColors.error
+            ALPINE -> Color(0xFF007AFF)
+            PIP -> Color(0xFF34C759)
+            NPM -> Color(0xFFFF3B30)
         }
 }
 
