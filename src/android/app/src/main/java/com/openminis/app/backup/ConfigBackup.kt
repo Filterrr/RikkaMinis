@@ -543,7 +543,13 @@ object ConfigBackup {
                     // no more "OpenAI (2)" duplicates. The merge returns the
                     // source entry uuid → restored entry uuid map directly;
                     // otherwise fall back to the classic append-and-pair.
-                    val merged = providerRepo.mergeImportInstanceJSON(obj.toString(), srcEntryIds)
+                    // [T-backup-restore-credentials] A manual full restore
+                    // (isSyncMerge=false) applies the backup's credentials to
+                    // the existing instance; sync merges keep local secrets.
+                    val merged = providerRepo.mergeImportInstanceJSON(
+                        obj.toString(), srcEntryIds,
+                        applyCredentials = !isSyncMerge,
+                    )
                     val resolvedLabel: String?
                     if (merged != null) {
                         resolvedLabel = label

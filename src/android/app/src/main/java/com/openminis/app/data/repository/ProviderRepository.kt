@@ -2106,6 +2106,39 @@ class ProviderRepository(private val context: Context) {
         )
         addInstance(instance)
 
+        // Restore credentials (API key, manual OAuth bearer, structured OAuth
+        // login, Gemini account metadata) from the payload onto the new
+        // instance. Shared with the merge path (see [mergeImportInstanceJSON]
+        // applyCredentials) so a manual full restore applies keys even when the
+        // provider already exists under the same label.
+        importInstanceCredentials(dict, instance)
+
+        // Import models (replace built-in defaults)
+        val importedEntries = parseImportedModelEntries(dict, instance.id)
+        if (importedEntries.isNotEmpty()) {
+            // Import replaces built-in entries directly (not via replaceEntries which takes LLMModel list)
+            synchronized(configLock) {
+                val cfg = mutationSnapshot(_config.value)
+                cfg.modelEntries.removeAll { it.providerInstanceId == instance.id }
+                cfg.modelEntries.addAll(importedEntries)
+                saveConfig(cfg)
+            }
+        }
+
+        return resolvedLabel
+    }
+
+    /**
+     * [T-backup-restore-credentials] Apply the credential fields of an
+     * exported provider JSON onto [instance] (the instance id the credentials
+     * must be stored under — a fresh append or an existing merge target).
+     * Covers: apiKey, manualOAuthToken, structured oauthToken, and Gemini
+     * account email / GCP project. Shared by [importInstanceJSON] (always
+     * applies on append) and [mergeImportInstanceJSON] (applies only when
+     * applyCredentials=true, i.e. a manual full restore — see
+     * ConfigBackup.import's isSyncMerge gating).
+     */
+    private fun importInstanceCredentials(dict: JSONObject, instance: ProviderInstance) {
         // Decode API key (base64 or plain text)
         val keyValue = dict.optString("apiKey", "").ifEmpty { null }
         if (keyValue != null) {
@@ -2156,20 +2189,6 @@ class ProviderRepository(private val context: Context) {
                 mgr?.importOAuthString("gcp_project", project)
             }
         }
-
-        // Import models (replace built-in defaults)
-        val importedEntries = parseImportedModelEntries(dict, instance.id)
-        if (importedEntries.isNotEmpty()) {
-            // Import replaces built-in entries directly (not via replaceEntries which takes LLMModel list)
-            synchronized(configLock) {
-                val cfg = mutationSnapshot(_config.value)
-                cfg.modelEntries.removeAll { it.providerInstanceId == instance.id }
-                cfg.modelEntries.addAll(importedEntries)
-                saveConfig(cfg)
-            }
-        }
-
-        return resolvedLabel
     }
 
     /**
@@ -2267,7 +2286,20 @@ class ProviderRepository(private val context: Context) {
      *   JSON is unparseable or no matching instance exists — the caller then
      *   falls back to the classic append path.
      */
-    fun mergeImportInstanceJSON(jsonStr: String, srcEntryIds: List<String>): Pair<String, Map<String, String>>? {
+    /**
+     * [T-backup-dedup] Merge an exported provider JSON into the existing
+     * instance with the same (type, label), returning its id and a source
+     * entry id → restored entry id map. @param applyCredentials: when true
+     * (manual full restore — ConfigBackup passes !isSyncMerge) the backup's
+     * credentials (apiKey / OAuth / Gemini account) are written onto the
+     * existing instance instead of being deliberately left untouched; the
+     * sync-merge path keeps local credentials.
+     */
+    fun mergeImportInstanceJSON(
+        jsonStr: String,
+        srcEntryIds: List<String>,
+        applyCredentials: Boolean = false,
+    ): Pair<String, Map<String, String>>? {
         ensureConfigLoaded()
         val dict = try { JSONObject(jsonStr) } catch (_: Exception) { return null }
         val providerTypeRaw = dict.optString("providerType", "").ifEmpty { return null }
@@ -2277,6 +2309,13 @@ class ProviderRepository(private val context: Context) {
         val existing = _config.value.instances.firstOrNull {
             it.providerType == providerType && it.label == label
         } ?: return null
+
+        // [T-backup-restore-credentials] A full manual restore must bring the
+        // backup's keys with it even when the provider already exists under
+        // the same label; the sync merge deliberately keeps local secrets.
+        if (applyCredentials) {
+            importInstanceCredentials(dict, existing)
+        }
 
         val entries = parseImportedModelEntries(dict, existing.id)
         val entryMap = HashMap<String, String>()
