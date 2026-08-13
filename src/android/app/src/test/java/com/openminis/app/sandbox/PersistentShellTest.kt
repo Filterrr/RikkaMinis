@@ -2,6 +2,7 @@ package com.openminis.app.sandbox
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -218,5 +219,114 @@ class PersistentShellTest {
         assertFalse(internalTruncateOutput(sb, "67890", 10))
         assertTrue(internalTruncateOutput(sb, "ABCDE", 10))
         assertEquals("1234567890", sb.toString())
+    }
+
+    // ── internalScanMarker ────────────────────────────────────────────
+
+    @Test
+    fun `scanMarker hits when marker fully inside one chunk`() {
+        val r = internalScanMarker("", "hello\n__MINIS_DONE_abc123_EXIT_0__done", "abc123")
+        assertTrue(r.hit)
+        assertEquals("hello\n", r.beforeMarker)
+        assertEquals(0, r.exitCode)
+        assertEquals("", r.keptTail)
+    }
+
+    @Test
+    fun `scanMarker hits when marker split across chunks`() {
+        // marker 前 20 字符在 tail，剩余在 text
+        val marker = "__MINIS_DONE_abc123_EXIT_0__"
+        val r = internalScanMarker(marker.substring(0, 20), marker.substring(20) + "tail", "abc123")
+        assertTrue(r.hit)
+        assertEquals(0, r.exitCode)
+        assertEquals("", r.keptTail)
+    }
+
+    @Test
+    fun `scanMarker hits when only one char left in tail`() {
+        val marker = "__MINIS_DONE_abc123_EXIT_0__"
+        val r = internalScanMarker(marker.take(1), marker.drop(1), "abc123")
+        assertTrue(r.hit)
+        assertEquals(0, r.exitCode)
+    }
+
+    @Test
+    fun `scanMarker hits when split point is before id in text`() {
+        // tail 只有前缀 "__MINIS_DONE_"，其余全在 text
+        val marker = "__MINIS_DONE_abc123_EXIT_0__"
+        val r = internalScanMarker("__MINIS_DONE_", marker.removePrefix("__MINIS_DONE_"), "abc123")
+        assertTrue(r.hit)
+        assertEquals(0, r.exitCode)
+    }
+
+    @Test
+    fun `scanMarker miss keeps only trailing window`() {
+        val out = "x".repeat(5000)
+        val r = internalScanMarker("", out, "abc123")
+        assertFalse(r.hit)
+        // 保留尾部 = markerPattern.length - 1
+        assertEquals("__MINIS_DONE_abc123_EXIT_".length - 1, r.keptTail.length)
+        assertEquals(out.dropLast(r.keptTail.length), r.beforeMarker)
+        assertEquals(-1, r.exitCode)
+    }
+
+    @Test
+    fun `scanMarker miss with short combined keeps everything in tail`() {
+        val r = internalScanMarker("", "hi", "abc123")
+        assertFalse(r.hit)
+        assertEquals("", r.beforeMarker)
+        assertEquals("hi", r.keptTail)
+    }
+
+    @Test
+    fun `scanMarker empty tail and empty text`() {
+        val r = internalScanMarker("", "", "abc123")
+        assertFalse(r.hit)
+        assertEquals("", r.beforeMarker)
+        assertEquals("", r.keptTail)
+    }
+
+    @Test
+    fun `scanMarker marker at very start of text`() {
+        val r = internalScanMarker("", "__MINIS_DONE_abc123_EXIT_1__rest", "abc123")
+        assertTrue(r.hit)
+        assertEquals("", r.beforeMarker)
+        assertEquals(1, r.exitCode)
+    }
+
+    @Test
+    fun `scanMarker exit code non-zero`() {
+        val r = internalScanMarker("", "out__MINIS_DONE_abc123_EXIT_127__", "abc123")
+        assertTrue(r.hit)
+        assertEquals(127, r.exitCode)
+    }
+
+    @Test
+    fun `scanMarker tail plus text still misses when no marker`() {
+        // tail 里含 marker 前缀但不完整，text 也不补全 → 仍 miss
+        val r = internalScanMarker("__MINIS_DONE_ab", "more output no marker", "abc123")
+        assertFalse(r.hit)
+        assertEquals(-1, r.exitCode)
+    }
+
+    @Test
+    fun `scanMarker accumulated tail eventually completes marker`() {
+        // 模拟多段拼接：前面的 chunk 把 marker 前缀保留在 tail 里，
+        // 最后一段补全剩余部分才 hit，flushed 只含真实输出。
+        val marker = "__MINIS_DONE_abc123_EXIT_42__"
+        val mid = marker.length / 2
+        val chunks = listOf("output-part1 ", "partial ", marker.substring(0, mid), marker.substring(mid))
+        var tail = ""
+        val flushed = StringBuilder()
+        var finalResult: MarkerScanResult? = null
+        for (chunk in chunks) {
+            val r = internalScanMarker(tail, chunk, "abc123")
+            flushed.append(r.beforeMarker)
+            if (r.hit) { finalResult = r; break }
+            tail = r.keptTail
+        }
+        assertNotNull(finalResult)
+        assertEquals(42, finalResult?.exitCode)
+        assertEquals("output-part1 partial ", flushed.toString())
     }
 }

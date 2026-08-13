@@ -292,6 +292,13 @@ class PersistentShell(
     }
 
     private fun readLoop(p: Process) {
+        // [fix/marker-chunk-boundary] Cross-chunk tail buffer. A single
+        // read() can split the __MINIS_DONE_ marker across two chunks;
+        // the old per-chunk indexOf never sees a split marker, so the
+        // command hung until the 600s timeout. Keep the trailing
+        // (markerPattern.length - 1) chars of unmatched output and
+        // re-scan them combined with the next chunk.
+        var tail: String = ""
         try {
             val buffer = ByteArray(4096)
             val stream = p.inputStream
@@ -302,33 +309,26 @@ class PersistentShell(
 
                 val cb = pendingCallback
                 if (cb != null) {
-                    // Check if this chunk contains the end marker
-                    val markerExitPattern = "__MINIS_DONE_${cb.marker}_EXIT_"
-                    val markerIdx = text.indexOf(markerExitPattern)
-
-                    if (markerIdx >= 0) {
-                        // Extract output before marker, with truncation guard
-                        val beforeMarker = text.substring(0, markerIdx)
-                        cb.appendOutput(beforeMarker)
-                        if (cb.lineCallback != null) {
-                            feedLines(beforeMarker, cb.lineCallback)
-                        }
-
-                        // Extract exit code from marker line
-                        val afterMarker = text.substring(markerIdx)
-                        val exitCode = parseExitCode(afterMarker, cb.marker)
-
-                        // Signal completion with truncated flag
-                        cb.finishOnce(cb.output.toString(), exitCode, cb.truncated)
-                        pendingCallback = null
-                    } else {
-                        cb.appendOutput(text)
-                        if (cb.lineCallback != null) {
-                            feedLines(text, cb.lineCallback)
-                        }
+                    val scan = internalScanMarker(tail, text, cb.marker)
+                    cb.appendOutput(scan.beforeMarker)
+                    if (cb.lineCallback != null) {
+                        feedLines(scan.beforeMarker, cb.lineCallback)
                     }
+                    if (scan.hit) {
+                        // Signal completion with truncated flag
+                        cb.finishOnce(cb.output.toString(), scan.exitCode, cb.truncated)
+                        pendingCallback = null
+                        tail = ""
+                    } else {
+                        // Keep the trailing window — the marker (or its
+                        // start) may be split across this chunk boundary.
+                        tail = scan.keptTail
+                    }
+                } else {
+                    // No pending callback — discard (shell prompt noise) and
+                    // reset the tail so no stale bytes leak into the next cmd.
+                    tail = ""
                 }
-                // If no pending callback, discard (shell prompt noise etc.)
             }
         } catch (e: Exception) {
             Log.d(TAG, "Reader loop ended: ${e.message}")
@@ -337,6 +337,10 @@ class PersistentShell(
         // Process exited
         val cb = pendingCallback
         if (cb != null) {
+            // EOF with no marker means the shell died — flush any withheld
+            // tail (potential split-marker prefix) so the last bytes of the
+            // command output aren't lost.
+            if (tail.isNotEmpty()) cb.appendOutput(tail)
             cb.finishOnce(cb.output.toString(), -1, cb.truncated)
             pendingCallback = null
         }
@@ -357,9 +361,6 @@ class PersistentShell(
                 callback(line)
             }
         }
-    }
-    private fun parseExitCode(text: String, marker: String): Int {
-        return internalParseMinisExitCode(text, marker)
     }
 
     /**
@@ -583,4 +584,49 @@ internal fun internalTruncateOutput(output: StringBuilder, text: String, maxChar
     }
     output.append(text)
     return false
+}
+
+/**
+ * Cross-chunk scan for the completion marker. `text` is the latest chunk
+ * read from the shell's stdout; `tail` is the trailing window withheld from
+ * the PREVIOUS chunk (it may hold the start of a marker that got split).
+ *
+ * Hit  → [MarkerScanResult.beforeMarker] = all output before the marker,
+ *        [MarkerScanResult.exitCode] = parsed exit code, `keptTail` empty.
+ * Miss → [MarkerScanResult.beforeMarker] = output safe to flush now,
+ *        [MarkerScanResult.keptTail] = last (markerPattern.length - 1)
+ *        chars that could be a split marker prefix (must be re-scanned with
+ *        the next chunk).
+ *
+ * Extracted as a pure function so the split-marker behaviour is JVM-testable
+ * without Android deps (see [internalParseMinisExitCode]).
+ */
+internal data class MarkerScanResult(
+    val hit: Boolean,
+    val beforeMarker: String,
+    val exitCode: Int,
+    val keptTail: String,
+)
+
+internal fun internalScanMarker(tail: String, text: String, marker: String): MarkerScanResult {
+    val markerPattern = "__MINIS_DONE_${marker}_EXIT_"
+    val combined = if (tail.isEmpty()) text else tail + text
+    val idx = combined.indexOf(markerPattern)
+    return if (idx >= 0) {
+        MarkerScanResult(
+            hit = true,
+            beforeMarker = combined.substring(0, idx),
+            exitCode = internalParseMinisExitCode(combined.substring(idx), marker),
+            keptTail = "",
+        )
+    } else {
+        val keepLen = (markerPattern.length - 1).coerceAtMost(combined.length)
+        val flushEnd = combined.length - keepLen
+        MarkerScanResult(
+            hit = false,
+            beforeMarker = combined.substring(0, flushEnd),
+            exitCode = -1,
+            keptTail = combined.substring(flushEnd),
+        )
+    }
 }
