@@ -2,7 +2,6 @@ package com.openminis.app.provider
 
 import com.openminis.app.provider.KimiConstants
 import com.openminis.app.data.model.LLMModel
-import com.openminis.app.data.model.ProviderCredential
 import com.openminis.app.data.model.ProviderInstance
 import com.openminis.app.data.model.ProviderType
 import com.openminis.app.data.repository.ModelListProvider
@@ -35,7 +34,6 @@ private object AnthropicModelListAdapter : ModelListProvider {
         return AnthropicModelsApi.fetchModels(
             apiKey,
             instance.effectiveBaseURL,
-            isOAuth = instance.credentialType == ProviderCredential.oauth,
             // [T-provider-custom-user-agent] models-list UA override.
             customUserAgent = instance.customUserAgent,
         )
@@ -59,10 +57,6 @@ private object OpenAIModelListAdapter : ModelListProvider {
             customUserAgent = instance.customUserAgent,
         )
     }
-
-    // [T8-1] OpenAI Codex OAuth: static model list (OAuth tokens can't
-    // call /v1/models). Mirrors the old ProviderRepository short-circuit.
-    override suspend fun oauthModels(): List<LLMModel> = OpenAIModelsApi.fetchModelsOAuth()
 }
 
 private object OpenRouterModelListAdapter : ModelListProvider {
@@ -75,9 +69,8 @@ private object OpenRouterModelListAdapter : ModelListProvider {
 private object XAIModelListAdapter : ModelListProvider {
     override suspend fun fetchModels(apiKey: String?, instance: ProviderInstance, thirdParty: Boolean): List<LLMModel> {
         // xAI: the model list is static (no /v1/models gating call needed —
-        // XAIModelsApi exposes the spec-mandated set). Works for both
-        // OAuth and API-key holders.
-        return XAIModelsApi.fetchModelsOAuth()
+        // XAIModelsApi exposes the spec-mandated set).
+        return XAIModelsApi.fetchModels()
     }
 }
 

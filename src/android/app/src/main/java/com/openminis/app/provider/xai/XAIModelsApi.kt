@@ -21,9 +21,9 @@ object XAIModelsApi {
     private const val TAG = "XAIModelsApi"
 
     /** Static fallback used when /v1/models is unreachable or untrusted. */
-    fun fetchModelsOAuth(): List<LLMModel> {
+    fun fetchModels(): List<LLMModel> {
         val models = LLMModel.allXAI
-        AppLogger.info(TAG, "xAI OAuth model list (${models.size} models): ${models.joinToString { it.id }}")
+        AppLogger.info(TAG, "xAI model list (${models.size} models): ${models.joinToString { it.id }}")
         return ModelsDevApi.enrichModels(models)
     }
 }

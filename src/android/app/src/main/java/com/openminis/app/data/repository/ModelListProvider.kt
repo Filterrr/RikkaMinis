@@ -29,12 +29,4 @@ interface ModelListProvider {
      *   parity with the old dispatch logic (some providers gate on it).
      */
     suspend fun fetchModels(apiKey: String?, instance: ProviderInstance, thirdParty: Boolean): List<LLMModel>
-
-    /**
-     * Static model list for OAuth-only providers whose access token
-     * cannot call /v1/models (e.g. OpenAI Codex OAuth). Returns an
-     * empty list by default; override when the provider has a fixed
-     * model set for OAuth users.
-     */
-    suspend fun oauthModels(): List<LLMModel> = emptyList()
 }

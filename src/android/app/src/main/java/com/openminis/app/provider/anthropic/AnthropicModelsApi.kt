@@ -17,9 +17,8 @@ object AnthropicModelsApi {
 
     /**
      * Fetch models from Anthropic API.
-     * @param apiKey The API key or OAuth access token
+     * @param apiKey The API key
      * @param baseURL Optional custom base URL
-     * @param isOAuth Whether to use OAuth Bearer auth + beta headers (vs x-api-key)
      * @param context Optional Android [Context]; when provided, results are cached
      *   for 7 days at `cacheDir/models-cache/<sha256(credential)>.json` (matches
      *   iOS `ModelsCache`). When null, the fetch bypasses the cache entirely.
@@ -29,7 +28,6 @@ object AnthropicModelsApi {
     suspend fun fetchModels(
         apiKey: String,
         baseURL: String? = null,
-        isOAuth: Boolean = false,
         context: Context? = null,
         forceRefresh: Boolean = false,
         // [T-provider-custom-user-agent] Per-provider UA override; null/blank
@@ -38,7 +36,7 @@ object AnthropicModelsApi {
     ): List<LLMModel> = withContext(Dispatchers.IO) {
         // Cache key: base URL included so the same API key across proxies doesn't
         // share cached model lists (vLLM vs api.anthropic.com can differ).
-        val cacheKey = (baseURL ?: "") + "|" + apiKey + "|" + isOAuth
+        val cacheKey = (baseURL ?: "") + "|" + apiKey
         if (context != null && !forceRefresh) {
             AnthropicModelsCache.load(context, cacheKey)?.let { return@withContext it }
         }
@@ -79,11 +77,7 @@ object AnthropicModelsApi {
                 // [T-provider-custom-user-agent] models-list UA override.
                 .applyUserAgentOverride(customUserAgent)
 
-            if (isOAuth) {
-                // OAuth: Bearer token + required beta header (mirrors iOS fetchModels(oauthToken:))
-                requestBuilder.header("Authorization", "Bearer $apiKey")
-                requestBuilder.header("anthropic-beta", "oauth-2025-04-20")
-            } else if (candidate != null) {
+            if (candidate != null) {
                 // Custom endpoint: Bearer auth
                 requestBuilder.header("Authorization", "Bearer $apiKey")
             } else {
@@ -92,7 +86,7 @@ object AnthropicModelsApi {
             }
 
             val request = requestBuilder.build()
-            android.util.Log.d("AnthropicModels", "Fetching models (level=$idx): ${request.url} isOAuth=$isOAuth headers=${request.headers}")
+            android.util.Log.d("AnthropicModels", "Fetching models (level=$idx): ${request.url} headers=${request.headers}")
 
             val response: Response = try {
                 client.newCall(request).execute()

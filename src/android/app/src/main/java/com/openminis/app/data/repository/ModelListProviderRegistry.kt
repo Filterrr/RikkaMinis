@@ -37,16 +37,6 @@ object ModelListProviderRegistry {
         return provider.fetchModels(apiKey, instance, thirdParty)
     }
 
-    /**
-     * Fetch OAuth static models for [instance] via its registered provider.
-     * Returns an empty list when no fetcher is registered or the provider
-     * has no static OAuth model list.
-     */
-    suspend fun oauthModels(instance: ProviderInstance): List<LLMModel> {
-        val provider = synchronized(providers) { providers[instance.providerType] } ?: return emptyList()
-        return provider.oauthModels()
-    }
-
     /** Test hook: clear all registrations. */
     fun clear() {
         synchronized(providers) { providers.clear() }
