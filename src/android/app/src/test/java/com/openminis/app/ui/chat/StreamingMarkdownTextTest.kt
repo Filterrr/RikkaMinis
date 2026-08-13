@@ -1,6 +1,7 @@
 package com.openminis.app.ui.chat
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -238,6 +239,115 @@ class StreamingMarkdownTextTest {
         // trimStart() is called on the first line, so it becomes "```" -> fence detected.
         assertEquals("  ```\ncode\n  ```", result[1])
         assertEquals("B", result[2])
+    }
+
+    // ── mergeAgentTextSnapshot ──────────────────────────────────────────────
+
+    @Test fun `mergeAgentTextSnapshot empty incoming returns current`() {
+        assertEquals("Hello", mergeAgentTextSnapshot("Hello", ""))
+    }
+
+    @Test fun `mergeAgentTextSnapshot empty current returns incoming`() {
+        assertEquals("Hello", mergeAgentTextSnapshot("", "Hello"))
+    }
+
+    @Test fun `mergeAgentTextSnapshot equal returns current`() {
+        assertEquals("Hello", mergeAgentTextSnapshot("Hello", "Hello"))
+    }
+
+    @Test fun `mergeAgentTextSnapshot ignores regressive prefix snapshot`() {
+        assertEquals("Hello, world!", mergeAgentTextSnapshot("Hello, world!", "Hello"))
+    }
+
+    @Test fun `mergeAgentTextSnapshot replaces divergent snapshot`() {
+        assertEquals("最终版：完整内容", mergeAgentTextSnapshot("第一版：草稿内容", "最终版：完整内容"))
+    }
+
+    @Test fun `mergeAgentTextSnapshot keeps emoji and markdown snapshots`() {
+        assertEquals("前缀😀 **完成**", mergeAgentTextSnapshot("前缀😀", "前缀😀 **完成**"))
+    }
+
+    @Test fun `mergeAgentTextSnapshot both empty returns empty`() {
+        assertEquals("", mergeAgentTextSnapshot("", ""))
+    }
+
+    @Test fun `mergeAgentTextSnapshot incoming longer not regressive replaces`() {
+        assertEquals("Hello world", mergeAgentTextSnapshot("Hello", "Hello world"))
+    }
+
+    // ── mergeLegacyStreamingText ────────────────────────────────────────────
+
+    @Test fun `mergeLegacyStreamingText empty incoming returns current`() {
+        assertEquals("Hello", mergeLegacyStreamingText("Hello", ""))
+    }
+
+    @Test fun `mergeLegacyStreamingText empty current returns incoming`() {
+        assertEquals("Hello", mergeLegacyStreamingText("", "Hello"))
+    }
+
+    @Test fun `mergeLegacyStreamingText equal returns current`() {
+        assertEquals("Hello", mergeLegacyStreamingText("Hello", "Hello"))
+    }
+
+    @Test fun `mergeLegacyStreamingText ignores regressive prefix snapshot`() {
+        assertEquals("Hello, world!", mergeLegacyStreamingText("Hello, world!", "Hello"))
+    }
+
+    @Test fun `mergeLegacyStreamingText normal append replaces with longer`() {
+        assertEquals("Hello, world!", mergeLegacyStreamingText("Hello, world", "Hello, world!"))
+    }
+
+    @Test fun `mergeLegacyStreamingText delta chunk suffix prefix overlap`() {
+        assertEquals("Hello, world", mergeLegacyStreamingText("Hello", ", world"))
+    }
+
+    @Test fun `mergeLegacyStreamingText deduplicates overlapping delta chunks`() {
+        assertEquals("Hello, world", mergeLegacyStreamingText("Hello, wor", "world"))
+    }
+
+    @Test fun `mergeLegacyStreamingText keeps tiny overlap as normal delta`() {
+        assertEquals("abccde", mergeLegacyStreamingText("abc", "cde"))
+    }
+
+    @Test fun `mergeLegacyStreamingText ignores shorter divergent restarted table`() {
+        val current = "好的，以下是一个示例表格：\n\n| 序号 | 姓名 |\n| --- | --- |\n| 1 | 张三 |"
+        val incoming = "好的，以下是一个示例表格：\n\n| 序号 | 姓名 |\n|:---"
+        assertEquals(current, mergeLegacyStreamingText(current, incoming))
+    }
+
+    @Test fun `mergeLegacyStreamingText both empty returns empty`() {
+        assertEquals("", mergeLegacyStreamingText("", ""))
+    }
+
+    @Test fun `mergeLegacyStreamingText divergent snapshot keeps longer one`() {
+        val current = "Common prefix A B C D E F G H I J K L M N O P longer ending"
+        val incoming = "Common prefix A B C D E F G H I J K L M N O P short"
+        // Same long common prefix, then diverge: incoming is shorter, so the
+        // longer current snapshot wins instead of concatenating garbage.
+        assertEquals(current, mergeLegacyStreamingText(current, incoming))
+    }
+
+    @Test fun `mergeLegacyStreamingText fallback concatenates unrelated text`() {
+        assertEquals("abcxyz", mergeLegacyStreamingText("abc", "xyz"))
+    }
+
+    // ── shouldIgnoreRegressiveStreamingSnapshot ─────────────────────────────
+
+    @Test fun `shouldIgnoreRegressiveStreamingSnapshot true when shorter and prefix`() {
+        assertTrue(shouldIgnoreRegressiveStreamingSnapshot("Hello, world!", "Hello"))
+    }
+
+    @Test fun `shouldIgnoreRegressiveStreamingSnapshot false when empty`() {
+        assertFalse(shouldIgnoreRegressiveStreamingSnapshot("", "Hello"))
+        assertFalse(shouldIgnoreRegressiveStreamingSnapshot("Hello", ""))
+    }
+
+    @Test fun `shouldIgnoreRegressiveStreamingSnapshot false when not prefix`() {
+        assertFalse(shouldIgnoreRegressiveStreamingSnapshot("Hello, world!", "world"))
+    }
+
+    @Test fun `shouldIgnoreRegressiveStreamingSnapshot false when longer`() {
+        assertFalse(shouldIgnoreRegressiveStreamingSnapshot("Hello", "Hello, world!"))
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────
