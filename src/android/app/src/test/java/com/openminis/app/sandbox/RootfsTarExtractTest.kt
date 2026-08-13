@@ -182,7 +182,7 @@ class RootfsTarExtractTest {
         )
         extract(entries, setOf("bin/sh", "bin/busybox"))
         assertFile("bin/busybox", "BUSYBOX-BIN")
-        val link = tmp.root.resolve("bin/sh")
+        val link = tmp.root.resolve("bin/sh").toPath()
         assertTrue("missing symlink bin/sh", Files.isSymbolicLink(link))
         assertEquals("/bin/busybox", Files.readSymbolicLink(link).toString())
     }
