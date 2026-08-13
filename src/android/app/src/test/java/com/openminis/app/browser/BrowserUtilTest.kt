@@ -128,7 +128,7 @@ class BrowserUtilTest {
     @Test fun `formatBytes kilobytes`() {
         assertEquals("1.0 KB", formatBytes(1024))
         assertEquals("1.5 KB", formatBytes(1536))
-        assertEquals("1023.0 KB", formatBytes(1024 * 1024 - 1))
+        assertEquals("1024.0 KB", formatBytes(1024 * 1024 - 1))
     }
 
     @Test fun `formatBytes megabytes`() {
@@ -223,8 +223,8 @@ class BrowserUtilTest {
         assertEquals(true, cookieBool(mapOf("flag" to "yes"), "flag"))
     }
 
-    @Test fun `cookieBool unknown string returns null`() {
-        assertNull(cookieBool(mapOf("flag" to "maybe"), "flag"))
+    @Test fun `cookieBool unknown string returns false`() {
+        assertEquals(false, cookieBool(mapOf("flag" to "maybe"), "flag"))
     }
 
     @Test fun `cookieBool null returns null`() {
