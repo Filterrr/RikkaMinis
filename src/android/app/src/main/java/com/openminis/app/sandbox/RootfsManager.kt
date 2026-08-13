@@ -361,21 +361,17 @@ class RootfsManager private constructor(private val context: Context) {
                 "-b", "/dev", "-b", "/proc", "-b", "/sys",
                 "-w", "/root",
                 "/bin/sh", "-c",
-                "apk fix --no-cache ; apk add --no-cache bash readline ncurses ; true"
+                "/sbin/apk fix --no-cache ; /sbin/apk add --no-cache bash readline ncurses ; true"
             )
             // PROOT_LOADER[_32] MUST point at the standalone loaders in
             // nativeLibraryDir — proot's embedded-loader fallback writes to
             // PROOT_TMP_DIR and fails under Android noexec (see
             // deps/build_proot.sh). Without these, proot aborts in ~20ms
             // with status=1 and no output, and the repair silently no-ops.
-            val loaderEnv = mutableMapOf(
-                "PROOT_TMP_DIR" to PRootKernel.getProotTmpDir(context).absolutePath,
-                "LD_LIBRARY_PATH" to nativeLibDir.absolutePath,
-            )
-            val loader = File(nativeLibDir, "libproot-loader.so")
-            val loader32 = File(nativeLibDir, "libproot-loader32.so")
-            if (loader.exists()) loaderEnv["PROOT_LOADER"] = loader.absolutePath
-            if (loader32.exists()) loaderEnv["PROOT_LOADER_32"] = loader32.absolutePath
+            // PATH is set explicitly too — ProcessBuilder inherits the app
+            // process env (Android PATH), so a bare `apk` would be
+            // `apk: not found` (exit 127) inside the guest.
+            val loaderEnv = prootLoaderEnv()
 
             runCatching {
                 val p = ProcessBuilder(repairCmd)
@@ -518,18 +514,14 @@ class RootfsManager private constructor(private val context: Context) {
                 "-b", "/dev", "-b", "/proc", "-b", "/sys", "-w", "/root",
                 "-b", "${apkDir.absolutePath}:/tmp/apk-offline",
                 "/bin/sh", "-c",
-                "apk add --allow-untrusted /tmp/apk-offline/*.apk ; true"
+                // Absolute apk path + explicit PATH: the app-process PATH
+                // (Android's) is what proot children inherit, so a bare
+                // `apk` used to be `apk: not found` (exit 127) here. The
+                // trailing `; true` ALSO masked every real failure by
+                // forcing exit 0 — remove it so failures surface.
+                "/sbin/apk add --allow-untrusted /tmp/apk-offline/*.apk"
             )
-            val loaderEnv = mutableMapOf(
-                "PROOT_TMP_DIR" to PRootKernel.getProotTmpDir(context).absolutePath,
-                "LD_LIBRARY_PATH" to nativeLibDir.absolutePath,
-            )
-            File(nativeLibDir, "libproot-loader.so").takeIf { it.exists() }?.let {
-                loaderEnv["PROOT_LOADER"] = it.absolutePath
-            }
-            File(nativeLibDir, "libproot-loader32.so").takeIf { it.exists() }?.let {
-                loaderEnv["PROOT_LOADER_32"] = it.absolutePath
-            }
+            val loaderEnv = prootLoaderEnv()
             runCatching {
                 val p = ProcessBuilder(cmd)
                     .redirectErrorStream(true)
@@ -540,7 +532,7 @@ class RootfsManager private constructor(private val context: Context) {
                 val exitCode = if (finished) p.exitValue() else -1
                 if (p.isAlive) p.destroyForcibly()
                 Log.i(TAG, "[OfflinePackages] apk add exit=$exitCode output=${output.takeLast(500)}")
-                exitCode == 0 || exitCode == 1
+                exitCode == 0
             }.onFailure { t ->
                 Log.e(TAG, "[OfflinePackages] process failed", t)
                 false
@@ -698,6 +690,33 @@ class RootfsManager private constructor(private val context: Context) {
     }
 
     /**
+     * Loader env for every proot child process. MUST include:
+     *  - `PROOT_LOADER[_32]` → standalone loaders in nativeLibraryDir
+     *    (proot's embedded-loader fallback writes to PROOT_TMP_DIR and
+     *    fails under Android noexec — without these proot aborts ~20ms in
+     *    with status=1 and no output)
+     *  - `PATH` → the ALPINE guest PATH. ProcessBuilder inherits the app
+     *    process env, whose PATH is Android's (`/sbin:/vendor/bin:...`) —
+     *    the guest `/bin/sh` then can't find `apk` (exit 127). This was
+     *    the real reason both Stage 2.6 and the apk-world restore silently
+     *    failed on device: `apk: not found` inside proot.
+     */
+    private fun prootLoaderEnv(): Map<String, String> {
+        val env = mutableMapOf(
+            "PATH" to ALPINE_PATH,
+            "PROOT_TMP_DIR" to PRootKernel.getProotTmpDir(context).absolutePath,
+            "LD_LIBRARY_PATH" to nativeLibDir.absolutePath,
+        )
+        File(nativeLibDir, "libproot-loader.so").takeIf { it.exists() }?.let {
+            env["PROOT_LOADER"] = it.absolutePath
+        }
+        File(nativeLibDir, "libproot-loader32.so").takeIf { it.exists() }?.let {
+            env["PROOT_LOADER_32"] = it.absolutePath
+        }
+        return env
+    }
+
+    /**
      * Run `apk add --no-cache <name>=<version>...` inside the guest via
      * proot. Shares the loader-env boilerplate with [installOfflinePackages].
      * Returns the apk exit code (0 = all installed), or -1 on process
@@ -713,18 +732,11 @@ class RootfsManager private constructor(private val context: Context) {
             "-r", rootfsDir.absolutePath,
             "-b", "/dev", "-b", "/proc", "-b", "/sys", "-w", "/root",
             "/bin/sh", "-c",
-            "apk add --no-cache ${pkgArgs.joinToString(" ")}"
+            // Absolute path: the guest PATH is only guaranteed inside a
+            // session shell, not in proot children (see prootLoaderEnv).
+            "/sbin/apk add --no-cache ${pkgArgs.joinToString(" ")}"
         )
-        val loaderEnv = mutableMapOf(
-            "PROOT_TMP_DIR" to PRootKernel.getProotTmpDir(context).absolutePath,
-            "LD_LIBRARY_PATH" to nativeLibDir.absolutePath,
-        )
-        File(nativeLibDir, "libproot-loader.so").takeIf { it.exists() }?.let {
-            loaderEnv["PROOT_LOADER"] = it.absolutePath
-        }
-        File(nativeLibDir, "libproot-loader32.so").takeIf { it.exists() }?.let {
-            loaderEnv["PROOT_LOADER_32"] = it.absolutePath
-        }
+        val loaderEnv = prootLoaderEnv()
         runCatching {
             val p = ProcessBuilder(cmd)
                 .redirectErrorStream(true)
@@ -1294,6 +1306,14 @@ internal val CRITICAL_RESTORE_PREFIXES = setOf(
  * without an Android Context.
  */
 private val OFFLINE_PACKAGE_NAMES = setOf("bash", "readline", "ncurses")
+
+/**
+ * The Alpine guest PATH, matching what PRootKernel sets for session shells.
+ * proot child processes inherit the app process env (Android PATH:
+ * /sbin:/vendor/bin:/system/sbin:...) — without an explicit override,
+ * `/bin/sh -c "apk ..."` fails with `apk: not found` (exit 127).
+ */
+private const val ALPINE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/bin"
 
 /**
  * A package name + version pair as recorded in Alpine's apk database.

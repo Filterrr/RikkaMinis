@@ -83,15 +83,7 @@ object PRootKernel {
             }
         }
 
-        // [Refactor-apk-world] Snapshot user-installed packages to the host
-        // side now that the rootfs is in its final state (post auto-repair).
-        // A later full rebuild (manual reset or Stage-3 reinstall) restores
-        // from this snapshot, so user packages survive resets/reinstalls.
-        rootfsManager.dumpApkWorld()
-
         // Overlay assets/default_mount/ onto the rootfs on every boot so
-        // updated profile scripts and URL-interception wrappers ship with
-        // each app update. Mirrors iOS RootfsManager.applyDefaultMountOverlay.
         rootfsManager.applyDefaultMountOverlay()
 
         // Re-apply user mirror selections — the overlay above ships stock
@@ -109,6 +101,14 @@ object PRootKernel {
         // user's chosen repositories instead of the factory defaults that
         // may have caused the original failure.
         rootfsManager.retryFailedApkWorld()
+
+        // [Refactor-apk-world] Snapshot user-installed packages to the host
+        // side LAST — the rootfs is only in its final state after
+        // auto-repair AND the restore-retry above. Dumping earlier could
+        // overwrite a good snapshot with a pre-retry (partially restored)
+        // state, losing user packages on the next rebuild. A later full
+        // rebuild (manual reset or Stage-3 reinstall) restores from it.
+        rootfsManager.dumpApkWorld()
 
         // LD_LIBRARY_PATH for the extracted native libs. talloc used to be
         // staged here under a versioned name; deps/build_proot.sh now links it
