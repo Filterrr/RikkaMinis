@@ -468,6 +468,14 @@ class RootfsManager private constructor(private val context: Context) {
      * socket under .config/pulse) inside /root via copyRecursively.
      * Reset is now a pure delete + reinstall; there is nothing to restore.
      */
+    /**
+     * Instance shim kept for the instrumented tests (which call
+     * manager.extractTar); delegates to the top-level function.
+     */
+    internal fun extractTar(input: InputStream, targetDir: File) {
+        extractTar(input, targetDir, onlyPrefixes = null)
+    }
+
     suspend fun reset(): Unit = withContext(Dispatchers.IO) {
         rootfsDir.deleteRecursively()
         installIfNeeded()
