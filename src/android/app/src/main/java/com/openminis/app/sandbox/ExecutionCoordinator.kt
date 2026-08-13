@@ -79,6 +79,20 @@ object ExecutionCoordinator {
     // minutes. 30 is a safe upper bound — well above normal usage but
     // well below the accumulation that triggers Scudo OOM.
     private const val MAX_COMMANDS_PER_SHELL = 30
+
+    // [shell-generation-scheduler] Progressive-degradation tiers for
+    // app-process native heap, below the existing 120MB high-water mark and
+    // 350MB hard cap. Instead of riding the heap up to a single cliff, we
+    // shrink the shell generation budget and recycle earlier at each tier so
+    // the PRoot tracer is shed progressively (crash case 2026-08-12: app
+    // native 25MB→542MB in 12s — recycling kicked in too late).
+    // Tiers (mirrored in internalDegradationPhase / shouldRecycleByClass):
+    //   NORMAL    < 50MB   — full budget (30 commands)
+    //   MILD      < 80MB   — budget halves (15)
+    //   MODERATE  < 100MB  — budget shrinks hard (5); heavy commands recycle at 80+
+    //   SEVERE    < 120MB  — budget 2; leaky commands rejected up front
+    //   CRITICAL  < 350MB  — budget 1; heavy/leaky rejected up front
+    //   LOCKED    ≥ 350MB  — everything rejected (old hard cap)
     // A shell idle this long is terminated to release its PRoot native
     // footprint. Generous above any agent transition gap (model thinking).
     private const val SHELL_IDLE_TIMEOUT_MS = 10 * 60 * 1000L  // 10 min
@@ -160,20 +174,22 @@ object ExecutionCoordinator {
         timeout: Long = 600_000L,
         lineCallback: ((String) -> Unit)? = null
     ): CommandResult {
-        // [P2-app-native-hardcap] Pre-execution hard cap check. Reject the
-        // command immediately if the app-process native heap has already
-        // exceeded the safe ceiling — the Scudo OOM is minutes away and
-        // running another command will only accelerate it. Run GC before
-        // returning so the caller's next retry has a better chance.
+        // [shell-generation-scheduler] Progressive pre-execution gate.
+        // Instead of a single 350MB cliff that freezes ALL commands (even
+        // `true`), degrade by tier: at CRITICAL (≥120MB) block only heavy
+        // and leaky commands — lightweight ones (ls/file_read) still work so
+        // the agent can self-recover; at SEVERE (≥100MB) block leaky model
+        // calls; only at LOCKED (≥350MB) is everything rejected, same as the
+        // old hard cap. Run GC before returning so the caller's next retry
+        // has a better chance.
         val preExecNativeMB = Debug.getNativeHeapAllocatedSize() / (1024L * 1024L)
-        if (preExecNativeMB > APP_NATIVE_HEAP_HARD_CAP_MB) {
-            Log.w(TAG, "[$sessionId] Native heap ${preExecNativeMB}MB exceeds hard cap ${APP_NATIVE_HEAP_HARD_CAP_MB}MB — rejecting command")
+        val preExecPhase = internalDegradationPhase(preExecNativeMB)
+        val cmdClass = classifyCommand(command)
+        val preExecReject = preExecRejectionMessage(preExecPhase, cmdClass, preExecNativeMB)
+        if (preExecReject != null) {
+            Log.w(TAG, "[$sessionId] Phase $preExecPhase: rejecting $cmdClass command (native ${preExecNativeMB}MB)")
             postRecycleMemoryRecovery()
-            return CommandResult(
-                "[System memory pressure: native heap ${preExecNativeMB}MB exceeds safe limit. " +
-                    "Please reduce concurrent sessions or wait for memory to recover.]",
-                -1, 0, true
-            )
+            return CommandResult(preExecReject, -1, 0, true)
         }
 
         // [P2-global-concurrency] Acquire the global shell slot. If all
@@ -256,7 +272,19 @@ object ExecutionCoordinator {
 
             val nativeOversized = nativeHeapMB > APP_NATIVE_HEAP_HIGH_WATER_MARK_MB
             val javaPressured = javaHeapFrac > JAVA_HEAP_PRESSURE_THRESHOLD
-            val cmdOverLimit = (shell?.commandCount ?: 0) >= MAX_COMMANDS_PER_SHELL
+            // [shell-generation-scheduler] Generation budget shrinks with
+            // memory pressure (30→15→5→2→1), so a dense tool-call sequence
+            // sheds the PRoot tracer progressively instead of riding it up to
+            // the 256MB RSS / 350MB hard cap (crash case 2026-08-12).
+            val generationBudget = internalGenerationBudget(nativeHeapMB)
+            val cmdOverLimit = (shell?.commandCount ?: 0) >= generationBudget
+            // [shell-generation-scheduler] Command-class-aware recycling:
+            // known-leaky commands (minis-model-use) always recycle the shell
+            // after completing; heavy ones (python3/apk/pip) recycle under
+            // memory pressure; lightweight ones never recycle by class (the
+            // generation budget still caps them).
+            val cmdClassAtExec = classifyCommand(command)
+            val recycleByClass = shouldRecycleByClass(cmdClassAtExec, nativeHeapMB)
 
             when {
                 nativeOversized -> Log.w(
@@ -266,10 +294,16 @@ object ExecutionCoordinator {
                     TAG, "[$sessionId] Java heap ${(javaHeapFrac * 100).toInt()}% > ${(JAVA_HEAP_PRESSURE_THRESHOLD * 100).toInt()}% — recycling shell"
                 )
                 cmdOverLimit -> Log.w(
-                    TAG, "[$sessionId] Shell command count ${shell?.commandCount ?: 0} >= $MAX_COMMANDS_PER_SHELL — recycling shell"
+                    TAG, "[$sessionId] Shell command count ${shell?.commandCount ?: 0} >= budget $generationBudget (native ${nativeHeapMB}MB) — recycling shell"
+                )
+                recycleByClass && cmdClassAtExec == CommandClass.LEAKY -> Log.w(
+                    TAG, "[$sessionId] Leaky command class executed — recycling shell (native ${nativeHeapMB}MB)"
+                )
+                recycleByClass && cmdClassAtExec == CommandClass.HEAVY -> Log.w(
+                    TAG, "[$sessionId] Heavy command under pressure (native ${nativeHeapMB}MB) — recycling shell"
                 )
             }
-            if (nativeOversized || javaPressured || cmdOverLimit) {
+            if (nativeOversized || javaPressured || cmdOverLimit || recycleByClass) {
                 sessionDidTerminate(sessionId)
             }
 
@@ -659,4 +693,123 @@ internal fun internalShouldRetryCommand(
 ): Boolean {
     val shellDied = exitCode == -1 || exitCode == 124 || !shellAlive
     return shellDied && attempt < maxRetries
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// [shell-generation-scheduler] Shell generation scheduler — pure functions
+//
+// Progressive-degradation model borrowed from connection scheduers that run
+// under hard resource ceilings (CF Workers VPNs): explicit per-tier budgets
+// instead of a single failure cliff. All functions below are pure (no
+// Context / Debug / Process deps) and JVM-testable, mirroring
+// internalShouldRetryCommand / internalParseMinisExitCode.
+// ──────────────────────────────────────────────────────────────────────────
+
+/**
+ * Shell generation phase derived from app-process native heap (MB).
+ * Thresholds match the tier table in ExecutionCoordinator comments:
+ *   NORMAL    < 50MB   — full budget
+ *   MILD      < 80MB   — budget halves
+ *   MODERATE  < 100MB  — budget shrinks hard
+ *   SEVERE    < 120MB  — leaky commands rejected up front
+ *   CRITICAL  < 350MB  — heavy/leaky rejected up front
+ *   LOCKED    ≥ 350MB  — everything rejected (old hard cap)
+ */
+internal enum class ShellPhase { NORMAL, MILD, MODERATE, SEVERE, CRITICAL, LOCKED }
+
+internal fun internalDegradationPhase(nativeMB: Long): ShellPhase {
+    return when {
+        nativeMB >= 350L -> ShellPhase.LOCKED
+        nativeMB >= 120L -> ShellPhase.CRITICAL
+        nativeMB >= 100L -> ShellPhase.SEVERE
+        nativeMB >= 80L -> ShellPhase.MODERATE
+        nativeMB >= 50L -> ShellPhase.MILD
+        else -> ShellPhase.NORMAL
+    }
+}
+
+/**
+ * Command resource class. LEAKY = known native-heap leakers that should
+ * never ride a shared shell (recycle unconditionally). HEAVY = commands
+ * that grow the PRoot tracer / allocate real memory (recycle under
+ * pressure). LIGHT = everything else (ls/cat/grep/file ops — recycle only
+ * by budget or memory thresholds, never by class).
+ */
+internal enum class CommandClass { LIGHT, HEAVY, LEAKY }
+
+internal fun classifyCommand(command: String): CommandClass {
+    val trimmed = command.trimStart()
+    return when {
+        // minis-model-use spawns in-process LLM calls whose DirectByteBuffer
+        // allocations live in the app native heap, invisible to GC — always
+        // isolate it from shared shells.
+        trimmed.startsWith("minis-model-use") -> CommandClass.LEAKY
+        trimmed.startsWith("python3") || trimmed.startsWith("python ") ||
+            trimmed.startsWith("apk ") || trimmed == "apk" ||
+            trimmed.startsWith("pip ") || trimmed.startsWith("pip3 ") ||
+            trimmed.startsWith("npm ") || trimmed.startsWith("go ") ||
+            trimmed.startsWith("cargo ") || trimmed.startsWith("node ") ->
+            CommandClass.HEAVY
+        else -> CommandClass.LIGHT
+    }
+}
+
+/**
+ * Command-class recycle decision. LEAKY always recycles (leak containment);
+ * HEAVY recycles only when app native heap is above [heavyRecycleThresholdMB]
+ * (default 80MB — matches HEAVY_CMD_RECYCLE_NATIVE_MB); LIGHT never recycles
+ * by class (the generation budget still caps it).
+ */
+internal fun shouldRecycleByClass(
+    cmdClass: CommandClass,
+    nativeMB: Long,
+    heavyRecycleThresholdMB: Long = 80L,
+): Boolean {
+    return when (cmdClass) {
+        CommandClass.LEAKY -> true
+        CommandClass.HEAVY -> nativeMB > heavyRecycleThresholdMB
+        CommandClass.LIGHT -> false
+    }
+}
+
+/**
+ * Shell generation budget (max commands before forced recycle), shrinking
+ * as app native heap climbs. At ≥120MB literally every command recycles the
+ * shell (budget 1), shedding the PRoot tracer after each execution.
+ */
+internal fun internalGenerationBudget(nativeMB: Long): Int {
+    return when {
+        nativeMB < 50L -> 30
+        nativeMB < 80L -> 15
+        nativeMB < 100L -> 5
+        nativeMB < 120L -> 2
+        else -> 1
+    }
+}
+
+/**
+ * Pre-execution rejection message for the current phase + command class.
+ * Returns null when the command may proceed:
+ *   LOCKED    — everything rejected (same as the old 350MB hard cap)
+ *   CRITICAL  — heavy & leaky rejected; light commands still run so the
+ *               agent can read files / self-recover under pressure
+ *   SEVERE    — leaky (model) calls rejected; everything else runs
+ *   MILD/MODERATE/NORMAL — proceed
+ */
+internal fun preExecRejectionMessage(
+    phase: ShellPhase,
+    cmdClass: CommandClass,
+    nativeMB: Long,
+): String? {
+    return when (phase) {
+        ShellPhase.LOCKED -> "[System memory pressure: native heap ${nativeMB}MB exceeds safe limit. " +
+            "Please reduce concurrent sessions or wait for memory to recover.]"
+        ShellPhase.CRITICAL -> if (cmdClass == CommandClass.LIGHT) null else
+            "[System memory pressure: native heap ${nativeMB}MB — only lightweight commands allowed. " +
+            "Please reduce concurrent sessions or wait for memory to recover.]"
+        ShellPhase.SEVERE -> if (cmdClass == CommandClass.LEAKY)
+            "[System memory pressure: native heap ${nativeMB}MB — model calls are temporarily unavailable. " +
+            "Please wait for memory to recover.]" else null
+        else -> null
+    }
 }
