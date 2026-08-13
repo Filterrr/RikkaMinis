@@ -84,7 +84,7 @@ class ChatFormattingTest {
 
     @Test
     fun `formatToolDuration exactly 1 second`() {
-        assertEquals("1.0s", formatToolDuration(1000))
+        assertEquals("1s", formatToolDuration(1000))
     }
 
     @Test
