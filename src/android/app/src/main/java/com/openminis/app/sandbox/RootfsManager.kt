@@ -273,14 +273,23 @@ class RootfsManager private constructor(private val context: Context) {
             val expected = expectedSizes[rel] ?: return true
             return f.length() == expected
         }
+        // Dynamic paths — installed or upgraded via `apk add`, or grown by
+        // it (the apk database). Their size changes legitimately after the
+        // factory snapshot is written, so asserting the manifest's factory
+        // size against them is WRONG: it made a freshly `apk add`-ed bash
+        // (size != 0) look "missing", and made the grown apk db look
+        // "unusable" — which pushed autoRepair into a full-reset loop on
+        // EVERY boot. These only need to exist.
+        fun existsDynamic(rel: String): Boolean = File(rootfsDir, rel).exists()
+
         return RootfsHealth(
-            bash = executable("bin/bash"),
+            bash = existsDynamic("bin/bash"),
             sh = executable("bin/sh"),
             libc = exists("lib/ld-musl-aarch64.so.1"),
-            libreadline = exists("usr/lib/libreadline.so.8"),
-            libncursesw = exists("usr/lib/libncursesw.so.6"),
+            libreadline = existsDynamic("usr/lib/libreadline.so.8"),
+            libncursesw = existsDynamic("usr/lib/libncursesw.so.6"),
             apk = executable("sbin/apk"),
-            apkDatabase = exists("lib/apk/db/installed"),
+            apkDatabase = existsDynamic("lib/apk/db/installed"),
         )
     }
 
