@@ -424,3 +424,6 @@ private fun ColumnScope.ApiKeyConfigSection(
             .padding(horizontal = 16.dp),
         enabled = apiKey.isNotBlank(),
     ) {
+        Text(stringResource(R.string.provider_list_add_provider))
+    }
+}
