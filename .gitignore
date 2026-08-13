@@ -14,6 +14,7 @@ captures/
 .cxx/
 *.aab
 *.apk
+!src/android/app/src/main/assets/apk-offline/*.apk
 output-metadata.json
 
 # IntelliJ
