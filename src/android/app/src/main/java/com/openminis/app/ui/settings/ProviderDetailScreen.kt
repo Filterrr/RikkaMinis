@@ -583,13 +583,6 @@ private fun exportProviderInstance(
     context.startActivity(chooser)
 }
 
-/**
- * Manual Bearer Token section for OAuth providers. Mirrors iOS
- * `manualOAuthTokenSection` — when set, the static token bypasses the OAuth
- * refresh flow entirely and is sent verbatim as `Authorization: Bearer …`.
- */
-@Composable
-
 /** Input modalities that get a (muted) capability badge in the model list. */
 internal val modalityIconKeys = setOf("image", "pdf", "audio", "video")
 

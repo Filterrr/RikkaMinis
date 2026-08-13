@@ -47,7 +47,7 @@ import java.io.InputStreamReader
 import java.util.concurrent.TimeUnit
 import com.openminis.app.provider.failOnSilentEmptyCompletion
 
-class OpenAIProvider private constructor(
+class OpenAIProvider constructor(
     private val apiKey: String?,
     override var model: LLMModel = LLMModel.gpt4oMini,
     private val basePath: String = "https://api.openai.com/v1",
@@ -78,27 +78,6 @@ class OpenAIProvider private constructor(
     private val azureBase: String? = null,
 ) : LLMProvider {
     override val name = "OpenAI"
-
-    /** API Key constructor (Chat Completions API by default; set useResponsesAPI=true for /v1/responses). */
-    constructor(
-        apiKey: String,
-        model: LLMModel = LLMModel.gpt4oMini,
-        basePath: String = "https://api.openai.com/v1",
-        extraHeaders: Map<String, String> = emptyMap(),
-        useResponsesAPI: Boolean = false,
-        customUserAgent: String? = null,
-        isAzure: Boolean = false,
-        azureBase: String? = null,
-    ) : this(
-        apiKey = apiKey,
-        model = model,
-        basePath = basePath,
-        extraHeaders = extraHeaders,
-        useResponsesAPI = useResponsesAPI,
-        customUserAgent = customUserAgent,
-        isAzure = isAzure,
-        azureBase = azureBase,
-    )
 
     companion object {
         /**
