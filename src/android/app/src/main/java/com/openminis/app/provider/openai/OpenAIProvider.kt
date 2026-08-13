@@ -49,22 +49,11 @@ import com.openminis.app.provider.failOnSilentEmptyCompletion
 
 class OpenAIProvider private constructor(
     private val apiKey: String?,
-    private val oauthTokenProvider: (suspend () -> String)?,
     override var model: LLMModel = LLMModel.gpt4oMini,
     private val basePath: String = "https://api.openai.com/v1",
     private val extraHeaders: Map<String, String> = emptyMap(),
-    /** Codex account ID for OAuth mode (extracted from JWT). */
-    var codexAccountId: String? = null,
     /** When true, route through /v1/responses even on API-key providers. */
     private val useResponsesAPI: Boolean = false,
-    /**
-     * When true, force Chat Completions even when the bearer is provided
-     * via OAuth. Set by OAuth-but-not-Codex callers (xAI Grok) — without
-     * it the default `usesChatCompletionsAPI = !isOAuth && !useResponsesAPI`
-     * heuristic incorrectly drags an OAuth bearer onto the Codex
-     * Responses backend at chatgpt.com, where it 404s.
-     */
-    private val forceChatCompletions: Boolean = false,
     /**
      * [T-provider-custom-user-agent] Per-provider User-Agent override.
      * null/blank → default UA; non-blank → replaces User-Agent on every
@@ -102,7 +91,6 @@ class OpenAIProvider private constructor(
         azureBase: String? = null,
     ) : this(
         apiKey = apiKey,
-        oauthTokenProvider = null,
         model = model,
         basePath = basePath,
         extraHeaders = extraHeaders,
@@ -112,54 +100,14 @@ class OpenAIProvider private constructor(
         azureBase = azureBase,
     )
 
-    /** OAuth constructor (Codex Responses API). */
-    constructor(
-        oauthTokenProvider: suspend () -> String,
-        model: LLMModel = LLMModel.codexMini,
-        codexAccountId: String? = null,
-    ) : this(apiKey = null, oauthTokenProvider = oauthTokenProvider, model = model, codexAccountId = codexAccountId)
-
     companion object {
-        /**
-         * [T-android-thinking-level-arch] Codex OAuth client version advertised
-         * in the Version / User-Agent headers. Bumped 0.142.3 → 0.144.1 to
-         * match the CLIProxyAPI/sub2api upstream (fixes a gpt-5.6-luna 404 seen
-         * on the older client). Shared constant so future bumps touch one place.
-         */
-        private const val CODEX_CLIENT_VERSION = "0.144.1"
-
         /**
          * [T-android-stale-conn-retry-hang] Streaming time-to-first-byte
          * budget: response HEADERS must arrive within this window. Does NOT
          * bound the SSE body — a flowing stream stays unlimited.
          */
         private const val STREAM_TTFB_TIMEOUT_MS = 30_000L
-
-        /**
-         * Factory for OAuth-bearer OpenAI-compatible providers that aren't
-         * Codex (e.g. xAI Grok). Same dynamic bearer plumbing, but the
-         * wire format stays Chat Completions and the endpoint is the
-         * caller-supplied base URL — not chatgpt.com's Responses API.
-         *
-         * Implemented as a factory (not a secondary ctor) because the
-         * JVM erases the signature down to
-         * `(Function1, LLMModel, String)` which collides with the Codex
-         * ctor's `(oauthTokenProvider, model, codexAccountId)` overload.
-         */
-        fun oauthOpenAICompat(
-            oauthTokenProvider: suspend () -> String,
-            model: LLMModel,
-            basePath: String,
-        ): OpenAIProvider = OpenAIProvider(
-            apiKey = null,
-            oauthTokenProvider = oauthTokenProvider,
-            model = model,
-            basePath = basePath,
-            forceChatCompletions = true,
-        )
     }
-
-    private val isOAuth: Boolean get() = oauthTokenProvider != null
 
     // MARK: - Image passthrough [T-android-model-use-image-passthrough GH#62]
 
@@ -291,10 +239,10 @@ class OpenAIProvider private constructor(
 
     /**
      * Whether this provider uses Chat Completions API (vs Responses API).
-     * Responses API is used when OAuth (Codex) OR when the user explicitly
-     * flipped the per-instance `useResponsesAPI` switch.
+     * Responses API is used when the user explicitly flipped the per-instance
+     * `useResponsesAPI` switch.
      */
-    private val usesChatCompletionsAPI: Boolean get() = forceChatCompletions || (!isOAuth && !useResponsesAPI)
+    private val usesChatCompletionsAPI: Boolean get() = !useResponsesAPI
 
     /**
      * [T-android-tool-splits-reply-fix] Chat Completions streams ONE
@@ -314,10 +262,7 @@ class OpenAIProvider private constructor(
      * Only meaningful on the Codex OAuth path; everything else (the GPT-5.x
      * Codex models and their existing OAuth flow) is untouched by this gate.
      */
-    private val isCodexImageModel: Boolean get() = isOAuth && model.id == "gpt-image-2"
-
     private suspend fun getToken(): String {
-        oauthTokenProvider?.let { return it() }
         return apiKey ?: throw LLMError.InvalidApiKey()
     }
 
@@ -482,31 +427,7 @@ class OpenAIProvider private constructor(
         tools: List<AgentToolDefinition>,
         thinkingLevel: ThinkingLevel,
     ): Flow<LLMStreamChunk> = callbackFlow {
-        val body = if (isCodexImageModel) {
-            // [T-gpt-image2-codex-backend-route-android] gpt-image-2 on an
-            // OpenAI OAuth (Codex) instance is driven through the Codex backend
-            // image_generation tool (chatgpt.com/backend-api/codex/responses),
-            // NOT the public /v1/images/generations Images API — a Codex OAuth
-            // token lacks the api.model.images.request scope and the Images API
-            // 401s with "Missing scopes: api.model.images.request" (see
-            // codex_oauth_image_generation_summary.md §11.1). Aligns with iOS
-            // commit 2dd35a14. The Codex-backend route is selected purely by
-            // `isCodexImageModel` (isOAuth + model id) — it does NOT require a
-            // codexAccountId (the Chatgpt-Account-Id header is optional and its
-            // absence doesn't 401), which is exactly the iOS fall-through bug
-            // this avoids. Android has no Images-API path at all, so an OAuth
-            // gpt-image-2 request can never reach /v1/images/generations.
-            //
-            // Special image-generation body — not Chat Completions, not the
-            // normal Responses tool shape.
-            com.openminis.app.logging.AppLogger.info(
-                "OpenAIProvider",
-                "[ModelUseRoute] gpt-image-2 → route=codex-backend " +
-                    "url=chatgpt.com/backend-api/codex/responses isOAuth=$isOAuth " +
-                    "hasAccountId=${codexAccountId != null}",
-            )
-            buildCodexImageBody(messages)
-        } else if (usesChatCompletionsAPI) {
+        val body = if (usesChatCompletionsAPI) {
             buildRequestBody(messages, systemPrompt, maxTokens, stream = true, temperature = temperature, imageParts = imageParts, tools = tools, thinkingLevel = thinkingLevel)
         } else {
             buildResponsesAPIBody(messages, systemPrompt, maxTokens, stream = true, tools = tools, thinkingLevel = thinkingLevel)
@@ -641,31 +562,6 @@ class OpenAIProvider private constructor(
         }
 
         val reader = BufferedReader(InputStreamReader(response.body!!.byteStream()))
-
-        // [T-codex-gpt-image2-oauth-android] gpt-image-2: the Codex backend
-        // streams the image as a base64 blob (PNG / JPEG / WebP) inside the SSE
-        // `image_generation_call` output item; there's no incremental text/tool
-        // stream to parse. handleCodexImageStream parses the SSE line-by-line,
-        // pulls the image (or a structured failure), emits a MediaAttachment
-        // chunk, and finishes — bypassing the chat/tool SSE state machine below.
-        if (isCodexImageModel) {
-            try {
-                handleCodexImageStream(reader) { chunk -> trySend(chunk) }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                cancel("Image stream error", mapError(e))
-            } finally {
-                reader.close()
-                response.close()
-            }
-            channel.close()
-            awaitClose {
-                try { call.cancel() } catch (_: Exception) {}
-                try { response.close() } catch (_: Exception) {}
-            }
-            return@callbackFlow
-        }
 
         // Chat Completions: tool calls are streamed as deltas keyed by index.
         data class ToolCallAccumulator(var id: String = "", var name: String = "", val args: StringBuilder = StringBuilder(), var started: Boolean = false)
@@ -1241,7 +1137,8 @@ class OpenAIProvider private constructor(
      * API (`POST $basePath/images/generations`). Mirrors iOS
      * OpenAIProvider.generateImage. Used only by ModelUseOffloadHandler's
      * image-output routing for API-key OpenAI-compat instances — the Codex
-     * OAuth gpt-image-2 path goes through the existing isCodexImageModel branch
+     * [T-gpt-image2-normal-route] gpt-image-2 on the normal (non-Codex)
+     * path goes through the existing image-generation handling.
      * and never reaches here.
      *
      * Request body: `{ model, prompt, n, size?, quality?, response_format:
@@ -1735,12 +1632,10 @@ class OpenAIProvider private constructor(
      * [T-android-model-use-passthrough-mode GH#72] Shared verbatim merge of
      * [chatExtraBody] into a request body, applied by BOTH the chat/completions
      * and responses builders so no endpoint can forget the passthrough. User
-     * keys overwrite; `model` is force-restored last. Skipped for Codex OAuth
-     * (its body is part of the client fingerprint and must stay untouched).
+     * keys overwrite; `model` is force-restored last.
      */
     private fun mergeChatExtraBody(body: JSONObject) {
         if (chatExtraBody.isEmpty()) return
-        if (isOAuth && !forceChatCompletions) return  // Codex OAuth exemption
         for ((k, v) in chatExtraBody) body.put(k, v ?: JSONObject.NULL)
         body.put("model", model.id)
     }
@@ -1806,43 +1701,11 @@ class OpenAIProvider private constructor(
     /**
      * T302: takes the pre-serialized body string instead of the JSONObject so
      * the caller can serialize once and reuse the result for the debug log,
-     * the OAuth byte build, and the OkHttp RequestBody. Per-call peak heap
-     * dropped by ~2× the body size (often tens of MB on long agent loops).
+     * the byte build, and the OkHttp RequestBody. Per-call peak heap dropped
+     * by ~2× the body size (often tens of MB on long agent loops).
      */
     private suspend fun buildRequest(bodyStr: String): Request {
         val token = getToken()
-
-        if (isOAuth && !forceChatCompletions) {
-            // Codex OAuth — use ChatGPT backend Responses API
-            // Use MediaType without charset — ChatGPT backend rejects "application/json; charset=utf-8"
-            val jsonMediaType = "application/json".toMediaType()
-            val bodyBytes = bodyStr.toByteArray(Charsets.UTF_8)
-            val requestBody = object : okhttp3.RequestBody() {
-                override fun contentType() = jsonMediaType
-                override fun contentLength() = bodyBytes.size.toLong()
-                override fun writeTo(sink: okio.BufferedSink) { sink.write(bodyBytes) }
-            }
-            val builder = Request.Builder()
-                .url("https://chatgpt.com/backend-api/codex/responses")
-                .post(requestBody)
-                .header("Authorization", "Bearer $token")
-                .header("Version", CODEX_CLIENT_VERSION)
-                .header("Openai-Beta", "responses=experimental")
-                .header("User-Agent", "codex_cli_rs/$CODEX_CLIENT_VERSION (Android; arm64)")
-                .header("Originator", "codex_cli_rs")
-            codexAccountId?.let { builder.header("Chatgpt-Account-Id", it) }
-            // [T-provider-custom-user-agent] Applied last so a non-blank
-            // override wins over the Codex default UA. In practice null on
-            // this OAuth path (the UI only exposes it for custom-base
-            // instances), so this is a no-op there.
-            // [T-android-default-ua] `defaultUserAgent = null` — keep the
-            // codex_cli_rs fingerprint set above when no per-provider
-            // override is configured. We must NOT fall back to the branded
-            // Minis UA here: the ChatGPT OAuth backend validates the
-            // client identity against this header.
-            builder.applyUserAgentOverride(customUserAgent, defaultUserAgent = null)
-            return builder.build()
-        }
 
         val endpointPath = if (useResponsesAPI) "/responses" else "/chat/completions"
         // [T-android-azure-openai] Azure routes via the deployments path and
@@ -2174,178 +2037,6 @@ class OpenAIProvider private constructor(
      * instruction. The <prompt> is the latest user text — plain string content
      * or the concatenated text parts of the last user message.
      */
-    private fun buildCodexImageBody(messages: List<LLMMessage>): JSONObject {
-        val lastUser = messages.lastOrNull { it.role == LLMMessage.Role.USER }
-        val prompt = lastUser?.let { m ->
-            m.content.takeIf { it.isNotBlank() }
-                ?: m.contentParts.filterIsInstance<AgentContentPart.Text>()
-                    .joinToString(" ") { it.text }.trim()
-        }.orEmpty()
-        return JSONObject().apply {
-            put("model", "gpt-5.5")
-            put("instructions", "You are a helpful assistant. Use tools when available.")
-            put("input", JSONArray().put(JSONObject().apply {
-                put("role", "user")
-                put("content", "Use the image generation tool to create: $prompt")
-            }))
-            put("store", false)
-            put("tools", JSONArray().put(JSONObject().put("type", "image_generation")))
-            put("reasoning", JSONObject().put("effort", "low"))
-            put("include", JSONArray())
-            put("tool_choice", "auto")
-            put("parallel_tool_calls", true)
-            put("stream", true)
-        }
-    }
-
-    /**
-     * [T-android-codex-image-stream-parse-fix #617] Consume the Codex Responses
-     * SSE stream and extract the generated image, emitting it as a
-     * MediaAttachment chunk followed by Finished.
-     *
-     * Structurally aligned with iOS `consumeCodexImageStream` (1225ec0b /
-     * 2dd35a14): parse each `data:` SSE line as JSON and pull the base64 from
-     * the `image_generation_call` output item's `result` field — NOT a blind
-     * regex over the raw body. The previous regex `iVBOR[A-Za-z0-9+/=]{1000,}`
-     * only matched PNG base64 (iVBOR is the base64 of the PNG \x89PNG header),
-     * so a WebP (UklGR…) or JPEG (/9j/…) image — which gpt-image-2 routinely
-     * returns — never matched and the method threw "no image data" even though
-     * the Codex backend had returned a full ~8 MB valid image (#615 diagnosis).
-     *
-     * Failure modes, each a distinct LLMError (mirrors iOS):
-     *   - auth (401/403): surfaced earlier by the non-2xx branch → mapHttpError,
-     *     never reaches here.
-     *   - safety refusal: `image_generation_call` status=failed and/or a refusal
-     *     message instead of an image → ProviderError("rejected by safety…").
-     *   - no image: stream completed with neither image nor refusal →
-     *     ProviderError("No image data…"). Only reported in this genuine case —
-     *     not on a successfully-decoded non-PNG image.
-     *   - network/interface: read throws (IOException) → caller maps to
-     *     NetworkError.
-     *
-     * Streams line-by-line (no 8 MB StringBuilder + regex backtracking): only
-     * the one `result` base64 string is retained, decoded once at the end.
-     * Never logs the token (the SSE body carries no Authorization).
-     */
-    private suspend fun handleCodexImageStream(
-        reader: BufferedReader,
-        emit: (LLMStreamChunk) -> Unit,
-    ) {
-        var b64Result: String? = null
-        var revisedPrompt: String? = null
-        var imageCallFailed = false
-        var refusalText: String? = null
-
-        // Pull the base64 result / failure / revised prompt out of one output
-        // item. Used both for streamed `response.output_item.done` items and,
-        // as a fallback, for every item in the final `response.completed`
-        // payload (matches iOS scanItem).
-        fun scanItem(item: JSONObject) {
-            when (item.optString("type")) {
-                "image_generation_call" -> {
-                    if (item.optString("status") == "failed") imageCallFailed = true
-                    item.optString("result").takeIf { it.isNotEmpty() }?.let { b64Result = it }
-                    item.optString("revised_prompt").takeIf { it.isNotEmpty() }?.let { revisedPrompt = it }
-                }
-                "message", "output_text" -> {
-                    // Refusal / explanation text the model emits when it declines.
-                    val content = item.optJSONArray("content")
-                    if (content != null) {
-                        for (i in 0 until content.length()) {
-                            val c = content.optJSONObject(i) ?: continue
-                            if (c.optString("type").contains("text")) {
-                                c.optString("text").takeIf { it.isNotEmpty() }?.let { refusalText = it }
-                            }
-                        }
-                    } else {
-                        item.optString("text").takeIf { it.isNotEmpty() }?.let { refusalText = it }
-                    }
-                }
-            }
-        }
-
-        var line: String?
-        while (reader.readLine().also { line = it } != null) {
-            val l = line ?: continue
-            // Tolerate both `data: {…}` and `data:{…}` (same as the chat path).
-            if (!l.startsWith("data:")) continue
-            val payload = l.removePrefix("data:").let { if (it.startsWith(" ")) it.removePrefix(" ") else it }
-            if (payload == "[DONE]") break
-
-            val event = try { JSONObject(payload) } catch (e: Exception) { continue }
-            when (event.optString("type")) {
-                "response.output_item.done" -> {
-                    event.optJSONObject("item")?.let { scanItem(it) }
-                }
-                "response.output_text.done", "response.output_text.delta" -> {
-                    event.optString("text").takeIf { it.isNotEmpty() }?.let { refusalText = it }
-                        ?: event.optString("delta").takeIf { it.isNotEmpty() }
-                            ?.let { refusalText = (refusalText ?: "") + it }
-                }
-                "response.completed" -> {
-                    if (b64Result == null) {
-                        val output = event.optJSONObject("response")?.optJSONArray("output")
-                        if (output != null) {
-                            for (i in 0 until output.length()) {
-                                output.optJSONObject(i)?.let { scanItem(it) }
-                            }
-                        }
-                    }
-                }
-                "response.failed", "error" -> {
-                    val msg = event.optJSONObject("response")?.optJSONObject("error")?.optString("message")
-                        ?.takeIf { it.isNotEmpty() }
-                        ?: event.optJSONObject("error")?.optString("message")?.takeIf { it.isNotEmpty() }
-                        ?: "Codex image generation failed"
-                    throw LLMError.ProviderError(msg)
-                }
-            }
-        }
-
-        // Success: base64 image extracted. Detect the real format from the
-        // decoded bytes (PNG / JPEG / WebP / GIF) instead of assuming PNG.
-        val b64 = b64Result
-        if (b64 != null) {
-            val bytes = try {
-                Base64.decode(b64, Base64.DEFAULT)
-            } catch (e: Exception) {
-                throw LLMError.ProviderError("Failed to decode generated image: ${e.message}")
-            }
-            if (bytes.isNotEmpty()) {
-                emit(
-                    LLMStreamChunk.MediaAttachment(
-                        LLMMediaAttachment(
-                            type = LLMMediaAttachment.MediaType.IMAGE,
-                            mimeType = detectImageMime(bytes),
-                            data = bytes,
-                        ),
-                    ),
-                )
-                emit(LLMStreamChunk.Finished("end_turn"))
-                return
-            }
-        }
-
-        // Safety refusal: the image call explicitly failed and/or the model
-        // returned a refusal message instead of an image.
-        if (imageCallFailed || refusalText != null) {
-            val reason = refusalText?.trim()
-            throw LLMError.ProviderError(
-                "Image generation was rejected by the safety system" +
-                    (reason?.takeIf { it.isNotBlank() }?.let { ": $it" } ?: "."),
-            )
-        }
-
-        // Stream completed with neither an image nor a refusal.
-        throw LLMError.ProviderError("No image data in Codex response")
-    }
-
-    /**
-     * [T-android-codex-image-stream-parse-fix] Detect an image's MIME type from
-     * its magic bytes. Mirrors iOS `detectImageMime`. gpt-image-2 can return
-     * PNG, JPEG, or WebP, so the previous hardcoded "image/png" mislabeled
-     * non-PNG output. Falls back to image/png when too short / unrecognized.
-     */
     private fun detectImageMime(data: ByteArray): String {
         if (data.size < 4) return "image/png"
         val b = data.map { it.toInt() and 0xFF }
@@ -2402,18 +2093,12 @@ class OpenAIProvider private constructor(
         // strictly behind isCodexOAuth. OpenAI's first-party Responses API
         // also accepts the field, so we keep it on for OAuth (Codex) only —
         // the encrypted reasoning content is what lets the ChatGPT backend
-        // re-attach prior reasoning across turns without store=true.
-        if (isOAuth) {
-            body.put("include", JSONArray().put("reasoning.encrypted_content"))
-        }
         // Thinking level → Responses API `reasoning.effort`. Mirrors iOS
         // OpenAIAgentProvider.swift:327-338. Pre-T119 this was hardcoded to
         // "low" regardless of the user's setting, so toggling Thinking
         // High/Medium/Off had no effect on GPT-5.x via the Responses path.
         // - When the user has thinking enabled → map their level to the
         //   matching effort string.
-        // - When off but using Codex OAuth → fall back to "low" because the
-        //   ChatGPT backend rejects requests without a `reasoning` object.
         // - Else → omit the field so the upstream applies its own default.
         // [T-android-codex-thinking-summary] `summary: "auto"` opts in to
         // streaming the human-readable reasoning SUMMARY (delivered as
@@ -2441,10 +2126,6 @@ class OpenAIProvider private constructor(
                 "reasoning",
                 JSONObject().put("effort", effort).put("summary", "auto"),
             )
-            isOAuth -> body.put(
-                "reasoning",
-                JSONObject().put("effort", "low").put("summary", "auto"),
-            )
             // [T-thinking-off-explicit] Thinking OFF on a reasoning-capable
             // model: send the explicit off tier instead of omitting `reasoning`
             // — omission lets the vendor default kick in. Same ALLOWLIST as the
@@ -2463,21 +2144,18 @@ class OpenAIProvider private constructor(
         // [T-responses-max-output-tokens] The builder received maxTokens but
         // never wrote it into the body, so Responses-flavor vendors fell back
         // to their (often tiny) defaults and truncated. Same guard as iOS
-        // 637cd890/5f148144: maxTokens > 0, and Codex OAuth excluded — the
-        // codex_cli_rs body shape is a client fingerprint and must not carry
-        // fields the real CLI doesn't send.
-        if (maxTokens > 0 && !isOAuth) {
+        // 637cd890/5f148144: maxTokens > 0.
+        if (maxTokens > 0) {
             body.put("max_output_tokens", maxTokens)
         }
 
         // [T-codex-fast-mode] Fast tier injection (mirrors iOS fb671083 +
         // 838ba929). Wire value verified against openai/codex source
         // (codex-rs/protocol config_types.rs): ServiceTier::Fast sends
-        // service_tier="priority" — "fast" is only the UI name, so this stays
-        // inside the codex_cli_rs client fingerprint on the OAuth route. Gate
-        // is toggle + gpt-family model only: this builder IS the Responses
+        // service_tier="priority" — "fast" is only the UI name. Gate is
+        // toggle + gpt-family model only: this builder IS the Responses
         // path, and Responses relays (e.g. sub2api) normalize/pass the tier
-        // through, so no isOAuth narrowing. Ineligible upstreams ignore the
+        // through. Ineligible upstreams ignore the
         // field or silently downgrade (receipt visible via the
         // response.completed service_tier log).
         if (com.openminis.app.data.FastModePrefs.isEnabled() &&

@@ -714,7 +714,6 @@
     <string name="share_provider_json_imported">已导入服务商“%1$s”</string>
     <string name="share_provider_json_import_failed">无效的服务商配置文件</string>
     <string name="provider_list_api_key">API Key</string>
-    <string name="provider_list_oauth">OAuth</string>
     <string name="provider_list_no_api_key">无 API 密钥</string>
     <string name="provider_list_disabled">已停用</string>
     <string name="provider_list_favorites">常用</string>
@@ -722,8 +721,6 @@
     <string name="provider_unset_favorite">取消常用</string>
     <string name="provider_detail_export">导出</string>
     <string name="provider_detail_label">标签</string>
-    <string name="provider_detail_manual_bearer_token">手动 Bearer Token</string>
-    <string name="provider_detail_use_a_static_bearer_token_instead_of_the">使用静态 bearer token,而不是 OAuth 登录流程。</string>
     <string name="provider_detail_custom_api_base">自定义 API 地址</string>
     <string name="provider_detail_custom_user_agent">自定义 User-Agent</string>
     <string name="provider_detail_custom_user_agent_placeholder">留空使用默认值</string>
@@ -742,7 +739,6 @@
     <string name="provider_detail_image_endpoint_chat">聊天</string>
     <string name="provider_detail_api_format_responses_footer">使用 /v1/responses 端点格式。某些仅支持 Responses API 的服务需要此格式。</string>
     <string name="provider_detail_api_format_chat_footer">标准 /v1/chat/completions 格式。兼容大多数 OpenAI 兼容服务。</string>
-    <string name="provider_detail_manual_bearer_footer">对接自定义代理端点时使用。</string>
 
     <string name="provider_detail_status">状态</string>
     <string name="provider_detail_enabled">已启用</string>
@@ -755,19 +751,13 @@
     <string name="provider_detail_add_custom_model">添加自定义模型</string>
     <string name="provider_detail_delete_provider">删除 AI 服务商</string>
     <string name="provider_detail_delete_model">Delete Model</string>
-    <string name="provider_detail_sign_out">退出登录</string>
-    <string name="provider_detail_sign_in">登录</string>
     <string name="provider_detail_save_key">保存密钥</string>
     <string name="provider_detail_paste_bearer_token">粘贴 bearer token</string>
     <string name="provider_detail_save_token">保存 Token</string>
     <string name="common_change">更换</string>
     <string name="common_remove">移除</string>
-    <string name="provider_detail_set_manual_bearer_token">设置手动 Bearer Token</string>
     <string name="add_provider_choose_provider">选择 AI 服务商</string>
     <string name="add_provider_you_can_add_multiple_instances_of_the_sa">你可以添加同一服务商的多个实例（例如工作和个人账户）。OpenAI 和 Anthropic 也支持兼容的第三方端点 —— 选择匹配的协议后再设置自定义 API Base URL。</string>
-    <string name="add_provider_auth_method">认证方式</string>
-    <string name="add_provider_choose_authentication">选择身份验证方式</string>
-    <string name="add_provider_pick_the_auth_method_that_matches_your_a">选择与你账户匹配的身份验证方式。OAuth 通过服务商的网页流程登录；API Key 使用账户面板里的密钥。</string>
     <string name="add_provider_identity">标识</string>
     <string name="add_provider_the_label_is_shown_in_the_provider_list_">标签会显示在服务商列表和模型选择器里。</string>
     <string name="add_provider_credential">凭证</string>
@@ -782,7 +772,6 @@
     <string name="add_provider_opens_the_provider_s_web_sign_in_flow_af">打开服务商的网页登录流程。登录后,token 会自动写入这里。</string>
     <string name="add_provider_signing_in">正在登录…</string>
     <!-- T-android-codex-oauth-dns -->
-    <string name="add_provider_oauth_network_unreachable">无法连接到登录服务器，请检查网络或代理设置后重试。</string>
     <string name="add_provider_or_configure_manually">或手动配置</string>
     <string name="add_provider_for_third_party_coding_plans_e_g_minimax">For third-party Coding Plans (e.g. MiniMax, Kimi) or compatible proxy endpoints, enter the API base URL and bearer token manually.</string>
     <string name="add_provider_bearer_token">Bearer Token</string>
@@ -919,7 +908,6 @@
     <string name="provider_detail_https_api_example_placeholder">https://api.example.com</string>
     <string name="provider_detail_models_count_header">模型 (%1$d)</string>
     <string name="provider_detail_refresh_success_api">已刷新——从提供商加载了 %1$d 个模型。</string>
-    <string name="provider_detail_refresh_success_oauth">已刷新，模型列表已通过 OAuth 加载。</string>
     <string name="provider_detail_refresh_success_models_dev">无实时列表；已使用 models.dev 注册表（%1$d 个模型）。结果可能不精确。</string>
     <string name="provider_detail_refresh_no_key">未配置 API 密钥——没有可刷新的内容。</string>
     <string name="provider_detail_refresh_preserved">无匹配的 models.dev 条目——保留现有模型列表。</string>

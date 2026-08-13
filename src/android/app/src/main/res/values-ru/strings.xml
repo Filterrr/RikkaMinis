@@ -693,7 +693,6 @@
     <string name="share_provider_json_imported">Провайдер \"%1$s\" импортирован</string>
     <string name="share_provider_json_import_failed">Недействительный файл конфигурации провайдера</string>
     <string name="provider_list_api_key">Ключ API</string>
-    <string name="provider_list_oauth">OAuth</string>
     <string name="provider_list_no_api_key">Нет ключа API</string>
     <string name="provider_list_disabled">Отключено</string>
     <string name="provider_list_favorites">Избранное</string>
@@ -701,8 +700,6 @@
     <string name="provider_unset_favorite">Убрать из избранного</string>
     <string name="provider_detail_export">Экспортировать</string>
     <string name="provider_detail_label">Метка</string>
-    <string name="provider_detail_manual_bearer_token">Ручной Bearer-токен</string>
-    <string name="provider_detail_use_a_static_bearer_token_instead_of_the">Использовать статический Bearer-токен вместо входа через OAuth. </string>
     <string name="provider_detail_custom_api_base">Свой базовый URL API</string>
     <string name="provider_detail_api_format">Формат API</string>
     <string name="provider_detail_chat_completions">Chat Completions</string>
@@ -719,7 +716,6 @@
     <string name="provider_detail_image_endpoint_chat">Чат</string>
     <string name="provider_detail_api_format_responses_footer">Использует формат эндпоинта /v1/responses. Требуется для некоторых сервисов только с Responses API.</string>
     <string name="provider_detail_api_format_chat_footer">Стандартный формат /v1/chat/completions. Совместим с большинством OpenAI-совместимых сервисов.</string>
-    <string name="provider_detail_manual_bearer_footer">Полезно при использовании пользовательских прокси-эндпоинтов.</string>
 
     <string name="provider_detail_status">Статус</string>
     <string name="provider_detail_enabled">Включено</string>
@@ -732,19 +728,13 @@
     <string name="provider_detail_add_custom_model">Добавить свою модель</string>
     <string name="provider_detail_delete_provider">Удалить провайдера</string>
     <string name="provider_detail_delete_model">Удалить модель</string>
-    <string name="provider_detail_sign_out">Выйти</string>
-    <string name="provider_detail_sign_in">Войти</string>
     <string name="provider_detail_save_key">Сохранить ключ</string>
     <string name="provider_detail_paste_bearer_token">Вставьте Bearer-токен</string>
     <string name="provider_detail_save_token">Сохранить токен</string>
     <string name="common_change">Изменить</string>
     <string name="common_remove">Удалить</string>
-    <string name="provider_detail_set_manual_bearer_token">Задать токен Bearer вручную</string>
     <string name="add_provider_choose_provider">Выбор провайдера</string>
     <string name="add_provider_you_can_add_multiple_instances_of_the_sa">Можно добавить несколько экземпляров одного провайдера (например, рабочий и личный аккаунты). OpenAI и Anthropic также работают со совместимыми сторонними эндпоинтами — задайте свой базовый URL API после выбора соответствующего протокола.</string>
-    <string name="add_provider_auth_method">Метод аутентификации</string>
-    <string name="add_provider_choose_authentication">Выбор аутентификации</string>
-    <string name="add_provider_pick_the_auth_method_that_matches_your_a">Выберите метод аутентификации, соответствующий вашему аккаунту. OAuth выполняет вход через веб-процесс провайдера; ключ API использует ключ из панели управления вашего аккаунта.</string>
     <string name="add_provider_identity">Идентификация</string>
     <string name="add_provider_the_label_is_shown_in_the_provider_list_">Метка отображается в списке провайдеров и в выборе моделей.</string>
     <string name="add_provider_credential">Учётные данные</string>
@@ -759,7 +749,6 @@
     <string name="add_provider_save_provider">Сохранить провайдера</string>
     <string name="add_provider_opens_the_provider_s_web_sign_in_flow_af">Открывает веб-процесс входа провайдера. После входа токен автоматически фиксируется здесь.</string>
     <string name="add_provider_signing_in">Выполняется вход…</string>
-    <string name="add_provider_oauth_network_unreachable">Не удалось подключиться к серверу входа. Проверьте сеть или настройки прокси и повторите попытку.</string>
     <string name="add_provider_or_configure_manually">Или настроить вручную</string>
     <string name="add_provider_for_third_party_coding_plans_e_g_minimax">Для сторонних тарифов Coding (например, MiniMax, Kimi) или совместимых прокси-эндпоинтов введите базовый URL API и токен Bearer вручную.</string>
     <string name="add_provider_bearer_token">Токен Bearer</string>
@@ -863,7 +852,6 @@
     <string name="provider_detail_https_api_example_placeholder">https://api.example.com</string>
     <string name="provider_detail_models_count_header">Модели (%1$d)</string>
     <string name="provider_detail_refresh_success_api">Обновлено – загружено %1$d моделей от провайдера.</string>
-    <string name="provider_detail_refresh_success_oauth">Обновлено, список моделей загружен через OAuth.</string>
     <string name="provider_detail_refresh_success_models_dev">Живого списка нет; использован реестр models.dev (%1$d моделей). Результаты могут быть приблизительными.</string>
     <string name="provider_detail_refresh_no_key">Ключ API не настроен — обновлять нечего.</string>
     <string name="provider_detail_refresh_preserved">Совпадений в models.dev нет — сохранён текущий список моделей.</string>

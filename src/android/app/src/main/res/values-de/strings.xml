@@ -595,7 +595,6 @@
     <string name="share_provider_json_imported">Provider \"%1$s\" importiert</string>
     <string name="share_provider_json_import_failed">Ungültige Provider-Konfigurationsdatei</string>
     <string name="provider_list_api_key">API Key</string>
-    <string name="provider_list_oauth">OAuth</string>
     <string name="provider_list_no_api_key">Kein API-Schlüssel</string>
     <string name="provider_list_disabled">Deaktiviert</string>
     <string name="provider_list_favorites">Favoriten</string>
@@ -603,8 +602,6 @@
     <string name="provider_unset_favorite">Aus Favoriten entfernen</string>
     <string name="provider_detail_export">Exportieren</string>
     <string name="provider_detail_label">Bezeichnung</string>
-    <string name="provider_detail_manual_bearer_token">Manuelles Bearer Token</string>
-    <string name="provider_detail_use_a_static_bearer_token_instead_of_the">Statisches Bearer-Token statt des OAuth-Anmeldevorgangs verwenden.</string>
     <string name="provider_detail_custom_api_base">Benutzerdefinierte API-Basis</string>
     <string name="provider_detail_api_format">API Format</string>
     <string name="provider_detail_chat_completions">Chat Completions</string>
@@ -621,7 +618,6 @@
     <string name="provider_detail_image_endpoint_chat">Chat</string>
     <string name="provider_detail_api_format_responses_footer">Verwendet das /v1/responses-Endpunktformat. Für einige Nur-Responses-API-Dienste erforderlich.</string>
     <string name="provider_detail_api_format_chat_footer">Standardformat /v1/chat/completions. Kompatibel mit den meisten OpenAI-kompatiblen Diensten.</string>
-    <string name="provider_detail_manual_bearer_footer">Nützlich für benutzerdefinierte Proxy-Endpunkte.</string>
 
     <string name="provider_detail_status">Status</string>
     <string name="provider_detail_enabled">Aktiviert</string>
@@ -634,19 +630,13 @@
     <string name="provider_detail_add_custom_model">Benutzerdefiniertes Modell hinzufügen</string>
     <string name="provider_detail_delete_provider">KI-Anbieter löschen</string>
     <string name="provider_detail_delete_model">Delete Model</string>
-    <string name="provider_detail_sign_out">Abmelden</string>
-    <string name="provider_detail_sign_in">Anmelden</string>
     <string name="provider_detail_save_key">Schlüssel speichern</string>
     <string name="provider_detail_paste_bearer_token">Bearer-Token einfügen</string>
     <string name="provider_detail_save_token">Token speichern</string>
     <string name="common_change">Ändern</string>
     <string name="common_remove">Entfernen</string>
-    <string name="provider_detail_set_manual_bearer_token">Manuelles Bearer Token festlegen</string>
     <string name="add_provider_choose_provider">KI-Anbieter wählen</string>
     <string name="add_provider_you_can_add_multiple_instances_of_the_sa">Du kannst mehrere Instanzen desselben Anbieters hinzufügen (z. B. Arbeits- und Privatkonten). OpenAI und Anthropic funktionieren auch mit kompatiblen Drittanbieter-Endpunkten — lege nach Auswahl des passenden Protokolls eine benutzerdefinierte API-Basis-URL fest.</string>
-    <string name="add_provider_auth_method">Authentifizierungsmethode</string>
-    <string name="add_provider_choose_authentication">Authentifizierung wählen</string>
-    <string name="add_provider_pick_the_auth_method_that_matches_your_a">Wähle die zum Konto passende Authentifizierungsmethode. OAuth meldet sich über den Web-Flow des Anbieters an; API Key verwendet einen Schlüssel aus deinem Konto-Dashboard.</string>
     <string name="add_provider_identity">Identität</string>
     <string name="add_provider_the_label_is_shown_in_the_provider_list_">Das Label wird in der Anbieterliste und Modellauswahl angezeigt.</string>
     <string name="add_provider_credential">Anmeldedaten</string>
@@ -751,7 +741,6 @@
     <string name="provider_detail_https_api_example_placeholder">https://api.example.com</string>
     <string name="provider_detail_models_count_header">Modelle (%1$d)</string>
     <string name="provider_detail_refresh_success_api">Aktualisiert – %1$d Modelle vom Anbieter geladen.</string>
-    <string name="provider_detail_refresh_success_oauth">Aktualisiert, Modellliste per OAuth geladen.</string>
     <string name="provider_detail_refresh_success_models_dev">Keine Live-Liste; models.dev-Registry verwendet (%1$d Modelle). Ergebnisse können ungenau sein.</string>
     <string name="provider_detail_refresh_no_key">Kein API-Schlüssel konfiguriert – nichts zu aktualisieren.</string>
     <string name="provider_detail_refresh_preserved">Kein passender models.dev-Eintrag – bestehende Modellliste behalten.</string>

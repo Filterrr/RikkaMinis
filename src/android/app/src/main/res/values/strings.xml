@@ -854,7 +854,6 @@
     <string name="provider_list_api_key">API Key</string>
     <!-- [provider-mgmt-opt] OAuth providers show this credential label in the
          list row instead of "API Key". -->
-    <string name="provider_list_oauth">OAuth</string>
     <string name="provider_list_no_api_key">No API key</string>
     <string name="provider_list_disabled">Disabled</string>
     <string name="provider_list_favorites">Favorites</string>
@@ -862,8 +861,6 @@
     <string name="provider_unset_favorite">Remove from favorites</string>
     <string name="provider_detail_export">Export</string>
     <string name="provider_detail_label">Label</string>
-    <string name="provider_detail_manual_bearer_token">Manual Bearer Token</string>
-    <string name="provider_detail_use_a_static_bearer_token_instead_of_the">Use a static bearer token instead of the OAuth sign-in flow. </string>
     <string name="provider_detail_custom_api_base">Custom API Base</string>
     <string name="provider_detail_custom_user_agent">Custom User-Agent</string>
     <string name="provider_detail_custom_user_agent_placeholder">Leave blank for default</string>
@@ -884,7 +881,6 @@
     <string name="provider_detail_image_endpoint_chat">Chat</string>
     <string name="provider_detail_api_format_responses_footer">Uses /v1/responses endpoint format. Required for some Responses-API-only services.</string>
     <string name="provider_detail_api_format_chat_footer">Standard /v1/chat/completions format. Compatible with most OpenAI-compatible services.</string>
-    <string name="provider_detail_manual_bearer_footer">Useful with custom proxy endpoints.</string>
     <string name="provider_detail_status">Status</string>
     <string name="provider_detail_enabled">Enabled</string>
     <string name="provider_detail_refresh_models">Refresh Models</string>
@@ -896,19 +892,13 @@
     <string name="provider_detail_add_custom_model">Add Custom Model</string>
     <string name="provider_detail_delete_provider">Delete Provider</string>
     <string name="provider_detail_delete_model">Delete Model</string>
-    <string name="provider_detail_sign_out">Sign Out</string>
-    <string name="provider_detail_sign_in">Sign In</string>
     <string name="provider_detail_save_key">Save Key</string>
     <string name="provider_detail_paste_bearer_token">Paste bearer token</string>
     <string name="provider_detail_save_token">Save Token</string>
     <string name="common_change">Change</string>
     <string name="common_remove">Remove</string>
-    <string name="provider_detail_set_manual_bearer_token">Set Manual Bearer Token</string>
     <string name="add_provider_choose_provider">Choose Provider</string>
     <string name="add_provider_you_can_add_multiple_instances_of_the_sa">You can add multiple instances of the same provider (e.g. work and personal accounts). OpenAI and Anthropic also work with compatible third-party endpoints — set a custom API Base URL after choosing the matching protocol.</string>
-    <string name="add_provider_auth_method">Auth Method</string>
-    <string name="add_provider_choose_authentication">Choose Authentication</string>
-    <string name="add_provider_pick_the_auth_method_that_matches_your_a">Pick the auth method that matches your account. OAuth signs in via the provider\'s web flow; API Key uses a key from your account dashboard.</string>
     <string name="add_provider_identity">Identity</string>
     <string name="add_provider_the_label_is_shown_in_the_provider_list_">The label is shown in the provider list and model picker.</string>
     <string name="add_provider_credential">Credential</string>
@@ -925,7 +915,6 @@
     <string name="add_provider_signing_in">Signing in…</string>
     <!-- T-android-codex-oauth-dns: shown when token-exchange POST to the
          OAuth provider fails with DNS / timeout. -->
-    <string name="add_provider_oauth_network_unreachable">Couldn\'t reach the sign-in server. Check your network or proxy settings and try again.</string>
     <string name="add_provider_or_configure_manually">Or Configure Manually</string>
     <string name="add_provider_for_third_party_coding_plans_e_g_minimax">For third-party Coding Plans (e.g. MiniMax, Kimi) or compatible proxy endpoints, enter the API base URL and bearer token manually.</string>
     <string name="add_provider_bearer_token">Bearer Token</string>
@@ -1067,7 +1056,6 @@
     <string name="provider_detail_models_count_header">Models (%1$d)</string>
     <!-- [provider-mgmt-opt] Refresh-model feedback strings (was silent). -->
     <string name="provider_detail_refresh_success_api">Refreshed — loaded %1$d models from the provider.</string>
-    <string name="provider_detail_refresh_success_oauth">Refreshed, model list loaded via OAuth.</string>
     <string name="provider_detail_refresh_success_models_dev">No live list; used models.dev registry (%1$d models). Results may be approximate.</string>
     <string name="provider_detail_refresh_no_key">No API key configured — nothing to refresh.</string>
     <string name="provider_detail_refresh_preserved">No matching models.dev entry — kept existing model list.</string>

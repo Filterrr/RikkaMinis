@@ -34,25 +34,19 @@ object GeminiModelsApi {
      */
     suspend fun fetchModels(
         apiKey: String,
-        isOAuth: Boolean = false,
         cloudCodeFallback: Boolean = false,
         context: Context? = null,
         forceRefresh: Boolean = false,
     ): List<LLMModel> = withContext(Dispatchers.IO) {
         if (cloudCodeFallback) return@withContext LLMModel.allGemini
 
-        val cacheKey = (if (isOAuth) "oauth|" else "key|") + apiKey
+        val cacheKey = "key|" + apiKey
         if (context != null && !forceRefresh) {
             cache.load(context, cacheKey)?.let { return@withContext it }
         }
 
         val builder = Request.Builder()
-        if (isOAuth) {
-            builder.url("https://generativelanguage.googleapis.com/v1beta/models")
-            builder.header("Authorization", "Bearer $apiKey")
-        } else {
-            builder.url("https://generativelanguage.googleapis.com/v1beta/models?key=$apiKey")
-        }
+        builder.url("https://generativelanguage.googleapis.com/v1beta/models?key=$apiKey")
 
         // [T-android-default-ua] brand outbound /v1beta/models request.
         builder.applyUserAgentOverride(null)
@@ -60,10 +54,6 @@ object GeminiModelsApi {
         val body = response.body?.string() ?: return@withContext LLMModel.allGemini
 
         if (!response.isSuccessful) {
-            // 403 on OAuth almost always means the token lacks the
-            // generative-language scope. Falling back to the built-in list
-            // matches iOS and keeps Cloud Code Assist users functional.
-            if (isOAuth && response.code == 403) return@withContext LLMModel.allGemini
             if (context != null && (response.code == 401 || response.code == 403)) {
                 cache.invalidate(context, cacheKey)
             }
