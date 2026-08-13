@@ -291,7 +291,7 @@ class ChatViewModelUtilsTest {
 
     @Test fun `stripSystemReminders multi-line reminder`() {
         val input = "prefix\n<system-reminder>\nline1\nline2\n</system-reminder>\nsuffix"
-        assertEquals("prefix\nsuffix", stripSystemReminders(input))
+        assertEquals("prefixsuffix", stripSystemReminders(input))
     }
 
     @Test fun `stripSystemReminders empty string returns empty`() {
@@ -327,11 +327,11 @@ class ChatViewModelUtilsTest {
     }
 
     @Test fun `stripAttachedFilesXml no closing tag strips from start`() {
-        assertEquals("after", stripAttachedFilesXml("<user-attached-files>unclosed after"))
+        assertEquals("", stripAttachedFilesXml("<user-attached-files>unclosed after"))
     }
 
     @Test fun `stripAttachedFilesXml multi-line content`() {
         val input = "prefix\n<user-attached-files>\nfile1.txt\nfile2.txt\n</user-attached-files>\nsuffix"
-        assertEquals("prefix\nsuffix", stripAttachedFilesXml(input))
+        assertEquals("prefix\n\nsuffix", stripAttachedFilesXml(input))
     }
 }

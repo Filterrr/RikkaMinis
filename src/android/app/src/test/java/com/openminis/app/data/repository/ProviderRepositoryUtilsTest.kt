@@ -186,8 +186,10 @@ class ProviderRepositoryUtilsTest {
         val outputs = listOf("text", "image", "audio", "video")
         val bits = modalityBitfieldFromLists(inputs, outputs)
         val (insOut, outsOut) = modalityListsFromBitfield(bits)
-        assertEquals(inputs, insOut)
-        assertEquals(outputs, outsOut)
+        // Decode order is bit-position order, not insertion order:
+        // text(0), image(2), pdf(3), audio(4), video(5)
+        assertEquals(listOf("text", "image", "pdf", "audio", "video"), insOut)
+        assertEquals(listOf("text", "image", "audio", "video"), outsOut)
     }
 
     @Test fun `modalityLists only output`() {
