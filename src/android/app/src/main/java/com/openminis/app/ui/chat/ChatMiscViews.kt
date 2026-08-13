@@ -671,7 +671,7 @@ private fun CompactSummarySheet(
                 Icon(
                     imageVector = if (copied) Icons.Default.Check else Icons.Default.ContentCopy,
                     contentDescription = "Copy",
-                    tint = if (copied) Color(0xFF34C759) else ChatColors.secondaryText,
+                    tint = if (copied) ChatColors.success else ChatColors.secondaryText,
                 )
             }
         },

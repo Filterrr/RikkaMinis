@@ -35,6 +35,7 @@ import com.openminis.app.R
 import com.openminis.app.accessibility.MinisAccessibilityService
 import com.openminis.app.power.PowerOptimizationManager
 import kotlinx.coroutines.delay
+import com.openminis.app.ui.theme.ChatColors
 
 /**
  * T323: surfaces OS-level permission states (Accessibility service,
@@ -90,7 +91,7 @@ fun SystemPermissionsScreen(onBack: () -> Unit) {
             ) {
                 SettingsRow(
                     icon = Icons.Outlined.Accessibility,
-                    iconColor = Color(0xFF34C759),
+                    iconColor = ChatColors.success,
                     title = stringResource(R.string.system_permissions_a11y_row),
                     subtitle = if (a11yEnabled)
                         stringResource(R.string.system_permissions_a11y_enabled)

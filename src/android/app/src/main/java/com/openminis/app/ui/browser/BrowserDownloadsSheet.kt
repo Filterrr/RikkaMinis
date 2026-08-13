@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import com.openminis.app.R
 import com.openminis.app.browser.BrowserTabPool
+import com.openminis.app.ui.theme.ChatColors
 
 /**
  * [T-android-browser-download-ux] Downloads panel — Android port of iOS
@@ -133,7 +134,7 @@ private fun DownloadRow(
             BrowserTabPool.DownloadState.DOWNLOADING ->
                 Icons.Default.Download to MaterialTheme.colorScheme.primary
             BrowserTabPool.DownloadState.COMPLETED ->
-                Icons.Default.CheckCircle to androidx.compose.ui.graphics.Color(0xFF34C759)
+                Icons.Default.CheckCircle to androidx.compose.ui.graphics.ChatColors.success
             BrowserTabPool.DownloadState.FAILED ->
                 Icons.Default.ErrorOutline to MaterialTheme.colorScheme.error
         }

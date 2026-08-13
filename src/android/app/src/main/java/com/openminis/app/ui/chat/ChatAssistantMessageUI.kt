@@ -462,7 +462,7 @@ internal fun InlineErrorBanner(error: String, onRetry: (() -> Unit)? = null) {
             .fillMaxWidth()
             .padding(top = 4.dp)
             .clip(RoundedCornerShape(12.dp))
-            .background(Color(0xFFFF3B30).copy(alpha = 0.12f))
+            .background(ChatColors.error.copy(alpha = 0.12f))
             .combinedClickable(
                 onClick = {},
                 onLongClick = {
@@ -475,13 +475,13 @@ internal fun InlineErrorBanner(error: String, onRetry: (() -> Unit)? = null) {
         Icon(
             imageVector = Icons.Default.Error,
             contentDescription = null,
-            tint = Color(0xFFFF3B30),
+            tint = ChatColors.error,
             modifier = Modifier.size(14.dp),
         )
         Spacer(modifier = Modifier.width(8.dp))
         Text(
             text = error,
-            color = Color(0xFFFF3B30),
+            color = ChatColors.error,
             fontSize = 12.sp,
             lineHeight = 16.sp,
             maxLines = 3,
@@ -493,7 +493,7 @@ internal fun InlineErrorBanner(error: String, onRetry: (() -> Unit)? = null) {
             Row(
                 modifier = Modifier
                     .clip(RoundedCornerShape(50))
-                    .background(Color(0xFFFF3B30).copy(alpha = 0.15f))
+                    .background(ChatColors.error.copy(alpha = 0.15f))
                     .clickable(onClick = onRetry)
                     .padding(horizontal = 10.dp, vertical = 3.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -501,11 +501,11 @@ internal fun InlineErrorBanner(error: String, onRetry: (() -> Unit)? = null) {
                 Icon(
                     imageVector = Icons.Default.Refresh,
                     contentDescription = null,
-                    tint = Color(0xFFFF3B30),
+                    tint = ChatColors.error,
                     modifier = Modifier.size(10.dp),
                 )
                 Spacer(modifier = Modifier.width(4.dp))
-                Text(stringResource(R.string.chat_longpress_retry), color = Color(0xFFFF3B30), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                Text(stringResource(R.string.chat_longpress_retry), color = ChatColors.error, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
             }
         }
     }
@@ -550,7 +550,7 @@ private fun ToolStopButton(
                 modifier = Modifier
                     .size(10.dp)
                     .clip(RoundedCornerShape(2.dp))
-                    .background(Color(0xFFFF3B30)),
+                    .background(ChatColors.error),
             )
         }
     }
@@ -1009,7 +1009,7 @@ internal fun ThinkingBlock(block: AssistantBlock, isStreaming: Boolean, isLast: 
         // if the user hasn't taken control of its state yet.
         if (!isStreaming && !userTouched) expanded = false
     }
-    val thinkingBlue = Color(0xFF007AFF)
+    val thinkingBlue = ChatColors.thinking
     val charCount = block.content.length
     val charLabel = when {
         charCount >= 1000 -> "${charCount / 1000}K"
@@ -1239,7 +1239,7 @@ private fun ThinkingFullContentDialog(content: String, onDismiss: () -> Unit) {
                         text = "Deep Thinking",
                         fontSize = 15.sp,
                         fontWeight = FontWeight.SemiBold,
-                        color = Color(0xFF007AFF),
+                        color = ChatColors.link,
                     )
                     Spacer(modifier = Modifier.weight(1f))
                     MinisTextButton(onClick = onDismiss) {

@@ -29,6 +29,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.openminis.app.data.repository.SkillRepository
+import com.openminis.app.ui.theme.ChatColors
 
 /**
  * Shared list row for a single skill — used by both [SkillsManagementScreen]
@@ -128,8 +129,8 @@ fun SkillRowItem(
  * stay consistent between Settings and the in-chat sheet.
  */
 fun sourceIconAndColor(source: SkillRepository.ImportSource): Pair<ImageVector, Color> = when (source) {
-    SkillRepository.ImportSource.URL -> Icons.Default.Link to Color(0xFF007AFF)
+    SkillRepository.ImportSource.URL -> Icons.Default.Link to ChatColors.link
     SkillRepository.ImportSource.FILE -> Icons.Outlined.Description to Color(0xFFFF9500)
-    SkillRepository.ImportSource.BUNDLED -> Icons.Default.Inventory2 to Color(0xFF34C759)
+    SkillRepository.ImportSource.BUNDLED -> Icons.Default.Inventory2 to ChatColors.success
     SkillRepository.ImportSource.SESSION -> Icons.Outlined.ChatBubble to Color(0xFFAF52DE)
 }

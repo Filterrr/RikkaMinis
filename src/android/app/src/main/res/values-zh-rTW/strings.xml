@@ -916,4 +916,12 @@
     <string name="storage_reclaim_confirm_title">回收殘留檔案？</string>
     <string name="storage_reclaim_confirm_text">這將永久刪除已刪除會話遺留的 %1$d 個殘留項目（%2$s）。其餘對話不受影響。此操作無法撤銷。</string>
     <string name="storage_reclaim_confirm_button">回收</string>
+    <string name="browser_ua_default">預設（依 UA 自動）</string>
+    <string name="browser_ua_custom">自訂</string>
+    <string name="browser_ua_custom_hint">自訂寬度 × 高度</string>
+    <string name="browser_viewport_width">寬度</string>
+    <string name="browser_viewport_height">高度</string>
+    <string name="common_loading">載入中…</string>
+    <string name="rootfs_reset_button">重設</string>
+    <string name="session_title_label">標題</string>
 </resources>

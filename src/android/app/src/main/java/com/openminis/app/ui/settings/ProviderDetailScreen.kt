@@ -78,6 +78,7 @@ import com.openminis.app.ui.components.MinisSmallOutlinedButton
 import com.openminis.app.ui.components.MinisSmallTextButton
 import com.openminis.app.ui.components.MinisTextButton
 import com.openminis.app.ui.components.SectionTextField
+import com.openminis.app.ui.theme.ChatColors
 
 private const val TAG = "ProviderDetail"
 
@@ -484,7 +485,7 @@ internal fun OAuthCredentialBlock(
                 modifier = Modifier
                     .padding(horizontal = 8.dp)
                     .size(8.dp)
-                    .background(Color(0xFF34C759), CircleShape),
+                    .background(ChatColors.success, CircleShape),
             )
         } else {
             Spacer(modifier = Modifier.weight(1f))
@@ -806,7 +807,7 @@ internal fun ManualBearerTokenSection(
                 modifier = Modifier
                     .padding(horizontal = 8.dp)
                     .size(8.dp)
-                    .background(Color(0xFF34C759), CircleShape),
+                    .background(ChatColors.success, CircleShape),
             )
         }
         Row(modifier = Modifier.padding(top = 8.dp)) {

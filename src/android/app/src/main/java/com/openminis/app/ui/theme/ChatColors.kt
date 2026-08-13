@@ -56,6 +56,9 @@ data class ChatPalette(
     val sheetHeaderBg: Color,
     val sheetHeaderBorder: Color,
     val fabAccent: Color,
+    val success: Color,
+    val error: Color,
+    val terminalThumbBg: Color,
 )
 
 val LightChatPalette = ChatPalette(
@@ -93,6 +96,9 @@ val LightChatPalette = ChatPalette(
     sheetHeaderBg = Color(0xFFFFFFFF),
     sheetHeaderBorder = Color(0x1A000000),
     fabAccent = Color(0xFFB7AF96),
+    success = Color(0xFF34C759),
+    error = Color(0xFFFF3B30),
+    terminalThumbBg = Color(0xFF1A1A1E),
 )
 
 // T153: Android-specific dark palette tweaks. iOS borrows the system
@@ -151,6 +157,12 @@ val DarkChatPalette = ChatPalette(
     sheetHeaderBg = Color(0xFF2C2C2E),
     sheetHeaderBorder = Color(0x33FFFFFF),
     fabAccent = Color(0xFF504C42),
+    // iOS dark equivalents (SystemGreen 30D158 / SystemRed FF453A); the
+    // thumbnail keeps the same near-black in both modes (terminal-style
+    // previews stay dark regardless of theme).
+    success = Color(0xFF30D158),
+    error = Color(0xFFFF453A),
+    terminalThumbBg = Color(0xFF1A1A1E),
 )
 
 val LocalChatPalette = compositionLocalOf { LightChatPalette }

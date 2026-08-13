@@ -426,8 +426,8 @@ private fun ToolPreviewThumbnail(
             .background(
                 when (block.toolName) {
                     "file_read", "file_write" -> ChatColors.secondaryBg
-                    "file_edit" -> Color(0xFF1A1A1E)
-                    else -> Color(0xFF1A1A1E)
+                    "file_edit" -> ChatColors.terminalThumbBg
+                    else -> ChatColors.terminalThumbBg
                 }
             )
             .border(0.5.dp, ChatColors.thumbnailBorder, thumbnailShape)

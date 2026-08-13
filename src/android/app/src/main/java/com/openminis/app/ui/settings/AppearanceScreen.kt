@@ -74,6 +74,7 @@ import androidx.core.graphics.drawable.toBitmap
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.res.stringResource
 import kotlin.math.roundToInt
+import com.openminis.app.ui.theme.ChatColors
 
 // -- Preference Keys --
 const val PREF_APPEARANCE = "appearance_prefs"
@@ -220,9 +221,9 @@ fun AppearanceScreen(
     }
 
     val tilePurple = Color(0xFF5856D6)
-    val tileBlue = Color(0xFF007AFF)
+    val tileBlue = ChatColors.link
     val tileOrange = Color(0xFFFF9500)
-    val tileGreen = Color(0xFF34C759)
+    val tileGreen = ChatColors.success
     val tileTeal = Color(0xFF5AC8FA)
 
     // top-level page: rely on system back gesture / bottom nav (no back arrow)

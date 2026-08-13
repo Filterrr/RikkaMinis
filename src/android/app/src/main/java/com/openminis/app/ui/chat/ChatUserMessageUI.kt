@@ -436,7 +436,7 @@ internal fun UserMessageBubble(
                                 Icon(
                                     imageVector = Icons.Filled.Cancel,
                                     contentDescription = "Withdraw queued message",
-                                    tint = Color(0xFFFF3B30),
+                                    tint = ChatColors.error,
                                     modifier = Modifier.size(24.dp),
                                 )
                             }
