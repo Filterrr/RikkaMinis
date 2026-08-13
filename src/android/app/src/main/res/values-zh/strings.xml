@@ -1509,4 +1509,5 @@
     <string name="common_loading">加载中…</string>
     <string name="rootfs_reset_button">重置</string>
     <string name="session_title_label">标题</string>
+    <string name="backup_export_incomplete">警告：有 %1$d 个字段无法读取 — 此备份可能不完整。</string>
 </resources>

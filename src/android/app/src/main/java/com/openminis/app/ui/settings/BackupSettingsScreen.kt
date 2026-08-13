@@ -305,11 +305,24 @@ fun BackupSettingsScreen(
                     } ?: throw IllegalStateException("no output stream")
                 }
                 withContext(Dispatchers.Main) {
+                    // [T-backup-readfailures] export() counts fields that
+                    // failed to serialize (readFailures); surface it so the
+                    // user knows the backup may be incomplete.
+                    val failures = runCatching {
+                        org.json.JSONObject(payload).optInt("readFailures", 0)
+                    }.getOrDefault(0)
+                    val body = buildString {
+                        append(uri.lastPathSegment ?: savedToast)
+                        if (failures > 0) {
+                            append("\n")
+                            append(context.getString(R.string.backup_export_incomplete, failures))
+                        }
+                    }
                     Toast.makeText(context, savedToast, Toast.LENGTH_SHORT).show()
                     notifier.notifyWorkCompleted(
                         tag = "local-export",
                         title = context.getString(R.string.backup_saved),
-                        body = uri.lastPathSegment ?: savedToast,
+                        body = body,
                     )
                 }
             } catch (t: Throwable) {
@@ -538,7 +551,20 @@ fun BackupSettingsScreen(
                                 )
                             }
                             withContext(Dispatchers.Main) {
-                                val msg = context.getString(R.string.webdav_uploaded)
+                                // [T-backup-readfailures] export() counts
+                                // fields that failed to serialize into the
+                                // payload (readFailures); surface it so the
+                                // user knows the backup may be incomplete.
+                                val failures = runCatching {
+                                    org.json.JSONObject(payload).optInt("readFailures", 0)
+                                }.getOrDefault(0)
+                                val msg = if (failures > 0) {
+                                    context.getString(R.string.webdav_uploaded) +
+                                        "\n" +
+                                        context.getString(R.string.backup_export_incomplete, failures)
+                                } else {
+                                    context.getString(R.string.webdav_uploaded)
+                                }
                                 Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                                 notifier.notifyWorkCompleted(
                                     tag = "webdav-upload",

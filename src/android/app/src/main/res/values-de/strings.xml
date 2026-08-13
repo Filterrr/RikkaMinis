@@ -1185,4 +1185,5 @@
     <string name="common_loading">Laden…</string>
     <string name="rootfs_reset_button">Zurücksetzen</string>
     <string name="session_title_label">Titel</string>
+    <string name="backup_export_incomplete">Warnung: %1$d Feld(er) konnten nicht gelesen werden – dieses Backup ist möglicherweise unvollständig.</string>
 </resources>
