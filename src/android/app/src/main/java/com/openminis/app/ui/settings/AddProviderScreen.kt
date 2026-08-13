@@ -32,8 +32,6 @@ import androidx.compose.material.icons.filled.Diamond
 import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Terminal
-import androidx.compose.material.icons.filled.Key
-import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.CircularProgressIndicator
@@ -67,8 +65,6 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.stringResource
-import com.openminis.app.auth.OpenAIOAuthManager
-import com.openminis.app.auth.OpenRouterOAuthManager
 import com.openminis.app.data.model.ProviderCredential
 import com.openminis.app.data.model.ProviderInstance
 import com.openminis.app.data.model.ProviderType
@@ -79,11 +75,9 @@ import java.util.UUID
 import com.openminis.app.ui.components.MinisButton
 import com.openminis.app.ui.components.RowLabel
 import com.openminis.app.ui.components.SectionTextField
-import com.openminis.app.ui.theme.ChatColors
 
 private enum class AddProviderStep {
     CHOOSE_TYPE,
-    CHOOSE_CREDENTIAL,
     CONFIGURE,
 }
 
@@ -95,26 +89,15 @@ fun AddProviderScreen(
 ) {
     var step by remember { mutableStateOf(AddProviderStep.CHOOSE_TYPE) }
     var selectedType by remember { mutableStateOf<ProviderType?>(null) }
-    var selectedCredential by remember { mutableStateOf<ProviderCredential?>(null) }
 
     // Unified back handler: reuse each step's onBack so predictive-back gesture
     // and the top-bar arrow behave identically (go back to prior step, not exit).
     val handleBack: () -> Unit = {
         when (step) {
             AddProviderStep.CHOOSE_TYPE -> onBack()
-            AddProviderStep.CHOOSE_CREDENTIAL -> {
+            AddProviderStep.CONFIGURE -> {
                 step = AddProviderStep.CHOOSE_TYPE
                 selectedType = null
-            }
-            AddProviderStep.CONFIGURE -> {
-                val creds = availableCredentials(selectedType!!)
-                if (creds.size == 1) {
-                    step = AddProviderStep.CHOOSE_TYPE
-                    selectedType = null
-                } else {
-                    step = AddProviderStep.CHOOSE_CREDENTIAL
-                }
-                selectedCredential = null
             }
         }
     }
@@ -127,27 +110,11 @@ fun AddProviderScreen(
             onBack = handleBack,
             onSelect = { type ->
                 selectedType = type
-                val creds = availableCredentials(type)
-                if (creds.size == 1) {
-                    // Skip credential picker if only one option
-                    selectedCredential = creds.first()
-                    step = AddProviderStep.CONFIGURE
-                } else {
-                    step = AddProviderStep.CHOOSE_CREDENTIAL
-                }
-            },
-        )
-        AddProviderStep.CHOOSE_CREDENTIAL -> ChooseCredentialScreen(
-            providerType = selectedType!!,
-            onBack = handleBack,
-            onSelect = { credential ->
-                selectedCredential = credential
                 step = AddProviderStep.CONFIGURE
             },
         )
         AddProviderStep.CONFIGURE -> ConfigureProviderScreen(
             providerType = selectedType!!,
-            credentialType = selectedCredential!!,
             providerRepository = providerRepository,
             onBack = handleBack,
             onSaved = onSaved,
@@ -174,24 +141,6 @@ private fun providerIcon(type: ProviderType): Pair<ImageVector, Color> = when (t
     ProviderType.xAI -> Icons.Default.FlashOn to Color(0xFFFF7043)           // orange — Grok visual cue
     // [T-kimi-oauth] Indigo — matches iOS's Kimi accent.
     ProviderType.kimiCode -> Icons.Default.Terminal to Color(0xFF5C6BC0)
-}
-
-/** Returns available credential types per provider. */
-private fun availableCredentials(type: ProviderType): List<ProviderCredential> {
-    return when (type) {
-        ProviderType.openRouter -> listOf(ProviderCredential.apiKey, ProviderCredential.oauth)
-        ProviderType.anthropic,
-        ProviderType.openAI -> listOf(ProviderCredential.apiKey, ProviderCredential.oauth)
-        ProviderType.gemini -> listOf(ProviderCredential.apiKey)
-        // xAI Grok primarily targets SuperGrok / X Premium+ OAuth, but also
-        // offers a plain API key path (api.x.ai). Mirror OpenAI's pattern
-        // of exposing both so users on tiers without OAuth API access can
-        // still configure manually.
-        ProviderType.xAI -> listOf(ProviderCredential.oauth, ProviderCredential.apiKey)
-        // [T-kimi-oauth] Primary target is the Coding Plan device-code
-        // sign-in; a manual Moonshot API key remains available.
-        ProviderType.kimiCode -> listOf(ProviderCredential.oauth, ProviderCredential.apiKey)
-    }
 }
 
 // -- Step 1: Choose Provider Type --
@@ -248,76 +197,12 @@ private fun ChooseProviderScreen(
     }
 }
 
-// -- Step 2: Choose Credential Type --
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ChooseCredentialScreen(
-    providerType: ProviderType,
-    onBack: () -> Unit,
-    onSelect: (ProviderCredential) -> Unit,
-) {
-    val credentials = availableCredentials(providerType)
-
-    SettingsScaffold(
-        title = stringResource(R.string.add_provider_auth_method),
-        onBack = onBack,
-    ) {
-        SettingsSection(
-            header = stringResource(R.string.add_provider_choose_authentication),
-            footer = stringResource(R.string.add_provider_pick_the_auth_method_that_matches_your_a),
-        ) {
-            credentials.forEachIndexed { index, credential ->
-                val (title, description, icon) = when (credential) {
-                    ProviderCredential.apiKey -> Triple(
-                        stringResource(R.string.provider_list_api_key),
-                        apiKeyDescription(providerType),
-                        Icons.Default.Key,
-                    )
-                    ProviderCredential.oauth -> Triple(
-                        "OAuth",
-                        oauthDescription(providerType),
-                        Icons.Default.Person,
-                    )
-                }
-                SettingsRow(
-                    title = title,
-                    subtitle = description,
-                    icon = icon,
-                    onClick = { onSelect(credential) },
-                    showDivider = index < credentials.size - 1,
-                )
-            }
-        }
-        Spacer(Modifier.height(24.dp))
-    }
-}
-
-private fun apiKeyDescription(type: ProviderType): String = when (type) {
-    ProviderType.openAI -> "Supports OpenAI official API and compatible third-party endpoints"
-    ProviderType.anthropic -> "Use an API key from your Anthropic account"
-    ProviderType.gemini -> "Use an API key from your Google Gemini account"
-    ProviderType.openRouter -> "Use an API key from your OpenRouter account"
-    ProviderType.xAI -> "Use an API key from your xAI Console (api.x.ai)"
-    ProviderType.kimiCode -> "Use an API key from your Moonshot account"
-}
-
-private fun oauthDescription(type: ProviderType): String = when (type) {
-    ProviderType.anthropic -> "Sign in with your Claude account"
-    ProviderType.gemini -> "Sign in with Google for Cloud Code Assist"
-    ProviderType.openAI -> "Sign in with OpenAI Codex"
-    ProviderType.xAI -> "Sign in with xAI (requires SuperGrok or X Premium+)"
-    ProviderType.openRouter -> "Sign in with OpenRouter"
-    ProviderType.kimiCode -> "Sign in with your Kimi account (Coding Plan)"
-}
-
-// -- Step 3: Configure & Save --
+// -- Step 2: Configure & Save --
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ConfigureProviderScreen(
     providerType: ProviderType,
-    credentialType: ProviderCredential,
     providerRepository: ProviderRepository,
     onBack: () -> Unit,
     onSaved: () -> Unit,
@@ -379,24 +264,16 @@ private fun ConfigureProviderScreen(
             }
         }
 
-        when (credentialType) {
-            ProviderCredential.apiKey -> ApiKeyConfigSection(
-                providerType = providerType,
-                label = label,
-                apiKey = apiKey,
-                onApiKeyChange = { apiKey = it },
-                customBaseURL = customBaseURL,
-                onCustomBaseURLChange = { customBaseURL = it },
-                providerRepository = providerRepository,
-                onSaved = onSaved,
-            )
-            ProviderCredential.oauth -> OAuthConfigSection(
-                providerType = providerType,
-                label = label,
-                providerRepository = providerRepository,
-                onSaved = onSaved,
-            )
-        }
+        ApiKeyConfigSection(
+            providerType = providerType,
+            label = label,
+            apiKey = apiKey,
+            onApiKeyChange = { apiKey = it },
+            customBaseURL = customBaseURL,
+            onCustomBaseURLChange = { customBaseURL = it },
+            providerRepository = providerRepository,
+            onSaved = onSaved,
+        )
 
         Spacer(Modifier.height(24.dp))
     }
@@ -547,269 +424,3 @@ private fun ColumnScope.ApiKeyConfigSection(
             .padding(horizontal = 16.dp),
         enabled = apiKey.isNotBlank(),
     ) {
-        Text(stringResource(R.string.provider_list_add_provider))
-    }
-}
-
-@Composable
-private fun ColumnScope.OAuthConfigSection(
-    providerType: ProviderType,
-    label: String,
-    providerRepository: ProviderRepository,
-    onSaved: () -> Unit,
-) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val pendingInstanceId = remember { UUID.randomUUID().toString() }
-    var isAuthenticating by remember { mutableStateOf(false) }
-    var isAuthenticated by remember { mutableStateOf(false) }
-    var maskedToken by remember { mutableStateOf<String?>(null) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
-
-    // Manual OAuth token entry state
-    var manualToken by remember { mutableStateOf("") }
-    var customBaseURL by remember { mutableStateOf("") }
-    // /v1 is appended automatically for all non-Gemini providers (Gemini uses
-    // v1beta full-path URLs). effectiveBaseURL already guards against double-append.
-    val appendV1Suffix = providerType != ProviderType.gemini
-
-    val signInLabel = when (providerType) {
-        ProviderType.anthropic -> "Sign in with Claude"
-        ProviderType.gemini -> "Sign in with Google"
-        ProviderType.openAI -> "Sign in with OpenAI"
-        ProviderType.openRouter -> "Sign in with OpenRouter"
-        ProviderType.xAI -> "Sign in with xAI"
-        ProviderType.kimiCode -> "Sign in with Kimi Code"
-    }
-
-    // [T-kimi-oauth] Device-code dialog state: non-null while a Kimi login is
-    // waiting for the user to authorize on auth.kimi.com. Set by the login
-    // coroutine's onDeviceCode callback and RENDERED below — the iOS lesson
-    // was a write-only state nobody displayed ("button does nothing").
-    var kimiDeviceAuth by remember {
-        mutableStateOf<com.openminis.app.auth.KimiDeviceFlow.DeviceAuthorization?>(null)
-    }
-    var kimiLoginJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
-    kimiDeviceAuth?.let { auth ->
-        KimiDeviceLoginDialog(
-            userCode = auth.userCode,
-            verificationUrl = auth.openUrl,
-            onCancel = {
-                kimiLoginJob?.cancel()
-                kimiDeviceAuth = null
-            },
-        )
-    }
-
-    if (isAuthenticated) {
-        // ── Authenticated state — Token + Save ─────────────────────────
-        SettingsSection(
-            header = stringResource(R.string.add_provider_authentication),
-            footer = stringResource(R.string.add_provider_sign_in_succeeded_the_token_is_stored_in),
-        ) {
-            SettingsCardBlock {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        Icons.Default.CheckCircle,
-                        contentDescription = null,
-                        tint = ChatColors.success,
-                        modifier = Modifier.size(20.dp),
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(stringResource(R.string.add_provider_authenticated), style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
-                }
-                if (maskedToken != null) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(stringResource(R.string.add_provider_token), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(
-                        maskedToken!!,
-                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
-        Spacer(Modifier.height(20.dp))
-        MinisButton(
-            onClick = {
-                val instance = ProviderInstance(
-                    id = pendingInstanceId,
-                    label = label.ifBlank { providerType.displayName },
-                    providerType = providerType,
-                    credentialType = ProviderCredential.oauth,
-                )
-                providerRepository.addInstance(instance)
-                // Auto-refresh models (fetches from API or falls back to models.dev)
-                scope.launch { providerRepository.refreshModels(instance) }
-                onSaved()
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-        ) {
-            Text(stringResource(R.string.add_provider_save_provider))
-        }
-    } else {
-        // ── Sign In ────────────────────────────────────────────────────
-        SettingsSection(
-            header = stringResource(R.string.provider_detail_sign_in),
-            footer = stringResource(R.string.add_provider_opens_the_provider_s_web_sign_in_flow_af),
-        ) {
-            SettingsCardBlock {
-                MinisButton(
-                    onClick = {
-                        isAuthenticating = true
-                        errorMessage = null
-                        kimiLoginJob = scope.launch {
-                            try {
-                                when (providerType) {
-                                    ProviderType.kimiCode -> {
-                                        // [T-kimi-oauth] Device-code flow: the
-                                        // onDeviceCode callback flips the dialog
-                                        // state as soon as the code is issued;
-                                        // login() keeps polling underneath and
-                                        // returns once the user authorizes.
-                                        val key = com.openminis.app.auth.KimiOAuthManager.login(
-                                            context, pendingInstanceId, providerRepository,
-                                            onDeviceCode = { auth -> kimiDeviceAuth = auth },
-                                        )
-                                        kimiDeviceAuth = null
-                                        maskedToken = maskOAuthToken(key)
-                                    }
-                                    ProviderType.openRouter -> {
-                                        val key = OpenRouterOAuthManager.login(context, pendingInstanceId, providerRepository)
-                                        maskedToken = maskOAuthToken(key)
-                                    }
-                                    ProviderType.anthropic -> {
-                                        val key = com.openminis.app.auth.ClaudeOAuthManager.login(context, pendingInstanceId, providerRepository)
-                                        maskedToken = maskOAuthToken(key)
-                                    }
-                                    ProviderType.openAI -> {
-                                        val key = OpenAIOAuthManager.login(context, pendingInstanceId, providerRepository)
-                                        maskedToken = maskOAuthToken(key)
-                                    }
-                                    ProviderType.xAI -> {
-                                        val key = com.openminis.app.auth.XAIOAuthManager.login(context, pendingInstanceId, providerRepository)
-                                        maskedToken = maskOAuthToken(key)
-                                    }
-                                    else -> {
-                                        throw Exception("OAuth not yet implemented for ${providerType.displayName}")
-                                    }
-                                }
-                                isAuthenticated = true
-                            } catch (e: kotlinx.coroutines.CancellationException) {
-                                // [T-kimi-oauth] User dismissed the device-code
-                                // dialog — not an error; just reset the button.
-                                kimiDeviceAuth = null
-                                throw e
-                            } catch (e: Exception) {
-                                kimiDeviceAuth = null
-                                // T-android-codex-oauth-dns: surface a
-                                // localized "check network / proxy" hint
-                                // when the OAuth manager flags a DNS /
-                                // socket-timeout failure. Other failures
-                                // (4xx, token format) keep their raw
-                                // message so we don't lose diagnostic
-                                // signal.
-                                errorMessage = if (e is com.openminis.app.auth.OAuthNetworkUnreachableException) {
-                                    context.getString(R.string.add_provider_oauth_network_unreachable)
-                                } else {
-                                    e.message ?: "Authentication failed"
-                                }
-                            } finally {
-                                isAuthenticating = false
-                            }
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = !isAuthenticating,
-                ) {
-                    if (isAuthenticating) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            color = MaterialTheme.colorScheme.onPrimary,
-                            strokeWidth = 2.dp,
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(stringResource(R.string.add_provider_signing_in))
-                    } else {
-                        Text(signInLabel)
-                    }
-                }
-                if (errorMessage != null) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        errorMessage!!,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-            }
-        }
-
-        // ── Or Configure Manually ──────────────────────────────────────
-        val defaultUrl = when (providerType) {
-            ProviderType.gemini -> "https://generativelanguage.googleapis.com/v1beta"
-            ProviderType.anthropic -> "https://api.anthropic.com"
-            ProviderType.openAI -> "https://api.openai.com"
-            ProviderType.openRouter -> "https://openrouter.ai/api/v1"
-            ProviderType.xAI -> "https://api.x.ai/v1"
-            // [T-kimi-oauth] /v1 is load-bearing (…/coding/… 404s without it).
-            ProviderType.kimiCode -> "https://api.kimi.com/coding/v1"
-        }
-        SettingsSection(
-            header = stringResource(R.string.add_provider_or_configure_manually),
-            footer = stringResource(R.string.add_provider_for_third_party_coding_plans_e_g_minimax),
-        ) {
-            SettingsCardBlock {
-                RowLabel(text = stringResource(R.string.add_provider_custom_api_base_optional))
-                SectionTextField(
-                    value = customBaseURL,
-                    onValueChange = { customBaseURL = it },
-                    placeholder = defaultUrl,
-                    singleLine = true,
-                )
-                Spacer(Modifier.height(12.dp))
-                RowLabel(text = stringResource(R.string.add_provider_bearer_token))
-                SectionTextField(
-                    value = manualToken,
-                    onValueChange = { manualToken = it },
-                    singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(),
-                )
-            }
-        }
-
-        Spacer(Modifier.height(20.dp))
-        MinisButton(
-            onClick = {
-                val trimmedBase = customBaseURL.trim()
-                val instance = ProviderInstance(
-                    id = UUID.randomUUID().toString(),
-                    label = label.ifBlank { providerType.displayName },
-                    providerType = providerType,
-                    credentialType = ProviderCredential.oauth,
-                    customBaseURL = trimmedBase.ifEmpty { null },
-                    appendV1Suffix = appendV1Suffix,
-                )
-                providerRepository.addInstance(instance)
-                // Store the manual token as API key — ProviderFactory uses loadApiKey() for all credential types
-                providerRepository.saveApiKey(instance.id, manualToken.trim())
-                scope.launch { providerRepository.refreshModels(instance) }
-                onSaved()
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-            enabled = manualToken.isNotBlank(),
-        ) {
-            Text(stringResource(R.string.provider_list_add_provider))
-        }
-    }
-}
-
-private fun maskOAuthToken(token: String): String {
-    if (token.length <= 4) return "*".repeat(token.length)
-    val edge = minOf(10, token.length / 3)
-    return token.take(edge) + "*".repeat(10) + token.takeLast(edge)
-}

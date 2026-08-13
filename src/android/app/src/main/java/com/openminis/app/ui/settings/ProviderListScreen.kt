@@ -47,7 +47,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.stringResource
 import com.openminis.app.data.model.ProviderInstance
-import com.openminis.app.data.model.ProviderCredential
 import com.openminis.app.data.repository.ProviderRepository
 import com.openminis.app.R
 import com.openminis.app.ui.theme.ChatColors
@@ -66,21 +65,15 @@ fun ProviderListScreen(
     val context = LocalContext.current
 
     // [perf-provider-list] Pre-compute per-instance display data once per
-    // `instances` change. loadApiKey() + OAuth isAuthenticated() both hit
-    // EncryptedSharedPreferences (synchronous encrypted I/O); naive inline
-    // calls inside the forEach re-ran them for EVERY row on EVERY
-    // recomposition, stalling the frame during navigation transitions.
-    // Caching here means the I/O happens once per instances change, not
-    // once per row per recomposition.
+    // `instances` change. loadApiKey() hits EncryptedSharedPreferences
+    // (synchronous encrypted I/O); naive inline calls inside the forEach
+    // re-ran them for EVERY row on EVERY recomposition, stalling the frame
+    // during navigation transitions. Caching here means the I/O happens once
+    // per instances change, not once per row per recomposition.
     val providerRows: List<ProviderRowData> = remember(instances) {
         instances.map { instance ->
             val apiKey = providerRepository.loadApiKey(instance.id)
-            val isConfigured = if (instance.credentialType == ProviderCredential.oauth) {
-                val mgr = com.openminis.app.auth.OAuthManager.forInstance(context, instance)
-                mgr?.isAuthenticated() == true
-            } else {
-                !apiKey.isNullOrBlank()
-            }
+            val isConfigured = !apiKey.isNullOrBlank()
             ProviderRowData(
                 instance = instance,
                 modelCount = providerRepository.visibleEntries(instance.id).size,
@@ -331,13 +324,7 @@ private fun ProviderInstanceRow(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = stringResource(
-                        if (instance.credentialType == ProviderCredential.oauth) {
-                            R.string.provider_list_oauth
-                        } else {
-                            R.string.provider_list_api_key
-                        },
-                    ),
+                    text = stringResource(R.string.provider_list_api_key),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
