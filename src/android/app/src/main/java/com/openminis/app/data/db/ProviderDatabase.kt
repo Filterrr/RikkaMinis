@@ -107,15 +107,30 @@ abstract class ProviderDatabase : RoomDatabase() {
         /**
          * [T-four-way-sync-gate] recovery column was removed from the
          * Entity (fff19a2) but MIGRATION_4_5 already added it to the
-         * database. Empty migration that re-hashes the schema to match
-         * the current Entity definition (which has no recovery column).
-         * The existing recovery column in the DB is harmlessly ignored.
+         * database, so a schema hash mismatch appeared. An empty migration
+         * is NOT enough — Room re-validates the schema after migration and
+         * fails with "Migration didn't properly handle: provider_model_groups"
+         * because the DB still has the orphaned recovery column. This
+         * migration DROPs the recovery column so the DB schema exactly
+         * matches the current Entity.
+         *
+         * ALTER TABLE DROP COLUMN preserves every other column's type/NULL/
+         * default exactly as Room created it — safer than a manual table
+         * rebuild, which risks column-definition drift and re-triggering
+         * "Migration didn't properly handle". Requires SQLite >= 3.35
+         * (Android 12+ = 3.32, Android 15 = 3.38+), all supported.
          */
         val MIGRATION_5_6 = object : Migration(5, 6) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                // Empty — schema change is the removal of the recovery
-                // column from the Entity. The column already exists in
-                // the database and is simply not mapped anymore.
+                // Drop the orphaned recovery column left behind by MIGRATION_4_5
+                // (fff19a2 removed it from the Entity). ALTER TABLE DROP COLUMN
+                // preserves every other column's type/NULL/default exactly as
+                // Room created it — safer than a manual table rebuild, which
+                // risks introducing column-definition drift and re-triggering
+                // "Migration didn't properly handle". Requires SQLite >= 3.35
+                // (Android 12+ = 3.32, Android 15 = 3.38+), which all supported
+                // API levels satisfy.
+                db.execSQL("ALTER TABLE provider_model_groups DROP COLUMN recovery")
             }
         }
 
