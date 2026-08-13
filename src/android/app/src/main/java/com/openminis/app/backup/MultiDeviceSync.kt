@@ -134,6 +134,12 @@ object MultiDeviceSync {
         }
     }
 
+    /** Preferences key: hash of the last successfully pushed sync payload
+     *  (content-only; createdAt stamps are stripped before hashing). Used by
+     *  [T-backup-sync-change-detect] to skip redundant PUTs when nothing
+     *  changed since the previous push. */
+    const val PREF_KEY_LAST_PUSHED_HASH = "multi_device_sync_last_pushed_hash"
+
     /**
      * The complete "sync now" cycle run on app start / resume (when enabled):
      *  1. Pull the newest remote snapshot and import it (entry-level merge —
@@ -144,9 +150,20 @@ object MultiDeviceSync {
      * the newest sibling state before re-asserting its own — the user's most
      * recent action on any device ends up authoritative.
      *
+     * [T-backup-sync-change-detect] Step 2 is skipped when (a) the server still
+     * holds at least one sync file AND (b) the freshly exported payload hashes
+     * identically to the last successfully pushed one (createdAt stamps
+     * excluded). Every foreground previously did a full pull + import + export
+     * + PUT + prune even when nothing had changed; the PUT of the whole config
+     * is the dominant traffic. The pull/import side is intentionally NOT gated:
+     * it is the only way to receive sibling changes, and it keeps the "last
+     * writer wins" convergence semantics intact (a sibling's newer state
+     * changes the exported payload, which then pushes).
+     *
      * @return a short descriptor for logging / the settings screen status.
      */
     suspend fun syncNow(
+        context: Context,
         providerRepo: ProviderRepository,
         envVarRepo: EnvVarRepository?,
         memoryRepo: MemoryRepository?,
@@ -154,10 +171,15 @@ object MultiDeviceSync {
         client: OkHttpClient,
         includeSecrets: Boolean = false,
     ): String {
+        val prefs = context.getSharedPreferences("backup_prefs", Context.MODE_PRIVATE)
+
         // (1) Pull + apply the newest remote snapshot (best-effort per entry).
+        // pulled == null means the server holds no sync file yet — in that
+        // case the push below must ALWAYS run (there is nothing to keep).
         val pulled = runCatching { WebDavSync.pullLatestSync(config, client) }.getOrElse {
             return "pull-failed: ${it.message}"
         }
+        val serverHasSyncFile = pulled != null
         if (pulled != null) {
             runCatching {
                 ConfigBackup.import(
@@ -186,11 +208,29 @@ object MultiDeviceSync {
         }.getOrElse {
             return "export-failed: ${it.message}"
         }
+
+        // [T-backup-sync-change-detect] No-op detection: same content as the
+        // last successful push (and the server still holds our file) → skip
+        // the PUT + prune. createdAt stamps are stripped because every export
+        // mints a fresh one; content-only comparison is what we want.
+        val contentHash = sha256(payload.replace(Regex("\"createdAt\"\\s*:\\s*\\d+"), ""))
+        if (serverHasSyncFile && contentHash == prefs.getString(PREF_KEY_LAST_PUSHED_HASH, null)) {
+            return "no-change: skipped push"
+        }
+
         return try {
             val name = pushSyncPayload(config, payload, client)
+            prefs.edit().putString(PREF_KEY_LAST_PUSHED_HASH, contentHash).apply()
             "pushed: $name"
         } catch (t: Throwable) {
             "push-failed: ${t.message}"
         }
+    }
+
+    /** SHA-256 hex digest of [text], used for sync no-op detection. */
+    private fun sha256(text: String): String {
+        val md = java.security.MessageDigest.getInstance("SHA-256")
+        return md.digest(text.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
     }
 }
