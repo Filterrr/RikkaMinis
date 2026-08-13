@@ -389,15 +389,72 @@ class RootfsManager private constructor(private val context: Context) {
             return@withContext true
         }
 
-        // Stage 3: last resort — full reset (apk itself is broken).
-        if (!after.apk || !after.apkDatabase) {
-            Log.w(TAG, "[Repair] apk unusable, falling back to full reset")
+        // Stage 2.5: targeted restore of factory files from the bundled
+        // asset — no network, no user-package loss. This closes the hole
+        // where apk itself was fine (so Stage 3's database guard would NOT
+        // fire) but `apk fix` failed because the network was down: without
+        // it, a broken bash stayed broken forever until a manual reset.
+        // Only factory files safe to overwrite are restored; the apk
+        // database (user package records) is deliberately untouched.
+        val restored = restoreCriticalFromAssets()
+        if (restored) {
+            Log.i(TAG, "[Repair] rootfs healthy after targeted asset restore")
+            return@withContext true
+        }
+
+        // Stage 3: last resort — full reset. Only when the apk *database*
+        // (user package records) is unusable: an apk binary that Stage 2.5
+        // could not fix is not in the safe-restore set either, so it resets
+        // too. A healthy database with a still-broken bash is NOT reset —
+        // wiping user packages over a few missing binaries is worse than
+        // leaving the terminal broken for a manual retry.
+        if (!verifyIntegrity().apkDatabase) {
+            Log.w(TAG, "[Repair] apk database unusable, falling back to full reset")
             runCatching { reset() }
         }
 
         val final = verifyIntegrity()
         Log.i(TAG, "[Repair] final health: ${final.missing.ifEmpty { listOf("OK") }}")
         final.healthy
+    }
+
+    /**
+     * Restore the rootfs's critical system files from the bundled asset tar,
+     * without wiping user-installed packages. Only factory files that are
+     * safe to overwrite are restored (bash/busybox/sh, musl loader, readline,
+     * ncursesw, apk binary); the apk database (`lib/apk/db/installed`, which
+     * holds user package records) is deliberately excluded — if it is broken
+     * the caller must fall back to a full reset. Network-independent, so it
+     * also covers the "apk fix failed because the proxy is down" case.
+     *
+     * Returns true when every non-database critical path is healthy after
+     * the restore (the apk database is ignored — restoring it would discard
+     * user package records).
+     */
+    suspend fun restoreCriticalFromAssets(): Boolean = withContext(Dispatchers.IO) {
+        val assetName = try {
+            context.assets.open(ROOTFS_ASSET).close()
+            ROOTFS_ASSET
+        } catch (_: Exception) {
+            ROOTFS_ASSET_TAR
+        }
+        try {
+            context.assets.open(assetName).use { raw ->
+                val tarInput = if (assetName.endsWith(".gz")) GZIPInputStream(raw) else raw
+                extractTar(tarInput, rootfsDir, onlyPrefixes = CRITICAL_RESTORE_PREFIXES)
+            }
+            val h = verifyIntegrity()
+            val nonDbOk = h.bash && h.sh && h.libc && h.libreadline && h.libncursesw && h.apk
+            if (nonDbOk) {
+                Log.i(TAG, "[Repair] targeted restore OK")
+            } else {
+                Log.w(TAG, "[Repair] targeted restore incomplete, still missing: ${h.missing}")
+            }
+            nonDbOk
+        } catch (t: Exception) {
+            Log.e(TAG, "[Repair] targeted restore failed", t)
+            false
+        }
     }
 
     /**
@@ -640,131 +697,6 @@ class RootfsManager private constructor(private val context: Context) {
 
     // --- POSIX tar extraction ---
 
-    /**
-     * Extract a POSIX tar stream into the target directory.
-     * Handles regular files, directories, and symlinks.
-     * Does not depend on any external library.
-     */
-    internal fun extractTar(input: InputStream, targetDir: File) {
-        val header = ByteArray(512)
-
-        while (true) {
-            val bytesRead = readFully(input, header)
-            if (bytesRead < 512) break
-
-            // Check for end-of-archive (two consecutive zero blocks)
-            if (header.all { it == 0.toByte() }) break
-
-            val name = extractString(header, 0, 100)
-            val modeOctal = extractString(header, 100, 8)
-            val sizeOctal = extractString(header, 124, 12)
-            val typeFlag = header[156].toInt().toChar()
-            val linkName = extractString(header, 157, 100)
-            val mode = modeOctal.trim().toIntOrNull(8) ?: 0
-
-            // Handle GNU/POSIX long names via prefix field (bytes 345-500)
-            val prefix = extractString(header, 345, 155)
-            val fullName = if (prefix.isNotEmpty()) "$prefix/$name" else name
-
-            if (fullName.isEmpty()) break
-
-            val size = sizeOctal.trim().toLongOrNull(8) ?: 0L
-            val outFile = File(targetDir, fullName)
-
-            when (typeFlag) {
-                '5', 'D' -> {
-                    // Directory
-                    outFile.mkdirs()
-                }
-                '2' -> {
-                    // Symbolic link
-                    outFile.parentFile?.mkdirs()
-                    try {
-                        java.nio.file.Files.createSymbolicLink(
-                            outFile.toPath(),
-                            java.nio.file.Paths.get(linkName)
-                        )
-                    } catch (_: Exception) {
-                        // Symlinks may fail on some Android versions; skip
-                        Log.w(TAG, "Failed to create symlink: $fullName -> $linkName")
-                    }
-                }
-                '0', '\u0000' -> {
-                    // Regular file (type '0' or null/legacy)
-                    outFile.parentFile?.mkdirs()
-                    outFile.outputStream().use { output ->
-                        var remaining = size
-                        val buf = ByteArray(8192)
-                        while (remaining > 0) {
-                            val toRead = minOf(buf.size.toLong(), remaining).toInt()
-                            val n = input.read(buf, 0, toRead)
-                            if (n < 0) break
-                            output.write(buf, 0, n)
-                            remaining -= n
-                        }
-                    }
-                    // Preserve executable permission from tar header
-                    if (mode and 0b001_001_001 != 0) {
-                        outFile.setExecutable(true, false)
-                    }
-                    // Skip padding to next 512-byte boundary
-                    val remainder = (size % 512).toInt()
-                    if (remainder != 0) {
-                        skipFully(input, (512 - remainder).toLong())
-                    }
-                    continue // Already consumed data + padding
-                }
-                '1' -> {
-                    // Hard link — create a copy
-                    outFile.parentFile?.mkdirs()
-                    val linkTarget = File(targetDir, linkName)
-                    if (linkTarget.exists()) {
-                        linkTarget.copyTo(outFile, overwrite = true)
-                    }
-                }
-                else -> {
-                    // Unknown type, skip data
-                }
-            }
-
-            // Skip data blocks for non-file entries that we didn't consume above
-            if (typeFlag != '0' && typeFlag != '\u0000' && size > 0) {
-                val blocks = (size + 511) / 512 * 512
-                skipFully(input, blocks)
-            }
-        }
-    }
-
-    internal fun extractString(header: ByteArray, offset: Int, length: Int): String {
-        val end = minOf(offset + length, header.size)
-        var actualEnd = offset
-        for (i in offset until end) {
-            if (header[i] == 0.toByte()) break
-            actualEnd = i + 1
-        }
-        return String(header, offset, actualEnd - offset, Charset.forName("UTF-8"))
-    }
-
-    internal fun readFully(input: InputStream, buf: ByteArray): Int {
-        var offset = 0
-        while (offset < buf.size) {
-            val n = input.read(buf, offset, buf.size - offset)
-            if (n < 0) return offset
-            offset += n
-        }
-        return offset
-    }
-
-    internal fun skipFully(input: InputStream, count: Long) {
-        var remaining = count
-        val buf = ByteArray(8192)
-        while (remaining > 0) {
-            val toRead = minOf(buf.size.toLong(), remaining).toInt()
-            val n = input.read(buf, 0, toRead)
-            if (n < 0) break
-            remaining -= n
-        }
-    }
 
     /**
      * InputStream wrapper that reports cumulative bytes read as a 0..1 fraction.
@@ -867,3 +799,167 @@ class RootfsManager private constructor(private val context: Context) {
         }
     }
 }
+/**
+ * Extract a POSIX tar stream into the target directory.
+ * files, directories, and symlinks.
+ *
+ * When [onlyPrefixes] is non-null, only entries whose full path
+ * starts with one of the prefixes are materialized; every other
+ * entry is still consumed (data + padding) so the stream stays
+ * aligned for the next header. Used by the targeted-restore
+ * repair path to recover factory files without wiping
+ * user-installed packages.
+ * Does not depend on any external library.
+ */
+internal fun extractTar(
+    input: InputStream,
+    targetDir: File,
+    onlyPrefixes: Set<String>? = null,
+) {
+    val header = ByteArray(512)
+
+    while (true) {
+        val bytesRead = readFully(input, header)
+        if (bytesRead < 512) break
+
+        // Check for end-of-archive (two consecutive zero blocks)
+        if (header.all { it == 0.toByte() }) break
+
+        val name = extractString(header, 0, 100)
+        val modeOctal = extractString(header, 100, 8)
+        val sizeOctal = extractString(header, 124, 12)
+        val typeFlag = header[156].toInt().toChar()
+        val linkName = extractString(header, 157, 100)
+        val mode = modeOctal.trim().toIntOrNull(8) ?: 0
+
+        // Handle GNU/POSIX long names via prefix field (bytes 345-500)
+        val prefix = extractString(header, 345, 155)
+        val fullName = if (prefix.isNotEmpty()) "$prefix/$name" else name
+
+        if (fullName.isEmpty()) break
+
+        val size = sizeOctal.trim().toLongOrNull(8) ?: 0L
+        val outFile = File(targetDir, fullName)
+        val isTarget = onlyPrefixes == null || onlyPrefixes.any { fullName.startsWith(it) }
+
+        when (typeFlag) {
+            '5', 'D' -> {
+                // Directory
+                if (isTarget) outFile.mkdirs()
+            }
+            '2' -> {
+                // Symbolic link
+                if (isTarget) {
+                    outFile.parentFile?.mkdirs()
+                    try {
+                        java.nio.file.Files.createSymbolicLink(
+                            outFile.toPath(),
+                            java.nio.file.Paths.get(linkName)
+                        )
+                    } catch (_: Exception) {
+                        // Symlinks may fail on some Android versions; skip
+                        Log.w("RootfsManager", "Failed to create symlink: $fullName -> $linkName")
+                    }
+                }
+            }
+            '0', '\u0000' -> {
+                if (isTarget) {
+                    // Regular file (type '0' or null/legacy)
+                    outFile.parentFile?.mkdirs()
+                    outFile.outputStream().use { output ->
+                        var remaining = size
+                        val buf = ByteArray(8192)
+                        while (remaining > 0) {
+                            val toRead = minOf(buf.size.toLong(), remaining).toInt()
+                            val n = input.read(buf, 0, toRead)
+                            if (n < 0) break
+                            output.write(buf, 0, n)
+                            remaining -= n
+                        }
+                    }
+                    // Preserve executable permission from tar header
+                    if (mode and 0b001_001_001 != 0) {
+                        outFile.setExecutable(true, false)
+                    }
+                } else {
+                    // Filtered out: consume data so the stream stays aligned
+                    skipFully(input, size)
+                }
+                // Skip padding to next 512-byte boundary (both branches)
+                val remainder = (size % 512).toInt()
+                if (remainder != 0) {
+                    skipFully(input, (512 - remainder).toLong())
+                }
+                continue // Already consumed data + padding
+            }
+            '1' -> {
+                // Hard link — create a copy
+                if (isTarget) {
+                    outFile.parentFile?.mkdirs()
+                    val linkTarget = File(targetDir, linkName)
+                    if (linkTarget.exists()) {
+                        linkTarget.copyTo(outFile, overwrite = true)
+                    }
+                }
+            }
+            else -> {
+                // Unknown type, skip data
+            }
+        }
+        // Skip data blocks for non-file entries that we didn't consume above
+        if (typeFlag != '0' && typeFlag != '\u0000' && size > 0) {
+            val blocks = (size + 511) / 512 * 512
+            skipFully(input, blocks)
+        }
+    }
+}
+
+internal fun extractString(header: ByteArray, offset: Int, length: Int): String {
+    val end = minOf(offset + length, header.size)
+    var actualEnd = offset
+    for (i in offset until end) {
+        if (header[i] == 0.toByte()) break
+        actualEnd = i + 1
+    }
+    return String(header, offset, actualEnd - offset, Charset.forName("UTF-8"))
+}
+
+internal fun readFully(input: InputStream, buf: ByteArray): Int {
+    var offset = 0
+    while (offset < buf.size) {
+        val n = input.read(buf, offset, buf.size - offset)
+        if (n < 0) return offset
+        offset += n
+    }
+    return offset
+}
+
+internal fun skipFully(input: InputStream, count: Long) {
+    var remaining = count
+    val buf = ByteArray(8192)
+    while (remaining > 0) {
+        val toRead = minOf(buf.size.toLong(), remaining).toInt()
+        val n = input.read(buf, 0, toRead)
+        if (n < 0) break
+        remaining -= n
+    }
+}
+
+
+/**
+ * Factory files that are safe to restore over a damaged rootfs without
+ * wiping user-installed packages. Prefix-matched so symlink chains
+ * (e.g. libreadline.so.8 -> libreadline.so.8.x) are restored together with
+ * their targets. The apk database (lib/apk/db/installed) is deliberately
+ * excluded — it holds user package records and can only be rebuilt by a
+ * full reset.
+ */
+internal val CRITICAL_RESTORE_PREFIXES = setOf(
+    "bin/bash",
+    "bin/sh",
+    "bin/busybox",
+    "lib/ld-musl-",
+    "usr/lib/libreadline",
+    "usr/lib/libncurses",
+    "sbin/apk",
+)
