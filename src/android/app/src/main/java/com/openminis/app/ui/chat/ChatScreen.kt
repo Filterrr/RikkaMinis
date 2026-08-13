@@ -3092,11 +3092,10 @@ fun ChatScreen(
                 // render time — mirrors iOS isCompactedHistory opacity(0.5).
                 // The lookup uses the underlying message id stripped of any
                 // dedupe suffix (`id#2`) added by buildFlatChatItems.
+                // originalMessageId is defined in ChatScreenUtils.kt.
                 val grayedMap = remember(messages) {
                     messages.associate { it.id to it.isCompactedHistory }
                 }
-                fun originalMessageId(id: String): String =
-                    id.substringBefore('#')
 
                 // ─── [P0-0] focus-a-message: scroll + transient highlight ───
                 //
