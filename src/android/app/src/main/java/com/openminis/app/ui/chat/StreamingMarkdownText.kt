@@ -804,6 +804,132 @@ fun coalesceMarkdownFragments(fragments: List<String>, maxChars: Int = 2000): Li
     return out
 }
 
+// ── Raw-text-layer streaming merge helpers ─────────────────────────────────
+
+/**
+ * Minimum streaming overlap length for suffix-prefix deduplication.
+ * Shorter overlaps are treated as normal delta text (concatenated).
+ */
+private const val MINIMUM_STREAMING_OVERLAP_LENGTH = 3
+
+/**
+ * Determines whether [incoming] is a regressive (backwards) snapshot of
+ * [current] — i.e., a shorter string that starts with the same characters.
+ * When true, the streaming output has regressed (e.g. "Hello world" → "Hello")
+ * and the snapshot should be ignored.
+ */
+fun shouldIgnoreRegressiveStreamingSnapshot(current: String, incoming: String): Boolean {
+    if (current.isEmpty() || incoming.isEmpty()) return false
+    return incoming.length < current.length && current.startsWith(incoming)
+}
+
+/**
+ * Merge an agent text snapshot [incoming] into the [current] accumulated text.
+ *
+ * Handles the common streaming artifact where the LLM returns a progressive
+ * snapshot that is shorter than the current text (regression), or a
+ * divergent replacement.
+ *
+ * This is the "raw text layer" protection — it operates on the full text
+ * string, not on markdown fragments. Used in conjunction with
+ * [coalesceMarkdownFragments] which operates at the fragment level.
+ *
+ * @return The merged text, preferring the longer/more complete version.
+ */
+fun mergeAgentTextSnapshot(current: String, incoming: String): String {
+    if (incoming.isEmpty()) return current
+    if (current.isEmpty()) return incoming
+    if (incoming == current) return current
+    if (shouldIgnoreRegressiveStreamingSnapshot(current, incoming)) {
+        return current
+    }
+    return incoming
+}
+
+/**
+ * Legacy streaming text merge with full overlap detection and divergent
+ * snapshot handling.
+ *
+ * This is a more conservative merge that handles:
+ * - Normal appends (incoming is longer and starts with current)
+ * - Suffix-prefix overlaps (deduplicate the common boundary)
+ * - Divergent streaming snapshots (mid-stream rewrite)
+ * - Fallback concatenation
+ *
+ * @return The merged text.
+ */
+fun mergeLegacyStreamingText(current: String, incoming: String): String {
+    if (incoming.isEmpty()) return current
+    if (current.isEmpty()) return incoming
+    if (incoming == current) return current
+    if (shouldIgnoreRegressiveStreamingSnapshot(current, incoming)) {
+        return current
+    }
+    // Normal append: incoming is longer and starts with current
+    if (incoming.length >= current.length && incoming.startsWith(current)) {
+        return incoming
+    }
+    // Suffix-prefix overlap deduplication
+    val overlap = longestSuffixPrefixOverlap(current, incoming)
+    if (overlap >= MINIMUM_STREAMING_OVERLAP_LENGTH) {
+        return current + incoming.substring(overlap)
+    }
+    // Divergent snapshot detection
+    val commonPrefixLength = commonPrefixLength(current, incoming)
+    if (looksLikeDivergentStreamingSnapshot(current, incoming, commonPrefixLength)) {
+        return if (incoming.length >= current.length) incoming else current
+    }
+    // Fallback: concatenate
+    return current + incoming
+}
+
+/**
+ * Calculates the longest suffix of [current] that is also a prefix of
+ * [incoming]. Capped at 4096 characters for performance.
+ *
+ * @return The length of the longest suffix-prefix overlap, or 0 if none.
+ */
+private fun longestSuffixPrefixOverlap(current: String, incoming: String): Int {
+    val maxOverlap = minOf(current.length, incoming.length, 4096)
+    for (length in maxOverlap downTo 1) {
+        if (incoming.startsWith(current.substring(current.length - length))) {
+            return length
+        }
+    }
+    return 0
+}
+
+/**
+ * Calculates the length of the common prefix shared by [a] and [b].
+ */
+private fun commonPrefixLength(a: String, b: String): Int {
+    val maxLength = minOf(a.length, b.length)
+    var index = 0
+    while (index < maxLength && a[index].code == b[index].code) {
+        index++
+    }
+    return index
+}
+
+/**
+ * Determines whether [a] and [b] look like divergent streaming snapshots —
+ * i.e., they share a long common prefix but then diverge (mid-stream
+ * rewrite). When true, the longer version should be kept instead of
+ * concatenating.
+ *
+ * @param commonPrefixLength The pre-computed common prefix length of [a] and [b].
+ */
+private fun looksLikeDivergentStreamingSnapshot(
+    a: String,
+    b: String,
+    commonPrefixLength: Int,
+): Boolean {
+    if (commonPrefixLength < 12) return false
+    val shorterLength = minOf(a.length, b.length)
+    if (shorterLength == 0) return false
+    return commonPrefixLength >= 24 || commonPrefixLength.toFloat() / shorterLength.toFloat() >= 0.6f
+}
+
 /**
  * Render a single markdown fragment (one or a few related blocks) inside
  * its own composable. Designed to be used as the body of an independent
