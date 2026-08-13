@@ -35,6 +35,11 @@ object MultiDeviceSync {
     /** Preferences key for the user-facing master switch. */
     const val PREF_KEY_ENABLED = "multi_device_sync_enabled"
 
+    /** Preferences key: whether the user has confirmed that auto-sync
+     *  snapshots may contain API keys / OAuth tokens / env var values.
+     *  Not confirmed → sync pushes without secrets (includeSecrets=false). */
+    const val PREF_KEY_SECRETS_CONFIRMED = "multi_device_sync_secrets_confirmed"
+
     /** Debounce window: config writes within this interval coalesce into a
      *  single push, so a settings edit that fires N writes pushes once. */
     const val PUSH_DEBOUNCE_MS = 4000L
@@ -49,6 +54,23 @@ object MultiDeviceSync {
     fun isEnabled(context: Context): Boolean {
         return context.getSharedPreferences("backup_prefs", Context.MODE_PRIVATE)
             .getBoolean(PREF_KEY_ENABLED, false)
+    }
+
+    /**
+     * Whether the user has confirmed that auto-sync snapshots may carry
+     * API keys and credentials. Before this is true, sync runs with
+     * includeSecrets=false (provider keys and env var values omitted).
+     * Persisted alongside [PREF_KEY_ENABLED] in the same prefs file.
+     */
+    fun hasConfirmedSecretsSync(context: Context): Boolean {
+        return context.getSharedPreferences("backup_prefs", Context.MODE_PRIVATE)
+            .getBoolean(PREF_KEY_SECRETS_CONFIRMED, false)
+    }
+
+    /** Mark the secrets-sync confirmation as given (one-shot, permanent). */
+    fun markSecretsSyncConfirmed(context: Context) {
+        context.getSharedPreferences("backup_prefs", Context.MODE_PRIVATE)
+            .edit().putBoolean(PREF_KEY_SECRETS_CONFIRMED, true).apply()
     }
 
     /**
@@ -130,7 +152,7 @@ object MultiDeviceSync {
         memoryRepo: MemoryRepository?,
         config: WebDavConfig,
         client: OkHttpClient,
-        includeSecrets: Boolean = true,
+        includeSecrets: Boolean = false,
     ): String {
         // (1) Pull + apply the newest remote snapshot (best-effort per entry).
         val pulled = runCatching { WebDavSync.pullLatestSync(config, client) }.getOrElse {

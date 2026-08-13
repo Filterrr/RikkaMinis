@@ -135,6 +135,7 @@ class MinisApp : Application(), ImageLoaderFactory {
                     memoryRepo = memoryRepository,
                     config = config,
                     client = WebDavClient.defaultClient(),
+                    includeSecrets = MultiDeviceSync.hasConfirmedSecretsSync(this@MinisApp),
                 )
                 AppLogger.info("MultiDeviceSync", result)
             }.onFailure {
