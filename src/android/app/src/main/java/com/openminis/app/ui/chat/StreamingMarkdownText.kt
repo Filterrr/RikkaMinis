@@ -1781,7 +1781,7 @@ private fun RenderBlock(block: MdBlock) {
                     Icon(
                         imageVector = if (copied) Icons.Default.Check else Icons.Default.ContentCopy,
                         contentDescription = if (copied) "Copied" else "Copy code",
-                        tint = if (copied) Color(0xFF34C759) else Color.White.copy(alpha = 0.4f),
+                        tint = if (copied) ChatColors.success else Color.White.copy(alpha = 0.4f),
                         modifier = Modifier
                             .size(16.dp)
                             .clickable {

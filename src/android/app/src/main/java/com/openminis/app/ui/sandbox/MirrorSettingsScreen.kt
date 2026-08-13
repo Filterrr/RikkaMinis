@@ -75,6 +75,7 @@ import okhttp3.Request
 import java.io.File
 import java.net.URI
 import java.util.concurrent.TimeUnit
+import com.openminis.app.ui.theme.ChatColors
 
 // ─── Data Model ──────────────────────────────────────────────────────────────
 
@@ -96,9 +97,9 @@ enum class MirrorCategory(
 
     val iconColor: Color
         get() = when (this) {
-            ALPINE -> Color(0xFF007AFF)
-            PIP -> Color(0xFF34C759)
-            NPM -> Color(0xFFFF3B30)
+            ALPINE -> ChatColors.link
+            PIP -> ChatColors.success
+            NPM -> ChatColors.error
         }
 }
 
@@ -588,9 +589,9 @@ private fun CircleIconBadge(icon: ImageVector, tint: Color) {
 @Composable
 private fun LatencyBadge(ms: Int) {
     val color = when {
-        ms < 200 -> Color(0xFF34C759)
+        ms < 200 -> ChatColors.success
         ms < 500 -> Color(0xFFFF9500)
-        else -> Color(0xFFFF3B30)
+        else -> ChatColors.error
     }
     Box(
         modifier = Modifier

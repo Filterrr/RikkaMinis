@@ -73,6 +73,7 @@ import com.openminis.app.data.MountedFoldersStore
 import com.openminis.app.data.SafMountHelper
 import com.openminis.app.ui.components.DialogTextField
 import kotlinx.coroutines.launch
+import com.openminis.app.ui.theme.ChatColors
 
 /**
  * Settings → Mount External Folders. Mirrors iOS MountedFoldersSettingsView.
@@ -463,7 +464,7 @@ private fun MountRow(
         Icon(
             imageVector = Icons.Outlined.Folder,
             contentDescription = null,
-            tint = Color(0xFF007AFF),
+            tint = ChatColors.link,
             modifier = Modifier.size(28.dp),
         )
         Spacer(Modifier.width(12.dp))
@@ -513,7 +514,7 @@ private fun AccessBadge(entry: MountedFoldersStore.Entry) {
     val (text, color) = when {
         !entry.isWritable -> stringResource(R.string.mount_badge_readonly) to Color(0xFFFF9500)
         !entry.userAllowWrite -> stringResource(R.string.mount_badge_locked) to Color(0xFFAF52DE)
-        else -> stringResource(R.string.mount_badge_rw) to Color(0xFF34C759)
+        else -> stringResource(R.string.mount_badge_rw) to ChatColors.success
     }
     Surface(
         shape = RoundedCornerShape(8.dp),

@@ -171,6 +171,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -287,12 +288,19 @@ import com.openminis.app.ui.browser.BrowserSheet
 import com.openminis.app.ui.theme.ChatColors
 import com.openminis.app.ui.components.MinisTextButton
 
-// iOS ChatColors equivalent
-internal val ToolCheckColor = Color(0xFF34C759) // iOS .green
-internal val ToolErrorColor = Color(0xFFFF3B30) // iOS .red
+// iOS ChatColors equivalent — semantic status colors read from the chat
+// palette so they follow the active light/dark theme.
+internal val ToolCheckColor: Color
+    @Composable
+    @ReadOnlyComposable
+    get() = ChatColors.success
+internal val ToolErrorColor: Color
+    @Composable
+    @ReadOnlyComposable
+    get() = ChatColors.error
+// iOS .yellow / .pink have no chat-palette slot; keep fixed.
 internal val ToolCancelColor = Color(0xFFFFCC00) // iOS .yellow
-// Memory tool accent — matches iOS `.pink` on SF Symbols.
-internal val ToolMemoryAccent = Color(0xFFFF2D55)
+internal val ToolMemoryAccent = Color(0xFFFF2D55) // iOS .pink
 // Sparkle gradient colors (iOS uses linear gradient)
 internal val SparkleColor1 = Color(0xFFB8B096) // rgb(0.72, 0.69, 0.59)
 internal val SparkleColor2 = Color(0xFF99998C) // rgb(0.6, 0.6, 0.55)
@@ -2063,7 +2071,7 @@ fun ChatScreen(
                                             modifier = Modifier
                                                 .size(6.dp)
                                                 .background(
-                                                    if (modelName.isNotEmpty()) Color(0xFF34C759) else Color(0xFFFF9500),
+                                                    if (modelName.isNotEmpty()) ChatColors.success else Color(0xFFFF9500),
                                                     CircleShape,
                                                 ),
                                         )
@@ -5307,7 +5315,7 @@ fun ChatScreen(
                             Box(
                                 modifier = Modifier
                                     .size(38.dp)
-                                    .background(Color(0xFFFF3B30), CircleShape)
+                                    .background(ChatColors.error, CircleShape)
                                     .clip(CircleShape)
                                     .clickable { viewModel.cancelStream() },
                                 contentAlignment = Alignment.Center,

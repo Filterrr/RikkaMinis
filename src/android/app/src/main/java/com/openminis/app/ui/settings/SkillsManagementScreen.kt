@@ -68,6 +68,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
@@ -95,6 +96,7 @@ import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import com.openminis.app.ui.theme.ChatColors
 
 /**
  * Inline state for the three update actions on [SkillDetailScreen]
@@ -805,9 +807,9 @@ fun SkillDetailScreen(
                     is UpdateStatus.Done -> {
                         DetailDivider()
                         DetailRow {
-                            Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color(0xFF34C759), modifier = Modifier.size(16.dp))
+                            Icon(Icons.Default.CheckCircle, contentDescription = null, tint = ChatColors.success, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(10.dp))
-                            Text(stringResource(R.string.skill_detail_updated), style = MaterialTheme.typography.bodySmall, color = Color(0xFF34C759))
+                            Text(stringResource(R.string.skill_detail_updated), style = MaterialTheme.typography.bodySmall, color = ChatColors.success)
                         }
                     }
                     is UpdateStatus.Failed -> {
@@ -1034,9 +1036,16 @@ private fun shareSkillZip(context: android.content.Context, zip: java.io.File) {
 
 /** [T-android-skill-icon-circular] The same iOS-system-palette values the main
  *  Settings rows use (SettingsScreen): blue for navigational/remote actions,
- *  green for local filesystem operations. */
-private val SettingsIconBlue = Color(0xFF007AFF)
-private val SettingsIconGreen = Color(0xFF34C759)
+ *  green for local filesystem operations. Read from the chat palette so they
+ *  follow the active theme. */
+private val SettingsIconBlue: Color
+    @Composable
+    @ReadOnlyComposable
+    get() = ChatColors.link
+private val SettingsIconGreen: Color
+    @Composable
+    @ReadOnlyComposable
+    get() = ChatColors.success
 
 /**
  * [T-android-skill-icon-circular] A colored circular badge with a white glyph

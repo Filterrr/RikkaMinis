@@ -1177,4 +1177,12 @@
     <string name="chat_attachment_limit">Only the first %1$d items were attached.</string>
     <string name="session_edit_title">Edit Session</string>
     <string name="session_new_chat_default">New Chat</string>
+    <string name="browser_ua_default">Standard (automatisch nach UA)</string>
+    <string name="browser_ua_custom">Benutzerdefiniert</string>
+    <string name="browser_ua_custom_hint">Eigene Breite × Höhe festlegen</string>
+    <string name="browser_viewport_width">Breite</string>
+    <string name="browser_viewport_height">Höhe</string>
+    <string name="common_loading">Laden…</string>
+    <string name="rootfs_reset_button">Zurücksetzen</string>
+    <string name="session_title_label">Titel</string>
 </resources>

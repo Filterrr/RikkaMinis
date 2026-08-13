@@ -79,6 +79,7 @@ import java.util.UUID
 import com.openminis.app.ui.components.MinisButton
 import com.openminis.app.ui.components.RowLabel
 import com.openminis.app.ui.components.SectionTextField
+import com.openminis.app.ui.theme.ChatColors
 
 private enum class AddProviderStep {
     CHOOSE_TYPE,
@@ -611,7 +612,7 @@ private fun ColumnScope.OAuthConfigSection(
                     Icon(
                         Icons.Default.CheckCircle,
                         contentDescription = null,
-                        tint = Color(0xFF34C759),
+                        tint = ChatColors.success,
                         modifier = Modifier.size(20.dp),
                     )
                     Spacer(Modifier.width(8.dp))

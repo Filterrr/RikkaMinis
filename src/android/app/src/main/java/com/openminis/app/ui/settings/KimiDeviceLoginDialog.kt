@@ -39,6 +39,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.openminis.app.R
+import com.openminis.app.ui.theme.ChatColors
 
 /**
  * [T-kimi-oauth] Device-code login dialog for Kimi Code (RFC 8628): shows the
@@ -100,7 +101,7 @@ fun KimiDeviceLoginDialog(
                             if (copied) Icons.Default.CheckCircle else Icons.Default.ContentCopy,
                             contentDescription = stringResource(R.string.kimi_login_copy_code),
                             tint = if (copied) {
-                                androidx.compose.ui.graphics.Color(0xFF34C759)
+                                androidx.compose.ui.graphics.ChatColors.success
                             } else {
                                 MaterialTheme.colorScheme.onSurfaceVariant
                             },

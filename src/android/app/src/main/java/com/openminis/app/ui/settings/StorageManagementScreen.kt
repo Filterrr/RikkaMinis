@@ -53,6 +53,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import com.openminis.app.ui.theme.ChatColors
 
 private data class SessionStorageInfo(
     val id: String,
@@ -170,7 +171,7 @@ fun StorageManagementScreen(
                 showDivider = true,
             )
             StorageOverviewRow(
-                color = Color(0xFF007AFF),
+                color = ChatColors.link,
                 label = stringResource(R.string.storage_overview_database),
                 value = Formatter.formatFileSize(context, dbSize),
                 showDivider = true,
@@ -187,7 +188,7 @@ fun StorageManagementScreen(
             SettingsSection(header = stringResource(R.string.storage_section_shell_detail)) {
                 shellBreakdown.forEachIndexed { index, entry ->
                     StorageOverviewRow(
-                        color = Color(0xFF34C759),
+                        color = ChatColors.success,
                         label = "/${entry.name}",
                         value = Formatter.formatFileSize(context, entry.bytes),
                         showDivider = index != shellBreakdown.lastIndex,

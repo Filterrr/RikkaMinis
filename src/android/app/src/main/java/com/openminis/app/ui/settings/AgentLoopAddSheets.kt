@@ -45,6 +45,7 @@ import com.openminis.app.data.repository.ProviderRepository
 import com.openminis.app.ui.components.modelEntryPickerItems
 import com.openminis.app.ui.components.MinisButton
 import com.openminis.app.ui.components.MinisTextButton
+import com.openminis.app.ui.theme.ChatColors
 
 /**
  * T185 — full-screen picker for adding model entries to the agent-loop
@@ -283,7 +284,7 @@ fun AddAgentLoopGroupsScreen(
                                 Icon(
                                     if (isSelected) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
                                     contentDescription = null,
-                                    tint = if (isSelected) Color(0xFF007AFF)
+                                    tint = if (isSelected) ChatColors.link
                                     else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
                                     modifier = Modifier.size(20.dp),
                                 )

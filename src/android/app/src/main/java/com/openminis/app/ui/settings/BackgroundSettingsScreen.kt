@@ -58,6 +58,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.openminis.app.MinisApp
 import com.openminis.app.R
 import com.openminis.app.power.PowerOptimizationManager
+import com.openminis.app.ui.theme.ChatColors
 
 /**
  * T50 settings screen — surfaces the two pieces of background-keep-alive
@@ -157,7 +158,7 @@ fun BackgroundSettingsScreen(onBack: () -> Unit) {
             BgSectionTitle(stringResource(R.string.settings_section_notifications))
             BgToggleRow(
                 icon = Icons.Outlined.NotificationsActive,
-                iconColor = Color(0xFF007AFF),
+                iconColor = ChatColors.link,
                 title = stringResource(R.string.settings_task_notifications),
                 checked = taskNotificationsEnabled,
                 onCheckedChange = { backgroundRepo.setTaskNotificationsEnabled(it) },
@@ -216,7 +217,7 @@ fun BackgroundSettingsScreen(onBack: () -> Unit) {
             Spacer(Modifier.size(8.dp))
             BgToggleRow(
                 icon = Icons.Outlined.Bolt,
-                iconColor = Color(0xFF34C759),
+                iconColor = ChatColors.success,
                 title = stringResource(R.string.settings_dynamic_island),
                 checked = dynamicIslandEnabled && dynamicIslandCapable,
                 enabled = dynamicIslandCapable,
@@ -234,7 +235,7 @@ fun BackgroundSettingsScreen(onBack: () -> Unit) {
             BgSectionTitle(stringResource(R.string.battery_opt_section_title))
             BgRow(
                 icon = Icons.Outlined.BatteryFull,
-                iconColor = if (ignoringOptimizations) Color(0xFF34C759) else Color(0xFFFF9500),
+                iconColor = if (ignoringOptimizations) ChatColors.success else Color(0xFFFF9500),
                 title = stringResource(R.string.battery_opt_row_title),
                 subtitle = if (ignoringOptimizations) {
                     stringResource(R.string.battery_opt_already_exempt)

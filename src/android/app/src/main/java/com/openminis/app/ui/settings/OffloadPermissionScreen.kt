@@ -34,6 +34,7 @@ import com.openminis.app.offload.ShizukuManager
 import com.openminis.app.ui.components.MinisMenu
 import com.openminis.app.ui.components.MinisTextButton
 import kotlinx.coroutines.delay
+import com.openminis.app.ui.theme.ChatColors
 
 @Composable
 fun OffloadPermissionScreen(
@@ -111,7 +112,7 @@ fun OffloadPermissionScreen(
         // deeplink back to the OS settings page that fixes it.
         IntegrationSection(
             iconVector = Icons.Outlined.Accessibility,
-            iconTint = Color(0xFF34C759),
+            iconTint = ChatColors.success,
             sectionHeaderRes = R.string.perm_section_a11y,
             sectionFooterRes = R.string.perm_a11y_section_footer,
             toolName = "a11y_cli",

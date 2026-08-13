@@ -554,7 +554,7 @@ internal fun ModelPickerSheet(
                                     Icon(
                                         if (isSelected) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
                                         contentDescription = null,
-                                        tint = if (isSelected) Color(0xFF34C759)
+                                        tint = if (isSelected) ChatColors.success
                                         else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
                                         modifier = Modifier.size(22.dp),
                                     )
@@ -622,10 +622,10 @@ internal fun ModelPickerSheet(
                                             stringResource(R.string.model_picker_default_badge),
                                             fontSize = 10.sp,
                                             fontWeight = FontWeight.Medium,
-                                            color = Color(0xFF007AFF),
+                                            color = ChatColors.link,
                                             modifier = Modifier
                                                 .background(
-                                                    Color(0xFF007AFF).copy(alpha = 0.1f),
+                                                    ChatColors.link.copy(alpha = 0.1f),
                                                     RoundedCornerShape(50),
                                                 )
                                                 .padding(horizontal = 6.dp, vertical = 2.dp),
@@ -700,7 +700,7 @@ internal fun ModelPickerSheet(
                                                 Icon(
                                                     if (isActive) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
                                                     contentDescription = null,
-                                                    tint = if (isActive) Color(0xFF007AFF)
+                                                    tint = if (isActive) ChatColors.link
                                                     else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f),
                                                     modifier = Modifier.size(17.dp),
                                                 )
@@ -739,10 +739,10 @@ internal fun ModelPickerSheet(
                                                         stringResource(R.string.model_picker_active_badge),
                                                         fontSize = 10.sp,
                                                         fontWeight = FontWeight.Medium,
-                                                        color = Color(0xFF34C759),
+                                                        color = ChatColors.success,
                                                         modifier = Modifier
                                                             .background(
-                                                                Color(0xFF34C759).copy(alpha = 0.1f),
+                                                                ChatColors.success.copy(alpha = 0.1f),
                                                                 RoundedCornerShape(8.dp),
                                                             )
                                                             .padding(horizontal = 5.dp, vertical = 1.dp),
@@ -899,7 +899,7 @@ internal fun ModelPickerSheet(
                                             Icon(
                                                 if (selectedEntry != null) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
                                                 contentDescription = null,
-                                                tint = if (selectedEntry != null) Color(0xFF007AFF)
+                                                tint = if (selectedEntry != null) ChatColors.link
                                                 else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
                                                 modifier = Modifier.size(20.dp),
                                             )
@@ -971,7 +971,7 @@ internal fun ModelPickerSheet(
                                             Icon(
                                                 if (isSelected) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
                                                 contentDescription = null,
-                                                tint = if (isSelected) Color(0xFF007AFF)
+                                                tint = if (isSelected) ChatColors.link
                                                 else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
                                                 modifier = Modifier.size(20.dp),
                                             )
@@ -1016,10 +1016,10 @@ internal fun ModelPickerSheet(
                                                     stringResource(R.string.model_picker_active_badge),
                                                     fontSize = 10.sp,
                                                     fontWeight = FontWeight.Medium,
-                                                    color = Color(0xFF34C759),
+                                                    color = ChatColors.success,
                                                     modifier = Modifier
                                                         .background(
-                                                            Color(0xFF34C759).copy(alpha = 0.1f),
+                                                            ChatColors.success.copy(alpha = 0.1f),
                                                             RoundedCornerShape(8.dp),
                                                         )
                                                         .padding(horizontal = 5.dp, vertical = 1.dp),

@@ -50,6 +50,7 @@ import com.openminis.app.data.model.ProviderInstance
 import com.openminis.app.data.model.ProviderCredential
 import com.openminis.app.data.repository.ProviderRepository
 import com.openminis.app.R
+import com.openminis.app.ui.theme.ChatColors
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -308,7 +309,7 @@ private fun ProviderInstanceRow(
             modifier = Modifier
                 .size(8.dp)
                 .background(
-                    color = if (isActive) Color(0xFF34C759) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f),
+                    color = if (isActive) ChatColors.success else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f),
                     shape = CircleShape,
                 ),
         )

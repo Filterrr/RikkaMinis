@@ -38,6 +38,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.openminis.app.R
+import com.openminis.app.ui.theme.ChatColors
 
 /**
  * Settings → Shared Folders. Mirrors iOS SharedFoldersView.
@@ -156,7 +157,7 @@ private fun SharedFolderRow(
 @Composable
 private fun AccessBadge(writable: Boolean) {
     val (textRes, color) = if (writable) {
-        R.string.mount_badge_rw to Color(0xFF34C759)
+        R.string.mount_badge_rw to ChatColors.success
     } else {
         R.string.mount_badge_readonly to Color(0xFFFF9500)
     }
@@ -191,7 +192,7 @@ internal object SharedFolderRegistry {
             linuxPath = "/var/minis/shared",
             writable = true,
             icon = Icons.Outlined.Folder,
-            iconColor = Color(0xFF007AFF),
+            iconColor = ChatColors.link,
         ),
         SharedFolderEntry(
             id = "skills",
