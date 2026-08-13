@@ -402,6 +402,20 @@ class RootfsManager private constructor(private val context: Context) {
             return@withContext true
         }
 
+        // Stage 2.6: offline install of bash/readline/ncurses from bundled
+        // APK files (assets/apk-offline/). These packages are NOT in the
+        // factory minirootfs (Stage 2.5 can't restore them), and `apk add`
+        // fails when the network is down. The bundled APK files cover the
+        // gap without requiring network access. Stage 2.5 must have restored
+        // busybox (/bin/sh) first, so proot can run inside the guest.
+        Log.i(TAG, "[Repair] Stage 2.6: offline install of extra packages")
+        installOfflinePackages()
+        val afterOffline = verifyIntegrity()
+        if (afterOffline.bash && afterOffline.libreadline && afterOffline.libncursesw) {
+            Log.i(TAG, "[Repair] rootfs healthy after offline package install")
+            return@withContext true
+        }
+
         // Stage 3: last resort — full reset. Only when the apk *database*
         // (user package records) is unusable: an apk binary that Stage 2.5
         // could not fix is not in the safe-restore set either, so it resets
@@ -454,6 +468,81 @@ class RootfsManager private constructor(private val context: Context) {
         } catch (t: Exception) {
             Log.e(TAG, "[Repair] targeted restore failed", t)
             false
+        }
+    }
+
+    /**
+     * Install bash, readline, and ncurses from bundled APK files
+     * (assets/apk-offline/) via proot, without network access.
+     * These packages are NOT in the factory minirootfs (Stage 2.5 can't
+     * restore them), and `apk add` fails when the network is down.
+     * The bundled APK files cover the gap without requiring network access.
+     * Stage 2.5 must have restored busybox (/bin/sh) first, so proot runs.
+     *
+     * Called from [autoRepair] Stage 2.6 after factory file restoration.
+     */
+    private suspend fun installOfflinePackages(): Boolean = withContext(Dispatchers.IO) {
+        if (!prootBinary.exists()) {
+            Log.w(TAG, "[OfflinePackages] proot binary not available")
+            return@withContext false
+        }
+        val apkDir = File(rootfsDir, "tmp/apk-offline")
+        apkDir.mkdirs()
+        try {
+            val apkFiles = mutableListOf<String>()
+            for (apkName in OFFLINE_PACKAGES) {
+                try {
+                    context.assets.open("apk-offline/$apkName").use { src ->
+                        val dst = File(apkDir, apkName)
+                        dst.outputStream().use { dstStream -> src.copyTo(dstStream) }
+                        apkFiles.add(dst.absolutePath)
+                    }
+                } catch (_: java.io.FileNotFoundException) {
+                    Log.w(TAG, "[OfflinePackages] asset not found: apk-offline/$apkName")
+                }
+            }
+            if (apkFiles.isEmpty()) {
+                Log.w(TAG, "[OfflinePackages] no APK files to install")
+                return@withContext false
+            }
+            val cmd = listOf(
+                prootBinary.absolutePath, "-0", "--link2symlink", "--kill-on-exit",
+                "-r", rootfsDir.absolutePath,
+                "-b", "/dev", "-b", "/proc", "-b", "/sys", "-w", "/root",
+                "-b", "${apkDir.absolutePath}:/tmp/apk-offline",
+                "/bin/sh", "-c",
+                "apk add --allow-untrusted /tmp/apk-offline/*.apk ; true"
+            )
+            val loaderEnv = mutableMapOf(
+                "PROOT_TMP_DIR" to PRootKernel.getProotTmpDir(context).absolutePath,
+                "LD_LIBRARY_PATH" to nativeLibDir.absolutePath,
+            )
+            File(nativeLibDir, "libproot-loader.so").takeIf { it.exists() }?.let {
+                loaderEnv["PROOT_LOADER"] = it.absolutePath
+            }
+            File(nativeLibDir, "libproot-loader32.so").takeIf { it.exists() }?.let {
+                loaderEnv["PROOT_LOADER_32"] = it.absolutePath
+            }
+            runCatching {
+                val p = ProcessBuilder(cmd)
+                    .redirectErrorStream(true)
+                    .apply { environment().putAll(loaderEnv) }
+                    .start()
+                val output = p.inputStream.readBytes().toString(Charset.forName("UTF-8"))
+                val finished = p.waitFor(120, java.util.concurrent.TimeUnit.SECONDS)
+                val exitCode = if (finished) p.exitValue() else -1
+                if (p.isAlive) p.destroyForcibly()
+                Log.i(TAG, "[OfflinePackages] apk add exit=$exitCode output=${output.takeLast(500)}")
+                exitCode == 0 || exitCode == 1
+            }.onFailure { t ->
+                Log.e(TAG, "[OfflinePackages] process failed", t)
+                false
+            }.getOrDefault(false)
+        } catch (t: Exception) {
+            Log.e(TAG, "[OfflinePackages] failed", t)
+            false
+        } finally {
+            apkDir.deleteRecursively()
         }
     }
 
@@ -755,6 +844,11 @@ class RootfsManager private constructor(private val context: Context) {
         private const val ROOTFS_ASSET_TAR = "alpine-minirootfs.tar"
         private const val PROOT_ASSET = "proot-aarch64"
         private const val DEFAULT_MOUNT_ASSET = "default_mount"
+        private val OFFLINE_PACKAGES = listOf(
+            "bash-5.2.37-r0.apk",
+            "readline-8.2.13-r0.apk",
+            "ncurses-6.5_p20241006-r3.apk",
+        )
 
         /**
          * Parse the line-based integrity manifest text ("rel/path=size" per
