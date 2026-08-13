@@ -1346,4 +1346,5 @@
     <string name="common_loading">Загрузка…</string>
     <string name="rootfs_reset_button">Сбросить</string>
     <string name="session_title_label">Название</string>
+    <string name="backup_import_too_large">Файл резервной копии слишком велик (%1$d МБ, максимум %2$d МБ) — ничего не импортировано.</string>
 </resources>
