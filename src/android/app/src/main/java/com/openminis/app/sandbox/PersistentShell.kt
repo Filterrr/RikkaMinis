@@ -79,6 +79,19 @@ class PersistentShell(
         private set
 
     /**
+     * [shell-generation-scheduler] Monotonic shell generation. Incremented
+     * by [stop] every time the process is torn down (recycle, idle sweep,
+     * user cancel). An in-flight command snapshots the generation before it
+     * starts and compares after it completes — if the shell was recycled
+     * mid-command, the continuation's result came from a dead/restarted
+     * tracer and is discarded (reported as -1 so the coordinator retries on
+     * the fresh shell).
+     */
+    @Volatile
+    var generation: Int = 0
+        private set
+
+    /**
      * [P2-proot-native-leak] Resident set size (MB) of the live PRoot child
      * process, read from /proc/<pid>/status VmRSS. This is the authoritative
      * signal for the PRoot tracer's native leak — NOT Debug.getNativeHeap-
@@ -383,6 +396,11 @@ class PersistentShell(
 
         // [P2-app-native-oom] Track command count for dense-call recycling.
         commandCount++
+        // [shell-generation-scheduler] Snapshot the shell generation so a
+        // mid-command recycle (memory monitor, idle sweep, user cancel) can
+        // be detected — the continuation's result then belongs to a dead
+        // tracer and must not be trusted.
+        val genAtStart = generation
 
         val marker = UUID.randomUUID().toString().take(8)
 
@@ -448,6 +466,19 @@ class PersistentShell(
 
             monitorJob?.cancel()
 
+            // [shell-generation-scheduler] The shell was recycled while this
+            // command was in flight (memory-monitor recycle, idle sweep, user
+            // cancel). Its output came from a dead tracer — report the death
+            // (exitCode -1) so the coordinator's retry logic rebuilds the
+            // shell and re-runs instead of trusting stale output.
+            if (genAtStart != generation) {
+                return@withContext CommandResult(
+                    result?.output.orEmpty(),
+                    -1,
+                    result?.truncated ?: false,
+                )
+            }
+
             if (result == null) {
                 // Timeout — cancel pending, but don't kill the shell
                 pendingCallback = null
@@ -499,6 +530,7 @@ class PersistentShell(
      * Stop the persistent shell.
      */
     fun stop() {
+        generation++
         try { stdinWriter?.close() } catch (_: Exception) {}
         stdinWriter = null
         process?.let { proc ->
