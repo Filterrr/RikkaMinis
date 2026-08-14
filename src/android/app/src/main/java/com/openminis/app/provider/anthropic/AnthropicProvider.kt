@@ -308,11 +308,15 @@ class AnthropicProvider(
     ): JSONObject {
         val body = JSONObject()
         body.put("model", model.id)
-        body.put("max_tokens", maxTokens)
+        // Defense-in-depth clamp: upstream dynamicMaxTokens() is already in
+        // range; this guards out-of-band callers (sub-agent budgets, synthesized
+        // requests) from a deterministic 400 on over-range max_tokens.
+        body.put("max_tokens", clampOutboundMaxTokens(maxTokens, effectiveMaxOutputTokens(model)))
         body.put("stream", stream)
 
         if (temperature != null && !thinkingLevel.isEnabled && !modelRejectsTemperature(model.id)) {
-            body.put("temperature", temperature)
+            // Anthropic's documented temperature range is 0..1.
+            body.put("temperature", clampOutboundTemperature(temperature, max = 1.0))
         }
 
         // Thinking / extended thinking. Two protocol shapes:
@@ -403,62 +407,6 @@ class AnthropicProvider(
     }
 
     /**
-     * Drop `tool_result` parts whose `tool_use_id` does not match a `tool_use`
-     * in the most recent assistant message. Anthropic rejects orphan
-     * tool_results with 400 (`unexpected tool_use_id ... no corresponding
-     * tool_use block`). Operates on a copy so the caller's stored history
-     * (DB rows / in-memory state) is untouched — only the outbound payload
-     * is sanitized. Mirrors iOS AnthropicAgentProvider.stripOrphanToolResults.
-     */
-    private fun stripOrphanToolResults(messages: List<LLMMessage>): List<LLMMessage> {
-        var liveToolUseIds: Set<String> = emptySet()
-        val result = ArrayList<LLMMessage>(messages.size)
-        for ((i, msg) in messages.withIndex()) {
-            when (msg.role) {
-                LLMMessage.Role.ASSISTANT -> {
-                    liveToolUseIds = msg.contentParts
-                        .filterIsInstance<AgentContentPart.ToolUse>()
-                        .map { it.id }
-                        .toSet()
-                    result.add(msg)
-                }
-                LLMMessage.Role.USER -> {
-                    val original = msg.contentParts
-                    if (original.isEmpty()) {
-                        result.add(msg)
-                    } else {
-                        val kept = original.filter { part ->
-                            if (part is AgentContentPart.ToolResult) {
-                                liveToolUseIds.contains(part.id)
-                            } else true
-                        }
-                        if (kept.size != original.size) {
-                            val dropped = original.size - kept.size
-                            android.util.Log.i(
-                                "AnthropicProvider",
-                                "Stripped $dropped orphan tool_result block(s) from outbound payload (idx=$i)"
-                            )
-                            result.add(msg.copy(contentParts = kept))
-                        } else {
-                            result.add(msg)
-                        }
-                    }
-                    // Clear so a later user turn can't match a stale assistant.
-                    liveToolUseIds = emptySet()
-                }
-            }
-        }
-        // Drop user messages that became empty (only orphan tool_results).
-        // An empty content array is itself a 400.
-        return result.filter { m ->
-            // Keep messages that still have either non-empty contentParts or a
-            // non-empty `content` string (string-only messages never had parts
-            // to strip in the first place).
-            m.contentParts.isNotEmpty() || m.content.isNotEmpty()
-        }
-    }
-
-    /**
      * [T-android-anthropic-thinking-echo] (issue #70) Whether to echo prior
      * assistant `thinking` content blocks back into the history.
      *
@@ -495,9 +443,16 @@ class AnthropicProvider(
         rawMessages: List<LLMMessage>,
         imageParts: List<LLMMessage.ImagePart>,
     ): JSONArray {
-        // Sanitize orphan tool_results before serialization. Operates on a
-        // copy — caller's stored history is untouched.
-        val messages = stripOrphanToolResults(rawMessages)
+        // Sanitize orphan tool_use/tool_result pairing before serialization
+        // (defense-in-depth; upstream history construction is the first line).
+        // Operates on a copy — caller's stored history is untouched. Extends
+        // the previous stripOrphanToolResults (which only dropped orphan
+        // tool_results) to also drop orphan tool_use — an assistant tool_use
+        // with no matching tool_result in the immediately following user
+        // message is an equally deterministic 400.
+        val messages = sanitizeToolPairing(rawMessages) { detail ->
+            android.util.Log.i("AnthropicProvider", detail)
+        }
         // [T-android-anthropic-thinking-echo] (issue #70) Compute once — the
         // gate depends only on the model + endpoint, not the message.
         val echoThinking = shouldEchoInterleavedThinking()

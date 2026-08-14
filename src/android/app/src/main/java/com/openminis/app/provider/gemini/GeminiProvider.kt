@@ -192,9 +192,16 @@ class GeminiProvider(
     ): JSONObject {
         val body = JSONObject()
 
+        // Defense-in-depth: strip orphan tool_use/tool_result pairing before
+        // serialization. Gemini rejects a `functionCall` with no following
+        // `functionResponse` (and vice versa) with a deterministic 400.
+        val sanitizedMessages = sanitizeToolPairing(messages) { detail ->
+            android.util.Log.i("GeminiProvider", detail)
+        }
+
         val contents = JSONArray()
-        val lastUserIndex = messages.indexOfLast { it.role == LLMMessage.Role.USER }
-        for ((index, msg) in messages.withIndex()) {
+        val lastUserIndex = sanitizedMessages.indexOfLast { it.role == LLMMessage.Role.USER }
+        for ((index, msg) in sanitizedMessages.withIndex()) {
             val role = if (msg.role == LLMMessage.Role.USER) "user" else "model"
             val content = JSONObject()
             content.put("role", role)
@@ -278,9 +285,11 @@ class GeminiProvider(
         }
 
         val config = JSONObject()
-        config.put("maxOutputTokens", maxTokens)
+        // Defense-in-depth clamp (see AnthropicProvider) — an over-range
+        // maxOutputTokens is a deterministic 400 on Gemini.
+        config.put("maxOutputTokens", clampOutboundMaxTokens(maxTokens, effectiveMaxOutputTokens(model)))
         if (temperature != null) {
-            config.put("temperature", temperature)
+            config.put("temperature", clampOutboundTemperature(temperature))
         }
 
         // Thinking configuration (model-specific)

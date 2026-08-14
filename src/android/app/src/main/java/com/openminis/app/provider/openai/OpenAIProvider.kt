@@ -1329,17 +1329,28 @@ class OpenAIProvider constructor(
         // here so the structured-contentParts loop and the legacy
         // imageParts loop below stay consistent.
         val supportsImages = "image" in (model.inputModalities ?: emptyList())
+        // Defense-in-depth: strip orphan tool_use/tool_result pairing before
+        // serialization (upstream history construction is the first line).
+        // OpenAI rejects an unanswered `tool_calls` entry (no following
+        // role:"tool" message) and a role:"tool" message with an unknown
+        // tool_call_id — both deterministic 400s.
+        val sanitizedMessages = sanitizeToolPairing(messages) { detail ->
+            android.util.Log.i("OpenAIProvider", detail)
+        }
         val body = JSONObject()
         body.put("model", model.id)
+        // Defense-in-depth clamp (see AnthropicProvider): upstream
+        // dynamicMaxTokens() is in range; guard out-of-band callers.
+        val safeMaxTokens = clampOutboundMaxTokens(maxTokens, effectiveMaxOutputTokens(model))
         if (isOpenRouter) {
-            body.put("max_tokens", maxTokens)
+            body.put("max_tokens", safeMaxTokens)
         } else {
-            body.put("max_completion_tokens", maxTokens)
+            body.put("max_completion_tokens", safeMaxTokens)
         }
         body.put("stream", stream)
 
         if (temperature != null) {
-            body.put("temperature", temperature)
+            body.put("temperature", clampOutboundTemperature(temperature))
         }
 
         if (stream && !isOpenRouter) {
@@ -1390,8 +1401,8 @@ class OpenAIProvider constructor(
         // there; non-reasoning models gate this off via includeReasoning=false.
         val placeholderAllowed = includeReasoning
 
-        val lastUserIndex = messages.indexOfLast { it.role == LLMMessage.Role.USER }
-        for ((index, msg) in messages.withIndex()) {
+        val lastUserIndex = sanitizedMessages.indexOfLast { it.role == LLMMessage.Role.USER }
+        for ((index, msg) in sanitizedMessages.withIndex()) {
             if (msg.contentParts.isNotEmpty()) {
                 // Structured content parts
                 when {
@@ -2055,6 +2066,14 @@ class OpenAIProvider constructor(
         // a non-vision model gets routed through Responses (e.g. via
         // forceResponsesAPI on a custom provider).
         val supportsImages = "image" in (model.inputModalities ?: emptyList())
+        // Defense-in-depth: strip orphan tool_use/tool_result pairing before
+        // serialization (same rationale as buildRequestBody — the Responses
+        // API rejects an unanswered function_call and a function_call_output
+        // with an unknown call_id). Sanitize BEFORE deriving the prompt cache
+        // key so the key reflects the payload that actually goes on the wire.
+        val sanitizedMessages = sanitizeToolPairing(messages) { detail ->
+            android.util.Log.i("OpenAIProvider", detail)
+        }
         val body = JSONObject()
         body.put("model", model.id)
         body.put("stream", stream)
@@ -2070,7 +2089,7 @@ class OpenAIProvider constructor(
         // Responses-API cache regardless of how byte-stable the prefix was —
         // that's the missing piece between Android (~70%) and iOS (90%+) on
         // the Codex OAuth / forceResponsesAPI path.
-        body.put("prompt_cache_key", derivePromptCacheKey(messages))
+        body.put("prompt_cache_key", derivePromptCacheKey(sanitizedMessages))
         // T-responses-include: `include: ["reasoning.encrypted_content"]` is a
         // ChatGPT-backend-only field. Third-party Responses-API-compatible
         // proxies (non-OpenAI) don't recognize it and reject the request with
@@ -2129,9 +2148,11 @@ class OpenAIProvider constructor(
         // [T-responses-max-output-tokens] The builder received maxTokens but
         // never wrote it into the body, so Responses-flavor vendors fell back
         // to their (often tiny) defaults and truncated. Same guard as iOS
-        // 637cd890/5f148144: maxTokens > 0.
-        if (maxTokens > 0) {
-            body.put("max_output_tokens", maxTokens)
+        // 637cd890/5f148144: maxTokens > 0. Also defense-in-depth clamp so an
+        // out-of-band over-range value can't 400.
+        val safeMaxTokens = clampOutboundMaxTokens(maxTokens, effectiveMaxOutputTokens(model))
+        if (safeMaxTokens > 0) {
+            body.put("max_output_tokens", safeMaxTokens)
         }
 
         // [T-codex-fast-mode] Fast tier injection (mirrors iOS fb671083 +
@@ -2170,7 +2191,7 @@ class OpenAIProvider constructor(
         // structured content parts become typed input items — function_call /
         // function_call_output — instead of free-text role/content pairs.
         val input = JSONArray()
-        for (msg in messages) {
+        for (msg in sanitizedMessages) {
             if (msg.contentParts.isNotEmpty()) {
                 when (msg.role) {
                     LLMMessage.Role.ASSISTANT -> {
