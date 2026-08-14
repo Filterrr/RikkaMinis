@@ -467,10 +467,11 @@ class AgentRunReducerTest {
 
         val t = AgentRunReducer.reduce(s, AgentRunEvent.RunFinalized(AgentTerminal.SUCCEEDED))
         assertTrue("repeat finalize must be accepted", t is AgentRunTransition.Accepted)
-        assertEquals("repeat finalize must be no-op", false, (t as AgentRunTransition.Accepted).changed)
-        assertEquals(AgentRunPhase.SUCCEEDED, t.state.phase)
+        val accepted = t as AgentRunTransition.Accepted
+        assertEquals("repeat finalize must be no-op", false, accepted.changed)
+        assertEquals(AgentRunPhase.SUCCEEDED, accepted.state.phase)
         // 不覆盖已有 reason
-        assertEquals(AgentTerminalReason.COMPLETED, t.state.terminalReason)
+        assertEquals(AgentTerminalReason.COMPLETED, accepted.state.terminalReason)
     }
 
     @Test
@@ -482,7 +483,10 @@ class AgentRunReducerTest {
             val s = reduceBatch(*events.toTypedArray()).finalState
             val t = AgentRunReducer.reduce(s, AgentRunEvent.RunFinalized(terminal))
             assertTrue("$terminal repeat finalize accepted", t is AgentRunTransition.Accepted)
-            assertEquals(AgentRunPhase.ofTerminal(terminal), t.state.phase)
+            assertEquals(
+                AgentRunPhase.ofTerminal(terminal),
+                (t as AgentRunTransition.Accepted).state.phase,
+            )
         }
     }
 
