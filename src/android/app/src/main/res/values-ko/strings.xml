@@ -695,10 +695,6 @@
     <string name="model_group_detail_fallback_trigger">폴백 트리거</string>
     <string name="common_default">기본값</string>
     <string name="model_group_detail_always">항상</string>
-    <string name="model_group_detail_recovery">Recovery Policy</string>
-    <string name="model_group_detail_recovery_continue_last">Continue last</string>
-    <string name="model_group_detail_recovery_honor_first">Always try first member</string>
-    <string name="model_group_detail_recovery_cooldown">Cooldown only</string>
     <string name="model_group_detail_unavailable">사용할 수 없음</string>
     <string name="model_group_detail_drag_to_reorder">끌어서 순서 변경</string>
     <string name="model_group_detail_more_options">더 보기</string>
@@ -1154,10 +1150,7 @@
     <string name="model_group_routing_fallback_footer">Try models in order. If one fails, advance to the next.</string>
     <string name="model_group_routing_loadbalance_footer">Distribute sessions across models in the group.</string>
     <string name="model_group_fallback_default_footer">Fall back on rate limits (429) and server errors (5xx) only.</string>
-    <string name="model_group_fallback_always_footer">Fall back on any error, including network and auth failures.</string>
-    <string name="model_group_recovery_continue_footer">Keep using the current fallback model for subsequent requests (default).</string>
-    <string name="model_group_recovery_honorfirst_footer">Always try the first member first; rate-limited members are skipped until their cooldown expires.</string>
-    <string name="model_group_recovery_cooldown_footer">Keep the current binding, but temporarily skip rate-limited members.</string>
+    <string name="model_group_fallback_always_footer">Advanced: fall back on any error, including network and auth failures. Prefer Default unless you know why you need this.</string>
     <string name="model_group_no_models">No models in this group.</string>
     <string name="model_group_model_unavailable">Model no longer available</string>
     <string name="provider_import_success">Imported provider "%1$s"</string>
