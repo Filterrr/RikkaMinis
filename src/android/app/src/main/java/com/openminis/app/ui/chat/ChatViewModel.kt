@@ -5004,6 +5004,38 @@ class ChatViewModel(
     }
 
     /**
+     * [T-consecutive-user-bridge] Enforce the provider protocol invariant
+     * "roles must alternate" *) just before appending a user message to
+     * [agentHistory] from a *fresh* entry point ([sendMessage] or
+     * [drainQueuedPrompts]).
+     *
+     * Normally those entry points follow a completed assistant turn, so the
+     * tail is already an assistant message and this is a no-op. But when the
+     * preceding agent loop was interrupted (user Stop) or capped
+     * (MAX_AGENT_TURNS) *after* a tool_result landed — tool results are
+     * persisted to agentHistory as role=USER messages — the tail can be a
+     * user(tool_result). Blindly appending another user then yields:
+     *
+     *   - Anthropic: hard 400 `roles: must alternate between "user" and
+     *     "assistant"`.
+     *   - OpenAI: two consecutive "user" roles merged into one message,
+     *     silently swallowing the tool_result's pairing semantics.
+     *
+     * Fix: if the tail is a user message, inject a lightweight assistant
+     * bridge (agentHistory-only, never persisted — same pattern as
+     * [injectQueuedPromptsAsNewTurn], which guards the mid-loop queued
+     * interrupt for exactly this reason) so the appended user starts a clean
+     * turn. Pure logic lives in the top-level
+     * [ensureRoleAlternationBeforeUserAppend] so it is JVM-testable.
+     */
+    private fun ensureTrailingRoleAlternativeBeforeUserAppend() {
+        if (agentHistory.lastOrNull()?.role == LLMMessage.Role.USER) {
+            Log.w(TAG, "append user whose history tail is user (tool_result likely) — injecting assistant bridge")
+        }
+        ensureRoleAlternationBeforeUserAppend(agentHistory)
+    }
+
+    /**
      * [T-android-queued-message-interrupt-on-toolclose] Mid-tool-loop
      * interrupt: take everything in [_promptQueue] right now, finalize the
      * just-finished assistant bubble in the UI, persist a fresh user
@@ -5230,6 +5262,16 @@ class ChatViewModel(
             val userPartsJson = buildUserPartsJson(userText, prepared.mediaRefPartsJson, prepared.attachedFilesXml)
             chatRepository.appendMessage(sid, "user", userPartsJson)
 
+            // [T-consecutive-user-bridge] The prior runAgentLoop may have
+            // exited with agentHistory ending on user(tool_result) — e.g. the
+            // MAX_AGENT_TURNS ceiling was hit between a tool result landing
+            // and the next assistant turn. Appending another user would make
+            // two consecutive user roles → deterministic 400 (Anthropic must
+            // alternate) / merged-away (OpenAI). Inject an assistant bridge
+            // (agentHistory-only, never persisted) exactly like
+            // injectQueuedPromptsAsNewTurn does for the mid-loop interrupt.
+            ensureTrailingRoleAlternativeBeforeUserAppend()
+
             agentHistory.add(LLMMessage(
                 role = LLMMessage.Role.USER,
                 content = userText,
@@ -5434,6 +5476,15 @@ class ChatViewModel(
                 userContentParts.add(AgentContentPart.ImageData(part.data, part.mimeType, linuxPath = path))
             }
             prepared.attachedFilesXml?.let { userContentParts.add(AgentContentPart.Text(it)) }
+
+            // [T-consecutive-user-bridge] A fresh send usually follows a
+            // completed assistant turn (tail = assistant). But if the prior
+            // agent loop was interrupted/capped after a tool_result landed
+            // (tail = user(tool_result)), appending this user would create two
+            // consecutive user roles → deterministic 400 on Anthropic /
+            // folded-away on OpenAI. Inject an assistant bridge first
+            // (agentHistory-only, mirrors injectQueuedPromptsAsNewTurn).
+            ensureTrailingRoleAlternativeBeforeUserAppend()
 
             agentHistory.add(LLMMessage(
                 role = LLMMessage.Role.USER,
@@ -11178,4 +11229,36 @@ internal fun sanitizeAgentHistoryMessages(messages: MutableList<LLMMessage>) {
             }
         }
     }
+
+/**
+ * [T-consecutive-user-bridge] Enforce "roles must alternate" just before a
+ * fresh user message is appended to history from an entry point that is NOT
+ * inside the agent-loop tool-result cycle ([sendMessage] /
+ * [drainQueuedPrompts]).
+ *
+ * Normally the tail is a completed assistant turn and this is a no-op. But
+ * if a prior agent loop was interrupted (user Stop) or capped (MAX_AGENT_TURNS)
+ * *after* a tool_result landed — tool results live in history as role=USER
+ * messages — the tail is user(tool_result). Appending another user then
+ * yields a deterministic 400 on Anthropic (`roles: must alternate`) or a
+ * silently merged-away payload on OpenAI. Injecting a lightweight assistant
+ * bridge (history-only, never persisted — same pattern as the queue-interrupt
+ * bridge in `injectQueuedPromptsAsNewTurn`) breaks the consecutive-user run.
+ *
+ * Pure + JVM-testable (no ViewModel dependencies).
+ */
+internal fun ensureRoleAlternationBeforeUserAppend(
+    history: MutableList<LLMMessage>,
+    bridgeText: String = "(Interrupted mid-task by a new user message. Decide based on the new message and overall context whether the prior task should continue — do not forget or abandon it unless the user explicitly says to stop, or the new message makes clear it is no longer needed.)",
+) {
+    if (history.lastOrNull()?.role == LLMMessage.Role.USER) {
+        history.add(
+            LLMMessage(
+                role = LLMMessage.Role.ASSISTANT,
+                content = "",
+                contentParts = listOf(AgentContentPart.Text(bridgeText)),
+            ),
+        )
+    }
+}
 
