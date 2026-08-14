@@ -1054,6 +1054,11 @@
     <string name="session_mcps_empty_title">MCP サーバーがありません</string>
     <string name="session_mcps_empty_subtitle">設定 → MCP 連携 でサーバーを追加してください。</string>
     <string name="error_empty_response_generic">モデルが空の応答を返しました。もう一度試すか、モデルを切り替えてください。</string>
+    <string name="error_all_models_failed">接続に失敗しました。%1$d 件のモデルを試しましたが、利用できませんでした。</string>
+    <string name="error_all_models_rate_limited">このグループのすべてのモデルがレート制限中です。</string>
+    <string name="error_all_models_bad_key">このグループのすべてのモデルで API キーが無効または期限切れです。</string>
+    <string name="error_tech_detail">技術詳細</string>
+    <string name="fallback_switched_to">%1$s に切り替えました</string>
     <string name="error_output_truncated_repeated">モデルが出力長の上限に繰り返し達しました。モデル設定でコンテキスト制限を下げるか、質問をより小さな部分に分けてください。</string>
     <string name="error_empty_response_context_large">モデルが空の応答を返しました。会話のコンテキストが大きすぎる可能性があります — 圧縮するか、新しいセッションを開始してください。</string>
     <string name="error_empty_response_after_tool">ツールの結果の後、リマインダーを送っても、モデルは応答を返しませんでした。過負荷の可能性があります — もう一度試すか、モデルを切り替えてください。</string>
