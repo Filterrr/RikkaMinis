@@ -215,6 +215,11 @@ private val MdCodeLangColor = Color.White.copy(alpha = 0.5f)
 
 /** Code blocks show this many lines before the "Expand N lines" fold kicks in. */
 private const val CODE_PREVIEW_LINES = 20
+// 表格折叠阈值：行数（含表头）超过此值折叠。表格行比代码行高（单元格
+// 上下 8dp padding），阈值取 10 更贴合"折叠后仍是一屏内"的直觉。与代码块
+// 折叠同模式（fix/scroll-ux-table-fold-animate）：表格本身保留横向滚动
+// （长列），纵向高度用折叠控制，避免长表格占满整屏把聊天顶走。
+private const val TABLE_PREVIEW_ROWS = 10
 
 val LocalMarkdownFontScale = compositionLocalOf { 1f }
 
@@ -2613,6 +2618,19 @@ private fun RenderTable(block: MdBlock.Table) {
         if (block.headers.isNotEmpty()) add(block.headers)
         addAll(block.rows)
     }
+    // 表格折叠：超过 TABLE_PREVIEW_ROWS 行折叠，只渲染前 N 行（表头天然
+    // 在前 N 行内）+ "展开 N 行"按钮，与代码块折叠同模式。表格本身保留
+    // 横向滚动（长列），纵向高度用折叠控制，避免长表格占满整屏把聊天顶走。
+    val totalRowCount = allRows.size
+    val tableCollapsed = totalRowCount > TABLE_PREVIEW_ROWS
+    // 与代码块折叠同模式：无 key 的 remember，展开状态跨重组保留（用户
+    // 手动展开后，后续消息流式进来不把它折回）。
+    var tableExpanded by remember { mutableStateOf(false) }
+    val visibleRows = if (tableCollapsed && !tableExpanded) {
+        allRows.take(TABLE_PREVIEW_ROWS)
+    } else {
+        allRows
+    }
 
     // [T-android-markdown-table-copy-actions] Copy Table (markdown text) +
     // Copy Table Image (rendered bitmap), aligning with iOS
@@ -2705,6 +2723,8 @@ private fun RenderTable(block: MdBlock.Table) {
             .padding(bottom = 8.dp),
     ) {
         val viewportWidthPx = with(androidx.compose.ui.platform.LocalDensity.current) { maxWidth.toPx() }.toInt()
+        // 折叠展开按钮纵向排在表格下方：用 Column 包裹表格 + 展开按钮。
+        Column {
         // Inner box owns the rounded border/clip and horizontal scroll. Border + clip
         // are applied before horizontalScroll so the frame stays anchored to the visible
         // viewport when the table is wider than the screen.
@@ -2728,12 +2748,11 @@ private fun RenderTable(block: MdBlock.Table) {
         ) {
         val lineColor = colors.tableBorder
         val lineStrokePx = with(androidx.compose.ui.platform.LocalDensity.current) { 1.dp.toPx() }
-        val totalRowCount = allRows.size
         androidx.compose.ui.layout.Layout(
             content = {
-                for ((rowIndex, cells) in allRows.withIndex()) {
+                for ((rowIndex, cells) in visibleRows.withIndex()) {
                     val isHeader = rowIndex == 0 && block.headers.isNotEmpty()
-                    val isLastRow = rowIndex == totalRowCount - 1
+                    val isLastRow = rowIndex == visibleRows.size - 1
                     for (colIndex in 0 until colCount) {
                         val isLastCol = colIndex == colCount - 1
                         Box(
@@ -2775,7 +2794,7 @@ private fun RenderTable(block: MdBlock.Table) {
                 }
             },
         ) { measurables, _ ->
-            val rowCount = allRows.size
+            val rowCount = visibleRows.size
 
             // Safe upper bound for intrinsic queries and constraint widths. Compose's
             // Constraints packs width into 18 bits, so values above ~262k will throw.
@@ -2844,6 +2863,23 @@ private fun RenderTable(block: MdBlock.Table) {
                     y += rowHeights[rowIdx]
                 }
             }
+        }
+        }
+        // 折叠态：表格下方展开/收起按钮（复用 code_expand/code_collapse 文案，
+        // 7 语言已存在，无需新增字符串）。
+        if (tableCollapsed) {
+            Text(
+                text = stringResource(
+                    if (tableExpanded) R.string.code_collapse else R.string.code_expand,
+                    totalRowCount - TABLE_PREVIEW_ROWS,
+                ),
+                fontSize = 12.sp,
+                color = colors.link,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { tableExpanded = !tableExpanded }
+                    .padding(start = 12.dp, top = 4.dp, bottom = 2.dp),
+            )
         }
         }
     }
