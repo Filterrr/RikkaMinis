@@ -1033,9 +1033,6 @@ internal fun ThinkingBlock(block: AssistantBlock, isStreaming: Boolean, isLast: 
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
-            .background(thinkingBlue.copy(alpha = 0.06f), RoundedCornerShape(12.dp))
-            .border(0.5.dp, thinkingBlue.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
-            .clip(RoundedCornerShape(12.dp))
             .padding(horizontal = 12.dp, vertical = 8.dp),
     ) {
         // Header row — only the header reacts to taps. Mirrors iOS, where
@@ -1115,7 +1112,18 @@ internal fun ThinkingBlock(block: AssistantBlock, isStreaming: Boolean, isLast: 
         // block is streaming, manual drag at any time, and pause-on-user-scroll
         // so a user reading earlier reasoning isn't yanked back to the tail by
         // the next token.
-        AnimatedVisibility(visible = expanded && !overHardCap) {
+        AnimatedVisibility(
+            visible = expanded && !overHardCap,
+            // Smooth height + fade on collapse/expand: without the animation
+            // the block's height snaps to zero the instant streaming ends,
+            // yanking the viewport (the "content suddenly jumps" feel).
+            enter = expandVertically(
+                animationSpec = tween(durationMillis = 220),
+            ) + fadeIn(animationSpec = tween(durationMillis = 160)),
+            exit = shrinkVertically(
+                animationSpec = tween(durationMillis = 220),
+            ) + fadeOut(animationSpec = tween(durationMillis = 160)),
+        ) {
             val scrollState = rememberScrollState()
             // [T-thinking-render-perf-android] Render only the tail window so
             // Compose lays out at most `thinkingWindowSize` chars. `remember`
@@ -1178,6 +1186,12 @@ internal fun ThinkingBlock(block: AssistantBlock, isStreaming: Boolean, isLast: 
             Column(
                 modifier = Modifier
                     .padding(top = 6.dp)
+                    // Expanded content keeps the tinted container (moved here
+                    // from the outer Column, which is now a plain one-line
+                    // header when collapsed — the lightweight form).
+                    .background(thinkingBlue.copy(alpha = 0.06f), RoundedCornerShape(12.dp))
+                    .border(0.5.dp, thinkingBlue.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
+                    .clip(RoundedCornerShape(12.dp))
                     .heightIn(max = 300.dp)
                     .verticalScroll(scrollState),
             ) {
