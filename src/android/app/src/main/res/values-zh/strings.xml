@@ -1464,7 +1464,6 @@
     <string name="filebrowser_sort_by">排序方式</string>
     <string name="add_provider_endpoint_anthropic_hint">按原样使用官方 Anthropic 端点。对于第三方 Anthropic 兼容服务（如 Mimo），基础 URL 可能需要路径后缀，如 "/anthropic" — 请查阅提供商文档。URL 会被原样使用并追加 "/v1/messages"。</string>
     <string name="modeldetail_video_output">视频输出</string>
-    <string name="model_groups_defaults_hint">Primary 用于主要 agent 任务。Sub 用于轻量任务，如标题生成。若未设置 Sub，则继承 Primary。使用组上的 ⋮ 菜单设置这些。</string>
     <string name="model_group_no_usable_models_badge">无可用模型</string>
     <string name="voice_system_recognition_online">系统识别（在线）</string>
     <string name="voice_system_recognition_offline">系统识别（离线）</string>
