@@ -54,92 +54,92 @@ class InlineMathExtractionTest {
     }
 
     @Test fun `single variable dollar span is collected`() {
-        assertEquals(listOf("x"), collectInlineMathLatex("$x$"))
+        assertEquals(listOf("x"), collectInlineMathLatex("\$x\$"))
     }
 
     @Test fun `dollar span with math operator is collected`() {
-        assertEquals(listOf("x+y"), collectInlineMathLatex("$x+y$"))
+        assertEquals(listOf("x+y"), collectInlineMathLatex("\$x+y\$"))
     }
 
     @Test fun `currency dollar is not collected`() {
-        assertEquals(emptyList<String>(), collectInlineMathLatex("cost is $5"))
+        assertEquals(emptyList<String>(), collectInlineMathLatex("cost is \$5"))
     }
 
     @Test fun `comma currency dollar is not collected`() {
-        assertEquals(emptyList<String>(), collectInlineMathLatex("price $1,000"))
+        assertEquals(emptyList<String>(), collectInlineMathLatex("price \$1,000"))
     }
 
     @Test fun `currency then real math keeps the real span`() {
         // [T-latex-inline] The rejected currency span must NOT consume the
         // `$` that opens the following real span (`cost $5, and $x+y$`).
-        assertEquals(listOf("x+y"), collectInlineMathLatex("$5 and $x+y$"))
+        assertEquals(listOf("x+y"), collectInlineMathLatex("\$5 and \$x+y\$"))
     }
 
     @Test fun `rejected span with space keeps following span`() {
-        assertEquals(listOf("b"), collectInlineMathLatex("$a $b$"))
+        assertEquals(listOf("b"), collectInlineMathLatex("\$a \$b\$"))
     }
 
     @Test fun `double dollar display math is not collected`() {
-        assertEquals(emptyList<String>(), collectInlineMathLatex("$$x$$"))
+        assertEquals(emptyList<String>(), collectInlineMathLatex("\$\$x\$\$"))
     }
 
     @Test fun `escaped dollar is not treated as span opener`() {
-        assertEquals(emptyList<String>(), collectInlineMathLatex("use \\$5"))
+        assertEquals(emptyList<String>(), collectInlineMathLatex("use \\\$5"))
     }
 
     @Test fun `latex command span is collected`() {
         assertEquals(
             listOf("\\frac{1}{2}"),
-            collectInlineMathLatex("$\\frac{1}{2}$"),
+            collectInlineMathLatex("\$\\frac{1}{2}\$"),
         )
     }
 
     @Test fun `subscript span is collected`() {
-        assertEquals(listOf("a_{b}"), collectInlineMathLatex("$a_{b}$"))
+        assertEquals(listOf("a_{b}"), collectInlineMathLatex("\$a_{b}\$"))
     }
 
     @Test fun `realistic text command formula is collected`() {
         assertEquals(
             listOf("W_c^{\\text{non-private}}"),
-            collectInlineMathLatex("$W_c^{\\text{non-private}}$"),
+            collectInlineMathLatex("\$W_c^{\\text{non-private}}\$"),
         )
     }
 
     @Test fun `newline bounds the dollar span so unclosed is ignored`() {
-        assertEquals(emptyList<String>(), collectInlineMathLatex("$x\ny$"))
+        assertEquals(emptyList<String>(), collectInlineMathLatex("\$x\ny\$"))
     }
 
     @Test fun `multiple spans in one line are collected`() {
-        assertEquals(listOf("x", "y"), collectInlineMathLatex("$x$ and $y$"))
+        assertEquals(listOf("x", "y"), collectInlineMathLatex("\$x\$ and \$y\$"))
     }
 
     @Test fun `span embedded in prose is collected`() {
-        assertEquals(listOf("x"), collectInlineMathLatex("text $x$ tail"))
+        assertEquals(listOf("x"), collectInlineMathLatex("text \$x\$ tail"))
     }
 
     @Test fun `balanced pipes absolute value is collected`() {
-        assertEquals(listOf("|x|"), collectInlineMathLatex("$|x|$"))
+        assertEquals(listOf("|x|"), collectInlineMathLatex("\$|x|\$"))
     }
 
     @Test fun `pipe with surrounding spaces is a table artifact and rejected`() {
-        assertEquals(emptyList<String>(), collectInlineMathLatex("$x | y$"))
+        assertEquals(emptyList<String>(), collectInlineMathLatex("\$x | y\$"))
     }
 
     @Test fun `single pipe odd count is a table artifact and rejected`() {
-        assertEquals(emptyList<String>(), collectInlineMathLatex("$ab|cd$"))
+        assertEquals(emptyList<String>(), collectInlineMathLatex("\$ab|cd\$"))
     }
 
     @Test fun `currency dollar inside table row is rejected`() {
         assertEquals(
             emptyList<String>(),
-            collectInlineMathLatex("| 月付 | $20|$ **3** |"),
+            collectInlineMathLatex("| 月付 | \$20|\$ **3** |"),
         )
     }
 
     @Test fun `escaped pipe norm bar with even count is collected`() {
         // `\|x\|` — the two escaped pipes are norm bars, not table separators;
         // bare pipe count is 0 (even), so it is NOT a table artifact.
-        assertEquals(listOf("\\|x\\|"), collectInlineMathLatex("$\\|x\\|$"))
+        assertEquals(listOf("\\|x\\|"), collectInlineMathLatex("\$\\|x\\|\$"))
     }
 
     // ── katexInlineTagFor ───────────────────────────────────────────────────

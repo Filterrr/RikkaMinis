@@ -177,7 +177,7 @@ class ChatScreenUtilsTest {
 
     @Test
     fun `assistant legacy content grayed when id in map`() {
-        assertTrue(isCompactedItem(FlatChatItem.AssistantLegacyContent("m_legacy", content = "c"), grayed))
+        assertTrue(isCompactedItem(FlatChatItem.AssistantLegacyContent("m_legacy", content = "c", isStreaming = false), grayed))
     }
 
     @Test
