@@ -43,6 +43,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.AudioFile
@@ -421,8 +422,10 @@ internal fun AssistantMessageView(message: ChatMessage, onRetry: (() -> Unit)? =
         }
 
         // Inline error banner (iOS: red exclamation + error text + Retry button)
+        // [T-error-no-permanent-scars] Neutral style + collapsible technical
+        // details — see InlineErrorBanner.
         if (message.error != null) {
-            InlineErrorBanner(error = message.error, onRetry = onRetry)
+            InlineErrorBanner(error = message.error, errorDetail = message.errorDetail, onRetry = onRetry)
         }
     }
 }
@@ -456,14 +459,22 @@ internal fun BoundsTrackedBlock(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-internal fun InlineErrorBanner(error: String, onRetry: (() -> Unit)? = null) {
+internal fun InlineErrorBanner(error: String, errorDetail: String? = null, onRetry: (() -> Unit)? = null) {
     val clipboard = LocalClipboardManager.current
-    Row(
+    // [T-error-no-permanent-scars] Neutral presentation: the banner is a quiet
+    // notice (warning palette, small text), NOT a red alarm. The raw technical
+    // detail (per-model trail, original error codes) is collapsed behind a
+    // "Technical details" disclosure and only expanded on tap — it no longer
+    // dominates the chat record.
+    var showDetail by remember { mutableStateOf(false) }
+    val bg = ChatColors.warningBg
+    val fg = ChatColors.warningText
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(top = 4.dp)
             .clip(RoundedCornerShape(12.dp))
-            .background(ChatColors.error.copy(alpha = 0.12f))
+            .background(bg)
             .combinedClickable(
                 onClick = {},
                 onLongClick = {
@@ -471,42 +482,86 @@ internal fun InlineErrorBanner(error: String, onRetry: (() -> Unit)? = null) {
                 },
             )
             .padding(horizontal = 10.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(
-            imageVector = Icons.Default.Error,
-            contentDescription = null,
-            tint = ChatColors.error,
-            modifier = Modifier.size(14.dp),
-        )
-        Spacer(modifier = Modifier.width(8.dp))
-        Text(
-            text = error,
-            color = ChatColors.error,
-            fontSize = 12.sp,
-            lineHeight = 16.sp,
-            maxLines = 3,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        if (onRetry != null) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = Icons.Default.Error,
+                contentDescription = null,
+                tint = fg,
+                modifier = Modifier.size(14.dp),
+            )
             Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = error,
+                color = fg,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            if (onRetry != null) {
+                Spacer(modifier = Modifier.width(8.dp))
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(fg.copy(alpha = 0.15f))
+                        .clickable(onClick = onRetry)
+                        .padding(horizontal = 10.dp, vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = null,
+                        tint = fg,
+                        modifier = Modifier.size(10.dp),
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(stringResource(R.string.chat_longpress_retry), color = fg, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+        // [T-error-no-permanent-scars] Technical detail disclosure: collapsed by
+        // default so the raw error codes never sit in the chat record; expanded
+        // on tap for the user who actually wants to debug. Only present while
+        // the failure is in memory (errorDetail is never persisted), so a
+        // reloaded session shows just the clean summary line.
+        if (!errorDetail.isNullOrBlank()) {
+            Spacer(modifier = Modifier.height(4.dp))
             Row(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(50))
-                    .background(ChatColors.error.copy(alpha = 0.15f))
-                    .clickable(onClick = onRetry)
-                    .padding(horizontal = 10.dp, vertical = 3.dp),
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable { showDetail = !showDetail }
+                    .padding(horizontal = 2.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(
-                    imageVector = Icons.Default.Refresh,
+                    imageVector = if (showDetail) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowRight,
                     contentDescription = null,
-                    tint = ChatColors.error,
-                    modifier = Modifier.size(10.dp),
+                    tint = fg.copy(alpha = 0.7f),
+                    modifier = Modifier.size(14.dp),
                 )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(stringResource(R.string.chat_longpress_retry), color = ChatColors.error, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                Text(
+                    text = stringResource(R.string.error_tech_detail),
+                    color = fg.copy(alpha = 0.7f),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
+            AnimatedVisibility(visible = showDetail) {
+                Text(
+                    text = errorDetail,
+                    color = ChatColors.secondaryText,
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp,
+                    modifier = Modifier
+                        .padding(top = 4.dp)
+                        .fillMaxWidth()
+                        .combinedClickable(
+                            onClick = {},
+                            onLongClick = { clipboard.setText(androidx.compose.ui.text.AnnotatedString(errorDetail)) },
+                        ),
+                )
             }
         }
     }

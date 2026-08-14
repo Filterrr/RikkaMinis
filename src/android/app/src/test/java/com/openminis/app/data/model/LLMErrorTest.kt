@@ -9,11 +9,23 @@ import org.junit.Test
 /**
  * Locks the group-fallback classification contract.
  *
- * ChatViewModel's shouldFallback uses LLMError.isFallbackable directly, so the
- * classification must stay exactly: rate limits (429), invalid API keys (401)
- * and provider errors (4xx/5xx) fall back to the next member of the group;
- * network/transient errors only retry in place (isRetryable); decoding,
- * cancellation and unknown errors surface to the user instead.
+ * [T-fallback-network-errors] ChatViewModel's shouldFallback uses
+ * LLMError.isFallbackable directly, consulted ONLY after the bounded same-
+ * provider retry loop is exhausted. So the contract is:
+ *
+ *  - rate limits (429), invalid keys (401), provider errors (4xx/5xx):
+ *    fall back to the next group member immediately (retrying same model
+ *    is pointless)
+ *  - network / transient errors (stream reset, timeouts, DNS, proxy drop):
+ *    retry in place first (isRetryable), and FALL BACK once retries are
+ *    exhausted — "this endpoint can't help right now" is exactly the group
+ *    fallback case
+ *  - decoding, cancellation, unknown: surface to the user / respect intent
+ *
+ * [T-error-no-permanent-scars] userMessage must NEVER contain raw error codes
+ * ("stream was reset: CANCEL", HTTP status numbers) — that text only ever
+ * appears in the collapsed technical-details disclosure, never as the
+ * primary banner text.
  */
 class LLMErrorTest {
 
@@ -39,9 +51,18 @@ class LLMErrorTest {
     }
 
     @Test
-    fun `fallbackable - network and transient errors do NOT fallback immediately`() {
-        assertFalse(LLMError.NetworkError(IOException("socket closed")).isFallbackable)
-        assertFalse(LLMError.TransientError("temporary").isFallbackable)
+    fun `fallbackable - network errors fall back once retries are exhausted`() {
+        // The retry loop (AUTO_RETRY_DELAYS_SEC) gets first crack on the same
+        // provider; isFallbackable is only consulted after that, so including
+        // NetworkError here stops the "retried 3x then hard-stopped" dead end
+        // without ever skipping the retry.
+        assertTrue(LLMError.NetworkError(IOException("socket closed")).isFallbackable)
+        assertTrue(LLMError.NetworkError(IOException("stream was reset: CANCEL")).isFallbackable)
+    }
+
+    @Test
+    fun `fallbackable - transient errors fall back once retries are exhausted`() {
+        assertTrue(LLMError.TransientError("temporary").isFallbackable)
     }
 
     @Test
@@ -70,5 +91,43 @@ class LLMErrorTest {
         assertEquals("Decoding error", LLMError.DecodingError(RuntimeException("x")).fallbackReason)
         assertEquals("Cancelled", LLMError.Cancelled().fallbackReason)
         assertEquals("Unknown error", LLMError.Unknown(null).fallbackReason)
+    }
+
+    @Test
+    fun `userMessage - human summary, never a raw error code`() {
+        // The exact string the user complained about must never surface
+        // as the primary banner text.
+        val reset = LLMError.NetworkError(IOException("stream was reset: CANCEL"))
+        assertEquals("Connection failed", reset.userMessage)
+        assertFalse(reset.userMessage.contains("stream was reset"))
+        assertFalse(reset.userMessage.contains("CANCEL"))
+
+        assertEquals("Rate limited — try again in a moment", LLMError.RateLimited().userMessage)
+        assertEquals("API key is invalid or expired", LLMError.InvalidApiKey("401").userMessage)
+        assertEquals("Provider returned an error", LLMError.ProviderError("HTTP 502").userMessage)
+        assertEquals("Service temporarily unavailable", LLMError.TransientError("x").userMessage)
+        assertEquals("Unexpected response from provider", LLMError.DecodingError(RuntimeException("x")).userMessage)
+        assertEquals("Request was cancelled", LLMError.Cancelled().userMessage)
+        assertEquals("Something went wrong", LLMError.Unknown(null).userMessage)
+    }
+
+    @Test
+    fun `userMessage - provider detail with status numbers stays out of the summary`() {
+        val err = LLMError.ProviderError("HTTP 502 Bad Gateway")
+        assertEquals("Provider returned an error", err.userMessage)
+        assertFalse(err.userMessage.contains("502"))
+    }
+
+    @Test
+    fun `fallbackExhaustedError - carries human summary separate from raw detail`() {
+        val e = FallbackExhaustedError(
+            summary = "Connection failed — tried 3 models, none available.",
+            detail = "⚠️ deepseek-v4-flash: Network error: stream was reset: CANCEL\nHTTP 502",
+        )
+        assertEquals("Connection failed — tried 3 models, none available.", e.summary)
+        assertTrue(e.detail.contains("stream was reset: CANCEL"))
+        // Exception.message stays human — UI fallbacks that print e.message
+        // must not leak the raw trail.
+        assertEquals("Connection failed — tried 3 models, none available.", e.message)
     }
 }

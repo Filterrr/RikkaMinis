@@ -820,6 +820,11 @@
     <string name="system_permissions_a11y_oem_battery">取消背景 / 省電限制</string>
     <string name="system_permissions_a11y_oem_battery_sub">將耗電管理設為「無限制」</string>
     <string name="error_empty_response_generic">模型回傳了空回應。請重試或切換模型。</string>
+    <string name="error_all_models_failed">連線失敗，已嘗試 %1$d 個模型均不可用。</string>
+    <string name="error_all_models_rate_limited">群組內所有模型均被限流。</string>
+    <string name="error_all_models_bad_key">群組內所有模型的 API key 均無效或已過期。</string>
+    <string name="error_tech_detail">技術詳情</string>
+    <string name="fallback_switched_to">已切換至 %1$s</string>
     <string name="error_output_truncated_repeated">模型多次達到輸出長度上限而被截斷。請嘗試在模型設定中調低上下文限制，或將問題拆分為較小的部分。</string>
     <string name="error_empty_response_context_large">模型回傳了空回應。對話上下文可能過大 —— 請嘗試壓縮上下文或開啟新工作階段。</string>
     <string name="error_empty_response_after_tool">在工具結果之後，即使經過提醒，模型仍未回傳任何回應。它可能已過載 —— 請重試或切換模型。</string>

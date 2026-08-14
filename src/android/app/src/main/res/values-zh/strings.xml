@@ -1387,6 +1387,11 @@
 
     <!-- [T-android-overlay-landscape-width-rotation-drift] Scheduled Tasks localization -->
     <string name="error_empty_response_generic">模型返回了空响应。请重试或切换模型。</string>
+    <string name="error_all_models_failed">连接失败，已尝试 %1$d 个模型均不可用。</string>
+    <string name="error_all_models_rate_limited">组内所有模型均被限流。</string>
+    <string name="error_all_models_bad_key">组内所有模型的 API key 均无效或已过期。</string>
+    <string name="error_tech_detail">技术详情</string>
+    <string name="fallback_switched_to">已切换至 %1$s</string>
     <string name="error_output_truncated_repeated">模型多次达到输出长度上限被截断。请尝试在模型设置中调低上下文限制，或将问题拆分成更小的部分。</string>
     <string name="error_empty_response_context_large">模型返回了空响应。会话上下文可能过大 —— 请尝试压缩上下文或开启新会话。</string>
     <string name="error_empty_response_after_tool">在工具结果之后，即使经过提醒，模型仍未返回任何响应。它可能已过载 —— 请重试或切换模型。</string>

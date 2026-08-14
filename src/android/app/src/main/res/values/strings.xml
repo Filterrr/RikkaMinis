@@ -1501,6 +1501,13 @@
     <string name="chat_load_older_messages">↑ Load older messages</string>
     <!-- [T-error-persist-android] Shown when the model returns an empty reply (no text, no tools). -->
     <string name="error_empty_response_generic">Model returned an empty response. Please try again or switch models.</string>
+    <!-- [T-error-no-permanent-scars] Human-readable terminal errors (raw error codes are collapsed behind the technical-details disclosure). -->
+    <string name="error_all_models_failed">Connection failed — tried %1$d models, none available.</string>
+    <string name="error_all_models_rate_limited">Rate limited on every model in this group.</string>
+    <string name="error_all_models_bad_key">The API key is invalid or expired on every model in this group.</string>
+    <string name="error_tech_detail">Technical details</string>
+    <!-- [T-error-no-permanent-scars] Lightweight note shown when a model-group fallback switches models mid-turn. -->
+    <string name="fallback_switched_to">Switched to %1$s</string>
     <string name="error_output_truncated_repeated">The model hit the output length limit repeatedly. Try lowering the context limit in model settings, or ask the question in smaller parts.</string>
     <string name="error_empty_response_context_large">The model returned an empty response. The conversation context may be too large — try compacting or starting a new session.</string>
     <string name="error_empty_response_after_tool">The model returned no response after a tool result, even after a reminder. It may be overloaded — please retry or switch models.</string>

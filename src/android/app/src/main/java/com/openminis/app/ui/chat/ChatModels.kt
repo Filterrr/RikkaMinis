@@ -131,6 +131,11 @@ data class ChatMessage(
     // to the chat's current thinking level at render time.
     val thinkingLevel: com.openminis.app.data.model.ThinkingLevel? = null,
     val error: String? = null,
+    // [T-error-no-permanent-scars] Technical detail behind the error banner's
+    // "technical details" disclosure: per-model failure trail + raw error codes.
+    // In-memory ONLY — never persisted, so a session reload shows the clean
+    // one-line summary (`error`) without resurrecting the raw tech text.
+    val errorDetail: String? = null,
     // Queued user prompt awaiting injection into the running agent loop.
     // Mirrors iOS ChatMessage.isQueued / queuedPromptId.
     val isQueued: Boolean = false,
