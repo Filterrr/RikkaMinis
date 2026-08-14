@@ -351,8 +351,11 @@ object ModelsDevApi {
         )
     }
 
-    // MARK: - Bundled Fallback
-
+    // MARK: - Bundled Fallback (deprecated — asset removed in fix/model-list)
+    // The bundled models-dev-api.json was removed from Android assets (2026-08-14,
+    // feat/remove-models-dev-asset).  This function is kept for backwards compatibility
+    // with old builds that still have the asset; it will always return null at runtime.
+    // enrich now relies solely on the network cache (disk → in-memory).
     private fun loadBundledRegistry(): Map<String, ProviderEntry>? {
         val ctx = appContext ?: return null
         return try {
