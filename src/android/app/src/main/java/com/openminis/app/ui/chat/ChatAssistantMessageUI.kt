@@ -864,16 +864,26 @@ internal fun ToolCallRunGroup(
     onOpenDetail: (String) -> Unit = {},
     onRerunFromHere: (() -> Unit)? = null,
     onCopyDetails: (() -> Unit)? = null,
+    // [T-android-run-group-thinking] Thinking-section gate, resolved by the
+    // caller from the message's T300 snapshot ?: the chat's current level —
+    // mirrors the retired AssistantThinking row's hide-when-off behaviour.
+    thinkingEnabled: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val isRunning = group.isRunning
-    // Default collapsed — no auto-expand when running, no auto-collapse
-    // when done. The header always shows running status via spinner +
-    // "Running N tools" text, so the user doesn't need the pills visible
-    // to know tools are in flight. A manual tap expands/collapses and
-    // the state stays what the user left it.
+    val thinkingVisible = thinkingEnabled && group.thinkingBlocks.isNotEmpty()
+    // Thinking hidden AND no tools → nothing to render (the retired
+    // AssistantThinking row was omitted entirely in this state).
+    if (!thinkingVisible && group.tools.isEmpty()) return
+    // [T-android-run-group-thinking] OmniBot AgentRunHeader semantics:
+    // `effectiveExpanded = isRunning || expanded` — running forces the card
+    // open so the user sees live progress; once every block is terminal the
+    // card falls back to the user's last choice (default collapsed → the
+    // one-line summary header). A manual tap flips `expanded` and takes
+    // over; it has no visible effect while running (the card stays open
+    // regardless, mirroring OmniBot's running-forces-open rule).
     var expanded by remember(group.messageId) { mutableStateOf(false) }
-    val effectiveExpanded = expanded
+    val effectiveExpanded = expanded || isRunning
 
     val groupAccent = toolAccentColor("shell_execute")
     val totalDurationText = when {
@@ -891,9 +901,13 @@ internal fun ToolCallRunGroup(
             .padding(vertical = 2.dp)
             .animateContentSize(),
     ) {
-        // Header — always visible; the collapsing unit is the pill list below.
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
+        // Header — always visible; the collapsing unit is the content below.
+        // [T-android-run-group-thinking] Two-line header: row 1 = icon +
+        // title (tool count / thinking state) + duration + chevron; row 2
+        // (completed cards with tools only) = the last tool's title as a
+        // one-line summary, so a collapsed run card still says what it
+        // ended on. Zero new strings — the tool title is the summary.
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(14.dp))
@@ -904,49 +918,76 @@ internal fun ToolCallRunGroup(
                 }
                 .padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
-            if (isRunning) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(13.dp),
-                    color = groupAccent,
-                    strokeWidth = 1.5.dp,
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-            } else {
-                Icon(
-                    imageVector = Icons.Default.AutoAwesome,
-                    contentDescription = null,
-                    tint = groupAccent,
-                    modifier = Modifier.size(14.dp),
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-            }
-            Text(
-                text = if (isRunning) "Running ${group.count} tools" else "${group.count} tools",
-                fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false),
-            )
-            if (totalDurationText != null) {
-                Spacer(modifier = Modifier.width(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (isRunning) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(13.dp),
+                        color = groupAccent,
+                        strokeWidth = 1.5.dp,
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.AutoAwesome,
+                        contentDescription = null,
+                        tint = groupAccent,
+                        modifier = Modifier.size(14.dp),
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                }
+                // With tools the header keeps the familiar tool count; a
+                // thinking-only turn reads as "Thinking…" / "Deep Thinking".
                 Text(
-                    text = totalDurationText,
-                    fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                    softWrap = false,
+                    text = when {
+                        group.tools.isNotEmpty() && isRunning -> "Running ${group.count} tools"
+                        group.tools.isNotEmpty() -> "${group.count} tools"
+                        isRunning -> "Thinking…"
+                        else -> "Deep Thinking"
+                    },
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
                 )
-                Spacer(modifier = Modifier.width(4.dp))
+                if (totalDurationText != null) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = totalDurationText,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        softWrap = false,
+                        maxLines = 1,
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                }
+                Icon(
+                    imageVector = if (effectiveExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                    contentDescription = if (effectiveExpanded) "Collapse tools" else "Expand tools",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    modifier = Modifier.size(16.dp),
+                )
             }
-            Icon(
-                imageVector = if (effectiveExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                contentDescription = if (effectiveExpanded) "Collapse tools" else "Expand tools",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                modifier = Modifier.size(16.dp),
-            )
+            // Last-step summary — only on the completed card with tools.
+            // 22.dp start pad ≈ icon (14dp) + spacer (8dp): aligns the
+            // summary under the row-1 title.
+            if (!isRunning && group.tools.isNotEmpty()) {
+                val lastTool = group.tools.lastOrNull()
+                val summary = if (lastTool != null) lastTool.toolTitle.ifEmpty { lastTool.toolName } else ""
+                if (summary.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(3.dp))
+                    Text(
+                        text = summary,
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(start = 22.dp),
+                    )
+                }
+            }
         }
 
         // Pill list — only shown when expanded. AnimatedVisibility gives the
@@ -964,6 +1005,26 @@ internal fun ToolCallRunGroup(
                 .padding(start = 8.dp),
         ) {
             Column(modifier = Modifier.fillMaxWidth()) {
+                // [T-android-run-group-thinking] Thinking first (merged into
+                // one block, content joined with "\n" — same merge the
+                // retired Pass 2 used), then tool pills. The merged block
+                // keeps the FIRST block's id so ThinkingBlock's per-block
+                // expand state stays stable across recompositions. It reads
+                // as streaming while the group is live AND its own status
+                // isn't terminal (a fresh thinking block carries a null
+                // status until text/tool_use arrives — group.isRunning
+                // covers that window).
+                if (thinkingVisible) {
+                    group.thinkingBlocks.firstOrNull()?.let { first ->
+                        ThinkingBlock(
+                            block = first.copy(
+                                content = group.thinkingBlocks.joinToString("\n") { it.content },
+                            ),
+                            isStreaming = group.isRunning && first.toolStatus != ToolBlockStatus.SUCCESS,
+                            isLast = true,
+                        )
+                    }
+                }
                 group.tools.forEach { block ->
                     ToolCallPill(
                         block = block,

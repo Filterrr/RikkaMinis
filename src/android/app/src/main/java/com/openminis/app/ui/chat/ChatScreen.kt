@@ -3670,6 +3670,14 @@ fun ChatScreen(
                             }
                             is FlatChatItem.AssistantToolRunGroup -> ToolCallRunGroup(
                                 group = item,
+                                // [T-android-run-group-thinking] Thinking
+                                // gate resolved here (the group component has
+                                // no ViewModel access): message snapshot wins,
+                                // legacy DB-restored messages (null) fall back
+                                // to the chat's current level — exactly the
+                                // retired AssistantThinking branch's rule.
+                                thinkingEnabled = item.messageThinkingLevel?.isEnabled
+                                    ?: viewModel.thinkingLevel.value.isEnabled,
                                 onRetry = if (item.isLastCancelled && !isStreaming && !canResume) ({ safeMutate { viewModel.retryLast() } }) else null,
                                 onStop = { viewModel.cancelStream() },
                                 onOpenTerminalWithCommand = onOpenTerminalWithCommand,

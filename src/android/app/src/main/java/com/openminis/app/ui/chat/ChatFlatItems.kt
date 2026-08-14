@@ -466,10 +466,23 @@ internal sealed class FlatChatItem {
     data class AssistantToolRunGroup(
         val messageId: String,
         val tools: List<AssistantBlock>,
-        /** True if ANY tool in the group is still live (STREAMING/PENDING/RUNNING). */
+        /**
+         * Same-message thinking blocks (kind == "thinking"), folded into the
+         * same run group so ONE agent turn = ONE card (thinking + tools).
+         * Rendered above the tool pills inside the expanded area; the group
+         * header shows the tool count / thinking title + aggregate duration.
+         */
+        val thinkingBlocks: List<AssistantBlock> = emptyList(),
+        /** True if ANY block (thinking or tool) in the group is still live (STREAMING/PENDING/RUNNING). */
         val isRunning: Boolean,
         /** True if the last tool in the group is CANCELLED — drives the single Retry affordance. */
         val isLastCancelled: Boolean,
+        // T300: thinking-level snapshot at the message's creation, carried
+        // through from ChatMessage so the renderer can gate the thinking
+        // section exactly like the retired AssistantThinking row did. Null
+        // for DB-restored messages — the renderer falls back to the chat's
+        // current level (see ChatScreen's ToolCallRunGroup call site).
+        val messageThinkingLevel: com.openminis.app.data.model.ThinkingLevel? = null,
     ) : FlatChatItem() {
         override val key = "toolrun:$messageId"
         override val contentType = "toolrun"
@@ -479,6 +492,9 @@ internal sealed class FlatChatItem {
             get() = tools.sumOf { it.durationMs }
 
         val count: Int get() = tools.size
+
+        /** Thinking + tool block count. */
+        val stepCount: Int get() = thinkingBlocks.size + tools.size
     }
 
     @Immutable
@@ -693,12 +709,6 @@ internal fun buildFlatChatItems(
 
         val blocks = message.toolBlocks
         val toolPillBlocks = blocks.filter { it.kind == "tool_use" }
-        val lastThinkingId = blocks.lastOrNull { it.kind == "thinking" }?.id
-        // [T-android-thinking-auto-collapse] Id of the last block of ANY
-        // kind — used to flip the trailing thinking block's auto-collapse
-        // signal the moment a subsequent text / tool_use arrives. See
-        // AssistantThinking.isLastBlockOverall KDoc.
-        val lastBlockId = blocks.lastOrNull()?.id
         val lastTextIdx = blocks.indexOfLast { it.kind == "text" }
         val hasAnyTextBlock = lastTextIdx >= 0
         // Only the last cancelled tool_use in the message gets the Retry button —
@@ -807,60 +817,37 @@ internal fun buildFlatChatItems(
                         }
                     }
                 }
-                // Pass 2 — thinking blocks: merged into a single collapsed bar. The
-        // merge previously interleaved with text/tool rows in model order; it
-        // now runs after ALL text rows so the collapsed thinking bar sits
-        // BELOW the answer. Semantics unchanged: every thinking block of the
-        // message folds into ONE AssistantThinking item; isLast /
-        // isLastBlockOverall end up reflecting the LAST thinking block, same
-        // result as the old out.indexOfLast merge.
-        var mergedThinking: FlatChatItem.AssistantThinking? = null
-        blocks.forEach { block ->
-            if (block.kind != "thinking") return@forEach
-            mergedThinking = mergedThinking?.let { prev ->
-                prev.copy(
-                    block = prev.block.copy(
-                        content = prev.block.content + "\n" + block.content
-                    ),
-                    isLast = block.id == lastThinkingId,
-                    isLastBlockOverall = block.id == lastBlockId,
-                )
-            } ?: FlatChatItem.AssistantThinking(
+                // Pass 2+3 — thinking + tool_use blocks fold into ONE run group card.
+        // [T-android-run-group-thinking] "One agent turn" = one card: the
+        // merged thinking section on top, tool pills below, sharing a single
+        // collapsible header ("N tools · total" / "Deep Thinking"). Emitted
+        // once whenever EITHER kind is present — a lone tool, thinking alone,
+        // or a mixed batch all produce exactly one AssistantToolRunGroup. The
+        // individual AssistantThinking / AssistantToolUse rows are no longer
+        // emitted (classes kept for the exhaustive `when` in ChatScreen, so
+        // this stays a minimal, revertable change).
+        val thinkingBlocks = blocks.filter { it.kind == "thinking" }
+        if (thinkingBlocks.isNotEmpty() || firstToolIndex >= 0) {
+            out.add(dedupe(FlatChatItem.AssistantToolRunGroup(
                 messageId = message.id,
-                block = block,
-                isLast = block.id == lastThinkingId,
-                messageIsStreaming = message.isStreaming,
+                tools = toolPillBlocks,
+                thinkingBlocks = thinkingBlocks,
+                isRunning = (thinkingBlocks + toolPillBlocks).any {
+                    it.toolStatus == ToolBlockStatus.STREAMING ||
+                        it.toolStatus == ToolBlockStatus.PENDING ||
+                        it.toolStatus == ToolBlockStatus.RUNNING ||
+                        // Fresh thinking blocks carry a null status while
+                        // streaming (flipped to SUCCESS only when text or a
+                        // tool_use arrives) — the message-level streaming
+                        // flag is the reliable liveness signal for the
+                        // thinking phase, same signal the retired
+                        // AssistantThinking row used (messageIsStreaming).
+                        (it.kind == "thinking" && it.toolStatus == null && message.isStreaming)
+                },
+                isLastCancelled = lastCancelledToolId != null &&
+                    lastCancelledToolId == toolPillBlocks.lastOrNull()?.id,
                 messageThinkingLevel = message.thinkingLevel,
-                isLastBlockOverall = block.id == lastBlockId,
-            )
-        }
-        mergedThinking?.let { out.add(dedupe(it)) }
-
-        // Pass 3 — tool_use blocks: one collapsed "N tools" run card when the
-        // message has >= 2 tool_use blocks, a plain pill otherwise. Emitted
-        // once, covering every tool_use block of this message. Moved AFTER
-        // text + thinking so the collapsed run bar anchors the message tail.
-        if (firstToolIndex >= 0) {
-            if (toolPillBlocks.size >= 2) {
-                out.add(dedupe(FlatChatItem.AssistantToolRunGroup(
-                    messageId = message.id,
-                    tools = toolPillBlocks,
-                    isRunning = toolPillBlocks.any {
-                        it.toolStatus == ToolBlockStatus.STREAMING ||
-                            it.toolStatus == ToolBlockStatus.PENDING ||
-                            it.toolStatus == ToolBlockStatus.RUNNING
-                    },
-                    isLastCancelled = lastCancelledToolId != null &&
-                        lastCancelledToolId == toolPillBlocks.lastOrNull()?.id,
-                )))
-            } else {
-                out.add(dedupe(FlatChatItem.AssistantToolUse(
-                    messageId = message.id,
-                    block = toolPillBlocks.first(),
-                    allToolBlocks = toolPillBlocks,
-                    isLastCancelled = toolPillBlocks.first().id == lastCancelledToolId,
-                )))
-            }
+            )))
         }
 
         // Pass 4 — info blocks (inline system notices), in model order.
