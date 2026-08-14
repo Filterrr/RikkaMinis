@@ -181,16 +181,17 @@ class RequestSanitizersTest {
     @Test
     fun `gemini shape - functionResponse without functionCall is dropped`() {
         // Gemini pairs functionCall ↔ functionResponse; an orphan response
-        // (no preceding call in the last model turn) is a 400. The user
-        // message held ONLY the orphan response, so it becomes empty and is
-        // dropped entirely.
+        // (no preceding call in the last model turn) is a 400. The orphan
+        // response is stripped; the message is returned empty (caller may
+        // filter empties).
         val msgs = listOf(
             assistant("plain text"), // no functionCall
             user("", listOf(toolResult("orphan"))),
         )
         val out = sanitize(msgs)
-        assertEquals(1, out.size)
-        assertEquals(LLMMessage.Role.ASSISTANT, out[0].role)
+        assertEquals(2, out.size)
+        assertEquals(LLMMessage.Role.USER, out[1].role)
+        assertTrue(partsOf(out[1]).filterIsInstance<AgentContentPart.ToolResult>().isEmpty())
         assertEquals(1, logs.size)
     }
 
