@@ -51,6 +51,113 @@ import java.io.InputStreamReader
 import java.util.concurrent.TimeUnit
 import com.openminis.app.provider.failOnSilentEmptyCompletion
 
+// -- Think-tag extraction (case-insensitive, multi-format) --
+
+/**
+ * Defines a think-tag format pair: [open] marks the start of thinking
+ * content, [close] marks the end. Matching is case-insensitive.
+ */
+internal data class ThinkTagDef(
+    val open: String,
+    val close: String,
+)
+
+/**
+ * All recognized think-tag formats. Matching is case-insensitive,
+ * so `<thinking>` and `<THINKING>` both match the `<thinking>` entry.
+ */
+internal val THINK_TAG_FORMATS: List<ThinkTagDef> = listOf(
+    ThinkTagDef(" thinking", " response"),
+    ThinkTagDef("<thinking>", "</thinking>"),
+    ThinkTagDef("<reasoning>", "</reasoning>"),
+    ThinkTagDef("[think]", "[/think]"),
+    ThinkTagDef("[reasoning]", "[/reasoning]"),
+)
+
+/**
+ * Maximum length of any open/close tag in [THINK_TAG_FORMATS].
+ * Used as the cross-chunk buffer margin so a tag split across SSE chunks
+ * is not lost.
+ */
+internal const val THINK_TAG_MAX_LEN = 12  // </reasoning> = 12, [/reasoning] = 12
+
+/**
+ * Result of a single [scanThinkTags] call.
+ */
+internal data class ThinkTagScanResult(
+    val visible: String,
+    val thinking: String,
+    val remainingBuffer: String,
+    val insideTag: Boolean,
+    val currentFormat: ThinkTagDef?,
+)
+
+/**
+ * Scans [buffer] for think-tag markers (case-insensitive).
+ *
+ * When [insideTag] is true, searches for the [currentFormat] close tag.
+ * When false, searches for any open tag from [THINK_TAG_FORMATS].
+ *
+ * This is a pure scanner — it does not mutate any state. Callers are
+ * responsible for updating their own state from the result.
+ */
+internal fun scanThinkTags(
+    buffer: String,
+    insideTag: Boolean,
+    currentFormat: ThinkTagDef?,
+): ThinkTagScanResult {
+    val bufLower = buffer.lowercase()
+    val visibleBuilder = StringBuilder()
+    val thinkingBuilder = StringBuilder()
+    var i = 0
+    var tagActive = insideTag
+    var activeFormat = currentFormat
+
+    while (i < buffer.length) {
+        if (!tagActive) {
+            // Search for any open tag (case-insensitive)
+            var found = false
+            for (fmt in THINK_TAG_FORMATS) {
+                val openIdx = bufLower.indexOf(fmt.open, i)
+                if (openIdx != -1) {
+                    visibleBuilder.append(buffer, i, openIdx)
+                    tagActive = true
+                    activeFormat = fmt
+                    i = openIdx + fmt.open.length
+                    found = true
+                    break
+                }
+            }
+            if (!found) {
+                // Keep last THINK_TAG_MAX_LEN chars buffered for potential tag boundary
+                val safe = if (buffer.length - i > THINK_TAG_MAX_LEN) buffer.length - THINK_TAG_MAX_LEN else i
+                visibleBuilder.append(buffer, i, safe)
+                val remaining = buffer.substring(safe)
+                return ThinkTagScanResult(visibleBuilder.toString(), thinkingBuilder.toString(), remaining, false, null)
+            }
+        } else {
+            val fmt = activeFormat ?: THINK_TAG_FORMATS[0] // fallback (shouldn't happen)
+            val closeIdx = bufLower.indexOf(fmt.close, i)
+            if (closeIdx == -1) {
+                // Close tag not yet arrived — keep last THINK_TAG_MAX_LEN chars buffered
+                val safe = if (buffer.length - i > THINK_TAG_MAX_LEN) buffer.length - THINK_TAG_MAX_LEN else i
+                thinkingBuilder.append(buffer, i, safe)
+                val remaining = buffer.substring(safe)
+                return ThinkTagScanResult(visibleBuilder.toString(), thinkingBuilder.toString(), remaining, true, activeFormat)
+            } else {
+                thinkingBuilder.append(buffer, i, closeIdx)
+                i = closeIdx + fmt.close.length
+                tagActive = false
+                activeFormat = null
+            }
+        }
+    }
+
+    return ThinkTagScanResult(visibleBuilder.toString(), thinkingBuilder.toString(), "", false, null)
+}
+
+// -- End of think-tag extraction --
+
 class OpenAIProvider constructor(
     private val apiKey: String?,
     override var model: LLMModel = LLMModel.gpt4oMini,
@@ -571,7 +678,7 @@ class OpenAIProvider constructor(
         // the model to in-context-learn it (see T249 / T257 history).
         val reasoningAccum = StringBuilder()
         var sawReasoningField = false
-        var hasThinkTags = isDashScope || model.id.contains("qwen")
+        val hasThinkTags = true  // safe: extractThinkTags is a no-op when no tags are present
         thinkTagBuffer = StringBuilder()
         insideThinkTag = false
 
@@ -880,24 +987,14 @@ class OpenAIProvider constructor(
                             }
                         }
 
-                        // Text content (with <think> tag extraction for Qwen/DashScope)
+                        // Text content (with think-tag extraction — enabled for
+                        // all models; extractThinkTags is a no-op when no tags
+                        // are present, so this path is safe for plain text)
                         delta?.safeOptString("content", "")?.let { text ->
                             if (text.isNotEmpty()) {
-                                if (hasThinkTags) {
-                                    val extracted = extractThinkTags(text)
-                                    if (extracted.thinking.isNotEmpty()) send(LLMStreamChunk.ThinkingDelta(extracted.thinking))
-                                    if (extracted.visible.isNotEmpty()) send(LLMStreamChunk.Text(extracted.visible))
-                                } else {
-                                    // Check if think tags start appearing
-                                    if (text.contains("<think>")) {
-                                        hasThinkTags = true
-                                        val extracted = extractThinkTags(text)
-                                        if (extracted.thinking.isNotEmpty()) send(LLMStreamChunk.ThinkingDelta(extracted.thinking))
-                                        if (extracted.visible.isNotEmpty()) send(LLMStreamChunk.Text(extracted.visible))
-                                    } else {
-                                        send(LLMStreamChunk.Text(text))
-                                    }
-                                }
+                                val extracted = extractThinkTags(text)
+                                if (extracted.thinking.isNotEmpty()) send(LLMStreamChunk.ThinkingDelta(extracted.thinking))
+                                if (extracted.visible.isNotEmpty()) send(LLMStreamChunk.Text(extracted.visible))
                             }
                         }
 
@@ -1987,43 +2084,15 @@ class OpenAIProvider constructor(
 
     private var thinkTagBuffer = StringBuilder()
     private var insideThinkTag = false
+    private var currentTagFormat: ThinkTagDef? = null
 
     private fun extractThinkTags(text: String): ThinkExtractResult {
-        val visibleBuilder = StringBuilder()
-        val thinkingBuilder = StringBuilder()
         thinkTagBuffer.append(text)
-
-        val buf = thinkTagBuffer.toString()
-        var i = 0
-        while (i < buf.length) {
-            if (!insideThinkTag) {
-                val openIdx = buf.indexOf("<think>", i)
-                if (openIdx == -1) {
-                    // Keep last 7 chars buffered for potential tag boundary
-                    val safe = if (buf.length - i > 7) buf.length - 7 else i
-                    visibleBuilder.append(buf, i, safe)
-                    thinkTagBuffer = StringBuilder(buf.substring(safe))
-                    return ThinkExtractResult(visibleBuilder.toString(), thinkingBuilder.toString())
-                } else {
-                    visibleBuilder.append(buf, i, openIdx)
-                    insideThinkTag = true
-                    i = openIdx + 7 // skip "<think>"
-                }
-            } else {
-                val closeIdx = buf.indexOf("</think>", i)
-                if (closeIdx == -1) {
-                    thinkingBuilder.append(buf, i, buf.length)
-                    thinkTagBuffer = StringBuilder()
-                    return ThinkExtractResult(visibleBuilder.toString(), thinkingBuilder.toString())
-                } else {
-                    thinkingBuilder.append(buf, i, closeIdx)
-                    insideThinkTag = false
-                    i = closeIdx + 8 // skip "</think>"
-                }
-            }
-        }
-        thinkTagBuffer = StringBuilder()
-        return ThinkExtractResult(visibleBuilder.toString(), thinkingBuilder.toString())
+        val result = scanThinkTags(thinkTagBuffer.toString(), insideThinkTag, currentTagFormat)
+        thinkTagBuffer = StringBuilder(result.remainingBuffer)
+        insideThinkTag = result.insideTag
+        currentTagFormat = result.currentFormat
+        return ThinkExtractResult(result.visible, result.thinking)
     }
 
     // MARK: - Codex image generation (gpt-image-2)
