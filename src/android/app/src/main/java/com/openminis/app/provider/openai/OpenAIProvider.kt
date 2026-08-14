@@ -56,30 +56,26 @@ import com.openminis.app.provider.failOnSilentEmptyCompletion
 /**
  * Defines a think-tag format pair: [open] marks the start of thinking
  * content, [close] marks the end. Matching is case-insensitive.
+ * [altClose] is an alternative terminator for the same [open] (e.g.
+ * DeepSeek R1 closes `<thinking>` with `<response>` instead of `</thinking>`).
  */
 internal data class ThinkTagDef(
     val open: String,
     val close: String,
+    val altClose: String? = null,
 )
 
 /**
- * All recognized think-tag formats. Matching is case-insensitive,
- * so `<thinking>` and `<THINKING>` both match the `<thinking>` entry.
+ * Explicit think-tag formats. Matching is case-insensitive, so `<thinking>`
+ * and `<THINKING>` both match the `<thinking>` entry. These are safe to scan
+ * for on ALL models — an explicit tag can't collide with plain prose.
  */
 internal val THINK_TAG_FORMATS: List<ThinkTagDef> = listOf(
-    ThinkTagDef(" thinking", " response"),
-    ThinkTagDef("<thinking>", "</thinking>"),
+    ThinkTagDef("<thinking>", "</thinking>", altClose = "<response>"), // DeepSeek R1 style
     ThinkTagDef("<reasoning>", "</reasoning>"),
     ThinkTagDef("[think]", "[/think]"),
     ThinkTagDef("[reasoning]", "[/reasoning]"),
 )
-
-/**
- * Maximum length of any open/close tag in [THINK_TAG_FORMATS].
- * Used as the cross-chunk buffer margin so a tag split across SSE chunks
- * is not lost.
- */
-internal const val THINK_TAG_MAX_LEN = 12  // </reasoning> = 12, [/reasoning] = 12
 
 /**
  * Result of a single [scanThinkTags] call.
@@ -93,18 +89,23 @@ internal data class ThinkTagScanResult(
 )
 
 /**
- * Scans [buffer] for think-tag markers (case-insensitive).
+ * Scans [buffer] for think-tag markers (case-insensitive) using [formats].
  *
  * When [insideTag] is true, searches for the [currentFormat] close tag.
- * When false, searches for any open tag from [THINK_TAG_FORMATS].
+ * When false, searches for any open tag from [formats].
  *
  * This is a pure scanner — it does not mutate any state. Callers are
  * responsible for updating their own state from the result.
+ *
+ * Fast path: when no tag is found, only the trailing partial-tag-prefix
+ * (e.g. `<th` of `<thinking>`) is kept buffered — plain text streams
+ * through immediately without accumulating (streaming UX must not lag).
  */
 internal fun scanThinkTags(
     buffer: String,
     insideTag: Boolean,
     currentFormat: ThinkTagDef?,
+    formats: List<ThinkTagDef>,
 ): ThinkTagScanResult {
     val bufLower = buffer.lowercase()
     val visibleBuilder = StringBuilder()
@@ -113,11 +114,27 @@ internal fun scanThinkTags(
     var tagActive = insideTag
     var activeFormat = currentFormat
 
+    /** Longest tail of [bufLower] that is a prefix of some open tag. */
+    fun maxOpenTagPrefixLen(): Int {
+        var best = 0
+        for (fmt in formats) {
+            val open = fmt.open.lowercase()
+            val maxLen = minOf(open.length - 1, bufLower.length) // full tag is found by indexOf, never a prefix here
+            for (len in maxLen downTo 1) {
+                if (open.startsWith(bufLower.substring(bufLower.length - len))) {
+                    if (len > best) best = len
+                    break
+                }
+            }
+        }
+        return best
+    }
+
     while (i < buffer.length) {
         if (!tagActive) {
             // Search for any open tag (case-insensitive)
             var found = false
-            for (fmt in THINK_TAG_FORMATS) {
+            for (fmt in formats) {
                 val openIdx = bufLower.indexOf(fmt.open, i)
                 if (openIdx != -1) {
                     visibleBuilder.append(buffer, i, openIdx)
@@ -129,24 +146,48 @@ internal fun scanThinkTags(
                 }
             }
             if (!found) {
-                // Keep last THINK_TAG_MAX_LEN chars buffered for potential tag boundary
-                val safe = if (buffer.length - i > THINK_TAG_MAX_LEN) buffer.length - THINK_TAG_MAX_LEN else i
-                visibleBuilder.append(buffer, i, safe)
-                val remaining = buffer.substring(safe)
+                // Fast path: emit everything except a possible open-tag
+                // prefix at the tail (kept buffered across chunks).
+                val prefixLen = maxOpenTagPrefixLen()
+                val keepFrom = buffer.length - prefixLen
+                visibleBuilder.append(buffer, i, keepFrom)
+                val remaining = buffer.substring(keepFrom)
                 return ThinkTagScanResult(visibleBuilder.toString(), thinkingBuilder.toString(), remaining, false, null)
             }
         } else {
-            val fmt = activeFormat ?: THINK_TAG_FORMATS[0] // fallback (shouldn't happen)
-            val closeIdx = bufLower.indexOf(fmt.close, i)
-            if (closeIdx == -1) {
-                // Close tag not yet arrived — keep last THINK_TAG_MAX_LEN chars buffered
-                val safe = if (buffer.length - i > THINK_TAG_MAX_LEN) buffer.length - THINK_TAG_MAX_LEN else i
-                thinkingBuilder.append(buffer, i, safe)
-                val remaining = buffer.substring(safe)
+            val fmt = activeFormat ?: formats[0] // fallback (shouldn't happen)
+            // Close candidates: primary close + altClose (e.g. <thinking> can
+            // end with either </thinking> or <response>); take the earliest.
+            val closes = listOfNotNull(fmt.close, fmt.altClose).map { it.lowercase() }
+            var bestIdx = -1
+            var bestLen = 0
+            for (c in closes) {
+                val idx = bufLower.indexOf(c, i)
+                if (idx != -1 && (bestIdx == -1 || idx < bestIdx)) {
+                    bestIdx = idx
+                    bestLen = c.length
+                }
+            }
+            if (bestIdx == -1) {
+                // Close tag not yet arrived — emit thinking text except a
+                // possible close-tag prefix at the tail (any close candidate).
+                var best = 0
+                for (c in closes) {
+                    val maxLen = minOf(c.length - 1, bufLower.length)
+                    for (len in maxLen downTo 1) {
+                        if (c.startsWith(bufLower.substring(bufLower.length - len))) {
+                            if (len > best) best = len
+                            break
+                        }
+                    }
+                }
+                val keepFrom = buffer.length - best
+                thinkingBuilder.append(buffer, i, keepFrom)
+                val remaining = buffer.substring(keepFrom)
                 return ThinkTagScanResult(visibleBuilder.toString(), thinkingBuilder.toString(), remaining, true, activeFormat)
             } else {
-                thinkingBuilder.append(buffer, i, closeIdx)
-                i = closeIdx + fmt.close.length
+                thinkingBuilder.append(buffer, i, bestIdx)
+                i = bestIdx + bestLen
                 tagActive = false
                 activeFormat = null
             }
@@ -2088,7 +2129,7 @@ class OpenAIProvider constructor(
 
     private fun extractThinkTags(text: String): ThinkExtractResult {
         thinkTagBuffer.append(text)
-        val result = scanThinkTags(thinkTagBuffer.toString(), insideThinkTag, currentTagFormat)
+        val result = scanThinkTags(thinkTagBuffer.toString(), insideThinkTag, currentTagFormat, THINK_TAG_FORMATS)
         thinkTagBuffer = StringBuilder(result.remainingBuffer)
         insideThinkTag = result.insideTag
         currentTagFormat = result.currentFormat
