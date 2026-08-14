@@ -4,6 +4,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runCurrent
@@ -120,8 +121,8 @@ class SessionConcurrencyManagerTest {
 
         // 全部释放后收敛为空
         listOf("s1", "s2", "s3", "s4", "s5").forEach { SessionConcurrencyManager.releaseSlot(it) }
-        assertEquals(emptySet(), SessionConcurrencyManager.runningSessions.value)
-        assertEquals(emptyList(), SessionConcurrencyManager.suspendedSessions.value)
+        assertEquals(emptySet<String>(), SessionConcurrencyManager.runningSessions.value)
+        assertEquals(emptyList<String>(), SessionConcurrencyManager.suspendedSessions.value)
     }
 
     // --- 取消语义 ---
@@ -173,17 +174,17 @@ class SessionConcurrencyManagerTest {
         assertEquals(setOf("s1"), SessionConcurrencyManager.runningSessions.value)
 
         SessionConcurrencyManager.releaseSlot("s1")
-        assertEquals(emptySet(), SessionConcurrencyManager.runningSessions.value)
+        assertEquals(emptySet<String>(), SessionConcurrencyManager.runningSessions.value)
 
         // 第二次 release：无 active 槽位，不抛异常、不改变状态
         SessionConcurrencyManager.releaseSlot("s1")
-        assertEquals(emptySet(), SessionConcurrencyManager.runningSessions.value)
+        assertEquals(emptySet<String>(), SessionConcurrencyManager.runningSessions.value)
     }
 
     @Test
     fun `releaseSlot for an unknown session is a no-op`() {
         SessionConcurrencyManager.releaseSlot("ghost")
-        assertEquals(emptySet(), SessionConcurrencyManager.runningSessions.value)
+        assertEquals(emptySet<String>(), SessionConcurrencyManager.runningSessions.value)
     }
 
     // --- 真实多线程交错 ---
