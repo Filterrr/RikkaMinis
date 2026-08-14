@@ -456,6 +456,12 @@ class AnthropicProvider(
         val messages = sanitizeToolPairing(rawMessages) { detail ->
             android.util.Log.i("AnthropicProvider", detail)
         }
+            // Drop messages that became empty (orphan-only removed). An empty
+            // content array is itself a 400 on Anthropic. Pristine empty
+            // messages (e.g. empty USER text) are handled by the serializer
+            // below — they reach here only if a call site sent them, and this
+            // filter is the last defense against empty content arrays.
+            .filter { m -> m.contentParts.isNotEmpty() || m.content.isNotEmpty() }
         // [T-android-anthropic-thinking-echo] (issue #70) Compute once — the
         // gate depends only on the model + endpoint, not the message.
         val echoThinking = shouldEchoInterleavedThinking()

@@ -135,7 +135,9 @@ fun sanitizeToolPairing(
     // still have either non-empty contentParts or a non-empty `content`
     // string (string-only messages never had parts to strip in the first
     // place).
-    return result.filter { m ->
-        m.contentParts.isNotEmpty() || m.content.isNotEmpty()
-    }
+    // Note: this filter is intentionally NOT in the sanitizer — callers
+    // (AnthropicProvider) apply it themselves because GeminiProvider has a
+    // test that sends pristine-empty messages (empty USER text) which must
+    // NOT be dropped (Gemini's serializer replaces "" with " ").
+    return result
 }

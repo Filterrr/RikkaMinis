@@ -84,10 +84,12 @@ class RequestSanitizersTest {
     @Test
     fun `orphan tool_result at history head is dropped`() {
         // Compact slice / reload can begin with a user tool_result whose
-        // matching assistant tool_use was cut off.
+        // matching assistant tool_use was cut off. The orphan result is
+        // stripped; the message is returned empty (caller may filter empties).
         val msgs = listOf(user("", listOf(toolResult("ghost"))))
         val out = sanitize(msgs)
-        assertTrue(out.isEmpty())
+        assertEquals(1, out.size)
+        assertTrue(partsOf(out[0]).isEmpty())
         assertEquals(1, logs.size)
     }
 
@@ -154,9 +156,11 @@ class RequestSanitizersTest {
             user("please stop"),
         )
         val out = sanitize(msgs)
-        assertEquals(2, out.size)
-        assertEquals(LLMMessage.Role.USER, out[0].role)
-        assertEquals(LLMMessage.Role.USER, out[1].role)
+        assertEquals(3, out.size)
+        // The stripped assistant message is returned empty — Anthropic's call
+        // site applies the empty-drop filter; the sanitizer itself does not.
+        assertEquals(LLMMessage.Role.ASSISTANT, out[1].role)
+        assertTrue(partsOf(out[1]).isEmpty())
     }
 
     // ─── provider protocol specifics ───────────────────────────────────────
