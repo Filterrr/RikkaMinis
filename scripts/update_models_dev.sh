@@ -6,7 +6,6 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 IOS_DEST="$SCRIPT_DIR/../src/ios/Resources/models-dev-api.json"
-ANDROID_DEST="$SCRIPT_DIR/../src/android/app/src/main/assets/models-dev-api.json"
 URL="https://models.dev/api.json"
 
 echo "Downloading $URL ..."
@@ -24,10 +23,6 @@ echo "Valid JSON — $PROVIDERS providers"
 
 mv "$IOS_DEST.tmp" "$IOS_DEST"
 echo "Updated $IOS_DEST"
-
-# Copy to Android assets
-cp "$IOS_DEST" "$ANDROID_DEST"
-echo "Updated $ANDROID_DEST"
 
 # Show size
 SIZE=$(wc -c < "$IOS_DEST" | tr -d ' ')
