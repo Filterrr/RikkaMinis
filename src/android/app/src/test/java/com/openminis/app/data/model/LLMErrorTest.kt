@@ -3,6 +3,7 @@ package com.openminis.app.data.model
 import java.io.IOException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -129,5 +130,34 @@ class LLMErrorTest {
         // Exception.message stays human — UI fallbacks that print e.message
         // must not leak the raw trail.
         assertEquals("Connection failed — tried 3 models, none available.", e.message)
+    }
+
+    // ─── Retry-After parsing (RFC 7231 §7.1.3) ─────────────────────────────
+
+    @Test
+    fun `parseRetryAfter - delay seconds form`() {
+        assertEquals(120_000L, parseRetryAfterMs("120", nowMs = 1000L))
+        assertEquals(0L, parseRetryAfterMs("0", nowMs = 1000L))
+    }
+
+    @Test
+    fun `parseRetryAfter - http date form`() {
+        // "Mon, 01 Jan 2024 00:00:10 GMT" = 10s after "Mon, 01 Jan 2024 00:00:00 GMT"
+        // epoch for 2024-01-01 00:00:00 GMT = 1704067200 seconds = 1704067200000 ms
+        assertEquals(10_000L, parseRetryAfterMs("Mon, 01 Jan 2024 00:00:10 GMT", nowMs = 1704067200000L))
+    }
+
+    @Test
+    fun `parseRetryAfter - date already in the past clamps to zero`() {
+        assertEquals(0L, parseRetryAfterMs("Mon, 01 Jan 2024 00:00:00 GMT", nowMs = 1704067200000L + 1000L))
+    }
+
+    @Test
+    fun `parseRetryAfter - garbage or blank returns null`() {
+        assertNull(parseRetryAfterMs(null, 1000L))
+        assertNull(parseRetryAfterMs("", 1000L))
+        assertNull(parseRetryAfterMs("   ", 1000L))
+        assertNull(parseRetryAfterMs("not-a-date", 1000L))
+        assertNull(parseRetryAfterMs("12abc", 1000L))
     }
 }

@@ -4,6 +4,7 @@ import android.util.Base64
 import com.openminis.app.data.model.AgentContentPart
 import com.openminis.app.data.model.AgentToolDefinition
 import com.openminis.app.data.model.LLMError
+import com.openminis.app.data.model.parseRetryAfterMs
 import com.openminis.app.provider.applyUserAgentOverride
 import com.openminis.app.data.model.LLMMessage
 import com.openminis.app.data.model.LLMModel
@@ -71,7 +72,11 @@ class GeminiProvider(
         val responseBody = response.body?.string() ?: ""
 
         if (!response.isSuccessful) {
-            throw mapHttpError(response.code, responseBody)
+            throw mapHttpError(
+                response.code,
+                responseBody,
+                parseRetryAfterMs(response.headers["Retry-After"], System.currentTimeMillis()),
+            )
         }
 
         val json = JSONObject(responseBody)
@@ -116,8 +121,9 @@ class GeminiProvider(
         val response = client.newCall(request).execute()
         if (!response.isSuccessful) {
             val errorBody = response.body?.string() ?: ""
+            val retryAfterMs = parseRetryAfterMs(response.headers["Retry-After"], System.currentTimeMillis())
             response.close()
-            throw mapHttpError(response.code, errorBody)
+            throw mapHttpError(response.code, errorBody, retryAfterMs)
         }
 
         val reader = BufferedReader(InputStreamReader(response.body!!.byteStream()))
@@ -474,9 +480,9 @@ class GeminiProvider(
         )
     }
 
-    private fun mapHttpError(statusCode: Int, body: String): LLMError {
+    private fun mapHttpError(statusCode: Int, body: String, retryAfterMs: Long? = null): LLMError {
         if (statusCode == 401 || statusCode == 403) return LLMError.InvalidApiKey()
-        if (statusCode == 429) return LLMError.RateLimited()
+        if (statusCode == 429) return LLMError.RateLimited(retryAfterMs = retryAfterMs)
         val message = "Gemini API error $statusCode: ${body.take(200)}"
         val transientCodes = setOf(500, 502, 503, 504, 529)
         if (statusCode in transientCodes) return LLMError.TransientError(message)

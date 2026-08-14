@@ -5,7 +5,7 @@ sealed class LLMError(message: String, cause: Throwable? = null) : Exception(mes
     class NetworkError(cause: Throwable) : LLMError("Network error: ${cause.message}", cause)
     class ProviderError(val detail: String) : LLMError("Provider error: $detail")
     class DecodingError(cause: Throwable) : LLMError("Decoding error: ${cause.message}", cause)
-    class RateLimited : LLMError("Rate limited — please try again later")
+    class RateLimited(val retryAfterMs: Long? = null) : LLMError("Rate limited — please try again later")
     class TransientError(val detail: String) : LLMError("Transient error: $detail")
     class Cancelled : LLMError("Request was cancelled")
     class Unknown(cause: Throwable?) : LLMError("Unknown error: ${cause?.message}", cause)
@@ -75,3 +75,27 @@ class FallbackExhaustedError(
     val summary: String,
     val detail: String,
 ) : Exception(summary)
+
+/**
+ * Parse a `Retry-After` HTTP header into a cooldown duration in milliseconds.
+ * Returns null when absent / unparseable — the caller falls back to
+ * [com.openminis.app.data.routing.GroupRouter.RATE_LIMIT_COOLDOWN_DEFAULT_MS].
+ *
+ * RFC 7231 §7.1.3 allows two forms; both are handled:
+ *  - delay-seconds: `Retry-After: 120`
+ *  - HTTP-date:     `Retry-After: Fri, 31 Dec 1999 23:59:59 GMT`
+ *
+ * A delay of 0 is valid (retry immediately) — coerced to 0 ms.
+ */
+fun parseRetryAfterMs(headerValue: String?, nowMs: Long): Long? {
+    if (headerValue.isNullOrBlank()) return null
+    val trimmed = headerValue.trim()
+    trimmed.toLongOrNull()?.let { return it.coerceAtLeast(0L) * 1000L }
+    return try {
+        val date = java.text.SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss z", java.util.Locale.US)
+            .parse(trimmed) ?: return null
+        (date.time - nowMs).coerceAtLeast(0L)
+    } catch (_: Exception) {
+        null
+    }
+}

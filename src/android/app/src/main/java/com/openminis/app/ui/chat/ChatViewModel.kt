@@ -761,19 +761,15 @@ class ChatViewModel(
     val fallbackToastEvent: SharedFlow<String> = _fallbackToastEvent.asSharedFlow()
 
     /**
-     * [T-recovery] Entry ID → cooldown-until wall-clock ms. Populated when a
-     * 429 rate-limit triggers a fallback and the group's recovery strategy is
-     * NOT continueLast. Consulted by resolveProviderFromGroup to skip members
-     * still inside their cooldown window, so the session can temporarily use
-     * the paid member and automatically return to the free member once its
-     * rate-limit window cools down.
-     *
-     * In-memory only: rate-limit windows are short (seconds to a few minutes)
-     * and mostly reset well before an app restart, so persisting would add
-     * complexity for zero real benefit. A user's manual group/entry selection
-     * clears the whole map — explicit intent overrides any cooldown.
+     * [T-recovery] Per-member runtime health (429 cooldown / circuit breaker /
+     * dead) lives in GroupRouter now — this class used to own an
+     * `entryId → cooldown-until` map here that was declared and cleared but
+     * never written or read (dead scaffolding; the recovery dimension was
+     * designed in 08-08, partially migrated into a DB column, then rolled
+     * back). The real implementation: GroupRouter.recordResult demotes on
+     * failure, selection/fallback skip unhealthy members, and recovery is
+     * automatic when Cooling / OpenCircuit expire.
      */
-    private val rateLimitCooldowns = mutableMapOf<String, Long>()
 
     private val _activeEntryId = MutableStateFlow<String?>(null)
     val activeEntryId: StateFlow<String?> = _activeEntryId.asStateFlow()
@@ -3935,9 +3931,10 @@ class ChatViewModel(
     fun selectGroup(groupId: String) {
         _selectedGroupId.value = groupId
         _selectedGroupName.value = providerRepository.group(groupId)?.name ?: ""
-        // [T-recovery] Explicit user selection clears all cooldowns — choosing
-        // a group is an explicit "I want to work with this group" signal.
-        rateLimitCooldowns.clear()
+        // [T-recovery] Explicit user selection clears all health state —
+        // choosing a group is an explicit "I want to work with this group"
+        // signal (also how a re-authed member becomes usable again).
+        groupRouter.clearHealth()
         val resolved = resolveProviderFromGroup(groupId)
         if (resolved) {
             persistBinding("""{"type":"group","groupId":"$groupId"}""")
@@ -3953,7 +3950,7 @@ class ChatViewModel(
         _selectedGroupName.value = providerRepository.group(groupId)?.name ?: ""
         // [T-recovery] Explicit user pick overrides any recovery/cooldown
         // policy — the user asked for THIS member, deliver it.
-        rateLimitCooldowns.clear()
+        groupRouter.clearHealth()
         val resolved = resolveProviderFromGroup(groupId, entryId)
         if (resolved) {
             persistBinding("""{"type":"group","groupId":"$groupId","lastEntryId":"$entryId"}""")
@@ -4206,6 +4203,10 @@ class ChatViewModel(
         )
         val result = mutableListOf<FallbackCandidate>()
         for (entryId in order) {
+            // [T-recovery] Skip members currently cooling (429) / circuit-open
+            // (repeated 5xx) / dead (401) — fallback must not re-try a member
+            // the router just demoted; it only cycles HEALTHY candidates.
+            if (!groupRouter.isUsable(entryId)) continue
             val entry = config.modelEntries.find { it.id == entryId } ?: continue
             val instance = config.instances.find { it.id == entry.providerInstanceId } ?: continue
             if (!instance.isEnabled) continue
@@ -6483,12 +6484,6 @@ class ChatViewModel(
         var currentProvider = provider
         val remainingFallbacks = fallbackProviders.toMutableList()
         val fallbackReasons = mutableListOf<String>()
-        // [T-recovery] Group recovery strategy, captured at loop entry for the
-        // cooldown-record + persist decisions inside the fallback path. A group
-        // change mid-loop would be a user action that triggers switchModelAndRerun,
-        // which restarts the whole loop with a fresh capture — so a stale read
-        // here is impossible in practice.
-        val recovery = "continueLast"
 
         // Accumulate tool inputs across all turns (so persist includes all, not just current turn)
         val allToolInputs = mutableMapOf<String, String>()
@@ -7198,9 +7193,36 @@ class ChatViewModel(
                         }
                         // [T-recovery] Capture the ENTRY we are falling back OFF of
                         // BEFORE _activeEntryId gets overwritten below with the new
-                        // member (the fallback target). The rate-limit cooldown must
-                        // be keyed by the failed entry, not the one we moved to.
+                        // member (the fallback target). The health update must be
+                        // keyed by the failed entry, not the one we moved to.
                         val failedEntryId = _activeEntryId.value
+                        // [T-recovery] Demote the failed entry so selection /
+                        // fallback skip it until it recovers. Outcome taxonomy:
+                        // 429 → Cooling (Retry-After when available), 5xx →
+                        // circuit-breaker counter, 401/403 → Dead (until
+                        // re-auth). Network/transient errors deliberately do NOT
+                        // demote — a wifi blip is the user's side, not this
+                        // member's fault, and churning the whole group over it
+                        // would manufacture instability.
+                        failedEntryId?.let { failed ->
+                            when {
+                                isRateLimit -> groupRouter.recordResult(
+                                    failed,
+                                    com.openminis.app.data.routing.RouteOutcome.RateLimited(
+                                        retryAfterMs = (actual as? com.openminis.app.data.model.LLMError.RateLimited)?.retryAfterMs,
+                                    ),
+                                )
+                                actual is com.openminis.app.data.model.LLMError.InvalidApiKey ->
+                                    groupRouter.recordResult(
+                                        failed,
+                                        com.openminis.app.data.routing.RouteOutcome.AuthError,
+                                    )
+                                is5xx -> groupRouter.recordResult(
+                                    failed,
+                                    com.openminis.app.data.routing.RouteOutcome.ServerError,
+                                )
+                            }
+                        }
                         if (newEntry != null) {
                             _activeEntryId.value = newEntry.id
                             currentModel = newEntry.model
@@ -7212,15 +7234,7 @@ class ChatViewModel(
                         // Flash ONLY on a genuine model switch — never on a
                         // transparent same-model endpoint retry.
                         if (isRealModelChange) _fallbackTrigger.value++
-                        // [T-recovery] Record a rate-limit cooldown for the entry
-                        // we just fell back OFF of, so honorFirst / cooldown
-                        // recovery can skip it on the next re-resolution. The
-                        // cooldown follows the entry (not the provider instance)
-                        // — a group can hold several entries for the same model
-                        // behind different providers, and rate limits are
-                        // per-endpoint.
-                        
-                        // Persist the fallback model so re-entering the session starts from here.
+
                         // [T-error-no-permanent-scars] Instead of inserting an
                         // info block into the message stream (which becomes part
                         // of the chat record), emit a one-shot event for the UI
@@ -7230,6 +7244,7 @@ class ChatViewModel(
                         _fallbackToastEvent.tryEmit(
                             context.getString(R.string.fallback_switched_to, currentProvider.model.displayName)
                         )
+
                         // [T-android-fallback-text-rewind] Same as the retry-
                         // rollback path above: preserve this turn's streamed text
                         // (`turnTextSb`) on screen while we switch providers.
@@ -7289,6 +7304,17 @@ class ChatViewModel(
                     }
                 }
             }  // end while (!collectDone)
+
+            // [T-recovery] The turn's stream completed without error — the
+            // member that served it is healthy. Clears any prior cooldown /
+            // circuit state (also closes a half-open circuit: a successful
+            // probe restores the member).
+            _activeEntryId.value?.let { entryId ->
+                groupRouter.recordResult(
+                    entryId,
+                    com.openminis.app.data.routing.RouteOutcome.Success,
+                )
+            }
 
             // T307: materialise the per-turn StringBuilder ONCE at the
             // turn boundary. After this point everything is plain String

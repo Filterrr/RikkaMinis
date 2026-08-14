@@ -4,6 +4,7 @@ import android.util.Base64
 import com.openminis.app.data.model.AgentContentPart
 import com.openminis.app.data.model.AgentToolDefinition
 import com.openminis.app.data.model.LLMError
+import com.openminis.app.data.model.parseRetryAfterMs
 import com.openminis.app.data.model.LLMMediaAttachment
 import com.openminis.app.data.model.LLMMessage
 import com.openminis.app.data.model.LLMModel
@@ -525,7 +526,11 @@ class OpenAIProvider constructor(
                     )
                 )
             }
-            throw mapHttpError(response.code, errorBody)
+            throw mapHttpError(
+                response.code,
+                errorBody,
+                parseRetryAfterMs(response.headers["Retry-After"], System.currentTimeMillis()),
+            )
         }
         if (com.openminis.app.BuildConfig.DEBUG) {
             com.openminis.app.debug.LLMRequestLog.add(
@@ -1204,6 +1209,7 @@ class OpenAIProvider constructor(
             val response = client.newCall(request).execute()
             val statusCode = response.code
             val responseBody = response.body?.string() ?: ""
+            val retryAfterMs = parseRetryAfterMs(response.headers["Retry-After"], System.currentTimeMillis())
             response.close()
 
             // Some providers (xAI) don't support b64_json — retry without it once.
@@ -1223,7 +1229,7 @@ class OpenAIProvider constructor(
                     "OpenAIProvider",
                     "[ModelUseRoute] images/generations HTTP $statusCode body=${responseBody.take(300)}",
                 )
-                throw mapHttpError(statusCode, responseBody)
+                throw mapHttpError(statusCode, responseBody, retryAfterMs)
             }
 
             val json = try {
@@ -2450,9 +2456,9 @@ class OpenAIProvider constructor(
         )
     }
 
-    private fun mapHttpError(statusCode: Int, body: String): LLMError {
+    private fun mapHttpError(statusCode: Int, body: String, retryAfterMs: Long? = null): LLMError {
         if (statusCode == 401 || statusCode == 403) return LLMError.InvalidApiKey()
-        if (statusCode == 429) return LLMError.RateLimited()
+        if (statusCode == 429) return LLMError.RateLimited(retryAfterMs = retryAfterMs)
 
         val message = try {
             val json = JSONObject(body)

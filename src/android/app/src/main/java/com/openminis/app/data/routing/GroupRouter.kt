@@ -104,17 +104,85 @@ class GroupRouter(
 
     // ── health ─────────────────────────────────────────────────────────────
 
+    companion object {
+        /**
+         * Circuit breaker: consecutive-ish 5xx failures at which the circuit
+         * opens and the member is skipped for [CIRCUIT_OPEN_MS].
+         */
+        const val CIRCUIT_FAILURE_THRESHOLD = 3
+
+        /** Circuit open duration after the threshold is breached (5 minutes). */
+        const val CIRCUIT_OPEN_MS = 5 * 60_000L
+
+        /**
+         * Default rate-limit cooldown when the provider doesn't send a usable
+         * Retry-After header: 60 seconds. Long enough to let a burst rate
+         * limit settle, short enough that a 5-hour free-tier window (the
+         * user's real scenario: 500 calls / 5 h on a free key) is not
+         * prolonged indefinitely. (Moved from ChatViewModel — this is now the
+         * single owner of the constant.)
+         */
+        const val RATE_LIMIT_COOLDOWN_DEFAULT_MS = 60_000L
+
+        /** Hard cap on health entries — stale members must not leak memory. */
+        const val MAX_HEALTH_ENTRIES = 256
+    }
+
     /**
-     * Record a request outcome, updating the member's runtime health.
+     * Record a request outcome, updating the member's runtime health:
      *
-     * Phase 2 wires the demotion transitions here:
-     *  - RateLimited  → Cooling(now + retryAfter ?: default)
-     *  - ServerError  → failure counter → OpenCircuit at threshold
-     *  - AuthError    → Dead
-     *  - Success      → Healthy (clear demotion)
+     *  - [RouteOutcome.RateLimited] → [MemberHealth.Cooling]
+     *    (`retryAfterMs` when the provider sent Retry-After, else the default)
+     *  - [RouteOutcome.ServerError]  → failure counter; at
+     *    [CIRCUIT_FAILURE_THRESHOLD] the circuit opens for [CIRCUIT_OPEN_MS]
+     *    (below threshold the member stays usable but keeps counting)
+     *  - [RouteOutcome.AuthError]    → [MemberHealth.Dead] (until re-auth)
+     *  - [RouteOutcome.Success]      → back to [MemberHealth.Healthy] (clears
+     *    any demotion; also the half-open probe's close signal)
+     *
+     * NetworkError / TransientError deliberately never reach here (see
+     * RouteOutcome) — transient connectivity is the user's side and would
+     * churn the whole group over a wifi blip.
      */
     fun recordResult(entryId: String, outcome: RouteOutcome) {
-        // Phase 2: not yet wired — no demotion, no promotion.
+        val now = clock()
+        when (outcome) {
+            RouteOutcome.Success -> health[entryId] = MemberHealth.Healthy
+
+            is RouteOutcome.RateLimited -> {
+                val untilMs = now + (outcome.retryAfterMs ?: RATE_LIMIT_COOLDOWN_DEFAULT_MS)
+                health[entryId] = MemberHealth.Cooling(untilMs)
+            }
+
+            RouteOutcome.ServerError -> {
+                val current = health[entryId]
+                val failures = if (current is MemberHealth.OpenCircuit) current.failures + 1 else 1
+                // Below threshold: OpenCircuit(now) is immediately usable but
+                // carries the counter. At threshold: circuit opens for real.
+                health[entryId] = MemberHealth.OpenCircuit(
+                    untilMs = if (failures >= CIRCUIT_FAILURE_THRESHOLD) now + CIRCUIT_OPEN_MS else now,
+                    failures = failures,
+                )
+            }
+
+            RouteOutcome.AuthError -> health[entryId] = MemberHealth.Dead
+        }
+        // Bounded memory: drop the oldest entries beyond the cap (simple FIFO).
+        if (health.size > MAX_HEALTH_ENTRIES) {
+            val eldest = health.keys.firstOrNull() ?: return
+            health.remove(eldest)
+        }
+    }
+
+    /**
+     * Forget all health state. Called on explicit user selection
+     * (selectGroup / selectGroupEntry / selectEntry) — an explicit pick is a
+     * "I want to work with this" signal that overrides any cooldown / circuit
+     * / dead state (also how a re-authed member becomes usable again without
+     * an app restart).
+     */
+    fun clearHealth() {
+        health.clear()
     }
 
     /** True when the member may be selected now (no entry = healthy). */
