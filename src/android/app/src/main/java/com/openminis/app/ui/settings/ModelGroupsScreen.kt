@@ -478,6 +478,7 @@ private fun GroupRow(
     val strategyLabel = when (group.strategy) {
         RoutingStrategy.fallback -> stringResource(R.string.model_group_detail_fallback)
         RoutingStrategy.loadBalance -> stringResource(R.string.model_group_detail_load_balance)
+        RoutingStrategy.cheapestFirst -> stringResource(R.string.model_group_detail_cheapest_first)
     }
     // [T-disabled-provider-via-group-android] Count members whose provider
     // instance is currently enabled — that's what the runtime resolver

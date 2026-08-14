@@ -4191,6 +4191,9 @@ class ChatViewModel(
             activeEntryId = _activeEntryId.value,
             primaryModelId = primaryProvider.model.id,
             modelIdOf = { entryId -> config.modelEntries.find { it.id == entryId }?.model?.id },
+            // [T-recovery] cheapestFirst needs cost tier lookup to order the
+            // fallback chain in ascending cost.
+            costTierOf = { entryId -> config.modelEntries.find { it.id == entryId }?.costTier },
         )
         val result = mutableListOf<FallbackCandidate>()
         for (entryId in order) {

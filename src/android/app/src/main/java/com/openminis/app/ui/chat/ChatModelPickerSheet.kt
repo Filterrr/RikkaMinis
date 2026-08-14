@@ -525,6 +525,7 @@ internal fun ModelPickerSheet(
                                 val strategyLabel = when (group.strategy) {
                                     RoutingStrategy.fallback -> "FB"
                                     RoutingStrategy.loadBalance -> "LB"
+                                    RoutingStrategy.cheapestFirst -> "CF"
                                 }
                                 // Resolve entry: try memberEntryIds first, fallback to activeEntryId ONLY if this group is selected
                                 val resolvedEntry = group.memberEntryIds.firstNotNullOfOrNull { entryId ->

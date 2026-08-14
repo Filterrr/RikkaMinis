@@ -1563,4 +1563,12 @@
     <string name="backup_export_incomplete">Warning: %1$d field(s) failed to read — this backup may be incomplete.</string>
     <string name="code_expand">Expand %1$d lines</string>
     <string name="code_collapse">Collapse</string>
+    <string name="model_group_detail_cheapest_first">Cheapest first</string>
+    <string name="model_group_routing_cheapestfirst_footer">Pick the cheapest usable member first (by cost tier), then fall back to the next cheapest.</string>
+    <string name="model_group_detail_cost_tier">Cost tier</string>
+    <string name="model_group_cost_tier_unannotated">Unannotated</string>
+    <string name="model_group_cost_tier_free">Free</string>
+    <string name="model_group_cost_tier_cheap">Cheap</string>
+    <string name="model_group_cost_tier_normal">Normal</string>
+    <string name="model_group_cost_tier_expensive">Expensive</string>
 </resources>
