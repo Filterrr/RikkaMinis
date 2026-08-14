@@ -65,7 +65,7 @@ class ThinkTagExtractionTest {
      * scanThinkTags: keeps the remaining buffer + inside/format state between
      * chunks, accumulates emitted visible/thinking text.
      */
-    private class ScanAccumulator {
+    private class ScanAccumulator(private val formats: List<ThinkTagDef> = THINK_TAG_FORMATS) {
         var buffer = ""
         var inside = false
         var fmt: ThinkTagDef? = null
@@ -73,7 +73,7 @@ class ThinkTagExtractionTest {
         val thinking = StringBuilder()
 
         fun append(text: String) {
-            val r = scanThinkTags(buffer + text, inside, fmt)
+            val r = scanThinkTags(buffer + text, inside, fmt, formats)
             buffer = r.remainingBuffer
             inside = r.insideTag
             fmt = r.currentFormat
@@ -186,22 +186,57 @@ class ThinkTagExtractionTest {
     }
 
     @Test
-    fun `legacy space-delimited think format still works`() {
+    fun `thinking tag closes with response altClose`() {
+        // DeepSeek R1 style: <thinking> content closes with <response> (no
+        // </thinking>). The <response> terminator must be recognized too.
         val acc = ScanAccumulator()
-        acc.append("A  thinking legacy mode  response B")
+        acc.append("A <thinking>secret plan<response>reply text B")
         val (visible, thinking) = acc.flush()
-        assertEquals("A  B", visible)
-        assertEquals("legacy mode", thinking)
+        assertEquals("A reply text B", visible)
+        assertEquals("secret plan", thinking)
+    }
+
+    @Test
+    fun `altClose split across chunks is extracted`() {
+        // <response> itself split across SSE chunks
+        val acc = ScanAccumulator()
+        acc.append("A <thinking>secret<re")
+        acc.append("sponse>reply B")
+        val (visible, thinking) = acc.flush()
+        assertEquals("A reply B", visible)
+        assertEquals("secret", thinking)
+    }
+
+    @Test
+    fun `standard close preferred when both terminators present`() {
+        val acc = ScanAccumulator()
+        acc.append("<thinking>t1</thinking>vis<thinking>t2<response>vis2")
+        val (visible, thinking) = acc.flush()
+        assertEquals("visvis2", visible)
+        assertEquals("t1t2", thinking)
+    }
+
+    @Test
+    fun `plain text containing the word thinking is not misdetected`() {
+        // "No thinking here" must NOT trigger extraction — explicit tags only.
+        val acc = ScanAccumulator()
+        acc.append("No thinking here, just text")
+        val (visible, thinking) = acc.flush()
+        assertEquals("No thinking here, just text", visible)
+        assertEquals("", thinking)
     }
 
     @Test
     fun `tag formats list contains all documented variants`() {
         val opens = THINK_TAG_FORMATS.map { it.open }
-        assertTrue(opens.contains(" thinking"))
         assertTrue(opens.contains("<thinking>"))
         assertTrue(opens.contains("<reasoning>"))
         assertTrue(opens.contains("[think]"))
         assertTrue(opens.contains("[reasoning]"))
+        // DeepSeek R1 alternative terminator rides on the thinking entry
+        assertEquals("<response>", THINK_TAG_FORMATS.first { it.open == "<thinking>" }.altClose)
+        // standard-close entries have no altClose
+        assertTrue(THINK_TAG_FORMATS.filter { it.open != "<thinking>" }.all { it.altClose == null })
     }
 
     // -- Integration: relay merges reasoning into content (all models) --
