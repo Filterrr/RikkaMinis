@@ -25,6 +25,7 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -688,7 +689,7 @@ internal fun ToolCallPill(
     // Pill stretches up to the full row width so long titles can ellipsize
     // without pushing the duration out of view. Title takes the remaining
     // space via weight(1f), duration stays fixed-width (softWrap=false).
-    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp).animateContentSize()) {
       Box(modifier = Modifier.weight(1f, fill = false)) {
         Row(
             modifier = Modifier
@@ -887,7 +888,8 @@ internal fun ToolCallRunGroup(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = 2.dp),
+            .padding(vertical = 2.dp)
+            .animateContentSize(),
     ) {
         // Header — always visible; the collapsing unit is the pill list below.
         Row(
