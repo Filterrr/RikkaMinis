@@ -1016,22 +1016,16 @@
     <string name="model_groups_new_group">New Group</string>
     <string name="model_groups_no_model_groups">No model groups</string>
     <string name="model_groups_groups_let_you_combine_models_for_fallba">Groups let you combine models for fallback or load balancing.</string>
-    <string name="model_groups_primary_is_used_for_main_agent_tasks_sub">Primary is used for main agent tasks. Sub is used for lightweight tasks like title generation. If Sub is not set, it inherits from Primary.</string>
     <string name="model_groups_group_name">Group name</string>
     <string name="model_groups_create">Create</string>
     <string name="model_groups_none">None</string>
     <!-- [model-groups-simplify] Row-menu entries that replace the old
          full-width Defaults dropdown section. -->
     <string name="model_groups_set_default_primary">Set as Default Primary</string>
-    <string name="model_groups_set_default_sub">Set as Default Sub</string>
     <string name="model_groups_clear_default_primary">Clear Default Primary</string>
-    <string name="model_groups_clear_default_sub">Clear Default Sub</string>
-    <string name="model_groups_row_menu">Group options</string>
-    <string name="model_groups_primary_badge">Primary</string>
-    <string name="model_groups_sub_badge">Sub</string>
     <string name="model_groups_defaults_hint">Primary is used for main agent tasks. Sub is used for lightweight tasks like title generation. If Sub is not set, it inherits from Primary. Use the ⋮ menu on a group to set these.</string>
     <string name="agent_loop_section_entry_title">Agent Loop Models</string>
-    <string name="agent_loop_section_entry_subtitle">Models and groups usable by the agent via minis-model-use</string>
+    <string name="agent_loop_section_entry_subtitle">The agent's working model pool — independent of your default chat model</string>
     <string name="add_models_to_group_search_models">Search models</string>
     <string name="add_models_to_group_clear">Clear</string>
     <string name="settings_agent_loop_models">Agent Loop Models</string>    <string name="agent_loop_models_groups">Groups</string>

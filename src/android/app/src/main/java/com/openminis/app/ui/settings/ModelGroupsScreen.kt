@@ -26,13 +26,12 @@ import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MovieCreation
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -229,9 +228,7 @@ fun ModelGroupsScreen(
                                         config = config,
                                         onClick = { onGroupClick(group.id) },
                                         onSetPrimary = { providerRepository.defaultPrimaryGroupId = group.id },
-                                        onSetSub = { providerRepository.defaultSubGroupId = group.id },
                                         onClearPrimary = { providerRepository.defaultPrimaryGroupId = null },
-                                        onClearSub = { providerRepository.defaultSubGroupId = null },
                                         // Drag only from the explicit handle. The row is
                                         // clickable AND horizontally swipe-to-delete, so a
                                         // whole-row drag would fight both gestures.
@@ -462,16 +459,13 @@ private fun GroupRow(
     config: com.openminis.app.data.model.ProviderConfig,
     onClick: () -> Unit,
     onSetPrimary: () -> Unit,
-    onSetSub: () -> Unit,
     onClearPrimary: () -> Unit,
-    onClearSub: () -> Unit,
     /** [reorder-groups] Built by the caller from
      *  `ReorderableItemScope.draggableHandle()` (scope-bound), so this row
      *  stays scope-agnostic. Defaults to a no-op modifier, which renders an
      *  inert handle — fine for previews/non-reorderable hosts. */
     dragHandleModifier: Modifier = Modifier,
 ) {
-    var menuExpanded by remember { mutableStateOf(false) }
     val memberNames = group.memberEntryIds.mapNotNull { entryId ->
         config.modelEntries.find { it.id == entryId }?.model?.displayName
     }
@@ -481,7 +475,6 @@ private fun GroupRow(
         memberNames.take(3).joinToString(", ") + " +${memberNames.size - 3}"
     }
     val isPrimary = config.defaultPrimaryGroupId == group.id
-    val isSub = config.defaultSubGroupId == group.id
     val strategyLabel = when (group.strategy) {
         RoutingStrategy.fallback -> stringResource(R.string.model_group_detail_fallback)
         RoutingStrategy.loadBalance -> stringResource(R.string.model_group_detail_load_balance)
@@ -533,8 +526,9 @@ private fun GroupRow(
                 groupTopModalities(group, config).forEach { marker ->
                     GroupModalityIcon(marker)
                 }
-                if (isPrimary) BadgeLabel(stringResource(R.string.model_groups_primary_badge), MaterialTheme.colorScheme.primary)
-                if (isSub) BadgeLabel(stringResource(R.string.model_groups_sub_badge), MaterialTheme.colorScheme.tertiary)
+                // [model-groups-redesign] Default-primary is now shown by the
+                // star icon at the row's end; the old "Primary"/"Sub" text
+                // badges are gone (Sub was a hidden title-generation model).
                 if (allDisabled) {
                     BadgeLabel(
                         stringResource(R.string.model_group_no_usable_models_badge),
@@ -569,41 +563,24 @@ private fun GroupRow(
                 )
             }
         }
-        Box {
-            IconButton(onClick = { menuExpanded = true }) {
-                Icon(
-                    Icons.Filled.MoreVert,
-                    contentDescription = stringResource(R.string.model_groups_row_menu),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            DropdownMenu(
-                expanded = menuExpanded,
-                onDismissRequest = { menuExpanded = false },
-            ) {
-                if (isPrimary) {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.model_groups_clear_default_primary)) },
-                        onClick = { onClearPrimary(); menuExpanded = false },
-                    )
-                } else {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.model_groups_set_default_primary)) },
-                        onClick = { onSetPrimary(); menuExpanded = false },
-                    )
-                }
-                if (isSub) {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.model_groups_clear_default_sub)) },
-                        onClick = { onClearSub(); menuExpanded = false },
-                    )
-                } else {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.model_groups_set_default_sub)) },
-                        onClick = { onSetSub(); menuExpanded = false },
-                    )
-                }
-            }
+        // [model-groups-redesign] Star toggles default-primary directly
+        // (one tap, no ⋮ menu) — the "Set as Default Sub" concept was
+        // removed entirely (it was a title-generation sub-model, invisible
+        // in chat and misread as a fallback hop).
+        IconButton(
+            onClick = {
+                if (isPrimary) onClearPrimary() else onSetPrimary()
+            },
+        ) {
+            Icon(
+                imageVector = if (isPrimary) Icons.Filled.Star else Icons.Filled.StarBorder,
+                contentDescription = stringResource(
+                    if (isPrimary) R.string.model_groups_clear_default_primary
+                    else R.string.model_groups_set_default_primary
+                ),
+                tint = if (isPrimary) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
