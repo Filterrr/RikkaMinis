@@ -2382,12 +2382,23 @@ class ChatViewModel(
                 else "userTextWalkBack(N=$keepN)"
             AppLogger.info(TAG, "[CompactDiag] eAH v2 slice: priorIdx=$priorIdx anchorIdx=$anchorIdx agentHistory.size=${agentHistory.size} → preAnchorRaw=$preAnchorRawCount preAnchorSent=${preAnchorPruned.size} postAnchor=${postAnchor.size} summaryChars=${summary.length} priorIdxSource=$priorIdxSource markerId=${marker.id.take(8)}")
 
-            val firstUserOffset = postAnchor.indexOfFirst { it.role == LLMMessage.Role.USER }
-            if (firstUserOffset >= 0) {
-                if (firstUserOffset > 0) {
-                    result.addAll(postAnchor.subList(0, firstUserOffset))
+            // [T-compact-slice-summary-toolresult] Skip tool_result-only messages
+            // when choosing the summary injection target: tool_result messages
+            // carry `content="" + ToolResult parts`, and serialization uses
+            // `contentParts` (ignoring the `content` string when parts are
+            // present) — injecting the summary into a tool_result message's
+            // content field would be silently swallowed. Find the first USER
+            // message that is NOT a tool_result-only message, and inject the
+            // summary there.
+            val firstTextUserOffset = postAnchor.indexOfFirst {
+                it.role == LLMMessage.Role.USER &&
+                    !it.contentParts.all { p -> p is AgentContentPart.ToolResult }
+            }
+            if (firstTextUserOffset >= 0) {
+                if (firstTextUserOffset > 0) {
+                    result.addAll(postAnchor.subList(0, firstTextUserOffset))
                 }
-                val target = postAnchor[firstUserOffset]
+                val target = postAnchor[firstTextUserOffset]
                 // Prepend `<context-summary>...` to the user content. We
                 // edit `content` directly because Android LLMMessage uses
                 // `content: String` as the canonical text payload; any
@@ -2396,13 +2407,13 @@ class ChatViewModel(
                     content = summaryWrappedText + "\n\n" + target.content,
                 )
                 result.add(injected)
-                if (firstUserOffset + 1 < postAnchor.size) {
-                    result.addAll(postAnchor.subList(firstUserOffset + 1, postAnchor.size))
+                if (firstTextUserOffset + 1 < postAnchor.size) {
+                    result.addAll(postAnchor.subList(firstTextUserOffset + 1, postAnchor.size))
                 }
             } else {
-                // Rare: no user message after anchor. Append everything
-                // post-anchor (typically empty) then a standalone summary
-                // user turn. Safe — no later user follows it to break
+                // Rare: no user message after anchor (or all are tool_result-only).
+                // Append everything post-anchor (typically empty) then a standalone
+                // summary user turn. Safe — no later user follows it to break
                 // alternation.
                 result.addAll(postAnchor)
                 result.add(LLMMessage(role = LLMMessage.Role.USER, content = summaryWrappedText))
@@ -2433,10 +2444,11 @@ class ChatViewModel(
         if (firstKeptId != null) {
             val keepStart = agentHistory.indexOfFirst { it.dbMessageId == firstKeptId }
             if (keepStart >= 0) {
-                return buildList(agentHistory.size - keepStart + 1) {
-                    add(summaryHead)
-                    addAll(agentHistory.subList(keepStart, agentHistory.size))
-                }
+                val result1 = mutableListOf<LLMMessage>()
+                result1.add(summaryHead)
+                result1.addAll(agentHistory.subList(keepStart, agentHistory.size))
+                sanitizeAgentHistoryMessages(result1)
+                return result1
             }
             // Fall through to safety net.
         } else {
@@ -2445,12 +2457,13 @@ class ChatViewModel(
                 agentHistory.indexOfLast { it.dbMessageId == id }
             } ?: -1
             val postCompactStart = lcmIdx + 1
-            return buildList(agentHistory.size - postCompactStart + 1) {
-                add(summaryHead)
-                if (postCompactStart < agentHistory.size) {
-                    addAll(agentHistory.subList(postCompactStart, agentHistory.size))
-                }
+            val result2 = mutableListOf<LLMMessage>()
+            result2.add(summaryHead)
+            if (postCompactStart < agentHistory.size) {
+                result2.addAll(agentHistory.subList(postCompactStart, agentHistory.size))
             }
+            sanitizeAgentHistoryMessages(result2)
+            return result2
         }
 
         Log.w(TAG, "[Compact] effectiveAgentHistory: marker ${marker.id.take(8)} unresolvable in agentHistory (size=${agentHistory.size}); returning full history")
