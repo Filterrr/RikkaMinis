@@ -3182,19 +3182,7 @@ fun ChatScreen(
                     kotlinx.coroutines.delay(1_600L)
                     highlightedMessageId = null
                 }
-                fun FlatChatItem.isCompacted(): Boolean = when (this) {
-                    is FlatChatItem.UserBubble -> grayedMap[originalMessageId(message.id)] == true
-                    is FlatChatItem.AssistantHeader -> grayedMap[originalMessageId(messageId)] == true
-                    is FlatChatItem.AssistantText -> grayedMap[originalMessageId(messageId)] == true
-                    is FlatChatItem.AssistantMarkdownBlock -> grayedMap[originalMessageId(messageId)] == true
-                    is FlatChatItem.AssistantThinking -> grayedMap[originalMessageId(messageId)] == true
-                    is FlatChatItem.AssistantToolUse -> grayedMap[originalMessageId(messageId)] == true
-                    is FlatChatItem.AssistantToolRunGroup -> grayedMap[originalMessageId(messageId)] == true
-                    is FlatChatItem.AssistantInfo -> false  // system rows never grayed
-                    is FlatChatItem.AssistantTyping -> false
-                    is FlatChatItem.AssistantError -> grayedMap[originalMessageId(messageId)] == true
-                    is FlatChatItem.AssistantLegacyContent -> grayedMap[originalMessageId(messageId)] == true
-                }
+                fun FlatChatItem.isCompacted(): Boolean = isCompactedItem(this, grayedMap)
                 // SelectionContainer must wrap the WHOLE LazyColumn — placing
                 // it per-item breaks long-press because items get disposed
                 // when scrolled out and the selection registrar/detector goes

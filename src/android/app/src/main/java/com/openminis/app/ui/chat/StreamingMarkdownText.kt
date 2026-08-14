@@ -3542,11 +3542,9 @@ internal const val KATEX_INLINE_TAG_PREFIX = "katex_inline:"
 internal fun katexInlineTagFor(latex: String): String = KATEX_INLINE_TAG_PREFIX + latex
 
 /**
- * T208-4 part 4: estimate the on-screen dp size of an inline KaTeX render
- * BEFORE it has actually rendered, so we can size the InlineTextContent
- * placeholder appropriately. Compose's Placeholder API requires a size at
- * construction time and the inline Text layout reserves exactly that
- * amount of space — so we have to predict.
+ * Pure em-unit sizing heuristic for an inline math formula — the part of
+ * [estimateInlineMathSize] that does not depend on [TextUnit], extracted so
+ * it can be unit-tested on the JVM. Returns (widthEm, heightEm).
  *
  * Heuristics calibrated against the T208-DBG logs collected from a real
  * device: KaTeX produces ~`fontSize * 1.6` dp wide per visible character
@@ -3558,7 +3556,7 @@ internal fun katexInlineTagFor(latex: String): String = KATEX_INLINE_TAG_PREFIX 
  * so an over-sized slot just produces extra whitespace, but an
  * under-sized slot triggers shrink/clip.
  */
-internal fun estimateInlineMathSize(latex: String, fontSize: TextUnit): Pair<TextUnit, TextUnit> {
+internal fun inlineMathSizeEm(latex: String): Pair<Float, Float> {
     val visibleCharCount = run {
         var c = 0
         var i = 0
@@ -3599,6 +3597,20 @@ internal fun estimateInlineMathSize(latex: String, fontSize: TextUnit): Pair<Tex
     ) heightEm = 3.2f
     if (latex.contains("\\begin{") || latex.contains("\\\\")) heightEm = 4.5f
 
+    return widthEm to heightEm
+}
+
+/**
+ * T208-4 part 4: estimate the on-screen dp size of an inline KaTeX render
+ * BEFORE it has actually rendered, so we can size the InlineTextContent
+ * placeholder appropriately. Compose's Placeholder API requires a size at
+ * construction time and the inline Text layout reserves exactly that
+ * amount of space — so we have to predict. The em heuristic lives in
+ * [inlineMathSizeEm] (JVM-testable); this wrapper applies the current
+ * font size.
+ */
+internal fun estimateInlineMathSize(latex: String, fontSize: TextUnit): Pair<TextUnit, TextUnit> {
+    val (widthEm, heightEm) = inlineMathSizeEm(latex)
     return (fontSize * widthEm) to (fontSize * heightEm)
 }
 

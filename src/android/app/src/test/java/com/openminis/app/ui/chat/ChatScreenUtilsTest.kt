@@ -1,10 +1,13 @@
 package com.openminis.app.ui.chat
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * JVM tests for pure functions extracted from [ChatScreen].
+ * JVM tests for pure functions extracted from [ChatScreen]:
+ * [originalMessageId] and [isCompactedItem].
  */
 class ChatScreenUtilsTest {
 
@@ -44,5 +47,142 @@ class ChatScreenUtilsTest {
     @Test
     fun `originalMessageId strips all suffixes after first hash`() {
         assertEquals("a", originalMessageId("a#b#2"))
+    }
+
+    // ── isCompactedItem ───────────────────────────────────────────────
+
+    private val grayed = mapOf(
+        "m_user" to true,
+        "m_header" to true,
+        "m_text" to true,
+        "m_mdblock" to true,
+        "m_think" to true,
+        "m_tool" to true,
+        "m_toolrun" to true,
+        "m_info" to true, // system row — should still never gray
+        "m_typing" to true, // system row — should still never gray
+        "m_error" to true,
+        "m_legacy" to true,
+        "m_false" to false, // explicitly false → not grayed
+    )
+
+    private fun userBubble(id: String) =
+        FlatChatItem.UserBubble(ChatMessage(id = id, role = "user", content = "hi"))
+
+    private fun block(id: String, kind: String) = AssistantBlock(id = id, kind = kind)
+
+    @Test
+    fun `user bubble grayed when id in map`() {
+        assertTrue(isCompactedItem(userBubble("m_user"), grayed))
+    }
+
+    @Test
+    fun `user bubble not grayed when id absent`() {
+        assertFalse(isCompactedItem(userBubble("absent"), grayed))
+    }
+
+    @Test
+    fun `dedupe suffix id resolves to grayed base id`() {
+        // buildFlatChatItems appends `#N` dedupe suffixes; lookup strips them.
+        assertTrue(isCompactedItem(userBubble("m_user#2"), grayed))
+    }
+
+    @Test
+    fun `explicit false value is not grayed`() {
+        assertFalse(isCompactedItem(userBubble("m_false"), grayed))
+    }
+
+    @Test
+    fun `assistant header grayed when id in map`() {
+        assertTrue(isCompactedItem(FlatChatItem.AssistantHeader("m_header"), grayed))
+    }
+
+    @Test
+    fun `assistant text grayed when id in map`() {
+        assertTrue(
+            isCompactedItem(
+                FlatChatItem.AssistantText("m_text", block("b1", "text"), isStreaming = false, messageMarkdown = "md"),
+                grayed,
+            ),
+        )
+    }
+
+    @Test
+    fun `assistant markdown block grayed when id in map`() {
+        assertTrue(
+            isCompactedItem(
+                FlatChatItem.AssistantMarkdownBlock(
+                    messageId = "m_mdblock",
+                    parentBlockId = "b1",
+                    rawText = "t",
+                    blockIndex = 0,
+                    isLastBlockOfMessage = true,
+                    messageIsStreaming = false,
+                    messageMarkdown = "md",
+                ),
+                grayed,
+            ),
+        )
+    }
+
+    @Test
+    fun `assistant thinking grayed when id in map`() {
+        assertTrue(
+            isCompactedItem(
+                FlatChatItem.AssistantThinking("m_think", block("b1", "thinking"), isLast = false, messageIsStreaming = false),
+                grayed,
+            ),
+        )
+    }
+
+    @Test
+    fun `assistant tool use grayed when id in map`() {
+        assertTrue(
+            isCompactedItem(
+                FlatChatItem.AssistantToolUse("m_tool", block("b1", "tool_use"), allToolBlocks = emptyList()),
+                grayed,
+            ),
+        )
+    }
+
+    @Test
+    fun `assistant tool run group grayed when id in map`() {
+        assertTrue(
+            isCompactedItem(
+                FlatChatItem.AssistantToolRunGroup(
+                    messageId = "m_toolrun",
+                    tools = listOf(block("b1", "tool_use")),
+                    isRunning = false,
+                    isLastCancelled = false,
+                ),
+                grayed,
+            ),
+        )
+    }
+
+    @Test
+    fun `assistant info never grayed even when id in map`() {
+        assertFalse(isCompactedItem(FlatChatItem.AssistantInfo("m_info", block("b1", "info")), grayed))
+    }
+
+    @Test
+    fun `assistant typing never grayed even when id in map`() {
+        assertFalse(isCompactedItem(FlatChatItem.AssistantTyping("m_typing"), grayed))
+    }
+
+    @Test
+    fun `assistant error grayed when id in map`() {
+        assertTrue(isCompactedItem(FlatChatItem.AssistantError("m_error", "err"), grayed))
+    }
+
+    @Test
+    fun `assistant legacy content grayed when id in map`() {
+        assertTrue(isCompactedItem(FlatChatItem.AssistantLegacyContent("m_legacy", content = "c"), grayed))
+    }
+
+    @Test
+    fun `empty grayed map never grays`() {
+        assertFalse(isCompactedItem(userBubble("m_user"), emptyMap()))
+        assertFalse(isCompactedItem(FlatChatItem.AssistantInfo("m_info", block("b1", "info")), emptyMap()))
     }
 }
