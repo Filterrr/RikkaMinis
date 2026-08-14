@@ -104,13 +104,14 @@ fun Modifier.minisTextKitSelectionGesture(
                 val pos = change.position
                 lastWindowPoint = localToWindow(pos, rootCoordinates)
                 if (!change.pressed) {
-                    // Tap — clear selection if it exists and the tap landed
-                    // directly inside a registered shard. Use STRICT so a
-                    // tap on a user bubble / padding doesn't dismiss the
-                    // active selection on an adjacent assistant message.
-                    if (controller.selection.value != null &&
-                        controller.hitTestStrict(lastWindowPoint) != null
-                    ) {
+                    // Tap anywhere while a selection is active dismisses it.
+                    // The previous STRICT hit-test only cleared on taps that
+                    // landed directly on a text shard, so tapping empty space /
+                    // a user bubble / a tool pill / the thinking header left the
+                    // floating toolbar stuck open. A plain tap has no other job
+                    // than dismissal — starting a NEW selection goes through the
+                    // long-press path below, never through this branch.
+                    if (controller.selection.value != null) {
                         controller.clearSelection()
                     }
                     return@withTimeoutOrNull "tap"
