@@ -251,7 +251,8 @@ class AgentRunReducerTest {
             AgentRunEvent.ProviderAttemptStarted,
         )
         assertEquals(AgentRunRejectionReason.RUN_NOT_STARTED, t.rejection().reason)
-        assertEquals("state must stay IDLE", AgentRunPhase.IDLE, t.acceptedStateIfAcceptedOrSame())
+        // 拒绝不改状态：phase 保持 IDLE
+        assertEquals("state must stay IDLE", AgentRunPhase.IDLE, (t as AgentRunTransition.Rejected).state.phase)
     }
 
     @Test
@@ -738,10 +739,4 @@ class AgentRunReducerTest {
         AgentRunEvent.ProviderAttemptFinished(ProviderAttemptOutcome.SUCCESS),
         AgentRunEvent.WorkCompleted,
     )
-
-    /** 便于在单事件断言里获取"若被接受则新状态，若被拒绝则原状态"。 */
-    private fun AgentRunTransition.acceptedStateIfAcceptedOrSame(): AgentRunState = when (this) {
-        is AgentRunTransition.Accepted -> state
-        is AgentRunTransition.Rejected -> state
-    }
 }
