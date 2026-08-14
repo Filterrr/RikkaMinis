@@ -23,6 +23,13 @@ class ChatViewModelMessageParserTest {
             if (value != null) put("value", value)
         }
 
+    /** Text parts carry the value as a plain string, not a nested object. */
+    private fun textPart(value: String? = null): JSONObject =
+        JSONObject().apply {
+            put("type", "text")
+            if (value != null) put("value", value)
+        }
+
     // ── tryParsePartsJson / parsePartsJson ──────────────────────────────────
 
     @Test fun `blank partsJson returns empty list`() {
@@ -35,14 +42,14 @@ class ChatViewModelMessageParserTest {
     }
 
     @Test fun `text part is parsed`() {
-        val json = JSONArray().put(partJson("text", JSONObject().put("value", "hello")))
+        val json = JSONArray().put(textPart("hello"))
         val parts = tryParsePartsJson(json.toString())!!
         assertEquals(1, parts.size)
         assertEquals(ParsedPart.Text("hello"), parts[0])
     }
 
     @Test fun `text part with missing value defaults to empty`() {
-        val json = JSONArray().put(partJson("text"))
+        val json = JSONArray().put(textPart())
         assertEquals(listOf(ParsedPart.Text("")), tryParsePartsJson(json.toString()))
     }
 
@@ -159,9 +166,9 @@ class ChatViewModelMessageParserTest {
 
     @Test fun `mixed parts preserve order`() {
         val json = JSONArray()
-            .put(partJson("text", JSONObject().put("value", "first")))
+            .put(textPart("first"))
             .put(partJson("toolUse", JSONObject().put("toolUseId", "c1").put("name", "file_read")))
-            .put(partJson("text", JSONObject().put("value", "second")))
+            .put(textPart("second"))
         val parts = tryParsePartsJson(json.toString())!!
         assertEquals(3, parts.size)
         assertEquals(ParsedPart.Text("first"), parts[0])
@@ -201,7 +208,7 @@ class ChatViewModelMessageParserTest {
     )
 
     @Test fun `parseRows parses each entity once with correct metadata`() {
-        val good = JSONArray().put(partJson("text", JSONObject().put("value", "hi")))
+        val good = JSONArray().put(textPart("hi"))
         val rows = parseRows(
             listOf(
                 entity("m1", good.toString()),
