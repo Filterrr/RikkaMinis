@@ -7105,8 +7105,6 @@ class ChatViewModel(
                     val isTransient = actual is com.openminis.app.data.model.LLMError.NetworkError ||
                         actual is com.openminis.app.data.model.LLMError.TransientError ||
                         is5xx
-                    // [T-fallback-network-errors] Fallback-chain members skip the
-                    // bounded retry: once we've already switched away from the
                     // [T-fallback-retry-original] Restored original behavior: all members
                     // (including fallback chain members) get bounded retries on transient
                     // errors. This absorbs intermittent stream resets that the fallback
