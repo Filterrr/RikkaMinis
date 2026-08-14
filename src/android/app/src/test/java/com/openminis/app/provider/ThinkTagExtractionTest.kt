@@ -216,7 +216,7 @@ class ThinkTagExtractionTest {
         )
         server.enqueue(MockResponse().setBody(responseBody).setHeader("Content-Type", "text/event-stream"))
 
-        val chunks = p.sendMessage(listOf(LLMMessage(LLMMessage.Role.USER, "Hi")), null, 1024).toList()
+        val chunks = p.streamMessage(listOf(LLMMessage(LLMMessage.Role.USER, "Hi")), null, 1024).toList()
         val thinking = chunks.filterIsInstance<LLMStreamChunk.ThinkingDelta>().joinToString("") { it.text }
         val text = chunks.filterIsInstance<LLMStreamChunk.Text>().joinToString("") { it.text }
 
@@ -233,7 +233,7 @@ class ThinkTagExtractionTest {
         )
         server.enqueue(MockResponse().setBody(responseBody).setHeader("Content-Type", "text/event-stream"))
 
-        val chunks = p.sendMessage(listOf(LLMMessage(LLMMessage.Role.USER, "Hi")), null, 1024).toList()
+        val chunks = p.streamMessage(listOf(LLMMessage(LLMMessage.Role.USER, "Hi")), null, 1024).toList()
         val thinking = chunks.filterIsInstance<LLMStreamChunk.ThinkingDelta>().joinToString("") { it.text }
         val text = chunks.filterIsInstance<LLMStreamChunk.Text>().joinToString("") { it.text }
 
@@ -250,7 +250,7 @@ class ThinkTagExtractionTest {
         )
         server.enqueue(MockResponse().setBody(responseBody).setHeader("Content-Type", "text/event-stream"))
 
-        val chunks = p.sendMessage(listOf(LLMMessage(LLMMessage.Role.USER, "Hi")), null, 1024).toList()
+        val chunks = p.streamMessage(listOf(LLMMessage(LLMMessage.Role.USER, "Hi")), null, 1024).toList()
         val text = chunks.filterIsInstance<LLMStreamChunk.Text>().joinToString("") { it.text }
         val thinking = chunks.filterIsInstance<LLMStreamChunk.ThinkingDelta>().joinToString("") { it.text }
 
@@ -270,7 +270,7 @@ class ThinkTagExtractionTest {
         )
         server.enqueue(MockResponse().setBody(responseBody).setHeader("Content-Type", "text/event-stream"))
 
-        val chunks = p.sendMessage(listOf(LLMMessage(LLMMessage.Role.USER, "Hi")), null, 1024).toList()
+        val chunks = p.streamMessage(listOf(LLMMessage(LLMMessage.Role.USER, "Hi")), null, 1024).toList()
         val thinking = chunks.filterIsInstance<LLMStreamChunk.ThinkingDelta>().joinToString("") { it.text }
         val text = chunks.filterIsInstance<LLMStreamChunk.Text>().joinToString("") { it.text }
 
@@ -289,7 +289,7 @@ class ThinkTagExtractionTest {
         )
         server.enqueue(MockResponse().setBody(responseBody).setHeader("Content-Type", "text/event-stream"))
 
-        val chunks = p.sendMessage(listOf(LLMMessage(LLMMessage.Role.USER, "Hi")), null, 1024).toList()
+        val chunks = p.streamMessage(listOf(LLMMessage(LLMMessage.Role.USER, "Hi")), null, 1024).toList()
         val thinking = chunks.filterIsInstance<LLMStreamChunk.ThinkingDelta>().joinToString("") { it.text }
         val text = chunks.filterIsInstance<LLMStreamChunk.Text>().joinToString("") { it.text }
 
