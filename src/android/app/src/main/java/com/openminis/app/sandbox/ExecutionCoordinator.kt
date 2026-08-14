@@ -4,6 +4,10 @@ import android.content.Context
 import android.os.Debug
 import android.os.SystemClock
 import android.util.Log
+import com.openminis.app.agent.runtime.CommandFailureKind
+import com.openminis.app.agent.runtime.RetryOutcome
+import com.openminis.app.agent.runtime.RetryPolicy
+import com.openminis.app.agent.runtime.RetrySafety
 import com.openminis.app.data.repository.EnvVarRepository
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -117,6 +121,12 @@ object ExecutionCoordinator {
         val exitCode: Int,
         val durationMs: Long,
         val truncated: Boolean = false,
+        // [T3-retry-side-effects] 向后兼容字段（带默认值，不破坏现有调用方）。
+        // 结果是否已知。false 表示"命令可能已执行但结果未返回"（OutcomeUnknown），
+        // 上层不得据此重跑非幂等命令，也不得把部分结果标记为 completed。
+        val outcomeKnown: Boolean = true,
+        // [T3-retry-side-effects] 本命令执行时的副作用等级（受信任调用点注入）。
+        val retrySafety: RetrySafety = RetrySafety.UNKNOWN,
     )
 
     private lateinit var appContext: Context
@@ -697,6 +707,82 @@ internal fun internalShouldRetryCommand(
 ): Boolean {
     val shellDied = exitCode == -1 || exitCode == 124 || !shellAlive
     return shellDied && attempt < maxRetries
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// [T3-retry-side-effects] Side-effect-aware retry policy — pure functions
+//
+// These extend the legacy internalShouldRetryCommand above with the
+// RetrySafety model (agent/runtime/RetrySafety.kt + RetryPolicy.kt). The
+// legacy function is kept untouched so existing call sites and tests keep
+// their semantics; production wiring of the new decision happens in T7.
+// ──────────────────────────────────────────────────────────────────────────
+
+/**
+ * [T3-retry-side-effects] Classify raw command signals into a
+ * [CommandFailureKind]. Returns `null` when the command completed
+ * successfully with known output (no retry consideration needed).
+ *
+ * Order matters:
+ * - `exitCode == -1`   → SHELL_DIED (readLoop saw the process exit);
+ * - `exitCode == 124`  → TIMEOUT (may have left zombies);
+ * - truncated + alive  → OUTPUT_TRUNCATED — the command RAN, its side
+ *   effects happened, only the output was cut. Must never be misread as
+ *   "command did not execute";
+ * - `!shellAlive`      → RESULT_LOST — output was produced but cannot be
+ *   trusted as complete (shell died before returning);
+ * - `exitCode != 0`    → NON_ZERO_EXIT (script error, command not found…).
+ */
+internal fun internalClassifyShellFailure(
+    exitCode: Int,
+    shellAlive: Boolean,
+    truncated: Boolean,
+): CommandFailureKind? = when {
+    exitCode == -1 -> CommandFailureKind.SHELL_DIED
+    exitCode == 124 -> CommandFailureKind.TIMEOUT
+    // Alive + non-zero exit: the command RAN and failed (script error,
+    // command not found…). Checked before truncation so a failed command
+    // with truncated output is not misread as a mere truncation.
+    exitCode != 0 && shellAlive -> CommandFailureKind.NON_ZERO_EXIT
+    // Alive + exit 0 + truncated: the command RAN (side effects happened),
+    // only the output was cut. Must never be misread as "not executed".
+    truncated && shellAlive -> CommandFailureKind.OUTPUT_TRUNCATED
+    // Shell died without -1/124 (e.g. exit 0 or 130): output was produced
+    // but cannot be trusted as complete.
+    !shellAlive -> CommandFailureKind.RESULT_LOST
+    else -> null
+}
+
+/**
+ * [T3-retry-side-effects] Side-effect-aware retry decision for a shell
+ * command. Wraps [com.openminis.app.agent.runtime.RetryPolicy.decideRetry]
+ * with the raw-signal classification above so it can be JVM-tested without
+ * Android dependencies.
+ *
+ * Returns [RetryOutcome.DoNotRetry] for completed-but-failed commands,
+ * [RetryOutcome.OutcomeUnknown] for side-effect-possible failures that must
+ * NOT be transparently re-run (UNKNOWN / NON_IDEMPOTENT_WRITE), and
+ * [RetryOutcome.SafeToRetry] only for READ_ONLY (or IDEMPOTENT_WRITE with
+ * verification) within budget.
+ */
+internal fun internalDecideShellRetry(
+    exitCode: Int,
+    shellAlive: Boolean,
+    truncated: Boolean,
+    attempt: Int,
+    safety: RetrySafety,
+    maxRetries: Int = 2,
+    hasVerification: Boolean = false,
+): RetryOutcome {
+    val failure = internalClassifyShellFailure(exitCode, shellAlive, truncated)
+        ?: return RetryOutcome.DoNotRetry // success with known output
+    return RetryPolicy.decideRetry(
+        safety = safety,
+        failure = failure,
+        attempt = attempt,
+        maxRetries = maxRetries,
+        hasVerification = hasVerification,
+    )
 }
 
 // ──────────────────────────────────────────────────────────────────────────
