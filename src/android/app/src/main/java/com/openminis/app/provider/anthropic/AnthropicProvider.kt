@@ -5,6 +5,7 @@ import com.openminis.app.data.model.AgentContentPart
 import com.openminis.app.data.model.AgentToolDefinition
 import com.openminis.app.data.model.sanitizeToolId
 import com.openminis.app.data.model.LLMError
+import com.openminis.app.data.model.parseRetryAfterMs
 import com.openminis.app.data.model.LLMMessage
 import com.openminis.app.data.model.LLMModel
 import com.openminis.app.data.model.LLMResponse
@@ -94,7 +95,11 @@ class AnthropicProvider(
         val responseBody = response.body?.string() ?: ""
 
         if (!response.isSuccessful) {
-            throw mapHttpError(response.code, responseBody)
+            throw mapHttpError(
+                response.code,
+                responseBody,
+                parseRetryAfterMs(response.headers["Retry-After"], System.currentTimeMillis()),
+            )
         }
 
         val json = JSONObject(responseBody)
@@ -162,7 +167,11 @@ class AnthropicProvider(
                 )
             }
             android.util.Log.e("AnthropicProvider", "Stream failed: ${response.code} body=${errorBody.take(300)}")
-            throw mapHttpError(response.code, errorBody)
+            throw mapHttpError(
+                response.code,
+                errorBody,
+                parseRetryAfterMs(response.headers["Retry-After"], System.currentTimeMillis()),
+            )
         }
 
         // Log successful request (debug builds only — see above)
@@ -923,9 +932,9 @@ class AnthropicProvider(
         )
     }
 
-    private fun mapHttpError(statusCode: Int, body: String): LLMError {
+    private fun mapHttpError(statusCode: Int, body: String, retryAfterMs: Long? = null): LLMError {
         if (statusCode == 401 || statusCode == 403) return LLMError.InvalidApiKey()
-        if (statusCode == 429) return LLMError.RateLimited()
+        if (statusCode == 429) return LLMError.RateLimited(retryAfterMs = retryAfterMs)
 
         val message = try {
             val json = JSONObject(body)

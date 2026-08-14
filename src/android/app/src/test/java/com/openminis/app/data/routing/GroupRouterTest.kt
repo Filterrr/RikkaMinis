@@ -144,7 +144,7 @@ class GroupRouterTest {
         assertTrue(router.fallbackOrder(g, activeEntryId = "a", primaryModelId = "m", modelIdOf = { null }).isEmpty())
     }
 
-    // ─── health (Phase 1: map consulted, never populated) ─────────────────
+    // ─── health transitions (Phase 2: recordResult demotes/promotes) ──────
 
     @Test fun noHealthRecorded_alwaysUsable() {
         val router = routerWithClock()
@@ -152,12 +152,119 @@ class GroupRouterTest {
         assertEquals(MemberHealth.Healthy, router.healthOf("any-entry"))
     }
 
-    @Test fun recordResult_isNoopInPhase1() {
-        val router = routerWithClock()
-        router.recordResult("a", RouteOutcome.RateLimited(retryAfterMs = 5000))
-        router.recordResult("a", RouteOutcome.AuthError)
-        // Phase 1 contract: recording does not yet demote — stays healthy
+    @Test fun rateLimited_recorded_becomesCoolingWithRetryAfter() {
+        var now = 1000L
+        val router = routerWithClock { now }
+        router.recordResult("a", RouteOutcome.RateLimited(retryAfterMs = 300_000))
+        assertEquals(MemberHealth.Cooling(untilMs = 301_000L), router.healthOf("a"))
+        assertFalse(router.isUsable("a"))
+        now = 301_000L
+        assertTrue(router.isUsable("a"))          // cooldown expired -> auto recovery
+    }
+
+    @Test fun rateLimited_withoutRetryAfter_usesDefaultCooldown() {
+        var now = 1000L
+        val router = routerWithClock { now }
+        router.recordResult("a", RouteOutcome.RateLimited(retryAfterMs = null))
+        assertEquals(
+            MemberHealth.Cooling(untilMs = 1000L + GroupRouter.RATE_LIMIT_COOLDOWN_DEFAULT_MS),
+            router.healthOf("a"),
+        )
+    }
+
+    @Test fun serverErrors_countTowardCircuit_thenOpen() {
+        var now = 1000L
+        val router = routerWithClock { now }
+        router.recordResult("a", RouteOutcome.ServerError)   // 1
+        assertTrue(router.isUsable("a"))                     // below threshold, still usable
+        router.recordResult("a", RouteOutcome.ServerError)   // 2
         assertTrue(router.isUsable("a"))
+        router.recordResult("a", RouteOutcome.ServerError)   // 3 -> circuit opens
+        assertFalse(router.isUsable("a"))
+        assertEquals(
+            MemberHealth.OpenCircuit(untilMs = 1000L + GroupRouter.CIRCUIT_OPEN_MS, failures = 3),
+            router.healthOf("a"),
+        )
+        now += GroupRouter.CIRCUIT_OPEN_MS
+        assertTrue(router.isUsable("a"))                     // circuit closed -> half-open probe eligible
+    }
+
+    @Test fun authError_isDeadUntilCleared() {
+        var now = 1000L
+        val router = routerWithClock { now }
+        router.recordResult("a", RouteOutcome.AuthError)
+        assertEquals(MemberHealth.Dead, router.healthOf("a"))
+        assertFalse(router.isUsable("a"))
+        now = Long.MAX_VALUE / 2
+        assertFalse(router.isUsable("a"))                    // Dead never expires on its own
+        router.clearHealth()
+        assertTrue(router.isUsable("a"))                     // explicit selection / re-auth clears it
+    }
+
+    @Test fun success_clearsDemotion() {
+        var now = 1000L
+        val router = routerWithClock { now }
+        router.recordResult("a", RouteOutcome.AuthError)
+        assertFalse(router.isUsable("a"))
+        router.recordResult("a", RouteOutcome.Success)       // half-open probe succeeded
+        assertTrue(router.isUsable("a"))
+        assertEquals(MemberHealth.Healthy, router.healthOf("a"))
+    }
+
+    @Test fun success_resetsCircuitCounter() {
+        var now = 1000L
+        val router = routerWithClock { now }
+        router.recordResult("a", RouteOutcome.ServerError)   // 1
+        router.recordResult("a", RouteOutcome.ServerError)   // 2
+        router.recordResult("a", RouteOutcome.Success)       // recovery resets the count
+        router.recordResult("a", RouteOutcome.ServerError)   // back to 1, not 3
+        assertTrue(router.isUsable("a"))
+    }
+
+    @Test fun select_skipsUnhealthyMembers() {
+        var now = 1000L
+        val router = routerWithClock { now }
+        val g = group("a", "b", "c")
+        val members = listOf(member("a"), member("b"), member("c"))
+        router.recordResult("a", RouteOutcome.RateLimited(retryAfterMs = 5000))
+        // preferred "a" is cooling -> falls through to the first healthy member
+        assertEquals("b", router.select(g, members, preferredEntryId = "a"))
+        now += 5000L
+        // cooldown expired -> "a" usable again, preferred honored once more
+        assertEquals("a", router.select(g, members, preferredEntryId = "a"))
+    }
+
+    @Test fun select_allMembersUnhealthy_returnsNull() {
+        var now = 1000L
+        val router = routerWithClock { now }
+        val g = group("a", "b")
+        val members = listOf(member("a"), member("b"))
+        router.recordResult("a", RouteOutcome.AuthError)
+        router.recordResult("b", RouteOutcome.RateLimited(retryAfterMs = 5000))
+        assertNull(router.select(g, members, preferredEntryId = "a"))
+    }
+
+    @Test fun loadBalance_rotationSkipsCoolingMember() {
+        var now = 1000L
+        val router = routerWithClock { now }
+        val g = group("a", "b", "c", strategy = RoutingStrategy.loadBalance)
+        val members = listOf(member("a"), member("b"), member("c"))
+        router.recordResult("b", RouteOutcome.RateLimited(retryAfterMs = 5000))
+        // sticky "a" -> rotation would land on "b", but "b" is cooling ->
+        // rotates among the usable pool [a, c] instead, landing on "c"
+        assertEquals("c", router.select(g, members, stickyEntryId = "a"))
+    }
+
+    @Test fun clearHealth_forgetsAllDemotions() {
+        var now = 1000L
+        val router = routerWithClock { now }
+        router.recordResult("a", RouteOutcome.AuthError)
+        router.recordResult("b", RouteOutcome.ServerError)
+        router.recordResult("c", RouteOutcome.RateLimited(retryAfterMs = 5000))
+        router.clearHealth()
+        assertTrue(router.isUsable("a"))
+        assertTrue(router.isUsable("b"))
+        assertTrue(router.isUsable("c"))
         assertEquals(MemberHealth.Healthy, router.healthOf("a"))
     }
 
