@@ -851,9 +851,9 @@ internal fun ToolCallPill(
 /**
  * Header-only summary for a collapsed/expanded tool run group.
  *
- * Collapse semantics mirror OmniBot's AgentRunHeader:
- * `effectiveExpanded = isRunning || userExpanded` — running forces open,
- * completion collapses unless the user took over via a tap.
+ * The card is collapsed by default and NEVER auto-expands: the one-line
+ * header (spinner + "Running N tools" / "Thinking…" while live) is the
+ * always-visible status; the user taps to reveal thinking + tools.
  */
 @Composable
 internal fun ToolCallRunGroup(
@@ -875,15 +875,14 @@ internal fun ToolCallRunGroup(
     // Thinking hidden AND no tools → nothing to render (the retired
     // AssistantThinking row was omitted entirely in this state).
     if (!thinkingVisible && group.tools.isEmpty()) return
-    // [T-android-run-group-thinking] OmniBot AgentRunHeader semantics:
-    // `effectiveExpanded = isRunning || expanded` — running forces the card
-    // open so the user sees live progress; once every block is terminal the
-    // card falls back to the user's last choice (default collapsed → the
-    // one-line summary header). A manual tap flips `expanded` and takes
-    // over; it has no visible effect while running (the card stays open
-    // regardless, mirroring OmniBot's running-forces-open rule).
+    // [T-android-run-group-manual] The card is collapsed by default and
+    // never auto-expands, not even while running — the header itself IS the
+    // live status (spinner + "Running N tools" / "Thinking…"), so an
+    // auto-open would only fight the user's scroll position. The user taps
+    // the header to expand, taps again to collapse; `expanded` is the single
+    // source of truth.
     var expanded by remember(group.messageId) { mutableStateOf(false) }
-    val effectiveExpanded = expanded || isRunning
+    val effectiveExpanded = expanded
 
     val groupAccent = toolAccentColor("shell_execute")
     val totalDurationText = when {

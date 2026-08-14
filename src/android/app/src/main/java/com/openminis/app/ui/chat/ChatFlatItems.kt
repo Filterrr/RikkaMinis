@@ -719,19 +719,48 @@ internal fun buildFlatChatItems(
         val firstToolIndex = blocks.indexOfFirst { it.kind == "tool_use" }
 
         // ─────────────────────────────────────────────────────────────────
-        // [T-android-process-below-answer] Emit the rows of one assistant
-        // message in a FIXED order regardless of the order the model produced
-        // the blocks in (models typically stream thinking → tool calls →
-        // final answer, which put the two collapsed bars — thinking + tool
-        // run — ABOVE the answer text; with a long answer they got pushed up
-        // and off the bottom of the viewport). Order here is: answer text
-        // first, then the merged thinking bar, then the collapsed tool-run
-        // bar, then info rows — so the two bars always sit BELOW the answer.
-        // The merge semantics are unchanged (all thinking blocks of one
-        // message collapse into a single bar; >= 2 tool_use blocks collapse
-        // into one "N tools" run card); only the relative row order moves.
+        // [T-android-run-group-first] Emit the rows of one assistant message
+        // in a FIXED order regardless of the order the model produced the
+        // blocks in. The run-group card (thinking + tools, collapsed to a
+        // one-line summary by default — never auto-expanded) comes FIRST:
+        // process before result reads naturally, and because the card stays
+        // collapsed it never pushes the answer around. Then the answer text,
+        // then info rows.
         //
-        // Pass 1 — text blocks (the answer), in model order.
+        // Pass 1 — the run group: thinking + tool_use fold into ONE card.
+        // [T-android-run-group-thinking] "One agent turn" = one card: the
+        // merged thinking section on top, tool pills below, sharing a single
+        // collapsible header ("N tools · total" / "Deep Thinking"). Emitted
+        // once whenever EITHER kind is present — a lone tool, thinking alone,
+        // or a mixed batch all produce exactly one AssistantToolRunGroup. The
+        // individual AssistantThinking / AssistantToolUse rows are no longer
+        // emitted (classes kept for the exhaustive `when` in ChatScreen, so
+        // this stays a minimal, revertable change).
+        val thinkingBlocks = blocks.filter { it.kind == "thinking" }
+        if (thinkingBlocks.isNotEmpty() || firstToolIndex >= 0) {
+            out.add(dedupe(FlatChatItem.AssistantToolRunGroup(
+                messageId = message.id,
+                tools = toolPillBlocks,
+                thinkingBlocks = thinkingBlocks,
+                isRunning = (thinkingBlocks + toolPillBlocks).any {
+                    it.toolStatus == ToolBlockStatus.STREAMING ||
+                        it.toolStatus == ToolBlockStatus.PENDING ||
+                        it.toolStatus == ToolBlockStatus.RUNNING ||
+                        // Fresh thinking blocks carry a null status while
+                        // streaming (flipped to SUCCESS only when text or a
+                        // tool_use arrives) — the message-level streaming
+                        // flag is the reliable liveness signal for the
+                        // thinking phase, same signal the retired
+                        // AssistantThinking row used (messageIsStreaming).
+                        (it.kind == "thinking" && it.toolStatus == null && message.isStreaming)
+                },
+                isLastCancelled = lastCancelledToolId != null &&
+                    lastCancelledToolId == toolPillBlocks.lastOrNull()?.id,
+                messageThinkingLevel = message.thinkingLevel,
+            )))
+        }
+
+        // Pass 2 — text blocks (the answer), in model order.
         blocks.forEachIndexed { index, block ->
             if (block.kind != "text") return@forEachIndexed
             if (block.content.isNotEmpty()) {
@@ -817,40 +846,7 @@ internal fun buildFlatChatItems(
                         }
                     }
                 }
-                // Pass 2+3 — thinking + tool_use blocks fold into ONE run group card.
-        // [T-android-run-group-thinking] "One agent turn" = one card: the
-        // merged thinking section on top, tool pills below, sharing a single
-        // collapsible header ("N tools · total" / "Deep Thinking"). Emitted
-        // once whenever EITHER kind is present — a lone tool, thinking alone,
-        // or a mixed batch all produce exactly one AssistantToolRunGroup. The
-        // individual AssistantThinking / AssistantToolUse rows are no longer
-        // emitted (classes kept for the exhaustive `when` in ChatScreen, so
-        // this stays a minimal, revertable change).
-        val thinkingBlocks = blocks.filter { it.kind == "thinking" }
-        if (thinkingBlocks.isNotEmpty() || firstToolIndex >= 0) {
-            out.add(dedupe(FlatChatItem.AssistantToolRunGroup(
-                messageId = message.id,
-                tools = toolPillBlocks,
-                thinkingBlocks = thinkingBlocks,
-                isRunning = (thinkingBlocks + toolPillBlocks).any {
-                    it.toolStatus == ToolBlockStatus.STREAMING ||
-                        it.toolStatus == ToolBlockStatus.PENDING ||
-                        it.toolStatus == ToolBlockStatus.RUNNING ||
-                        // Fresh thinking blocks carry a null status while
-                        // streaming (flipped to SUCCESS only when text or a
-                        // tool_use arrives) — the message-level streaming
-                        // flag is the reliable liveness signal for the
-                        // thinking phase, same signal the retired
-                        // AssistantThinking row used (messageIsStreaming).
-                        (it.kind == "thinking" && it.toolStatus == null && message.isStreaming)
-                },
-                isLastCancelled = lastCancelledToolId != null &&
-                    lastCancelledToolId == toolPillBlocks.lastOrNull()?.id,
-                messageThinkingLevel = message.thinkingLevel,
-            )))
-        }
-
-        // Pass 4 — info blocks (inline system notices), in model order.
+        // Pass 3 — info blocks (inline system notices), in model order.
         blocks.forEach { block ->
             if (block.kind == "info") {
                 out.add(dedupe(FlatChatItem.AssistantInfo(
