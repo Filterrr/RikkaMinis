@@ -750,6 +750,17 @@ class ChatViewModel(
     val fallbackTrigger: StateFlow<Int> = _fallbackTrigger.asStateFlow()
 
     /**
+     * [T-error-no-permanent-scars] One-shot event for the UI to show a
+     * transient snackbar/toast when a model-group fallback switches models.
+     * The event is consumed by ChatScreen's LaunchedEffect and displayed as a
+     * temporary Snackbar (auto-dismisses after a few seconds). Unlike the info
+     * block that used to be inserted into the message stream, this leaves no
+     * permanent trace in the chat record.
+     */
+    private val _fallbackToastEvent = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val fallbackToastEvent: SharedFlow<String> = _fallbackToastEvent.asSharedFlow()
+
+    /**
      * [T-recovery] Entry ID → cooldown-until wall-clock ms. Populated when a
      * 429 rate-limit triggers a fallback and the group's recovery strategy is
      * NOT continueLast. Consulted by resolveProviderFromGroup to skip members
@@ -7206,22 +7217,15 @@ class ChatViewModel(
                         // per-endpoint.
                         
                         // Persist the fallback model so re-entering the session starts from here.
-                        // [T-error-no-permanent-scars] Lightweight success note:
-                        // show ONLY the switch outcome ("Switched to X"), never the
-                        // raw failure trail of the previous member. A successful
-                        // fallback is self-healing — it should not leave a scar of
-                        // "⚠️ deepseek-v4-flash: Network error: stream was reset:
-                        // CANCEL..." in the chat record. The trail stays in the
-                        // log line above for debuggability.
-                        val infoText = "🔄 ${context.getString(R.string.fallback_switched_to, currentProvider.model.displayName)}"
-                        allToolBlocks.removeAll { it.kind == "info" }
-                        allToolBlocks.add(0, AssistantBlock(
-                            id = "fallback_info_$turn",
-                            kind = "info",
-                            content = infoText,
-                            toolTitle = "Switched model",
-                            toolStatus = ToolBlockStatus.SUCCESS,
-                        ))
+                        // [T-error-no-permanent-scars] Instead of inserting an
+                        // info block into the message stream (which becomes part
+                        // of the chat record), emit a one-shot event for the UI
+                        // to show a transient Snackbar ("已切换至 xxx") that
+                        // auto-dismisses after a few seconds. The user sees the
+                        // switch happen but it leaves no permanent trace.
+                        _fallbackToastEvent.tryEmit(
+                            context.getString(R.string.fallback_switched_to, currentProvider.model.displayName)
+                        )
                         // [T-android-fallback-text-rewind] Same as the retry-
                         // rollback path above: preserve this turn's streamed text
                         // (`turnTextSb`) on screen while we switch providers.

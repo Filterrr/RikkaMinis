@@ -189,6 +189,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
@@ -1530,6 +1531,16 @@ fun ChatScreen(
         }
     }
 
+    // [T-error-no-permanent-scars] Show a transient Snackbar when a model-group
+    // fallback switches models mid-turn. The event is emitted as a one-shot
+    // SharedFlow, so the Snackbar auto-dismisses after a few seconds and leaves
+    // no permanent trace in the chat record.
+    LaunchedEffect(Unit) {
+        viewModel.fallbackToastEvent.collect { msg ->
+            snackbarHostState.showSnackbar(msg)
+        }
+    }
+
     // T-request-imgsize: surface request-level image-budget elisions
     // (older images compacted into text placeholders to fit the 25MB
     // request cap). Independent flow from the composer-side budget so
@@ -2716,7 +2727,11 @@ fun ChatScreen(
                 expandedHeight = 68.dp,
             )
         },
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        // [T-error-no-permanent-scars] SnackbarHost is NOT registered here —
+        // it's rendered inside the content Box aligned to the TOP (below the
+        // app bar) so transient notices (model-fallback switches, budget
+        // events) appear "from above" and auto-dismiss, never polluting the
+        // chat record.
     ) { padding ->
         Box(
             modifier = Modifier
@@ -5461,6 +5476,18 @@ fun ChatScreen(
                         ),
                     )
                 )
+        )
+        // [T-error-no-permanent-scars] Transient notices (model-fallback switch
+        // "已切换至 xxx", image-budget events, top-level errors) render here —
+        // a top-aligned Snackbar that auto-dismisses after a few seconds.
+        // Unlike the old fallback info block (inserted into the message stream
+        // and persisted), this leaves no permanent trace in the chat record.
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = 8.dp)
+                .zIndex(10f),
         )
         }
     }
