@@ -16,8 +16,38 @@ sealed class LLMError(message: String, cause: Throwable? = null) : Exception(mes
     /** Worth retrying on the same provider (bounded backoff). */
     val isRetryable: Boolean get() = this is NetworkError || this is TransientError
 
-    /** Should immediately fall back to the next model in the group — same model won't help. */
-    val isFallbackable: Boolean get() = this is RateLimited || this is InvalidApiKey || this is ProviderError
+    /**
+     * Should fall back to the next model in the group — same model won't help.
+     *
+     * [T-fallback-network-errors] NetworkError / TransientError are included:
+     * "this endpoint can't help right now" is exactly the group-fallback case
+     * (stream reset, connection timeout, DNS failure, proxy drop — the whole
+     * OkHttp IOException family the user sees as "模型不可用"). The retry
+     * loop still gets first crack at them (bounded backoff on the SAME
+     * provider); `isFallbackable` is only consulted AFTER retries are
+     * exhausted, so including them here never skips the retry — it just stops
+     * the "retried 3×, then hard-stopped with a red banner" dead end.
+     */
+    val isFallbackable: Boolean get() = this is RateLimited || this is InvalidApiKey || this is ProviderError || this is NetworkError || this is TransientError
+
+    /**
+     * Human-readable, user-facing summary of the failure — NO raw error codes
+     * (no "stream was reset: CANCEL", no HTTP status numbers). This is what
+     * the inline error banner shows; the technical detail (raw message, fallback
+     * trail) is collapsed behind the "technical details" disclosure instead of
+     * being pasted into the chat record. [T-error-no-permanent-scars]
+     */
+    val userMessage: String
+        get() = when (this) {
+            is RateLimited -> "Rate limited — try again in a moment"
+            is InvalidApiKey -> "API key is invalid or expired"
+            is ProviderError -> "Provider returned an error"
+            is NetworkError -> "Connection failed"
+            is TransientError -> "Service temporarily unavailable"
+            is DecodingError -> "Unexpected response from provider"
+            is Cancelled -> "Request was cancelled"
+            is Unknown -> "Something went wrong"
+        }
 
     /** Short user-facing reason shown when a fallback engages. */
     val fallbackReason: String
@@ -32,3 +62,16 @@ sealed class LLMError(message: String, cause: Throwable? = null) : Exception(mes
             is Unknown -> "Unknown error"
         }
 }
+
+/**
+ * [T-error-no-permanent-scars] Thrown when the group-fallback chain is fully
+ * exhausted (every member failed). Carries a HUMAN-READABLE `summary` (what
+ * the error banner shows) separately from the raw `detail` (per-model failure
+ * trail + original error codes, shown only behind the "technical details"
+ * disclosure). Splitting the two at the throw site keeps the banner text
+ * clean without losing debuggability.
+ */
+class FallbackExhaustedError(
+    val summary: String,
+    val detail: String,
+) : Exception(summary)
