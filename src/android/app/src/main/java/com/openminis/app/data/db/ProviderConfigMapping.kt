@@ -115,6 +115,7 @@ fun ProviderConfig.toSnapshot(
                     isHidden = if (e.isHidden) 1 else 0,
                     sortOrder = idx,
                     userModifiedAt = e.userModifiedAt,
+                    costTier = e.costTier,
                 )
             )
         }
@@ -240,6 +241,7 @@ fun ProviderConfigSnapshot.toProviderConfig(jsonForBlobs: Json): ProviderConfig 
             isHidden = row.isHidden != 0,
             uuid = row.id,
             userModifiedAt = row.userModifiedAt,
+            costTier = row.costTier,
         )
     }.toMutableList()
 

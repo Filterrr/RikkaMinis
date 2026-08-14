@@ -36,4 +36,5 @@ data class ProviderModelEntryEntity(
     @ColumnInfo(name = "is_hidden") val isHidden: Int = 0,
     @ColumnInfo(name = "sort_order") val sortOrder: Int = 0,
     @ColumnInfo(name = "user_modified_at") val userModifiedAt: Long? = null,
+    @ColumnInfo(name = "cost_tier") val costTier: Int? = null,
 )
