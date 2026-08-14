@@ -136,6 +136,7 @@ object SessionConcurrencyManager {
             activeRunIdsBySession.clear()
             _runningSessions.value = emptySet()
             _suspendedSessions.value = emptyList()
+            controller.resetForTesting()
         }
     }
 
