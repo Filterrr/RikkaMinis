@@ -2290,9 +2290,36 @@ class ChatViewModel(
                 maxMessages = preAnchorCap,
             )
             val priorIdxResolved: Int? = walkBack.priorIdx
-            val priorIdx = walkBack.priorIdx ?: (anchorIdx + 1) // empty preAnchor sentinel
+            var priorIdx = walkBack.priorIdx ?: (anchorIdx + 1) // empty preAnchor sentinel
             if (walkBack.stopReason != "userTextTargetMet") {
                 AppLogger.info(TAG, "[CompactDiag] eAH v2 walkBack stopped: reason=${walkBack.stopReason} priorIdx=$priorIdx userTextTurnsFound=${walkBack.userTextTurnsFound} preAnchorMsgs=${walkBack.messageCount}")
+            }
+
+            // [T-compact-slice-tool-pairing] Boundary guard: walkBackUserTurnsBounded
+            // stops on any USER-role message — including tool_result messages
+            // (content="" + ToolResult parts). If the cap lands such that
+            // agentHistory[priorIdx] is a tool_result whose assistant tool_use
+            // sits at priorIdx-1, the slice would OPEN with an orphan tool
+            // message → API 400 "tool must be a response to preceding
+            // tool_calls". Extend the boundary backward over any leading
+            // tool_result messages to include their paired tool_use(s), so the
+            // slice never starts mid-tool-round.
+            while (priorIdx in 1 until agentHistory.size) {
+                val head = agentHistory[priorIdx]
+                val headResultIds = head.contentParts
+                    .filterIsInstance<AgentContentPart.ToolResult>().map { it.id }.toSet()
+                if (headResultIds.isEmpty()) break
+                val pairedUseIdx = (priorIdx - 1 downTo 0).firstOrNull { idx ->
+                    agentHistory[idx].role == LLMMessage.Role.ASSISTANT &&
+                        agentHistory[idx].contentParts
+                            .filterIsInstance<AgentContentPart.ToolUse>()
+                            .any { it.id in headResultIds }
+                }
+                if (pairedUseIdx == null) break // orphan result — sanitize will drop it
+                priorIdx = pairedUseIdx
+            }
+            if (priorIdx != (walkBack.priorIdx ?: (anchorIdx + 1))) {
+                AppLogger.info(TAG, "[CompactDiag] eAH v2 boundary guard: priorIdx=${walkBack.priorIdx} → $priorIdx (included paired tool_use)")
             }
 
             // PRE-ANCHOR PRUNE (tool-heavy session fix):
@@ -2393,6 +2420,18 @@ class ChatViewModel(
                 result.addAll(postAnchor)
                 result.add(LLMMessage(role = LLMMessage.Role.USER, content = summaryWrappedText))
             }
+            // [T-compact-slice-tool-pairing] The slice (walkBack cap /
+            // preAnchor prune / postAnchor splice) can split a tool round
+            // across a boundary — e.g. cap lands on the tool_result user
+            // message while its assistant tool_use was cut off, leaving an
+            // orphan tool message that the API rejects with 400 "tool must
+            // be a response to preceding tool_calls". Repair pairing on the
+            // FINAL outgoing slice (drop orphan results / inject placeholder
+            // results for orphan uses) so the request never carries a
+            // dangling tool message. This is the same repair that runs on
+            // the full agentHistory each loop iteration — the slice is the
+            // gap that previously escaped it.
+            sanitizeAgentHistoryMessages(result)
             return result
         }
 
@@ -5827,73 +5866,28 @@ class ChatViewModel(
      * - Assistant text after tool_use in the same message (Anthropic rejects this)
      */
     private fun sanitizeAgentHistory() {
-        // Walk through history sequentially, checking each assistant message.
-        // For each assistant message with tool_use blocks, verify the NEXT message
-        // is a user message with matching tool_result blocks. If not, inject them.
-        var i = 0
-        while (i < agentHistory.size) {
-            val msg = agentHistory[i]
-            if (msg.role != LLMMessage.Role.ASSISTANT) { i++; continue }
-
-            val toolUses = msg.contentParts.filterIsInstance<AgentContentPart.ToolUse>()
-            if (toolUses.isEmpty()) { i++; continue }
-
-            val toolUseIds = toolUses.map { it.id }.toSet()
-
-            // Check next message for matching tool_results
-            val next = agentHistory.getOrNull(i + 1)
-            val nextResultIds = next?.contentParts
-                ?.filterIsInstance<AgentContentPart.ToolResult>()
-                ?.map { it.id }?.toSet() ?: emptySet()
-
-            val missingIds = toolUseIds - nextResultIds
-            if (missingIds.isEmpty()) { i++; continue }
-
-            // Some tool_uses have no matching tool_result in the next message.
-            // If next message is a user message, add the missing results to it.
-            // Otherwise, inject a new user message with placeholder results.
-            val placeholders = toolUses.filter { it.id in missingIds }.map { use ->
-                AgentContentPart.ToolResult(
-                    id = use.id, name = use.name,
-                    content = "Tool execution was interrupted by an unexpected error.",
-                    isError = true,
-                )
-            }
-            Log.w(TAG, "sanitize: injecting ${placeholders.size} placeholder tool_result(s) after history[$i]")
-
-            if (next != null && next.role == LLMMessage.Role.USER &&
-                next.contentParts.any { it is AgentContentPart.ToolResult }) {
-                // Append missing results to the existing user message
-                agentHistory[i + 1] = next.copy(
-                    contentParts = next.contentParts + placeholders
-                )
-            } else {
-                // Insert a new user message with just the placeholder results
-                agentHistory.add(i + 1, LLMMessage(
-                    role = LLMMessage.Role.USER, content = "",
-                    contentParts = placeholders,
-                ))
-            }
-            i++
-        }
-
-        // Remove orphaned tool_results (result IDs not found in any tool_use)
-        val allToolUseIds = agentHistory.flatMap { it.contentParts }
-            .filterIsInstance<AgentContentPart.ToolUse>().map { it.id }.toSet()
-        val iter = agentHistory.listIterator()
-        while (iter.hasNext()) {
-            val msg = iter.next()
-            if (msg.role != LLMMessage.Role.USER) continue
-            val cleaned = msg.contentParts.filter { part ->
-                part !is AgentContentPart.ToolResult || part.id in allToolUseIds
-            }
-            if (cleaned.isEmpty() && msg.content.isBlank()) {
-                iter.remove()
-            } else if (cleaned.size < msg.contentParts.size) {
-                iter.set(msg.copy(contentParts = cleaned))
-            }
-        }
+        sanitizeAgentHistoryMessages(agentHistory)
     }
+
+    /**
+     * [T-compact-slice-tool-pairing] Core tool_use/tool_result pairing repair,
+     * extracted from [sanitizeAgentHistory] so it can also be applied to the
+     * compacted-slice result returned by [effectiveAgentHistory]. The compact
+     * slice (walkBack cap / preAnchor prune / postAnchor splice) can split a
+     * tool round across the boundary, leaving an orphan tool_result whose
+     * tool_use was cut off — the API then rejects the request with
+     * "Messages with role 'tool' must be a response to a preceding message
+     * with 'tool_calls'". Running the same repair on the FINAL outgoing slice
+     * closes that gap regardless of where the boundary lands.
+     *
+     * Mirrors iOS AIChatViewModel pre-API validation. Ensures: every assistant
+     * message with tool_use is immediately followed by a user message with the
+     * matching tool_result(s). Handles:
+     * - Duplicate tool IDs across messages (from provider fallback/retry)
+     * - Orphaned tool_use without any tool_result
+     * - Orphaned tool_result without matching tool_use
+     * - Assistant text after tool_use in the same message (Anthropic rejects this)
+     */
 
     private fun unwrapFlowException(e: Throwable): Throwable {
         var cause: Throwable? = e
@@ -11082,4 +11076,73 @@ Environment variables:
         }
     }
 }
+
+internal fun sanitizeAgentHistoryMessages(messages: MutableList<LLMMessage>) {
+        // Walk through history sequentially, checking each assistant message.
+        // For each assistant message with tool_use blocks, verify the NEXT message
+        // is a user message with matching tool_result blocks. If not, inject them.
+        var i = 0
+        while (i < messages.size) {
+            val msg = messages[i]
+            if (msg.role != LLMMessage.Role.ASSISTANT) { i++; continue }
+
+            val toolUses = msg.contentParts.filterIsInstance<AgentContentPart.ToolUse>()
+            if (toolUses.isEmpty()) { i++; continue }
+
+            val toolUseIds = toolUses.map { it.id }.toSet()
+
+            // Check next message for matching tool_results
+            val next = messages.getOrNull(i + 1)
+            val nextResultIds = next?.contentParts
+                ?.filterIsInstance<AgentContentPart.ToolResult>()
+                ?.map { it.id }?.toSet() ?: emptySet()
+
+            val missingIds = toolUseIds - nextResultIds
+            if (missingIds.isEmpty()) { i++; continue }
+
+            // Some tool_uses have no matching tool_result in the next message.
+            // If next message is a user message, add the missing results to it.
+            // Otherwise, inject a new user message with placeholder results.
+            val placeholders = toolUses.filter { it.id in missingIds }.map { use ->
+                AgentContentPart.ToolResult(
+                    id = use.id, name = use.name,
+                    content = "Tool execution was interrupted by an unexpected error.",
+                    isError = true,
+                )
+            }
+            Log.w("ChatViewModel", "sanitize: injecting ${placeholders.size} placeholder tool_result(s) after history[$i]")
+
+            if (next != null && next.role == LLMMessage.Role.USER &&
+                next.contentParts.any { it is AgentContentPart.ToolResult }) {
+                // Append missing results to the existing user message
+                messages[i + 1] = next.copy(
+                    contentParts = next.contentParts + placeholders
+                )
+            } else {
+                // Insert a new user message with just the placeholder results
+                messages.add(i + 1, LLMMessage(
+                    role = LLMMessage.Role.USER, content = "",
+                    contentParts = placeholders,
+                ))
+            }
+            i++
+        }
+
+        // Remove orphaned tool_results (result IDs not found in any tool_use)
+        val allToolUseIds = messages.flatMap { it.contentParts }
+            .filterIsInstance<AgentContentPart.ToolUse>().map { it.id }.toSet()
+        val iter = messages.listIterator()
+        while (iter.hasNext()) {
+            val msg = iter.next()
+            if (msg.role != LLMMessage.Role.USER) continue
+            val cleaned = msg.contentParts.filter { part ->
+                part !is AgentContentPart.ToolResult || part.id in allToolUseIds
+            }
+            if (cleaned.isEmpty() && msg.content.isBlank()) {
+                iter.remove()
+            } else if (cleaned.size < msg.contentParts.size) {
+                iter.set(msg.copy(contentParts = cleaned))
+            }
+        }
+    }
 
