@@ -27,16 +27,16 @@ import com.openminis.app.data.model.LLMMessage
  * requests) that bypass it. An over-range `max_tokens` is a deterministic 400
  * on every provider family; a non-positive value is equally rejected.
  */
-internal fun clampOutboundMaxTokens(requested: Int, ceiling: Int): Int {
+fun clampOutboundMaxTokens(requested: Int, ceiling: Int): Int {
     val safeCeiling = ceiling.coerceIn(1, GLOBAL_MAX_OUTPUT_CEILING)
     return requested.coerceIn(1, safeCeiling)
 }
 
 /** Shared 128K cap for outbound max_tokens — mirrors ChatViewModel.GLOBAL_MAX_TOKENS_CEILING. */
-internal const val GLOBAL_MAX_OUTPUT_CEILING = 128_000
+const val GLOBAL_MAX_OUTPUT_CEILING = 128_000
 
 /** Clamp temperature into the standard [0, max] range (OpenAI/Gemini: 2, Anthropic: 1). */
-internal fun clampOutboundTemperature(value: Double, max: Double = 2.0): Double =
+fun clampOutboundTemperature(value: Double, max: Double = 2.0): Double =
     value.coerceIn(0.0, max)
 
 /**
@@ -67,7 +67,7 @@ internal fun clampOutboundTemperature(value: Double, max: Double = 2.0): Double 
  * @param log invoked with a human-readable description each time a block is
  *   stripped; callers wire this to android.util.Log.
  */
-internal fun sanitizeToolPairing(
+fun sanitizeToolPairing(
     messages: List<LLMMessage>,
     log: (String) -> Unit = {},
 ): List<LLMMessage> {
