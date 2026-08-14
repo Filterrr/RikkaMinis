@@ -1171,4 +1171,12 @@
     <string name="backup_export_incomplete">경고: %1$d개 필드를 읽지 못했습니다 — 이 백업은 불완전할 수 있습니다.</string>
     <string name="code_expand">%1$d줄 펼치기</string>
     <string name="code_collapse">접기</string>
+    <string name="model_group_detail_cheapest_first">Cheapest first</string>
+    <string name="model_group_routing_cheapestfirst_footer">Pick the cheapest usable member first (by cost tier), then fall back to the next cheapest.</string>
+    <string name="model_group_detail_cost_tier">Cost tier</string>
+    <string name="model_group_cost_tier_unannotated">Unannotated</string>
+    <string name="model_group_cost_tier_free">Free</string>
+    <string name="model_group_cost_tier_cheap">Cheap</string>
+    <string name="model_group_cost_tier_normal">Normal</string>
+    <string name="model_group_cost_tier_expensive">Expensive</string>
 </resources>

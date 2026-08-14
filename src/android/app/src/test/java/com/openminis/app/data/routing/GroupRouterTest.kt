@@ -20,12 +20,13 @@ class GroupRouterTest {
 
     // ─── helpers ───────────────────────────────────────────────────────────
 
-    private fun member(id: String, modelId: String = "model-$id") = ModelEntry(
+    private fun member(id: String, modelId: String = "model-$id", costTier: Int? = null) = ModelEntry(
         providerInstanceId = "inst-$id",
         baseModel = LLMModel(modelId, "Model $id", "Test"),
         // ModelEntry.id is derived from uuid — must pin it so select() returns
         // the id the tests assert on (default uuid would be a random UUID).
         uuid = id,
+        costTier = costTier,
     )
 
     private fun group(vararg ids: String, strategy: RoutingStrategy = RoutingStrategy.fallback) = ModelGroup(
@@ -292,5 +293,73 @@ class GroupRouterTest {
     @Test fun dead_neverUsable() {
         assertFalse(MemberHealth.Dead.isUsable(0L))
         assertFalse(MemberHealth.Dead.isUsable(Long.MAX_VALUE))
+    }
+
+    // ─── cheapestFirst strategy (cost tier routing) ────────────────────────
+
+    @Test fun cheapestFirst_selectsLowestCostTierFirst() {
+        val router = routerWithClock()
+        val g = group("a", "b", "c", strategy = RoutingStrategy.cheapestFirst)
+        val members = listOf(
+            member("a", costTier = 3),   // expensive
+            member("b", costTier = 0),   // free
+            member("c", costTier = 1),   // cheap
+        )
+        assertEquals("b", router.select(g, members))
+    }
+
+    @Test fun cheapestFirst_unannotatedSortsLast() {
+        val router = routerWithClock()
+        val g = group("a", "b", "c", strategy = RoutingStrategy.cheapestFirst)
+        val members = listOf(
+            member("a"),                 // unannotated → most expensive
+            member("b", costTier = 1),
+            member("c", costTier = 2),
+        )
+        assertEquals("b", router.select(g, members))
+        // All unannotated: keeps group order.
+        val allUnannotated = listOf(member("x"), member("y"))
+        assertEquals("x", router.select(group("x", "y", strategy = RoutingStrategy.cheapestFirst), allUnannotated))
+    }
+
+    @Test fun cheapestFirst_preferredEntryWinsOverCost() {
+        val router = routerWithClock()
+        val g = group("a", "b", strategy = RoutingStrategy.cheapestFirst)
+        val members = listOf(member("a", costTier = 3), member("b", costTier = 0))
+        assertEquals("a", router.select(g, members, preferredEntryId = "a"))
+    }
+
+    @Test fun cheapestFirst_skipsUnhealthyMembers() {
+        val router = routerWithClock()
+        router.recordResult("a", RouteOutcome.AuthError) // Dead (clock = 1000L)
+        val g = group("a", "b", strategy = RoutingStrategy.cheapestFirst)
+        val members = listOf(member("a", costTier = 0), member("b", costTier = 2))
+        assertEquals("b", router.select(g, members))
+    }
+
+    @Test fun cheapestFirst_fallbackOrderAscendsByCostAndSkipsActive() {
+        val router = routerWithClock()
+        val g = group("a", "b", "c", strategy = RoutingStrategy.cheapestFirst)
+        val members = listOf(
+            member("a", costTier = 2),
+            member("b", costTier = 0),
+            member("c", costTier = 1),
+        )
+        val costTierOf: (String) -> Int? = { id -> members.find { it.id == id }?.costTier }
+        // Active member "a" failed → fallback should try cheapest non-active first.
+        val order = router.fallbackOrder(g, activeEntryId = "a", primaryModelId = "model-a", modelIdOf = { it }, costTierOf = costTierOf)
+        assertEquals(listOf("b", "c"), order)
+        // Active member "b" failed → try "c" (1) then "a" (2).
+        val order2 = router.fallbackOrder(g, activeEntryId = "b", primaryModelId = "model-b", modelIdOf = { it }, costTierOf = costTierOf)
+        assertEquals(listOf("c", "a"), order2)
+    }
+
+    @Test fun cheapestFirst_fallbackOrderUnannotatedLast() {
+        val router = routerWithClock()
+        val g = group("a", "b", "c", strategy = RoutingStrategy.cheapestFirst)
+        val members = listOf(member("a", costTier = 1), member("b"), member("c", costTier = 0))
+        val costTierOf: (String) -> Int? = { id -> members.find { it.id == id }?.costTier }
+        val order = router.fallbackOrder(g, activeEntryId = "b", primaryModelId = "model-b", modelIdOf = { it }, costTierOf = costTierOf)
+        assertEquals(listOf("c", "a"), order)
     }
 }

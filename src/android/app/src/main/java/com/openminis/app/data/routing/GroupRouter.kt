@@ -54,6 +54,8 @@ class GroupRouter(
         return when {
             preferredEntryId != null ->
                 usable.firstOrNull { it.id == preferredEntryId }?.id ?: usable.first().id
+            group.strategy == RoutingStrategy.cheapestFirst ->
+                usable.minWithOrNull(compareBy<ModelEntry> { it.costTier ?: Int.MAX_VALUE })!!.id
             group.strategy == RoutingStrategy.loadBalance -> {
                 val lastIdx = usable.indexOfFirst { it.id == stickyEntryId }
                 usable[(lastIdx + 1) % usable.size].id
@@ -87,8 +89,18 @@ class GroupRouter(
         activeEntryId: String?,
         primaryModelId: String,
         modelIdOf: (String) -> String?,
+        costTierOf: (String) -> Int? = { null },
     ): List<String> {
         val members = group.memberEntryIds
+        // [T-recovery] cheapestFirst: fall back in ascending cost order
+        // (cheapest first, unannotated = most expensive), skipping the
+        // currently-active member — a failure demotes only the active one,
+        // the rest of the chain keeps its cost order.
+        if (group.strategy == RoutingStrategy.cheapestFirst) {
+            return members
+                .filter { it != activeEntryId }
+                .sortedBy { costTierOf(it) ?: Int.MAX_VALUE }
+        }
         val currentIdx = if (activeEntryId != null && members.contains(activeEntryId)) {
             members.indexOf(activeEntryId)
         } else {

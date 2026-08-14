@@ -15,12 +15,14 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
@@ -195,6 +197,7 @@ fun ModelGroupDetailScreen(
                     footer = when (strategy) {
                         RoutingStrategy.fallback -> stringResource(R.string.model_group_routing_fallback_footer)
                         RoutingStrategy.loadBalance -> stringResource(R.string.model_group_routing_loadbalance_footer)
+                        RoutingStrategy.cheapestFirst -> stringResource(R.string.model_group_routing_cheapestfirst_footer)
                     },
                 ) {
                     SettingsChoiceRow(
@@ -212,13 +215,21 @@ fun ModelGroupDetailScreen(
                             strategy = RoutingStrategy.loadBalance
                             providerRepository.updateGroup(group.copy(strategy = RoutingStrategy.loadBalance))
                         },
+                    )
+                    SettingsChoiceRow(
+                        title = stringResource(R.string.model_group_detail_cheapest_first),
+                        selected = strategy == RoutingStrategy.cheapestFirst,
+                        onSelect = {
+                            strategy = RoutingStrategy.cheapestFirst
+                            providerRepository.updateGroup(group.copy(strategy = RoutingStrategy.cheapestFirst))
+                        },
                         showDivider = false,
                     )
                 }
             }
 
-            // ── Fallback Trigger (only when strategy = fallback) ──────
-            if (strategy == RoutingStrategy.fallback) {
+            // ── Fallback Trigger (only when strategy = fallback / cheapestFirst) ──────
+            if (strategy == RoutingStrategy.fallback || strategy == RoutingStrategy.cheapestFirst) {
                 item {
                     SettingsSection(
                         header = stringResource(R.string.model_group_detail_fallback_trigger),
@@ -367,6 +378,36 @@ fun ModelGroupDetailScreen(
                                             expanded = showMenu,
                                             onDismissRequest = { showMenu = false },
                                         ) {
+                                            // [T-recovery] Cost tier used by
+                                            // cheapestFirst strategy groups.
+                                            val currentTier = entry.costTier
+                                            Text(
+                                                text = stringResource(R.string.model_group_detail_cost_tier),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                            )
+                                            CostTier.entries.forEach { tier ->
+                                                DropdownMenuItem(
+                                                    text = { Text(stringResource(tier.labelRes)) },
+                                                    leadingIcon = {
+                                                        if (currentTier == tier.value) {
+                                                            Icon(
+                                                                Icons.Default.Check,
+                                                                contentDescription = null,
+                                                                tint = MaterialTheme.colorScheme.primary,
+                                                            )
+                                                        }
+                                                    },
+                                                    onClick = {
+                                                        showMenu = false
+                                                        if (currentTier != tier.value) {
+                                                            providerRepository.updateEntry(entry.copy(costTier = tier.value))
+                                                        }
+                                                    },
+                                                )
+                                            }
+                                            HorizontalDivider()
                                             DropdownMenuItem(
                                                 text = { Text(stringResource(R.string.model_group_detail_remove_from_group), color = MaterialTheme.colorScheme.error) },
                                                 onClick = {
@@ -727,4 +768,17 @@ private fun ContextLimitSlider(
             )
         }
     }
+}
+
+/**
+ * [T-recovery] Cost tiers exposed in the group member ⋮ menu. Mirrors the
+ * `ModelEntry.costTier` integer convention (0=free … 3=expensive); the
+ * UNANNOTATED option clears the field back to null.
+ */
+private enum class CostTier(val value: Int?, val labelRes: Int) {
+    UNANNOTATED(null, R.string.model_group_cost_tier_unannotated),
+    FREE(0, R.string.model_group_cost_tier_free),
+    CHEAP(1, R.string.model_group_cost_tier_cheap),
+    NORMAL(2, R.string.model_group_cost_tier_normal),
+    EXPENSIVE(3, R.string.model_group_cost_tier_expensive),
 }

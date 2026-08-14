@@ -911,4 +911,12 @@
     <string name="backup_export_incomplete">警告：有 %1$d 個欄位無法讀取 — 此備份可能不完整。</string>
     <string name="code_expand">展開 %1$d 行</string>
     <string name="code_collapse">收起</string>
+    <string name="model_group_detail_cheapest_first">Cheapest first</string>
+    <string name="model_group_routing_cheapestfirst_footer">Pick the cheapest usable member first (by cost tier), then fall back to the next cheapest.</string>
+    <string name="model_group_detail_cost_tier">Cost tier</string>
+    <string name="model_group_cost_tier_unannotated">Unannotated</string>
+    <string name="model_group_cost_tier_free">Free</string>
+    <string name="model_group_cost_tier_cheap">Cheap</string>
+    <string name="model_group_cost_tier_normal">Normal</string>
+    <string name="model_group_cost_tier_expensive">Expensive</string>
 </resources>

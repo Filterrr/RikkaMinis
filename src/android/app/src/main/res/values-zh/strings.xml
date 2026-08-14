@@ -1494,4 +1494,12 @@
     <string name="backup_export_incomplete">警告：有 %1$d 个字段无法读取 — 此备份可能不完整。</string>
     <string name="code_expand">展开 %1$d 行</string>
     <string name="code_collapse">收起</string>
+    <string name="model_group_detail_cheapest_first">最便宜优先</string>
+    <string name="model_group_routing_cheapestfirst_footer">优先选择最便宜的可用成员（按成本档位），失败后回退到下一个较便宜的。</string>
+    <string name="model_group_detail_cost_tier">成本档位</string>
+    <string name="model_group_cost_tier_unannotated">未标注</string>
+    <string name="model_group_cost_tier_free">免费</string>
+    <string name="model_group_cost_tier_cheap">便宜</string>
+    <string name="model_group_cost_tier_normal">普通</string>
+    <string name="model_group_cost_tier_expensive">昂贵</string>
 </resources>
