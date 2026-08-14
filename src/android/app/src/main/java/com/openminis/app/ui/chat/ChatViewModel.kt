@@ -309,15 +309,6 @@ class ChatViewModel(
         private val AUTO_RETRY_DELAYS_SEC = intArrayOf(1, 2, 4)
 
         /**
-         * [T-recovery] Default rate-limit cooldown when the provider doesn't
-         * send a usable Retry-After header: 60 seconds. Long enough to let a
-         * burst rate limit settle, short enough that a 5-hour free-tier window
-         * (the user's real scenario: 500 calls / 5 h on a free key) is not
-         * prolonged indefinitely.
-         */
-        private const val RATE_LIMIT_COOLDOWN_DEFAULT_MS = 60_000L
-
-        /**
          * Factory for use with `viewModel(factory = ...)`. Binds the ChatViewModel
          * to a NavBackStackEntry's ViewModelStore so the streaming job survives
          * configuration changes (rotation) and re-entering the chat screen while
