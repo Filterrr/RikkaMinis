@@ -108,7 +108,7 @@ const val KEY_SHOW_CHAT_TITLE = "appearance.show_chat_title"  // Boolean, defaul
 // it stays collapsed until tapped. Key name mirrors iOS
 // `@AppStorage("chat.autoExpandThinking")` so future config sync reads the same
 // value. Read at block-mount time in ThinkingBlock.
-const val KEY_AUTO_EXPAND_THINKING = "chat.autoExpandThinking"  // Boolean, default true
+const val KEY_AUTO_EXPAND_THINKING = "chat.autoExpandThinking"  // Boolean, default false (thinking starts collapsed)
 const val KEY_FONT_CHAT_INPUT = "font_chat_input"  // Int scale level -2..3
 const val KEY_FONT_MESSAGE = "font_message"        // Int scale level -2..3
 const val KEY_FONT_APP_BASE = "font_app_base"      // Int scale level -2..3
@@ -131,7 +131,7 @@ fun showChatTitleEnabled(context: Context): Boolean =
  *  streaming thinking block opens expanded. Off = it stays collapsed until the
  *  user taps it. */
 fun autoExpandThinkingEnabled(context: Context): Boolean =
-    getAppearancePrefs(context).getBoolean(KEY_AUTO_EXPAND_THINKING, true)
+    getAppearancePrefs(context).getBoolean(KEY_AUTO_EXPAND_THINKING, false)
 
 /** Font scale levels matching iOS: XS(-2) Small(-1) Default(0) Medium(1) Large(2) XL(3) */
 private val fontScaleLabels = listOf("XS", "Small", "Default", "Medium", "Large", "XL")
@@ -184,7 +184,7 @@ fun AppearanceScreen(
     var toolPreview by remember { mutableStateOf(prefs.getBoolean(KEY_TOOL_PREVIEW, false)) }
     var toolStatusBar by remember { mutableStateOf(prefs.getBoolean(KEY_TOOL_STATUS_BAR, true)) }
     var autoFocusAfterReply by remember { mutableStateOf(prefs.getBoolean(KEY_AUTO_FOCUS_AFTER_REPLY, true)) }
-    var autoExpandThinking by remember { mutableStateOf(prefs.getBoolean(KEY_AUTO_EXPAND_THINKING, true)) }
+    var autoExpandThinking by remember { mutableStateOf(prefs.getBoolean(KEY_AUTO_EXPAND_THINKING, false)) }
     var showChatTitle by remember { mutableStateOf(prefs.getBoolean(KEY_SHOW_CHAT_TITLE, true)) }
     var chatInputLevel by remember { mutableIntStateOf(prefs.getInt(KEY_FONT_CHAT_INPUT, 0)) }
     var messageLevel by remember { mutableIntStateOf(prefs.getInt(KEY_FONT_MESSAGE, 0)) }
@@ -208,7 +208,7 @@ fun AppearanceScreen(
                 KEY_TOOL_PREVIEW -> toolPreview = prefs.getBoolean(key, false)
                 KEY_TOOL_STATUS_BAR -> toolStatusBar = prefs.getBoolean(key, true)
                 KEY_AUTO_FOCUS_AFTER_REPLY -> autoFocusAfterReply = prefs.getBoolean(key, true)
-                KEY_AUTO_EXPAND_THINKING -> autoExpandThinking = prefs.getBoolean(key, true)
+                KEY_AUTO_EXPAND_THINKING -> autoExpandThinking = prefs.getBoolean(key, false)
                 KEY_SHOW_CHAT_TITLE -> showChatTitle = prefs.getBoolean(key, true)
                 KEY_FONT_CHAT_INPUT -> chatInputLevel = prefs.getInt(key, 0)
                 KEY_FONT_MESSAGE -> messageLevel = prefs.getInt(key, 0)
