@@ -213,7 +213,9 @@ class InlineMathExtractionTest {
 
     @Test fun `double backslash line break raises tallest height`() {
         val (w, h) = inlineMathSizeEm("a \\\\ b")
-        assertEquals(2.85f, w, 0.001f)
+        // Two consecutive backslashes each count as a TeX command → 1 visible
+        // char each, so width = 4 chars × 0.95 = 3.8em.
+        assertEquals(3.8f, w, 0.001f)
         assertEquals(4.5f, h, 0.001f)
     }
 
