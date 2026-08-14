@@ -858,6 +858,16 @@ class ChatViewModel(
     private val toolFailureHook = ToolFailureHook(writeErrorBlock = { block -> appendToolFailureBlock(block) })
 
     /**
+     * Pure-JVM group routing engine (model-group strategy redesign, Phase 1).
+     * Owns the "which member to use / in which order to fall back" decisions
+     * that previously lived inline in resolveProviderFromGroup and
+     * buildFallbackProviders, plus per-member runtime health (wired in
+     * Phase 2). Same pattern as ToolFailureHook: no Android deps, injectable
+     * clock, unit-testable.
+     */
+    private val groupRouter = com.openminis.app.data.routing.GroupRouter()
+
+    /**
      * T9: agent execution trace recorder. Side-channel only — records one
      * JSONL line per event into the session's `workspace/.traces/agent-<ts>.jsonl`
      * so a full agent run (turns → tool calls → results → token usage) can be
@@ -3854,16 +3864,23 @@ class ChatViewModel(
         // member so the session can still proceed on a now-degraded group.
         val enabledMembers = providerRepository.enabledMemberEntries(group)
         if (enabledMembers.isEmpty()) return false
-        val targetEntry = if (preferredEntryId != null) {
-            enabledMembers.firstOrNull { it.id == preferredEntryId } ?: enabledMembers.first()
-        } else if (group.strategy == com.openminis.app.data.model.RoutingStrategy.loadBalance) {
-            val lastIdx = enabledMembers.indexOfFirst { it.id == providerRepository.lastUsedEntryId }
-            val rotated = enabledMembers[(lastIdx + 1) % enabledMembers.size]
-            providerRepository.lastUsedEntryId = rotated.id
-            rotated
-        } else {
-            enabledMembers.first()
+        // Selection decision delegated to GroupRouter (pure JVM, testable) —
+        // identical semantics: preferred binding first, then loadBalance
+        // rotation anchored on lastUsedEntryId, then first member.
+        val targetId = groupRouter.select(
+            group = group,
+            members = enabledMembers,
+            preferredEntryId = preferredEntryId,
+            stickyEntryId = providerRepository.lastUsedEntryId,
+        ) ?: return false
+        // loadBalance rotation advances the sticky anchor. Only when no
+        // preferredEntryId was honored — mirrors the previous inline rotation,
+        // which wrote lastUsedEntryId = rotated.id exclusively in the
+        // `else if (loadBalance)` branch (explicit picks leave the anchor).
+        if (preferredEntryId == null && group.strategy == com.openminis.app.data.model.RoutingStrategy.loadBalance) {
+            providerRepository.lastUsedEntryId = targetId
         }
+        val targetEntry = enabledMembers.first { it.id == targetId }
         val instance = providerRepository.instance(targetEntry.providerInstanceId) ?: return false
         val apiKey = providerRepository.loadApiKey(instance.id) ?: return false
 
@@ -4132,31 +4149,24 @@ class ChatViewModel(
         val groupId = _selectedGroupId.value ?: return emptyList()
         val config = providerRepository.config.value
         val group = config.modelGroups.find { it.id == groupId } ?: return emptyList()
-        val members = group.memberEntryIds
-        // [P0-fallback-anchor] Find the current provider's position by the ACTUAL
-        // active entry id, not by `model.id`. A group can hold several entries
-        // for the SAME modelId behind different instances/endpoints (e.g.
-        // deepseek-v4-flash via a dead hub.oaifree.com key + via
-        // api.deepseek.com). `members.indexOfFirst { …model.id == primary }`
-        // returns the FIRST entry matching that modelId, which may be an earlier
-        // index than the entry actually in use — so the fallback chain started
-        // from the wrong point and even re-included the current entry itself,
-        // causing repeated calls to the failing provider. Anchor to
-        // `_activeEntryId` (the entry the loop actually runs on) and fall back
-        // to a modelId match only when the active entry isn't in this group.
-        val activeEntryId = _activeEntryId.value
-        val currentIdx = if (activeEntryId != null && members.contains(activeEntryId)) {
-            members.indexOf(activeEntryId)
-        } else {
-            members.indexOfFirst { entryId ->
-                config.modelEntries.find { it.id == entryId }?.model?.id == primaryProvider.model.id
-            }
-        }
+        // [P0-fallback-anchor] Ordering delegated to GroupRouter.fallbackOrder —
+        // anchors by the ACTUAL active entry id, not by model.id: a group can
+        // hold several entries for the SAME modelId behind different
+        // instances/endpoints (e.g. deepseek-v4-flash via a dead
+        // hub.oaifree.com key + via api.deepseek.com), and matching by modelId
+        // returns the FIRST such entry, which may sit earlier than the entry
+        // actually in use — the chain would start from the wrong point and
+        // even re-include the failing entry itself. The router returns pure
+        // ordering; the filtering below (disabled instance / missing
+        // credential / provider creation failure) stays here.
+        val order = groupRouter.fallbackOrder(
+            group = group,
+            activeEntryId = _activeEntryId.value,
+            primaryModelId = primaryProvider.model.id,
+            modelIdOf = { entryId -> config.modelEntries.find { it.id == entryId }?.model?.id },
+        )
         val result = mutableListOf<FallbackCandidate>()
-        // Iterate starting from the entry AFTER the primary, cycling around
-        for (offset in 1 until members.size) {
-            val idx = if (currentIdx >= 0) (currentIdx + offset) % members.size else offset
-            val entryId = members[idx]
+        for (entryId in order) {
             val entry = config.modelEntries.find { it.id == entryId } ?: continue
             val instance = config.instances.find { it.id == entry.providerInstanceId } ?: continue
             if (!instance.isEnabled) continue
