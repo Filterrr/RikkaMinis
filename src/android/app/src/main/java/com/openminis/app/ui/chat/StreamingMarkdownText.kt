@@ -18,7 +18,6 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.text.appendInlineContent
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -213,6 +212,9 @@ private fun currentMdColors(): MdColors {
 }
 
 private val MdCodeLangColor = Color.White.copy(alpha = 0.5f)
+
+/** Code blocks show this many lines before the "Expand N lines" fold kicks in. */
+private const val CODE_PREVIEW_LINES = 20
 
 val LocalMarkdownFontScale = compositionLocalOf { 1f }
 
@@ -1790,36 +1792,48 @@ private fun RenderBlock(block: MdBlock) {
                             },
                     )
                 }
-                // iOS parity (SelectableMarkdownView.swift L971): cap visual
-                // code-block height at ~400 pt and let an internal scroll
-                // view handle overflow vertically, so a 200-line dump
-                // doesn't push the rest of the message off the bottom of
-                // the chat. Nest scrolls: inner Row owns horizontal scroll
-                // (long lines), outer Box owns vertical scroll + height
-                // cap (long blocks). Compose disallows two scroll modifiers
-                // on the same node, hence the nesting.
-                val vScroll = rememberScrollState()
+                // Folded code block: show the first CODE_PREVIEW_LINES lines
+                // by default, tap "Expand N lines" for the rest. The previous
+                // nested vertical scroll (400dp cap) inside a horizontal
+                // scroll made the block a 2D scrollable, so diagonal/arced
+                // thumb swipes over it fought the chat list's scroll
+                // direction arbitration — the "must swipe perfectly straight"
+                // feeling. Vertical gestures now flow straight to the chat
+                // LazyColumn; only horizontal scroll (long lines) stays
+                // inside the block.
+                val lineCount = block.code.count { it == '\n' } + 1
+                val collapsed = lineCount > CODE_PREVIEW_LINES
+                var expanded by remember { mutableStateOf(false) }
+                val visibleCode = if (collapsed && !expanded) {
+                    block.code.lineSequence().take(CODE_PREVIEW_LINES).joinToString("\n")
+                } else block.code
                 val hScroll = rememberScrollState()
                 Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 400.dp)
-                        .verticalScroll(vScroll)
-                        .padding(bottom = 8.dp),
+                        .horizontalScroll(hScroll)
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
                 ) {
-                    Box(
+                    Text(
+                        text = visibleCode,
+                        fontSize = BaseFontSize * 0.85f,
+                        fontFamily = FontFamily.Monospace,
+                        color = colors.codeText,
+                        lineHeight = BaseLineHeight * 0.9f,
+                    )
+                }
+                if (collapsed) {
+                    Text(
+                        text = stringResource(
+                            if (expanded) R.string.code_collapse else R.string.code_expand,
+                            lineCount - CODE_PREVIEW_LINES,
+                        ),
+                        fontSize = 12.sp,
+                        color = colors.link,
                         modifier = Modifier
-                            .horizontalScroll(hScroll)
-                            .padding(horizontal = 12.dp, vertical = 4.dp),
-                    ) {
-                        Text(
-                            text = block.code,
-                            fontSize = BaseFontSize * 0.85f,
-                            fontFamily = FontFamily.Monospace,
-                            color = colors.codeText,
-                            lineHeight = BaseLineHeight * 0.9f,
-                        )
-                    }
+                            .fillMaxWidth()
+                            .clickable { expanded = !expanded }
+                            .padding(start = 12.dp, top = 2.dp, bottom = 6.dp),
+                    )
                 }
             }
         }
