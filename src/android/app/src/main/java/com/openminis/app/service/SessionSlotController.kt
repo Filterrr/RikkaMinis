@@ -116,6 +116,14 @@ class SessionSlotController(
         )
     }
 
+    /** 仅测试用：清空全部状态（生产路径不调用）。 */
+    internal fun resetForTesting() {
+        synchronized(this) {
+            activeRunIds.clear()
+            waitingRunIds.clear()
+        }
+    }
+
     private fun promoteNextLocked(): String? {
         val next = waitingRunIds.removeFirstOrNull() ?: return null
         activeRunIds.addLast(next)
