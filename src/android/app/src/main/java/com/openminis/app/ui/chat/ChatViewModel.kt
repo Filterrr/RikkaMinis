@@ -7107,12 +7107,12 @@ class ChatViewModel(
                         is5xx
                     // [T-fallback-network-errors] Fallback-chain members skip the
                     // bounded retry: once we've already switched away from the
-                    // primary (fallbackReasons non-empty), a connection failure on
-                    // the NEXT member is treated as "this endpoint is also down" and
-                    // we advance immediately. Otherwise a total network outage would
-                    // burn N × 7s of retries (one member at a time) before giving up.
-                    val isFallbackMember = fallbackReasons.isNotEmpty()
-                    if (isTransient && !isFallbackMember && retryAttempt < AUTO_RETRY_DELAYS_SEC.size) {
+                    // [T-fallback-retry-original] Restored original behavior: all members
+                    // (including fallback chain members) get bounded retries on transient
+                    // errors. This absorbs intermittent stream resets that the fallback
+                    // member would otherwise immediately expose as a "all fallbacks
+                    // exhausted" banner. See 3b3a12f for the revert context.
+                    if (isTransient && retryAttempt < AUTO_RETRY_DELAYS_SEC.size) {
                         val delaySec = AUTO_RETRY_DELAYS_SEC[retryAttempt]
                         retryAttempt += 1
                         val errDesc = actual.message ?: actual.javaClass.simpleName
