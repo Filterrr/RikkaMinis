@@ -120,4 +120,63 @@ class ChatViewModelSanitizeTest {
             2, msgs.size,
         )
     }
+
+    @Test
+    fun `append after trailing user tool_result injects assistant bridge`() {
+        // The A3 trigger shape: a prior agent loop exited with a tool_result
+        // as the last message (interrupt/cap after the result landed).
+        val msgs = mutableListOf(
+            assistantMsg(parts = listOf(toolUse("call_1"))),
+            userMsg(parts = listOf(toolResult("call_1"))),
+        )
+        ensureRoleAlternationBeforeUserAppend(msgs)
+        assertEquals(LLMMessage.Role.ASSISTANT, msgs.last().role)
+        assertEquals(
+            "exactly one bridge assistant appended",
+            3, msgs.size,
+        )
+        // Appending the new user now alternates correctly:
+        msgs.add(userMsg("fresh prompt"))
+        assertFalse(
+            "no two consecutive user roles",
+            (0 until msgs.lastIndex).any { msgs[it].role == LLMMessage.Role.USER && msgs[it + 1].role == LLMMessage.Role.USER },
+        )
+    }
+
+    @Test
+    fun `append after trailing plain user also bridges`() {
+        // Any trailing user role — not just tool_result — must be bridged.
+        val msgs = mutableListOf(userMsg("previous user text"))
+        ensureRoleAlternationBeforeUserAppend(msgs)
+        assertEquals(LLMMessage.Role.ASSISTANT, msgs.last().role)
+        assertEquals(2, msgs.size)
+    }
+
+    @Test
+    fun `append after trailing assistant is a no-op`() {
+        // Normal completed-agent-turn shape: tail is assistant, no bridge.
+        val msgs = mutableListOf(
+            assistantMsg(parts = listOf(toolUse("call_1"))),
+            userMsg(parts = listOf(toolResult("call_1"))),
+            assistantMsg("done"),
+        )
+        ensureRoleAlternationBeforeUserAppend(msgs)
+        assertEquals(3, msgs.size)
+        assertEquals(LLMMessage.Role.ASSISTANT, msgs.last().role)
+    }
+
+    @Test
+    fun `append on empty history is a no-op`() {
+        val msgs = mutableListOf<LLMMessage>()
+        ensureRoleAlternationBeforeUserAppend(msgs)
+        assertTrue(msgs.isEmpty())
+    }
+
+    @Test
+    fun `custom bridge text wins`() {
+        val msgs = mutableListOf(userMsg(parts = listOf(toolResult("c"))))
+        ensureRoleAlternationBeforeUserAppend(msgs, bridgeText = "(custom)")
+        val text = msgs.last().contentParts.filterIsInstance<AgentContentPart.Text>().firstOrNull()?.text
+        assertEquals("(custom)", text)
+    }
 }
