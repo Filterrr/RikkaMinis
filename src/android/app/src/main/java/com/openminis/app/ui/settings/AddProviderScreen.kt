@@ -52,7 +52,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -69,6 +68,7 @@ import com.openminis.app.data.model.ProviderCredential
 import com.openminis.app.data.model.ProviderInstance
 import com.openminis.app.data.model.ProviderType
 import com.openminis.app.data.repository.ProviderRepository
+import com.openminis.app.MinisApp
 import com.openminis.app.R
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -290,7 +290,13 @@ private fun ColumnScope.ApiKeyConfigSection(
     providerRepository: ProviderRepository,
     onSaved: () -> Unit,
 ) {
-    val scope = rememberCoroutineScope()
+    // [T-provider-save-refresh] The post-save model refresh MUST survive the
+    // navigation away from this screen. rememberCoroutineScope() would cancel
+    // the fetch the moment onSaved() pops the route (composition disposal),
+    // leaving a freshly-added provider with an empty model list. The
+    // application-scoped scope outlives composition (same pattern as the
+    // WebDAV backup transfer in BackupSettingsScreen).
+    val appContext = LocalContext.current.applicationContext
     var showApiKeyPlaintext by remember { mutableStateOf(false) }
     // /v1 is appended automatically for all non-Gemini providers (Gemini uses
     // v1beta full-path URLs). effectiveBaseURL already guards against double-append.
@@ -415,8 +421,11 @@ private fun ColumnScope.ApiKeyConfigSection(
             )
             providerRepository.addInstance(instance)
             providerRepository.saveApiKey(instance.id, apiKey.trim())
-            // Auto-refresh models in background (fetches from API or falls back to models.dev)
-            scope.launch { providerRepository.refreshModels(instance) }
+            // Auto-refresh models in background (fetches from API or falls back to models.dev).
+            // Launched on the app-scoped scope so the fetch survives this screen's disposal.
+            (appContext as? MinisApp)?.applicationScope?.launch {
+                providerRepository.refreshModels(instance)
+            }
             onSaved()
         },
         modifier = Modifier
