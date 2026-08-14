@@ -79,6 +79,11 @@ enum class ThinkingLevel {
 enum class RoutingStrategy {
     fallback,
     loadBalance,
+
+    /** [T-recovery] Pick the cheapest usable member first (by [ModelEntry.costTier],
+     *  ascending; unannotated entries sort last), falling back to the next
+     *  cheapest on failure. Same fallback chain semantics as [fallback]. */
+    cheapestFirst,
 }
 
 /**
@@ -281,6 +286,14 @@ data class ModelEntry(
     val isHidden: Boolean = false,
     val uuid: String = UUID.randomUUID().toString(),
     val userModifiedAt: Long? = null,
+    /**
+     * [T-recovery] Optional cost tier used by groups with
+     * [RoutingStrategy.cheapestFirst]: 0 = free, 1 = cheap, 2 = normal,
+     * 3 = expensive. null = unannotated (treated as the most expensive so
+     * explicitly-tagged entries win). Pure metadata — never affects
+     * selection under any other strategy.
+     */
+    val costTier: Int? = null,
 ) {
     val id: String get() = uuid
 
