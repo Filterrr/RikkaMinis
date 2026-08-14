@@ -4716,7 +4716,11 @@ class ChatViewModel(
                 } catch (e: Exception) {
                     AppLogger.error(TAG_STREAM, "$label runAgentLoop EXCEPTION ${e.javaClass.simpleName}: ${e.message}")
                     Log.e(TAG, "Agent loop error ($label)", e)
-                    setInlineError(e.message ?: "Unknown error")
+                    // [T-error-no-permanent-scars] The banner shows a human
+                    // summary; raw error codes / fallback trail go to the
+                    // collapsed technical-details disclosure (or are dropped
+                    // on reload since errorDetail is never persisted).
+                    reportAgentLoopError(e)
                     // T298: flag the upcoming setInactive() so the
                     // background completion notifier renders the ❌
                     // variant instead of a clean success.
@@ -5206,7 +5210,7 @@ class ChatViewModel(
                 throw e
             } catch (e: Exception) {
                 Log.e(TAG, "Agent loop (queued-drain) error", e)
-                setInlineError(e.message ?: "Unknown error")
+                reportAgentLoopError(e)
                 break
             }
         }
@@ -5414,7 +5418,7 @@ class ChatViewModel(
                     } catch (e: Exception) {
                         AppLogger.error(TAG_STREAM, "send runAgentLoop EXCEPTION ${e.javaClass.simpleName}: ${e.message}")
                         Log.e(TAG, "Agent loop error (all fallbacks exhausted)", e)
-                        setInlineError(e.message ?: "Unknown error")
+                        reportAgentLoopError(e)
                         // T298: completion notifier should show the ❌ variant.
                         SessionActivityTracker.markStreamError(activeSessionId)
                     } finally {
@@ -5461,7 +5465,7 @@ class ChatViewModel(
      *  true at runAgentLoop ~4015) leaves the "Minis is thinking" indicator
      *  on screen even though streaming is over. The flag is per-message and
      *  is not implicitly cleared by isStreaming=false. */
-    private fun setInlineError(errorText: String) {
+    private fun setInlineError(errorText: String, detail: String? = null) {
         // [T-error-persist-android] Never let an empty/blank error string reach
         // the banner. The UI gate is `message.error?.let { … }` — a non-null ""
         // would render an EMPTY error banner, and (now that errors persist) it
@@ -5480,6 +5484,9 @@ class ChatViewModel(
             val msg = msgs[lastAssistantIdx]
             msgs[lastAssistantIdx] = msg.copy(
                 error = safeError,
+                // [T-error-no-permanent-scars] errorDetail is in-memory only
+                // (never persisted) — see ChatMessage.errorDetail.
+                errorDetail = detail,
                 isStreaming = false,
                 isAwaitingModelResponse = false,
             )
@@ -5525,7 +5532,7 @@ class ChatViewModel(
         if (lastAssistantIdx < 0) return
         val msg = msgs[lastAssistantIdx]
         if (msg.error == null) return
-        msgs[lastAssistantIdx] = msg.copy(error = null)
+        msgs[lastAssistantIdx] = msg.copy(error = null, errorDetail = null)
         _messages.value = msgs
         // [T-error-persist-android] Clear the persisted sticker too, so a
         // recovered turn doesn't resurrect the error banner on the next reload.
@@ -5743,7 +5750,7 @@ class ChatViewModel(
                     } catch (e: Exception) {
                         AppLogger.error(TAG_STREAM, "retryLast runAgentLoop EXCEPTION ${e.javaClass.simpleName}: ${e.message}")
                         Log.e(TAG, "Agent loop error (retryLast)", e)
-                        setInlineError(e.message ?: "Unknown error")
+                        reportAgentLoopError(e)
                         // T298: completion notifier should show the ❌ variant.
                         SessionActivityTracker.markStreamError(activeSessionId)
                     } finally {
@@ -5874,6 +5881,24 @@ class ChatViewModel(
             cause = cause.cause
         }
         return e
+    }
+
+    /**
+     * [T-error-no-permanent-scars] Uniform terminal-error reporter for every
+     * runAgentLoop call site (send / retryLast / resume / queued-drain). Shows
+     * a human summary on the banner and keeps the raw error text (fallback
+     * trail, original error codes) in the collapsed `errorDetail` disclosure.
+     */
+    private fun reportAgentLoopError(e: Exception) {
+        if (e is com.openminis.app.data.model.FallbackExhaustedError) {
+            setInlineError(e.summary, e.detail)
+        } else {
+            val errActual = unwrapFlowException(e)
+            val errSummary = (errActual as? com.openminis.app.data.model.LLMError)?.userMessage
+                ?: errActual.message?.takeIf { it.isNotBlank() }
+                ?: "Unknown error"
+            setInlineError(errSummary, errActual.message)
+        }
     }
 
     /**
@@ -7012,16 +7037,30 @@ class ChatViewModel(
                     val isTransient = actual is com.openminis.app.data.model.LLMError.NetworkError ||
                         actual is com.openminis.app.data.model.LLMError.TransientError ||
                         is5xx
-                    if (isTransient && retryAttempt < AUTO_RETRY_DELAYS_SEC.size) {
+                    // [T-fallback-network-errors] Fallback-chain members skip the
+                    // bounded retry: once we've already switched away from the
+                    // primary (fallbackReasons non-empty), a connection failure on
+                    // the NEXT member is treated as "this endpoint is also down" and
+                    // we advance immediately. Otherwise a total network outage would
+                    // burn N × 7s of retries (one member at a time) before giving up.
+                    val isFallbackMember = fallbackReasons.isNotEmpty()
+                    if (isTransient && !isFallbackMember && retryAttempt < AUTO_RETRY_DELAYS_SEC.size) {
                         val delaySec = AUTO_RETRY_DELAYS_SEC[retryAttempt]
                         retryAttempt += 1
                         val errDesc = actual.message ?: actual.javaClass.simpleName
                         Log.w(TAG, "🔁 Transient error on ${currentProvider.model.displayName}, retry $retryAttempt/${AUTO_RETRY_DELAYS_SEC.size} in ${delaySec}s: $errDesc")
+                        // [T-error-no-permanent-scars] The transient banner shows a
+                        // human summary too ("Connection failed — retrying 1/3…"),
+                        // not the raw "stream was reset: CANCEL" text. The log line
+                        // above keeps the full detail for debugging.
+                        val errSummary = (actual as? com.openminis.app.data.model.LLMError)?.userMessage
+                            ?: actual.message?.takeIf { it.isNotBlank() }
+                            ?: actual.javaClass.simpleName
                         withContext(Dispatchers.Main) {
                             _autoRetryAttempt.value = retryAttempt
                             // Show the error inline on the streaming assistant message during countdown.
                             // Keeps isStreaming=true so the UI doesn't tear down the streaming state.
-                            setTransientInlineError("$errDesc — retrying ($retryAttempt/${AUTO_RETRY_DELAYS_SEC.size})…")
+                            setTransientInlineError("$errSummary — retrying ($retryAttempt/${AUTO_RETRY_DELAYS_SEC.size})…")
                         }
                         try {
                             for (remaining in delaySec downTo 1) {
@@ -7167,7 +7206,14 @@ class ChatViewModel(
                         // per-endpoint.
                         
                         // Persist the fallback model so re-entering the session starts from here.
-                        val infoText = fallbackReasons.joinToString("\n") + "\n🔄 Switched to ${currentProvider.model.displayName}"
+                        // [T-error-no-permanent-scars] Lightweight success note:
+                        // show ONLY the switch outcome ("Switched to X"), never the
+                        // raw failure trail of the previous member. A successful
+                        // fallback is self-healing — it should not leave a scar of
+                        // "⚠️ deepseek-v4-flash: Network error: stream was reset:
+                        // CANCEL..." in the chat record. The trail stays in the
+                        // log line above for debuggability.
+                        val infoText = "🔄 ${context.getString(R.string.fallback_switched_to, currentProvider.model.displayName)}"
                         allToolBlocks.removeAll { it.kind == "info" }
                         allToolBlocks.add(0, AssistantBlock(
                             id = "fallback_info_$turn",
@@ -7206,8 +7252,29 @@ class ChatViewModel(
                             val skipped = unavailableGroupMembers()
                             if (fallbackReasons.isNotEmpty() || skipped.isNotEmpty()) {
                                 val trail = (fallbackReasons + skipped).joinToString("\n")
-                                val finalDesc = actual.message ?: actual.toString()
-                                throw com.openminis.app.data.model.LLMError.ProviderError("$trail\n$finalDesc")
+                                // [T-error-no-permanent-scars] Throw a summary/detail
+                                // split: the banner shows the human summary ("tried N
+                                // models"), the raw per-model trail (with the original
+                                // error codes) is carried as `detail` for the collapsed
+                                // technical-details disclosure — it never becomes the
+                                // primary visible error text.
+                                val triedCount = fallbackReasons.size + 1  // primary + fallback members
+                                val summary = when (actual) {
+                                    is com.openminis.app.data.model.LLMError.NetworkError,
+                                    is com.openminis.app.data.model.LLMError.TransientError ->
+                                        context.getString(R.string.error_all_models_failed, triedCount)
+                                    is com.openminis.app.data.model.LLMError.RateLimited ->
+                                        context.getString(R.string.error_all_models_rate_limited)
+                                    is com.openminis.app.data.model.LLMError.InvalidApiKey ->
+                                        context.getString(R.string.error_all_models_bad_key)
+                                    else -> (actual as? com.openminis.app.data.model.LLMError)?.userMessage
+                                        ?: actual.message?.takeIf { it.isNotBlank() }
+                                        ?: "Unknown error"
+                                }
+                                throw com.openminis.app.data.model.FallbackExhaustedError(
+                                    summary = summary,
+                                    detail = "$trail\n${actual.message ?: actual.toString()}",
+                                )
                             }
                         }
                         throw actual  // re-throw unwrapped, all fallbacks exhausted
@@ -10240,7 +10307,7 @@ Environment variables:
                     } catch (e: Exception) {
                         AppLogger.error(TAG_STREAM, "resumeQueueAfterCancel drain EXCEPTION ${e.javaClass.simpleName}: ${e.message}")
                         Log.e(TAG, "Queued drain error (resumeQueueAfterCancel)", e)
-                        setInlineError(e.message ?: "Unknown error")
+                        reportAgentLoopError(e)
                     } finally {
                         AppLogger.info(TAG_STREAM, "resumeQueueAfterCancel streamJob FINALLY enter")
                         // [T-android-overlay-reply-status-34599] Surface
@@ -10500,7 +10567,7 @@ Environment variables:
                     } catch (e: Exception) {
                         AppLogger.error(TAG_STREAM, "resume runAgentLoop EXCEPTION ${e.javaClass.simpleName}: ${e.message}")
                         Log.e(TAG, "Agent loop error (resume)", e)
-                        setInlineError(e.message ?: "Unknown error")
+                        reportAgentLoopError(e)
                     } finally {
                         AppLogger.info(TAG_STREAM, "resume streamJob FINALLY enter")
                         // [T-android-overlay-reply-status-34599] Surface
