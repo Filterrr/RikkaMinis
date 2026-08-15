@@ -5,6 +5,7 @@ import com.openminis.app.agent.runtime.AgentTerminal
 import com.openminis.app.agent.runtime.AgentTerminalReason
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -45,7 +46,11 @@ class T7TraceSchemaMappingTest {
     fun `phase mapping never emits ALL-CAPS enum name`() {
         AgentRunPhase.entries.forEach { phase ->
             val mapped = ChatViewModel.t7PhaseSchema(phase)
-            assertEquals(mapped, mapped.lowercase())
+            // schema 枚举是 PascalCase（如 "CallingModel"），绝不能是 enum 的 ALL-CAPS name
+            assertTrue(
+                "phase ${phase.name} must not map to ALL-CAPS enum name, was '$mapped'",
+                mapped != phase.name,
+            )
         }
     }
 
@@ -103,7 +108,11 @@ class T7TraceSchemaMappingTest {
         AgentTerminalReason.entries.forEach { reason ->
             val mapped = ChatViewModel.t7TerminalReasonSchema(reason)
             if (mapped != null) {
-                assertEquals(mapped, mapped.lowercase())
+                // schema terminal_reason 是 snake_case 全小写
+                assertTrue(
+                    "reason ${reason.name} must not map to ALL-CAPS enum name, was '$mapped'",
+                    mapped != reason.name && mapped.none { it.isUpperCase() },
+                )
             }
         }
     }
