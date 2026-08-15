@@ -166,17 +166,20 @@ class RealAgentAdapterSkeleton(
             if (budget.isExpired()) {
                 emitEvent(AgentRunEvent.DeadlineReached(budget.startedAtMonotonicMs))
                 emitTrace(TraceEventType.DEADLINE_REACHED, "deadline at turn entry")
+                emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.INTERRUPTED, AgentTerminalReason.DEADLINE_EXCEEDED))
                 return
             }
             if (runtime.isUserCancelled()) {
                 emitEvent(AgentRunEvent.UserCancelled("user_cancelled"))
                 emitTrace(TraceEventType.USER_CANCELLED, "user cancelled at turn entry")
+                emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.CANCELLED, AgentTerminalReason.USER_CANCELLED))
                 drive.providerCancellations++
                 return
             }
             if (runtime.isProcessDead()) {
                 emitEvent(AgentRunEvent.ProcessInterrupted("process_death"))
                 emitTrace(TraceEventType.PROCESS_INTERRUPTED, "process death at turn entry")
+                emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.INTERRUPTED, AgentTerminalReason.PROCESS_INTERRUPTED))
                 return
             }
 
@@ -184,6 +187,7 @@ class RealAgentAdapterSkeleton(
             if (budget.consumeTurn() is com.openminis.app.agent.runtime.BudgetDecision.Denied) {
                 emitEvent(AgentRunEvent.ProcessInterrupted("budget_exhausted(turn_limit)"))
                 emitTrace(TraceEventType.PROCESS_INTERRUPTED, "turn limit")
+                emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
                 return
             }
 
@@ -317,6 +321,7 @@ class RealAgentAdapterSkeleton(
                             ))
                             emitEvent(AgentRunEvent.ProcessInterrupted("all_fallbacks_exhausted"))
                             emitTrace(TraceEventType.PROCESS_INTERRUPTED, "all_fallbacks_exhausted after rate limit")
+                            emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
                             return
                         }
                     }
@@ -345,6 +350,8 @@ class RealAgentAdapterSkeleton(
                         drive.persistenceMark = PersistenceMark.PARTIAL
                         emitEvent(AgentRunEvent.ProcessInterrupted("dropped_after_first_chunk"))
                         emitTrace(TraceEventType.PROCESS_INTERRUPTED, "dropped after first chunk")
+                        drive.persistenceMark = PersistenceMark.PARTIAL
+                        emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.INTERRUPTED, AgentTerminalReason.PROCESS_INTERRUPTED))
                         return
                     }
 
@@ -362,6 +369,7 @@ class RealAgentAdapterSkeleton(
                             ))
                             emitEvent(AgentRunEvent.ProcessInterrupted("all_fallbacks_exhausted"))
                             emitTrace(TraceEventType.PROCESS_INTERRUPTED, "all_fallbacks_exhausted after hard failure")
+                            emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
                             return
                         }
                     }
@@ -380,9 +388,11 @@ class RealAgentAdapterSkeleton(
         if (budget.isExpired()) {
             emitEvent(AgentRunEvent.DeadlineReached(budget.startedAtMonotonicMs))
             emitTrace(TraceEventType.DEADLINE_REACHED, "deadline after turns exhausted")
+            emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.INTERRUPTED, AgentTerminalReason.DEADLINE_EXCEEDED))
         } else {
             emitEvent(AgentRunEvent.ProcessInterrupted("turns_exhausted_without_final"))
             emitTrace(TraceEventType.PROCESS_INTERRUPTED, "turns exhausted without final")
+            emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
         }
     }
 

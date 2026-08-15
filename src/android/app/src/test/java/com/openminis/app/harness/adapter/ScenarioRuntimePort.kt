@@ -131,7 +131,14 @@ class ScenarioRuntimePort(
         emitted += event
     }
 
-    override fun isUserCancelled(): Boolean = userCancelled
+    /** 记录开始时刻（单调时间 ms），用于 userCancelAtMs / processDeathAtMs 检测 */
+    private val startAtMs = System.nanoTime() / 1_000_000L
 
-    override fun isProcessDead(): Boolean = processDead
+    private fun elapsedMs(): Long = (System.nanoTime() / 1_000_000L) - startAtMs
+
+    override fun isUserCancelled(): Boolean =
+        userCancelled || (scenario.userCancelAtMs != null && elapsedMs() >= scenario.userCancelAtMs!!)
+
+    override fun isProcessDead(): Boolean =
+        processDead || (scenario.processDeathAtMs != null && elapsedMs() >= scenario.processDeathAtMs!!)
 }
