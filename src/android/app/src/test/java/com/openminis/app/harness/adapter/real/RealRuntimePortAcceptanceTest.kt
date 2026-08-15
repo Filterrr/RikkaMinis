@@ -130,17 +130,19 @@ class RealRuntimePortAcceptanceTest {
     fun `every real run emits schema 2.0 header`() {
         for (scenario in allScenarios) {
             val outcome = runScenario(scenario)
-            val first = outcome.port.trace.lines.firstOrNull()
-            if (first == null) {
+            val lines = outcome.port.trace.lines
+            if (lines.isEmpty()) {
                 fail("${scenario.id}: no trace lines emitted")
+                return
             }
+            val first = lines.first()
             assertTrue(
-                "${scenario.id}: trace_start missing schema_version", 
-                first.contains("trace_schema_version")
+                "${scenario.id}: trace_start missing schema_version",
+                first.contains("trace_schema_version"),
             )
             assertTrue(
                 "${scenario.id}: trace_start missing run_id",
-                first.contains("run_id")
+                first.contains("run_id"),
             )
         }
     }

@@ -113,6 +113,9 @@ class RealTraceRuntime(
                     toolCount = 0,
                 )
             }
+            // attempt 结束：若为最终失败进入 Finalizing（骨架同时发 PROCESS_INTERRUPTED
+            // 或 RUN_FINALIZED 处理终态；此处仅记录结果，不重复 stateTransition）。
+            TraceEventType.PROVIDER_ATTEMPT_FINISHED -> Unit
             TraceEventType.PROVIDER_ATTEMPT_STARTED -> {
                 recorder.stateTransition(
                     from = "Idle".takeIf { _first } ?: phaseSchema[TraceEventType.PROVIDER_ATTEMPT_STARTED]!!,
