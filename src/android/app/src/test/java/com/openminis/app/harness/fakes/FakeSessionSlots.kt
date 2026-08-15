@@ -24,17 +24,25 @@ class FakeSessionSlots(private val maxConcurrent: Int = 5) {
 
     /** 释放一个槽位。如果队列非空，将下一个等待者移入 active。 */
     fun release(runId: String) {
-        val removed = active.remove(runId)
+        val idx = active.indexOf(runId)
+        if (idx >= 0) {
+            active.removeAt(idx)
+        }
         released.add(runId)
-        if (removed && waiting.isNotEmpty()) {
-            val next = waiting.removeFirst()
+        if (idx >= 0 && waiting.isNotEmpty()) {
+            val next = waiting.removeAt(0)
             active.add(next)
         }
     }
 
     /** 取消一个等待者（不释放 active 槽位）。 */
     fun cancelWaiting(runId: String): Boolean {
-        return waiting.remove(runId)
+        val idx = waiting.indexOf(runId)
+        if (idx >= 0) {
+            waiting.removeAt(idx)
+            return true
+        }
+        return false
     }
 
     fun activeCount(): Int = active.size
