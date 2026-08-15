@@ -2938,6 +2938,15 @@ fun ChatScreen(
                     var frozenKeys: Set<String> = emptySet()
                     var frozenSplitIdx = -1
                     var streamWasActive = false
+                    // [T-android-streaming-tail-patch] Live tail state for the
+                    // intermediate approach: keep the previous tick's key set
+                    // stable during streaming. When the fresh build produces
+                    // the same keys → use it directly (no structural churn).
+                    // When keys differ (fragment boundary split) → patch the
+                    // last streaming fragment's content in place, preserving
+                    // the previous key set. The overhead is O(1) per tick.
+                    var prevLiveRows: List<FlatChatItem> = emptyList()
+                    var prevStreamMap: Map<String, StreamingDelta> = emptyMap()
                     // [T-android-stream-pipeline-incremental] Flush the perf
                     // turn when this effect is CANCELLED mid-turn: the
                     // turn-end drain emits `_messages` FIRST (restarting this
@@ -3074,7 +3083,36 @@ fun ChatScreen(
                                     buildFlatChatItems(merged, null, fromIndex = splitIdx, seedKeys = frozenKeys)
                                 }
                             }
-                            flatItems = if (liveRows.isEmpty()) frozenRows else frozenRows + liveRows
+                            // [T-android-streaming-tail-patch] Patch-or-replace
+                            // decision for the live tail. When the frozen
+                            // prefix is reused AND we have a cached tail from
+                            // the previous tick, compare key sets:
+                            //   - Keys identical → fragment structure stable,
+                            //     use fresh build directly (current behavior).
+                            //   - Keys differ → fragment boundary split (e.g.
+                            //     new paragraph, code fence crossing). Keep
+                            //     the PREVIOUS key set by patching the last
+                            //     streaming fragment's content in place.
+                            //     Avoids LazyColumn slot churn on every split.
+                            val effectiveLiveRows = if (frozenReused &&
+                                prevLiveRows.isNotEmpty() && liveRows.isNotEmpty() &&
+                                prevStreamMap.keys == stream.keys
+                            ) {
+                                val prevKeys = prevLiveRows.map { it.key }
+                                val freshKeys = liveRows.map { it.key }
+                                if (prevKeys == freshKeys) {
+                                    liveRows
+                                } else {
+                                    patchLiveTail(prevLiveRows, liveRows)
+                                }
+                            } else {
+                                liveRows
+                            }
+                            flatItems =
+                                if (effectiveLiveRows.isEmpty()) frozenRows
+                                else frozenRows + effectiveLiveRows
+                            prevLiveRows = effectiveLiveRows
+                            prevStreamMap = stream
                             com.openminis.app.diagnostics.StreamPerfMonitor.tick(
                                 flattenNanos = System.nanoTime() - tickStartNs,
                                 frozenReused = frozenReused,
@@ -6054,4 +6092,53 @@ private fun exportCurrentChat(
             ).show()
         }
     }
+}
+
+/**
+ * [T-android-streaming-tail-patch] Patch the live tail's content in place
+ * when the fragment key set diverges (a fragment boundary split mid-stream).
+ * Keeps the previous tick's key set stable, merging new content into the
+ * last streaming [FlatChatItem.AssistantMarkdownBlock]. Also updates the
+ * [FlatChatItem.AssistantToolRunGroup] from the fresh build so tool status
+ * transitions (e.g. running→complete) remain correct.
+ *
+ * Returns the patched list (same keys as [prev], updated content fields).
+ * Falls back to [fresh] when the prev tail has no streaming fragment
+ * (structural change — first text fragment appearing mid-turn).
+ */
+private fun patchLiveTail(
+    prev: List<FlatChatItem>,
+    fresh: List<FlatChatItem>,
+): List<FlatChatItem> {
+    val result = prev.toMutableList()
+
+    // 1. Update ToolRunGroup with fresh instance (correct isRunning / tool status).
+    val freshToolRun = fresh.firstOrNull { it is FlatChatItem.AssistantToolRunGroup }
+    val prevToolRunIdx = result.indexOfFirst { it is FlatChatItem.AssistantToolRunGroup }
+    if (freshToolRun != null && prevToolRunIdx >= 0) {
+        result[prevToolRunIdx] = freshToolRun
+    }
+
+    // 2. Update the last streaming markdown block's content.
+    val freshStreaming = fresh.lastOrNull {
+        it is FlatChatItem.AssistantMarkdownBlock && it.isStreaming
+    } as? FlatChatItem.AssistantMarkdownBlock
+    if (freshStreaming != null) {
+        val prevStreamingIdx = result.indexOfLast {
+            it is FlatChatItem.AssistantMarkdownBlock && it.isStreaming
+        }
+        if (prevStreamingIdx >= 0) {
+            val prevBlock = result[prevStreamingIdx] as FlatChatItem.AssistantMarkdownBlock
+            result[prevStreamingIdx] = prevBlock.copy(
+                rawText = freshStreaming.rawText,
+                messageMarkdown = freshStreaming.messageMarkdown,
+            )
+        } else {
+            // No streaming fragment in prev — this is a structural change
+            // (first text fragment appearing). Accept fresh build.
+            return fresh
+        }
+    }
+
+    return result
 }
