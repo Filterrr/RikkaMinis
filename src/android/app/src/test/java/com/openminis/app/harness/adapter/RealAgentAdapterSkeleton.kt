@@ -211,6 +211,7 @@ class RealAgentAdapterSkeleton(
                     // compact 超时后中断（F09 语义：超时不损坏原历史）
                     if (compactWait >= (scenario.compactTimeoutMs ?: Long.MAX_VALUE)) {
                         drive.historyIntact = true
+                        drive.persistenceMark = PersistenceMark.PARTIAL
                         emitEvent(AgentRunEvent.CompactionFinished())
                         emitEvent(AgentRunEvent.ProcessInterrupted("compact_timeout"))
                         emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.INTERRUPTED, AgentTerminalReason.PROCESS_INTERRUPTED))
