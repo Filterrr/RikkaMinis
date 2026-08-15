@@ -527,10 +527,17 @@ internal fun ModelPickerSheet(
                                     RoutingStrategy.loadBalance -> "LB"
                                     RoutingStrategy.cheapestFirst -> "CF"
                                 }
-                                // Resolve entry: try memberEntryIds first, fallback to activeEntryId ONLY if this group is selected
-                                val resolvedEntry = group.memberEntryIds.firstNotNullOfOrNull { entryId ->
+                                // Resolve entry: when this group is selected, prefer the active entry
+                                // so the header reflects the ACTUALLY-USED model (which may differ
+                                // from the first member due to cheapestFirst selection, loadBalance
+                                // rotation, or fallback recovery). Fall back to the first member
+                                // only when the group is NOT selected (preview), or when the active
+                                // entry cannot be resolved.
+                                val resolvedEntry = if (isSelected && activeEntryId != null) {
+                                    config.modelEntries.find { it.id == activeEntryId }
+                                } else null ?: group.memberEntryIds.firstNotNullOfOrNull { entryId ->
                                     config.modelEntries.find { it.id == entryId }
-                                } ?: if (isSelected && activeEntryId != null) config.modelEntries.find { it.id == activeEntryId } else null
+                                }
                                 // Count of resolved members for display
                                 val resolvedCount = group.memberEntryIds.count { entryId ->
                                     config.modelEntries.any { it.id == entryId }
