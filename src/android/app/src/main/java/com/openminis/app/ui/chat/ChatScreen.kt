@@ -1411,7 +1411,22 @@ fun ChatScreen(
             if (now - stopMs < 300L) return@collect
             if (idx == 0 && off <= nearBottomThresholdPx.toInt()) return@collect
             if (now - lastCompensateMs < 100L) return@collect
-            lastCompensateMs = now
+            // [Txxx-anchor-guard-deadzone] Deadzone: give reverseLayout's
+            // native anchor time to self-settle before compensating. Content
+            // insertion at index 0 in reverseLayout can transiently push
+            // firstVisibleItemIndex from 0 to 1, but the native anchor often
+            // self-corrects within ~200ms. Compensating during this window
+            // only fights the LazyColumn and creates a visible jump. Wait
+            // 500ms; if the viewport self-settles within that window, skip
+            // the redundant scroll.
+            kotlinx.coroutines.delay(500L)
+            // Re-check position after deadzone — native anchor may have
+            // self-settled back to (0,0) during the delay.
+            if (isUserDragging) return@collect
+            val afterIdx = listState.firstVisibleItemIndex
+            val afterOff = listState.firstVisibleItemScrollOffset
+            if (afterIdx == 0 && afterOff <= nearBottomThresholdPx.toInt()) return@collect
+            lastCompensateMs = SystemClock.elapsedRealtime()
             tracedScrollToItem("anchor-guard", 0, 0)
         }
     }
