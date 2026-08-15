@@ -53,6 +53,16 @@ class ScenarioRuntimePort(
 
     override suspend fun callProvider(attemptIndex: Int): ProviderCallResult {
         providerCalls += attemptIndex
+        // 新 turn 开始的信号：adapter 以 attemptIdx==0 进入一个 turn。
+        // 若当前 turn 的 attempts 已耗尽，前进到下一 turn（F05/F13 多 turn 场景
+        // 第二轮的 SUCCESS 必须来自 turns[1] 而不是被当成"no more attempts"）。
+        if (attemptIndex == 0 &&
+            currentTurn < scenario.turns.size &&
+            attemptInTurn >= scenario.turns[currentTurn].attempts.size
+        ) {
+            currentTurn++
+            attemptInTurn = 0
+        }
         val script = currentAttempt()
         attemptInTurn++
 
@@ -128,7 +138,8 @@ class ScenarioRuntimePort(
 
     override suspend fun persist(mark: PersistenceMark): Boolean {
         persistCalls += mark
-        return persistResult
+        // F12: failOnFinalize 场景模拟"收尾持久化失败"（运行期写下失败在此等效处理）。
+        return if (scenario.persistence.failOnFinalize) false else persistResult
     }
 
     override fun acquireSlot(runId: String): Boolean {
