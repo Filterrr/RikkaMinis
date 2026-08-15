@@ -110,7 +110,7 @@ class RealRuntimePortAcceptanceTest {
         val failures = mutableListOf<String>()
         for (scenario in allScenarios) {
             val outcome = runScenario(scenario)
-            val lines = outcome.port.trace.lines
+            val lines = outcome.traceLines
             val starts = lines.count { it.contains("\"trace_start\"") }
             val ends = lines.count { it.contains("\"trace_end\"") }
             if (starts != 1) {
@@ -130,7 +130,7 @@ class RealRuntimePortAcceptanceTest {
     fun `emits schema v2 header on every run`() {
         for (scenario in allScenarios) {
             val outcome = runScenario(scenario)
-            val lines = outcome.port.trace.lines
+            val lines = outcome.traceLines
             if (lines.isEmpty()) {
                 fail("${scenario.id}: no trace lines emitted")
                 return
@@ -164,11 +164,12 @@ class RealRuntimePortAcceptanceTest {
         )
         val adapter = RealAgentAdapterSkeleton(port)
         val report = runBlocking { adapter.executeScenario(scenario) }
-        return ScenarioOutcome(port, report)
+        return ScenarioOutcome(port, report, traceLines)
     }
 
     private class ScenarioOutcome(
         val port: RealRuntimePort,
         val report: ScenarioReport,
+        val traceLines: List<String>,
     )
 }
