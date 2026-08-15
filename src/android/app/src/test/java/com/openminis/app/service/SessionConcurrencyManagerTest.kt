@@ -37,6 +37,12 @@ class SessionConcurrencyManagerTest {
     @Before
     fun resetManager() {
         SessionConcurrencyManager.resetForTesting()
+        // [memory-pressure-gate] Pin the gate to NORMAL so existing tests
+        // are unaffected by the real /proc/self/status RSS of the CI runner
+        // (which could exceed the ELEVATED watermark and add real delays).
+        MemoryPressureGate.rssReader = { 0L }
+        MemoryPressureGate.reclaimHook = {}
+        MemoryPressureGate.pressureListener = { _, _ -> }
     }
 
     // --- 基本准入 ---
@@ -247,5 +253,62 @@ class SessionConcurrencyManagerTest {
         assertTrue("unexpected errors: $errors", errors.isEmpty())
         assertEquals(0, SessionConcurrencyManager.runningSessions.value.size)
         assertEquals(0, SessionConcurrencyManager.suspendedSessions.value.size)
+    }
+
+    // --- [memory-pressure-gate] pressure-aware admission ---
+
+    @Test
+    fun `NORMAL pressure admits immediately without reclaim`() = runTest {
+        MemoryPressureGate.rssReader = { 100L }
+        var reclaimed = 0
+        MemoryPressureGate.reclaimHook = { reclaimed++ }
+
+        SessionConcurrencyManager.acquireSlot("s1")
+        assertEquals(setOf("s1"), SessionConcurrencyManager.runningSessions.value)
+        assertEquals(0, reclaimed)
+    }
+
+    @Test
+    fun `ELEVATED pressure delays admission but does not reclaim`() = runTest {
+        MemoryPressureGate.rssReader = { 300L }
+        var reclaimed = 0
+        MemoryPressureGate.reclaimHook = { reclaimed++ }
+        val started = System.currentTimeMillis()
+
+        SessionConcurrencyManager.acquireSlot("s1")
+
+        // 500ms delay happens in test virtual time — assert the slot is
+        // acquired and no reclaim was triggered (ELEVATED is a soft gate).
+        assertEquals(setOf("s1"), SessionConcurrencyManager.runningSessions.value)
+        assertEquals(0, reclaimed)
+    }
+
+    @Test
+    fun `CRITICAL pressure triggers reclaim hook before admission`() = runTest {
+        MemoryPressureGate.rssReader = { 350L }
+        var reclaimed = 0
+        MemoryPressureGate.reclaimHook = { reclaimed++ }
+
+        SessionConcurrencyManager.acquireSlot("s1")
+
+        assertEquals(1, reclaimed)
+        assertEquals(setOf("s1"), SessionConcurrencyManager.runningSessions.value)
+    }
+
+    @Test
+    fun `CRITICAL pressure still admits after reclaim window`() = runTest {
+        MemoryPressureGate.rssReader = { 350L }
+        var reclaimed = 0
+        MemoryPressureGate.reclaimHook = { reclaimed++ }
+
+        // Second acquire also passes (reclaim is a delay, not a rejection —
+        // never deadlocks the FIFO).
+        SessionConcurrencyManager.acquireSlot("s1")
+        SessionConcurrencyManager.acquireSlot("s2")
+        SessionConcurrencyManager.releaseSlot("s1")
+        SessionConcurrencyManager.acquireSlot("s3")
+
+        assertEquals(setOf("s2", "s3"), SessionConcurrencyManager.runningSessions.value)
+        assertEquals(3, reclaimed)
     }
 }

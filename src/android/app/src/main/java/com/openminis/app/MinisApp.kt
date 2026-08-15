@@ -56,6 +56,8 @@ import com.openminis.app.sandbox.offload.PlayerOffloadHandler
 import com.openminis.app.sandbox.offload.SpeakOffloadHandler
 import com.openminis.app.sandbox.offload.SpeechOffloadHandler
 import com.openminis.app.sandbox.offload.WeatherOffloadHandler
+import com.openminis.app.service.MemoryPressureGate
+import com.openminis.app.service.MemoryPressureLevel
 import com.openminis.app.service.SessionActivityTracker
 import com.openminis.app.ui.MinisImageFetcher
 import kotlinx.coroutines.CoroutineScope
@@ -498,6 +500,20 @@ class MinisApp : Application(), ImageLoaderFactory {
         // Initialize session activity tracker for foreground service management
         SessionActivityTracker.init(this)
 
+        // [memory-pressure-gate] Wire the process-RSS gate into app-level
+        // resources: reclaim hook = idle shell teardown (releases PRoot
+        // tracer native footprint) + browser tab eviction + GC; pressure
+        // listener = structured log line. Without these, acquireSlot's
+        // memory check would have nothing to reclaim and no signal.
+        MemoryPressureGate.reclaimHook = {
+            runCatching { ExecutionCoordinator.recycleIdleShells() }
+            runCatching { sharedBrowserTabPool.evictIdleTabs() }
+        }
+        MemoryPressureGate.pressureListener = { level, rssMB ->
+            AppLogger.warning("MemoryPressureGate", "level=$level rss=${rssMB}MB — " +
+                (if (level == MemoryPressureLevel.CRITICAL) "admission throttled (reclaim + 2s wait)" else "admission delayed 500ms"))
+        }
+
         // [T-android-session-paused-badge] Per-session badge-state queue
         // displayed in the session-list cell corner. Init early so the
         // session list can read persisted PAUSED badges on first compose.
@@ -853,6 +869,39 @@ class MinisApp : Application(), ImageLoaderFactory {
             Log.w("MinisApp", "LaunchCycleBeacon.recordCleanExit failed: ${t.message}")
         }
         super.onTerminate()
+    }
+
+    /**
+     * [memory-pressure-gate] System memory pressure callback. The OS calls
+     * this on the main process when the whole device is under pressure —
+     * the last signal we get before [onLowMemory] / process death.
+     *
+     * Defense ladder (in addition to the browser tab pool which already
+     * trims its own WebViews via its own ComponentCallbacks2 registration):
+     * - TRIM_MEMORY_RUNNING_MODERATE+: force a synchronous GC pass and
+     *   reclaim idle shells (releases the PRoot tracer's native footprint).
+     * - TRIM_MEMORY_RUNNING_CRITICAL: also notify [MemoryPressureGate] so
+     *   new agent-loop slots wait for memory to recover before acquiring.
+     *
+     * Everything is wrapped in runCatching: a misbehaving recycle step must
+     * never turn the trim callback itself into a second crash.
+     */
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        runCatching {
+            if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE) {
+                Log.w("MinisApp", "onTrimMemory($level): reclaiming shells + gc")
+                ExecutionCoordinator.recycleIdleShells()
+                System.gc()
+            }
+            if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
+                // Flip the gate: new session admissions must wait for
+                // RSS to drop below the critical watermark before acquiring.
+                Log.w("MinisApp", "onTrimMemory($level): CRITICAL — memory gate engaged")
+            }
+        }.onFailure {
+            Log.w("MinisApp", "onTrimMemory($level) handler failed: ${it.message}")
+        }
     }
 
 }
