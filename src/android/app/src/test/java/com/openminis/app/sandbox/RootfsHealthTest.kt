@@ -111,4 +111,52 @@ class RootfsHealthTest {
         assertEquals(100L, map["bin/bash"])
         assertEquals(200L, map["bin/sh"])
     }
+
+    // ── Integrity size-check contract ─────────────────────────────────
+
+    @Test
+    fun `bin-sh is apk-managed so busybox upgrade does not fail integrity`() {
+        // /bin/sh -> /bin/busybox symlink: busybox's size changes with apk
+        // upgrades, so the manifest's factory size must NOT be asserted.
+        // Regression: every boot reported missing=[/bin/sh] after any
+        // busybox change (fix/boot-sh-false-positive, 2026-08-15).
+        assertTrue("bin/sh" in DYNAMIC_INTEGRITY_PATHS)
+        val manifest = mapOf("bin/sh" to 890123L)
+        assertTrue(integritySizePasses("bin/sh", actualSize = 999_999L, expectedSizes = manifest))
+    }
+
+    @Test
+    fun `all dynamic paths are existence-only regardless of manifest size`() {
+        val manifest = mapOf(
+            "bin/bash" to 1234567L,
+            "usr/lib/libreadline.so.8" to 42L,
+            "usr/lib/libncursesw.so.6" to 42L,
+            "lib/apk/db/installed" to 14907L,
+        )
+        for (rel in listOf(
+            "bin/bash",
+            "usr/lib/libreadline.so.8",
+            "usr/lib/libncursesw.so.6",
+            "lib/apk/db/installed",
+        )) {
+            assertTrue("$rel should be dynamic", rel in DYNAMIC_INTEGRITY_PATHS)
+            assertTrue(integritySizePasses(rel, actualSize = Long.MAX_VALUE, expectedSizes = manifest))
+        }
+    }
+
+    @Test
+    fun `static files still assert factory snapshot size`() {
+        assertFalse("lib/ld-musl-aarch64.so.1" in DYNAMIC_INTEGRITY_PATHS)
+        assertFalse("sbin/apk" in DYNAMIC_INTEGRITY_PATHS)
+        val manifest = mapOf("lib/ld-musl-aarch64.so.1" to 456789L)
+        // Truncated static file (size mismatch) must still be caught…
+        assertFalse(integritySizePasses("lib/ld-musl-aarch64.so.1", actualSize = 111L, expectedSizes = manifest))
+        // …and an intact one passes.
+        assertTrue(integritySizePasses("lib/ld-musl-aarch64.so.1", actualSize = 456789L, expectedSizes = manifest))
+    }
+
+    @Test
+    fun `missing manifest entry falls back to existence-only`() {
+        assertTrue(integritySizePasses("sbin/apk", actualSize = 0L, expectedSizes = emptyMap()))
+    }
 }

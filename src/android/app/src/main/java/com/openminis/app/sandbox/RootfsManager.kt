@@ -48,7 +48,7 @@ sealed class RootfsInstallState {
 data class RootfsHealth(
     /** /bin/bash — interactive terminal shell (readline-based). */
     val bash: Boolean,
-    /** /bin/sh — busybox ash fallback (static-linked, near-unbreakable). */
+    /** /bin/sh — busybox ash fallback (symlink → /bin/busybox, apk-managed). */
     val sh: Boolean,
     /** /lib/ld-musl-aarch64.so.1 — dynamic loader every ELF needs. */
     val libc: Boolean,
@@ -263,33 +263,22 @@ class RootfsManager private constructor(private val context: Context) {
         fun exists(rel: String): Boolean {
             val f = File(rootfsDir, rel)
             if (!f.exists()) return false
-            // Size check: if manifest has an expected size, verify it.
-            val expected = expectedSizes[rel] ?: return true  // no manifest entry → existence-only
-            return f.length() == expected
+            return integritySizePasses(rel, f.length(), expectedSizes)
         }
         fun executable(rel: String): Boolean {
             val f = File(rootfsDir, rel)
             if (!f.exists() || !f.canExecute()) return false
-            val expected = expectedSizes[rel] ?: return true
-            return f.length() == expected
+            return integritySizePasses(rel, f.length(), expectedSizes)
         }
-        // Dynamic paths — installed or upgraded via `apk add`, or grown by
-        // it (the apk database). Their size changes legitimately after the
-        // factory snapshot is written, so asserting the manifest's factory
-        // size against them is WRONG: it made a freshly `apk add`-ed bash
-        // (size != 0) look "missing", and made the grown apk db look
-        // "unusable" — which pushed autoRepair into a full-reset loop on
-        // EVERY boot. These only need to exist.
-        fun existsDynamic(rel: String): Boolean = File(rootfsDir, rel).exists()
 
         return RootfsHealth(
-            bash = existsDynamic("bin/bash"),
-            sh = executable("bin/sh"),
+            bash = exists("bin/bash"),
+            sh = exists("bin/sh"),
             libc = exists("lib/ld-musl-aarch64.so.1"),
-            libreadline = existsDynamic("usr/lib/libreadline.so.8"),
-            libncursesw = existsDynamic("usr/lib/libncursesw.so.6"),
+            libreadline = exists("usr/lib/libreadline.so.8"),
+            libncursesw = exists("usr/lib/libncursesw.so.6"),
             apk = executable("sbin/apk"),
-            apkDatabase = existsDynamic("lib/apk/db/installed"),
+            apkDatabase = exists("lib/apk/db/installed"),
         )
     }
 
@@ -1285,6 +1274,43 @@ internal fun skipFully(input: InputStream, count: Long) {
     }
 }
 
+
+/**
+ * Paths managed by apk (installed/upgraded at runtime, or grown by it —
+ * the apk database). Their on-disk size legitimately differs from the
+ * factory snapshot after any package change, so [verifyIntegrity] must only
+ * check existence for them. Asserting the factory size made a freshly
+ * `apk add`-ed bash (size != 0) look "missing" and a grown apk db look
+ * "unusable" — which pushed autoRepair into a full-reset loop on EVERY boot
+ * (2026-08-13). `/bin/sh` is a symlink to `/bin/busybox`, so it inherits
+ * busybox's runtime size changes too — it was the last dynamic path still
+ * size-asserted, causing a false `missing=[/bin/sh]` on every boot after a
+ * busybox upgrade (fixed 2026-08-15).
+ */
+internal val DYNAMIC_INTEGRITY_PATHS = setOf(
+    "bin/bash",
+    "bin/sh",
+    "usr/lib/libreadline.so.8",
+    "usr/lib/libncursesw.so.6",
+    "lib/apk/db/installed",
+)
+
+/**
+ * Decide whether a path passes the manifest size check. Dynamic
+ * (apk-managed) paths and paths absent from the manifest are existence-only;
+ * everything else must match the factory snapshot size (catches truncation).
+ * Pure so the boot contract is JVM-testable without an Android Context
+ * ([RootfsHealthTest]).
+ */
+internal fun integritySizePasses(
+    rel: String,
+    actualSize: Long,
+    expectedSizes: Map<String, Long>,
+): Boolean {
+    if (rel in DYNAMIC_INTEGRITY_PATHS) return true
+    val expected = expectedSizes[rel] ?: return true
+    return actualSize == expected
+}
 
 /**
  * Factory files that are safe to restore over a damaged rootfs without
