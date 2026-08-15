@@ -2947,6 +2947,11 @@ fun ChatScreen(
                     // the previous key set. The overhead is O(1) per tick.
                     var prevLiveRows: List<FlatChatItem> = emptyList()
                     var prevStreamMap: Map<String, StreamingDelta> = emptyMap()
+                    // [T-android-streaming-tail-patch] Full merged content of
+                    // the streaming message from the previous tick. Used to
+                    // compute the append-only delta when fragment boundary
+                    // splits occur: newLastRawText = prevLastRawText + delta.
+                    var prevMergedText: String = ""
                     // [T-android-stream-pipeline-incremental] Flush the perf
                     // turn when this effect is CANCELLED mid-turn: the
                     // turn-end drain emits `_messages` FIRST (restarting this
@@ -3075,11 +3080,15 @@ fun ChatScreen(
                             // against the merged FULL list so neighbor lookbacks
                             // across the frozen/live boundary stay correct.
                             // sessionId = null keeps the hot path log-free.
+                            var liveMergedText: String = ""
                             val liveRows = if (splitIdx >= msgs.size) {
                                 emptyList()
                             } else {
                                 withContext(Dispatchers.Default) {
                                     val merged = mergeStreamingOverlay(msgs, stream)
+                                    // Capture the streaming message's merged
+                                    // content for delta computation below.
+                                    liveMergedText = stream.values.firstOrNull()?.content ?: ""
                                     buildFlatChatItems(merged, null, fromIndex = splitIdx, seedKeys = frozenKeys)
                                 }
                             }
@@ -3103,7 +3112,12 @@ fun ChatScreen(
                                 if (prevKeys == freshKeys) {
                                     liveRows
                                 } else {
-                                    patchLiveTail(prevLiveRows, liveRows)
+                                    patchLiveTail(
+                                        prev = prevLiveRows,
+                                        fresh = liveRows,
+                                        prevMergedText = prevMergedText,
+                                        currentMergedText = liveMergedText,
+                                    )
                                 }
                             } else {
                                 liveRows
@@ -3113,6 +3127,7 @@ fun ChatScreen(
                                 else frozenRows + effectiveLiveRows
                             prevLiveRows = effectiveLiveRows
                             prevStreamMap = stream
+                            prevMergedText = liveMergedText
                             com.openminis.app.diagnostics.StreamPerfMonitor.tick(
                                 flattenNanos = System.nanoTime() - tickStartNs,
                                 frozenReused = frozenReused,
@@ -6097,18 +6112,31 @@ private fun exportCurrentChat(
 /**
  * [T-android-streaming-tail-patch] Patch the live tail's content in place
  * when the fragment key set diverges (a fragment boundary split mid-stream).
- * Keeps the previous tick's key set stable, merging new content into the
- * last streaming [FlatChatItem.AssistantMarkdownBlock]. Also updates the
- * [FlatChatItem.AssistantToolRunGroup] from the fresh build so tool status
- * transitions (e.g. running→complete) remain correct.
+ *
+ * Model: streaming content only APPENDS, so `currentMergedText` must be
+ * `prevMergedText + delta`. The previous tick's fragments are a stable
+ * prefix of the content — keep all prev instances EXCEPT the last streaming
+ * fragment, whose rawText becomes `oldRawText + delta`. The key set therefore
+ * never changes, and old fragments never lose content (earlier bug: the last
+ * fragment was replaced with the fresh build's LAST fragment text, dropping
+ * the old prefix from the UI).
+ *
+ * Guards:
+ *  - If the previous merged text is not a prefix of the current (shouldn't
+ *    happen with append-only streaming, but defensive), return fresh.
+ *  - If the fresh build's last streaming fragment belongs to a DIFFERENT
+ *    markdown block than prev's (a new block appeared — structural change),
+ *    return fresh.
+ *  - If the prev tail has no streaming fragment (first text fragment
+ *    appearing), return fresh.
  *
  * Returns the patched list (same keys as [prev], updated content fields).
- * Falls back to [fresh] when the prev tail has no streaming fragment
- * (structural change — first text fragment appearing mid-turn).
  */
 private fun patchLiveTail(
     prev: List<FlatChatItem>,
     fresh: List<FlatChatItem>,
+    prevMergedText: String,
+    currentMergedText: String,
 ): List<FlatChatItem> {
     val result = prev.toMutableList()
 
@@ -6119,34 +6147,44 @@ private fun patchLiveTail(
         result[prevToolRunIdx] = freshToolRun
     }
 
-    // 2. Update the last streaming markdown block's content.
-    val freshStreaming = fresh.lastOrNull {
-        it is FlatChatItem.AssistantMarkdownBlock && it.isStreaming
-    } as? FlatChatItem.AssistantMarkdownBlock
-    if (freshStreaming != null) {
+    // 2. Compute the append-only delta. If prevMergedText isn't a prefix of
+    //    currentMergedText, fall back to the fresh build (defensive).
+    if (!prevMergedText.isEmpty() &&
+        currentMergedText.startsWith(prevMergedText) &&
+        currentMergedText.length > prevMergedText.length
+    ) {
+        val delta = currentMergedText.substring(prevMergedText.length)
+
+        // 3. Find prev's last streaming fragment. Fresh's last streaming
+        //    fragment must belong to the SAME markdown block, else the
+        //    structure changed — fall back to fresh.
         val prevStreamingIdx = result.indexOfLast {
             it is FlatChatItem.AssistantMarkdownBlock && it.isStreaming
         }
-        if (prevStreamingIdx >= 0) {
+        val freshStreaming = fresh.lastOrNull {
+            it is FlatChatItem.AssistantMarkdownBlock && it.isStreaming
+        } as? FlatChatItem.AssistantMarkdownBlock
+        if (prevStreamingIdx >= 0 && freshStreaming != null) {
             val prevBlock = result[prevStreamingIdx] as FlatChatItem.AssistantMarkdownBlock
-            // AssistantMarkdownBlock is a regular class with a hand-rolled
-            // equals (length-based) — no copy(). Construct a new instance
-            // preserving identity fields, swapping in the fresh content.
-            result[prevStreamingIdx] = FlatChatItem.AssistantMarkdownBlock(
-                messageId = prevBlock.messageId,
-                parentBlockId = prevBlock.parentBlockId,
-                rawText = freshStreaming.rawText,
-                blockIndex = prevBlock.blockIndex,
-                isLastBlockOfMessage = prevBlock.isLastBlockOfMessage,
-                messageIsStreaming = prevBlock.messageIsStreaming,
-                messageMarkdown = freshStreaming.messageMarkdown,
-            )
-        } else {
-            // No streaming fragment in prev — this is a structural change
-            // (first text fragment appearing). Accept fresh build.
-            return fresh
+            if (prevBlock.parentBlockId == freshStreaming.parentBlockId) {
+                // Same block, content grew: old prefix stays, delta appended.
+                // AssistantMarkdownBlock is a regular class with a hand-rolled
+                // equals (length-based) — no copy(). Construct with fresh
+                // content fields.
+                result[prevStreamingIdx] = FlatChatItem.AssistantMarkdownBlock(
+                    messageId = prevBlock.messageId,
+                    parentBlockId = prevBlock.parentBlockId,
+                    rawText = prevBlock.rawText + delta,
+                    blockIndex = prevBlock.blockIndex,
+                    isLastBlockOfMessage = prevBlock.isLastBlockOfMessage,
+                    messageIsStreaming = prevBlock.messageIsStreaming,
+                    messageMarkdown = freshStreaming.messageMarkdown,
+                )
+                return result
+            }
         }
     }
 
-    return result
+    // Structural change or unsafe divergence — accept the fresh build.
+    return fresh
 }
