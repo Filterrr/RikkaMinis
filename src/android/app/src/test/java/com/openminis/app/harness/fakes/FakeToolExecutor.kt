@@ -31,11 +31,11 @@ class FakeToolExecutor(
 
     /** 执行一个工具，返回结果。 */
     fun execute(toolName: String, operationId: String): HarnessToolResult {
+        val count = _executionCount.getOrDefault(toolName, 0) + 1
+        _executionCount[toolName] = count
         val script = scripts[toolName] ?: return HarnessToolResult(
             toolName, true, false, 0
         )
-        val count = _executionCount.getOrDefault(toolName, 0) + 1
-        _executionCount[toolName] = count
 
         when (script.behavior) {
             ToolBehavior.SUCCESS -> {
