@@ -127,7 +127,7 @@ class RealRuntimePortAcceptanceTest {
     }
 
     @Test
-    fun `every real run emits schema 2.0 header`() {
+    fun `emits schema v2 header on every run`() {
         for (scenario in allScenarios) {
             val outcome = runScenario(scenario)
             val lines = outcome.port.trace.lines
