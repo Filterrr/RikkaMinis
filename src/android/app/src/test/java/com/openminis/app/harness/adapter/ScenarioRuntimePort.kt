@@ -7,6 +7,8 @@ import com.openminis.app.harness.contract.HarnessTraceEvent
 import com.openminis.app.harness.contract.PersistenceMark
 import com.openminis.app.harness.contract.ToolBehavior
 import com.openminis.app.harness.contract.ToolCallScript
+import kotlinx.coroutines.delay
+import com.openminis.app.harness.contract.ToolCallScript
 
 /**
  * [T4-B] 场景感知 [AgentRuntimePort] —— 按 [FaultScenario] 的脚本定义
@@ -96,9 +98,13 @@ class ScenarioRuntimePort(
             ToolBehavior.FAILURE -> ToolCallResult(
                 success = false, sideEffectPerformed = false, resultKnown = true,
             )
-            ToolBehavior.SIDE_EFFECT_THEN_NO_RESULT -> ToolCallResult(
-                success = false, sideEffectPerformed = true, resultKnown = false,
-            )
+            ToolBehavior.SIDE_EFFECT_THEN_NO_RESULT -> {
+                // F14: 模拟工具执行耗时（确保 processDeathAtMs=20 在工具执行期间到达）
+                delay(100)
+                ToolCallResult(
+                    success = false, sideEffectPerformed = true, resultKnown = false,
+                )
+            }
             ToolBehavior.BLOCK_UNTIL_CANCELLED -> ToolCallResult(
                 success = false, sideEffectPerformed = true, resultKnown = false,
                 cancelled = true,

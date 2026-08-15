@@ -213,7 +213,7 @@ class RealAgentAdapterSkeleton(
                         drive.historyIntact = true
                         emitEvent(AgentRunEvent.CompactionFinished())
                         emitEvent(AgentRunEvent.ProcessInterrupted("compact_timeout"))
-                        emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
+                        emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.INTERRUPTED, AgentTerminalReason.PROCESS_INTERRUPTED))
                         // RUN_FINALIZED
                         return
                     }
@@ -312,7 +312,7 @@ class RealAgentAdapterSkeleton(
                             }
                             if (runtime.isProcessDead()) {
                                 emitEvent(AgentRunEvent.ProcessInterrupted("process_death"))
-                                emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
+                                emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.INTERRUPTED, AgentTerminalReason.PROCESS_INTERRUPTED))
                                 // RUN_FINALIZED
                                 return
                             }
