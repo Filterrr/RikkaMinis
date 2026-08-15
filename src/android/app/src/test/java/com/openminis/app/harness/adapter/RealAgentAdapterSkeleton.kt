@@ -20,34 +20,31 @@ import com.openminis.app.harness.adapter.ScenarioRuntimePort
 import kotlinx.coroutines.delay
 
 /**
- * [T4-B] 生产 adapter 骨架 —— 场景驱动循环的**结构**，实现留桩等 T7。
+ * [T4-B] 生产 adapter —— 场景驱动循环（与 T4-A `HarnessRunner` 同构）。
  *
- * ## 当前状态
+ * ## 职责
  *
- * 本骨架定义的是"真实主链驱动循环"的完整形状（turn loop → provider attempt →
- * tool → finalize → report），与 T4-A `HarnessRunner` 的流程对齐。凡依赖
- * T7 冻结接口的步骤都以 `TODO(await T7 ...)` 标注，T7 完成后逐点填实现。
+ * 消费 [FaultScenario]（故障脚本），经 [AgentRuntimePort] 驱动 provider / tool /
+ * shell / persistence / session slot，产出与 T4-A `HarnessRunner` **同构**的
+ * [ScenarioReport]（[ScenarioReportFactory] 保证结构一致），由 `ScenarioVerifier`
+ * 断言 —— runner 被替换为生产 adapter，场景与断言引擎原样复用。
  *
- * ## 诚实占位（不伪装成功）
+ * ## 状态机契约（T5 `AgentRunReducer`）
  *
- * T7 未接入时，[driveTurnLoop] 返回 null（占位），[executeScenario] 将状态机
- * 显式落为 FAILED(EXECUTION_FAILED) 并产出报告 —— **绝不**把未接入的循环
- * 伪装成 Succeeded。T7 完成后此行为被真实循环替换。
+ * 驱动循环只发事件（[AgentRunEvent]），不直接改状态；终态唯一、非法转换拒绝。
+ * 所有出口必须：先经终止事件（UserCancelled / DeadlineReached / ProcessInterrupted /
+ * PersistenceFailed / WorkCompleted / ProviderAttemptFinished(FATAL)）进入
+ * FINALIZING，再 `RunFinalized` 落终态，并记一条 RUN_FINALIZED trace
+ * （[ScenarioReportFactory] 用 trace 计数断言 `traceTerminalEvents == 1`）。
  *
- * ## 与 T7 的分工
+ * 与 T4-A 参考实现对齐的语义：
+ * - 用户取消 → CANCELLED（终态契约 4.1）；
+ * - 进程死亡 / 断流 / deadline / outcome-unknown 工具 → INTERRUPTED（可恢复）；
+ * - fallback 链耗尽 / turn 预算耗尽 → FAILED；
+ * - finalAnswer 且持久化成功 → SUCCEEDED；持久化失败 → FAILED；
+ * - 首次 outcome-unknown 副作用不计 duplicate（只有重跑才计）。
  *
- * - 本骨架负责：场景驱动的**编排**（读 [FaultScenario]、走循环、收集证据、
- *   组装 [ScenarioReport]）；
- * - T7 负责：[AgentRuntimePort] 的真实实现（provider/tool/shell/persistence/
- *   slot/trace 的真实调用），以及把状态机事件接入真实主链。
- *
- * ## 验收（T7 完成后）
- *
- * 替换 [AgentRuntimePort] 为真实实现后，`executeScenario` 必须对 F01-F14
- * 全部场景产出与 T4-A `HarnessRunner` **同构**的报告（[ScenarioReportFactory]
- * 保证结构一致），由 `ScenarioVerifier` 断言。
- *
- * @param runtime 运行时端口（当前 fake / T7 后真实）
+ * @param runtime 运行时端口（T4-B 阶段 = [ScenarioRuntimePort]，T7 后 = 真实实现）
  * @param budgetFactory 按场景创建生产预算（注入以支持测试确定性）
  * @param reduce 状态机 reduce 函数（注入以便测试替换为记录版本）
  */
@@ -67,6 +64,10 @@ class RealAgentAdapterSkeleton(
         var historyIntact = true
         var persistenceMark = PersistenceMark.NONE
         var sessionSlotReleased = true
+        /** 已产生副作用的工具操作（按 run 内唯一 id），用于 duplicate 判定。 */
+        val performedToolOps = mutableSetOf<String>()
+        /** 是否存在 outcome-unknown 的工具结果（run 结束未收敛时不得伪装成功）。 */
+        var hasOutcomeUnknownTool = false
         val traceEvents = mutableListOf<HarnessTraceEvent>()
         val cooldowns = mutableListOf<CooldownRecord>()
     }
@@ -115,7 +116,7 @@ class RealAgentAdapterSkeleton(
             drive.sessionSlotReleased = true
         }
 
-        // 5. 占位未接入 → 显式 FAILED（诚实暴露，不伪装成功）
+        // 5. 循环未落终态 → 显式 FAILED（诚实暴露，不伪装成功）
         if (!state.isTerminal) {
             state = apply(
                 reduce, state,
@@ -127,6 +128,17 @@ class RealAgentAdapterSkeleton(
             // PREPARING 特例下 RunFinalized(FAILED) 合法（无进行中工作）
             drive.persistenceMark = PersistenceMark.NONE
             emit(runtime, drive, TraceEventType.RUN_FINALIZED, detail = "terminal=FAILED placeholder")
+        }
+
+        // 5b. 终态持久化标记派生：显式未设置时按终态语义补齐
+        //     （F07/F08 CANCELLED、F11/F14 INTERRUPTED → PARTIAL；SUCCEEDED → COMPLETED；FAILED → NONE）
+        if (drive.persistenceMark == PersistenceMark.NONE && state.isTerminal) {
+            drive.persistenceMark = when (state.phase) {
+                AgentRunPhase.SUCCEEDED -> PersistenceMark.COMPLETED
+                AgentRunPhase.CANCELLED,
+                AgentRunPhase.INTERRUPTED -> PersistenceMark.PARTIAL
+                else -> PersistenceMark.NONE
+            }
         }
 
         // 6. 组装报告（纯逻辑，可测）
@@ -166,35 +178,42 @@ class RealAgentAdapterSkeleton(
             TraceBridge.emit(runtime, type, now, detail)
         }
 
+        /**
+         * 统一收尾：先落终态（reducer 从 FINALIZING 接受），再记 RUN_FINALIZED trace。
+         * 调用方必须先发过终止事件（UserCancelled / ProcessInterrupted / DeadlineReached /
+         * WorkCompleted / ProviderAttemptFinished(FATAL) 等）使状态进入 FINALIZING。
+         */
+        fun finalizeRun(terminal: AgentTerminal, reason: AgentTerminalReason) {
+            emitEvent(AgentRunEvent.RunFinalized(terminal, reason))
+            emitTrace(TraceEventType.RUN_FINALIZED, "terminal=$terminal")
+        }
+
         for ((turnIdx, turn) in scenario.turns.withIndex()) {
             // ── 前置检查 ─────────────────────────────────────────────
             if (budget.isExpired()) {
                 emitEvent(AgentRunEvent.DeadlineReached(budget.startedAtMonotonicMs))
                 emitTrace(TraceEventType.DEADLINE_REACHED, "deadline at turn entry")
-                emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.INTERRUPTED, AgentTerminalReason.DEADLINE_EXCEEDED))
+                finalizeRun(AgentTerminal.INTERRUPTED, AgentTerminalReason.DEADLINE_EXCEEDED)
                 return
             }
             if (runtime.isUserCancelled()) {
                 emitEvent(AgentRunEvent.UserCancelled("user_cancelled"))
                 emitTrace(TraceEventType.USER_CANCELLED, "user cancelled at turn entry")
-                emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.CANCELLED, AgentTerminalReason.USER_CANCELLED))
-                drive.providerCancellations++
-                emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
-                // RUN_FINALIZED
+                finalizeRun(AgentTerminal.CANCELLED, AgentTerminalReason.USER_CANCELLED)
                 return
             }
             if (runtime.isProcessDead()) {
                 emitEvent(AgentRunEvent.ProcessInterrupted("process_death"))
                 emitTrace(TraceEventType.PROCESS_INTERRUPTED, "process death at turn entry")
-                emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.INTERRUPTED, AgentTerminalReason.PROCESS_INTERRUPTED))
+                finalizeRun(AgentTerminal.INTERRUPTED, AgentTerminalReason.PROCESS_INTERRUPTED)
                 return
             }
 
             // ── turn 预算 ────────────────────────────────────────────
-            if (budget.consumeTurn() is com.openminis.app.agent.runtime.BudgetDecision.Denied) {
+            if (budget.consumeTurn() is BudgetDecision.Denied) {
                 emitEvent(AgentRunEvent.ProcessInterrupted("budget_exhausted(turn_limit)"))
                 emitTrace(TraceEventType.PROCESS_INTERRUPTED, "turn limit")
-                emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
+                finalizeRun(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED)
                 return
             }
 
@@ -202,23 +221,22 @@ class RealAgentAdapterSkeleton(
             if (turn.compactDelayMs > 0) {
                 emitEvent(AgentRunEvent.CompactionStarted("pre_turn_$turnIdx"))
                 drive.compactCalls++
-                // 等待 compact 超时或完成
-                val compactWait = turn.compactDelayMs.coerceAtMost(
-                    scenario.compactTimeoutMs ?: turn.compactDelayMs
-                )
-                if (compactWait > 0) {
-                    delay(compactWait)
-                    // compact 超时后中断（F09 语义：超时不损坏原历史）
-                    if (compactWait >= (scenario.compactTimeoutMs ?: Long.MAX_VALUE)) {
+                val timeoutMs = scenario.compactTimeoutMs
+                if (timeoutMs != null && timeoutMs > 0) {
+                    // 有超时上限：等待到超时点，超时即中断（F09 语义：历史不损坏）
+                    delay(turn.compactDelayMs.coerceAtMost(timeoutMs))
+                    if (turn.compactDelayMs > timeoutMs) {
                         drive.historyIntact = true
                         drive.persistenceMark = PersistenceMark.PARTIAL
-                        emitEvent(AgentRunEvent.CompactionFinished())
+                        emitTrace(TraceEventType.COMPACT_FINISHED, "compact timeout")
                         emitEvent(AgentRunEvent.ProcessInterrupted("compact_timeout"))
-                        emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.INTERRUPTED, AgentTerminalReason.PROCESS_INTERRUPTED))
-                        // RUN_FINALIZED
+                        finalizeRun(AgentTerminal.INTERRUPTED, AgentTerminalReason.PROCESS_INTERRUPTED)
                         return
                     }
+                } else {
+                    delay(turn.compactDelayMs)
                 }
+                emitTrace(TraceEventType.COMPACT_FINISHED, "compact success")
                 emitEvent(AgentRunEvent.CompactionFinished())
             }
 
@@ -226,57 +244,64 @@ class RealAgentAdapterSkeleton(
             for ((attemptIdx, attempt) in turn.attempts.withIndex()) {
                 if (budget.isExpired()) {
                     emitEvent(AgentRunEvent.DeadlineReached(budget.startedAtMonotonicMs))
-                    emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
-                    // RUN_FINALIZED
+                    emitTrace(TraceEventType.DEADLINE_REACHED, "deadline before attempt")
+                    finalizeRun(AgentTerminal.INTERRUPTED, AgentTerminalReason.DEADLINE_EXCEEDED)
                     return
                 }
                 if (runtime.isUserCancelled()) {
                     emitEvent(AgentRunEvent.UserCancelled("user_cancelled"))
+                    emitTrace(TraceEventType.USER_CANCELLED, "user cancelled before attempt")
                     drive.providerCancellations++
-                    emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
-                    // RUN_FINALIZED
+                    finalizeRun(AgentTerminal.CANCELLED, AgentTerminalReason.USER_CANCELLED)
                     return
                 }
                 if (runtime.isProcessDead()) {
                     emitEvent(AgentRunEvent.ProcessInterrupted("process_death"))
-                    emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
-                    // RUN_FINALIZED
+                    emitTrace(TraceEventType.PROCESS_INTERRUPTED, "process death before attempt")
+                    finalizeRun(AgentTerminal.INTERRUPTED, AgentTerminalReason.PROCESS_INTERRUPTED)
                     return
                 }
 
                 // 消耗 provider attempt 预算
-                if (budget.consumeProviderAttempt() is com.openminis.app.agent.runtime.BudgetDecision.Denied) {
+                if (budget.consumeProviderAttempt() is BudgetDecision.Denied) {
                     emitEvent(AgentRunEvent.ProcessInterrupted("budget_exhausted(provider_attempts)"))
-                    emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
-                    // RUN_FINALIZED
+                    emitTrace(TraceEventType.PROCESS_INTERRUPTED, "provider attempt budget")
+                    finalizeRun(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED)
                     return
                 }
 
                 emitEvent(AgentRunEvent.ProviderAttemptStarted)
 
-                // 模拟冷却等待（F01/F02 cooldown 场景）
+                // 模拟冷却/前置等待（F07/F11：等待期间必须轮询 deadline/cancel/death，
+                // 对齐参考 HarnessRunner 10ms 粒度的时钟推进；打断 = providerCancellations++）
                 if (attempt.delayMs > 0) {
-                    delay(attempt.delayMs)
-                    if (budget.isExpired()) {
-                        emitEvent(AgentRunEvent.DeadlineReached(budget.startedAtMonotonicMs))
-                        emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
-                        // RUN_FINALIZED
-                        return
+                    var remaining = attempt.delayMs
+                    while (remaining > 0) {
+                        val step = minOf(10L, remaining)
+                        delay(step)
+                        remaining -= step
+                        if (budget.isExpired()) {
+                            emitEvent(AgentRunEvent.DeadlineReached(budget.startedAtMonotonicMs))
+                            emitTrace(TraceEventType.DEADLINE_REACHED, "deadline during attempt delay")
+                            drive.providerCancellations++
+                            finalizeRun(AgentTerminal.INTERRUPTED, AgentTerminalReason.DEADLINE_EXCEEDED)
+                            return
+                        }
+                        if (runtime.isUserCancelled()) {
+                            emitEvent(AgentRunEvent.UserCancelled("user_cancelled"))
+                            emitTrace(TraceEventType.USER_CANCELLED, "user cancelled during attempt delay")
+                            drive.providerCancellations++
+                            finalizeRun(AgentTerminal.CANCELLED, AgentTerminalReason.USER_CANCELLED)
+                            return
+                        }
+                        if (runtime.isProcessDead()) {
+                            emitEvent(AgentRunEvent.ProcessInterrupted("process_death"))
+                            emitTrace(TraceEventType.PROCESS_INTERRUPTED, "process death during attempt delay")
+                            drive.providerCancellations++
+                            finalizeRun(AgentTerminal.INTERRUPTED, AgentTerminalReason.PROCESS_INTERRUPTED)
+                            return
+                        }
                     }
-                }
-                if (runtime.isUserCancelled()) {
-                    emitEvent(AgentRunEvent.UserCancelled("user_cancelled"))
-                    drive.providerCancellations++
-                    emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
-                    // RUN_FINALIZED
-                    return
-                }
-                // T4-B: delay 后检查 process death（F14 场景，processDeathAtMs 在 delay 期间到达）
-                if (runtime.isProcessDead()) {
-                    emitEvent(AgentRunEvent.ProcessInterrupted("process_death"))
-                    emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
-                    // RUN_FINALIZED
-                    return
                 }
 
                 val providerResult = runtime.callProvider(attemptIdx)
@@ -288,110 +313,117 @@ class RealAgentAdapterSkeleton(
                         ))
                         // 执行工具
                         for (toolName in providerResult.toolCalls) {
-                            if (budget.consumeToolCall() is com.openminis.app.agent.runtime.BudgetDecision.Denied) {
+                            if (budget.consumeToolCall() is BudgetDecision.Denied) {
                                 emitEvent(AgentRunEvent.ProcessInterrupted("budget_exhausted(tool_calls)"))
-                                emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
-                                // RUN_FINALIZED
+                                emitTrace(TraceEventType.PROCESS_INTERRUPTED, "tool call budget")
+                                finalizeRun(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED)
                                 return
                             }
                             emitEvent(AgentRunEvent.ToolStarted(toolName))
                             val toolResult = runtime.executeTool(toolName)
                             emitEvent(AgentRunEvent.ToolFinished(toolName, toolResult.resultKnown))
-                            if (!toolResult.resultKnown && toolResult.sideEffectPerformed) {
-                                drive.duplicateSideEffects++
+                            // duplicate 判定：仅同操作重跑才计（首次 outcome-unknown 不算重复）
+                            if (toolResult.sideEffectPerformed) {
+                                val opId = "turn.$turnIdx.tool.$toolName"
+                                if (opId in drive.performedToolOps) drive.duplicateSideEffects++
+                                drive.performedToolOps.add(opId)
                             }
-                            if (toolResult.cancelled) drive.toolCancellations++
+                            if (!toolResult.resultKnown) drive.hasOutcomeUnknownTool = true
                             if (toolResult.spawnRejected) drive.spawnRejected++
 
-                            // 检查取消（F08 语义：工具中被取消）
-                            if (runtime.isUserCancelled()) {
-                                emitEvent(AgentRunEvent.UserCancelled("user_cancelled"))
+                            // 用户取消的确定性来源：工具结果 cancelled 且进程未死 ⇒ 用户取消
+                            if (toolResult.cancelled && !runtime.isProcessDead()) {
                                 drive.toolCancellations++
-                                emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
-                                // RUN_FINALIZED
+                                emitEvent(AgentRunEvent.UserCancelled("tool_cancelled"))
+                                emitTrace(TraceEventType.USER_CANCELLED, "tool cancelled")
+                                finalizeRun(AgentTerminal.CANCELLED, AgentTerminalReason.USER_CANCELLED)
                                 return
                             }
+                            // 进程死亡（F14：工具执行期间死亡）→ INTERRUPTED，不是 FAILED
                             if (runtime.isProcessDead()) {
                                 emitEvent(AgentRunEvent.ProcessInterrupted("process_death"))
-                                emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.INTERRUPTED, AgentTerminalReason.PROCESS_INTERRUPTED))
-                                // RUN_FINALIZED
+                                emitTrace(TraceEventType.PROCESS_INTERRUPTED, "process death during tool")
+                                finalizeRun(AgentTerminal.INTERRUPTED, AgentTerminalReason.PROCESS_INTERRUPTED)
+                                return
+                            }
+                            // 兜底：工具返回后用户取消（F08 语义）
+                            if (runtime.isUserCancelled()) {
+                                drive.toolCancellations++
+                                emitEvent(AgentRunEvent.UserCancelled("user_cancelled"))
+                                emitTrace(TraceEventType.USER_CANCELLED, "user cancelled after tool")
+                                finalizeRun(AgentTerminal.CANCELLED, AgentTerminalReason.USER_CANCELLED)
                                 return
                             }
                         }
                         // finalAnswer → 本轮终结（不再走更多 turn）
                         if (providerResult.finalAnswer) {
                             emitEvent(AgentRunEvent.WorkCompleted)
-                            // 终态持久化
+                            // 终态持久化（F12：失败则终态 FAILED，不伪装成功）
                             val persistOk = runtime.persist(PersistenceMark.COMPLETED)
-                            if (!persistOk) {
+                            if (persistOk) {
+                                drive.persistenceMark = PersistenceMark.COMPLETED
+                                finalizeRun(AgentTerminal.SUCCEEDED, AgentTerminalReason.COMPLETED)
+                            } else {
                                 emitEvent(AgentRunEvent.PersistenceFailed("finalize_persist"))
                                 drive.persistenceMark = PersistenceMark.FAILED
-                            } else {
-                                drive.persistenceMark = PersistenceMark.COMPLETED
+                                finalizeRun(AgentTerminal.FAILED, AgentTerminalReason.PERSISTENCE_FAILED)
                             }
-                            emitEvent(AgentRunEvent.RunFinalized(
-                                terminal = AgentTerminal.SUCCEEDED,
-                                reason = AgentTerminalReason.COMPLETED,
-                            ))
-                            emitTrace(TraceEventType.RUN_FINALIZED, "terminal=SUCCEEDED")
-                            emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
-                            // RUN_FINALIZED
                             return
                         }
                         // 无 finalAnswer → 继续下一轮
                     }
 
                     is ProviderCallResult.RateLimited -> {
-                        emitEvent(AgentRunEvent.ProviderAttemptFinished(
-                            ProviderAttemptOutcome.TRANSIENT_FAILURE
-                        ))
                         drive.cooldowns.add(CooldownRecord(
                             providerId = "provider_$attemptIdx",
                             cooldownUntilMs = System.nanoTime() / 1_000_000L + providerResult.cooldownMs,
                         ))
                         // 还有后续 attempt → fallback 继续
                         if (attemptIdx + 1 < turn.attempts.size) {
+                            emitEvent(AgentRunEvent.ProviderAttemptFinished(
+                                ProviderAttemptOutcome.FALLBACK_FAILURE
+                            ))
+                            emitTrace(TraceEventType.FALLBACK_SELECTED, "rate limited, fallback to ${attemptIdx + 1}")
                             emitEvent(AgentRunEvent.FallbackSelected(attemptIdx + 1))
                         } else {
+                            // fallback 链耗尽 → FATAL 直达 FINALIZING（不能先 TRANSIENT 再 FATAL）
                             emitEvent(AgentRunEvent.ProviderAttemptFinished(
                                 ProviderAttemptOutcome.FATAL_FAILURE
                             ))
                             emitEvent(AgentRunEvent.ProcessInterrupted("all_fallbacks_exhausted"))
                             emitTrace(TraceEventType.PROCESS_INTERRUPTED, "all_fallbacks_exhausted after rate limit")
-                            emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
-                            return
+                            finalizeRun(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED)
                         }
                     }
 
                     is ProviderCallResult.StreamReset -> {
-                        emitEvent(AgentRunEvent.ProviderAttemptFinished(
-                            ProviderAttemptOutcome.TRANSIENT_FAILURE
-                        ))
                         // 尝试重试（同一 provider）或 fallback
                         if (attemptIdx + 1 < turn.attempts.size) {
+                            emitEvent(AgentRunEvent.ProviderAttemptFinished(
+                                ProviderAttemptOutcome.TRANSIENT_FAILURE
+                            ))
+                            emitTrace(TraceEventType.RETRY_REQUESTED, "stream reset, retry")
                             emitEvent(AgentRunEvent.RetryRequested("stream_reset"))
                         } else {
+                            // fallback 链耗尽 → 直接 FATAL（TRANSIENT 后再 FATAL 会被 reducer 拒绝）
                             emitEvent(AgentRunEvent.ProviderAttemptFinished(
                                 ProviderAttemptOutcome.FATAL_FAILURE
                             ))
-                            emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
-                            // RUN_FINALIZED
-                            return
+                            emitEvent(AgentRunEvent.ProcessInterrupted("all_fallbacks_exhausted"))
+                            emitTrace(TraceEventType.PROCESS_INTERRUPTED, "all_fallbacks_exhausted after stream reset")
+                            finalizeRun(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED)
                         }
                     }
 
                     is ProviderCallResult.DroppedAfterFirstChunk -> {
-                        // 首 chunk 后断流 → partial content → INTERRUPTED
+                        // 首 chunk 后断流 → 部分输出已产生 → INTERRUPTED（可恢复）
                         emitEvent(AgentRunEvent.ProviderAttemptFinished(
                             ProviderAttemptOutcome.TRANSIENT_FAILURE
                         ))
-                        emitEvent(AgentRunEvent.ProcessInterrupted("dropped_after_first_chunk"))
                         drive.persistenceMark = PersistenceMark.PARTIAL
                         emitEvent(AgentRunEvent.ProcessInterrupted("dropped_after_first_chunk"))
                         emitTrace(TraceEventType.PROCESS_INTERRUPTED, "dropped after first chunk")
-                        drive.persistenceMark = PersistenceMark.PARTIAL
-                        emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.INTERRUPTED, AgentTerminalReason.PROCESS_INTERRUPTED))
-                        return
+                        finalizeRun(AgentTerminal.INTERRUPTED, AgentTerminalReason.PROCESS_INTERRUPTED)
                     }
 
                     is ProviderCallResult.HardFailure -> {
@@ -400,6 +432,7 @@ class RealAgentAdapterSkeleton(
                             emitEvent(AgentRunEvent.ProviderAttemptFinished(
                                 ProviderAttemptOutcome.FALLBACK_FAILURE
                             ))
+                            emitTrace(TraceEventType.FALLBACK_SELECTED, "hard failure, fallback to ${attemptIdx + 1}")
                             emitEvent(AgentRunEvent.FallbackSelected(attemptIdx + 1))
                         } else {
                             // fallback 链耗尽
@@ -408,8 +441,7 @@ class RealAgentAdapterSkeleton(
                             ))
                             emitEvent(AgentRunEvent.ProcessInterrupted("all_fallbacks_exhausted"))
                             emitTrace(TraceEventType.PROCESS_INTERRUPTED, "all_fallbacks_exhausted after hard failure")
-                            emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
-                            return
+                            finalizeRun(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED)
                         }
                     }
 
@@ -423,17 +455,20 @@ class RealAgentAdapterSkeleton(
             }
         }
 
-        // 所有 turn 耗尽 → 正常结束（但未 finalAnswer）
+        // ── 所有 turn 耗尽 → 正常结束（但未 finalAnswer）────────────
         if (budget.isExpired()) {
             emitEvent(AgentRunEvent.DeadlineReached(budget.startedAtMonotonicMs))
             emitTrace(TraceEventType.DEADLINE_REACHED, "deadline after turns exhausted")
-            emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.INTERRUPTED, AgentTerminalReason.DEADLINE_EXCEEDED))
-            emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.INTERRUPTED, AgentTerminalReason.DEADLINE_EXCEEDED))
+            finalizeRun(AgentTerminal.INTERRUPTED, AgentTerminalReason.DEADLINE_EXCEEDED)
+        } else if (drive.hasOutcomeUnknownTool) {
+            // outcome unknown 工具 → 不能证明副作用安全（F06 语义）→ INTERRUPTED 可恢复
+            emitEvent(AgentRunEvent.ProcessInterrupted("outcome_unknown_tool"))
+            emitTrace(TraceEventType.PROCESS_INTERRUPTED, "run ended with outcome unknown tool")
+            finalizeRun(AgentTerminal.INTERRUPTED, AgentTerminalReason.OUTCOME_UNKNOWN)
         } else {
             emitEvent(AgentRunEvent.ProcessInterrupted("turns_exhausted_without_final"))
             emitTrace(TraceEventType.PROCESS_INTERRUPTED, "turns exhausted without final")
-            emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
-            emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
+            finalizeRun(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED)
         }
     }
 
@@ -486,7 +521,6 @@ class RealAgentAdapterSkeleton(
          */
         fun defaultBudgetFor(scenario: FaultScenario): AgentExecutionBudget {
             val now = System.nanoTime() / 1_000_000L
-            // RUN_FINALIZED
             return AgentExecutionBudget(
                 startedAtMonotonicMs = now,
                 deadlineMonotonicMs = now + scenario.deadlineMs.coerceAtMost(Long.MAX_VALUE / 4),
