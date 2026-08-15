@@ -74,16 +74,22 @@ class RealAgentAdapterSkeletonTest {
     }
 
     @Test
-    fun `placeholder loop reports FAILED honestly`() {
+    fun `skeleton drives turn loop with fake runtime port`() {
         val runtime = FakeRuntimePort(slotAcquired = true)
         val adapter = RealAgentAdapterSkeleton(runtime)
         val report = runBlocking { adapter.executeScenario(minimalScenario) }
-        // T7 未接入 → 占位循环不执行真实调用 → 诚实 FAILED（不伪装 Succeeded）
-        assertTrue(report.terminal == TerminalState.FAILED, "placeholder → FAILED")
-        assertTrue(runtime.providerCalls.isEmpty(), "no provider calls in placeholder")
-        assertTrue(runtime.toolCalls.isEmpty(), "no tool calls in placeholder")
-        assertTrue(runtime.shellCalls.isEmpty(), "no shell calls in placeholder")
+        // driveTurnLoop now runs: FakeRuntimePort returns Success(finalAnswer=true)
+        // on the first callProvider(0), so the loop completes with SUCCEEDED.
+        assertTrue(report.terminal == TerminalState.SUCCEEDED, "skeleton → SUCCEEDED (FakeRuntimePort returns finalAnswer=true)")
+        assertTrue(runtime.providerCalls.size == 1, "1 provider call")
+        assertTrue(runtime.toolCalls.isEmpty(), "no tool calls (minimal scenario has none)")
+        assertTrue(runtime.shellCalls.isEmpty(), "no shell calls")
         assertTrue(report.traceTerminalEvents == 1, "terminal trace event exactly once")
+        assertTrue(runtime.persistCalls.size == 1, "persist called once on finalAnswer")
+        assertTrue(
+            runtime.persistCalls.first() == com.openminis.app.harness.contract.PersistenceMark.COMPLETED,
+            "persist with COMPLETED",
+        )
     }
 
     @Test
@@ -125,7 +131,7 @@ class RealAgentAdapterSkeletonTest {
         val adapter = RealAgentAdapterSkeleton(runtime)
         val report = runBlocking { adapter.executeScenario(minimalScenario) }
         assertTrue(report.budgetSnapshot.maxTurns == 100, "budget snapshot present")
-        assertTrue(report.persistenceMark == PersistenceMark.NONE, "placeholder persistence=NONE")
+        assertTrue(report.persistenceMark == PersistenceMark.COMPLETED, "skeleton completion → COMPLETED")
     }
 
     private fun assertTrue(condition: Boolean, msg: String) {
