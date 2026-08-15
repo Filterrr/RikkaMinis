@@ -952,8 +952,7 @@ internal fun ToolCallRunGroup(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = 2.dp)
-            .animateContentSize(),
+            .padding(vertical = 2.dp),
     ) {
         // Header — always visible; the collapsing unit is the content below.
         // [T-android-run-group-thinking] Two-line header: row 1 = icon +
