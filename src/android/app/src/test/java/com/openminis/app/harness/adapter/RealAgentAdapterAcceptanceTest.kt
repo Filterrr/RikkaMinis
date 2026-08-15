@@ -35,7 +35,7 @@ class RealAgentAdapterAcceptanceTest {
             val report = runScenario(scenario)
             val violations = ScenarioVerifier.verify(scenario, report)
             if (violations.isNotEmpty()) {
-                failures.add("${scenario.id}: ${violations.joinToString("; ") { "${it.category} ${it.detail}" }}")
+                failures.add("${scenario.id}: ${violations.joinToString("; ") { "${it.category} ${it.message}" }}")
             }
         }
         assertTrue(
@@ -75,7 +75,7 @@ class RealAgentAdapterAcceptanceTest {
         val report = runScenario(scenario)
         val violations = ScenarioVerifier.verify(scenario, report)
         assertTrue(
-            "${scenario.id} violations:\n  ${violations.joinToString("\n  ") { "${it.category} ${it.detail}" }}",
+            "${scenario.id} violations:\n  ${violations.joinToString("\n  ") { "${it.category} ${it.message}" }}",
             violations.isEmpty(),
         )
     }
