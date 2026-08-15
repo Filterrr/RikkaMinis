@@ -2128,6 +2128,7 @@ class ChatViewModel(
                 )
                 // T7-D: 旁路验证 —— compact 结束
                 t7Reduce(AgentRunEvent.CompactionFinished())
+            }
             // [T-android-compact-queued-drain] A successful compact must let
             // any queued prompts proceed — previously nothing re-triggered the
             // drain after compact (loop-end / cancel / tool-boundary are the
