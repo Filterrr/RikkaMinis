@@ -473,7 +473,6 @@ class RealAgentAdapterSkeleton(
          */
         fun defaultBudgetFor(scenario: FaultScenario): AgentExecutionBudget {
             val now = System.nanoTime() / 1_000_000L
-            emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
             // RUN_FINALIZED
             return AgentExecutionBudget(
                 startedAtMonotonicMs = now,
