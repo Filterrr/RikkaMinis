@@ -98,11 +98,19 @@ class ScenarioRuntimePort(
                 success = false, sideEffectPerformed = false, resultKnown = true,
             )
             ToolBehavior.SIDE_EFFECT_THEN_NO_RESULT -> {
-                // F14: 模拟工具执行耗时（确保 processDeathAtMs=20 在工具执行期间到达）
+                // F14: 模拟工具执行耗时，并在 delay 后检查 process death
                 delay(100)
-                ToolCallResult(
-                    success = false, sideEffectPerformed = true, resultKnown = false,
-                )
+                // 如果 process death 在工具执行期间发生，工具未完成即中断
+                if (isProcessDead()) {
+                    ToolCallResult(
+                        success = false, sideEffectPerformed = false, resultKnown = true,
+                        cancelled = true,
+                    )
+                } else {
+                    ToolCallResult(
+                        success = false, sideEffectPerformed = true, resultKnown = false,
+                    )
+                }
             }
             ToolBehavior.BLOCK_UNTIL_CANCELLED -> ToolCallResult(
                 success = false, sideEffectPerformed = true, resultKnown = false,
