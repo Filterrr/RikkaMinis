@@ -116,21 +116,7 @@ class RealAgentAdapterSkeleton(
             drive.sessionSlotReleased = true
         }
 
-        // 5. 循环未落终态 → 显式 FAILED（诚实暴露，不伪装成功）
-        if (!state.isTerminal) {
-            state = apply(
-                reduce, state,
-                AgentRunEvent.RunFinalized(
-                    terminal = AgentTerminal.FAILED,
-                    reason = AgentTerminalReason.EXECUTION_FAILED,
-                ),
-            )
-            // PREPARING 特例下 RunFinalized(FAILED) 合法（无进行中工作）
-            drive.persistenceMark = PersistenceMark.NONE
-            emit(runtime, drive, TraceEventType.RUN_FINALIZED, detail = "terminal=FAILED placeholder")
-        }
-
-        // 5b. 终态持久化标记派生：显式未设置时按终态语义补齐
+        // 5. 终态持久化标记派生：显式未设置时按终态语义补齐
         //     （F07/F08 CANCELLED、F11/F14 INTERRUPTED → PARTIAL；SUCCEEDED → COMPLETED；FAILED → NONE）
         if (drive.persistenceMark == PersistenceMark.NONE && state.isTerminal) {
             drive.persistenceMark = when (state.phase) {
