@@ -1,6 +1,7 @@
 package com.openminis.app.service
 
 import kotlinx.coroutines.CancellableContinuation
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -61,8 +62,21 @@ object SessionConcurrencyManager {
      * 容量未满立即返回；已满则进入 FIFO 队列挂起，直到 [releaseSlot] / 其它释放提升。
      * 协程被取消时从队列原子移除并以 [kotlinx.coroutines.CancellationException] 结束，
      * 不会在取消后又被提升为 active。
+     *
+     * [memory-pressure-gate] 准入前检查进程 RSS 水线（[MemoryPressureGate]）：
+     * ELEVATED 短暂等待 500ms（让回收动作生效）；CRITICAL 触发全局回收并等待 2s；
+     * 扩散的目的不是拒绝准入（那会饿死重任务），而是给内存恢复争取时间——
+     * 在大量 shell/WebView 线程堆积时避免新的 agent loop 立即把 RSS 推向硬门槛。
      */
     suspend fun acquireSlot(sessionId: String) {
+        val pressure = MemoryPressureGate.level()
+        MemoryPressureGate.notify(pressure)
+        if (pressure == MemoryPressureLevel.CRITICAL) {
+            MemoryPressureGate.reclaimAndWait()
+        } else if (pressure == MemoryPressureLevel.ELEVATED) {
+            delay(500L)
+        }
+
         val runId = controller.newRunId()
         val outcome: SessionSlotController.AcquireOutcome = synchronized(this) {
             val r = controller.acquire(runId)
