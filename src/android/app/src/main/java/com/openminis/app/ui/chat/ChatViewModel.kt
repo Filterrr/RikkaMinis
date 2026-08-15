@@ -8808,12 +8808,13 @@ class ChatViewModel(
                 true
             }
             is BudgetDecision.Denied -> {
+                val deniedReason = decision.reason  // smart-cast to Denied
                 runCatching {
                     agentTraceRecorder.budgetRefuse(
                         dimension = dimension,
                         requested = 1,
                         remaining = t7Remaining(dimension, budget.snapshot()),
-                        reason = when (d.reason) {
+                        reason = when (deniedReason) {
                             BudgetExhaustedReason.TURN_LIMIT,
                             BudgetExhaustedReason.PROVIDER_ATTEMPT_LIMIT,
                             BudgetExhaustedReason.TOOL_CALL_LIMIT,
