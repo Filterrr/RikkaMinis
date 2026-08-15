@@ -1,0 +1,137 @@
+package com.openminis.app.harness.adapter
+
+import com.openminis.app.harness.contract.AttemptResult
+import com.openminis.app.harness.contract.AttemptScript
+import com.openminis.app.harness.contract.FaultScenario
+import com.openminis.app.harness.contract.HarnessTraceEvent
+import com.openminis.app.harness.contract.PersistenceMark
+import com.openminis.app.harness.contract.ToolBehavior
+import com.openminis.app.harness.contract.ToolCallScript
+
+/**
+ * [T4-B] 场景感知 [AgentRuntimePort] —— 按 [FaultScenario] 的脚本定义
+ * 模拟 provider/tool/shell 行为，使 `RealAgentAdapterSkeleton` 能驱动
+ * F01-F14 并验证终态与行为一致性。
+ *
+ * 与 [FakeRuntimePort] 的区别：FakeRuntimePort 是固定返回 Success 的
+ * 结构测试桩；本端口读取场景脚本，逐次返回对应的 ProviderCallResult。
+ */
+class ScenarioRuntimePort(
+    private val scenario: FaultScenario,
+    var persistResult: Boolean = true,
+    var userCancelled: Boolean = false,
+    var processDead: Boolean = false,
+) : AgentRuntimePort {
+
+    /** 当前执行到的 turn 索引 */
+    private var currentTurn = 0
+    /** 当前 turn 内已尝试的 attempt 计数 */
+    private var attemptInTurn = 0
+    /** 当前 turn 内已消耗的工具脚本索引 */
+    private var toolIndex = 0
+
+    val emitted = mutableListOf<HarnessTraceEvent>()
+    val providerCalls = mutableListOf<Int>()
+    val toolCalls = mutableListOf<String>()
+    val shellCalls = mutableListOf<String>()
+    val persistCalls = mutableListOf<PersistenceMark>()
+    var acquireCount = 0
+    var releaseCount = 0
+
+    /** 场景的当前 attempt 脚本（由 turn 和 attempt 索引定位） */
+    private fun currentAttempt(): AttemptScript? {
+        if (currentTurn >= scenario.turns.size) return null
+        val turn = scenario.turns[currentTurn]
+        if (attemptInTurn >= turn.attempts.size) return null
+        return turn.attempts[attemptInTurn]
+    }
+
+    /** 场景的工具脚本（按 toolName 索引） */
+    private fun toolScriptFor(name: String): ToolCallScript? =
+        scenario.toolScripts[name]
+
+    override suspend fun callProvider(attemptIndex: Int): ProviderCallResult {
+        providerCalls += attemptIndex
+        val script = currentAttempt()
+        attemptInTurn++
+
+        if (script == null) {
+            return ProviderCallResult.HardFailure("no more attempts in scenario")
+        }
+
+        return when (script.result) {
+            AttemptResult.SUCCESS -> {
+                ProviderCallResult.Success(
+                    toolCalls = script.toolCalls,
+                    finalAnswer = script.finalAnswer,
+                )
+            }
+            AttemptResult.HTTP_429 -> {
+                ProviderCallResult.RateLimited(cooldownMs = script.cooldownMs)
+            }
+            AttemptResult.STREAM_RESET -> {
+                ProviderCallResult.StreamReset("scenario script")
+            }
+            AttemptResult.DROP_AFTER_FIRST_CHUNK -> {
+                ProviderCallResult.DroppedAfterFirstChunk()
+            }
+            AttemptResult.HARD_FAILURE -> {
+                ProviderCallResult.HardFailure("scenario script hard failure")
+            }
+            AttemptResult.LENGTH_FINISH -> {
+                ProviderCallResult.LengthFinish("scenario script length finish")
+            }
+        }
+    }
+
+    override suspend fun executeTool(toolName: String): ToolCallResult {
+        toolCalls += toolName
+        val script = toolScriptFor(toolName)
+
+        val behavior = script?.behavior ?: ToolBehavior.SUCCESS
+        return when (behavior) {
+            ToolBehavior.SUCCESS -> ToolCallResult(
+                success = true, sideEffectPerformed = false, resultKnown = true,
+            )
+            ToolBehavior.FAILURE -> ToolCallResult(
+                success = false, sideEffectPerformed = false, resultKnown = true,
+            )
+            ToolBehavior.SIDE_EFFECT_THEN_NO_RESULT -> ToolCallResult(
+                success = false, sideEffectPerformed = true, resultKnown = false,
+            )
+            ToolBehavior.BLOCK_UNTIL_CANCELLED -> ToolCallResult(
+                success = false, sideEffectPerformed = true, resultKnown = false,
+                cancelled = true,
+            )
+            ToolBehavior.SPAWN -> ToolCallResult(
+                success = false, sideEffectPerformed = false, resultKnown = true,
+                spawnRejected = true,
+            )
+        }
+    }
+
+    override suspend fun runShell(command: String): ShellCallResult =
+        ShellCallResult(success = true, sideEffectPerformed = false, resultKnown = true)
+
+    override suspend fun persist(mark: PersistenceMark): Boolean {
+        persistCalls += mark
+        return persistResult
+    }
+
+    override fun acquireSlot(runId: String): Boolean {
+        acquireCount++
+        return true
+    }
+
+    override fun releaseSlot(runId: String) {
+        releaseCount++
+    }
+
+    override fun emitTrace(event: HarnessTraceEvent) {
+        emitted += event
+    }
+
+    override fun isUserCancelled(): Boolean = userCancelled
+
+    override fun isProcessDead(): Boolean = processDead
+}
