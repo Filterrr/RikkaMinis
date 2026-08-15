@@ -7,6 +7,7 @@ import com.openminis.app.harness.runner.ScenarioVerifier
 import com.openminis.app.harness.scenarios.FaultScenarios
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 /**
@@ -23,12 +24,9 @@ import org.junit.Test
  * | 预算/Reducer | 骨架（生产类） | 骨架（生产类，不变） |
  * | Provider/Tool/Shell/Persist | 场景脚本 | 场景脚本（[ScenarioBehaviorSource]） |
  *
- * F01-F14 场景本身不依赖槽位/trace 的"真实"程度 —— 它们验证的是终态收敛、
- * 预算、trace 事件计数、持久化标记等。因此用真实组件跑同样场景后，
- * [ScenarioVerifier] 断言应全部通过。在此基础上，新增真实组件断言：
- * - 槽位快照：run 结束后 activeCount == 0（所有槽位已释放）
- * - trace JSONL：包含 trace_start 和 trace_end 行
- * - trace JSONL：trace_end 仅一条（terminal 去重）
+ * 除 [ScenarioVerifier] 标准断言外，本测试还验证真实生产组件的注入：
+ * - 槽位快照：run 结束后 `activeCount == 0`（所有槽位已释放，T1 不变量 3/4）；
+ * - trace JSONL：`trace_start` 恰好一条、`trace_end` 恰好一条（T6 terminal 去重）。
  *
  * F10（五会话并发）因使用专用 FakeSessionSlots 测试路径，不在本测试中覆盖。
  */
@@ -45,35 +43,17 @@ class RealRuntimePortAcceptanceTest {
     @Test
     fun `all F01-F14 scenarios pass through RealRuntimePort`() {
         val failures = mutableListOf<String>()
-        val slotFailures = mutableListOf<String>()
-        val traceFailures = mutableListOf<String>()
-
         for (scenario in allScenarios) {
-            val report = runScenario(scenario)
-
-            // 标准验证（与 ScenarioRuntimePort 同构）
-            val violations = ScenarioVerifier.verify(scenario, report)
+            val outcome = runScenario(scenario)
+            val violations = ScenarioVerifier.verify(scenario, outcome.report)
             if (violations.isNotEmpty()) {
                 failures.add("${scenario.id}: ${violations.joinToString("; ") { "${it.category} ${it.message}" }}")
             }
         }
-        assertTrue("F01-F14 violations via RealRuntimePort:\n  ${failures.joinToString("\n  ")}", failures.isEmpty())
-
-        // 所有断言通过（测试失败时显示详细消息）
-        if (slotFailures.isNotEmpty() || traceFailures.isNotEmpty()) {
-            val msg = buildString {
-                if (slotFailures.isNotEmpty()) {
-                    appendLine("Slot violations:")
-                    slotFailures.forEach { appendLine("  $it") }
-                }
-                if (traceFailures.isNotEmpty()) {
-                    appendLine("Trace violations:")
-                    traceFailures.forEach { appendLine("  $it") }
-                }
-            }
-            // 不 assert，仅记录 —— 槽位/trace 断言是增强验证，不是 F01-F14 必要条件
-            println("RealRuntimePort enhanced checks:\n$msg")
-        }
+        assertTrue(
+            "F01-F14 violations via RealRuntimePort:\n  ${failures.joinToString("\n  ")}",
+            failures.isEmpty(),
+        )
     }
 
     // ── 单场景测试（与 RealAgentAdapterAcceptanceTest 一一对应） ──────
@@ -105,22 +85,88 @@ class RealRuntimePortAcceptanceTest {
     @Test
     fun `F14 process death`() = verifySingle(FaultScenarios.F14)
 
+    // ── 真实组件不变量测试 ───────────────────────────────────────────
+
+    @Test
+    fun `session slot released after every scenario run`() {
+        val failures = mutableListOf<String>()
+        for (scenario in allScenarios) {
+            val outcome = runScenario(scenario)
+            val snap = outcome.port.slot.snapshot()
+            if (snap.activeCount != 0 || snap.waitingCount != 0) {
+                failures.add(
+                    "${scenario.id}: slot not drained: active=${snap.activeCount} waiting=${snap.waitingCount}"
+                )
+            }
+        }
+        assertTrue(
+            "slot leak detected:\n  ${failures.joinToString("\n  ")}",
+            failures.isEmpty(),
+        )
+    }
+
+    @Test
+    fun `trace_start and trace_end exactly once per run`() {
+        val failures = mutableListOf<String>()
+        for (scenario in allScenarios) {
+            val outcome = runScenario(scenario)
+            val lines = outcome.port.trace.lines
+            val starts = lines.count { it.contains("\"trace_start\"") }
+            val ends = lines.count { it.contains("\"trace_end\"") }
+            if (starts != 1) {
+                failures.add("${scenario.id}: trace_start=$starts (expected 1)")
+            }
+            if (ends != 1) {
+                failures.add("${scenario.id}: trace_end=$ends (expected 1)")
+            }
+        }
+        assertTrue(
+            "trace terminal mismatch:\n  ${failures.joinToString("\n  ")}",
+            failures.isEmpty(),
+        )
+    }
+
+    @Test
+    fun `every real run emits schema 2.0 header`() {
+        for (scenario in allScenarios) {
+            val outcome = runScenario(scenario)
+            val first = outcome.port.trace.lines.firstOrNull()
+            if (first == null) {
+                fail("${scenario.id}: no trace lines emitted")
+            }
+            assertTrue(
+                "${scenario.id}: trace_start missing schema_version", 
+                first.contains("trace_schema_version")
+            )
+            assertTrue(
+                "${scenario.id}: trace_start missing run_id",
+                first.contains("run_id")
+            )
+        }
+    }
+
     private fun verifySingle(scenario: FaultScenario) {
-        val report = runScenario(scenario)
-        val violations = ScenarioVerifier.verify(scenario, report)
+        val outcome = runScenario(scenario)
+        val violations = ScenarioVerifier.verify(scenario, outcome.report)
         assertTrue(
             "${scenario.id} violations via RealRuntimePort:\n  ${violations.joinToString("\n  ") { "${it.category} ${it.message}" }}",
             violations.isEmpty(),
         )
     }
 
-    private fun runScenario(scenario: FaultScenario): ScenarioReport {
+    private fun runScenario(scenario: FaultScenario): ScenarioOutcome {
         val traceLines = mutableListOf<String>()
         val port = RealRuntimePort.forScenarioWithSink(
             scenario = scenario,
             sink = { traceLines += it },
         )
         val adapter = RealAgentAdapterSkeleton(port)
-        return runBlocking { adapter.executeScenario(scenario) }
+        val report = runBlocking { adapter.executeScenario(scenario) }
+        return ScenarioOutcome(port, report)
     }
+
+    private class ScenarioOutcome(
+        val port: RealRuntimePort,
+        val report: ScenarioReport,
+    )
 }
