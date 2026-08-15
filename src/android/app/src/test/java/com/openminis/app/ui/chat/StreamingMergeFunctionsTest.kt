@@ -161,10 +161,10 @@ class StreamingMergeFunctionsTest {
 
     @Test fun `legacy single character suffix overlap concatenates`() {
         // "Hello" suffix "o" matches incoming "orld" prefix "o"
-        // overlap = 1, below MINIMUM_STREAMING_OVERLAP_LENGTH
+        // overlap = 1, below MINIMUM_STREAMING_OVERLAP_LENGTH (3)
         // commonPrefixLength of "Hello" and "orld" = 0 (H != o)
-        // falls through to fallback concatenation: "Hello" + "orld" = "HelloWorld"
-        assertEquals("HelloWorld", mergeLegacyStreamingText("Hello", "orld"))
+        // not divergent -> fallback: "Hello" + "orld" = "Helloorld"
+        assertEquals("Helloorld", mergeLegacyStreamingText("Hello", "orld"))
     }
 
     @Test fun `legacy divergent snapshot keeps longer version`() {
@@ -202,13 +202,9 @@ class StreamingMergeFunctionsTest {
     }
 
     @Test fun `legacy suffix prefix overlap with long common substring`() {
-        // "defdef" has suffix "def" (3 chars)
-        // "defghi" has prefix "def" (3 chars)
-        // overlap = 3 < MINIMUM_STREAMING_OVERLAP_LENGTH (likely 12+)
-        // So falls through to divergent
-        // Common prefix length = 3 (both start with "def")
-        // 3 < 12 -> not divergent -> fallback concatenation
-        assertEquals("defdefdefghi", mergeLegacyStreamingText("defdef", "defdefghi"))
+        // "defdef" (6 chars) + "defdefghi" (9 chars)
+        // incoming starts with current -> normal append path -> returns incoming
+        assertEquals("defdefghi", mergeLegacyStreamingText("defdef", "defdefghi"))
     }
 
     @Test fun `legacy no overlap concatenation fallback`() {
