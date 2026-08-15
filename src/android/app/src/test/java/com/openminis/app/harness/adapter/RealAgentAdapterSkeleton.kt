@@ -270,6 +270,13 @@ class RealAgentAdapterSkeleton(
                     // RUN_FINALIZED
                     return
                 }
+                // T4-B: delay 后检查 process death（F14 场景，processDeathAtMs 在 delay 期间到达）
+                if (runtime.isProcessDead()) {
+                    emitEvent(AgentRunEvent.ProcessInterrupted("process_death"))
+                    emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
+                    // RUN_FINALIZED
+                    return
+                }
 
                 val providerResult = runtime.callProvider(attemptIdx)
 
