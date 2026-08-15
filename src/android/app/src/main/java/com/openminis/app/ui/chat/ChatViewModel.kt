@@ -6628,6 +6628,15 @@ class ChatViewModel(
             to = t7PhaseSchema(AgentRunPhase.PREPARING),
             reason = "RunStarted",
         )
+        // T7-B: session slot lease 观察 —— streamJob 在进入 runAgentLoop 前
+        // 已经成功 acquireSlot；此处登记 lease（trace 侧），语义是
+        // "run 持有会话并发槽位"。释放统一在 t7EndRun(finalize) 发出，
+        // 保证任何终态（正常/取消/异常）都有对应的 release 事件。
+        t7ResourceAcquire(
+            resourceType = AgentTraceRecorder.RESOURCE_SESSION_SLOT,
+            resourceId = activeSessionId,
+            leaseToken = "slot-$runId",
+        )
         // [T-android-queued-message-interrupt-on-toolclose] `assistantId` is
         // normally a single message id for the whole agent loop (iOS-parity:
         // multiple tool/text turns folded into one bubble). It is reassigned
@@ -8346,43 +8355,64 @@ class ChatViewModel(
         t7ConsumeAndTrace(AgentTraceRecorder.DIMENSION_TOOL_CALLS) { it.consumeToolCall() }
         t7State(t7PhaseSchema(AgentRunPhase.EXECUTING_TOOLS), t7PhaseSchema(AgentRunPhase.EXECUTING_TOOLS), "ToolStarted($name)")
 
-        val result = when (name) {
-            FileReadTool.NAME -> {
-                val result = FileReadTool.execute(argsJson, activeSessionId, context)
-                // Record skill usage when SKILL.md under /var/minis/skills/<id>/ is read.
-                if (result.success) {
-                    runCatching {
-                        val readPath = JSONObject(argsJson).optString("path", "")
-                        if (readPath.isNotEmpty()) {
-                            skillRepository?.skillIdFromPath(readPath)?.let { sid ->
-                                skillRepository.recordSkillUse(sid)
+        // T7-B: tool slot lease —— 工具执行期间占用一个并发工具槽位
+        // （budget 的 tryAcquireToolSlot，advisory），trace 侧登记 acquire；
+        // finally 无条件 release（成功/异常/取消都释放，不泄漏槽位）。
+        val toolLease = "tool-$toolId-${activeRunId ?: "norun"}"
+        activeRunBudget?.tryAcquireToolSlot()
+        t7ResourceAcquire(
+            resourceType = AgentTraceRecorder.RESOURCE_TOOL_SLOT,
+            resourceId = toolId,
+            leaseToken = toolLease,
+        )
+        val result = try {
+            when (name) {
+                FileReadTool.NAME -> {
+                    val result = FileReadTool.execute(argsJson, activeSessionId, context)
+                    // Record skill usage when SKILL.md under /var/minis/skills/<id>/ is read.
+                    if (result.success) {
+                        runCatching {
+                            val readPath = JSONObject(argsJson).optString("path", "")
+                            if (readPath.isNotEmpty()) {
+                                skillRepository?.skillIdFromPath(readPath)?.let { sid ->
+                                    skillRepository.recordSkillUse(sid)
+                                }
                             }
                         }
                     }
+                    result
                 }
-                result
+                FileWriteTool.NAME -> FileWriteTool.execute(argsJson, activeSessionId, context).also {
+                    if (it.success) maybeReloadSkillsForPath(argsJson)
+                }
+                FileEditTool.NAME -> FileEditTool.execute(argsJson, activeSessionId, context).also {
+                    if (it.success) maybeReloadSkillsForPath(argsJson)
+                }
+                // T178: pass sessionId + context so read_image routes through
+                // resolveSessionHostPath like file_read/write/edit do — without
+                // these, the tool consults the global last-writer-wins
+                // bindMounts map and would surface another session's
+                // /var/minis/{workspace,attachments,offloads,browser} files.
+                ReadImageTool.NAME -> ReadImageTool.execute(argsJson, activeSessionId, context)
+                "shell_execute" -> executeShellCommand(argsJson, toolId, toolBlocks, assistantId, currentText)
+                "browser_use" -> executeBrowserUseTool(argsJson)
+                "memory_write" -> executeMemoryWriteTool(argsJson)
+                "memory_get" -> executeMemoryGetTool(argsJson)
+                "memory_rollup" -> executeMemoryRollupTool()
+                // [T7-subagent] spawn_agent: delegate to an independent sub-agent
+                // instance running the named skill.
+                SubagentSkill.NAME -> executeSpawnAgentTool(argsJson)
+                else -> ToolExecutionResult("Unknown tool: $name", false)
             }
-            FileWriteTool.NAME -> FileWriteTool.execute(argsJson, activeSessionId, context).also {
-                if (it.success) maybeReloadSkillsForPath(argsJson)
-            }
-            FileEditTool.NAME -> FileEditTool.execute(argsJson, activeSessionId, context).also {
-                if (it.success) maybeReloadSkillsForPath(argsJson)
-            }
-            // T178: pass sessionId + context so read_image routes through
-            // resolveSessionHostPath like file_read/write/edit do — without
-            // these, the tool consults the global last-writer-wins
-            // bindMounts map and would surface another session's
-            // /var/minis/{workspace,attachments,offloads,browser} files.
-            ReadImageTool.NAME -> ReadImageTool.execute(argsJson, activeSessionId, context)
-            "shell_execute" -> executeShellCommand(argsJson, toolId, toolBlocks, assistantId, currentText)
-            "browser_use" -> executeBrowserUseTool(argsJson)
-            "memory_write" -> executeMemoryWriteTool(argsJson)
-            "memory_get" -> executeMemoryGetTool(argsJson)
-            "memory_rollup" -> executeMemoryRollupTool()
-            // [T7-subagent] spawn_agent: delegate to an independent sub-agent
-            // instance running the named skill.
-            SubagentSkill.NAME -> executeSpawnAgentTool(argsJson)
-            else -> ToolExecutionResult("Unknown tool: $name", false)
+        } finally {
+            // T7-B: 无条件释放 tool slot —— 覆盖成功、普通异常、CancellationException
+            activeRunBudget?.releaseToolSlot()
+            t7ResourceRelease(
+                resourceType = AgentTraceRecorder.RESOURCE_TOOL_SLOT,
+                resourceId = toolId,
+                leaseToken = toolLease,
+                releasedBy = AgentTraceRecorder.RELEASED_FINALIZE,
+            )
         }
 
         // T9: record tool result event
@@ -8772,7 +8802,35 @@ class ChatViewModel(
     }
 
     /**
-     * T7-A: 统一终态收尾 —— 写 2.0 trace_end（terminal state + budget 终态
+     * T7-B: 资源 lease 的容错封装 —— 记录 resource_acquire 事件并消耗
+     * 对应预算维度（advisory）。resourceType 用 AgentTraceRecorder 的
+     * RESOURCE_* 常量；leaseToken 用 runId + 资源前缀保证唯一。
+     * 观察失败不影响主执行。
+     */
+    private fun t7ResourceAcquire(
+        resourceType: String,
+        resourceId: String,
+        leaseToken: String,
+    ) {
+        runCatching { agentTraceRecorder.resourceAcquire(resourceType, resourceId, leaseToken) }
+    }
+
+    /**
+     * T7-B: 资源 lease 释放的容错封装 —— 记录 resource_release 事件并释放
+     * 对应预算维度（幂等）。releasedBy 用 AgentTraceRecorder 的 RELEASED_*
+     * 常量，供审计判断释放原因（normal/cancel/finalize/error/timeout）。
+     */
+    private fun t7ResourceRelease(
+        resourceType: String,
+        resourceId: String,
+        leaseToken: String,
+        releasedBy: String,
+    ) {
+        runCatching { agentTraceRecorder.resourceRelease(resourceType, resourceId, leaseToken, releasedBy) }
+    }
+
+    /**
+     * T7-B: 统一终态收尾 —— 写 2.0 trace_end（terminal state + budget 终态
      * 快照），并清空本轮观察上下文。幂等：trace 侧由 recorder 的 terminal
      * 去重保证只写一次；本函数对 null budget 安全（观察未启动时 no-op）。
      */
@@ -8783,7 +8841,23 @@ class ChatViewModel(
         error: String? = null,
     ) {
         val budget = activeRunBudget
+        val runId = activeRunId
         runCatching {
+            // T7-B: session slot lease 释放 —— 任何终态路径都在这里 release，
+            // 与 runAgentLoop 入口的 acquire 配对（lease 平衡可被审计）。
+            runId?.let { rid ->
+                t7ResourceRelease(
+                    resourceType = AgentTraceRecorder.RESOURCE_SESSION_SLOT,
+                    resourceId = activeSessionId,
+                    leaseToken = "slot-$rid",
+                    releasedBy = when (terminal) {
+                        AgentTerminal.SUCCEEDED -> AgentTraceRecorder.RELEASED_NORMAL
+                        AgentTerminal.CANCELLED -> AgentTraceRecorder.RELEASED_CANCEL
+                        AgentTerminal.INTERRUPTED -> AgentTraceRecorder.RELEASED_RECOVERY
+                        AgentTerminal.FAILED -> AgentTraceRecorder.RELEASED_ERROR
+                    },
+                )
+            }
             val snap = budget?.snapshot()
             agentTraceRecorder.endRun(
                 terminalState = t7TerminalSchema(terminal),
@@ -8800,6 +8874,7 @@ class ChatViewModel(
         }
         activeRunBudget = null
         activeRunId = null
+        t7ObservedPhase = null
     }
 
     /**
@@ -8890,16 +8965,25 @@ class ChatViewModel(
     ): ToolExecutionResult {
         // T7-A: 观察 —— shell 命令消耗 shell_commands 预算（advisory，不阻断）
         t7ConsumeAndTrace(AgentTraceRecorder.DIMENSION_SHELL_COMMANDS) { it.consumeShellCommand() }
-        return try {
-            val args = JSONObject(argsJson)
-            var command = args.optString("command", "")
-            val timeoutSec = args.optInt("timeout", 900).coerceIn(1, 900)
-            val delaySec = args.optInt("delay", 0).coerceAtLeast(0)
-            val toolTitle = args.optString("tool_title", "shell_execute")
+        // T7-B: shell lease —— 执行期间占用 shell 资源，finally 无条件释放
+        // （覆盖成功、异常、取消路径，不泄漏 shell 槽位）
+        val shellLease = "shell-${toolId}-${activeRunId ?: "norun"}"
+        t7ResourceAcquire(
+            resourceType = AgentTraceRecorder.RESOURCE_SHELL,
+            resourceId = "shell_execute",
+            leaseToken = shellLease,
+        )
+        try {
+            return try {
+                val args = JSONObject(argsJson)
+                var command = args.optString("command", "")
+                val timeoutSec = args.optInt("timeout", 900).coerceIn(1, 900)
+                val delaySec = args.optInt("delay", 0).coerceAtLeast(0)
+                val toolTitle = args.optString("tool_title", "shell_execute")
 
-            if (command.isBlank()) {
-                return ToolExecutionResult("Error: 'command' is required", false, toolTitle = toolTitle)
-            }
+                if (command.isBlank()) {
+                    return ToolExecutionResult("Error: 'command' is required", false, toolTitle = toolTitle)
+                }
 
             // [T-android-overlay-finalize item 1] Removed the
             // shell-specific status hack ("shell: $toolTitle"). Since the
@@ -9060,6 +9144,15 @@ class ChatViewModel(
             )
         } catch (e: Exception) {
             ToolExecutionResult("Error: ${e.message}", false)
+        }
+        } finally {
+            // T7-B: 无条件释放 shell lease —— 覆盖成功、异常、取消路径
+            t7ResourceRelease(
+                resourceType = AgentTraceRecorder.RESOURCE_SHELL,
+                resourceId = "shell_execute",
+                leaseToken = shellLease,
+                releasedBy = AgentTraceRecorder.RELEASED_FINALIZE,
+            )
         }
     }
 
