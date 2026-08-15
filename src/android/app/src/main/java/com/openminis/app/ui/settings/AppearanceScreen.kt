@@ -164,8 +164,8 @@ fun getFontScale(context: Context, key: String): Float =
     fontScaleForLevel(getAppearancePrefs(context).getInt(key, 0))
 
 fun fontScaleForLevel(level: Int): Float {
-    val idx = fontScaleValues.indexOf(level).coerceIn(0, fontScaleMultipliers.lastIndex)
-    return fontScaleMultipliers[idx]
+    val idx = fontScaleValues.indexOf(level)
+    return if (idx < 0) 1.0f else fontScaleMultipliers[idx]
 }
 
 @Composable

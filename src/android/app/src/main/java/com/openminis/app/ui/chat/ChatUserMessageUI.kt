@@ -413,7 +413,7 @@ internal fun UserMessageBubble(
                                 Text(
                                     text = message.content,
                                     color = textColor,
-                                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 16.5.sp),
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 16.5.sp * LocalMarkdownFontScale.current),
                                     modifier = bubbleModifier
                                         .background(bubbleBg, shape)
                                         .clip(shape)

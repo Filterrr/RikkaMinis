@@ -4857,6 +4857,7 @@ fun ChatScreen(
                         val interactionSource = remember { MutableInteractionSource() }
                         val mergedTextStyle = MaterialTheme.typography.bodyMedium.copy(
                             fontSize = 16.5.sp * chatInputFontScale,
+                            lineHeight = 20.sp * chatInputFontScale,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                         // [T-android-enter-to-send-broken] Live read of the
