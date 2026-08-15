@@ -152,25 +152,38 @@ class RealAgentAdapterSkeleton(
         drive: DriveState,
         emitEvent: (AgentRunEvent) -> Unit,
     ) {
+        // Trace emission helper: records into drive.traceEvents AND
+        // passes through runtime.emitTrace so the ScenarioReport's
+        // trace event counts are populated.
+        fun emitTrace(type: TraceEventType, detail: String? = null) {
+            val now = System.nanoTime() / 1_000_000L
+            drive.traceEvents += HarnessTraceEvent(type, now, detail)
+            TraceBridge.emit(runtime, type, now, detail)
+        }
+
         for ((turnIdx, turn) in scenario.turns.withIndex()) {
             // ── 前置检查 ─────────────────────────────────────────────
             if (budget.isExpired()) {
                 emitEvent(AgentRunEvent.DeadlineReached(budget.startedAtMonotonicMs))
+                emitTrace(TraceEventType.DEADLINE_REACHED, "deadline at turn entry")
                 return
             }
             if (runtime.isUserCancelled()) {
                 emitEvent(AgentRunEvent.UserCancelled("user_cancelled"))
+                emitTrace(TraceEventType.USER_CANCELLED, "user cancelled at turn entry")
                 drive.providerCancellations++
                 return
             }
             if (runtime.isProcessDead()) {
                 emitEvent(AgentRunEvent.ProcessInterrupted("process_death"))
+                emitTrace(TraceEventType.PROCESS_DEATH, "process death at turn entry")
                 return
             }
 
             // ── turn 预算 ────────────────────────────────────────────
             if (budget.consumeTurn() is com.openminis.app.agent.runtime.BudgetDecision.Denied) {
                 emitEvent(AgentRunEvent.ProcessInterrupted("budget_exhausted(turn_limit)"))
+                emitTrace(TraceEventType.BUDGET_EXHAUSTED, "turn limit")
                 return
             }
 
@@ -281,6 +294,7 @@ class RealAgentAdapterSkeleton(
                                 terminal = AgentTerminal.SUCCEEDED,
                                 reason = AgentTerminalReason.COMPLETED,
                             ))
+                            emitTrace(TraceEventType.RUN_FINALIZED, "terminal=SUCCEEDED")
                             return
                         }
                         // 无 finalAnswer → 继续下一轮
@@ -302,6 +316,7 @@ class RealAgentAdapterSkeleton(
                                 ProviderAttemptOutcome.FATAL_FAILURE
                             ))
                             emitEvent(AgentRunEvent.ProcessInterrupted("all_fallbacks_exhausted"))
+                            emitTrace(TraceEventType.PROCESS_DEATH, "all_fallbacks_exhausted after rate limit")
                             return
                         }
                     }
@@ -329,6 +344,7 @@ class RealAgentAdapterSkeleton(
                         emitEvent(AgentRunEvent.ProcessInterrupted("dropped_after_first_chunk"))
                         drive.persistenceMark = PersistenceMark.PARTIAL
                         emitEvent(AgentRunEvent.ProcessInterrupted("dropped_after_first_chunk"))
+                        emitTrace(TraceEventType.PROCESS_DEATH, "dropped after first chunk")
                         return
                     }
 
@@ -345,6 +361,7 @@ class RealAgentAdapterSkeleton(
                                 ProviderAttemptOutcome.FATAL_FAILURE
                             ))
                             emitEvent(AgentRunEvent.ProcessInterrupted("all_fallbacks_exhausted"))
+                            emitTrace(TraceEventType.PROCESS_DEATH, "all_fallbacks_exhausted after hard failure")
                             return
                         }
                     }
@@ -362,8 +379,10 @@ class RealAgentAdapterSkeleton(
         // 所有 turn 耗尽 → 正常结束（但未 finalAnswer）
         if (budget.isExpired()) {
             emitEvent(AgentRunEvent.DeadlineReached(budget.startedAtMonotonicMs))
+            emitTrace(TraceEventType.DEADLINE_REACHED, "deadline after turns exhausted")
         } else {
             emitEvent(AgentRunEvent.ProcessInterrupted("turns_exhausted_without_final"))
+            emitTrace(TraceEventType.PROCESS_DEATH, "turns exhausted without final")
         }
     }
 
