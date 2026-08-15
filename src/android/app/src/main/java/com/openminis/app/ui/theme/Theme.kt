@@ -154,7 +154,7 @@ fun MinisTheme(
 }
 
 private fun TextStyle.scale(factor: Float): TextStyle =
-    if (factor == 1f) this else copy(fontSize = fontSize * factor)
+    if (factor == 1f) this else copy(fontSize = fontSize * factor, lineHeight = lineHeight * factor)
 
 private fun scaledTypography(factor: Float): Typography {
     val base = Typography()
