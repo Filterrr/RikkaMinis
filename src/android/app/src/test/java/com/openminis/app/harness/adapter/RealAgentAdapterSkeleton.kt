@@ -16,6 +16,7 @@ import com.openminis.app.agent.runtime.ProviderAttemptOutcome
 import com.openminis.app.harness.contract.TraceEventType
 import com.openminis.app.harness.contract.HarnessTraceEvent
 import com.openminis.app.harness.contract.CooldownRecord
+import com.openminis.app.harness.adapter.ScenarioRuntimePort
 import kotlinx.coroutines.delay
 
 /**
@@ -101,6 +102,10 @@ class RealAgentAdapterSkeleton(
 
         // 3. 主循环
         try {
+            // T4-B: 在 turn loop 前重置 ScenarioRuntimePort 的计时器，
+            // 避免 setup 开销（实例化、预算创建、reducer 初始化等）影响
+            // F14 processDeathAtMs（20ms）的精确检测。
+            if (runtime is ScenarioRuntimePort) runtime.resetTimer()
             driveTurnLoop(scenario, budget, drive) { event ->
                 state = apply(reduce, state, event)
             }

@@ -132,7 +132,12 @@ class ScenarioRuntimePort(
     }
 
     /** 记录开始时刻（单调时间 ms），用于 userCancelAtMs / processDeathAtMs 检测 */
-    private val startAtMs = System.nanoTime() / 1_000_000L
+    private var startAtMs = System.nanoTime() / 1_000_000L
+
+    /** 重置计时器 —— 在 turn loop 开始前调用，避免 setup 开销影响 F14 检测 */
+    fun resetTimer() {
+        startAtMs = System.nanoTime() / 1_000_000L
+    }
 
     private fun elapsedMs(): Long = (System.nanoTime() / 1_000_000L) - startAtMs
 
