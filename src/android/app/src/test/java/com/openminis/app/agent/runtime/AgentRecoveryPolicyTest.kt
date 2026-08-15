@@ -56,7 +56,7 @@ class AgentRecoveryPolicyTest {
         assertTrue("expected SafeToResume", outcome is RecoveryOutcome.SafeToResume)
         val safe = outcome as RecoveryOutcome.SafeToResume
         assertFalse("no partial output expected", safe.hasPartialOutput)
-        assertTrue("reason should mention no side effects", safe.reason.contains("no side effects"))
+        assertTrue("reason should mention no side effects", safe.reason.contains("No side effects"))
     }
 
     @Test
