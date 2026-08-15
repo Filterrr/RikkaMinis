@@ -6,7 +6,10 @@ import com.openminis.app.harness.contract.FaultScenario
 import com.openminis.app.harness.contract.HarnessTraceEvent
 import com.openminis.app.harness.contract.PersistenceMark
 import com.openminis.app.harness.contract.ToolBehavior
+<<<<<<< HEAD
 import kotlinx.coroutines.delay
+=======
+>>>>>>> d56b95b (feat(stability): T4-B F01-F14 acceptance tests through ScenarioRuntimePort)
 import com.openminis.app.harness.contract.ToolCallScript
 
 /**
@@ -97,6 +100,7 @@ class ScenarioRuntimePort(
             ToolBehavior.FAILURE -> ToolCallResult(
                 success = false, sideEffectPerformed = false, resultKnown = true,
             )
+<<<<<<< HEAD
             ToolBehavior.SIDE_EFFECT_THEN_NO_RESULT -> {
                 // F14: 模拟工具执行耗时，并在 delay 后检查 process death
                 delay(100)
@@ -112,6 +116,11 @@ class ScenarioRuntimePort(
                     )
                 }
             }
+=======
+            ToolBehavior.SIDE_EFFECT_THEN_NO_RESULT -> ToolCallResult(
+                success = false, sideEffectPerformed = true, resultKnown = false,
+            )
+>>>>>>> d56b95b (feat(stability): T4-B F01-F14 acceptance tests through ScenarioRuntimePort)
             ToolBehavior.BLOCK_UNTIL_CANCELLED -> ToolCallResult(
                 success = false, sideEffectPerformed = true, resultKnown = false,
                 cancelled = true,
@@ -144,6 +153,7 @@ class ScenarioRuntimePort(
         emitted += event
     }
 
+<<<<<<< HEAD
     /** 记录开始时刻（单调时间 ms），用于 userCancelAtMs / processDeathAtMs 检测 */
     private var startAtMs = System.nanoTime() / 1_000_000L
 
@@ -159,4 +169,9 @@ class ScenarioRuntimePort(
 
     override fun isProcessDead(): Boolean =
         processDead || (scenario.processDeathAtMs != null && elapsedMs() >= scenario.processDeathAtMs!!)
+=======
+    override fun isUserCancelled(): Boolean = userCancelled
+
+    override fun isProcessDead(): Boolean = processDead
+>>>>>>> d56b95b (feat(stability): T4-B F01-F14 acceptance tests through ScenarioRuntimePort)
 }

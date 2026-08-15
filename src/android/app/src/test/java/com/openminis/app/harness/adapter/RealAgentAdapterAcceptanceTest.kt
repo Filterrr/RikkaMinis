@@ -35,7 +35,11 @@ class RealAgentAdapterAcceptanceTest {
             val report = runScenario(scenario)
             val violations = ScenarioVerifier.verify(scenario, report)
             if (violations.isNotEmpty()) {
+<<<<<<< HEAD
                 failures.add("${scenario.id}: ${violations.joinToString("; ") { "${it.category} ${it.message}" }}")
+=======
+                failures.add("${scenario.id}: ${violations.joinToString("; ") { "${it.category} ${it.detail}" }}")
+>>>>>>> d56b95b (feat(stability): T4-B F01-F14 acceptance tests through ScenarioRuntimePort)
             }
         }
         assertTrue(
@@ -75,7 +79,11 @@ class RealAgentAdapterAcceptanceTest {
         val report = runScenario(scenario)
         val violations = ScenarioVerifier.verify(scenario, report)
         assertTrue(
+<<<<<<< HEAD
             "${scenario.id} violations:\n  ${violations.joinToString("\n  ") { "${it.category} ${it.message}" }}",
+=======
+            "${scenario.id} violations:\n  ${violations.joinToString("\n  ") { "${it.category} ${it.detail}" }}",
+>>>>>>> d56b95b (feat(stability): T4-B F01-F14 acceptance tests through ScenarioRuntimePort)
             violations.isEmpty(),
         )
     }
