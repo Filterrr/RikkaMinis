@@ -222,7 +222,7 @@ class RealAgentAdapterSkeleton(
                 emitEvent(AgentRunEvent.CompactionStarted("pre_turn_$turnIdx"))
                 drive.compactCalls++
                 val timeoutMs = scenario.compactTimeoutMs
-                if (timeoutMs != null && timeoutMs > 0) {
+                if (timeoutMs > 0) {
                     // 有超时上限：等待到超时点，超时即中断（F09 语义：历史不损坏）
                     delay(turn.compactDelayMs.coerceAtMost(timeoutMs))
                     if (turn.compactDelayMs > timeoutMs) {
@@ -393,6 +393,7 @@ class RealAgentAdapterSkeleton(
                             emitEvent(AgentRunEvent.ProcessInterrupted("all_fallbacks_exhausted"))
                             emitTrace(TraceEventType.PROCESS_INTERRUPTED, "all_fallbacks_exhausted after rate limit")
                             finalizeRun(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED)
+                            return
                         }
                     }
 
@@ -412,6 +413,7 @@ class RealAgentAdapterSkeleton(
                             emitEvent(AgentRunEvent.ProcessInterrupted("all_fallbacks_exhausted"))
                             emitTrace(TraceEventType.PROCESS_INTERRUPTED, "all_fallbacks_exhausted after stream reset")
                             finalizeRun(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED)
+                            return
                         }
                     }
 
@@ -424,6 +426,7 @@ class RealAgentAdapterSkeleton(
                         emitEvent(AgentRunEvent.ProcessInterrupted("dropped_after_first_chunk"))
                         emitTrace(TraceEventType.PROCESS_INTERRUPTED, "dropped after first chunk")
                         finalizeRun(AgentTerminal.INTERRUPTED, AgentTerminalReason.PROCESS_INTERRUPTED)
+                        return
                     }
 
                     is ProviderCallResult.HardFailure -> {
@@ -442,6 +445,7 @@ class RealAgentAdapterSkeleton(
                             emitEvent(AgentRunEvent.ProcessInterrupted("all_fallbacks_exhausted"))
                             emitTrace(TraceEventType.PROCESS_INTERRUPTED, "all_fallbacks_exhausted after hard failure")
                             finalizeRun(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED)
+                            return
                         }
                     }
 
