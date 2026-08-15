@@ -176,14 +176,14 @@ class RealAgentAdapterSkeleton(
             }
             if (runtime.isProcessDead()) {
                 emitEvent(AgentRunEvent.ProcessInterrupted("process_death"))
-                emitTrace(TraceEventType.PROCESS_DEATH, "process death at turn entry")
+                emitTrace(TraceEventType.PROCESS_INTERRUPTED, "process death at turn entry")
                 return
             }
 
             // ── turn 预算 ────────────────────────────────────────────
             if (budget.consumeTurn() is com.openminis.app.agent.runtime.BudgetDecision.Denied) {
                 emitEvent(AgentRunEvent.ProcessInterrupted("budget_exhausted(turn_limit)"))
-                emitTrace(TraceEventType.BUDGET_EXHAUSTED, "turn limit")
+                emitTrace(TraceEventType.PROCESS_INTERRUPTED, "turn limit")
                 return
             }
 
@@ -316,7 +316,7 @@ class RealAgentAdapterSkeleton(
                                 ProviderAttemptOutcome.FATAL_FAILURE
                             ))
                             emitEvent(AgentRunEvent.ProcessInterrupted("all_fallbacks_exhausted"))
-                            emitTrace(TraceEventType.PROCESS_DEATH, "all_fallbacks_exhausted after rate limit")
+                            emitTrace(TraceEventType.PROCESS_INTERRUPTED, "all_fallbacks_exhausted after rate limit")
                             return
                         }
                     }
@@ -344,7 +344,7 @@ class RealAgentAdapterSkeleton(
                         emitEvent(AgentRunEvent.ProcessInterrupted("dropped_after_first_chunk"))
                         drive.persistenceMark = PersistenceMark.PARTIAL
                         emitEvent(AgentRunEvent.ProcessInterrupted("dropped_after_first_chunk"))
-                        emitTrace(TraceEventType.PROCESS_DEATH, "dropped after first chunk")
+                        emitTrace(TraceEventType.PROCESS_INTERRUPTED, "dropped after first chunk")
                         return
                     }
 
@@ -361,7 +361,7 @@ class RealAgentAdapterSkeleton(
                                 ProviderAttemptOutcome.FATAL_FAILURE
                             ))
                             emitEvent(AgentRunEvent.ProcessInterrupted("all_fallbacks_exhausted"))
-                            emitTrace(TraceEventType.PROCESS_DEATH, "all_fallbacks_exhausted after hard failure")
+                            emitTrace(TraceEventType.PROCESS_INTERRUPTED, "all_fallbacks_exhausted after hard failure")
                             return
                         }
                     }
@@ -382,7 +382,7 @@ class RealAgentAdapterSkeleton(
             emitTrace(TraceEventType.DEADLINE_REACHED, "deadline after turns exhausted")
         } else {
             emitEvent(AgentRunEvent.ProcessInterrupted("turns_exhausted_without_final"))
-            emitTrace(TraceEventType.PROCESS_DEATH, "turns exhausted without final")
+            emitTrace(TraceEventType.PROCESS_INTERRUPTED, "turns exhausted without final")
         }
     }
 
