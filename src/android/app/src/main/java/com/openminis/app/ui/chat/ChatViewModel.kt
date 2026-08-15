@@ -11,12 +11,16 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.compose.foundation.lazy.LazyListState
 import com.openminis.app.agent.runtime.AgentExecutionBudget
+import com.openminis.app.agent.runtime.AgentRunEvent
 import com.openminis.app.agent.runtime.AgentRunPhase
+import com.openminis.app.agent.runtime.AgentRunReducer
+import com.openminis.app.agent.runtime.AgentRunTransition
 import com.openminis.app.agent.runtime.AgentTerminal
 import com.openminis.app.agent.runtime.AgentTerminalReason
 import com.openminis.app.agent.runtime.BudgetDecision
 import com.openminis.app.agent.runtime.BudgetExhaustedReason
 import com.openminis.app.agent.runtime.BudgetSnapshot
+import com.openminis.app.agent.runtime.ProviderAttemptOutcome
 import com.openminis.app.agent.Level
 import com.openminis.app.agent.ToolLoopDetector
 import com.openminis.app.browser.BrowserActionInput
@@ -977,6 +981,34 @@ class ChatViewModel(
     @Volatile
     private var t7ObservedPhase: String? = null
 
+    /**
+     * T7-D: 终态 reducer 旁路验证状态 —— 类级持有，使 compactAll /
+     * cancelStream / executeTool 等独立函数也能发事件（null = 无活跃 run）。
+     * 只在 runAgentLoop 生命周期内非 null：入口初始化为 IDLE，
+     * t7EndRun 落终态后置 null。
+     */
+    @Volatile
+    private var t7ReducerState: AgentRunState? = null
+
+    /**
+     * T7-D: 把 AgentRun 事件发给 T5 状态机（旁路验证）。reducer 拒绝时只
+     * 记录日志，不改生产行为；无活跃 run 时 no-op。
+     */
+    private fun t7Reduce(event: AgentRunEvent) {
+        val state = t7ReducerState ?: return
+        when (val r = AgentRunReducer.reduce(state, event)) {
+            is AgentRunTransition.Accepted -> {
+                if (r.changed) t7ReducerState = r.state
+            }
+            is AgentRunTransition.Rejected -> {
+                AppLogger.warning(
+                    TAG_STREAM,
+                    "T7-D reducer REJECTED ${event::class.simpleName}: ${r.rejection.message}",
+                )
+            }
+        }
+    }
+
 
     /**
      * Cached reference to the lazily-created [BrowserTabPool] so
@@ -1916,6 +1948,8 @@ class ChatViewModel(
             t7PhaseSchema(AgentRunPhase.COMPACTING),
             "CompactionStarted",
         )
+        // T7-D: 旁路验证 —— compact 开始
+        t7Reduce(AgentRunEvent.CompactionStarted("compact_all"))
         viewModelScope.launch(Dispatchers.IO) {
             // [T-android-compact-queued-drain] Only a SUCCESSFUL compact kicks
             // the queued-prompt drain below; failure/cancel/empty-summary paths
@@ -2092,7 +2126,8 @@ class ChatViewModel(
                     t7PhaseSchema(AgentRunPhase.CALLING_MODEL),
                     "CompactionFinished",
                 )
-            }
+                // T7-D: 旁路验证 —— compact 结束
+                t7Reduce(AgentRunEvent.CompactionFinished())
             // [T-android-compact-queued-drain] A successful compact must let
             // any queued prompts proceed — previously nothing re-triggered the
             // drain after compact (loop-end / cancel / tool-boundary are the
@@ -6641,6 +6676,8 @@ class ChatViewModel(
             to = t7PhaseSchema(AgentRunPhase.PREPARING),
             reason = "RunStarted",
         )
+        // T7-D: 旁路验证 —— RunStarted 事件
+        t7Reduce(AgentRunEvent.RunStarted(runId))
         // T7-B: session slot lease 观察 —— streamJob 在进入 runAgentLoop 前
         // 已经成功 acquireSlot；此处登记 lease（trace 侧），语义是
         // "run 持有会话并发槽位"。释放统一在 t7EndRun(finalize) 发出，
@@ -6767,6 +6804,10 @@ class ChatViewModel(
         // node that burned its whole budget just pays for the same wall again).
         var lengthWallEmptyHits = 0
 
+        // T7-D: 终态 reducer 旁路验证 —— 入口初始化状态机（IDLE），
+        // 后续事件经类级 [t7Reduce] 发出；t7EndRun 落终态并清理。
+        t7ReducerState = AgentRunState.initial()
+
         try {
         for (turn in 0 until MAX_AGENT_TURNS) {
             // T7-C: deadline 到达后不发新 provider/tool 请求 —— turn 循环入口检查。
@@ -6778,6 +6819,8 @@ class ChatViewModel(
                     t7PhaseSchema(AgentRunPhase.FINALIZING),
                     "DeadlineReached",
                 )
+                // T7-D: 旁路验证 —— deadline 到达
+                t7Reduce(AgentRunEvent.DeadlineReached())
                 break
             }
             // Sanitize history before each API call (mirrors iOS pre-API validation)
@@ -6791,6 +6834,8 @@ class ChatViewModel(
             // T7-C: turn 计数耗尽 → 中断本轮 run
             if (!t7ConsumeAndTrace(AgentTraceRecorder.DIMENSION_TURNS) { it.consumeTurn() }) {
                 t7BudgetStopReason = "turn_limit"
+                // T7-D: 旁路验证 —— 计数耗尽进入收尾
+                t7Reduce(AgentRunEvent.ProcessInterrupted("budget_exhausted(turn_limit)"))
                 t7State(
                     t7ObservedPhase ?: t7PhaseSchema(AgentRunPhase.EXECUTING_TOOLS),
                     t7PhaseSchema(AgentRunPhase.FINALIZING),
@@ -6936,6 +6981,8 @@ class ChatViewModel(
                         t7PhaseSchema(AgentRunPhase.FINALIZING),
                         "DeadlineReached",
                     )
+                    // T7-D: 旁路验证 —— deadline 到达
+                    t7Reduce(AgentRunEvent.DeadlineReached())
                     break
                 }
                 try {
@@ -6943,6 +6990,8 @@ class ChatViewModel(
                     // T7-C: provider attempt 预算耗尽 → 不再尝试（不走 fallback）
                     if (!t7ConsumeAndTrace(AgentTraceRecorder.DIMENSION_PROVIDER_ATTEMPTS) { it.consumeProviderAttempt() }) {
                         t7BudgetStopReason = "provider_attempt_limit"
+                        // T7-D: 旁路验证 —— 计数耗尽进入收尾
+                        t7Reduce(AgentRunEvent.ProcessInterrupted("budget_exhausted(provider_attempts)"))
                         t7State(
                             t7ObservedPhase ?: t7PhaseSchema(AgentRunPhase.CALLING_MODEL),
                             t7PhaseSchema(AgentRunPhase.FINALIZING),
@@ -6951,6 +7000,8 @@ class ChatViewModel(
                         collectDone = true
                         break
                     }
+                    // T7-D: 旁路验证 —— ProviderAttemptStarted
+                    t7Reduce(AgentRunEvent.ProviderAttemptStarted)
                     // [T-android-enhanced-cache] Stamp the per-turn Enhanced
                     // Cache flag onto the active provider here — the single
                     // choke point every turn passes through, regardless of how
@@ -7311,6 +7362,8 @@ class ChatViewModel(
                     collectDone = true
                     // T7-A: 观察 —— provider 尝试成功（T5 ProviderAttemptFinished(SUCCESS)）
                     t7State(t7PhaseSchema(AgentRunPhase.CALLING_MODEL), t7PhaseSchema(AgentRunPhase.EXECUTING_TOOLS), "ProviderAttemptFinished(SUCCESS)")
+                    // T7-D: 旁路验证 —— provider 成功
+                    t7Reduce(AgentRunEvent.ProviderAttemptFinished(ProviderAttemptOutcome.SUCCESS))
                     // Stream completed without error — clear any lingering retry UI state.
                     if (_autoRetryAttempt.value != 0 || _autoRetryCountdown.value != 0) {
                         _autoRetryAttempt.value = 0
@@ -7341,6 +7394,8 @@ class ChatViewModel(
                         Log.w(TAG, "🔁 Transient error on ${currentProvider.model.displayName}, retry $retryAttempt/${AUTO_RETRY_DELAYS_SEC.size} in ${delaySec}s: $errDesc")
                         // T7-A: 观察 —— provider 瞬态失败（T5 ProviderAttemptFinished(TRANSIENT_FAILURE)）
                         t7State(t7PhaseSchema(AgentRunPhase.CALLING_MODEL), t7PhaseSchema(AgentRunPhase.RETRYING), "ProviderAttemptFinished(TRANSIENT_FAILURE)")
+                        // T7-D: 旁路验证 —— provider 瞬态失败
+                        t7Reduce(AgentRunEvent.ProviderAttemptFinished(ProviderAttemptOutcome.TRANSIENT_FAILURE))
                         // T7-A: 观察 —— provider 瞬态失败决定重试（T3 语义：provider
                         // 调用视为 READ_ONLY 级，透明重试在预算内允许）
                         t7Retry(
@@ -7418,6 +7473,8 @@ class ChatViewModel(
                         lastOtherToolInputMs = 0L
                         // T7-A: 观察 —— 决定重试（T5 RetryRequested：RETRYING → CALLING_MODEL）
                         t7State(t7PhaseSchema(AgentRunPhase.RETRYING), t7PhaseSchema(AgentRunPhase.CALLING_MODEL), "RetryRequested(provider_attempt)")
+                        // T7-D: 旁路验证 —— 重试请求
+                        t7Reduce(AgentRunEvent.RetryRequested("transient"))
                         continue  // retry on same provider
                     }
                     // Retries exhausted or non-retryable — proceed to fallback / throw.
@@ -7447,9 +7504,13 @@ class ChatViewModel(
                     // T7-A: 观察 —— provider 尝试失败需 fallback（T5 ProviderAttemptFinished(FALLBACK_FAILURE)）
                     if (shouldFallback) {
                         t7State(t7PhaseSchema(AgentRunPhase.CALLING_MODEL), t7PhaseSchema(AgentRunPhase.FALLING_BACK), "ProviderAttemptFinished(FALLBACK_FAILURE)")
+                        // T7-D: 旁路验证 —— provider fallback 失败
+                        t7Reduce(AgentRunEvent.ProviderAttemptFinished(ProviderAttemptOutcome.FALLBACK_FAILURE))
                     } else {
                         // 非 fallback 错误（如终止性错误）—— 观察为致命失败
                         t7State(t7PhaseSchema(AgentRunPhase.CALLING_MODEL), t7PhaseSchema(AgentRunPhase.FINALIZING), "ProviderAttemptFinished(FATAL_FAILURE)")
+                        // T7-D: 旁路验证 —— provider 致命失败
+                        t7Reduce(AgentRunEvent.ProviderAttemptFinished(ProviderAttemptOutcome.FATAL_FAILURE))
                     }
                     val next = if (shouldFallback) remainingFallbacks.removeFirstOrNull() else null
                     if (next != null) {
@@ -7474,6 +7535,8 @@ class ChatViewModel(
                         Log.i(TAG, "🔀 $reason on ${currentProvider.model.displayName}, switching to ${next.provider.model.displayName} (realModelChange=$isRealModelChange)")
                         // T7-A: 观察 —— fallback 选中新成员（T5 FallbackSelected 语义）
                         t7State(t7PhaseSchema(AgentRunPhase.FALLING_BACK), t7PhaseSchema(AgentRunPhase.CALLING_MODEL), "FallbackSelected(${next.provider.model.displayName})")
+                        // T7-D: 旁路验证 —— fallback 选中
+                        t7Reduce(AgentRunEvent.FallbackSelected(fallbackMemberIndex = next.entryId.hashCode()))
                         t7Retry(
                             operationType = "provider_fallback",
                             operationName = next.provider.model.displayName,
@@ -7859,6 +7922,8 @@ class ChatViewModel(
                     durationMs = System.currentTimeMillis() - turnStartMs,
                 )
                 loopExitedNormally = true
+                // T7-D: 旁路验证 —— 工具序列完成，进入收尾
+                t7Reduce(AgentRunEvent.WorkCompleted)
                 break
             }
             AppLogger.info(TAG_STREAM, "runAgentLoop turn=$turn dispatching ${toolCalls.size} tool call(s), continuing")
@@ -8430,9 +8495,13 @@ class ChatViewModel(
         // T7-C: tool_calls 预算耗尽 → 不执行工具，返回明确错误给 LLM（不是静默失败）
         if (!t7ConsumeAndTrace(AgentTraceRecorder.DIMENSION_TOOL_CALLS) { it.consumeToolCall() }) {
             t7BudgetStopReason = "tool_call_limit"
+            // T7-D: 旁路验证 —— 计数耗尽进入收尾
+            t7Reduce(AgentRunEvent.ProcessInterrupted("budget_exhausted(tool_calls)"))
             return ToolExecutionResult("Error: Agent budget exhausted (tool_calls)", false, toolTitle = toolTitle)
         }
         t7State(t7PhaseSchema(AgentRunPhase.EXECUTING_TOOLS), t7PhaseSchema(AgentRunPhase.EXECUTING_TOOLS), "ToolStarted($name)")
+        // T7-D: 旁路验证 —— 工具开始
+        t7Reduce(AgentRunEvent.ToolStarted(name))
 
         // T7-B: tool slot lease —— 工具执行期间占用一个并发工具槽位
         // （budget 的 tryAcquireToolSlot，advisory），trace 侧登记 acquire；
@@ -8505,6 +8574,8 @@ class ChatViewModel(
         )
         // T7-A: 观察 —— 工具结束（ToolFinished 语义）
         t7State(t7PhaseSchema(AgentRunPhase.EXECUTING_TOOLS), t7PhaseSchema(AgentRunPhase.EXECUTING_TOOLS), "ToolFinished($name)")
+        // T7-D: 旁路验证 —— 工具结束（resultKnown = 结果已到达）
+        t7Reduce(AgentRunEvent.ToolFinished(name, resultKnown = true))
 
         // T3: failure-learning automation hook. Side-channel only — the
         // failed result still flows to the LLM exactly as before; this just
@@ -8929,6 +9000,13 @@ class ChatViewModel(
     ) {
         val budget = activeRunBudget
         val runId = activeRunId
+        // T7-D: 终态 reducer —— RunFinalized 只产生一次终态（reducer 幂等保护）
+        t7Reduce(
+            AgentRunEvent.RunFinalized(
+                terminal = terminal,
+                reason = reason,
+            )
+        )
         runCatching {
             // T7-B: session slot lease 释放 —— 任何终态路径都在这里 release，
             // 与 runAgentLoop 入口的 acquire 配对（lease 平衡可被审计）。
@@ -8963,6 +9041,7 @@ class ChatViewModel(
         activeRunId = null
         t7ObservedPhase = null
         t7BudgetStopReason = null
+        t7ReducerState = null  // T7-D: run 结束，状态机清理
     }
 
     /**
@@ -10847,6 +10926,8 @@ Environment variables:
             t7PhaseSchema(AgentRunPhase.FINALIZING),
             "UserCancelled",
         )
+        // T7-D: 旁路验证 —— 用户取消
+        t7Reduce(AgentRunEvent.UserCancelled("user_stop"))
         // T-streaming-side-channel: flush any in-flight delta back into the
         // canonical message so the rest of cancelStream's cleanup (publish
         // overlay excerpt, persist, retry-eligible state) sees the real
