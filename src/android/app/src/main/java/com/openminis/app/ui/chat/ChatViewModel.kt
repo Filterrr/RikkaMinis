@@ -962,6 +962,14 @@ class ChatViewModel(
     private var activeRunBudget: AgentExecutionBudget? = null
 
     /**
+     * T7-C: 本轮 run 因预算耗尽（deadline / 计数上限）而中断的原因。
+     * 由调用点（turn/provider/tool/shell 循环）在 Denied 时设置，
+     * runAgentLoop 出口据此选择显式终态（BudgetExhausted 不是静默失败）。
+     */
+    @Volatile
+    private var t7BudgetStopReason: String? = null
+
+    /**
      * T7-A: 观察用当前 phase（schema 枚举字符串）。仅用于让 UserCancelled /
      * 中断等"任意阶段可达"的事件有准确的 from；不是状态机单一事实源
      * （T7-D 才接 reducer）。
@@ -1897,7 +1905,12 @@ class ChatViewModel(
         }
         _isCompacting.value = true
         // T7-A: 观察 —— compact 开始（advisory）
-        t7ConsumeAndTrace(AgentTraceRecorder.DIMENSION_COMPACTION_CALLS) { it.consumeCompaction() }
+        // T7-C: compaction 预算耗尽 → 跳过 compact，不改变历史
+        if (!t7ConsumeAndTrace(AgentTraceRecorder.DIMENSION_COMPACTION_CALLS) { it.consumeCompaction() }) {
+            _isCompacting.value = false
+            appendSystemInfo("Compact skipped: budget exhausted.", "compact")
+            return
+        }
         t7State(
             t7ObservedPhase ?: t7PhaseSchema(AgentRunPhase.EXECUTING_TOOLS),
             t7PhaseSchema(AgentRunPhase.COMPACTING),
@@ -6756,6 +6769,17 @@ class ChatViewModel(
 
         try {
         for (turn in 0 until MAX_AGENT_TURNS) {
+            // T7-C: deadline 到达后不发新 provider/tool 请求 —— turn 循环入口检查。
+            // 中断标记后走统一 finalize（BudgetExhausted 不是静默失败）。
+            if (activeRunBudget?.isExpired() == true) {
+                t7BudgetStopReason = "deadline_reached"
+                t7State(
+                    t7ObservedPhase ?: t7PhaseSchema(AgentRunPhase.EXECUTING_TOOLS),
+                    t7PhaseSchema(AgentRunPhase.FINALIZING),
+                    "DeadlineReached",
+                )
+                break
+            }
             // Sanitize history before each API call (mirrors iOS pre-API validation)
             sanitizeAgentHistory()
 
@@ -6764,7 +6788,16 @@ class ChatViewModel(
             activeTraceTurn = turn
             agentTraceRecorder.turnStart(turn)
             // T7-A: 每轮消耗 turn 预算（advisory 观察，不阻断）
-            t7ConsumeAndTrace(AgentTraceRecorder.DIMENSION_TURNS) { it.consumeTurn() }
+            // T7-C: turn 计数耗尽 → 中断本轮 run
+            if (!t7ConsumeAndTrace(AgentTraceRecorder.DIMENSION_TURNS) { it.consumeTurn() }) {
+                t7BudgetStopReason = "turn_limit"
+                t7State(
+                    t7ObservedPhase ?: t7PhaseSchema(AgentRunPhase.EXECUTING_TOOLS),
+                    t7PhaseSchema(AgentRunPhase.FINALIZING),
+                    "BudgetExhausted(turn_limit)",
+                )
+                break
+            }
 
             // Context window management: offload large tool outputs in older
             // messages to disk when the policy threshold for this model's
@@ -6895,9 +6928,29 @@ class ChatViewModel(
             var collectDone = false
             var retryAttempt = 0  // per-turn auto-retry counter (resets on each new turn)
             while (!collectDone) {
+                // T7-C: deadline 到达后不发新 provider 请求
+                if (activeRunBudget?.isExpired() == true) {
+                    t7BudgetStopReason = "deadline_reached"
+                    t7State(
+                        t7ObservedPhase ?: t7PhaseSchema(AgentRunPhase.CALLING_MODEL),
+                        t7PhaseSchema(AgentRunPhase.FINALIZING),
+                        "DeadlineReached",
+                    )
+                    break
+                }
                 try {
                     // T7-A: provider attempt 开始（每次 retry/fallback 都会重新进入）
-                    t7ConsumeAndTrace(AgentTraceRecorder.DIMENSION_PROVIDER_ATTEMPTS) { it.consumeProviderAttempt() }
+                    // T7-C: provider attempt 预算耗尽 → 不再尝试（不走 fallback）
+                    if (!t7ConsumeAndTrace(AgentTraceRecorder.DIMENSION_PROVIDER_ATTEMPTS) { it.consumeProviderAttempt() }) {
+                        t7BudgetStopReason = "provider_attempt_limit"
+                        t7State(
+                            t7ObservedPhase ?: t7PhaseSchema(AgentRunPhase.CALLING_MODEL),
+                            t7PhaseSchema(AgentRunPhase.FINALIZING),
+                            "BudgetExhausted(provider_attempts)",
+                        )
+                        collectDone = true
+                        break
+                    }
                     // [T-android-enhanced-cache] Stamp the per-turn Enhanced
                     // Cache flag onto the active provider here — the single
                     // choke point every turn passes through, regardless of how
@@ -8225,7 +8278,7 @@ class ChatViewModel(
         // (b) is the only case that needs the inline-error/Resume hand-holding;
         // (a) must NOT be touched or every normal completion gets a fake "hit
         // 200 turns" sticker (the bug user hit at v1.4.0-dev tip).
-        if (!loopExitedNormally) {
+        if (!loopExitedNormally && t7BudgetStopReason == null) {
             AppLogger.warning(
                 TAG_STREAM,
                 "runAgentLoop EXIT — hit MAX_AGENT_TURNS=$MAX_AGENT_TURNS, finalizing as resumable",
@@ -8233,18 +8286,40 @@ class ChatViewModel(
             withContext(Dispatchers.Main) {
                 finalizeAtTurnLimit(assistantId, accumulatedText, allToolBlocks)
             }
+        } else if (t7BudgetStopReason != null) {
+            // T7-C: 预算耗尽（deadline / 计数上限）—— 显式终态，不是静默失败。
+            // 不经过 finalizeAtTurnLimit（那是 200 轮的 Resume 语义）。
+            AppLogger.warning(TAG_STREAM, "runAgentLoop EXIT — budget stop: $t7BudgetStopReason")
         } else {
             AppLogger.info(TAG_STREAM, "runAgentLoop EXIT (loop body ended naturally)")
         }
         // T9: close the trace for this run
         // T7-A: 2.0 终态收尾 —— 正常退出 / 达到轮数上限都走这里
+        // T7-C: 预算中断 → deadline 走 Interrupted(DEADLINE_EXCEEDED)，
+        //       计数耗尽走 Failed(EXECUTION_FAILED) + error 标注具体维度
+        val budgetStop = t7BudgetStopReason
         t7EndRun(
-            terminal = if (loopExitedNormally) AgentTerminal.SUCCEEDED else AgentTerminal.FAILED,
-            reason = if (loopExitedNormally) AgentTerminalReason.COMPLETED else AgentTerminalReason.EXECUTION_FAILED,
+            terminal = when {
+                budgetStop == "deadline_reached" -> AgentTerminal.INTERRUPTED
+                budgetStop != null -> AgentTerminal.FAILED
+                loopExitedNormally -> AgentTerminal.SUCCEEDED
+                else -> AgentTerminal.FAILED
+            },
+            reason = when {
+                budgetStop == "deadline_reached" -> AgentTerminalReason.DEADLINE_EXCEEDED
+                budgetStop != null -> AgentTerminalReason.EXECUTION_FAILED
+                loopExitedNormally -> AgentTerminalReason.COMPLETED
+                else -> AgentTerminalReason.EXECUTION_FAILED
+            },
             durationMs = System.currentTimeMillis() - traceStartMs,
-            error = if (!loopExitedNormally) "MAX_AGENT_TURNS" else null,
+            error = when {
+                budgetStop != null -> "budget_exhausted($budgetStop)"
+                !loopExitedNormally -> "MAX_AGENT_TURNS"
+                else -> null
+            },
         )
         traceRunFile = null
+        t7BudgetStopReason = null
         } catch (e: CancellationException) {
             // T9: cancel is intentional — trace the interruption
             runCatching {
@@ -8352,7 +8427,11 @@ class ChatViewModel(
         val etStartMs = System.currentTimeMillis()
         agentTraceRecorder.toolCall(activeTraceTurn, toolId, name, argsJson)
         // T7-A: 观察 —— 工具调用消耗 tool_calls 预算（advisory，不阻断）
-        t7ConsumeAndTrace(AgentTraceRecorder.DIMENSION_TOOL_CALLS) { it.consumeToolCall() }
+        // T7-C: tool_calls 预算耗尽 → 不执行工具，返回明确错误给 LLM（不是静默失败）
+        if (!t7ConsumeAndTrace(AgentTraceRecorder.DIMENSION_TOOL_CALLS) { it.consumeToolCall() }) {
+            t7BudgetStopReason = "tool_call_limit"
+            return ToolExecutionResult("Error: Agent budget exhausted (tool_calls)", false, toolTitle = toolTitle)
+        }
         t7State(t7PhaseSchema(AgentRunPhase.EXECUTING_TOOLS), t7PhaseSchema(AgentRunPhase.EXECUTING_TOOLS), "ToolStarted($name)")
 
         // T7-B: tool slot lease —— 工具执行期间占用一个并发工具槽位
@@ -8710,11 +8789,14 @@ class ChatViewModel(
     private fun t7ConsumeAndTrace(
         dimension: String,
         consume: (AgentExecutionBudget) -> BudgetDecision,
-    ) {
-        val budget = activeRunBudget ?: return
-        runCatching {
-            when (val d = consume(budget)) {
-                is BudgetDecision.Allowed -> {
+    ): Boolean {
+        val budget = activeRunBudget ?: return true  // 观察未启动（无预算）→ 不阻断
+        // consume 本身是纯逻辑（计数 + 决策），不包 runCatching —— 预算状态
+        // 变化不因 trace 失败而丢失；trace 记录单独包 runCatching。
+        val decision = consume(budget)
+        return when (decision) {
+            is BudgetDecision.Allowed -> {
+                runCatching {
                     val snap = budget.snapshot()
                     agentTraceRecorder.budgetConsume(
                         dimension = dimension,
@@ -8723,7 +8805,10 @@ class ChatViewModel(
                         total = t7Total(dimension, budget),
                     )
                 }
-                is BudgetDecision.Denied -> {
+                true
+            }
+            is BudgetDecision.Denied -> {
+                runCatching {
                     agentTraceRecorder.budgetRefuse(
                         dimension = dimension,
                         requested = 1,
@@ -8740,8 +8825,9 @@ class ChatViewModel(
                         },
                     )
                 }
+                false  // T7-C: Denied → 调用点必须停止（不再发新请求/工具）
             }
-        } // 观察 trace 失败不得影响主执行
+        }
     }
 
     private fun t7Remaining(dimension: String, snap: BudgetSnapshot): Int = when (dimension) {
@@ -8875,6 +8961,7 @@ class ChatViewModel(
         activeRunBudget = null
         activeRunId = null
         t7ObservedPhase = null
+        t7BudgetStopReason = null
     }
 
     /**
@@ -8964,7 +9051,10 @@ class ChatViewModel(
         currentText: String,
     ): ToolExecutionResult {
         // T7-A: 观察 —— shell 命令消耗 shell_commands 预算（advisory，不阻断）
-        t7ConsumeAndTrace(AgentTraceRecorder.DIMENSION_SHELL_COMMANDS) { it.consumeShellCommand() }
+        // T7-C: shell_commands 预算耗尽 → 不执行命令，返回明确错误
+        if (!t7ConsumeAndTrace(AgentTraceRecorder.DIMENSION_SHELL_COMMANDS) { it.consumeShellCommand() }) {
+            return ToolExecutionResult("Error: Agent budget exhausted (shell_commands)", false)
+        }
         // T7-B: shell lease —— 执行期间占用 shell 资源，finally 无条件释放
         // （覆盖成功、异常、取消路径，不泄漏 shell 槽位）
         val shellLease = "shell-${toolId}-${activeRunId ?: "norun"}"
