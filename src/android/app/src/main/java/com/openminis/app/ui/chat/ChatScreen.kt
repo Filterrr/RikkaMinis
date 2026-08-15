@@ -6129,8 +6129,16 @@ private fun patchLiveTail(
         }
         if (prevStreamingIdx >= 0) {
             val prevBlock = result[prevStreamingIdx] as FlatChatItem.AssistantMarkdownBlock
-            result[prevStreamingIdx] = prevBlock.copy(
+            // AssistantMarkdownBlock is a regular class with a hand-rolled
+            // equals (length-based) — no copy(). Construct a new instance
+            // preserving identity fields, swapping in the fresh content.
+            result[prevStreamingIdx] = FlatChatItem.AssistantMarkdownBlock(
+                messageId = prevBlock.messageId,
+                parentBlockId = prevBlock.parentBlockId,
                 rawText = freshStreaming.rawText,
+                blockIndex = prevBlock.blockIndex,
+                isLastBlockOfMessage = prevBlock.isLastBlockOfMessage,
+                messageIsStreaming = prevBlock.messageIsStreaming,
                 messageMarkdown = freshStreaming.messageMarkdown,
             )
         } else {
