@@ -174,6 +174,8 @@ class RealAgentAdapterSkeleton(
                 emitTrace(TraceEventType.USER_CANCELLED, "user cancelled at turn entry")
                 emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.CANCELLED, AgentTerminalReason.USER_CANCELLED))
                 drive.providerCancellations++
+                emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
+                // RUN_FINALIZED
                 return
             }
             if (runtime.isProcessDead()) {
@@ -206,6 +208,8 @@ class RealAgentAdapterSkeleton(
                         drive.historyIntact = true
                         emitEvent(AgentRunEvent.CompactionFinished())
                         emitEvent(AgentRunEvent.ProcessInterrupted("compact_timeout"))
+                        emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
+                        // RUN_FINALIZED
                         return
                     }
                 }
@@ -216,21 +220,29 @@ class RealAgentAdapterSkeleton(
             for ((attemptIdx, attempt) in turn.attempts.withIndex()) {
                 if (budget.isExpired()) {
                     emitEvent(AgentRunEvent.DeadlineReached(budget.startedAtMonotonicMs))
+                    emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
+                    // RUN_FINALIZED
                     return
                 }
                 if (runtime.isUserCancelled()) {
                     emitEvent(AgentRunEvent.UserCancelled("user_cancelled"))
                     drive.providerCancellations++
+                    emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
+                    // RUN_FINALIZED
                     return
                 }
                 if (runtime.isProcessDead()) {
                     emitEvent(AgentRunEvent.ProcessInterrupted("process_death"))
+                    emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
+                    // RUN_FINALIZED
                     return
                 }
 
                 // 消耗 provider attempt 预算
                 if (budget.consumeProviderAttempt() is com.openminis.app.agent.runtime.BudgetDecision.Denied) {
                     emitEvent(AgentRunEvent.ProcessInterrupted("budget_exhausted(provider_attempts)"))
+                    emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
+                    // RUN_FINALIZED
                     return
                 }
 
@@ -241,12 +253,16 @@ class RealAgentAdapterSkeleton(
                     delay(attempt.delayMs)
                     if (budget.isExpired()) {
                         emitEvent(AgentRunEvent.DeadlineReached(budget.startedAtMonotonicMs))
+                        emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
+                        // RUN_FINALIZED
                         return
                     }
                 }
                 if (runtime.isUserCancelled()) {
                     emitEvent(AgentRunEvent.UserCancelled("user_cancelled"))
                     drive.providerCancellations++
+                    emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
+                    // RUN_FINALIZED
                     return
                 }
 
@@ -261,6 +277,8 @@ class RealAgentAdapterSkeleton(
                         for (toolName in providerResult.toolCalls) {
                             if (budget.consumeToolCall() is com.openminis.app.agent.runtime.BudgetDecision.Denied) {
                                 emitEvent(AgentRunEvent.ProcessInterrupted("budget_exhausted(tool_calls)"))
+                                emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
+                                // RUN_FINALIZED
                                 return
                             }
                             emitEvent(AgentRunEvent.ToolStarted(toolName))
@@ -276,10 +294,14 @@ class RealAgentAdapterSkeleton(
                             if (runtime.isUserCancelled()) {
                                 emitEvent(AgentRunEvent.UserCancelled("user_cancelled"))
                                 drive.toolCancellations++
+                                emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
+                                // RUN_FINALIZED
                                 return
                             }
                             if (runtime.isProcessDead()) {
                                 emitEvent(AgentRunEvent.ProcessInterrupted("process_death"))
+                                emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
+                                // RUN_FINALIZED
                                 return
                             }
                         }
@@ -299,6 +321,8 @@ class RealAgentAdapterSkeleton(
                                 reason = AgentTerminalReason.COMPLETED,
                             ))
                             emitTrace(TraceEventType.RUN_FINALIZED, "terminal=SUCCEEDED")
+                            emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
+                            // RUN_FINALIZED
                             return
                         }
                         // 无 finalAnswer → 继续下一轮
@@ -337,6 +361,8 @@ class RealAgentAdapterSkeleton(
                             emitEvent(AgentRunEvent.ProviderAttemptFinished(
                                 ProviderAttemptOutcome.FATAL_FAILURE
                             ))
+                            emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
+                            // RUN_FINALIZED
                             return
                         }
                     }
@@ -389,9 +415,11 @@ class RealAgentAdapterSkeleton(
             emitEvent(AgentRunEvent.DeadlineReached(budget.startedAtMonotonicMs))
             emitTrace(TraceEventType.DEADLINE_REACHED, "deadline after turns exhausted")
             emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.INTERRUPTED, AgentTerminalReason.DEADLINE_EXCEEDED))
+            emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.INTERRUPTED, AgentTerminalReason.DEADLINE_EXCEEDED))
         } else {
             emitEvent(AgentRunEvent.ProcessInterrupted("turns_exhausted_without_final"))
             emitTrace(TraceEventType.PROCESS_INTERRUPTED, "turns exhausted without final")
+            emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
             emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
         }
     }
@@ -445,6 +473,8 @@ class RealAgentAdapterSkeleton(
          */
         fun defaultBudgetFor(scenario: FaultScenario): AgentExecutionBudget {
             val now = System.nanoTime() / 1_000_000L
+            emitEvent(AgentRunEvent.RunFinalized(AgentTerminal.FAILED, AgentTerminalReason.EXECUTION_FAILED))
+            // RUN_FINALIZED
             return AgentExecutionBudget(
                 startedAtMonotonicMs = now,
                 deadlineMonotonicMs = now + scenario.deadlineMs.coerceAtMost(Long.MAX_VALUE / 4),
