@@ -1,11 +1,38 @@
 package com.openminis.app.harness.adapter.real
 
-import com.openminis.app.harness.adapter.HarnessTraceEvent
 import com.openminis.app.harness.adapter.TraceBridge
+import com.openminis.app.harness.contract.HarnessTraceEvent
 import com.openminis.app.harness.contract.TraceEventType
 import com.openminis.app.tools.AgentTraceRecorder
 import com.openminis.app.agent.runtime.AgentRunPhase
 import com.openminis.app.agent.runtime.AgentTerminal
+
+/**
+ * schema v2 的 phase 枚举字符串（与 `rikkaminis-trace-schema.md` §3 一致：
+ * camelCase，如 "CallingModel"，不是枚举的 SCREAMING_SNAKE）。
+ */
+internal fun t7RealPhaseSchema(phase: AgentRunPhase): String = when (phase) {
+    AgentRunPhase.IDLE -> "Idle"
+    AgentRunPhase.PREPARING -> "Preparing"
+    AgentRunPhase.CALLING_MODEL -> "CallingModel"
+    AgentRunPhase.EXECUTING_TOOLS -> "ExecutingTools"
+    AgentRunPhase.RETRYING -> "Retrying"
+    AgentRunPhase.FALLING_BACK -> "FallingBack"
+    AgentRunPhase.COMPACTING -> "Compacting"
+    AgentRunPhase.FINALIZING -> "Finalizing"
+    AgentRunPhase.SUCCEEDED -> "Succeeded"
+    AgentRunPhase.FAILED -> "Failed"
+    AgentRunPhase.CANCELLED -> "Cancelled"
+    AgentRunPhase.INTERRUPTED -> "Interrupted"
+}
+
+/** schema v2 的 terminal 枚举字符串（与 ChatViewModel.t7TerminalSchema 一致）。 */
+internal fun t7RealTerminalSchema(terminal: AgentTerminal): String = when (terminal) {
+    AgentTerminal.SUCCEEDED -> "Succeeded"
+    AgentTerminal.FAILED -> "Failed"
+    AgentTerminal.CANCELLED -> "Cancelled"
+    AgentTerminal.INTERRUPTED -> "Interrupted"
+}
 
 /**
  * [T7-real-runtime] 真实 trace 运行时 —— 把 harness 的 [HarnessTraceEvent]
@@ -51,17 +78,17 @@ class RealTraceRuntime(
 
     private val phaseSchema: Map<TraceEventType, String?> = mapOf(
         TraceEventType.RUN_START to null,
-        TraceEventType.PROVIDER_ATTEMPT_STARTED to AgentRunPhase.CALLING_MODEL.name,
-        TraceEventType.TOOL_STARTED to AgentRunPhase.EXECUTING_TOOLS.name,
-        TraceEventType.TOOL_FINISHED to AgentRunPhase.EXECUTING_TOOLS.name,
-        TraceEventType.COMPACT_STARTED to AgentRunPhase.COMPACTING.name,
-        TraceEventType.COMPACT_FINISHED to AgentRunPhase.CALLING_MODEL.name,
-        TraceEventType.RETRY_REQUESTED to AgentRunPhase.RETRYING.name,
-        TraceEventType.FALLBACK_SELECTED to AgentRunPhase.FALLING_BACK.name,
-        TraceEventType.USER_CANCELLED to AgentRunPhase.FINALIZING.name,
-        TraceEventType.DEADLINE_REACHED to AgentRunPhase.FINALIZING.name,
-        TraceEventType.PROCESS_INTERRUPTED to AgentRunPhase.FINALIZING.name,
-        TraceEventType.PERSISTENCE_FAILED to AgentRunPhase.FINALIZING.name,
+        TraceEventType.PROVIDER_ATTEMPT_STARTED to t7RealPhaseSchema(AgentRunPhase.CALLING_MODEL),
+        TraceEventType.TOOL_STARTED to t7RealPhaseSchema(AgentRunPhase.EXECUTING_TOOLS),
+        TraceEventType.TOOL_FINISHED to t7RealPhaseSchema(AgentRunPhase.EXECUTING_TOOLS),
+        TraceEventType.COMPACT_STARTED to t7RealPhaseSchema(AgentRunPhase.COMPACTING),
+        TraceEventType.COMPACT_FINISHED to t7RealPhaseSchema(AgentRunPhase.CALLING_MODEL),
+        TraceEventType.RETRY_REQUESTED to t7RealPhaseSchema(AgentRunPhase.RETRYING),
+        TraceEventType.FALLBACK_SELECTED to t7RealPhaseSchema(AgentRunPhase.FALLING_BACK),
+        TraceEventType.USER_CANCELLED to t7RealPhaseSchema(AgentRunPhase.FINALIZING),
+        TraceEventType.DEADLINE_REACHED to t7RealPhaseSchema(AgentRunPhase.FINALIZING),
+        TraceEventType.PROCESS_INTERRUPTED to t7RealPhaseSchema(AgentRunPhase.FINALIZING),
+        TraceEventType.PERSISTENCE_FAILED to t7RealPhaseSchema(AgentRunPhase.FINALIZING),
         TraceEventType.RUN_FINALIZED to null, // 终态由 detail 解析
         TraceEventType.SPAWN_REJECTED to null,
     )
@@ -76,6 +103,7 @@ class RealTraceRuntime(
     private fun recordInternal(event: HarnessTraceEvent) {
         when (event.type) {
             TraceEventType.RUN_START -> {
+                _startMs = event.atMs
                 recorder.beginRun(
                     runId = runId,
                     sessionId = sessionId,
@@ -88,7 +116,7 @@ class RealTraceRuntime(
             TraceEventType.PROVIDER_ATTEMPT_STARTED -> {
                 recorder.stateTransition(
                     from = "Idle".takeIf { _first } ?: phaseSchema[TraceEventType.PROVIDER_ATTEMPT_STARTED]!!,
-                    to = AgentRunPhase.CALLING_MODEL.name,
+                    to = t7RealPhaseSchema(AgentRunPhase.CALLING_MODEL),
                     reason = "ProviderAttemptStarted",
                 )
                 _first = false
@@ -119,22 +147,22 @@ class RealTraceRuntime(
             }
             TraceEventType.COMPACT_STARTED -> {
                 recorder.stateTransition(
-                    from = AgentRunPhase.CALLING_MODEL.name,
-                    to = AgentRunPhase.COMPACTING.name,
+                    from = t7RealPhaseSchema(AgentRunPhase.CALLING_MODEL),
+                    to = t7RealPhaseSchema(AgentRunPhase.COMPACTING),
                     reason = event.detail,
                 )
             }
             TraceEventType.COMPACT_FINISHED -> {
                 recorder.stateTransition(
-                    from = AgentRunPhase.COMPACTING.name,
-                    to = AgentRunPhase.CALLING_MODEL.name,
+                    from = t7RealPhaseSchema(AgentRunPhase.COMPACTING),
+                    to = t7RealPhaseSchema(AgentRunPhase.CALLING_MODEL),
                     reason = event.detail,
                 )
             }
             TraceEventType.RETRY_REQUESTED -> {
                 recorder.stateTransition(
-                    from = AgentRunPhase.CALLING_MODEL.name,
-                    to = AgentRunPhase.RETRYING.name,
+                    from = t7RealPhaseSchema(AgentRunPhase.CALLING_MODEL),
+                    to = t7RealPhaseSchema(AgentRunPhase.RETRYING),
                     reason = event.detail,
                 )
                 recorder.retryDecision(
@@ -150,29 +178,29 @@ class RealTraceRuntime(
             }
             TraceEventType.FALLBACK_SELECTED -> {
                 recorder.stateTransition(
-                    from = AgentRunPhase.CALLING_MODEL.name,
-                    to = AgentRunPhase.FALLING_BACK.name,
+                    from = t7RealPhaseSchema(AgentRunPhase.CALLING_MODEL),
+                    to = t7RealPhaseSchema(AgentRunPhase.FALLING_BACK),
                     reason = event.detail,
                 )
             }
             TraceEventType.USER_CANCELLED -> {
                 recorder.stateTransition(
-                    from = AgentRunPhase.CALLING_MODEL.name,
-                    to = AgentRunPhase.FINALIZING.name,
+                    from = t7RealPhaseSchema(AgentRunPhase.CALLING_MODEL),
+                    to = t7RealPhaseSchema(AgentRunPhase.FINALIZING),
                     reason = "UserCancelled: ${event.detail}",
                 )
             }
             TraceEventType.DEADLINE_REACHED -> {
                 recorder.stateTransition(
-                    from = AgentRunPhase.CALLING_MODEL.name,
-                    to = AgentRunPhase.FINALIZING.name,
+                    from = t7RealPhaseSchema(AgentRunPhase.CALLING_MODEL),
+                    to = t7RealPhaseSchema(AgentRunPhase.FINALIZING),
                     reason = "DeadlineReached",
                 )
             }
             TraceEventType.PROCESS_INTERRUPTED -> {
                 recorder.stateTransition(
-                    from = AgentRunPhase.CALLING_MODEL.name,
-                    to = AgentRunPhase.FINALIZING.name,
+                    from = t7RealPhaseSchema(AgentRunPhase.CALLING_MODEL),
+                    to = t7RealPhaseSchema(AgentRunPhase.FINALIZING),
                     reason = event.detail ?: "ProcessInterrupted",
                 )
             }
@@ -192,18 +220,18 @@ class RealTraceRuntime(
                     else -> AgentTerminal.FAILED
                 }
                 recorder.stateTransition(
-                    from = AgentRunPhase.FINALIZING.name,
-                    to = terminal.name,
+                    from = t7RealPhaseSchema(AgentRunPhase.FINALIZING),
+                    to = t7RealTerminalSchema(terminal),
                     reason = event.detail,
                 )
                 recorder.endRun(
-                    terminalState = terminal.name,
+                    terminalState = t7RealTerminalSchema(terminal),
                     terminalReason = null,
                     durationMs = if (_startMs > 0) event.atMs - _startMs else 0,
                 )
             }
             TraceEventType.SPAWN_REJECTED -> {
-                recorder.error(turn = null, phase = AgentRunPhase.EXECUTING_TOOLS.name, message = "spawn rejected")
+                recorder.error(turn = null, phase = t7RealPhaseSchema(AgentRunPhase.EXECUTING_TOOLS), message = "spawn rejected")
             }
         }
     }
