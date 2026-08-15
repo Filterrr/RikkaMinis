@@ -11,9 +11,12 @@ import com.openminis.app.agent.runtime.AgentRunTransition
 import com.openminis.app.agent.runtime.AgentRunPhase
 import com.openminis.app.agent.runtime.AgentTerminal
 import com.openminis.app.agent.runtime.AgentTerminalReason
+import com.openminis.app.agent.runtime.BudgetDecision
+import com.openminis.app.agent.runtime.ProviderAttemptOutcome
 import com.openminis.app.harness.contract.TraceEventType
 import com.openminis.app.harness.contract.HarnessTraceEvent
 import com.openminis.app.harness.contract.CooldownRecord
+import kotlinx.coroutines.delay
 
 /**
  * [T4-B] 生产 adapter 骨架 —— 场景驱动循环的**结构**，实现留桩等 T7。
@@ -130,12 +133,18 @@ class RealAgentAdapterSkeleton(
     }
 
     /**
-     * turn loop 骨架。T4-A `HarnessRunner` 的流程镜像：
-     * turn → compact → provider fallback 链 → tool 执行 → 终态判定。
+     * turn loop 实现 —— 通用 Agent Run 驱动循环。
      *
-     * TODO(await T7): 各步骤的真实行为（provider 调用、tool 执行、shell、
-     * persist、deadline/cancel/processDeath 探测）由 T7 的 [AgentRuntimePort]
-     * 实现填充。当前骨架按场景脚本意图注释每个步骤的期望行为。
+     * 按场景 [FaultScenario] 定义的 turn 序列驱动运行时端口：
+     * 1. 每轮开始检查 deadline/userCancelled/processDead
+     * 2. 消耗 turn 预算（T2）
+     * 3. 尝试 fallback 链（预期间隔检测）
+     * 4. 处理 provider 结果（成功/429/stream reset/drop/hard failure/length finish）
+     * 5. 执行工具（tool calls）
+     * 6. 检查工具结果副作用
+     * 7. 终态判定
+     *
+     * 所有 reducer 事件通过 [emitEvent] 发出，供 T5 状态机旁路验证。
      */
     private suspend fun driveTurnLoop(
         scenario: FaultScenario,
@@ -143,22 +152,219 @@ class RealAgentAdapterSkeleton(
         drive: DriveState,
         emitEvent: (AgentRunEvent) -> Unit,
     ) {
-        // TODO(await T7): 完整驱动循环 —— 当前为结构性占位（不执行任何真实调用）。
-        // T7 完成后本方法实现：
-        //   for (turn in scenario.turns) {
-        //     budget.consumeTurn()                        // T2 预算
-        //     if (turn.compactDelayMs > 0) performCompact() // F09
-        //     for (attempt in turn.attempts) {            // fallback 链
-        //       budget.consumeProviderAttempt()           // T2 预算
-        //       when (runtime.callProvider(idx)) { ... }  // F01/F02/F03/F04
-        //     }
-        //     for (toolName in attempt.toolCalls) {       // 工具
-        //       budget.consumeToolCall()                  // T2 预算
-        //       runtime.executeTool(toolName)             // F05/F06/F08/F13
-        //     }
-        //     // deadline/cancel/processDeath 探测（F07/F11/F14）
-        //   }
-        //   // finalize：persist(mark) → RunFinalized(terminal)
+        for ((turnIdx, turn) in scenario.turns.withIndex()) {
+            // ── 前置检查 ─────────────────────────────────────────────
+            if (budget.isExpired()) {
+                emitEvent(AgentRunEvent.DeadlineReached(budget.startedAtMonotonicMs))
+                return
+            }
+            if (runtime.isUserCancelled()) {
+                emitEvent(AgentRunEvent.UserCancelled("user_cancelled"))
+                drive.providerCancellations++
+                return
+            }
+            if (runtime.isProcessDead()) {
+                emitEvent(AgentRunEvent.ProcessInterrupted("process_death"))
+                return
+            }
+
+            // ── turn 预算 ────────────────────────────────────────────
+            if (budget.consumeTurn() is com.openminis.app.agent.runtime.BudgetDecision.Denied) {
+                emitEvent(AgentRunEvent.ProcessInterrupted("budget_exhausted(turn_limit)"))
+                return
+            }
+
+            // ── compact 阶段 ──────────────────────────────────────────
+            if (turn.compactDelayMs > 0) {
+                emitEvent(AgentRunEvent.CompactionStarted("pre_turn_$turnIdx"))
+                drive.compactCalls++
+                // 等待 compact 超时或完成
+                val compactWait = turn.compactDelayMs.coerceAtMost(
+                    scenario.compactTimeoutMs ?: turn.compactDelayMs
+                )
+                if (compactWait > 0) {
+                    delay(compactWait)
+                    // compact 超时后中断（F09 语义：超时不损坏原历史）
+                    if (compactWait >= (scenario.compactTimeoutMs ?: Long.MAX_VALUE)) {
+                        drive.historyIntact = true
+                        emitEvent(AgentRunEvent.CompactionFinished())
+                        emitEvent(AgentRunEvent.ProcessInterrupted("compact_timeout"))
+                        return
+                    }
+                }
+                emitEvent(AgentRunEvent.CompactionFinished())
+            }
+
+            // ── provider fallback 链 ─────────────────────────────────
+            for ((attemptIdx, attempt) in turn.attempts.withIndex()) {
+                if (budget.isExpired()) {
+                    emitEvent(AgentRunEvent.DeadlineReached(budget.startedAtMonotonicMs))
+                    return
+                }
+                if (runtime.isUserCancelled()) {
+                    emitEvent(AgentRunEvent.UserCancelled("user_cancelled"))
+                    drive.providerCancellations++
+                    return
+                }
+                if (runtime.isProcessDead()) {
+                    emitEvent(AgentRunEvent.ProcessInterrupted("process_death"))
+                    return
+                }
+
+                // 消耗 provider attempt 预算
+                if (budget.consumeProviderAttempt() is com.openminis.app.agent.runtime.BudgetDecision.Denied) {
+                    emitEvent(AgentRunEvent.ProcessInterrupted("budget_exhausted(provider_attempts)"))
+                    return
+                }
+
+                emitEvent(AgentRunEvent.ProviderAttemptStarted)
+
+                // 模拟冷却等待（F01/F02 cooldown 场景）
+                if (attempt.delayMs > 0) {
+                    delay(attempt.delayMs)
+                    if (budget.isExpired()) {
+                        emitEvent(AgentRunEvent.DeadlineReached(budget.startedAtMonotonicMs))
+                        return
+                    }
+                }
+                if (runtime.isUserCancelled()) {
+                    emitEvent(AgentRunEvent.UserCancelled("user_cancelled"))
+                    drive.providerCancellations++
+                    return
+                }
+
+                val providerResult = runtime.callProvider(attemptIdx)
+
+                when (providerResult) {
+                    is ProviderCallResult.Success -> {
+                        emitEvent(AgentRunEvent.ProviderAttemptFinished(
+                            ProviderAttemptOutcome.SUCCESS
+                        ))
+                        // 执行工具
+                        for (toolName in providerResult.toolCalls) {
+                            if (budget.consumeToolCall() is com.openminis.app.agent.runtime.BudgetDecision.Denied) {
+                                emitEvent(AgentRunEvent.ProcessInterrupted("budget_exhausted(tool_calls)"))
+                                return
+                            }
+                            emitEvent(AgentRunEvent.ToolStarted(toolName))
+                            val toolResult = runtime.executeTool(toolName)
+                            emitEvent(AgentRunEvent.ToolFinished(toolName, toolResult.resultKnown))
+                            if (!toolResult.resultKnown && toolResult.sideEffectPerformed) {
+                                drive.duplicateSideEffects++
+                            }
+                            if (toolResult.cancelled) drive.toolCancellations++
+                            if (toolResult.spawnRejected) drive.spawnRejected++
+
+                            // 检查取消（F08 语义：工具中被取消）
+                            if (runtime.isUserCancelled()) {
+                                emitEvent(AgentRunEvent.UserCancelled("user_cancelled"))
+                                drive.toolCancellations++
+                                return
+                            }
+                            if (runtime.isProcessDead()) {
+                                emitEvent(AgentRunEvent.ProcessInterrupted("process_death"))
+                                return
+                            }
+                        }
+                        // finalAnswer → 本轮终结（不再走更多 turn）
+                        if (providerResult.finalAnswer) {
+                            emitEvent(AgentRunEvent.WorkCompleted)
+                            // 终态持久化
+                            val persistOk = runtime.persist(PersistenceMark.COMPLETED)
+                            if (!persistOk) {
+                                emitEvent(AgentRunEvent.PersistenceFailed("finalize_persist"))
+                                drive.persistenceMark = PersistenceMark.FAILED
+                            } else {
+                                drive.persistenceMark = PersistenceMark.COMPLETED
+                            }
+                            emitEvent(AgentRunEvent.RunFinalized(
+                                terminal = AgentTerminal.SUCCEEDED,
+                                reason = AgentTerminalReason.COMPLETED,
+                            ))
+                            return
+                        }
+                        // 无 finalAnswer → 继续下一轮
+                    }
+
+                    is ProviderCallResult.RateLimited -> {
+                        emitEvent(AgentRunEvent.ProviderAttemptFinished(
+                            ProviderAttemptOutcome.TRANSIENT_FAILURE
+                        ))
+                        drive.cooldowns.add(CooldownRecord(
+                            providerId = "provider_$attemptIdx",
+                            cooldownUntilMs = System.nanoTime() / 1_000_000L + providerResult.cooldownMs,
+                        ))
+                        // 还有后续 attempt → fallback 继续
+                        if (attemptIdx + 1 < turn.attempts.size) {
+                            emitEvent(AgentRunEvent.FallbackSelected(attemptIdx + 1))
+                        } else {
+                            emitEvent(AgentRunEvent.ProviderAttemptFinished(
+                                ProviderAttemptOutcome.FATAL_FAILURE
+                            ))
+                            emitEvent(AgentRunEvent.ProcessInterrupted("all_fallbacks_exhausted"))
+                            return
+                        }
+                    }
+
+                    is ProviderCallResult.StreamReset -> {
+                        emitEvent(AgentRunEvent.ProviderAttemptFinished(
+                            ProviderAttemptOutcome.TRANSIENT_FAILURE
+                        ))
+                        // 尝试重试（同一 provider）或 fallback
+                        if (attemptIdx + 1 < turn.attempts.size) {
+                            emitEvent(AgentRunEvent.RetryRequested("stream_reset"))
+                        } else {
+                            emitEvent(AgentRunEvent.ProviderAttemptFinished(
+                                ProviderAttemptOutcome.FATAL_FAILURE
+                            ))
+                            return
+                        }
+                    }
+
+                    is ProviderCallResult.DroppedAfterFirstChunk -> {
+                        // 首 chunk 后断流 → partial content → INTERRUPTED
+                        emitEvent(AgentRunEvent.ProviderAttemptFinished(
+                            ProviderAttemptOutcome.TRANSIENT_FAILURE
+                        ))
+                        emitEvent(AgentRunEvent.ProcessInterrupted("dropped_after_first_chunk"))
+                        drive.persistenceMark = PersistenceMark.PARTIAL
+                        emitEvent(AgentRunEvent.ProcessInterrupted("dropped_after_first_chunk"))
+                        return
+                    }
+
+                    is ProviderCallResult.HardFailure -> {
+                        if (attemptIdx + 1 < turn.attempts.size) {
+                            // 还有 fallback → 尝试下一个
+                            emitEvent(AgentRunEvent.ProviderAttemptFinished(
+                                ProviderAttemptOutcome.FALLBACK_FAILURE
+                            ))
+                            emitEvent(AgentRunEvent.FallbackSelected(attemptIdx + 1))
+                        } else {
+                            // fallback 链耗尽
+                            emitEvent(AgentRunEvent.ProviderAttemptFinished(
+                                ProviderAttemptOutcome.FATAL_FAILURE
+                            ))
+                            emitEvent(AgentRunEvent.ProcessInterrupted("all_fallbacks_exhausted"))
+                            return
+                        }
+                    }
+
+                    is ProviderCallResult.LengthFinish -> {
+                        // finish_reason=length → 续写（下一轮继续）
+                        emitEvent(AgentRunEvent.ProviderAttemptFinished(
+                            ProviderAttemptOutcome.SUCCESS
+                        ))
+                    }
+                }
+            }
+        }
+
+        // 所有 turn 耗尽 → 正常结束（但未 finalAnswer）
+        if (budget.isExpired()) {
+            emitEvent(AgentRunEvent.DeadlineReached(budget.startedAtMonotonicMs))
+        } else {
+            emitEvent(AgentRunEvent.ProcessInterrupted("turns_exhausted_without_final"))
+        }
     }
 
     private fun emit(
