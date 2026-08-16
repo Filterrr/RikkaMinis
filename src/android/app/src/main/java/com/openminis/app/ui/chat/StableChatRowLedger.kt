@@ -95,20 +95,16 @@ internal class StableChatRowLedger {
         //    builder — they go through the segmenters inside
         //    reconcileMessage so their keys are stable mdslot keys.
         if (messages.size > lastMessageIndex + 1) {
-            val seedKeys = rows.mapTo(HashSet()) { it.key }
             for (idx in lastMessageIndex + 1 until messages.size) {
                 val msg = messages[idx]
                 val prevRole = prevNonSystemRole(messages, idx)
                 if (msg.role == "assistant") {
-                    val fresh = buildNewMessageRows(msg, prevRole, seedKeys)
+                    val fresh = buildNewMessageRows(msg, prevRole)
                     val nonText = fresh.filterNot { it is FlatChatItem.AssistantMarkdownBlock }
-                    nonText.forEach { seedKeys.add(it.key) }
                     rows.addAll(nonText)
                     reconcileMessage(msg, prevRole)
                 } else {
-                    val fresh = buildNewMessageRows(msg, prevRole, seedKeys)
-                    fresh.forEach { seedKeys.add(it.key) }
-                    rows.addAll(fresh)
+                    rows.addAll(buildNewMessageRows(msg, prevRole))
                 }
             }
             lastMessageIndex = messages.size - 1
@@ -137,9 +133,12 @@ internal class StableChatRowLedger {
     private fun buildNewMessageRows(
         message: ChatMessage,
         prevNonSystemRole: String?,
-        seedKeys: Set<String>,
     ): List<FlatChatItem> {
-        val built = buildFlatChatItems(listOf(message), seedKeys = seedKeys)
+        // NOTE: deliberately NO seedKeys passed to buildFlatChatItems. The
+        // dedupe suffixing (key#2) must only guard against collisions WITHIN
+        // this build; the ledger's own published keys are the merge target
+        // (same message id → same keys expected), not collisions to avoid.
+        val built = buildFlatChatItems(listOf(message), seedKeys = emptySet())
         val suppressHeader = message.role == "assistant" && prevNonSystemRole == "assistant"
         return built.mapNotNull { row ->
             when {
@@ -167,8 +166,7 @@ internal class StableChatRowLedger {
             rows.addAll(buildNewMessageRows(message, prevNonSystemRole, rows.mapTo(HashSet()) { it.key }))
             return
         }
-        val seedKeys = rows.mapTo(HashSet()) { it.key }
-        val freshAll = buildNewMessageRows(message, prevNonSystemRole, seedKeys)
+        val freshAll = buildNewMessageRows(message, prevNonSystemRole)
         val freshNonText = freshAll.filterNot { it is FlatChatItem.AssistantMarkdownBlock }
 
         // ── text-structure reset detection (first segmenter attach / retry) ──
