@@ -184,6 +184,7 @@ internal class StableChatRowLedger {
                 } else {
                     rows.addAll(buildNewMessageRows(msg, prevRole))
                 }
+                if (isLiveAssistant(msg)) activeAssistantIds.add(msg.id)
                 reconciledMessageIds.add(msg.id)
             }
             lastMessageIndex = messages.size - 1
@@ -288,7 +289,9 @@ internal class StableChatRowLedger {
 
     private fun isLiveAssistant(msg: ChatMessage): Boolean =
         msg.isStreaming || msg.isAwaitingModelResponse ||
-            msg.toolBlocks.any { it.toolStatus == ToolBlockStatus.RUNNING }
+            msg.toolBlocks.any { it.toolStatus == ToolBlockStatus.STREAMING ||
+                it.toolStatus == ToolBlockStatus.PENDING ||
+                it.toolStatus == ToolBlockStatus.RUNNING }
 
     private fun hasLiveRowsOwnedBy(messageId: String): Boolean =
         rows.any {

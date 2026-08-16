@@ -497,4 +497,42 @@ class StableChatRowLedgerTest {
             .firstOrNull { it.messageId == "a1" }
         assertFalse("a1 tool must stop running", a1Group!!.isRunning)
     }
+
+    @Test
+    fun `appended live assistant with pending tool is registered and converges`() {
+        // Seed a settled conversation history first (no live assistant).
+        val settled = listOf(
+            userMessage("u0"),
+            assistantMessage("a0", blocks = listOf(textBlock("t0", "Old answer")), isStreaming = false),
+        )
+        val ledger = StableChatRowLedger()
+        val kSettled = keysOf(ledger.seed(buildFlatChatItems(settled, "s1"), settled.size))
+        assertTrue(kSettled.isNotEmpty())
+
+        // Append-only reconcile: new user message + new assistant in PENDING state.
+        // This is the real-life flow after the conversation is already on screen:
+        // the live assistant is appended, never re-seeded.
+        val live = settled + listOf(
+            userMessage("u1"),
+            assistantMessage("a1", blocks = listOf(toolBlock("tool_1", ToolBlockStatus.PENDING)), isStreaming = true),
+        )
+        val kV1 = keysOf(ledger.reconcile(live))
+        // Sanity: PENDING tool must render as running in the initial appended row.
+        val a1Running = ledger.snapshot().filterIsInstance<FlatChatItem.AssistantToolRunGroup>()
+            .firstOrNull { it.messageId == "a1" }
+        assertNotNull("a1 must be tracked as live", a1Running)
+        assertTrue("PENDING tool must render running", a1Running!!.isRunning)
+
+        // Converge the same appended assistant to terminal in the next frame.
+        val terminal = settled + listOf(
+            userMessage("u1"),
+            assistantMessage("a1", blocks = listOf(toolBlock("tool_1", ToolBlockStatus.SUCCESS)), isStreaming = false),
+        )
+        val kV2 = keysOf(ledger.reconcile(terminal))
+        // Row topology stays identical; only the group status flips.
+        assertEquals(kV1, kV2)
+        val a1Terminal = ledger.snapshot().filterIsInstance<FlatChatItem.AssistantToolRunGroup>()
+            .firstOrNull { it.messageId == "a1" }
+        assertFalse("a1 tool must stop running after converge", a1Terminal!!.isRunning)
+    }
 }
