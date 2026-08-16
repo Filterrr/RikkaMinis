@@ -33,6 +33,16 @@ import java.util.concurrent.TimeUnit
  * - Shell death: detected on next command, shell is recreated with same bind mounts
  */
 
+// [P2-proot-native-leak] High-water mark (MB) for PRoot *child process*
+// RSS. Normal operation is ~35-55MB. Referenced by top-level
+// childRssHighWaterMarkMB() as the tight-memory baseline.
+private const val NATIVE_HEAP_HIGH_WATER_MARK_MB = 256L
+
+// [P2-app-native-oom] High-water mark for app-process native heap
+// (Debug.getNativeHeapAllocatedSize). Referenced by top-level
+// appNativeHighWaterMarkMB() as the tight-memory baseline.
+private const val APP_NATIVE_HEAP_HIGH_WATER_MARK_MB = 120L
+
 // [memory-dynamic-budget] 动态预算。以上固定阈值是「系统内存紧张/未知」
 // 时的保守基线（2026-08-12 失控泄漏 25MB→542MB/12s 的防线）。设备实测
 // （2026-08-16）MemTotal 11.4GB / 空闲 MemAvailable 5.3GB，正常任务离
@@ -75,16 +85,6 @@ object ExecutionCoordinator {
     // When a command returns (or while it runs) and the child RSS exceeds
     // this, we recycle the session's shell so the next getOrCreateShell
     // spawns a fresh PRoot at baseline.
-    private const val NATIVE_HEAP_HIGH_WATER_MARK_MB = 256L
-
-    // [P2-app-native-oom] High-water mark for app-process native heap
-    // (Debug.getNativeHeapAllocatedSize). This catches the actual OOM path
-    // that nativeRssMB() misses: the PRoot tracer stays at 3MB while the
-    // app process's own native heap (talloc inside PRoot's in-process
-    // components, DirectByteBuffers, LOS objects) balloons past Scudo's
-    // limit. Normal is ~50-100MB; lowered from 200MB to 120MB after
-    // 2026-08-12 crash (native heap 542MB in 12s, recycle too late).
-    private const val APP_NATIVE_HEAP_HIGH_WATER_MARK_MB = 120L
 
     // [P2-global-concurrency] Maximum number of persistent shells that can
     // run commands concurrently across all sessions. 3-4 sessions each
