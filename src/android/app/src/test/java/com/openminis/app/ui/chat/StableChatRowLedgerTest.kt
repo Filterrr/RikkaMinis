@@ -102,7 +102,7 @@ class StableChatRowLedgerTest {
         val k3 = keysOf(ledger.reconcile(t3))
         // New text row appended at tail; previous keys unchanged prefix.
         assertTrue(k3.take(k2.size) == k2)
-        assertEquals("mdslot:a1:text_1_2:0", k3.last())
+        assertEquals("mdblock:a1:text_1_2:0", k3.last())
 
         // Text grows across a paragraph boundary: one more slot appended.
         val t4 = listOf(userMessage("u1"), assistantMessage(msgId,
@@ -114,7 +114,7 @@ class StableChatRowLedgerTest {
             isStreaming = true))
         val k4 = keysOf(ledger.reconcile(t4))
         assertTrue(k4.take(k3.size) == k3)
-        assertEquals(listOf("mdslot:a1:text_1_2:0", "mdslot:a1:text_1_2:1"), k4.takeLast(2))
+        assertEquals(listOf("mdblock:a1:text_1_2:0", "mdblock:a1:text_1_2:1"), k4.takeLast(2))
     }
 
     @Test fun `stream end keeps every key identical`() {
@@ -154,7 +154,7 @@ class StableChatRowLedgerTest {
         val k2 = keysOf(ledger.reconcile(turn2))
         assertTrue(k2.take(k1.size) == k1)
         // New rows: u2 bubble + a2 header + a2 text slot.
-        assertEquals(listOf("user:u2", "header:a2", "mdslot:a2:text_2_1:0"), k2.drop(k1.size))
+        assertEquals(listOf("user:u2", "header:a2", "mdblock:a2:text_2_1:0"), k2.drop(k1.size))
     }
 
     // ── text → tool → text (tool arrives late) ──────────────────────────────
@@ -165,7 +165,7 @@ class StableChatRowLedgerTest {
         ledger.seed(emptyList(), 0)
         val t1 = listOf(userMessage("u1"), assistantMessage(msgId, blocks = listOf(textBlock("text_1_0", "Preface")), isStreaming = true))
         val k1 = keysOf(ledger.reconcile(t1))
-        assertEquals(listOf("user:u1", "header:a1", "mdslot:a1:text_1_0:0"), k1)
+        assertEquals(listOf("user:u1", "header:a1", "mdblock:a1:text_1_0:0"), k1)
 
         // Tool arrives AFTER text — first-appearance order: toolrun appends.
         val t2 = listOf(userMessage("u1"), assistantMessage(msgId,
@@ -196,7 +196,7 @@ class StableChatRowLedgerTest {
         val k2 = keysOf(ledger.reconcile(t2))
         assertFalse(k2.contains("typing:a1"))
         assertTrue(k2.contains("header:a1"))
-        assertTrue(k2.last() == "mdslot:a1:text_1_1:0")
+        assertTrue(k2.last() == "mdblock:a1:text_1_1:0")
     }
 
     @Test fun `error banner row may disappear after retry`() {
@@ -237,8 +237,8 @@ class StableChatRowLedgerTest {
         // Turn 1 keys identical.
         assertEquals(kBefore.take(3), kAfter.take(3))
         // Turn 2: old text row gone, new text row present.
-        assertFalse(kAfter.contains("mdslot:a2:text_2_1:0"))
-        assertTrue(kAfter.contains("mdslot:a2:text_3_2:0"))
+        assertFalse(kAfter.contains("mdblock:a2:text_2_1:0"))
+        assertTrue(kAfter.contains("mdblock:a2:text_3_2:0"))
         assertTrue(kAfter.contains("header:a2"))
     }
 
