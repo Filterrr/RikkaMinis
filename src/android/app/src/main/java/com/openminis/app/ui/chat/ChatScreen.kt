@@ -312,6 +312,9 @@ internal val SparkleColor2 = Color(0xFF99998C) // rgb(0.6, 0.6, 0.55)
 // sides and toast the user when their selection is trimmed. Mirrors iOS
 // PHPickerConfiguration.selectionLimit = 50.
 private const val ATTACHMENT_PICK_LIMIT = 50
+// [forward-stable] Bottom sentinel row key — the single scroll target for
+// every "go to bottom" request in the forward (non-reverse) chat list.
+private const val ScrollBottomKey = "__scroll_bottom__"
 
 /**
  * [T-android-send-no-autoscroll-behind-preview] Follow-grace window after a
@@ -1095,40 +1098,24 @@ fun ChatScreen(
     // multi-tool turn). Anchor on the rendered set instead.
     val isNearBottom = remember(listState, nearBottomThresholdPx) {
         derivedStateOf {
+            // [forward-stable] Forward list: "at bottom" ⇔ the bottom
+            // sentinel row is visible, or the last visible row's bottom edge
+            // reaches the viewport end. The sentinel is a 5dp spacer one past
+            // the last message row, so it is only measurable when the user
+            // really is at the bottom — and it cannot be fooled by a tall
+            // last item (the T173 failure mode of the old gap test).
             val info = listState.layoutInfo
-            val bottomItem = info.visibleItemsInfo.firstOrNull { it.index == 0 }
-            val viewportEnd = info.viewportEndOffset
-            val itemBottom = bottomItem?.let { it.offset + it.size } ?: Int.MIN_VALUE
-            val gap = viewportEnd - itemBottom
-            // T173: when the bottom row is taller than the viewport (e.g. one
-            // big assistant message with code blocks), `gap` is permanently
-            // hugely negative even when the user is anchored at the bottom —
-            // because reverseLayout pins index 0's *bottom* to the viewport
-            // bottom, but the item's geometric bottom is below the viewport
-            // (it extends downward off-screen in layoutInfo terms). The
-            // earlier `gap < threshold` test happened to be true in that
-            // case, but it ALSO stayed true as the user scrolled up by
-            // thousands of px — settle-after-interaction then snapped them
-            // right back. Use the LazyListState anchor instead: under
-            // reverseLayout, "at bottom" ⇔ index 0 is the first item AND
-            // its scroll offset is within `threshold` px. Any drag upward
-            // grows firstVisibleItemScrollOffset past threshold instantly,
-            // so the user's intent flips into userScrolledAway.
-            val firstIdx = listState.firstVisibleItemIndex
-            val firstOff = listState.firstVisibleItemScrollOffset
-            // [T-android-scroll-isnearbottom-bug] Anchor authority lives on
-            // listState.firstVisibleItem(Index|ScrollOffset). Previous form
-            // required `bottomItem != null` too, but during a fresh measure
-            // pass visibleItemsInfo can transiently be empty even when the
-            // user IS at the bottom (firstIdx=0 / firstOff=0). The empty
-            // window read as "not at bottom" and propagated to:
-            //   - reserve-change SKIP at the bottom (recovery yank lost)
-            //   - scroll-to-bottom FAB shown on a session that's actually
-            //     bottom-anchored
-            //   - trailing-row pin gated on isNearBottom failing
-            // See /tmp/fix_scroll_diagnosis.md. Anchor on firstIdx/firstOff
-            // alone — they survive the measure window.
-            val result = firstIdx == 0 && firstOff <= nearBottomThresholdPx.toInt()
+            val total = info.totalItemsCount
+            if (total == 0) return@derivedStateOf false
+            val sentinelIdx = total - 1
+            val sentinel = info.visibleItemsInfo.firstOrNull { it.index == sentinelIdx }
+            val result = if (sentinel != null) {
+                true
+            } else {
+                val viewportEnd = info.viewportEndOffset
+                val last = info.visibleItemsInfo.maxByOrNull { it.index }
+                last != null && last.offset + last.size <= viewportEnd
+            }
             // T-android-jank-profile: was logging on every scroll frame (this
             // is a derivedStateOf body — it re-runs when any of
             // listState.layoutInfo / firstVisibleItemIndex /
@@ -1138,9 +1125,11 @@ fun ChatScreen(
             // Gate behind a debug toggle so the log path stays available for
             // future scroll-debugging sessions but doesn't ship by default.
             if (false) {
+                val sentinelVis = sentinel != null
+                val lastRow = info.visibleItemsInfo.maxByOrNull { it.index }
                 AppLogger.debug(
                     tagScroll,
-                    "isNearBottom: bottomVisible=${bottomItem != null} itemBottom=$itemBottom viewportEnd=$viewportEnd gap=$gap threshold=${nearBottomThresholdPx.toInt()} firstVisible=$firstIdx firstOffset=$firstOff canScrollForward=${listState.canScrollForward} canScrollBackward=${listState.canScrollBackward} totalItems=${info.totalItemsCount} visibleItems=${info.visibleItemsInfo.size} isScrollInProgress=${listState.isScrollInProgress} → $result",
+                    "isNearBottom: total=$total sentinelVisible=$sentinelVis lastIdx=${lastRow?.index} lastBottom=${lastRow?.let { it.offset + it.size }} viewportEnd=${info.viewportEndOffset} canScrollForward=${listState.canScrollForward} canScrollBackward=${listState.canScrollBackward} isScrollInProgress=${listState.isScrollInProgress} -> $result",
                 )
             }
             result
@@ -1248,25 +1237,19 @@ fun ChatScreen(
             val viewportH = info.viewportEndOffset - info.viewportStartOffset
             val visible = info.visibleItemsInfo
             if (viewportH <= 0 || visible.isEmpty()) return@derivedStateOf false
-            // [T-android-scroll-fab-reversed] At the very bottom the list cannot
-            // scroll forward; never report "far from bottom" there. This is the
-            // authoritative at-bottom signal under reverseLayout. (The earlier
-            // nearestBottomOverhang term wrongly reported far-from-bottom=true at
-            // rest when the newest message (index 0) was taller than the
-            // viewport — its content box extends below the fold so the overhang
-            // measured ~1938px > viewportH even though index 0's bottom IS pinned
-            // to the viewport bottom. Confirmed in ScrollFAB2 logs:
-            // nbIdx=0 nbOver=1938 belowSum=0 canFwd=false → falsely true.)
+            // [forward-stable] At the very bottom the list cannot scroll
+            // forward; never report "far from bottom" there. (canScrollForward
+            // already flips with the layout direction.)
             if (!listState.canScrollForward) return@derivedStateOf false
-            // reverseLayout: index 0 = newest = visual bottom.
-            val nearestBottom = visible.minByOrNull { it.index }!!
-            // Sum of (cached, else avg-estimated) sizes for the WHOLE items below
-            // the viewport: indices 0..nearestBottom.index-1. We intentionally do
-            // NOT add a partial-overhang term for nearestBottom — under
-            // reverseLayout a tall bottom item makes that term spuriously large.
-            // The whole-items sum is the scrolled-past distance we care about.
+            // Forward list: the highest visible index is the visual bottom.
+            val nearestBottom = visible.maxByOrNull { it.index }!!
+            // Sum of (cached, else avg-estimated) sizes for the WHOLE items
+            // below the viewport: (nearestBottom.index+1)..total-1. No
+            // partial-overhang term — a tall bottom item would make it
+            // spuriously large (same rationale as the old reverseLayout code).
+            val total = info.totalItemsCount
             var belowSum = 0L
-            for (i in 0 until nearestBottom.index) {
+            for (i in (nearestBottom.index + 1) until total) {
                 belowSum += sizeAt(i)
             }
             belowSum > viewportH
@@ -1282,13 +1265,14 @@ fun ChatScreen(
             // Symmetric to isFarFromBottom: at the top the list cannot scroll
             // backward; never report "far from top" there.
             if (!listState.canScrollBackward) return@derivedStateOf false
-            // reverseLayout: highest index = oldest = visual top.
-            val nearestTop = visible.maxByOrNull { it.index }!!
-            // Whole items above the viewport (older): nearestTop.index+1..total-1.
-            // Unmeasured on first entry (scrolled up from the bottom), so estimate
-            // via the running average. No partial-overhang term, mirroring above.
+            // Forward list: the lowest visible index is the visual top.
+            val nearestTop = visible.minByOrNull { it.index }!!
+            // Whole items above the viewport (older): 0..nearestTop.index-1.
+            // Unmeasured on first entry (scrolled up from the bottom), so
+            // estimate via the running average. No partial-overhang term,
+            // mirroring above.
             var aboveSum = 0L
-            for (i in (nearestTop.index + 1) until total) {
+            for (i in 0 until nearestTop.index) {
                 aboveSum += sizeAt(i)
             }
             aboveSum > viewportH
@@ -1359,77 +1343,24 @@ fun ChatScreen(
                 // [consolidated] USER_SEND is unconditional — no gate to consult.
                 // Authoring a send (composer or IME action) is an explicit intent
                 // to see the reply; pin directly if the reader was at the bottom.
-                tracedScrollToItem("user-send/initial", 0, 0)
+                // [forward-stable] Target is the bottom sentinel (last index).
+                val sendBottomIdx = (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)
+                tracedScrollToItem("user-send/initial", sendBottomIdx, 0)
                 kotlinx.coroutines.delay(100)
-                tracedScrollToItem("user-send/settle", 0, 0)
+                tracedScrollToItem("user-send/settle", sendBottomIdx, 0)
             } else {
                 AppLogger.debug("USER-SEND", "reader-in-history, skip yank (firstIdx drift scene)")
             }
         }
     }
-    // ─── Anchor guard: single auto-follow mechanism ───
+    // [forward-stable] Anchor-guard REMOVED — the reverseLayout compensation
+    // loop is gone with the forward list. Content grows at the tail; the
+    // viewport anchor (first visible row key) never moves; there is no
+    // (index0 → index1 → index0) transient to fight, so no drift watcher, no
+    // deadzone, no 100ms throttle, no forced re-pin. Follow decisions live in
+    // the drag-stop handler + explicit intents below (FollowController in
+    // Commit D turns these into a single request protocol).
     //
-    // Replaces the 8 reactive auto-follow paths (LE(messages.size) append,
-    // streaming glide loop, stream-end settle + late-repin, layout-drift snap,
-    // trailing-row pin, reserve-change, settle-after-interaction) with ONE
-    // continuous watcher. When stickToBottom is engaged, any viewport drift
-    // from the newest row is compensated with a single scrollToItem(0,0).
-    //
-    // Why this replaces gates-by-position: reverseLayout keeps the anchor on
-    // index 0 during content growth, so all distinct per-path gates fought the
-    // same transient — (index0 → index1 → index0) whenever a new row lands at
-    // the top. Different paths sampled that window at different times, then
-    // either skipped (isNearBottom gate) or compensated (drift-snap). The
-    // guard collapses all of that into one decision: AM I anchored, or not.
-    //
-    // - distinctUntilChanged(): act only when the (index, offset) tuple truly
-    //   changes — not once per recomposition.
-    // - isUserDragging: never compete with an active gesture.
-    // - nearBottomThresholdPx: sub-threshold micro-drift is not worth a scroll.
-    // - 100 ms rate limit: prevents fighting LazyColumn's own anchoring while
-    //   a streaming block grows frame-over-frame at the top.
-    //
-    // Engaged by: send at bottom, FAB tap, resume, and any IME action while
-    // anchored (stickToBottom=true). Disengaged by: scrolling away, which is
-    // recorded in the DragInteraction.Stop handler, so a user reading history
-    // is never yanked.
-    LaunchedEffect(stickToBottom, listState) {
-        if (!stickToBottom) return@LaunchedEffect
-        var lastCompensateMs = 0L
-        snapshotFlow {
-            Pair(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)
-        }
-        .distinctUntilChanged()
-        .collect { (idx, off) ->
-            if (isUserDragging) return@collect
-            val now = SystemClock.elapsedRealtime()
-            // [bottom-fix] Right after a drag ends, the layout / isNearBottom /
-            // stickToBottom state is mid-settle. Skipping compensation for
-            // this window prevents the guard from yanking a reader who just
-            // scrolled away from the bottom (the observed "output-end jump").
-            val stopMs = lastDragStopMs
-            if (now - stopMs < 300L) return@collect
-            if (idx == 0 && off <= nearBottomThresholdPx.toInt()) return@collect
-            if (now - lastCompensateMs < 100L) return@collect
-            // [Txxx-anchor-guard-deadzone] Deadzone: give reverseLayout's
-            // native anchor time to self-settle before compensating. Content
-            // insertion at index 0 in reverseLayout can transiently push
-            // firstVisibleItemIndex from 0 to 1, but the native anchor often
-            // self-corrects within ~200ms. Compensating during this window
-            // only fights the LazyColumn and creates a visible jump. Wait
-            // 500ms; if the viewport self-settles within that window, skip
-            // the redundant scroll.
-            kotlinx.coroutines.delay(500L)
-            // Re-check position after deadzone — native anchor may have
-            // self-settled back to (0,0) during the delay.
-            if (isUserDragging) return@collect
-            val afterIdx = listState.firstVisibleItemIndex
-            val afterOff = listState.firstVisibleItemScrollOffset
-            if (afterIdx == 0 && afterOff <= nearBottomThresholdPx.toInt()) return@collect
-            lastCompensateMs = SystemClock.elapsedRealtime()
-            tracedScrollToItem("anchor-guard", 0, 0)
-        }
-    }
     // [T-android-composer-input-blocked-while-streaming] True only while the
     // user's FINGER is actively dragging the message list. Programmatic scrolls
     // (the streaming auto-follow glide, settle, pin-to-bottom) go through
@@ -1461,9 +1392,16 @@ fun ChatScreen(
                     // "output-end jump"). Reading the raw index/offset is
                     // authoritative and settles in the same snapshot.
                     val stoppedIdx = listState.firstVisibleItemIndex
-                    val stoppedOff = listState.firstVisibleItemScrollOffset
-                    if (stickToBottom != (stoppedIdx == 0 && stoppedOff <= nearBottomThresholdPx.toInt())) {
-                        stickToBottom = (stoppedIdx == 0 && stoppedOff <= nearBottomThresholdPx.toInt())
+                    val stoppedTotal = listState.layoutInfo.totalItemsCount
+                    // [forward-stable] Forward list: at bottom ⇔ the viewport
+                    // reaches the last rows (sentinel index = total-1) with a
+                    // small scroll offset. Raw index/offset are authoritative
+                    // here — the cached isNearBottom can lag a snapshot.
+                    val stoppedAtBottom = stoppedTotal > 0 &&
+                        stoppedIdx >= stoppedTotal - 2 &&
+                        listState.firstVisibleItemScrollOffset <= nearBottomThresholdPx.toInt()
+                    if (stickToBottom != stoppedAtBottom) {
+                        stickToBottom = stoppedAtBottom
                     }
                 }
                 is androidx.compose.foundation.interaction.DragInteraction.Cancel -> {
@@ -1503,7 +1441,7 @@ fun ChatScreen(
             // a tool block / retries a message on its own mid-multi-turn. Only
             // honour it when the user is still following (stickToBottom) — a
             // reader in history should not be yanked back on every retry.
-            if (stickToBottom) tracedScrollToItem("force-scroll", 0, 0)
+            if (stickToBottom) tracedScrollToItem("force-scroll", (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0), 0)
         }
     }
 
@@ -3141,8 +3079,9 @@ fun ChatScreen(
                 LaunchedEffect(pendingFocusId, flatItems) {
                     val target = pendingFocusId ?: return@LaunchedEffect
                     if (flatItems.isEmpty()) return@LaunchedEffect
-                    val rendered = flatItems.asReversed()
-                    val idx = rendered.indexOfFirst {
+                    // [forward-stable] Forward list — natural order, no
+                    // reversed-space mirror math.
+                    val idx = flatItems.indexOfFirst {
                         originalMessageId(it.owningMessageId()) == originalMessageId(target)
                     }
                     if (idx < 0) {
@@ -3264,9 +3203,13 @@ fun ChatScreen(
                 // auto-push while already sticky. (See AlwaysStretchOverscroll.kt.)
                 Box {
                 AlwaysStretchOverscrollBox { sharedEffect ->
+                // [forward-stable] Forward (non-reverse) list: content
+                // grows at the BOTTOM, so the viewport anchor naturally stays
+                // put during streaming — no reverseLayout index-0 insertion
+                // churn, no need for an anchor-guard compensation loop.
                 LazyColumn(
                     state = listState,
-                    reverseLayout = true,
+                    reverseLayout = false,
                     // T30: when no tool status bar is rendered, a small bottom
                     // padding keeps the latest message off the composer's
                     // top edge so the conversation breathes. Reuses the same
@@ -3303,11 +3246,10 @@ fun ChatScreen(
                             controller = selectionController,
                             listState = listState,
                             rootCoordinates = { listRootCoords },
-                            // Chat LazyColumn is reverseLayout=true; auto-
-                            // scroll sign needs to flip so dragging toward
-                            // the bottom edge reveals NEWER messages (lower
-                            // index) rather than jumping backward.
-                            reverseLayout = true,
+                            // [forward-stable] Forward list: dragging
+                            // toward the bottom edge reveals NEWER messages
+                            // (higher index) — no sign flip needed.
+                            reverseLayout = false,
                         )
                         // T29 dismiss-on-tap spy. Only active while the slash
                         // popup is showing. awaitFirstDown(requireUnconsumed=false,
@@ -3332,23 +3274,16 @@ fun ChatScreen(
                                 }
                             }
                         },
-                    // T303: anchor items to the visual bottom so a newly
-                    // streamed tool card / typing indicator that arrives
-                    // before older items have shifted up still lands inside
-                    // the visible area. Without this, reverseLayout's
-                    // default arrangement (anchored to viewportStart) leaves
-                    // a gap at the bottom of the list when the bottom item
-                    // is just-inserted with offset=0 — the new card renders
-                    // behind the composer and `gap = vpEnd - itemBottom`
-                    // hits ~1300 px while listState still reports
-                    // firstVisible=0, firstOffset=0 (logged as the "tool on
-                    // screen but not pushed into view" repro on Pixel 4a).
-                    verticalArrangement = Arrangement.spacedBy(2.dp, Alignment.Bottom),
+                    // [forward-stable] T303's reverseLayout-specific
+                    // bottom-anchored arrangement is gone with the forward
+                    // list — new rows land at the tail naturally.
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
                     overscrollEffect = sharedEffect,
                 ) {
-                    // T13 Resume banner — placed BEFORE items() so reverseLayout
-                    // renders it at the visual bottom of the list (just below
-                    // the last assistant message). Mirrors iOS resumeBanner in
+                    // T13 Resume banner — [forward-stable] placed AFTER
+                    // items() so it renders at the visual BOTTOM of the list
+                    // (just below the last assistant message); the bottom
+                    // sentinel follows it. Mirrors iOS resumeBanner in
                     // CollectionViewMessageListV3.swift:360. Hidden while
                     // streaming or when an error banner is showing.
                     //
@@ -3357,33 +3292,27 @@ fun ChatScreen(
                     // covers that turn, and showing both at once is confusing
                     // (Resume on a turn that hit rate-limit would just retrace
                     // into the same failure).
-                    val lastAssistantHasError = messages
-                        .lastOrNull { it.role == "assistant" }
-                        ?.error
-                        ?.isNotBlank() == true
-                    if (canResume && !isStreaming && error == null && !lastAssistantHasError) {
-                        item(key = "__resume_banner__", contentType = "resume_banner") {
-                            ResumeBanner(onResume = {
-                                viewModel.resume()
-                                // T282: same dual-scroll trick as the regular
-                                // send paths (T281). Resume kicks off a fresh
-                                // stream, so the "Minis is thinking" indicator
-                                // mounts a frame or two later — pin once now,
-                                // then again after 100ms so the indicator
-                                // doesn't land below the fold.
-                                // [bottom-trigger] Resume = user wants to see
-                                // the continuation → restore follow.
-                                stickToBottom = true
-                                coroutineScope.launch {
-                                    tracedScrollToItem("RESUME-BANNER/initial", 0, 0)
-                                    kotlinx.coroutines.delay(100)
-                                    tracedScrollToItem("RESUME-BANNER/settle", 0, 0)
-                                }
-                            })
+                    if (hasOlderMessages) {
+                        item(key = "__load_older_messages__", contentType = "load_older") {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 12.dp)
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .clickable { viewModel.loadOlderMessages() }
+                                    .padding(vertical = 8.dp, horizontal = 12.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.chat_load_older_messages),
+                                    color = ChatColors.secondaryText,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
                         }
                     }
                     items(
-                        items = flatItems.asReversed(),
+                        items = flatItems,
                         key = { it.key },
                         contentType = { it.contentType },
                     ) { item ->
@@ -3541,7 +3470,7 @@ fun ChatScreen(
                                 // Retry that silently no-op'd.
                                 onRetry = if (isStreaming) null else ({
                                     coroutineScope.launch {
-                                        tracedScrollToItem("RETRY-FROM-MSG", 0, 0)
+                                        tracedScrollToItem("RETRY-FROM-MSG", (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0), 0)
                                     }
                                     safeMutate { viewModel.retryFromMessage(item.message.id) }
                                 }),
@@ -3557,7 +3486,7 @@ fun ChatScreen(
                                         // place the caret at the end so the user sees the tail.
                                         viewModel.setInputText(prefill, caretOverride = prefill.length)
                                         coroutineScope.launch {
-                                            tracedScrollToItem("EDIT-MSG", 0, 0)
+                                            tracedScrollToItem("EDIT-MSG", (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0), 0)
                                         }
                                         inputFocusRequester.requestFocus()
                                     }
@@ -3683,7 +3612,7 @@ fun ChatScreen(
                                     val anchorId = item.tools.firstOrNull()?.id
                                     if (anchorId != null) {
                                         coroutineScope.launch {
-                                            tracedScrollToItem("RERUN-FROM-TOOLRUN", 0, 0)
+                                            tracedScrollToItem("RERUN-FROM-TOOLRUN", (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0), 0)
                                         }
                                         safeMutate { viewModel.rerunFromToolBlock(item.messageId, anchorId) }
                                     }
@@ -3732,7 +3661,7 @@ fun ChatScreen(
                                 // before the truncation reshuffles the list.
                                 onRerunFromHere = if (!isStreaming) ({
                                     coroutineScope.launch {
-                                        tracedScrollToItem("RERUN-FROM-TOOL", 0, 0)
+                                        tracedScrollToItem("RERUN-FROM-TOOL", (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0), 0)
                                     }
                                     safeMutate { viewModel.rerunFromToolBlock(item.messageId, item.block.id) }
                                 }) else null,
@@ -3763,7 +3692,7 @@ fun ChatScreen(
                                 error = item.error,
                                 errorDetail = item.errorDetail,
                                 onRetry = {
-                                    coroutineScope.launch { tracedScrollToItem("INLINE-RETRY-LAST", 0, 0) }
+                                    coroutineScope.launch { tracedScrollToItem("INLINE-RETRY-LAST", (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0), 0) }
                                     safeMutate { viewModel.retryLast() }
                                 },
                             )
@@ -3793,34 +3722,38 @@ fun ChatScreen(
                         }
                         } // Box (alpha wrapper)
                     }
-                    // [T-android-larky-longsession-followup] "Load older
-                    // messages" header — placed AFTER items() so under
-                    // reverseLayout it sits at the VISUAL TOP of the list.
-                    // Only emitted when the session has trimmed older messages
-                    // behind the window; tapping bumps the cap by
-                    // VISIBLE_MESSAGE_CAP_STEP and the FlatChat pipeline
-                    // rebuilds with the wider slice. The item key is stable so
-                    // LazyListState's anchor (firstVisibleItem) survives the
-                    // re-emission and the user keeps their scroll position
-                    // relative to the message they were reading.
-                    if (hasOlderMessages) {
-                        item(key = "__load_older_messages__", contentType = "load_older") {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 12.dp)
-                                    .clip(RoundedCornerShape(16.dp))
-                                    .clickable { viewModel.loadOlderMessages() }
-                                    .padding(vertical = 8.dp, horizontal = 12.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(
-                                    text = stringResource(R.string.chat_load_older_messages),
-                                    color = ChatColors.secondaryText,
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
-                            }
+                    val lastAssistantHasError = messages
+                        .lastOrNull { it.role == "assistant" }
+                        ?.error
+                        ?.isNotBlank() == true
+                    if (canResume && !isStreaming && error == null && !lastAssistantHasError) {
+                        item(key = "__resume_banner__", contentType = "resume_banner") {
+                            ResumeBanner(onResume = {
+                                viewModel.resume()
+                                // T282: same dual-scroll trick as the regular
+                                // send paths (T281). Resume kicks off a fresh
+                                // stream, so the "Minis is thinking" indicator
+                                // mounts a frame or two later — pin once now,
+                                // then again after 100ms so the indicator
+                                // doesn't land below the fold.
+                                // [bottom-trigger] Resume = user wants to see
+                                // the continuation → restore follow.
+                                stickToBottom = true
+                                coroutineScope.launch {
+                                    val resumeBottomIdx = (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)
+                                    tracedScrollToItem("RESUME-BANNER/initial", resumeBottomIdx, 0)
+                                    kotlinx.coroutines.delay(100)
+                                    tracedScrollToItem("RESUME-BANNER/settle", resumeBottomIdx, 0)
+                                }
+                            })
                         }
+                    }
+                    // [forward-stable] Bottom sentinel — the single target of
+                    // every "scroll to bottom" request and the authoritative
+                    // "at bottom" signal (its presence in the viewport means
+                    // the user reached the very end of the transcript).
+                    item(key = ScrollBottomKey, contentType = "scroll_bottom") {
+                        Spacer(Modifier.height(5.dp))
                     }
                 }
                 } // AlwaysStretchOverscrollBox
@@ -3834,7 +3767,7 @@ fun ChatScreen(
                     controller = selectionController,
                     listState = listState,
                     listRootCoordinates = { listRootCoords },
-                    reverseLayout = true,
+                    reverseLayout = false,
                 )
                 MinisMarkdownTextToolbarHost(markdownToolbar)
                 // MinisTextKit floating toolbar — driven by selectionController.
@@ -3883,7 +3816,7 @@ fun ChatScreen(
                 MinisSelectionHandlesHost(
                     controller = selectionController,
                     listState = listState,
-                    reverseLayout = true,
+                    reverseLayout = false,
                 )
                 } // Box (selection scope)
                 } // CompositionLocalProvider
@@ -3997,8 +3930,10 @@ fun ChatScreen(
                     androidx.compose.material3.FilledIconButton(
                         onClick = {
                             coroutineScope.launch {
-                                val lastIndex = (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)
-                                tracedScrollToItem("FAB-UP", lastIndex, 0)
+                                // [forward-stable] Forward list: oldest message
+                                // is index 0 (was totalItemsCount-1 under
+                                // reverseLayout).
+                                tracedScrollToItem("FAB-UP", 0, 0)
                             }
                         },
                         modifier = Modifier
@@ -4040,12 +3975,14 @@ fun ChatScreen(
                             // gesture — re-engage the stick state.
                             stickToBottom = true
                             coroutineScope.launch {
-                                tracedScrollToItem("FAB-DOWN", 0, 0)
+                                val fabBottomIdx = (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)
+                                tracedScrollToItem("FAB-DOWN", fabBottomIdx, 0)
                                 // Second pin after a frame: the first scroll may
                                 // land short while late-measuring items shift the
-                                // true bottom; re-issue once layout settles.
+                                // true bottom; re-read the sentinel index for the
+                                // settle.
                                 kotlinx.coroutines.delay(100)
-                                tracedScrollToItem("FAB-DOWN/settle", 0, 0)
+                                tracedScrollToItem("FAB-DOWN/settle", fabBottomIdx, 0)
                             }
                         },
                         modifier = Modifier
@@ -4907,9 +4844,11 @@ fun ChatScreen(
                             coroutineScope.launch {
                                 if (!wasScrolledIntoHistory) {
                                     // [consolidated] USER_SEND is unconditional.
-                                    tracedScrollToItem("user-send/ime-action/initial", 0, 0)
+                                    // [forward-stable] Target is the bottom sentinel.
+                                    val imeBottomIdx = (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)
+                                    tracedScrollToItem("user-send/ime-action/initial", imeBottomIdx, 0)
                                     kotlinx.coroutines.delay(100)
-                                    tracedScrollToItem("user-send/ime-action/settle", 0, 0)
+                                    tracedScrollToItem("user-send/ime-action/settle", imeBottomIdx, 0)
                                 } else {
                                     AppLogger.debug("USER-SEND", "ime-action reader-in-history, skip yank")
                                 }
