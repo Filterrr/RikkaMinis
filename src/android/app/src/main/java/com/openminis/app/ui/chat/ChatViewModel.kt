@@ -5328,6 +5328,19 @@ class ChatViewModel(
                 finishedAllToolBlocks,
                 isAwaitingModelResponse = false,
             )
+            // [T-android-cancel-sidechannel] The interrupted assistant may
+            // still hold a live streaming delta in `_streamingById` (thinking
+            // streams through the side-channel; `finishedAccumulatedText`
+            // only carries the formal text, not the thinking delta). If we
+            // leave that entry behind, ChatScreen's `n(msgs, streamingById)`
+            // overlay re-merges the delta and `mergeStreamingOverlay` forces
+            // `isStreaming = true` again — so the old "Thinking…" breadcrumb
+            // keeps spinning even though the tool itself reached a terminal
+            // state (SUCCESS/CANCELLED) above. Evict the entry now: the
+            // terminal canonical row has already been written by the
+            // updateAssistantMessage call, so we only drop the stale overlay
+            // without touching the just-written content.
+            _streamingById.value = _streamingById.value - finishedAssistantId
             // (c) — append the queued user bubble + the new assistant
             // placeholder. Mirrors sendMessage's user-bubble append shape so
             // attachments / images / file chips render the same.
@@ -11102,8 +11115,24 @@ Environment variables:
         // reset it, so after Stop the indicator stayed live forever even
         // though the streamJob was already torn down. Reset before either
         // case runs so both tool-cancel and text-cancel paths benefit.
+        //
+        // [T-android-cancel-isstreaming] The per-message `isStreaming` flag
+        // is the run-group's liveness source for a thinking block in flight
+        // (run-group isRunning = "thinking && toolStatus==null && message
+        // .isStreaming"). A cancel tears the stream down, so this message is
+        // by definition no longer streaming — but the flag was never cleared
+        // here, leaving the old "Thinking…" breadcrumb spinning after the
+        // tool (whose own status DID converge to SUCCESS/CANCELLED) stopped.
+        // Reset it unconditionally (NOT gated on isAwaitingModelResponse —
+        // that flag flips false the moment the first thinking chunk lands,
+        // so the gated reset alone left the thinking sticky for messages
+        // that actually streamed content).
         if (last.isAwaitingModelResponse) {
-            last = last.copy(isAwaitingModelResponse = false)
+            last = last.copy(isAwaitingModelResponse = false, isStreaming = false)
+            msgs[lastIdx] = last
+            _messages.value = msgs
+        } else if (last.isStreaming) {
+            last = last.copy(isStreaming = false)
             msgs[lastIdx] = last
             _messages.value = msgs
         }
