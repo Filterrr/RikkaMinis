@@ -26,12 +26,14 @@ class StableChatRowLedgerTest {
         content: String = "",
         blocks: List<AssistantBlock> = emptyList(),
         isStreaming: Boolean = false,
+        isAwaitingModelResponse: Boolean = false,
         error: String? = null,
     ) = ChatMessage(
         id = id,
         role = "assistant",
         content = content,
         isStreaming = isStreaming,
+        isAwaitingModelResponse = isAwaitingModelResponse,
         toolBlocks = blocks,
         error = error,
     )
@@ -369,5 +371,132 @@ class StableChatRowLedgerTest {
         // Same head, grown tail → still compatible.
         val grown = base + userMessage("u2")
         assertTrue(ledger.isIncrementallyCompatible(grown))
+    }
+
+    // ── interrupted-turn status sync (fix) ─────────────────────────────────
+
+    @Test fun `running tool group of an interrupted turn is drained to terminal in place`() {
+        val ledger = StableChatRowLedger()
+        ledger.seed(emptyList(), 0)
+
+        // Turn 1: assistant runs ONE tool (RUNNING), then queued interrupt.
+        val turn1 = listOf(
+            userMessage("u1"),
+            assistantMessage("a1", blocks = listOf(toolBlock("tool_1", ToolBlockStatus.RUNNING)), isStreaming = true),
+        )
+        ledger.reconcile(turn1)
+        val toolRun = ledger.snapshot().filterIsInstance<FlatChatItem.AssistantToolRunGroup>()
+            .firstOrNull { it.messageId == "a1" }
+        assertNotNull("running tool group must be published", toolRun)
+        assertTrue("tool group must start RUNNING", toolRun.isRunning)
+
+        // User interrupts in the middle of the tool call (enqueuePrompt →
+        // new user bubble appended). The RUNNING tool then finishes naturally:
+        // canonical flips it to SUCCESS and isStreaming=false. This is the
+        // final single frame the UI observes; the ledger must drain the
+        // published RUNNING pill without rebuilding/touching anything else.
+        val finalFrame = listOf(
+            userMessage("u1"),
+            assistantMessage("a1",
+                blocks = listOf(toolBlock("tool_1", ToolBlockStatus.SUCCESS)),
+                isStreaming = false,
+            ),
+            userMessage("u2", content = "stop"),
+        )
+        val kBefore = keysOf(ledger.snapshot())
+        val kAfter = keysOf(ledger.reconcile(finalFrame))
+        // Only the new user bubble is appended; the interrupted turn keeps its
+        // rows (key + order stable, no reseed).
+        assertEquals(kBefore + listOf("user:u2"), kAfter)
+        val afterRun = ledger.snapshot().filterIsInstance<FlatChatItem.AssistantToolRunGroup>()
+            .firstOrNull { it.messageId == "a1" }
+        assertNotNull(afterRun)
+        assertFalse("tool group of interrupted turn must stop running", afterRun.isRunning)
+        assertEquals(
+            "tool PILL must reflect terminal SUCCESS",
+            ToolBlockStatus.SUCCESS,
+            afterRun.tools.single().status,
+        )
+    }
+
+    @Test fun `thinking placeholder of an interrupted awaiting turn is dropped when terminal`() {
+        val ledger = StableChatRowLedger()
+        ledger.seed(emptyList(), 0)
+
+        // Turn 1: assistant is awaiting model response, no content yet → typing.
+        val turn1 = listOf(
+            userMessage("u1"),
+            assistantMessage("a1", content = "", isStreaming = true, isAwaitingModelResponse = true),
+        )
+        val k1 = keysOf(ledger.reconcile(turn1))
+        assertTrue(k1.contains("typing:a1"))
+
+        // User interrupts; a1 never produced content (handleUserCancelledCleanup
+        // would normally drop it — but when the turn DID produce, it stays).
+        // Here: a1 finished streaming with no content → canonical has only a
+        // legacy/void state; the typing placeholder must be dropped, not pinned.
+        val terminal = listOf(
+            userMessage("u1"),
+            assistantMessage("a1", content = "", isStreaming = false),
+            userMessage("u2", content = "stop"),
+        )
+        val k2 = keysOf(ledger.reconcile(terminal))
+        assertTrue("new user bubble must append", k2.contains("user:u2"))
+        assertFalse("stale typing placeholder must be dropped", k2.contains("typing:a1"))
+    }
+
+    @Test fun `queued placeholder replaced by real user message at same index is incompatible`() {
+        val ledger = StableChatRowLedger()
+        ledger.seed(emptyList(), 0)
+
+        // Turn 1 running; queued bubble occupies index 1.
+        val turn1 = listOf(
+            userMessage("u1"),
+            assistantMessage("a1", blocks = listOf(toolBlock("tool_1", ToolBlockStatus.RUNNING)), isStreaming = true),
+            userMessage("q2", content = "stop", isQueued = true),
+        )
+        ledger.reconcile(turn1)
+
+        // The queued placeholder is replaced at the SAME index by a real user
+        // message (different id). Count stays 3, head unchanged — but the
+        // already-published a1 → q2 prefix changed, so plain head+count check
+        // would wrongly pass. The ledger must demand a full rebuild.
+        val replaced = listOf(
+            userMessage("u1"),
+            assistantMessage("a1", blocks = listOf(toolBlock("tool_1", ToolBlockStatus.SUCCESS)), isStreaming = false),
+            userMessage("u2", content = "stop", isQueued = false),
+        )
+        assertFalse(
+            "same-index replacement within the published prefix must be incompatible",
+            ledger.isIncrementallyCompatible(replaced),
+        )
+    }
+
+    @Test fun `status sync leaves non-target rows completely untouched`() {
+        val ledger = StableChatRowLedger()
+        ledger.seed(emptyList(), 0)
+
+        // Two recorded turns + a queued interrupt in flight.
+        val base = listOf(
+            userMessage("u1"),
+            assistantMessage("a1", blocks = listOf(textBlock("text_1_0", "Answer one"), toolBlock("tool_1", ToolBlockStatus.RUNNING)), isStreaming = true),
+            userMessage("u2"),
+            assistantMessage("a2", blocks = listOf(textBlock("text_2_1", "Answer two")), isStreaming = false),
+        )
+        val kBase = keysOf(ledger.reconcile(base))
+
+        // a1 drains to terminal (its tool finishes) while a2 stays frozen.
+        val drained = listOf(
+            userMessage("u1"),
+            assistantMessage("a1", blocks = listOf(textBlock("text_1_0", "Answer one"), toolBlock("tool_1", ToolBlockStatus.SUCCESS)), isStreaming = false),
+            userMessage("u2"),
+            assistantMessage("a2", blocks = listOf(textBlock("text_2_1", "Answer two")), isStreaming = false),
+        )
+        val kDrained = keysOf(ledger.reconcile(drained))
+        // Zero structural change: identical key sequence the whole way.
+        assertEquals(kBase, kDrained)
+        val a1Group = ledger.snapshot().filterIsInstance<FlatChatItem.AssistantToolRunGroup>()
+            .firstOrNull { it.messageId == "a1" }
+        assertFalse("a1 tool must stop running", a1Group!!.isRunning)
     }
 }
