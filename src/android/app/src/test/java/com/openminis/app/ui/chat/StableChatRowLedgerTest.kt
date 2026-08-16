@@ -506,7 +506,8 @@ class StableChatRowLedgerTest {
             assistantMessage("a0", blocks = listOf(textBlock("t0", "Old answer")), isStreaming = false),
         )
         val ledger = StableChatRowLedger()
-        val kSettled = keysOf(ledger.seed(buildFlatChatItems(settled, "s1"), settled.size))
+        ledger.seed(buildFlatChatItems(settled, "s1"), settled.size)
+        val kSettled = keysOf(ledger.snapshot())
         assertTrue(kSettled.isNotEmpty())
 
         // Append-only reconcile: new user message + new assistant in PENDING state.
