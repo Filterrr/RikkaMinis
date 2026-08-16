@@ -3,6 +3,7 @@ package com.openminis.app.mcp.oauth
 import android.util.Log
 import java.io.BufferedReader
 import java.io.InputStreamReader
+import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.URI
 
@@ -43,7 +44,7 @@ class OAuthCallbackServer(
                 var bound = false
                 for (p in portsToTry) {
                     try {
-                        serverSocket = ServerSocket(p)
+                        serverSocket = ServerSocket(p, 0, InetAddress.getLoopbackAddress())
                         boundPort = p
                         bound = true
                         break
@@ -81,7 +82,7 @@ class OAuthCallbackServer(
                                 }
                             }
                             val trustedHosts = listOf("auth.x.ai", "accounts.x.ai")
-                            val allowOrigin = if (origin != null && trustedHosts.any { origin!!.contains(it) }) {
+                            val allowOrigin = if (origin != null && trustedHosts.any { host -> origin == "https://$host" }) {
                                 origin
                             } else {
                                 "null"

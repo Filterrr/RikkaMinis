@@ -722,6 +722,7 @@
     <string name="provider_detail_export">导出</string>
     <string name="provider_detail_label">标签</string>
     <string name="provider_detail_custom_api_base">自定义 API 地址</string>
+    <string name="provider_detail_http_endpoint_warning">⚠ 该端点使用未加密的 HTTP。发往其中的 API 密钥、消息和工具结果可被网络中的任何人读取。仅对可信的本地服务器使用 HTTP。</string>
     <string name="provider_detail_custom_user_agent">自定义 User-Agent</string>
     <string name="provider_detail_custom_user_agent_placeholder">留空使用默认值</string>
     <string name="provider_detail_api_format">API Format</string>

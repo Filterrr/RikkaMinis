@@ -110,7 +110,7 @@ object DeepLinkHandler {
                 else -> DeepLinkAction.Unknown
             }
             "open_terminal" -> DeepLinkAction.OpenTerminal(
-                initCommand = uri.getQueryParameter("init_command")
+                initCommand = sanitizeInitCommand(uri.getQueryParameter("init_command"))
             )
             // Quick-actions surface (app-icon long-press). Path drives which
             // pending action ChatScreen consumes on first compose. Mirrors iOS
@@ -225,5 +225,21 @@ object DeepLinkHandler {
             // so the user can find what they wanted by browsing.
             else -> DeepLinkAction.OpenSettingsScreen(Routes.SETTINGS)
         }
+    }
+
+    /**
+     * Strip C0 control characters (0x00–0x1F except 0x09 TAB) and
+     * 0x7F (DEL) from a string that came from an external deep-link
+     * parameter. These characters have terminal-level side effects
+     * (CR → execute, LF → execute, ESC → CSI sequences, NUL → input
+     * corruption, BEL → bell, etc.) and must never reach the PTY.
+     *
+     * This is defence-in-depth: the consumer ([TerminalScreen]) also
+     * sanitizes before sending to the PTY.
+     */
+    private fun sanitizeInitCommand(text: String?): String? {
+        if (text == null) return null
+        val safe = text.filter { it != '\u0000' && (it >= ' ' || it == '\t') && it != '\u007f' }
+        return safe.ifBlank { null }
     }
 }

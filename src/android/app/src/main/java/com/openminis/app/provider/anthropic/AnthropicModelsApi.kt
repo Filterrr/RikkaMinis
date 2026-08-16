@@ -86,7 +86,7 @@ object AnthropicModelsApi {
             }
 
             val request = requestBuilder.build()
-            android.util.Log.d("AnthropicModels", "Fetching models (level=$idx): ${request.url} headers=${request.headers}")
+            android.util.Log.d("AnthropicModels", "Fetching models (level=$idx): ${request.url.scheme}://${request.url.host}${request.url.encodedPath} headerKeys=${request.headers.names()} authPresent=${request.headers["Authorization"] != null}")
 
             val response: Response = try {
                 client.newCall(request).execute()

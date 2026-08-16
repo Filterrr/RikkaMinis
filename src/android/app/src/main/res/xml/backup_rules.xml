@@ -1,3 +1,41 @@
 <?xml version="1.0" encoding="utf-8"?>
 <full-backup-content>
+    <!-- Exclude all encrypted SharedPreferences — the AndroidKeystore key
+         that EncryptedSharedPreferences depends on does NOT survive a
+         backup-restore cycle, so restoring these files would produce
+         AEADBadTagException on first access and trigger the plaintext
+         fallback / credential-loss path. -->
+    <exclude domain="sharedpref" path="provider_secrets.xml" />
+    <exclude domain="sharedpref" path="env_var_encrypted.xml" />
+    <exclude domain="sharedpref" path="mcp_oauth.xml" />
+    <exclude domain="sharedpref" path="device_identity.xml" />
+    <exclude domain="sharedpref" path="webdav_config.xml" />
+    <!-- Exclude any plaintext fallback files that may have been created
+         by EncryptedPrefsFactory during a degraded state. -->
+    <exclude domain="sharedpref" path="*_plain_fallback.xml" />
+    <exclude domain="sharedpref" path="__androidx_security_crypto_encrypted_prefs__.xml" />
+
+    <!-- Exclude crash reports, logs, and diagnostics — no user value in
+         backup and can contain sensitive context. -->
+    <exclude domain="file" path="logs/" />
+
+    <!-- Exclude session workspace files — per-session attachments,
+         offloads, and browser files can be large and contain sensitive
+         tool output. Let the user re-generate on demand. -->
+    <exclude domain="file" path="sessions/" />
+    <exclude domain="file" path="minis-sessions/" />
+
+    <!-- Exclude rootfs — the Alpine image is large and re-downloadable
+         from the app's "Reset Rootfs" action. -->
+    <exclude domain="file" path="proot/" />
+
+    <!-- Exclude share staging directory — transient files copied from
+         other apps, no backup value. -->
+    <exclude domain="file" path="share_extension/" />
+
+    <!-- Exclude the debug server token — ephemeral per-install. -->
+    <exclude domain="file" path="debug_server_token" />
+
+    <!-- Exclude all cache — re-downloadable / re-computable. -->
+    <exclude domain="cache" path="" />
 </full-backup-content>

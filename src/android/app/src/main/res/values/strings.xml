@@ -862,6 +862,7 @@
     <string name="provider_detail_export">Export</string>
     <string name="provider_detail_label">Label</string>
     <string name="provider_detail_custom_api_base">Custom API Base</string>
+    <string name="provider_detail_http_endpoint_warning">⚠ This endpoint uses unencrypted HTTP. API keys, messages, and tool results sent to it can be read by anyone on the network. Only use HTTP for trusted local servers.</string>
     <string name="provider_detail_custom_user_agent">Custom User-Agent</string>
     <string name="provider_detail_custom_user_agent_placeholder">Leave blank for default</string>
     <string name="provider_detail_api_format">API Format</string>

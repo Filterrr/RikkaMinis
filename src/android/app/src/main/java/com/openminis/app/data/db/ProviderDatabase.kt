@@ -124,13 +124,33 @@ abstract class ProviderDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 // Drop the orphaned recovery column left behind by MIGRATION_4_5
                 // (fff19a2 removed it from the Entity). ALTER TABLE DROP COLUMN
-                // preserves every other column's type/NULL/default exactly as
-                // Room created it — safer than a manual table rebuild, which
-                // risks introducing column-definition drift and re-triggering
-                // "Migration didn't properly handle". Requires SQLite >= 3.35
-                // (Android 12+ = 3.32, Android 15 = 3.38+), which all supported
-                // API levels satisfy.
-                db.execSQL("ALTER TABLE provider_model_groups DROP COLUMN recovery")
+                // requires SQLite >= 3.35 (Android 12+ = 3.32, Android 15 = 3.38+),
+                // which is NOT available on our minSdk=26. Use the standard
+                // CREATE → INSERT → DROP → RENAME pattern instead.
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS provider_model_groups_new (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        strategy TEXT NOT NULL,
+                        fallback_strategy TEXT NOT NULL,
+                        default_thinking_level TEXT,
+                        context_limit_tokens INTEGER,
+                        last_context_limit_tokens INTEGER,
+                        member_entry_ids_json TEXT NOT NULL,
+                        sort_order INTEGER NOT NULL DEFAULT 0
+                    )
+                """.trimIndent())
+                db.execSQL("""
+                    INSERT INTO provider_model_groups_new (
+                        id, name, strategy, fallback_strategy, default_thinking_level,
+                        context_limit_tokens, last_context_limit_tokens, member_entry_ids_json, sort_order
+                    )
+                    SELECT id, name, strategy, fallback_strategy, default_thinking_level,
+                        context_limit_tokens, last_context_limit_tokens, member_entry_ids_json, sort_order
+                    FROM provider_model_groups
+                """.trimIndent())
+                db.execSQL("DROP TABLE IF EXISTS provider_model_groups")
+                db.execSQL("ALTER TABLE provider_model_groups_new RENAME TO provider_model_groups")
             }
         }
 
