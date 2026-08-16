@@ -92,12 +92,14 @@ class ChatFollowControllerTest {
 
     @Test fun `detached ignores tokens tools stream end and retries`() {
         var s = apply(FollowState(), FollowEvent.UserDragEnd(atBottom = false))
-        // Simulate a full agent turn while the user reads history.
+        // Simulate a full agent turn while the user reads history. Retry is a
+        // USER-explicit intent (reducer re-engages follow on Retry) — an
+        // AUTOMATIC re-run manifests as plain data revisions, which is what
+        // this simulates: none of it may yank the reader.
         s = apply(s, FollowEvent.StreamRowsChanged)
         s = apply(s, FollowEvent.StreamRowsChanged)
         s = apply(s, FollowEvent.StreamRowsChanged)
         s = apply(s, FollowEvent.StreamRowsChanged)
-        s = apply(s, FollowEvent.Retry) // automatic retry must NOT yank either
         assertNull(s.pendingBottomRequest)
         assertEquals(FollowMode.DETACHED, s.mode)
     }

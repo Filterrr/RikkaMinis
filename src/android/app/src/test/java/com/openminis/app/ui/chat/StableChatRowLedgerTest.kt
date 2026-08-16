@@ -56,8 +56,10 @@ class StableChatRowLedgerTest {
         ledger.seed(seedRows, history.size)
         val snapshot = ledger.reconcile(history)
         assertEquals(keysOf(seedRows), keysOf(snapshot))
-        assertEquals(seedRows.map { (it as FlatChatItem.AssistantMarkdownBlock).rawText },
-            snapshot.filterIsInstance<FlatChatItem.AssistantMarkdownBlock>().map { it.rawText })
+        assertEquals(
+            seedRows.filterIsInstance<FlatChatItem.AssistantMarkdownBlock>().map { it.rawText },
+            snapshot.filterIsInstance<FlatChatItem.AssistantMarkdownBlock>().map { it.rawText },
+        )
     }
 
     @Test fun `reconcile without seed falls back to full canonical build`() {
