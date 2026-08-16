@@ -37,3 +37,35 @@ internal fun isCompactedItem(item: FlatChatItem, grayedMap: Map<String, Boolean>
     is FlatChatItem.AssistantError -> grayedMap[originalMessageId(item.messageId)] == true
     is FlatChatItem.AssistantLegacyContent -> grayedMap[originalMessageId(item.messageId)] == true
 }
+
+// ── Forward-list index mapping (post-reverseLayout migration) ──────────────
+
+/**
+ * Index of the first row belonging to [messageId] in a FORWARD (oldest-first)
+ * row list, or null if the message has no published rows.
+ *
+ * The reverseLayout-era code searched `flatItems.asReversed()` and worked in
+ * mirror space; forward lists need no reversal — this is the one lookup that
+ * replaced that whole class of conversions.
+ */
+internal fun firstRowIndexOfMessage(rows: List<FlatChatItem>, messageId: String): Int? {
+    for (i in rows.indices) {
+        if (rows[i].owningMessageId() == messageId) return i
+    }
+    return null
+}
+
+/** Index of the bottom sentinel row in a forward list (always the last slot). */
+internal fun bottomSentinelIndex(rowCount: Int): Int = rowCount
+
+/**
+ * Where a previously-visible row lands after [headInsertedCount] rows were
+ * prepended (load-older pagination). Key-anchored lists keep the same key;
+ * only its numeric slot shifts — this is the load-older stability promise.
+ */
+internal fun shiftedIndexAfterHeadInsert(index: Int, headInsertedCount: Int): Int =
+    index + headInsertedCount
+
+/** Reverse-space → forward-space conversion for legacy call sites. */
+internal fun forwardIndexFromReversed(reversedIndex: Int, rowCount: Int): Int =
+    rowCount - 1 - reversedIndex
