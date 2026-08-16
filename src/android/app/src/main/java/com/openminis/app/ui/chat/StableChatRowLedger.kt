@@ -1,5 +1,7 @@
 package com.openminis.app.ui.chat
 
+import androidx.annotation.VisibleForTesting
+
 /**
  * Session-lifetime stable row ledger for the chat transcript.
  *
@@ -65,6 +67,9 @@ internal class StableChatRowLedger {
      * when the terminal state is written the id leaves this set.
      */
     private val activeAssistantIds = mutableSetOf<String>()
+
+    /** Test-only: count of tracked live assistant message ids. */
+    @VisibleForTesting internal fun activeAssistantIdsCount(): Int = activeAssistantIds.size
 
     /** Current published rows. Treat the result as immutable. */
     fun snapshot(): List<FlatChatItem> = rows.toList()
@@ -337,7 +342,28 @@ internal class StableChatRowLedger {
                     }
                 }
             }
-            if (!rowsTouched) {
+            // If the message has fully converged (no live state) and the live
+            // pass above didn't touch anything, do a full replacement of ALL
+            // rows owned by this message — including text/markdown rows that
+            // the live pass skips. This catches the "interrupted thinking"
+            // case: the stream is torn down, isStreaming flips to false, but
+            // the old thinking markdown block stays in the ledger because the
+            // main reconcile append branch didn't run (message count unchanged)
+            // and the live pass skips markdown rows. The canonical fresh rows
+            // have no thinking content for this message any more, so we can
+            // safely swap in the full canonical set.
+            if (!rowsTouched && !isLiveAssistant(freshMsg)) {
+                // Check whether the published rows actually differ from the
+                // canonical ones — if they're already identical, skip.
+                val publishedEnd = start + rows.subList(start, rows.size)
+                    .takeWhile { it.owningMessageId() == messageId }.size
+                val publishedTake = rows.subList(start, publishedEnd)
+                if (publishedTake != freshAll) {
+                    rows.subList(start, publishedEnd).clear()
+                    rows.addAll(start, freshAll)
+                    activeAssistantIds.remove(messageId)
+                }
+            } else if (!rowsTouched) {
                 // Canonical has no live rows for it anymore — drop the stale
                 // typing placeholder if any.
                 var removed = false

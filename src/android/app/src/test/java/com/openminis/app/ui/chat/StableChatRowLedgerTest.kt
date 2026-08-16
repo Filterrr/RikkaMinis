@@ -536,4 +536,45 @@ class StableChatRowLedgerTest {
             .firstOrNull { it.messageId == "a1" }
         assertFalse("a1 tool must stop running after converge", a1Terminal!!.isRunning)
     }
+
+    @Test
+    fun `interrupted thinking rows are fully replaced on converge`() {
+        // Seed a conversation with a prior assistant answer.
+        val settled = listOf(
+            userMessage("u0"),
+            assistantMessage("a0", blocks = listOf(textBlock("t0", "Prior answer")), isStreaming = false),
+        )
+        val ledger = StableChatRowLedger()
+        ledger.seed(buildFlatChatItems(settled, "s1"), settled.size)
+        assertTrue(keysOf(ledger.snapshot()).isNotEmpty())
+
+        // User asks a new question → assistant starts thinking (streaming, no
+        // tools yet, only a thinking text block).
+        val thinking = settled + listOf(
+            userMessage("u1"),
+            assistantMessage("a1", blocks = listOf(textBlock("t1", "Let me think…")), isStreaming = true),
+        )
+        val kV1 = keysOf(ledger.reconcile(thinking))
+        // The thinking message should have live rows with a markdown block.
+        val a1Rows = ledger.snapshot().filter { it.owningMessageId() == "a1" }
+        assertTrue(a1Rows.isNotEmpty(), "a1 must have published rows during thinking")
+        assertTrue(a1Rows.any { it is FlatChatItem.AssistantMarkdownBlock },
+            "a1 must have a markdown block during thinking")
+
+        // User interrupts — the assistant is cancelled, streaming stops, and
+        // the canonical message now has only the text that arrived before the
+        // interrupt (or none if cancelled before any content arrived).
+        val interrupted = settled + listOf(
+            userMessage("u1"),
+            assistantMessage("a1", blocks = listOf(textBlock("t1", "Let me think…")), isStreaming = false),
+        )
+        val kV2 = keysOf(ledger.reconcile(interrupted))
+        // After converge the rows should still be present (the content is
+        // kept), but the message is no longer tracked as active.
+        assertEquals(kV1, kV2, "row topology must not change on converge")
+        // The ledger's internal activeAssistantIds should be empty.
+        assertEquals(0, ledger.activeAssistantIdsCount(),
+            "no live assistant ids after converge")
+    }
+}
 }
