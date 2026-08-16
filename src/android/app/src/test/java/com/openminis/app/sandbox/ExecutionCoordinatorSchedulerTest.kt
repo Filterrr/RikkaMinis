@@ -237,4 +237,93 @@ class ExecutionCoordinatorSchedulerTest {
         assertTrue(preExecRejectionMessage(ShellPhase.LOCKED, CommandClass.HEAVY, 400) != null)
         assertTrue(preExecRejectionMessage(ShellPhase.LOCKED, CommandClass.LEAKY, 400) != null)
     }
+
+    // ── [memory-dynamic-budget] 动态边界（MemAvailable 感知） ─────────
+
+    @Test
+    fun `phase defaults to conservative baseline when memory unknown`() {
+        // 默认 memAvailableMB=0（未知/紧张）→ 与旧版基线行为完全一致
+        assertEquals(ShellPhase.LOCKED, internalDegradationPhase(350))
+        assertEquals(ShellPhase.CRITICAL, internalDegradationPhase(120))
+        assertEquals(ShellPhase.CRITICAL, internalDegradationPhase(200))
+        assertEquals(ShellPhase.NORMAL, internalDegradationPhase(0))
+    }
+
+    @Test
+    fun `phase raises rejection boundaries when memory is ample`() {
+        // MemAvailable 4GB：CRITICAL 120→512，LOCKED 350→1536
+        // 350MB native + 4GB 可用 → 只到 SEVERE（渐进降级，heavy 仍可跑）
+        assertEquals(ShellPhase.SEVERE, internalDegradationPhase(350, memAvailableMB = 4096))
+        assertEquals(ShellPhase.CRITICAL, internalDegradationPhase(512, memAvailableMB = 4096))
+        assertEquals(ShellPhase.CRITICAL, internalDegradationPhase(1000, memAvailableMB = 4096))
+        assertEquals(ShellPhase.LOCKED, internalDegradationPhase(1536, memAvailableMB = 4096))
+        assertEquals(ShellPhase.LOCKED, internalDegradationPhase(2000, memAvailableMB = 4096))
+    }
+
+    @Test
+    fun `phase keeps baseline when memory is tight`() {
+        assertEquals(ShellPhase.LOCKED, internalDegradationPhase(350, memAvailableMB = 512))
+        assertEquals(ShellPhase.CRITICAL, internalDegradationPhase(120, memAvailableMB = 512))
+        assertEquals(ShellPhase.CRITICAL, internalDegradationPhase(200, memAvailableMB = 1024))
+    }
+
+    @Test
+    fun `lower tiers never relax regardless of available memory`() {
+        // 泄漏防护不放松：低 tier 边界与 MemAvailable 无关
+        assertEquals(ShellPhase.NORMAL, internalDegradationPhase(49, memAvailableMB = 8192))
+        assertEquals(ShellPhase.MILD, internalDegradationPhase(50, memAvailableMB = 8192))
+        assertEquals(ShellPhase.MODERATE, internalDegradationPhase(80, memAvailableMB = 8192))
+        assertEquals(ShellPhase.SEVERE, internalDegradationPhase(100, memAvailableMB = 8192))
+    }
+
+    // ── [memory-dynamic-budget] 动态高水位 ────────────────────────────
+
+    @Test
+    fun `child rss mark scales with available memory`() {
+        assertEquals(256L, childRssHighWaterMarkMB(0))
+        assertEquals(256L, childRssHighWaterMarkMB(512))
+        assertEquals(256L, childRssHighWaterMarkMB(1023))
+        assertEquals(512L, childRssHighWaterMarkMB(1024))
+        assertEquals(1024L, childRssHighWaterMarkMB(2048))
+        assertEquals(1536L, childRssHighWaterMarkMB(4096))
+        assertEquals(1536L, childRssHighWaterMarkMB(8192))
+    }
+
+    @Test
+    fun `app native mark is dynamic only when ample`() {
+        assertEquals(120L, appNativeHighWaterMarkMB(0))
+        assertEquals(120L, appNativeHighWaterMarkMB(1024))
+        assertEquals(512L, appNativeHighWaterMarkMB(2048))
+        assertEquals(512L, appNativeHighWaterMarkMB(8192))
+    }
+
+    // ── [memory-dynamic-budget] heavy 通道 ────────────────────────────
+
+    @Test
+    fun `critical heavy is allowed when memory is ample`() {
+        // 内存充裕：CRITICAL + HEAVY 放行（heavy 通道，跑完强制回收）
+        assertNull(preExecRejectionMessage(ShellPhase.CRITICAL, CommandClass.HEAVY, 150, memAvailableMB = 4096))
+        assertNull(preExecRejectionMessage(ShellPhase.CRITICAL, CommandClass.HEAVY, 400, memAvailableMB = 4096))
+    }
+
+    @Test
+    fun `critical light always allowed and leaky never allowed even when ample`() {
+        assertNull(preExecRejectionMessage(ShellPhase.CRITICAL, CommandClass.LIGHT, 150, memAvailableMB = 4096))
+        // LEAKY：DirectByteBuffer 泄漏不靠 recycle 解决，即使内存充裕也拒绝
+        val leakyMsg = preExecRejectionMessage(ShellPhase.CRITICAL, CommandClass.LEAKY, 150, memAvailableMB = 4096)
+        assertTrue(leakyMsg != null && leakyMsg.contains("lightweight"))
+    }
+
+    @Test
+    fun `critical heavy still rejected when memory is not ample`() {
+        assertTrue(preExecRejectionMessage(ShellPhase.CRITICAL, CommandClass.HEAVY, 150, memAvailableMB = 1024) != null)
+        assertTrue(preExecRejectionMessage(ShellPhase.CRITICAL, CommandClass.HEAVY, 150, memAvailableMB = 0) != null)
+    }
+
+    @Test
+    fun `locked rejects everything regardless of available memory`() {
+        assertTrue(preExecRejectionMessage(ShellPhase.LOCKED, CommandClass.LIGHT, 1600, memAvailableMB = 8192) != null)
+        assertTrue(preExecRejectionMessage(ShellPhase.LOCKED, CommandClass.HEAVY, 1600, memAvailableMB = 8192) != null)
+        assertTrue(preExecRejectionMessage(ShellPhase.LOCKED, CommandClass.LEAKY, 1600, memAvailableMB = 8192) != null)
+    }
 }
