@@ -32,6 +32,35 @@ import java.util.concurrent.TimeUnit
  * - Shell creation: protected by globalLock to prevent duplicate shells
  * - Shell death: detected on next command, shell is recreated with same bind mounts
  */
+
+// [memory-dynamic-budget] 动态预算。以上固定阈值是「系统内存紧张/未知」
+// 时的保守基线（2026-08-12 失控泄漏 25MB→542MB/12s 的防线）。设备实测
+// （2026-08-16）MemTotal 11.4GB / 空闲 MemAvailable 5.3GB，正常任务离
+// 基线远得很——基线防的是 runaway 泄漏，不是正常大任务。当系统
+// MemAvailable ≥ MEM_AVAIL_AMPLE_MB 时动态放宽拒绝级边界，让
+// git fetch --unshallow / python 大任务这类 heavy 操作能跑完
+// （跑完强制 recycle shell + GC 善后），而不是被阈值误杀。
+private const val MEM_AVAIL_AMPLE_MB = 2048L
+
+// [memory-dynamic-budget] 充裕时动态边界：
+//   CRITICAL（拒 heavy 起点）  120MB → 512MB
+//   LOCKED（全拒最后防线）     350MB → 1536MB
+//   app native 回收高水位     120MB → 512MB（与动态 CRITICAL 一致，
+//   in-flight 回收与 pre-exec 拒绝口径统一）
+private const val CRITICAL_NATIVE_DYNAMIC_MB = 512L
+private const val LOCKED_NATIVE_DYNAMIC_MB = 1536L
+private const val APP_NATIVE_DYNAMIC_MB = 512L
+
+// [memory-dynamic-budget] 充裕时子进程 RSS 动态高水位（1024MB）。基线
+// 256MB 的闸是 `git fetch --unshallow` 类大命令中途被杀的直接原因——
+// 子进程 RSS 是 git 内存的真正归属，不是 app native heap。
+private const val CHILD_RSS_DYNAMIC_MB = 1024L
+
+// [memory-dynamic-budget] Heavy 命令全局串行闸超时。任何时刻最多 1 个
+// heavy 命令在跑（Semaphore(1)），防止多会话同时跑多个大任务把 memcg
+// 叠加推爆。超时说明另一 heavy 还在跑——排队而非并发叠加。
+private const val HEAVY_GATE_TIMEOUT_MS = 600_000L
+
 object ExecutionCoordinator {
 
     private const val TAG = "ExecutionCoordinator"
@@ -72,34 +101,6 @@ object ExecutionCoordinator {
     // reaching Scudo OOM. The crash case hit 542MB before the recycling
     // mechanism could react — this is a last-line defence.
     private const val APP_NATIVE_HEAP_HARD_CAP_MB = 350L
-
-    // [memory-dynamic-budget] 动态预算。以上固定阈值是「系统内存紧张/未知」
-    // 时的保守基线（2026-08-12 失控泄漏 25MB→542MB/12s 的防线）。设备实测
-    // （2026-08-16）MemTotal 11.4GB / 空闲 MemAvailable 5.3GB，正常任务离
-    // 基线远得很——基线防的是 runaway 泄漏，不是正常大任务。当系统
-    // MemAvailable ≥ MEM_AVAIL_AMPLE_MB 时动态放宽拒绝级边界，让
-    // git fetch --unshallow / python 大任务这类 heavy 操作能跑完
-    // （跑完强制 recycle shell + GC 善后），而不是被阈值误杀。
-    private const val MEM_AVAIL_AMPLE_MB = 2048L
-
-    // [memory-dynamic-budget] 充裕时动态边界：
-    //   CRITICAL（拒 heavy 起点）  120MB → 512MB
-    //   LOCKED（全拒最后防线）     350MB → 1536MB
-    //   app native 回收高水位     120MB → 512MB（与动态 CRITICAL 一致，
-    //   in-flight 回收与 pre-exec 拒绝口径统一）
-    private const val CRITICAL_NATIVE_DYNAMIC_MB = 512L
-    private const val LOCKED_NATIVE_DYNAMIC_MB = 1536L
-    private const val APP_NATIVE_DYNAMIC_MB = 512L
-
-    // [memory-dynamic-budget] 充裕时子进程 RSS 动态高水位（1024MB）。基线
-    // 256MB 的闸是 `git fetch --unshallow` 类大命令中途被杀的直接原因——
-    // 子进程 RSS 是 git 内存的真正归属，不是 app native heap。
-    private const val CHILD_RSS_DYNAMIC_MB = 1024L
-
-    // [memory-dynamic-budget] Heavy 命令全局串行闸超时。任何时刻最多 1 个
-    // heavy 命令在跑（Semaphore(1)），防止多会话同时跑多个大任务把 memcg
-    // 叠加推爆。超时说明另一 heavy 还在跑——排队而非并发叠加。
-    private const val HEAVY_GATE_TIMEOUT_MS = 600_000L
 
     // [P2-app-native-oom] Java heap utilization threshold. When the agent
     // runs a dense tool-call sequence, Java heap climbs (crash case:
