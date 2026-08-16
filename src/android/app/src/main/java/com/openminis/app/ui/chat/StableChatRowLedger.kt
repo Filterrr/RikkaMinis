@@ -288,7 +288,7 @@ internal class StableChatRowLedger {
 
     private fun isLiveAssistant(msg: ChatMessage): Boolean =
         msg.isStreaming || msg.isAwaitingModelResponse ||
-            msg.toolBlocks.any { it.status == ToolBlockStatus.RUNNING }
+            msg.toolBlocks.any { it.toolStatus == ToolBlockStatus.RUNNING }
 
     private fun hasLiveRowsOwnedBy(messageId: String): Boolean =
         rows.any {
@@ -355,8 +355,6 @@ internal class StableChatRowLedger {
     private fun sameLiveView(a: FlatChatItem, b: FlatChatItem): Boolean = when {
         a is FlatChatItem.AssistantToolRunGroup && b is FlatChatItem.AssistantToolRunGroup ->
             a.isRunning == b.isRunning && a.tools == b.tools
-        a is FlatChatItem.AssistantTyping && b is FlatChatItem.AssistantTyping ->
-            a.messageId == b.messageId && a.isAwaitingModelResponse == b.isAwaitingModelResponse
         else -> a == b
     }
 
