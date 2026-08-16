@@ -31,6 +31,11 @@ class StableChatRowLedger {
     private val rows = mutableListOf<FlatChatItem>()
     private var lastMessageIndex = -1
 
+    /** Id of messages[0] at seed / first reconcile — the incremental-append
+     *  contract only holds while the HEAD is unchanged (load-older prepends
+     *  or a message deletion invalidates it and forces a full rebuild). */
+    private var headMessageId: String? = null
+
     /** messageId → (textBlockId → segmenter). Cleared per message on text reset. */
     private val segmenters = mutableMapOf<String, MutableMap<String, AppendOnlyMarkdownSegmenter>>()
 
@@ -46,7 +51,21 @@ class StableChatRowLedger {
         rows.clear()
         rows.addAll(initialRows)
         lastMessageIndex = messageCount - 1
+        headMessageId = null // caller passes the new head on next reconcile
         segmenters.clear()
+    }
+
+    /**
+     * Whether [messages] can be reconciled incrementally against the current
+     * ledger state. False when the message list was structurally changed in
+     * a way the append-only model cannot follow: a new head (load-older,
+     * compact, deletion) or a truncated tail. Callers should then do a full
+     * [seed] rebuild instead.
+     */
+    fun isIncrementallyCompatible(messages: List<ChatMessage>): Boolean {
+        val head = headMessageId ?: return true
+        if (messages.firstOrNull()?.id != head) return false
+        return messages.size >= lastMessageIndex + 1
     }
 
     /**
@@ -65,6 +84,7 @@ class StableChatRowLedger {
             rows.clear()
             rows.addAll(buildFlatChatItems(messages))
             lastMessageIndex = messages.size - 1
+            headMessageId = messages.firstOrNull()?.id
             ensureLastMessageSegmented(messages)
             return snapshot()
         }
