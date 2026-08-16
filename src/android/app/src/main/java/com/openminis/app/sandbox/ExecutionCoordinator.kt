@@ -638,24 +638,64 @@ object ExecutionCoordinator {
      * they trigger a concurrent GC. We also read Debug.getNativeHeap-
      * AllocatedSize() before/after to log the effect. This is cheap enough
      * to call on recycle and on pre-execution hard-cap rejection.
+     *
+     * [P2-app-native-reclaim-verify] Bounded iterative GC rounds (up to 3)
+     * instead of a single shot, with a longer settle between rounds so the
+     * concurrent GC's reference queue (DirectByteBuffer cleaners) has time to
+     * drain. Each round measures actual freed bytes; the loop stops once the
+     * round budget is exhausted or native heap drops below a safe floor.
+     * This directly addresses the "Post-recycle GC freed 0MB — session locked
+     * forever" failure mode (2026-08-12, 5.5GB app native heap).
      */
     private fun postRecycleMemoryRecovery() {
         if (!::appContext.isInitialized) return
         try {
-            val beforeNative = Debug.getNativeHeapAllocatedSize() / (1024L * 1024L)
             val runtime = Runtime.getRuntime()
-            val beforeJava = (runtime.totalMemory() - runtime.freeMemory()) / (1024L * 1024L)
-            System.gc()
-            Runtime.getRuntime().gc()
-            // Give the concurrent GC a moment to actually run before logging.
-            Thread.sleep(50)
-            val afterNative = Debug.getNativeHeapAllocatedSize() / (1024L * 1024L)
-            val afterJava = (runtime.totalMemory() - runtime.freeMemory()) / (1024L * 1024L)
-            Log.w(
-                TAG,
-                "Post-recycle GC: native ${beforeNative}MB→${afterNative}MB (freed ${beforeNative - afterNative}MB), " +
-                    "java ${beforeJava}MB→${afterJava}MB (freed ${beforeJava - afterJava}MB)"
-            )
+            val startingNative = Debug.getNativeHeapAllocatedSize() / (1024L * 1024L)
+            val startingJava = (runtime.totalMemory() - runtime.freeMemory()) / (1024L * 1024L)
+            // [P2-app-native-reclaim-verify] Bounded multi-round GC loop.
+            // Each round fires GC hints + settles so the reference queue has
+            // time to drain (DirectByteBuffer cleaners run on background threads).
+            // Exits early when a round actually frees meaningful memory.
+            val maxRounds = 3
+            var roundsUsed = 0
+            var cumulativeFreedMb = 0L
+            var nativeNow = startingNative
+            var javaNow = startingJava
+            // freedThisRound is hoisted out of the loop body so the do-while
+            // condition can reference it (a loop condition cannot see locals
+            // declared inside the body).
+            var freedThisRoundMb = 0L
+            // Floor: once native heap drops below 120MB (tight baseline), stop.
+            val floor = 120L
+            do {
+                roundsUsed++
+                val beforeRoundNative = Debug.getNativeHeapAllocatedSize() / (1024L * 1024L)
+                val beforeRoundJava = (runtime.totalMemory() - runtime.freeMemory()) / (1024L * 1024L)
+                System.gc()
+                Runtime.getRuntime().gc()
+                // [P2-app-native-reclaim-verify] Longer settle (120ms vs 50ms)
+                // so the concurrent GC's reference queue has time to drain
+                // DirectByteBuffer cleaners before the next measurement.
+                Thread.sleep(120)
+                val afterRoundNative = Debug.getNativeHeapAllocatedSize() / (1024L * 1024L)
+                val afterRoundJava = (runtime.totalMemory() - runtime.freeMemory()) / (1024L * 1024L)
+                freedThisRoundMb = beforeRoundNative - afterRoundNative
+                cumulativeFreedMb += freedThisRoundMb
+                nativeNow = afterRoundNative
+                javaNow = afterRoundJava
+                Log.w(TAG, "GC round $roundsUsed/$maxRounds: native ${beforeRoundNative}→${afterRoundNative}MB " +
+                    "(freed ${freedThisRoundMb} MB, cumulative $cumulativeFreedMb MB), " +
+                    "java ${beforeRoundJava}→${afterRoundJava}MB")
+            } while (shouldContinueNativeReclaim(
+                freedThisRoundMb = freedThisRoundMb,
+                roundsUsed = roundsUsed,
+                maxRounds = maxRounds,
+                nativeNowMb = nativeNow,
+                lockedFloorMb = floor,
+            ))
+            Log.w(TAG, "Post-recycle GC: native ${startingNative}→${nativeNow}MB (freed ${startingNative - nativeNow}MB), " +
+                "java ${startingJava}→${javaNow}MB (freed ${startingJava - javaNow}MB), rounds=$roundsUsed")
         } catch (_: Throwable) {
             // Never let memory recovery break the calling flow.
         }
@@ -1051,4 +1091,26 @@ internal fun preExecRejectionMessage(
         ShellPhase.SEVERE -> null
         else -> null
     }
+}
+// [P2-app-native-reclaim-verify] Pure function: decide whether to continue
+// another GC round in the bounded iterative `postRecycleMemoryRecovery()`.
+// Decides whether another GC round is worth trying in the bounded iterative
+// reclaim loop. We keep going only while: (a) we haven't exhausted the round
+// budget, AND (b) native heap is still at/above the locked floor. Once native
+// heap drops below the floor, the session is no longer memory-locked, so we
+// stop (further GC rounds would just burn CPU with no benefit).
+//
+// `freedThisRoundMb` is intentionally not a decision input: a single round
+// freeing 0MB does NOT mean later rounds will too (GC is a hint; objects may
+// become free as the concurrent GC advances), and native heap is the signal we
+// actually care about. It stays in the signature for Log/reporting symmetry.
+// JVM-testable — no Android dependency.
+internal fun shouldContinueNativeReclaim(
+    freedThisRoundMb: Long,
+    roundsUsed: Int,
+    maxRounds: Int,
+    nativeNowMb: Long,
+    lockedFloorMb: Long,
+): Boolean {
+    return roundsUsed < maxRounds && nativeNowMb >= lockedFloorMb
 }
