@@ -2902,6 +2902,10 @@ fun ChatScreen(
                 var flatItems by remember(sessionId) {
                     mutableStateOf<List<FlatChatItem>>(emptyList())
                 }
+                // [forward-stable] Session-lifetime stable row ledger. Owns the
+                // row list once seeded: cold open builds canonically, then every
+                // tick is an incremental reconcile with prefix-stable keys.
+                val rowLedger = remember(sessionId) { StableChatRowLedger() }
                 // [T-android-coldload-offmain-parse] Composition-snapshot
                 // prewarmer (captures the markdown palette) used by the
                 // flatten effect below to warm the parse caches for the
@@ -2949,24 +2953,7 @@ fun ChatScreen(
                     //
                     // Throttle (unchanged): conflate() + sample(80) keeps UI
                     // publication at ~12fps regardless of token rate.
-                    var frozenRows: List<FlatChatItem> = emptyList()
-                    var frozenKeys: Set<String> = emptySet()
-                    var frozenSplitIdx = -1
                     var streamWasActive = false
-                    // [T-android-streaming-tail-patch] Live tail state for the
-                    // intermediate approach: keep the previous tick's key set
-                    // stable during streaming. When the fresh build produces
-                    // the same keys → use it directly (no structural churn).
-                    // When keys differ (fragment boundary split) → patch the
-                    // last streaming fragment's content in place, preserving
-                    // the previous key set. The overhead is O(1) per tick.
-                    var prevLiveRows: List<FlatChatItem> = emptyList()
-                    var prevStreamMap: Map<String, StreamingDelta> = emptyMap()
-                    // [T-android-streaming-tail-patch] Full merged content of
-                    // the streaming message from the previous tick. Used to
-                    // compute the append-only delta when fragment boundary
-                    // splits occur: newLastRawText = prevLastRawText + delta.
-                    var prevMergedText: String = ""
                     // [T-android-stream-pipeline-incremental] Flush the perf
                     // turn when this effect is CANCELLED mid-turn: the
                     // turn-end drain emits `_messages` FIRST (restarting this
@@ -2988,48 +2975,36 @@ fun ChatScreen(
                                 streamWasActive = true
                                 com.openminis.app.diagnostics.StreamPerfMonitor.turnStart(sessionId)
                             }
-                            // First message carrying a live overlay; everything
-                            // before it is frozen. Empty stream → whole list is
-                            // frozen (covers cold open and post-drain ticks).
-                            val splitIdx = if (stream.isEmpty()) {
-                                msgs.size
-                            } else {
-                                val i = msgs.indexOfFirst { stream.containsKey(it.id) }
-                                if (i < 0) msgs.size else i
-                            }
-                            val frozenReused = splitIdx == frozenSplitIdx
-                            if (!frozenReused) {
+                            // ── [forward-stable] StableChatRowLedger path ──
+                            // The ledger owns the row list once seeded: cold
+                            // open builds canonically (off-main, with the
+                            // viewport prewarm), every later tick is an
+                            // incremental reconcile — new messages append at
+                            // the tail, the active turn's text is
+                            // segmenter-managed (mdslot keys, live tail only),
+                            // and published keys are prefix-stable. Structural
+                            // list changes (load-older, deletion, compaction)
+                            // invalidate the append-only contract and force a
+                            // full re-seed via isIncrementallyCompatible().
+                            val merged = mergeStreamingOverlay(msgs, stream)
+                            if (flatItems.isEmpty()) {
                                 val tBuildStart = System.nanoTime()
-                                val wasEmptyPre = flatItems.isEmpty()
-                                // [T-android-perf-logging] Mark the start of a
-                                // full (first / non-streaming) build so the
-                                // gap to buildFlatChatItems.firstBuild bounds
-                                // the construction cost in isolation.
-                                if (wasEmptyPre && stream.isEmpty()) {
-                                    com.openminis.app.diagnostics.PerfLongCtx.step(
-                                        sessionId,
-                                        "buildFlatChatItems.start",
-                                        "msgCount=${msgs.size}",
-                                    )
-                                }
+                                com.openminis.app.diagnostics.PerfLongCtx.step(
+                                    sessionId,
+                                    "buildFlatChatItems.start",
+                                    "msgCount=${msgs.size}",
+                                )
                                 val rows = withContext(Dispatchers.Default) {
                                     // [T-android-flatitems-sublist-cme] Pass a
-                                    // SNAPSHOT COPY, not msgs.subList(...). A
-                                    // subList is a live VIEW backed by msgs and
-                                    // shares its modCount; building off-main
-                                    // (Dispatchers.Default) while msgs is
-                                    // concurrently replaced — and the nested
-                                    // messages.subList(idx+1, …).all{} inside
-                                    // buildFlatChatItems iterating that view —
-                                    // threw ConcurrentModificationException from
-                                    // a later frame's SubList.equals. Copying
-                                    // severs the view so it can't comodify.
-                                    buildFlatChatItems(msgs.take(splitIdx), sessionId)
+                                    // SNAPSHOT COPY (msgs.take), not a subList —
+                                    // a subList is a live VIEW sharing the
+                                    // parent's modCount and threw
+                                    // ConcurrentModificationException when the
+                                    // backing list changed mid-build.
+                                    buildFlatChatItems(msgs.take(msgs.size), sessionId)
                                 }
                                 val buildMs = (System.nanoTime() - tBuildStart) / 1_000_000
-                                frozenRows = rows
-                                frozenKeys = rows.mapTo(HashSet()) { it.key }
-                                frozenSplitIdx = splitIdx
+                                rowLedger.seed(rows, merged.size)
                                 // [T-android-coldload-offmain-parse] Parallel
                                 // viewport prewarm: block-parse + inline-warm
                                 // the newest (viewport-candidate) markdown
@@ -3037,12 +3012,7 @@ fun ChatScreen(
                                 // compose as cache HITs. Deliberately launched
                                 // in PARALLEL with the flatItems publish, not
                                 // before it — blocking the publish would add
-                                // the parse latency to time-to-first-frame,
-                                // the exact thing this task removes; rows the
-                                // prewarm hasn't reached yet just take the
-                                // placeholder-then-swap path in
-                                // MarkdownBlockBody. Cold/full builds only
-                                // (stream empty) — live ticks never get here.
+                                // the parse latency to time-to-first-frame.
                                 if (stream.isEmpty() && rows.isNotEmpty()) {
                                     val prewarmRowLimit = 16
                                     val prewarmCharBudget = 96_000
@@ -3068,86 +3038,42 @@ fun ChatScreen(
                                         }
                                     }
                                 }
-                                // Only emit on the first non-streaming build per
-                                // session (cheap reentry-path marker) or whenever
-                                // build takes >50 ms (i.e. real work).
-                                if ((wasEmptyPre || buildMs >= 50) && stream.isEmpty()) {
+                                com.openminis.app.diagnostics.PerfLongCtx.step(
+                                    sessionId,
+                                    "buildFlatChatItems.firstBuild",
+                                    "msgCount=${msgs.size} rowCount=${rows.size} buildMs=$buildMs",
+                                )
+                                if (rows.size > 3000) {
                                     com.openminis.app.diagnostics.PerfLongCtx.step(
                                         sessionId,
-                                        if (wasEmptyPre) "buildFlatChatItems.firstBuild"
-                                        else "buildFlatChatItems.slow",
+                                        "buildFlatChatItems.highRowCount",
+                                        "rowCount=${rows.size} threshold=3000 msgCount=${msgs.size}",
+                                    )
+                                }
+                            } else {
+                                // Incremental reconcile, or a full re-seed when
+                                // the message list structure changed.
+                                if (!rowLedger.isIncrementallyCompatible(merged)) {
+                                    val tRebuildStart = System.nanoTime()
+                                    val rows = withContext(Dispatchers.Default) {
+                                        buildFlatChatItems(merged, sessionId)
+                                    }
+                                    val buildMs = (System.nanoTime() - tRebuildStart) / 1_000_000
+                                    rowLedger.seed(rows, merged.size)
+                                    com.openminis.app.diagnostics.PerfLongCtx.step(
+                                        sessionId,
+                                        "buildFlatChatItems.ledgerReseed",
                                         "msgCount=${msgs.size} rowCount=${rows.size} buildMs=$buildMs",
                                     )
-                                    // [T-android-perf-logging] Low-memory risk
-                                    // flag: a very high row count is the single
-                                    // biggest contributor to cold-open GC
-                                    // pressure.
-                                    if (rows.size > 3000) {
-                                        com.openminis.app.diagnostics.PerfLongCtx.step(
-                                            sessionId,
-                                            "buildFlatChatItems.highRowCount",
-                                            "rowCount=${rows.size} threshold=3000 msgCount=${msgs.size}",
-                                        )
-                                    }
                                 }
+                                rowLedger.reconcile(merged)
                             }
-                            // Live suffix: only the streamed message(s). Built
-                            // against the merged FULL list so neighbor lookbacks
-                            // across the frozen/live boundary stay correct.
-                            // sessionId = null keeps the hot path log-free.
-                            var liveMergedText: String = ""
-                            val liveRows = if (splitIdx >= msgs.size) {
-                                emptyList()
-                            } else {
-                                withContext(Dispatchers.Default) {
-                                    val merged = mergeStreamingOverlay(msgs, stream)
-                                    // Capture the streaming message's merged
-                                    // content for delta computation below.
-                                    liveMergedText = stream.values.firstOrNull()?.content ?: ""
-                                    buildFlatChatItems(merged, null, fromIndex = splitIdx, seedKeys = frozenKeys)
-                                }
-                            }
-                            // [T-android-streaming-tail-patch] Patch-or-replace
-                            // decision for the live tail. When the frozen
-                            // prefix is reused AND we have a cached tail from
-                            // the previous tick, compare key sets:
-                            //   - Keys identical → fragment structure stable,
-                            //     use fresh build directly (current behavior).
-                            //   - Keys differ → fragment boundary split (e.g.
-                            //     new paragraph, code fence crossing). Keep
-                            //     the PREVIOUS key set by patching the last
-                            //     streaming fragment's content in place.
-                            //     Avoids LazyColumn slot churn on every split.
-                            val effectiveLiveRows = if (frozenReused &&
-                                prevLiveRows.isNotEmpty() && liveRows.isNotEmpty() &&
-                                prevStreamMap.keys == stream.keys
-                            ) {
-                                val prevKeys = prevLiveRows.map { it.key }
-                                val freshKeys = liveRows.map { it.key }
-                                if (prevKeys == freshKeys) {
-                                    liveRows
-                                } else {
-                                    patchLiveTail(
-                                        prev = prevLiveRows,
-                                        fresh = liveRows,
-                                        prevMergedText = prevMergedText,
-                                        currentMergedText = liveMergedText,
-                                    )
-                                }
-                            } else {
-                                liveRows
-                            }
-                            flatItems =
-                                if (effectiveLiveRows.isEmpty()) frozenRows
-                                else frozenRows + effectiveLiveRows
-                            prevLiveRows = effectiveLiveRows
-                            prevStreamMap = stream
-                            prevMergedText = liveMergedText
+                            flatItems = rowLedger.snapshot()
                             com.openminis.app.diagnostics.StreamPerfMonitor.tick(
                                 flattenNanos = System.nanoTime() - tickStartNs,
-                                frozenReused = frozenReused,
-                                frozenRows = frozenRows.size,
-                                liveRows = liveRows.size,
+                                frozenReused = true,
+                                frozenRows = 0,
+                                liveRows = flatItems.size,
                             )
                             if (stream.isEmpty() && streamWasActive) {
                                 streamWasActive = false
