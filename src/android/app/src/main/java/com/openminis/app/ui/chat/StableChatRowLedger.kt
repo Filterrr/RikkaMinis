@@ -98,6 +98,23 @@ internal class StableChatRowLedger {
             return snapshot()
         }
 
+        // Anchor the head on the first incremental reconcile after seed().
+        // seed() deliberately nulls it ("caller passes the new head on next
+        // reconcile") but nothing ever did — so isIncrementallyCompatible()
+        // always returned true and structural changes (an interrupted
+        // assistant message dropped by handleUserCancelledCleanup, deletions,
+        // truncation) were silently reconciled as tail appends, leaving stale
+        // rows behind (e.g. a thinking placeholder whose message is gone).
+        if (headMessageId == null) headMessageId = messages.firstOrNull()?.id
+
+        // Sync queued→sent flips on already-published user rows. A message
+        // published as isQueued=true (dashed bubble) keeps its id when the
+        // prompt queue drains — only the flag flips. Count and head stay
+        // identical, so neither the append branch nor
+        // isIncrementallyCompatible() notices; the row would keep its dashed
+        // styling forever.
+        syncQueuedFlips(messages)
+
         // 1. Append rows for brand-new messages (tail), keeping neighbour
         //    lookbacks (precededByUser / resume header suppression) correct.
         //    Text rows of new assistant messages are NOT taken from the
@@ -165,6 +182,26 @@ internal class StableChatRowLedger {
             if (messages[i].role != "system") return messages[i].role
         }
         return null
+    }
+
+    /**
+     * In-place update of already-published [FlatChatItem.UserBubble] rows whose
+     * message's queued state flipped (enqueuePrompt publishes isQueued=true,
+     * drainQueuedPrompts flips it to false on the same message id). Cheap: only
+     * runs when user bubbles exist and compares one boolean per row.
+     */
+    private fun syncQueuedFlips(messages: List<ChatMessage>) {
+        if (rows.none { it is FlatChatItem.UserBubble }) return
+        val freshById = messages.associateBy { it.id }
+        for (i in rows.indices) {
+            val row = rows[i]
+            if (row is FlatChatItem.UserBubble) {
+                val fresh = freshById[row.message.id] ?: continue
+                if (fresh.isQueued != row.message.isQueued) {
+                    rows[i] = FlatChatItem.UserBubble(fresh, row.precededByUser)
+                }
+            }
+        }
     }
 
     private fun reconcileMessage(message: ChatMessage, prevNonSystemRole: String?) {
