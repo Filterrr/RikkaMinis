@@ -577,4 +577,3 @@ class StableChatRowLedgerTest {
             "no live assistant ids after converge")
     }
 }
-}
