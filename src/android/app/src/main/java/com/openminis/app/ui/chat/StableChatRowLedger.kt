@@ -103,7 +103,7 @@ internal class StableChatRowLedger {
         activeAssistantIds.clear()
         // Reconcile re-derives the prefix (first reconcile after seed anchors
         // the head and snapshots the published ids).
-        resolvedMessageIds.clear()
+        reconciledMessageIds.clear()
     }
 
     /**
