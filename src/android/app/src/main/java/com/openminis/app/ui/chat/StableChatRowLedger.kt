@@ -163,7 +163,7 @@ internal class StableChatRowLedger {
         if (start < 0) {
             // Defensive: no published rows yet (shouldn't happen — new messages
             // go through the append path). Build and append.
-            rows.addAll(buildNewMessageRows(message, prevNonSystemRole, rows.mapTo(HashSet()) { it.key }))
+            rows.addAll(buildNewMessageRows(message, prevNonSystemRole))
             return
         }
         val freshAll = buildNewMessageRows(message, prevNonSystemRole)
