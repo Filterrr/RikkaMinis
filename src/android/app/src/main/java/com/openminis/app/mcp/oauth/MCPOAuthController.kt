@@ -108,8 +108,8 @@ class MCPOAuthController(private val context: Context) {
             } ?: return@withContext Result.Cancelled
 
             val (code, state) = callback
-            if (state != null && state != pkce.state) {
-                AppLogger.warning(TAG, "[Authorize] '$server' state mismatch")
+            if (state != pkce.state) {
+                AppLogger.warning(TAG, "[Authorize] '$server' state mismatch (state=${state?.take(8) ?: "null"})")
                 return@withContext Result.Failed("State mismatch in the OAuth callback.")
             }
 

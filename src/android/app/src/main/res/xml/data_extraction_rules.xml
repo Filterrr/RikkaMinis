@@ -1,3 +1,35 @@
 <?xml version="1.0" encoding="utf-8"?>
 <data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="provider_secrets.xml" />
+        <exclude domain="sharedpref" path="env_var_encrypted.xml" />
+        <exclude domain="sharedpref" path="mcp_oauth.xml" />
+        <exclude domain="sharedpref" path="device_identity.xml" />
+        <exclude domain="sharedpref" path="webdav_config.xml" />
+        <exclude domain="sharedpref" path="*_plain_fallback.xml" />
+        <exclude domain="sharedpref" path="__androidx_security_crypto_encrypted_prefs__.xml" />
+        <exclude domain="file" path="logs/" />
+        <exclude domain="file" path="sessions/" />
+        <exclude domain="file" path="minis-sessions/" />
+        <exclude domain="file" path="proot/" />
+        <exclude domain="file" path="share_extension/" />
+        <exclude domain="file" path="debug_server_token" />
+        <exclude domain="cache" path="" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="provider_secrets.xml" />
+        <exclude domain="sharedpref" path="env_var_encrypted.xml" />
+        <exclude domain="sharedpref" path="mcp_oauth.xml" />
+        <exclude domain="sharedpref" path="device_identity.xml" />
+        <exclude domain="sharedpref" path="webdav_config.xml" />
+        <exclude domain="sharedpref" path="*_plain_fallback.xml" />
+        <exclude domain="sharedpref" path="__androidx_security_crypto_encrypted_prefs__.xml" />
+        <exclude domain="file" path="logs/" />
+        <exclude domain="file" path="sessions/" />
+        <exclude domain="file" path="minis-sessions/" />
+        <exclude domain="file" path="proot/" />
+        <exclude domain="file" path="share_extension/" />
+        <exclude domain="file" path="debug_server_token" />
+        <exclude domain="cache" path="" />
+    </device-transfer>
 </data-extraction-rules>

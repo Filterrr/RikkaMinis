@@ -51,8 +51,8 @@ object EncryptedPrefsFactory {
                 Log.e(TAG, "rebuild($fileName) after wipe failed: ${it.message}", it)
             }
 
-        Log.w(TAG, "falling back to plain SharedPreferences for $fileName — credentials lost")
-        return context.getSharedPreferences("${fileName}_plain_fallback", Context.MODE_PRIVATE)
+        Log.w(TAG, "falling back to in-memory SharedPreferences for $fileName — credentials lost, nothing persisted")
+        return InMemorySharedPreferences()
     }
 
     private fun build(context: Context, fileName: String): SharedPreferences {
@@ -84,4 +84,53 @@ object EncryptedPrefsFactory {
             }
         }.onFailure { Log.w(TAG, "wipe master-key alias failed: ${it.message}") }
     }
+}
+
+/**
+ * Fail-closed in-memory [SharedPreferences] used when
+ * [EncryptedSharedPreferences] can't be created after a wipe+rebuild.
+ *
+ * Every read returns the default; every write is kept only in process
+ * memory and is never persisted to disk. This guarantees secrets can
+ * never silently fall back to plaintext storage. The app continues to
+ * work (users see "no credentials stored"), and the next launch retries
+ * the encrypted path.
+ */
+private class InMemorySharedPreferences : SharedPreferences {
+    private val values = mutableMapOf<String, Any?>()
+
+    override fun getAll(): MutableMap<String, *> = HashMap(values)
+    override fun getString(key: String, defValue: String?): String? = values[key] as? String ?: defValue
+    override fun getStringSet(key: String, defValues: MutableSet<String>?): MutableSet<String>? =
+        @Suppress("UNCHECKED_CAST") (values[key] as? MutableSet<String>) ?: defValues
+    override fun getInt(key: String, defValue: Int): Int = values[key] as? Int ?: defValue
+    override fun getLong(key: String, defValue: Long): Long = values[key] as? Long ?: defValue
+    override fun getFloat(key: String, defValue: Float): Float = values[key] as? Float ?: defValue
+    override fun getBoolean(key: String, defValue: Boolean): Boolean = values[key] as? Boolean ?: defValue
+    override fun contains(key: String): Boolean = values.containsKey(key)
+    override fun registerOnSharedPreferenceChangeListener(listener: SharedPreferences.OnSharedPreferenceChangeListener) {}
+    override fun unregisterOnSharedPreferenceChangeListener(listener: SharedPreferences.OnSharedPreferenceChangeListener) {}
+    override fun edit(): SharedPreferences.Editor = InMemoryEditor(values)
+}
+
+private class InMemoryEditor(
+    private val values: MutableMap<String, Any?>,
+) : SharedPreferences.Editor {
+    private val staged = mutableMapOf<String, Any?>()
+    private val removed = mutableSetOf<String>()
+
+    override fun putString(key: String, value: String?): SharedPreferences.Editor { staged[key] = value; return this }
+    override fun putStringSet(key: String, values: MutableSet<String>?): SharedPreferences.Editor { staged[key] = values; return this }
+    override fun putInt(key: String, value: Int): SharedPreferences.Editor { staged[key] = value; return this }
+    override fun putLong(key: String, value: Long): SharedPreferences.Editor { staged[key] = value; return this }
+    override fun putFloat(key: String, value: Float): SharedPreferences.Editor { staged[key] = value; return this }
+    override fun putBoolean(key: String, value: Boolean): SharedPreferences.Editor { staged[key] = value; return this }
+    override fun remove(key: String): SharedPreferences.Editor { removed.add(key); return this }
+    override fun clear(): SharedPreferences.Editor { staged.clear(); removed.addAll(values.keys); return this }
+    override fun commit(): Boolean {
+        removed.forEach { values.remove(it) }
+        staged.forEach { (k, v) -> values[k] = v }
+        return true
+    }
+    override fun apply() { commit() }
 }

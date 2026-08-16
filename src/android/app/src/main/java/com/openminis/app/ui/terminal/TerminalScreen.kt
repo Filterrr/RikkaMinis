@@ -103,7 +103,14 @@ fun TerminalScreen(
         if (!terminalSession.isRunning) terminalSession.start(sessionId = sessionId)
         if (!initCommand.isNullOrBlank()) {
             kotlinx.coroutines.delay(500)
-            terminalSession.sendText(initCommand)
+            // Strip control characters that would execute commands (CR, LF, ESC, etc.)
+            // before sending to the PTY — defense-in-depth alongside DeepLinkHandler's
+            // sanitization. The initCommand is meant to pre-fill visible text, not
+            // auto-execute.
+            val safe = initCommand.filter { it != '\u0000' && (it >= ' ' || it == '\t') && it != '\u007f' }
+            if (safe.isNotBlank()) {
+                terminalSession.sendText(safe)
+            }
         }
     }
 

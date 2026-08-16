@@ -4,7 +4,11 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.lifecycle.lifecycleScope
 import com.openminis.app.logging.AppLogger
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
 
@@ -35,6 +39,10 @@ class ShareReceiverActivity : ComponentActivity() {
     companion object {
         private const val TAG = "ShareReceiver"
         private const val INLINE_TEXT_LIMIT = 1000
+        private const val MAX_ATTACHMENTS = 50
+        private const val MAX_FILE_BYTES = 100L * 1024 * 1024   // 100 MB per file
+        private const val MAX_TOTAL_BYTES = 500L * 1024 * 1024  // 500 MB total
+        private const val IO_TIMEOUT_MS = 30_000L               // 30 s per file
     }
 
     // T-n01-andmenu-l10n: pre-Tiramisu locale override (see MainActivity).
@@ -44,6 +52,24 @@ class ShareReceiverActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Extract share items on the IO dispatcher so the main thread is
+        // never blocked by potentially slow ContentResolver reads.
+        lifecycleScope.launch(Dispatchers.IO) {
+            val items = extractItems()
+            // Provider-JSON detection also reads the staged file — keep on IO.
+            val providerJson = items.singleOrNull()?.let { providerExportJsonOrNull(it) }
+            withContext(Dispatchers.Main) {
+                if (providerJson != null) {
+                    promptProviderImportOrAttach(providerJson, items)
+                } else {
+                    finishWithAttachmentFlow(items)
+                }
+            }
+        }
+    }
+
+    /** Extract items from the incoming intent. Runs on IO. */
+    private suspend fun extractItems(): List<PendingShare.Item> {
         val items = mutableListOf<PendingShare.Item>()
         try {
             when (intent?.action) {
@@ -55,19 +81,7 @@ class ShareReceiverActivity : ComponentActivity() {
         } catch (e: Throwable) {
             AppLogger.error(TAG, "extraction failed: ${e.message}")
         }
-
-        // [T-android-json-open-provider-import-prompt] If exactly one item was
-        // staged and it parses as a Provider-export JSON, offer a two-way
-        // choice: import it as a provider, or fall through to the normal
-        // chat-attachment flow. Mirrors iOS #678. Only the single-item case is
-        // eligible — a multi-file share is unambiguously an attachment batch.
-        val providerJson = items.singleOrNull()?.let { providerExportJsonOrNull(it) }
-        if (providerJson != null) {
-            promptProviderImportOrAttach(providerJson, items)
-            return
-        }
-
-        finishWithAttachmentFlow(items)
+        return items
     }
 
     /**
@@ -200,7 +214,8 @@ class ShareReceiverActivity : ComponentActivity() {
     private fun handleMultipleSend(intent: Intent, out: MutableList<PendingShare.Item>) {
         val type = intent.type ?: ""
         val uris = getParcelableArrayListExtra<Uri>(intent, Intent.EXTRA_STREAM) ?: return
-        for (uri in uris) {
+        for (uri in uris.take(MAX_ATTACHMENTS)) {
+            if (out.size >= MAX_ATTACHMENTS) break
             copyUriToStaging(uri, type)?.let {
                 out += PendingShare.Item(PendingShare.Item.Kind.ATTACHMENT, it)
             }
@@ -226,9 +241,13 @@ class ShareReceiverActivity : ComponentActivity() {
         }
     }
 
-    /** Copy a ContentResolver-backed URI to the staging dir. Returns
-     *  the staged filename (relative to sharedFileDirectory) or null on
-     *  failure. */
+    /** Copy a ContentResolver-backed URI to the staging dir. Runs on the
+     *  IO dispatcher (the caller is [extractItems]). Returns the staged
+     *  filename (relative to sharedFileDirectory) or null on failure.
+     *  Enforces per-file and cumulative size limits and cleans up partial
+     *  files on any failure. */
+    private var totalStagedBytes = 0L
+
     private fun copyUriToStaging(uri: Uri, mimeType: String): String? {
         val ext = guessExtension(mimeType, uri)
         val prefix = when {
@@ -240,11 +259,36 @@ class ShareReceiverActivity : ComponentActivity() {
         val dest = File(SharedShareStore.sharedFileDirectory(this), name)
         return try {
             contentResolver.openInputStream(uri)?.use { input ->
-                dest.outputStream().use { input.copyTo(it) }
+                dest.outputStream().use { output ->
+                    val buf = ByteArray(8192)
+                    var total = 0L
+                    val deadline = System.currentTimeMillis() + IO_TIMEOUT_MS
+                    while (true) {
+                        if (System.currentTimeMillis() > deadline) {
+                            AppLogger.warning(TAG, "copyUriToStaging($uri) timed out after ${IO_TIMEOUT_MS}ms")
+                            return null
+                        }
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        total += n
+                        if (total > MAX_FILE_BYTES) {
+                            AppLogger.warning(TAG, "copyUriToStaging($uri) exceeded ${MAX_FILE_BYTES} bytes")
+                            return null
+                        }
+                        if (totalStagedBytes + total > MAX_TOTAL_BYTES) {
+                            AppLogger.warning(TAG, "copyUriToStaging($uri) would exceed cumulative ${MAX_TOTAL_BYTES} bytes")
+                            return null
+                        }
+                        output.write(buf, 0, n)
+                    }
+                    totalStagedBytes += total
+                }
             }
             name
         } catch (e: Exception) {
             AppLogger.warning(TAG, "copyUriToStaging($uri): ${e.message}")
+            // Clean up partial file, if any
+            try { dest.delete() } catch (_: Exception) {}
             null
         }
     }

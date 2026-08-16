@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
 import android.webkit.CookieManager
+import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.runtime.Composable
@@ -11,7 +12,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.webkit.WebViewAssetLoader
 import com.openminis.app.logging.AppLogger
+import java.io.File
 
 /**
  * Holds a single WebView instance + the page-state observed from it.
@@ -46,20 +49,43 @@ class WebViewHolder(
 
     private var mobileUserAgent: String = ""
 
+    /**
+     * For file:// URLs, use WebViewAssetLoader to serve the HTML and its
+     * sibling resources from the file's parent directory under the secure
+     * `https://appassets.androidplatform.net/` origin. This prevents the
+     * WebView from having direct file:// access to the filesystem.
+     */
+    private val assetLoader: WebViewAssetLoader?
+
+    init {
+        @Suppress("DEPRECATION")
+        assetLoader = if (initialUrl.startsWith("file://")) {
+            val file = File(initialUrl.removePrefix("file://"))
+            val parent = file.parentFile
+            if (parent != null) {
+                WebViewAssetLoader.Builder()
+                    .addPathHandler("/", WebViewAssetLoader.InternalStoragePathHandler(appContext, parent))
+                    .build()
+            } else null
+        } else null
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     val webView: WebView = WebView(appContext).apply {
         settings.javaScriptEnabled = true       // sandbox HTML demos rely on JS
         settings.domStorageEnabled = true
-        settings.allowFileAccess = true         // file:// for sandbox previews
+        // [T-audit-p1-1] File access is DISABLED in the preview WebView.
+        // Local HTML files are served via WebViewAssetLoader under the
+        // secure `https://appassets.androidplatform.net/` origin, which
+        // only exposes the file's parent directory — not the entire
+        // filesystem. The earlier `allowFileAccessFromFileURLs` and
+        // `allowUniversalAccessFromFileURLs` flags have been removed, so
+        // a malicious HTML page can no longer read sibling files outside
+        // its parent directory or exfiltrate them via fetch/XHR.
+        settings.allowFileAccess = false
         settings.allowContentAccess = true
-        // Same-origin file:// access is needed so `<script src="game.js">`
-        // sitting next to a sandbox HTML loads correctly. We accept the small
-        // attack surface because all paths come from PRoot-resolved sandbox
-        // outputs, never untrusted user content from the network.
-        @Suppress("DEPRECATION")
-        settings.allowFileAccessFromFileURLs = true
-        @Suppress("DEPRECATION")
-        settings.allowUniversalAccessFromFileURLs = true
+        settings.allowFileAccessFromFileURLs = false
+        settings.allowUniversalAccessFromFileURLs = false
         // T-htmlpreview-2d5c4f3d: pages that use viewport units (`100vh` /
         // `height: 100%`) combined with `overflow: hidden` would render
         // blank inside the bottom-sheet preview, because the WebView starts
@@ -96,9 +122,25 @@ class WebViewHolder(
             setAcceptThirdPartyCookies(wv, true)
         }
         webViewClient = object : WebViewClient() {
+            override fun shouldInterceptRequest(
+                view: WebView,
+                request: WebResourceRequest,
+            ): android.webkit.WebResourceResponse? {
+                val url = request.url ?: return null
+                // For file:// URLs, serve via the asset loader which only
+                // exposes the file's parent directory under the secure
+                // appassets origin. For https://appassets.androidplatform.net/
+                // URLs, the asset loader also serves the local files.
+                // Non-file, non-appassets URLs pass through to the network.
+                if (url.scheme == "file" || (url.scheme == "https" && url.host == ASSET_LOADER_HOST)) {
+                    return assetLoader?.shouldInterceptRequest(url)
+                }
+                return null
+            }
+
             override fun shouldOverrideUrlLoading(
                 view: WebView,
-                request: android.webkit.WebResourceRequest,
+                request: WebResourceRequest,
             ): Boolean {
                 val urlStr = request.url?.toString()
                 // T234: Google permanently disallows WebView for sign-in /
@@ -186,39 +228,30 @@ class WebViewHolder(
      */
     fun startIfNeeded() {
         if (hasLoaded) return
-        // T-htmlpreview-2d5c4f3d: defer the actual loadUrl until the
-        // WebView is attached to a window AND has been laid out with a
-        // positive width/height. Pages that compute `100vh` / `height: 100%`
-        // against the initial measured viewport otherwise see 0×0 and
-        // collapse — exactly the white-screen the user reported on
-        // viewport-height + overflow:hidden HTML files.
-        //
-        // We start the load eagerly when the WebView is already laid out
-        // (warm reuse — re-entering a sheet for the same holder), and
-        // otherwise post once to the WebView's handler after attach.
         hasLoaded = true
+        // For file:// URLs, load via the asset loader's secure origin
+        // instead of granting direct file:// access.
+        val loadUrl = assetLoaderUrl(currentUrl) ?: currentUrl
         if (webView.isAttachedToWindow && webView.width > 0 && webView.height > 0) {
-            AppLogger.info(TAG, "loadUrl (attached) ${currentUrl.take(160)}")
-            webView.loadUrl(currentUrl)
+            AppLogger.info(TAG, "loadUrl (attached) ${loadUrl.take(160)}")
+            webView.loadUrl(loadUrl)
             return
         }
         webView.addOnAttachStateChangeListener(object : android.view.View.OnAttachStateChangeListener {
             override fun onViewAttachedToWindow(v: android.view.View) {
                 v.removeOnAttachStateChangeListener(this)
-                // doOnLayout fires after the next layout pass — guarantees
-                // width/height > 0 so 100vh resolves against a real viewport.
                 v.post {
                     if (v.width > 0 && v.height > 0) {
-                        AppLogger.info(TAG, "loadUrl (post-attach) ${currentUrl.take(160)}")
-                        webView.loadUrl(currentUrl)
+                        AppLogger.info(TAG, "loadUrl (post-attach) ${loadUrl.take(160)}")
+                        webView.loadUrl(loadUrl)
                     } else {
                         v.viewTreeObserver.addOnGlobalLayoutListener(object :
                             android.view.ViewTreeObserver.OnGlobalLayoutListener {
                             override fun onGlobalLayout() {
                                 if (v.width > 0 && v.height > 0) {
                                     v.viewTreeObserver.removeOnGlobalLayoutListener(this)
-                                    AppLogger.info(TAG, "loadUrl (post-layout) ${currentUrl.take(160)}")
-                                    webView.loadUrl(currentUrl)
+                                    AppLogger.info(TAG, "loadUrl (post-layout) ${loadUrl.take(160)}")
+                                    webView.loadUrl(loadUrl)
                                 }
                             }
                         })
@@ -318,6 +351,7 @@ class WebViewHolder(
 
     companion object {
         private const val TAG = "WebViewHolder"
+        private const val ASSET_LOADER_HOST = "appassets.androidplatform.net"
         // Match BrowserAction.UserAgentProfile.DESKTOP_CHROME so the in-chat
         // web preview and the Browser tab desktop modes are identical.
         private const val DESKTOP_UA =
@@ -325,6 +359,16 @@ class WebViewHolder(
                 "Chrome/134.0.0.0 Safari/537.36"
         // Match UserAgentProfile.DESKTOP_CHROME.viewportSize.
         private const val DESKTOP_VIEWPORT_CSS_WIDTH = 1280
+
+        /**
+         * Convert a file:// URL to the asset loader's secure origin URL.
+         * Returns null for non-file URLs so they load normally.
+         */
+        private fun assetLoaderUrl(url: String): String? {
+            if (!url.startsWith("file://")) return null
+            val file = File(url.removePrefix("file://"))
+            return "https://$ASSET_LOADER_HOST/${file.name}"
+        }
     }
 }
 

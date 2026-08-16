@@ -145,6 +145,17 @@ fun ProviderConnectionScreen(
                                     if (!focusState.isFocused) saveBaseURLSettings()
                                 },
                         )
+                        // [T-audit-p2-4] Persistent warning when the endpoint uses
+                        // unencrypted HTTP — API keys, messages and tool results
+                        // would travel in cleartext over the network.
+                        if (customBaseURL.trim().startsWith("http://", ignoreCase = true)) {
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                text = stringResource(R.string.provider_detail_http_endpoint_warning),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
                     }
                     val showUserAgentField = instance.providerType == ProviderType.openAI ||
                         instance.providerType == ProviderType.anthropic
