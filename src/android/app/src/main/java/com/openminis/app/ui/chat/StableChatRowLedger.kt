@@ -39,6 +39,15 @@ internal class StableChatRowLedger {
     /** messageId → (textBlockId → segmenter). Cleared per message on text reset. */
     private val segmenters = mutableMapOf<String, MutableMap<String, AppendOnlyMarkdownSegmenter>>()
 
+    /**
+     * messageIds whose text rows are segmenter-owned (mdslot-style mdblock
+     * rows produced inside [reconcileMessage]). Attached on first text-block
+     * update; detached on text-reset. This is the authoritative "already
+     * segmented" signal — key prefixes are NOT a reliable discriminator
+     * because AssistantMarkdownBlock.key is fixed to "mdblock:...".
+     */
+    private val segmentedMessages = mutableSetOf<String>()
+
     /** Current published rows. Treat the result as immutable. */
     fun snapshot(): List<FlatChatItem> = rows.toList()
 
@@ -177,14 +186,16 @@ internal class StableChatRowLedger {
             .filterIsInstance<FlatChatItem.AssistantMarkdownBlock>()
             .map { it.parentBlockId }
             .distinct()
-        // The message's text rows are segmenter-owned iff it already carries
-        // mdslot rows. Until then (cold-open canonical build) they are plain
-        // mdblock rows that must be replaced on first attach.
-        val hasMdslotRows = rows.subList(start, rows.size)
-            .any { it is FlatChatItem.AssistantMarkdownBlock && it.key.startsWith("mdslot:") }
-        val textReset = !hasMdslotRows || currentTextIds != publishedTextIds
+        // The message's text rows are segmenter-owned iff this ledger already
+        // attached a segmenter for it (see [segmentedMessages]). Until then
+        // (cold-open canonical build) they are plain canonical mdblock rows
+        // that must be replaced on first attach. Key prefixes are NOT a
+        // reliable discriminator: AssistantMarkdownBlock.key is fixed to
+        // "mdblock:..." for both canonical and segmenter-owned rows.
+        val textReset = message.id !in segmentedMessages || currentTextIds != publishedTextIds
         if (textReset) {
             segmenters.remove(message.id)
+            segmentedMessages.remove(message.id)
             val itr = rows.listIterator(start)
             while (itr.hasNext()) {
                 if (itr.next() is FlatChatItem.AssistantMarkdownBlock) itr.remove()
@@ -205,6 +216,11 @@ internal class StableChatRowLedger {
         // ── pass 3: text rows via per-block segmenters ──
         val joinedMarkdown = joinedMarkdownFor(message)
         val textBlocks = message.toolBlocks.filter { it.kind == "text" && it.content.isNotEmpty() }
+        if (textBlocks.isNotEmpty()) {
+            // Segmenter ownership begins now: subsequent ticks reuse the
+            // segmenter (no text reset) until block ids change.
+            segmentedMessages.add(message.id)
+        }
         for (block in textBlocks) {
             val seg = segmenters.getOrPut(message.id) { mutableMapOf() }
                 .getOrPut(block.id) { AppendOnlyMarkdownSegmenter() }
