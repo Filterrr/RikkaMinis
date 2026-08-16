@@ -48,8 +48,46 @@ internal class StableChatRowLedger {
      */
     private val segmentedMessages = mutableSetOf<String>()
 
+    /**
+     * The ordered ids of messages already published by [seed] / [reconcile],
+     * so far. [isIncrementallyCompatible] matches the FULL published prefix
+     * against the latest canonical list — not just the head and a count — so
+     * a same-index replacement or mid-list deletion that keeps count and head
+     * unchanged still forces a reseed instead of silently leaving stale rows.
+     */
+    private val reconciledMessageIds = mutableListOf<String>()
+
+    /**
+     * messageIds of assistant messages that are still "live" in the UI
+     * (streaming / awaiting model response / a RUNNING tool block). Once a
+     * turn is no longer the last message it still gets status-synced against
+     * the latest canonical snapshot so stale RUNNING/typing state is drained;
+     * when the terminal state is written the id leaves this set.
+     */
+    private val activeAssistantIds = mutableSetOf<String>()
+
     /** Current published rows. Treat the result as immutable. */
     fun snapshot(): List<FlatChatItem> = rows.toList()
+
+    /**
+     * Whether [messages] can be reconciled incrementally against the current
+     * ledger state. False when the message list was structurally changed in
+     * a way the append-only model cannot follow: a new head (load-older,
+     * compact, deletion), a truncated tail, or a same-index replacement
+     * within the already-published prefix (queued placeholder → real user
+     * message, or an interrupted assistant message dropped/reshaped).
+     */
+    fun isIncrementallyCompatible(messages: List<ChatMessage>): Boolean {
+        val head = headMessageId ?: return true
+        if (messages.firstOrNull()?.id != head) return false
+        if (messages.size < reconciledMessageIds.size) return false
+        // Full prefix match — catches same-index replacement / mid-list
+        // deletion the head+count check alone cannot see.
+        for (i in reconciledMessageIds.indices) {
+            if (messages[i].id != reconciledMessageIds[i]) return false
+        }
+        return true
+    }
 
     /**
      * Cold-open seed: hand over the canonical full build (callers run
@@ -62,19 +100,10 @@ internal class StableChatRowLedger {
         lastMessageIndex = messageCount - 1
         headMessageId = null // caller passes the new head on next reconcile
         segmenters.clear()
-    }
-
-    /**
-     * Whether [messages] can be reconciled incrementally against the current
-     * ledger state. False when the message list was structurally changed in
-     * a way the append-only model cannot follow: a new head (load-older,
-     * compact, deletion) or a truncated tail. Callers should then do a full
-     * [seed] rebuild instead.
-     */
-    fun isIncrementallyCompatible(messages: List<ChatMessage>): Boolean {
-        val head = headMessageId ?: return true
-        if (messages.firstOrNull()?.id != head) return false
-        return messages.size >= lastMessageIndex + 1
+        activeAssistantIds.clear()
+        // Reconcile re-derives the prefix (first reconcile after seed anchors
+        // the head and snapshots the published ids).
+        resolvedMessageIds.clear()
     }
 
     /**
@@ -94,6 +123,9 @@ internal class StableChatRowLedger {
             rows.addAll(buildFlatChatItems(messages))
             lastMessageIndex = messages.size - 1
             headMessageId = messages.firstOrNull()?.id
+            reconciledMessageIds.clear()
+            reconciledMessageIds.addAll(messages.map { it.id })
+            seedActiveAssistantIds(messages)
             ensureLastMessageSegmented(messages)
             return snapshot()
         }
@@ -105,7 +137,15 @@ internal class StableChatRowLedger {
         // assistant message dropped by handleUserCancelledCleanup, deletions,
         // truncation) were silently reconciled as tail appends, leaving stale
         // rows behind (e.g. a thinking placeholder whose message is gone).
-        if (headMessageId == null) headMessageId = messages.firstOrNull()?.id
+        if (headMessageId == null) {
+            headMessageId = messages.firstOrNull()?.id
+            // First reconcile after a cold-open seed: the already-published
+            // prefix is the full current history. Snapshot it so the prefix
+            // check below is meaningful from the very first incremental step.
+            reconciledMessageIds.clear()
+            reconciledMessageIds.addAll(messages.take(lastMessageIndex + 1).map { it.id })
+            seedActiveAssistantIds(messages)
+        }
 
         // Sync queued→sent flips on already-published user rows. A message
         // published as isQueued=true (dashed bubble) keeps its id when the
@@ -114,6 +154,18 @@ internal class StableChatRowLedger {
         // isIncrementallyCompatible() notices; the row would keep its dashed
         // styling forever.
         syncQueuedFlips(messages)
+
+        // Sync stale live-state (RUNNING tool pills / typing / awaiting)
+        // of assistant messages that were once the active turn but have since
+        // become HISTORY (a new user turn was appended below them by
+        // enqueuePrompt → injectQueuedPromptsAsNewTurn). Their canonical rows
+        // reflect the terminal state (tool SUCCESS/FAILED/CANCELLED,
+        // isStreaming=false), and the viewport froze on the old snapshot, so
+        // without this pass a "thinking…"/"Running" ghost stays pinned to a
+        // finished turn (the interrupted-turn leftover). Only rows belonging
+        // to those specific messages are touched — everything else is left
+        // untouched to preserve stable scrolling.
+        syncActiveAssistantStatus(messages)
 
         // 1. Append rows for brand-new messages (tail), keeping neighbour
         //    lookbacks (precededByUser / resume header suppression) correct.
@@ -132,8 +184,10 @@ internal class StableChatRowLedger {
                 } else {
                     rows.addAll(buildNewMessageRows(msg, prevRole))
                 }
+                reconciledMessageIds.add(msg.id)
             }
             lastMessageIndex = messages.size - 1
+            pruneActiveAssistantIds(messages)
             return snapshot()
         }
 
@@ -202,6 +256,108 @@ internal class StableChatRowLedger {
                 }
             }
         }
+    }
+
+    /**
+     * Harvest the set of assistant messages that are currently "live" in the
+     * UI (streaming / awaiting model response / any RUNNING tool) so that
+     * [syncActiveAssistantStatus] keeps them updated even once they stop being
+     * the last message (a queued prompt appended a new user turn below them).
+     * Runs on seed / the first reconcile after a cold-open seed.
+     */
+    private fun seedActiveAssistantIds(messages: List<ChatMessage>) {
+        activeAssistantIds.clear()
+        for (msg in messages) {
+            if (msg.role != "assistant") continue
+            if (isLiveAssistant(msg)) activeAssistantIds.add(msg.id)
+        }
+    }
+
+    /**
+     * Drop ids of messages that moved to history and whose headline states are
+     * terminal. Kept tiny so the status-sync pass stays O(active rows).
+     */
+    private fun pruneActiveAssistantIds(messages: List<ChatMessage>) {
+        if (activeAssistantIds.isEmpty()) return
+        val byId = messages.associateBy { it.id }
+        activeAssistantIds.removeAll { id ->
+            val msg = byId[id]
+            msg == null || !isLiveAssistant(msg) || !hasLiveRowsOwnedBy(msg.id)
+        }
+    }
+
+    private fun isLiveAssistant(msg: ChatMessage): Boolean =
+        msg.isStreaming || msg.isAwaitingModelResponse ||
+            msg.toolBlocks.any { it.status == ToolBlockStatus.RUNNING }
+
+    private fun hasLiveRowsOwnedBy(messageId: String): Boolean =
+        rows.any {
+            it.owningMessageId() == messageId &&
+                (it is FlatChatItem.AssistantTyping ||
+                    (it is FlatChatItem.AssistantToolRunGroup && it.isRunning))
+        }
+
+    /**
+     * In-place sync of stale live-state rows (thinking placeholder, RUNNING
+     * tool pills) of assistant messages that became history — the
+     * interrupted-turn leftover. For each such message, compare its published
+     * rows against the canonical fresh rows of the SAME message and replace
+     * on the same keys, WITHOUT touching rows of other messages, re-segmenting
+     * published markdown, or reordering anything — so stable scrolling is
+     * preserved. Rows that legitimately disappear from canonical history
+     * (typing placeholder) are dropped as transient.
+     */
+    private fun syncActiveAssistantStatus(messages: List<ChatMessage>) {
+        if (activeAssistantIds.isEmpty()) return
+        val freshById = messages.associateBy { it.id }
+        for (messageId in activeAssistantIds.toList()) {
+            val freshMsg = freshById[messageId] ?: continue
+            val start = rows.indexOfFirst { it.owningMessageId() == messageId }
+            if (start < 0) continue
+            val freshAll = buildNewMessageRows(freshMsg, null)
+            val freshByKey = freshAll.associateBy { it.key }
+            var rowsTouched = false
+            for (i in start until rows.size) {
+                val row = rows[i]
+                if (row.owningMessageId() != messageId) break
+                // Never touch frozen text rows: their segmenter-owned content
+                // is authoritative. Only sync live-status rows that flip a
+                // boolean/tool state (RUNNING→终态, typing→gone).
+                if (row is FlatChatItem.AssistantMarkdownBlock) continue
+                if (row is FlatChatItem.UserBubble) continue
+                val fresh = freshByKey[row.key] ?: continue
+                if (!sameLiveView(row, fresh)) {
+                    rows[i] = fresh
+                    rowsTouched = true
+                    if (fresh is FlatChatItem.AssistantToolRunGroup && !fresh.isRunning) {
+                        activeAssistantIds.remove(messageId)
+                    }
+                }
+            }
+            if (!rowsTouched) {
+                // Canonical has no live rows for it anymore — drop the stale
+                // typing placeholder if any.
+                var removed = false
+                val itr = rows.listIterator(start)
+                while (itr.hasNext()) {
+                    val row = itr.next()
+                    if (row.owningMessageId() != messageId) break
+                    if (row is FlatChatItem.AssistantTyping) {
+                        itr.remove(); removed = true
+                    }
+                }
+                if (removed) activeAssistantIds.remove(messageId)
+            }
+        }
+    }
+
+    /** Whether two rows that share a key differ in their live-state fields. */
+    private fun sameLiveView(a: FlatChatItem, b: FlatChatItem): Boolean = when {
+        a is FlatChatItem.AssistantToolRunGroup && b is FlatChatItem.AssistantToolRunGroup ->
+            a.isRunning == b.isRunning && a.tools == b.tools
+        a is FlatChatItem.AssistantTyping && b is FlatChatItem.AssistantTyping ->
+            a.messageId == b.messageId && a.isAwaitingModelResponse == b.isAwaitingModelResponse
+        else -> a == b
     }
 
     private fun reconcileMessage(message: ChatMessage, prevNonSystemRole: String?) {
