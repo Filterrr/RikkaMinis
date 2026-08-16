@@ -1,5 +1,6 @@
 package com.openminis.app.sandbox
 
+import android.app.ActivityManager
 import android.content.Context
 import android.os.Debug
 import android.os.SystemClock
@@ -71,6 +72,34 @@ object ExecutionCoordinator {
     // reaching Scudo OOM. The crash case hit 542MB before the recycling
     // mechanism could react — this is a last-line defence.
     private const val APP_NATIVE_HEAP_HARD_CAP_MB = 350L
+
+    // [memory-dynamic-budget] 动态预算。以上固定阈值是「系统内存紧张/未知」
+    // 时的保守基线（2026-08-12 失控泄漏 25MB→542MB/12s 的防线）。设备实测
+    // （2026-08-16）MemTotal 11.4GB / 空闲 MemAvailable 5.3GB，正常任务离
+    // 基线远得很——基线防的是 runaway 泄漏，不是正常大任务。当系统
+    // MemAvailable ≥ MEM_AVAIL_AMPLE_MB 时动态放宽拒绝级边界，让
+    // git fetch --unshallow / python 大任务这类 heavy 操作能跑完
+    // （跑完强制 recycle shell + GC 善后），而不是被阈值误杀。
+    private const val MEM_AVAIL_AMPLE_MB = 2048L
+
+    // [memory-dynamic-budget] 充裕时动态边界：
+    //   CRITICAL（拒 heavy 起点）  120MB → 512MB
+    //   LOCKED（全拒最后防线）     350MB → 1536MB
+    //   app native 回收高水位     120MB → 512MB（与动态 CRITICAL 一致，
+    //   in-flight 回收与 pre-exec 拒绝口径统一）
+    private const val CRITICAL_NATIVE_DYNAMIC_MB = 512L
+    private const val LOCKED_NATIVE_DYNAMIC_MB = 1536L
+    private const val APP_NATIVE_DYNAMIC_MB = 512L
+
+    // [memory-dynamic-budget] 充裕时子进程 RSS 动态高水位（1024MB）。基线
+    // 256MB 的闸是 `git fetch --unshallow` 类大命令中途被杀的直接原因——
+    // 子进程 RSS 是 git 内存的真正归属，不是 app native heap。
+    private const val CHILD_RSS_DYNAMIC_MB = 1024L
+
+    // [memory-dynamic-budget] Heavy 命令全局串行闸超时。任何时刻最多 1 个
+    // heavy 命令在跑（Semaphore(1)），防止多会话同时跑多个大任务把 memcg
+    // 叠加推爆。超时说明另一 heavy 还在跑——排队而非并发叠加。
+    private const val HEAVY_GATE_TIMEOUT_MS = 600_000L
 
     // [P2-app-native-oom] Java heap utilization threshold. When the agent
     // runs a dense tool-call sequence, Java heap climbs (crash case:
@@ -162,8 +191,31 @@ object ExecutionCoordinator {
     // prevents starvation of any single session.
     private val globalConcurrency = Semaphore(MAX_CONCURRENT_SHELLS, true)
 
+    // [memory-dynamic-budget] Heavy 命令全局串行闸（Semaphore(1)）：任何
+    // 时刻最多 1 个 heavy 命令在跑。锁序：先 heavyGate 后 globalConcurrency
+    // —— 持 heavyGate 者必在 globalConcurrency 队列等待，不会反向等
+    // heavyGate，因此无死锁。heavy 命令跑完由 shouldRecycleByClass 强制
+    // 回收 shell，不会长期占闸。
+    private val heavyGate = Semaphore(1, true)
+
     fun init(context: Context) {
         appContext = context.applicationContext
+    }
+
+    /**
+     * [memory-dynamic-budget] System MemAvailable in MB via ActivityManager.
+     * Returns 0 (conservative baseline) on any failure — unknown memory is
+     * treated as tight, never as ample.
+     */
+    private fun systemMemAvailableMB(): Long {
+        return try {
+            val am = appContext.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return 0L
+            val mi = ActivityManager.MemoryInfo()
+            am.getMemoryInfo(mi)
+            mi.availMem / (1024L * 1024L)
+        } catch (_: Throwable) {
+            0L
+        }
     }
 
     /**
@@ -195,13 +247,32 @@ object ExecutionCoordinator {
         // Run GC before returning so the caller's next retry has a better
         // chance.
         val preExecNativeMB = Debug.getNativeHeapAllocatedSize() / (1024L * 1024L)
-        val preExecPhase = internalDegradationPhase(preExecNativeMB)
+        // [memory-dynamic-budget] System MemAvailable drives the dynamic
+        // boundaries below: ample memory raises the rejection thresholds so
+        // heavy commands are not killed by the conservative baseline.
+        val memAvailableMB = systemMemAvailableMB()
+        val preExecPhase = internalDegradationPhase(preExecNativeMB, memAvailableMB)
         val cmdClass = classifyCommand(command)
-        val preExecReject = preExecRejectionMessage(preExecPhase, cmdClass, preExecNativeMB)
+        val preExecReject = preExecRejectionMessage(preExecPhase, cmdClass, preExecNativeMB, memAvailableMB)
         if (preExecReject != null) {
-            Log.w(TAG, "[$sessionId] Phase $preExecPhase: rejecting $cmdClass command (native ${preExecNativeMB}MB)")
+            Log.w(TAG, "[$sessionId] Phase $preExecPhase: rejecting $cmdClass command (native ${preExecNativeMB}MB, memAvail ${memAvailableMB}MB)")
             postRecycleMemoryRecovery()
             return CommandResult(preExecReject, -1, 0, true)
+        }
+
+        // [memory-dynamic-budget] Heavy 全局串行闸：先拿 heavyGate 再拿
+        // globalConcurrency（锁序一致无死锁）。等待超时（10min）说明另一
+        // heavy 还在跑——排队而非并发叠加，防止多会话大任务把 memcg 推爆。
+        val heavyGateAcquired = cmdClass == CommandClass.HEAVY &&
+            heavyGate.tryAcquire(HEAVY_GATE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        if (cmdClass == CommandClass.HEAVY && !heavyGateAcquired) {
+            Log.w(TAG, "[$sessionId] Heavy gate timeout after ${HEAVY_GATE_TIMEOUT_MS}ms — another heavy command still running")
+            postRecycleMemoryRecovery()
+            return CommandResult(
+                "[System busy: another heavy command is still running. " +
+                    "Please wait for it to finish and retry.]",
+                -1, 0, true
+            )
         }
 
         // [P2-global-concurrency] Acquire the global shell slot. If all
@@ -210,6 +281,7 @@ object ExecutionCoordinator {
         // pushing the combined memory footprint past Scudo's limit.
         val acquired = globalConcurrency.tryAcquire(60, TimeUnit.SECONDS)
         if (!acquired) {
+            if (heavyGateAcquired) heavyGate.release()
             Log.w(TAG, "[$sessionId] Global concurrency slot timeout after 60s — rejecting command")
             postRecycleMemoryRecovery()
             return CommandResult(
@@ -261,11 +333,15 @@ object ExecutionCoordinator {
             // Debug.getNativeHeapAllocatedSize(), which misses the leak.
             lastActiveMs[sessionId] = SystemClock.elapsedRealtime()
             val prootRssMB = shell?.nativeRssMB() ?: 0L
-            if (prootRssMB > NATIVE_HEAP_HIGH_WATER_MARK_MB) {
-                Log.w(TAG, "[$sessionId] PRoot child RSS > ${NATIVE_HEAP_HIGH_WATER_MARK_MB}MB after command — recycling PRoot shell")
+            // [memory-dynamic-budget] Child RSS ceiling is dynamic — ample
+            // system memory lets a large git/python task complete instead of
+            // being recycled mid-run by the 256MB baseline mark.
+            val childRssMark = childRssHighWaterMarkMB(systemMemAvailableMB())
+            if (prootRssMB > childRssMark) {
+                Log.w(TAG, "[$sessionId] PRoot child RSS ${prootRssMB}MB > ${childRssMark}MB after command — recycling PRoot shell")
                 sessionDidTerminate(sessionId)
             } else {
-                Log.d(TAG, "[$sessionId] PRoot child RSS ${prootRssMB}MB — within mark")
+                Log.d(TAG, "[$sessionId] PRoot child RSS ${prootRssMB}MB — within mark ${childRssMark}MB")
             }
 
             // [P2-app-native-oom] Post-command pressure check. The PRoot child
@@ -282,7 +358,11 @@ object ExecutionCoordinator {
             val javaHeapUsed = runtime.totalMemory() - runtime.freeMemory()
             val javaHeapFrac = if (runtime.maxMemory() > 0L) javaHeapUsed.toDouble() / runtime.maxMemory().toDouble() else 0.0
 
-            val nativeOversized = nativeHeapMB > APP_NATIVE_HEAP_HIGH_WATER_MARK_MB
+            // [memory-dynamic-budget] Sample MemAvailable once for the
+            // post-exec checks so the dynamic marks in the log and the
+            // decision agree.
+            val memNow = systemMemAvailableMB()
+            val nativeOversized = nativeHeapMB > appNativeHighWaterMarkMB(memNow)
             val javaPressured = javaHeapFrac > JAVA_HEAP_PRESSURE_THRESHOLD
             // [shell-generation-scheduler] Generation budget shrinks with
             // memory pressure (30→15→5→2→{8 light / 1 heavy-leaky}), so a
@@ -302,7 +382,7 @@ object ExecutionCoordinator {
 
             when {
                 nativeOversized -> Log.w(
-                    TAG, "[$sessionId] App native heap ${nativeHeapMB}MB > ${APP_NATIVE_HEAP_HIGH_WATER_MARK_MB}MB — recycling shell"
+                    TAG, "[$sessionId] App native heap ${nativeHeapMB}MB > ${appNativeHighWaterMarkMB(memNow)}MB — recycling shell"
                 )
                 javaPressured -> Log.w(
                     TAG, "[$sessionId] Java heap ${(javaHeapFrac * 100).toInt()}% > ${(JAVA_HEAP_PRESSURE_THRESHOLD * 100).toInt()}% — recycling shell"
@@ -330,6 +410,9 @@ object ExecutionCoordinator {
         // Semaphore does not contend with the just-finished session's
         // mutex cleanup.
         globalConcurrency.release()
+        // [memory-dynamic-budget] Release the heavy serialization gate if
+        // this command held it.
+        if (heavyGateAcquired) heavyGate.release()
     }
     }
 
@@ -371,9 +454,13 @@ object ExecutionCoordinator {
                 timeout = timeout,
                 lineCallback = lineCallback,
                 memoryMonitor = { rssMB ->
-                    midCommandRecycleIfOversized(shell, sessionId, rssMB)
+                    // [memory-dynamic-budget] Both marks are dynamic: the
+                    // child RSS ceiling and the app-native recycling point
+                    // scale with system MemAvailable.
+                    val memNow = systemMemAvailableMB()
+                    midCommandRecycleIfOversized(shell, sessionId, rssMB, childRssHighWaterMarkMB(memNow))
                     val appNativeMB = Debug.getNativeHeapAllocatedSize() / (1024L * 1024L)
-                    if (appNativeMB > APP_NATIVE_HEAP_HIGH_WATER_MARK_MB) {
+                    if (appNativeMB > appNativeHighWaterMarkMB(memNow)) {
                         Log.w(TAG, "[$sessionId] App native heap ${appNativeMB}MB crossed mark in-flight — recycling shell")
                         sessionDidTerminate(sessionId)
                     }
@@ -403,10 +490,11 @@ object ExecutionCoordinator {
     /** [P2-proot-native-leak] If the PRoot child is already dead mid-command
      * (it OOM'd), immediately recycle the session so the shell isn't held as
      * a zombie and the next command spawns fresh. Called from the executeCommand
-     * in-flight monitor; rssMB of 0 means the child already died. */
-    private fun midCommandRecycleIfOversized(shell: PersistentShell, sessionId: String, rssMB: Long) {
-        if (rssMB > NATIVE_HEAP_HIGH_WATER_MARK_MB) {
-            Log.w(TAG, "[$sessionId] PRoot child RSS ${rssMB}MB crossed mark mid-command — recycling")
+     * in-flight monitor; rssMB of 0 means the child already died. The ceiling
+     * is dynamic ([memory-dynamic-budget]) — passed in by the caller. */
+    private fun midCommandRecycleIfOversized(shell: PersistentShell, sessionId: String, rssMB: Long, childRssMarkMB: Long) {
+        if (rssMB > childRssMarkMB) {
+            Log.w(TAG, "[$sessionId] PRoot child RSS ${rssMB}MB crossed mark ${childRssMarkMB}MB mid-command — recycling")
             sessionDidTerminate(sessionId)
         }
     }
@@ -801,21 +889,58 @@ internal fun internalDecideShellRetry(
  *   NORMAL    < 50MB   — full budget
  *   MILD      < 80MB   — budget halves
  *   MODERATE  < 100MB  — budget shrinks hard
- *   SEVERE    < 120MB  — budget 2; no up-front class rejection (model calls isolated)
- *   CRITICAL  < 350MB  — heavy/leaky rejected up front
- *   LOCKED    ≥ 350MB  — everything rejected (old hard cap)
+ *   SEVERE    < 100MB+ — budget 2; no up-front class rejection
+ *   CRITICAL  ≥ 120MB (baseline) / ≥ 512MB (ample) — heavy/leaky rejected,
+ *             except heavy is allowed when memory is ample (heavy channel)
+ *   LOCKED    ≥ 350MB (baseline) / ≥ 1536MB (ample) — everything rejected
+ *
+ * [memory-dynamic-budget] [memAvailableMB] (MB, default 0 = unknown/tight)
+ * scales only the two REJECTION boundaries (CRITICAL/LOCKED) — the lower
+ * tiers stay fixed so leak containment never relaxes. Ample (≥
+ * MEM_AVAIL_AMPLE_MB) raises the boundaries so legitimate heavy commands
+ * survive; tight keeps the conservative baseline.
  */
 internal enum class ShellPhase { NORMAL, MILD, MODERATE, SEVERE, CRITICAL, LOCKED }
 
-internal fun internalDegradationPhase(nativeMB: Long): ShellPhase {
+internal fun internalDegradationPhase(nativeMB: Long, memAvailableMB: Long = 0L): ShellPhase {
+    val ample = memAvailableMB >= MEM_AVAIL_AMPLE_MB
+    val lockedAt = if (ample) LOCKED_NATIVE_DYNAMIC_MB else 350L
+    val criticalAt = if (ample) CRITICAL_NATIVE_DYNAMIC_MB else 120L
     return when {
-        nativeMB >= 350L -> ShellPhase.LOCKED
-        nativeMB >= 120L -> ShellPhase.CRITICAL
+        nativeMB >= lockedAt -> ShellPhase.LOCKED
+        nativeMB >= criticalAt -> ShellPhase.CRITICAL
         nativeMB >= 100L -> ShellPhase.SEVERE
         nativeMB >= 80L -> ShellPhase.MODERATE
         nativeMB >= 50L -> ShellPhase.MILD
         else -> ShellPhase.NORMAL
     }
+}
+
+/**
+ * [memory-dynamic-budget] Dynamic high-water mark for PRoot *child* process
+ * RSS — the signal that actually kills `git fetch --unshallow`-style large
+ * commands (their memory lives in the child, not the app native heap).
+ * Scaled to system MemAvailable: baseline 256MB when tight, up to 1536MB
+ * when ample, so a large task can complete instead of being recycled
+ * mid-run.
+ */
+internal fun childRssHighWaterMarkMB(memAvailableMB: Long): Long {
+    return when {
+        memAvailableMB >= 4096L -> 1536L
+        memAvailableMB >= MEM_AVAIL_AMPLE_MB -> CHILD_RSS_DYNAMIC_MB
+        memAvailableMB >= 1024L -> 512L
+        else -> NATIVE_HEAP_HIGH_WATER_MARK_MB
+    }
+}
+
+/**
+ * [memory-dynamic-budget] Dynamic high-water mark for app-process native
+ * heap (Debug.getNativeHeapAllocatedSize). Baseline 120MB when tight; 512MB
+ * when MemAvailable is ample — mirrors the dynamic CRITICAL boundary so
+ * in-flight recycling and pre-exec rejection agree.
+ */
+internal fun appNativeHighWaterMarkMB(memAvailableMB: Long): Long {
+    return if (memAvailableMB >= MEM_AVAIL_AMPLE_MB) APP_NATIVE_DYNAMIC_MB else APP_NATIVE_HEAP_HIGH_WATER_MARK_MB
 }
 
 /**
@@ -888,23 +1013,37 @@ internal fun internalGenerationBudget(
 /**
  * Pre-execution rejection message for the current phase + command class.
  * Returns null when the command may proceed:
- *   LOCKED    — everything rejected (same as the old 350MB hard cap)
- *   CRITICAL  — heavy & leaky rejected; light commands still run so the
- *               agent can read files / self-recover under pressure
- *   SEVERE    — leaky (model) calls rejected; everything else runs
+ *   LOCKED    — everything rejected (dynamic: 350MB baseline / 1536MB ample)
+ *   CRITICAL  — light commands run (agent can self-recover); leaky rejected
+ *               always; heavy rejected UNLESS memory is ample (≥
+ *               MEM_AVAIL_AMPLE_MB) — the heavy channel lets large
+ *               git/python tasks through when the system has headroom,
+ *               with forced recycle+GC afterwards
+ *   SEVERE    — nothing rejected (model calls isolated in :modelservice)
  *   MILD/MODERATE/NORMAL — proceed
  */
 internal fun preExecRejectionMessage(
     phase: ShellPhase,
     cmdClass: CommandClass,
     nativeMB: Long,
+    memAvailableMB: Long = 0L,
 ): String? {
     return when (phase) {
         ShellPhase.LOCKED -> "[System memory pressure: native heap ${nativeMB}MB exceeds safe limit. " +
             "Please reduce concurrent sessions or wait for memory to recover.]"
-        ShellPhase.CRITICAL -> if (cmdClass == CommandClass.LIGHT) null else
-            "[System memory pressure: native heap ${nativeMB}MB — only lightweight commands allowed. " +
-            "Please reduce concurrent sessions or wait for memory to recover.]"
+        ShellPhase.CRITICAL -> when {
+            cmdClass == CommandClass.LIGHT -> null
+            // [memory-dynamic-budget] Heavy channel: ample system memory lets
+            // a heavy command through at CRITICAL — it will be force-recycled
+            // after (shouldRecycleByClass: native > 80MB → true) so the cost
+            // is deferred to cleanup, not paid as a rejection. LEAKY stays
+            // rejected: minis-model-use's DirectByteBuffer allocations live in
+            // the app native heap, invisible to GC, and recycling the shell
+            // does not release them.
+            cmdClass == CommandClass.HEAVY && memAvailableMB >= MEM_AVAIL_AMPLE_MB -> null
+            else -> "[System memory pressure: native heap ${nativeMB}MB — only lightweight commands allowed. " +
+                "Please reduce concurrent sessions or wait for memory to recover.]"
+        }
         // Model calls now run in the isolated :modelservice process (file
         // protocol), so they no longer bloat this process's native heap —
         // SEVERE no longer needs to reject LEAKY commands up front.
