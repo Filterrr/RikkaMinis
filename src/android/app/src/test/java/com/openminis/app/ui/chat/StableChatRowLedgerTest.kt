@@ -557,9 +557,9 @@ class StableChatRowLedgerTest {
         val kV1 = keysOf(ledger.reconcile(thinking))
         // The thinking message should have live rows with a markdown block.
         val a1Rows = ledger.snapshot().filter { it.owningMessageId() == "a1" }
-        assertTrue(a1Rows.isNotEmpty(), "a1 must have published rows during thinking")
-        assertTrue(a1Rows.any { it is FlatChatItem.AssistantMarkdownBlock },
-            "a1 must have a markdown block during thinking")
+        assertTrue("a1 must have published rows during thinking", a1Rows.isNotEmpty())
+        assertTrue("a1 must have a markdown block during thinking",
+            a1Rows.any { it is FlatChatItem.AssistantMarkdownBlock })
 
         // User interrupts — the assistant is cancelled, streaming stops, and
         // the canonical message now has only the text that arrived before the
@@ -571,10 +571,10 @@ class StableChatRowLedgerTest {
         val kV2 = keysOf(ledger.reconcile(interrupted))
         // After converge the rows should still be present (the content is
         // kept), but the message is no longer tracked as active.
-        assertEquals(kV1, kV2, "row topology must not change on converge")
+        assertEquals("row topology must not change on converge", kV1, kV2)
         // The ledger's internal activeAssistantIds should be empty.
-        assertEquals(0, ledger.activeAssistantIdsCount(),
-            "no live assistant ids after converge")
+        assertEquals("no live assistant ids after converge", 0,
+            ledger.activeAssistantIdsCount())
     }
 
     @Test
@@ -615,12 +615,12 @@ class StableChatRowLedgerTest {
             ),
         )
         val kV2 = keysOf(ledger.reconcile(cancelled))
-        assertEquals(kV1, kV2, "row topology must stay stable across the flip")
+        assertEquals("row topology must stay stable across the flip", kV1, kV2)
         val afterFlip = ledger.snapshot().filterIsInstance<FlatChatItem.AssistantToolRunGroup>()
             .firstOrNull { it.messageId == "a1" }
         assertNotNull("cancelled tool row must still exist", afterFlip)
         assertFalse("CANCELLED tool must NOT render isRunning", afterFlip!!.isRunning)
-        assertEquals(0, ledger.activeAssistantIdsCount(),
-            "no tracked live assistant after cancel")
+        assertEquals("no tracked live assistant after cancel", 0,
+            ledger.activeAssistantIdsCount())
     }
 }
