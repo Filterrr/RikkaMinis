@@ -26,7 +26,7 @@ package com.openminis.app.ui.chat
  * All methods are pure state transitions over [FlatChatItem] / [ChatMessage] —
  * no Android dependencies, fully JVM-testable.
  */
-class StableChatRowLedger {
+internal class StableChatRowLedger {
 
     private val rows = mutableListOf<FlatChatItem>()
     private var lastMessageIndex = -1
@@ -160,7 +160,7 @@ class StableChatRowLedger {
     }
 
     private fun reconcileMessage(message: ChatMessage, prevNonSystemRole: String?) {
-        val start = rows.indexOfFirst { owningMessageId(it) == message.id }
+        val start = rows.indexOfFirst { it.owningMessageId() == message.id }
         if (start < 0) {
             // Defensive: no published rows yet (shouldn't happen — new messages
             // go through the append path). Build and append.
