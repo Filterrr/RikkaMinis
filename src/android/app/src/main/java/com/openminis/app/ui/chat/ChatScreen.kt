@@ -2988,7 +2988,7 @@ fun ChatScreen(
                                     // parent's modCount and threw
                                     // ConcurrentModificationException when the
                                     // backing list changed mid-build.
-                                    buildFlatChatItems(msgs.take(msgs.size), sessionId)
+                                    buildFlatChatItems(merged, sessionId)
                                 }
                                 val buildMs = (System.nanoTime() - tBuildStart) / 1_000_000
                                 rowLedger.seed(rows, merged.size)
