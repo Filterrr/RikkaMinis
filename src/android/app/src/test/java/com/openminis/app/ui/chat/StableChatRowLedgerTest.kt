@@ -18,8 +18,8 @@ class StableChatRowLedgerTest {
 
     // ── helpers ─────────────────────────────────────────────────────────────
 
-    private fun userMessage(id: String, content: String = "hello") =
-        ChatMessage(id = id, role = "user", content = content)
+    private fun userMessage(id: String, content: String = "hello", isQueued: Boolean = false) =
+        ChatMessage(id = id, role = "user", content = content, isQueued = isQueued)
 
     private fun assistantMessage(
         id: String,
@@ -285,5 +285,89 @@ class StableChatRowLedgerTest {
         // No key churn on subsequent ticks.
         val k3 = keysOf(ledger.reconcile(t2))
         assertEquals(k2, k3)
+    }
+
+    // ── interrupt / queued-prompt handling (fix) ────────────────────────────
+
+    @Test fun `interrupted thinking message drop is detected as incompatible`() {
+        val ledger = StableChatRowLedger()
+        ledger.seed(emptyList(), 0)
+
+        // Turn 1 streaming: thinking only, no content yet.
+        val turn1 = listOf(
+            userMessage("u1"),
+            assistantMessage("a1", blocks = listOf(thinkingBlock("th1", "Reasoning")), isStreaming = true),
+        )
+        val k1 = keysOf(ledger.reconcile(turn1))
+        assertTrue(k1.contains("toolrun:a1")) // thinking folded into the toolrun row
+
+        // User interrupts while streaming: queued bubble appears (enqueuePrompt),
+        // A1 is still in the list.
+        val interrupted = turn1 + userMessage("q2", content = "stop", isQueued = true)
+        val k2 = keysOf(ledger.reconcile(interrupted))
+        assertEquals(listOf("user:q2"), k2.drop(k1.size))
+
+        // handleUserCancelledCleanup Case 0: A1 (no content, no tool) is REMOVED
+        // from _messages. The count shrinks below the reconciled index — the
+        // append-only contract no longer holds → the ledger must demand a full
+        // rebuild (otherwise the stale thinking row would linger forever).
+        val afterCancel = listOf(
+            userMessage("u1"),
+            userMessage("q2", content = "stop", isQueued = true),
+        )
+        assertFalse(
+            "message removal must be detected as structurally incompatible",
+            ledger.isIncrementallyCompatible(afterCancel),
+        )
+
+        // What ChatScreen does on incompatibility: full seed → stale rows gone.
+        ledger.seed(buildFlatChatItems(afterCancel), afterCancel.size)
+        val k3 = keysOf(ledger.snapshot())
+        assertFalse("stale thinking row must be gone", k3.contains("toolrun:a1"))
+        assertTrue(k3.contains("user:q2"))
+    }
+
+    @Test fun `queued user bubble flips to sent in place`() {
+        val ledger = StableChatRowLedger()
+        ledger.seed(emptyList(), 0)
+        val queued = listOf(
+            userMessage("u1"),
+            userMessage("q2", content = "stop", isQueued = true),
+        )
+        val k1 = keysOf(ledger.reconcile(queued))
+        assertTrue(
+            "queued bubble must render dashed",
+            ledger.snapshot().filterIsInstance<FlatChatItem.UserBubble>().last().message.isQueued,
+        )
+
+        // drainQueuedPrompts flips the SAME message id — count and head unchanged,
+        // so the append-only contract still holds…
+        val sent = listOf(
+            userMessage("u1"),
+            userMessage("q2", content = "stop", isQueued = false),
+        )
+        assertTrue(ledger.isIncrementallyCompatible(sent))
+        // …but the published row must update in place (no key churn).
+        val k2 = keysOf(ledger.reconcile(sent))
+        assertEquals("no key churn on queued→sent flip", k1, k2)
+        assertFalse(
+            "sent bubble must lose dashed styling",
+            ledger.snapshot().filterIsInstance<FlatChatItem.UserBubble>().last().message.isQueued,
+        )
+    }
+
+    @Test fun `head anchors after first reconcile and detects prepended history`() {
+        val ledger = StableChatRowLedger()
+        ledger.seed(emptyList(), 0)
+        val base = listOf(userMessage("u1"), assistantMessage("a1", content = "Answer"))
+        ledger.reconcile(base)
+
+        // Head is now anchored at u1: prepending older history must invalidate.
+        val older = listOf(userMessage("u0"), userMessage("u1"), assistantMessage("a1", content = "Answer"))
+        assertFalse("prepended history must be detected", ledger.isIncrementallyCompatible(older))
+
+        // Same head, grown tail → still compatible.
+        val grown = base + userMessage("u2")
+        assertTrue(ledger.isIncrementallyCompatible(grown))
     }
 }
