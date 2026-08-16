@@ -386,8 +386,7 @@ class StableChatRowLedgerTest {
         )
         ledger.reconcile(turn1)
         val toolRun = ledger.snapshot().filterIsInstance<FlatChatItem.AssistantToolRunGroup>()
-            .firstOrNull { it.messageId == "a1" }
-        assertNotNull("running tool group must be published", toolRun)
+            .firstOrNull { it.messageId == "a1" }!!
         assertTrue("tool group must start RUNNING", toolRun.isRunning)
 
         // User interrupts in the middle of the tool call (enqueuePrompt →
@@ -409,8 +408,7 @@ class StableChatRowLedgerTest {
         // rows (key + order stable, no reseed).
         assertEquals(kBefore + listOf("user:u2"), kAfter)
         val afterRun = ledger.snapshot().filterIsInstance<FlatChatItem.AssistantToolRunGroup>()
-            .firstOrNull { it.messageId == "a1" }
-        assertNotNull(afterRun)
+            .firstOrNull { it.messageId == "a1" }!!
         assertFalse("tool group of interrupted turn must stop running", afterRun.isRunning)
         assertEquals(
             "tool PILL must reflect terminal SUCCESS",
