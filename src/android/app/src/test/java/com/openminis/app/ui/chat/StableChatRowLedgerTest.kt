@@ -415,7 +415,7 @@ class StableChatRowLedgerTest {
         assertEquals(
             "tool PILL must reflect terminal SUCCESS",
             ToolBlockStatus.SUCCESS,
-            afterRun.tools.single().status,
+            afterRun.tools.single().toolStatus,
         )
     }
 
