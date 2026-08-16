@@ -342,6 +342,17 @@ private val SLASH_PICKER_FIXED_HEIGHT: Dp = 176.dp
  * The thumb fades in while scrolling / shortly after, similar to the
  * platform scrollbar.
  */
+// [forward-stable] True when the bottom sentinel row (the last index) is
+// currently measured inside the viewport — the authoritative "user is at the
+// very bottom" signal for the follow state machine. The sentinel is a 5dp
+// spacer so it is only measurable at the true end of the transcript.
+private fun isBottomSentinelVisible(
+    layoutInfo: androidx.compose.foundation.lazy.LazyListLayoutInfo,
+): Boolean {
+    val total = layoutInfo.totalItemsCount
+    return total > 0 && layoutInfo.visibleItemsInfo.any { it.index == total - 1 }
+}
+
 private fun Modifier.verticalScrollbar(
     listState: androidx.compose.foundation.lazy.LazyListState,
     width: Dp = 3.dp,
@@ -1293,7 +1304,44 @@ fun ChatScreen(
     // Model:  down-arrow / return-to-bottom → stickToBottom=true (follow);
     //         scroll-away-from-bottom → stickToBottom=false (stop moving);
     //         down-arrow again → resume follow.
-    var stickToBottom by remember(sessionId) { mutableStateOf(true) }
+    // [forward-stable] Follow state machine — pure reducer
+    // (ChatFollowController). FOLLOWING: data revisions + explicit intents
+    // raise exactly ONE pending bottom request, consumed by the effect
+    // below. DETACHED: tokens/tools/stream end/auto-retry/IME never scroll.
+    // Replaces the reverseLayout-era stickToBottom flag + anchor-guard.
+    var followState by remember(sessionId) { mutableStateOf(FollowState()) }
+    // [forward-stable] Row keys of the previous published snapshot — used to
+    // verify the append-only prefix invariant (published keys must never be
+    // deleted or reordered while a turn is active).
+    var prevRowKeys: List<String>? = null
+
+    // [forward-stable] Session open: one initial bottom request, unless the
+    // open targets a specific message (focus-message owns the scroll then).
+    LaunchedEffect(sessionId) {
+        if (pendingFocusId == null) {
+            followState = followReducer(followState, FollowEvent.InitialOpen)
+        }
+    }
+
+    // [forward-stable] Single bottom-request consumer. FOLLOWING + committed
+    // revision + no in-flight gesture + sentinel not yet visible → one
+    // requestScrollToItem at the sentinel. Exactly one request per event; the
+    // pending flag is consumed whether or not the scroll fired. Position
+    // observation is only ever read here to DECIDE — never triggers a scroll
+    // from inside a listener, so no feedback loop.
+    LaunchedEffect(followState.pendingBottomRequest, followState.rowRevision, listState) {
+        val reason = followState.pendingBottomRequest ?: return@LaunchedEffect
+        if (followState.isFollowing &&
+            !listState.isScrollInProgress &&
+            !isBottomSentinelVisible(listState.layoutInfo)
+        ) {
+            AppLogger.debug("ScrollSrc", "request-bottom reason=$reason revision=${followState.rowRevision}")
+            listState.requestScrollToItem(listState.layoutInfo.totalItemsCount - 1)
+        } else if (!followState.isFollowing) {
+            AppLogger.debug("ScrollInvariant", "forbidden_scroll reason=$reason revision=${followState.rowRevision}")
+        }
+        followState = consumeBottomRequest(followState)
+    }
 
     // T-android-use-dragging-guard: does a real pointer drag currently own the
     // list? The anchor-guard reads this so it never fires a compensation
@@ -1335,22 +1383,13 @@ fun ChatScreen(
         // [P2-scroll-user-send] The send re-engages follow ONLY if the user was
         // already at the bottom (wasScrolledIntoHistory==false) — sending does
         // NOT turn a history reader into a follower. The FAB remains the way a
-        // reader re-engages. With the anchor-guard being the single auto-follow
-        // loop, this one stickToBottom flag drives everything.
-        stickToBottom = !wasScrolledIntoHistory
-        coroutineScope.launch {
-            if (!wasScrolledIntoHistory) {
-                // [consolidated] USER_SEND is unconditional — no gate to consult.
-                // Authoring a send (composer or IME action) is an explicit intent
-                // to see the reply; pin directly if the reader was at the bottom.
-                // [forward-stable] Target is the bottom sentinel (last index).
-                val sendBottomIdx = (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)
-                tracedScrollToItem("user-send/initial", sendBottomIdx, 0)
-                kotlinx.coroutines.delay(100)
-                tracedScrollToItem("user-send/settle", sendBottomIdx, 0)
-            } else {
-                AppLogger.debug("USER-SEND", "reader-in-history, skip yank (firstIdx drift scene)")
-            }
+        // reader re-engages. [forward-stable] The reducer raises exactly ONE
+        // pending bottom request (no initial+settle double scroll); a history
+        // reader stays detached and is never yanked.
+        if (!wasScrolledIntoHistory) {
+            followState = followReducer(followState, FollowEvent.Send)
+        } else {
+            AppLogger.debug("USER-SEND", "reader-in-history, skip yank (firstIdx drift scene)")
         }
     }
     // [forward-stable] Anchor-guard REMOVED — the reverseLayout compensation
@@ -1377,8 +1416,12 @@ fun ChatScreen(
             // event during a scroll (Press / Cancel / Stop). String-building
             // logs here added measurable load. Gate behind a constant.
             when (interaction) {
-                is androidx.compose.foundation.interaction.DragInteraction.Start ->
+                is androidx.compose.foundation.interaction.DragInteraction.Start -> {
                     isUserDragging = true
+                    // [forward-stable] A real pointer drag begins — drop any
+                    // in-flight bottom request so nothing scrolls mid-gesture.
+                    followState = followReducer(followState, FollowEvent.UserDragStart)
+                }
                 is androidx.compose.foundation.interaction.DragInteraction.Stop -> {
                     isUserDragging = false
                     lastDragStopMs = SystemClock.elapsedRealtime()
@@ -1400,9 +1443,9 @@ fun ChatScreen(
                     val stoppedAtBottom = stoppedTotal > 0 &&
                         stoppedIdx >= stoppedTotal - 2 &&
                         listState.firstVisibleItemScrollOffset <= nearBottomThresholdPx.toInt()
-                    if (stickToBottom != stoppedAtBottom) {
-                        stickToBottom = stoppedAtBottom
-                    }
+                    // [forward-stable] Drag end flips the mode: sentinel in
+                    // view → follow; scrolled away → detach (nothing may yank).
+                    followState = followReducer(followState, FollowEvent.UserDragEnd(atBottom = stoppedAtBottom))
                 }
                 is androidx.compose.foundation.interaction.DragInteraction.Cancel -> {
                     isUserDragging = false
@@ -1423,10 +1466,11 @@ fun ChatScreen(
     // they were reading.
     val imeBottomPx = WindowInsets.ime.getBottom(LocalDensity.current)
     LaunchedEffect(imeBottomPx) {
-        if (!stickToBottom && isNearBottom.value) {
-            // The IME reshaped the viewport while the user was actually at the
-            // bottom — keep the follow state in sync.
-            stickToBottom = true
+        // [forward-stable] The IME reshaped the viewport while the user was
+        // actually at the bottom — keep the follow state in sync (drag-stop
+        // position verdicts cover the animation window).
+        if (!followState.isFollowing && isNearBottom.value) {
+            followState = followReducer(followState, FollowEvent.UserDragEnd(atBottom = true))
         }
     }
     // [T-android-tool-autoscroll] Start-of-turn edge from ViewModel: resume() /
@@ -1439,9 +1483,14 @@ fun ChatScreen(
             // [fix/force-scroll-respect-viewport] resume/retry/rerun fire this
             // BOTH on an explicit user gesture AND when the agent loop re-runs
             // a tool block / retries a message on its own mid-multi-turn. Only
-            // honour it when the user is still following (stickToBottom) — a
-            // reader in history should not be yanked back on every retry.
-            if (stickToBottom) tracedScrollToItem("force-scroll", (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0), 0)
+            // honour it when the user is still following — a reader in
+            // history should not be yanked back on every retry. [forward-stable]
+            // Raise a data-revision request instead of scrolling directly; the
+            // consumer effect gates on sentinel + gesture. DETACHED is never
+            // yanked by an automatic re-run.
+            if (followState.isFollowing) {
+                followState = followReducer(followState, FollowEvent.StreamRowsChanged)
+            }
         }
     }
 
@@ -3007,6 +3056,25 @@ fun ChatScreen(
                                 rowLedger.reconcile(merged)
                             }
                             flatItems = rowLedger.snapshot()
+                            // [forward-stable] Verify the append-only prefix
+                            // invariant: published keys must never regress
+                            // while a turn is active. Telemetry only — any
+                            // violation is logged as ScrollInvariant.
+                            val newRowKeys = flatItems.map { it.key }
+                            val prevKeys = prevRowKeys
+                            val prefixOk = prevKeys == null ||
+                                (newRowKeys.size >= prevKeys.size && newRowKeys.take(prevKeys.size) == prevKeys)
+                            if (!prefixOk) {
+                                AppLogger.debug(
+                                    "ScrollInvariant",
+                                    "row_revision=${followState.rowRevision} old_keys=${prevKeys?.size} new_keys=${newRowKeys.size} prefix_ok=false",
+                                )
+                            }
+                            prevRowKeys = newRowKeys
+                            // [forward-stable] A data revision was committed —
+                            // the follow reducer may raise a bottom request
+                            // (FOLLOWING only; DETACHED ignores revisions).
+                            followState = followReducer(followState, FollowEvent.StreamRowsChanged)
                             com.openminis.app.diagnostics.StreamPerfMonitor.tick(
                                 flattenNanos = System.nanoTime() - tickStartNs,
                                 frozenReused = true,
@@ -3738,13 +3806,10 @@ fun ChatScreen(
                                 // doesn't land below the fold.
                                 // [bottom-trigger] Resume = user wants to see
                                 // the continuation → restore follow.
-                                stickToBottom = true
-                                coroutineScope.launch {
-                                    val resumeBottomIdx = (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)
-                                    tracedScrollToItem("RESUME-BANNER/initial", resumeBottomIdx, 0)
-                                    kotlinx.coroutines.delay(100)
-                                    tracedScrollToItem("RESUME-BANNER/settle", resumeBottomIdx, 0)
-                                }
+                                // [forward-stable] One pending bottom request;
+                                // the "Minis is thinking" indicator mounts via
+                                // the next StreamRowsChanged revision.
+                                followState = followReducer(followState, FollowEvent.Resume)
                             })
                         }
                     }
@@ -3958,7 +4023,7 @@ fun ChatScreen(
                 // (stickToBottom==false) — i.e. the user scrolled away to read
                 // history and the "return to newest" button should be available
                 // as the explicit resume-follow escape hatch.
-                if (!stickToBottom && contentOverflows.value && messages.isNotEmpty()) {
+                if (!followState.isFollowing && contentOverflows.value && messages.isNotEmpty()) {
                     val fabBottomPadding = if (lastToolBlocks.isNotEmpty()) 80.dp else 8.dp
                     androidx.compose.material3.FilledIconButton(
                         onClick = {
@@ -3972,18 +4037,9 @@ fun ChatScreen(
                             // so re-engage stickToBottom directly.
                             // [bottom-trigger] Tapping the JumpToBottom FAB is
                             // the explicit "return to newest / resume follow"
-                            // gesture — re-engage the stick state.
-                            stickToBottom = true
-                            coroutineScope.launch {
-                                val fabBottomIdx = (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)
-                                tracedScrollToItem("FAB-DOWN", fabBottomIdx, 0)
-                                // Second pin after a frame: the first scroll may
-                                // land short while late-measuring items shift the
-                                // true bottom; re-read the sentinel index for the
-                                // settle.
-                                kotlinx.coroutines.delay(100)
-                                tracedScrollToItem("FAB-DOWN/settle", fabBottomIdx, 0)
-                            }
+                            // gesture. [forward-stable] Exactly one pending
+                            // bottom request — no settle second call.
+                            followState = followReducer(followState, FollowEvent.FabDown)
                         },
                         modifier = Modifier
                             .align(Alignment.BottomEnd)
@@ -4840,18 +4896,11 @@ fun ChatScreen(
                             // [bottom-trigger] Re-engage follow only if the
                             // reader was anchored at the bottom (P2: must not
                             // turn a history reader into a follower).
-                            stickToBottom = !wasScrolledIntoHistory
-                            coroutineScope.launch {
-                                if (!wasScrolledIntoHistory) {
-                                    // [consolidated] USER_SEND is unconditional.
-                                    // [forward-stable] Target is the bottom sentinel.
-                                    val imeBottomIdx = (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)
-                                    tracedScrollToItem("user-send/ime-action/initial", imeBottomIdx, 0)
-                                    kotlinx.coroutines.delay(100)
-                                    tracedScrollToItem("user-send/ime-action/settle", imeBottomIdx, 0)
-                                } else {
-                                    AppLogger.debug("USER-SEND", "ime-action reader-in-history, skip yank")
-                                }
+                            // [forward-stable] Exactly one pending request.
+                            if (!wasScrolledIntoHistory) {
+                                followState = followReducer(followState, FollowEvent.Send)
+                            } else {
+                                AppLogger.debug("USER-SEND", "ime-action reader-in-history, skip yank")
                             }
                             true
                         }
@@ -5987,84 +6036,4 @@ private fun exportCurrentChat(
             ).show()
         }
     }
-}
-
-/**
- * [T-android-streaming-tail-patch] Patch the live tail's content in place
- * when the fragment key set diverges (a fragment boundary split mid-stream).
- *
- * Model: streaming content only APPENDS, so `currentMergedText` must be
- * `prevMergedText + delta`. The previous tick's fragments are a stable
- * prefix of the content — keep all prev instances EXCEPT the last streaming
- * fragment, whose rawText becomes `oldRawText + delta`. The key set therefore
- * never changes, and old fragments never lose content (earlier bug: the last
- * fragment was replaced with the fresh build's LAST fragment text, dropping
- * the old prefix from the UI).
- *
- * Guards:
- *  - If the previous merged text is not a prefix of the current (shouldn't
- *    happen with append-only streaming, but defensive), return fresh.
- *  - If the fresh build's last streaming fragment belongs to a DIFFERENT
- *    markdown block than prev's (a new block appeared — structural change),
- *    return fresh.
- *  - If the prev tail has no streaming fragment (first text fragment
- *    appearing), return fresh.
- *
- * Returns the patched list (same keys as [prev], updated content fields).
- */
-private fun patchLiveTail(
-    prev: List<FlatChatItem>,
-    fresh: List<FlatChatItem>,
-    prevMergedText: String,
-    currentMergedText: String,
-): List<FlatChatItem> {
-    val result = prev.toMutableList()
-
-    // 1. Update ToolRunGroup with fresh instance (correct isRunning / tool status).
-    val freshToolRun = fresh.firstOrNull { it is FlatChatItem.AssistantToolRunGroup }
-    val prevToolRunIdx = result.indexOfFirst { it is FlatChatItem.AssistantToolRunGroup }
-    if (freshToolRun != null && prevToolRunIdx >= 0) {
-        result[prevToolRunIdx] = freshToolRun
-    }
-
-    // 2. Compute the append-only delta. If prevMergedText isn't a prefix of
-    //    currentMergedText, fall back to the fresh build (defensive).
-    if (!prevMergedText.isEmpty() &&
-        currentMergedText.startsWith(prevMergedText) &&
-        currentMergedText.length > prevMergedText.length
-    ) {
-        val delta = currentMergedText.substring(prevMergedText.length)
-
-        // 3. Find prev's last streaming fragment. Fresh's last streaming
-        //    fragment must belong to the SAME markdown block, else the
-        //    structure changed — fall back to fresh.
-        val prevStreamingIdx = result.indexOfLast {
-            it is FlatChatItem.AssistantMarkdownBlock && it.isStreaming
-        }
-        val freshStreaming = fresh.lastOrNull {
-            it is FlatChatItem.AssistantMarkdownBlock && it.isStreaming
-        } as? FlatChatItem.AssistantMarkdownBlock
-        if (prevStreamingIdx >= 0 && freshStreaming != null) {
-            val prevBlock = result[prevStreamingIdx] as FlatChatItem.AssistantMarkdownBlock
-            if (prevBlock.parentBlockId == freshStreaming.parentBlockId) {
-                // Same block, content grew: old prefix stays, delta appended.
-                // AssistantMarkdownBlock is a regular class with a hand-rolled
-                // equals (length-based) — no copy(). Construct with fresh
-                // content fields.
-                result[prevStreamingIdx] = FlatChatItem.AssistantMarkdownBlock(
-                    messageId = prevBlock.messageId,
-                    parentBlockId = prevBlock.parentBlockId,
-                    rawText = prevBlock.rawText + delta,
-                    blockIndex = prevBlock.blockIndex,
-                    isLastBlockOfMessage = prevBlock.isLastBlockOfMessage,
-                    messageIsStreaming = prevBlock.messageIsStreaming,
-                    messageMarkdown = freshStreaming.messageMarkdown,
-                )
-                return result
-            }
-        }
-    }
-
-    // Structural change or unsafe divergence — accept the fresh build.
-    return fresh
 }
