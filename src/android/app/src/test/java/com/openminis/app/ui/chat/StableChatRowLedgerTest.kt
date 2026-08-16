@@ -576,4 +576,51 @@ class StableChatRowLedgerTest {
         assertEquals(0, ledger.activeAssistantIdsCount(),
             "no live assistant ids after converge")
     }
+
+    @Test
+    fun `running tool flips to cancelled on interrupt without staying live`() {
+        // Seed settled history.
+        val settled = listOf(
+            userMessage("u0"),
+            assistantMessage("a0", blocks = listOf(textBlock("t0", "Prior answer")), isStreaming = false),
+        )
+        val ledger = StableChatRowLedger()
+        ledger.seed(buildFlatChatItems(settled, "s1"), settled.size)
+        assertTrue(keysOf(ledger.snapshot()).isNotEmpty())
+
+        // Assistant turn with a RUNNING tool (streaming in flight).
+        val running = settled + listOf(
+            userMessage("u1"),
+            assistantMessage(
+                "a1",
+                blocks = listOf(toolBlock("tool_1", ToolBlockStatus.RUNNING)),
+                isStreaming = true,
+            ),
+        )
+        val kV1 = keysOf(ledger.reconcile(running))
+        val runGroup = ledger.snapshot().filterIsInstance<FlatChatItem.AssistantToolRunGroup>()
+            .firstOrNull { it.messageId == "a1" }
+        assertNotNull("running tool must be published as a run group", runGroup)
+        assertTrue("RUNNING tool must render isRunning", runGroup!!.isRunning)
+        assertTrue("a1 must be tracked live", ledger.activeAssistantIdsCount() >= 1)
+
+        // User interrupts — cancelStream flips the in-flight tool to
+        // CANCELLED and isStreaming to false in the canonical message.
+        val cancelled = settled + listOf(
+            userMessage("u1"),
+            assistantMessage(
+                "a1",
+                blocks = listOf(toolBlock("tool_1", ToolBlockStatus.CANCELLED)),
+                isStreaming = false,
+            ),
+        )
+        val kV2 = keysOf(ledger.reconcile(cancelled))
+        assertEquals(kV1, kV2, "row topology must stay stable across the flip")
+        val afterFlip = ledger.snapshot().filterIsInstance<FlatChatItem.AssistantToolRunGroup>()
+            .firstOrNull { it.messageId == "a1" }
+        assertNotNull("cancelled tool row must still exist", afterFlip)
+        assertFalse("CANCELLED tool must NOT render isRunning", afterFlip!!.isRunning)
+        assertEquals(0, ledger.activeAssistantIdsCount(),
+            "no tracked live assistant after cancel")
+    }
 }
