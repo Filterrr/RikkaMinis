@@ -3,9 +3,12 @@ package com.openminis.app.sandbox.offload
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import com.openminis.app.data.model.AgentContentPart
+import com.openminis.app.data.model.AgentToolDefinition
 import com.openminis.app.data.model.LLMMessage
 import com.openminis.app.data.model.LLMModel
 import com.openminis.app.data.model.ProviderInstance
+import com.openminis.app.data.model.ThinkingLevel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
@@ -54,6 +57,9 @@ object ModelExecutionDispatcher {
         imageParts: List<LLMMessage.ImagePart>,
         inputJson: String,
         outputExt: String?,
+        tools: List<AgentToolDefinition> = emptyList(),
+        thinkingLevel: ThinkingLevel = ThinkingLevel.OFF,
+        streaming: Boolean = false,
     ): String {
         return JSONObject().apply {
             put("instance_id", instance.id)
@@ -81,6 +87,46 @@ object ModelExecutionDispatcher {
                         put(JSONObject().apply {
                             put("role", m.role.value)
                             put("content", m.content)
+                            if (m.contentParts.isNotEmpty()) {
+                                put("contentParts", JSONArray().apply {
+                                    m.contentParts.forEach { part ->
+                                        put(JSONObject().apply {
+                                            when (part) {
+                                                is AgentContentPart.Text -> {
+                                                    put("kind", "text")
+                                                    put("text", part.text)
+                                                }
+                                                is AgentContentPart.ToolUse -> {
+                                                    put("kind", "tooluse")
+                                                    put("toolUseId", part.id)
+                                                    put("name", part.name)
+                                                    put("arguments", part.input ?: JSONObject())
+                                                }
+                                                is AgentContentPart.ToolResult -> {
+                                                    put("kind", "toolresult")
+                                                    put("toolUseId", part.id)
+                                                    put("name", part.name)
+                                                    put("isError", part.isError)
+                                                    put("content", part.content)
+                                                    part.imageData?.takeIf { it.isNotEmpty() }?.let {
+                                                        put("imageDataB64", java.util.Base64.getEncoder().encodeToString(it))
+                                                    }
+                                                    part.imageMimeType?.let { put("imageMimeType", it) }
+                                                    part.imageLinuxPath?.let { put("imageLinuxPath", it) }
+                                                }
+                                                is AgentContentPart.ImageData -> {
+                                                    put("kind", "image")
+                                                    put("mimeType", part.mimeType)
+                                                    if (part.data.isNotEmpty()) {
+                                                        put("b64Data", java.util.Base64.getEncoder().encodeToString(part.data))
+                                                    }
+                                                    part.linuxPath?.let { put("linuxPath", it) }
+                                                }
+                                            }
+                                        })
+                                    }
+                                })
+                            }
                             if (m.audioParts.isNotEmpty()) {
                                 put("audio_parts", JSONArray().apply {
                                     m.audioParts.forEach { a ->
@@ -115,6 +161,32 @@ object ModelExecutionDispatcher {
 
             if (inputJson.isNotBlank()) put("input_json", inputJson)
             outputExt?.let { put("output_ext", it) }
+
+            if (tools.isNotEmpty()) {
+                put("tools", JSONArray().apply {
+                    tools.forEach { t ->
+                        put(JSONObject().apply {
+                            put("name", t.name)
+                            put("description", t.description)
+                            if (t.parameters.isNotEmpty()) {
+                                put("parameters", JSONObject().apply {
+                                    t.parameters.forEach { (k, v) ->
+                                        put(k, JSONObject().apply {
+                                            put("type", v.type)
+                                            put("description", v.description)
+                                            v.enumValues?.takeIf { it.isNotEmpty() }?.let { put("enum", JSONArray(it)) }
+                                        })
+                                    }
+                                })
+                            }
+                            if (t.required.isNotEmpty()) put("required", JSONArray(t.required))
+                            t.propertyOrdering?.takeIf { it.isNotEmpty() }?.let { put("property_ordering", JSONArray(it)) }
+                        })
+                    }
+                })
+            }
+            if (thinkingLevel != ThinkingLevel.OFF) put("thinking_level", thinkingLevel.name)
+            if (streaming) put("streaming", true)
         }.toString()
     }
 
