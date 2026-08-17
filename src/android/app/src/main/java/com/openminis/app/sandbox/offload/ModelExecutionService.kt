@@ -39,6 +39,10 @@ class ModelExecutionService : Service() {
         private const val TAG = "ModelExecService"
         const val EXTRA_REQUEST_DIR = "request_dir"
         const val RESULT_FILE = "result.json"
+        /** Streaming-chunk log line-per-chunk file written by streaming runs. */
+        const val STREAM_FILE = "stream.jsonl"
+        /** Cancellation signal file: when created, a running stream aborts. */
+        const val CANCEL_FILE = "cancel"
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -60,9 +64,15 @@ class ModelExecutionService : Service() {
         // Execute on a background thread; stopSelf after the result lands.
         Thread {
             try {
-                val result = executeRun(requestFile.readText())
-                resultFile.writeText(result)
-                Log.i(TAG, "result written ($result.length bytes), pid=${android.os.Process.myPid()}")
+                val requestText = requestFile.readText()
+                val isStreaming = JSONObject(requestText).optBoolean("streaming", false)
+                if (isStreaming) {
+                    executeStreamingRun(requestText, dir)
+                } else {
+                    val result = executeRun(requestText)
+                    resultFile.writeText(result)
+                    Log.i(TAG, "result written ($result.length bytes), pid=${android.os.Process.myPid()}")
+                }
             } catch (t: Throwable) {
                 Log.w(TAG, "execution failed: ${t.message}", t)
                 try {
@@ -291,6 +301,237 @@ class ModelExecutionService : Service() {
             put("exit_code", 0)
         }.toString()
     }
+
+    /**
+     * Streaming execution path (direction A chat-offload primary path).
+     *
+     * Protocol (see ChatStreamOffloadHandler):
+     *  - Reads request from [dir]/request.json with `"streaming":true`.
+     *  - Calls provider.streamMessage(...) and appends every chunk to [dir]/[STREAM_FILE] as one JSON line.
+     *  - On clean completion: appends [DONE_LINE] + writes result.json.
+     *  - On failure: appends a `{"type":"error",...}` line + writes result.json error. Never fabricates Finished.
+     *  - On cancel (main process creates [dir]/[CANCEL_FILE]): aborts the stream, writes an error line so
+     *    the client's Flow terminates (hardened-3: cancellation propagation).
+     */
+    private fun executeStreamingRun(requestJson: String, dir: File) {
+        val streamFile = File(dir, STREAM_FILE)
+        val resultFile = File(dir, RESULT_FILE)
+        val cancelFile = File(dir, CANCEL_FILE)
+        val output = java.io.BufferedWriter(java.io.OutputStreamWriter(java.io.FileOutputStream(streamFile, true)))
+        val appendLine = { line: String ->
+            output.append(line).append('\n')
+            output.flush()
+        }
+        try {
+            val req = JSONObject(requestJson)
+
+            // ── Reconstruct ProviderInstance (mirrors executeRun) ──
+            val instance = com.openminis.app.data.model.ProviderInstance(
+                id = req.optString("instance_id", "remote"),
+                label = req.optString("instance_label", "remote"),
+                providerType = safeEnum(
+                    req.optString("provider_type", "openAI"),
+                    com.openminis.app.data.model.ProviderType.openAI,
+                ),
+                credentialType = safeEnum(
+                    req.optString("credential_type", "apiKey"),
+                    com.openminis.app.data.model.ProviderCredential.apiKey,
+                ),
+                customBaseURL = req.optString("base_url", "").ifEmpty { null },
+                appendV1Suffix = req.optBoolean("append_v1", true),
+                customUserAgent = req.optString("user_agent", "").ifEmpty { null },
+                useResponsesAPI = req.optBoolean("use_responses_api", false),
+                imageEndpointMode = safeEnum(
+                    req.optString("image_endpoint_mode", "auto"),
+                    com.openminis.app.data.model.ImageEndpointMode.auto,
+                ),
+                imageEndpointResolved = req.optString("image_endpoint_resolved", "").let {
+                    if (it.isNotEmpty()) safeEnumOrNull<com.openminis.app.data.model.ImageEndpointMode>(it) else null
+                },
+                azureMode = req.optBoolean("azure_mode", false),
+                pinned = false,
+            )
+
+            // ── Reconstruct LLMModel ──
+            val model = com.openminis.app.data.model.LLMModel(
+                id = req.getString("model_id"),
+                displayName = req.optString("model_display_name", req.getString("model_id")),
+                provider = req.optString("model_provider", instance.providerType.name),
+                inputModalities = jsonStrList(req.optJSONArray("input_modalities")),
+                outputModalities = jsonStrList(req.optJSONArray("output_modalities")),
+                contextWindow = req.optInt("context_window", 0).takeIf { it > 0 },
+            )
+
+            // ── Reconstruct messages ──
+            val messages = jsonObjList(req.optJSONArray("messages")).map { obj ->
+                com.openminis.app.data.model.LLMMessage(
+                    role = try {
+                        com.openminis.app.data.model.LLMMessage.Role.valueOf(
+                            obj.getString("role").uppercase()
+                        )
+                    } catch (_: Exception) {
+                        com.openminis.app.data.model.LLMMessage.Role.USER
+                    },
+                    content = obj.optString("content", ""),
+                    contentParts = parseContentParts(obj),
+                    audioParts = jsonObjList(obj.optJSONArray("audio_parts")).mapNotNull { a ->
+                        val b64 = a.optString("data", "")
+                        if (b64.isEmpty()) null
+                        else com.openminis.app.data.model.LLMMessage.AudioPart(
+                            format = a.optString("format", "wav"),
+                            base64Data = b64,
+                        )
+                    },
+                )
+            }
+            val systemPrompt = req.optString("system_prompt", "").ifEmpty { null }
+            val maxTokens = req.optInt("max_tokens", 4096)
+            val temperature = if (req.has("temperature")) {
+                req.optDouble("temperature", Double.NaN).takeIf { !it.isNaN() }
+            } else null
+            val imageParts = jsonObjList(req.optJSONArray("image_parts")).map { obj ->
+                com.openminis.app.data.model.LLMMessage.ImagePart(
+                    data = obj.optString("data", "").let { b64 ->
+                        if (b64.isNotEmpty()) java.util.Base64.getDecoder().decode(b64)
+                        else ByteArray(0)
+                    },
+                    mimeType = obj.optString("mime_type", "image/png"),
+                    linuxPath = obj.optString("linux_path", "").ifEmpty { null },
+                )
+            }
+            val tools = parseToolsJson(req.optJSONArray("tools"))
+            val thinkingLevel = safeEnum(getString(req, "thinking_level"), com.openminis.app.data.model.ThinkingLevel.OFF)
+
+            // ── API key: read from EncryptedSharedPreferences (same uid) ──
+            val apiKey = try {
+                com.openminis.app.util.EncryptedPrefsFactory.safeCreate(this, "provider_secrets")
+                    .getString("apikey_${instance.id}", null) ?: ""
+            } catch (_: Exception) { "" }
+            if (apiKey.isEmpty()) {
+                appendLine(ChatStreamJsonl.errorLine("missing_api_key"))
+                resultFile.writeText(JSONObject().apply {
+                    put("error", "missing_api_key")
+                    put("message", "No API key configured for ${instance.label}.")
+                    put("exit_code", 2)
+                }.toString())
+                return
+            }
+
+            // ── Provider ──
+            @Suppress("UNCHECKED_CAST")
+            val provider = com.openminis.app.provider.ProviderFactory.create(instance, apiKey, model, this)
+            provider.streamMessage(
+                messages = messages,
+                systemPrompt = systemPrompt,
+                maxTokens = maxTokens,
+                temperature = temperature,
+                tools = tools,
+                thinkingLevel = thinkingLevel,
+            ).collect { chunk ->
+                if (cancelFile.exists()) {
+                    throw IllegalStateException("cancelled")
+                }
+                appendLine(ChatStreamJsonl.encode(chunk))
+            }
+            appendLine(ChatStreamJsonl.DONE_LINE)
+            resultFile.writeText(JSONObject().apply {
+                put("ok", true)
+                put("streaming", true)
+            }.toString())
+            Log.i(TAG, "stream done, pid=${android.os.Process.myPid()}")
+        } catch (t: Throwable) {
+            Log.w(TAG, "stream failed: ${t.message}", t)
+            try {
+                appendLine(ChatStreamJsonl.errorLine(t.message ?: "stream_failed"))
+            } catch (_: Throwable) {}
+            try {
+                resultFile.writeText(JSONObject().apply {
+                    put("error", "stream_failed")
+                    put("message", t.message ?: "unknown")
+                    put("exit_code", 1)
+                }.toString())
+            } catch (_: Throwable) {}
+        } finally {
+            try { output.close() } catch (_: Throwable) {}
+        }
+    }
+
+    private fun parseContentParts(o: JSONObject): List<com.openminis.app.data.model.AgentContentPart> {
+        val parts = mutableListOf<com.openminis.app.data.model.AgentContentPart>()
+        o.optJSONArray("contentParts")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val p = arr.getJSONObject(i)
+                when (getString(p, "kind").lowercase()) {
+                    "tooluse" -> {
+                        val id = getString(p, "toolUseId").ifBlank { getString(p, "id") }
+                        val name = getString(p, "name")
+                        val arguments = p.optJSONObject("arguments") ?: JSONObject()
+                        parts.add(com.openminis.app.data.model.AgentContentPart.ToolUse(id = id, name = name, input = arguments))
+                    }
+                    "toolresult" -> {
+                        val id = getString(p, "toolUseId").ifBlank { getString(p, "id") }
+                        val name = getString(p, "name")
+                        val error = p.optBoolean("isError", false)
+                        val content = getString(p, "content")
+                        val imageData: ByteArray? = p.optString("imageDataB64").takeIf { it.isNotBlank() }
+                            ?.let { runCatching { java.util.Base64.getDecoder().decode(it) }.getOrNull() }
+                        val imageMimeType = getString(p, "imageMimeType").ifEmpty { null }
+                        val imageLinuxPath = getString(p, "imageLinuxPath").ifEmpty { null }
+                        parts.add(com.openminis.app.data.model.AgentContentPart.ToolResult(
+                            id = id,
+                            name = name,
+                            content = content,
+                            isError = error,
+                            imageData = imageData,
+                            imageMimeType = imageMimeType,
+                            imageLinuxPath = imageLinuxPath,
+                        ))
+                    }
+                    "image", "imagedata" -> {
+                        val b64 = getString(p, "b64Data")
+                        val data = if (b64.isNotBlank()) { runCatching { java.util.Base64.getDecoder().decode(b64) }.getOrNull() ?: ByteArray(0) }
+                        else ByteArray(0)
+                        val mimeType = getString(p, "mimeType").ifEmpty { "image/png" }
+                        val linuxPath = getString(p, "linuxPath").ifEmpty { null }
+                        parts.add(com.openminis.app.data.model.AgentContentPart.ImageData(data = data, mimeType = mimeType, linuxPath = linuxPath))
+                    }
+                    "text" -> parts.add(com.openminis.app.data.model.AgentContentPart.Text(getString(p, "text")))
+                }
+            }
+        }
+        return parts
+    }
+
+    private fun parseToolsJson(arr: JSONArray?): List<com.openminis.app.data.model.AgentToolDefinition> {
+        if (arr == null) return emptyList()
+        val out = mutableListOf<com.openminis.app.data.model.AgentToolDefinition>()
+        for (i in 0 until arr.length()) {
+            val t = arr.getJSONObject(i)
+            val params = linkedMapOf<String, com.openminis.app.data.model.AgentToolParam>()
+            t.optJSONObject("parameters")?.let { ps ->
+                ps.keys().forEach { k ->
+                    val v = ps.getJSONObject(k)
+                    params[k] = com.openminis.app.data.model.AgentToolParam(
+                        type = getString(v, "type"),
+                        description = getString(v, "description"),
+                        enumValues = v.optJSONArray("enum")?.let { e -> (0 until e.length()).map { e.getString(it) } },
+                    )
+                }
+            }
+            val required = jsonStrList(t.optJSONArray("required"))
+            val propertyOrdering = t.optJSONArray("property_ordering")?.let { e -> (0 until e.length()).map { e.getString(it) } }
+            out.add(com.openminis.app.data.model.AgentToolDefinition(
+                name = getString(t, "name"),
+                description = getString(t, "description"),
+                parameters = params,
+                required = required,
+                propertyOrdering = propertyOrdering,
+            ))
+        }
+        return out
+    }
+
+    private fun getString(o: JSONObject, key: String): String = o.optString(key) ?: ""
 
     // ── helpers ──
 
