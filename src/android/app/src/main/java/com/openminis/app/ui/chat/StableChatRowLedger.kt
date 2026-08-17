@@ -399,6 +399,20 @@ internal class StableChatRowLedger {
         val freshAll = buildNewMessageRows(message, prevNonSystemRole)
         val freshNonText = freshAll.filterNot { it is FlatChatItem.AssistantMarkdownBlock }
 
+        // ── typing indicator retirement ──
+        // The freshly-built canonical rows carry NO AssistantTyping row once
+        // any visible content exists (buildFlatChatItems emits it only for
+        // the `isStreaming && !hasVisibleContent` window). If the message
+        // already shows content, a previously-published typing row is now a
+        // redundant "thinking…" under the answer text — retire it here so it
+        // never lingers through the isAwaitingModelResponse gap.
+        if (freshAll.none { it is FlatChatItem.AssistantTyping }) {
+            val itr = rows.listIterator(start)
+            while (itr.hasNext()) {
+                if (itr.next() is FlatChatItem.AssistantTyping) itr.remove()
+            }
+        }
+
         // ── text-structure reset detection (first segmenter attach / retry) ──
         val currentTextIds = message.toolBlocks
             .filter { it.kind == "text" && it.content.isNotEmpty() }

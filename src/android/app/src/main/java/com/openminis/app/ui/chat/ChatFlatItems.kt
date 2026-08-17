@@ -856,13 +856,19 @@ internal fun buildFlatChatItems(
             }
         }
 
-        // Typing indicator: show while streaming and either (a) no visible
-        // content has arrived yet, or (b) we're in the network gap waiting
-        // on the model's next response (e.g. after tool results were sent
-        // back). Mirrors iOS: `isActiveMessage && (!hasVisibleContent || isAwaitingModelResponse)`.
+        // Typing indicator: show only while streaming and NO visible content
+        // has arrived yet. Once any answer content is on screen (or the
+        // message has any blocks), the indicator is redundant — the thinking
+        // already lives in the run-group card above the answer, and an extra
+        // "thinking…" row below the text reads as a stray duplicate.
+        // Mirrors iOS more strictly: iOS shows it during the initial network
+        // gap only (`isActiveMessage && !hasVisibleContent`); the
+        // isAwaitingModelResponse window (waiting after tool results were
+        // sent back) previously re-inserted the row under finished text —
+        // precisely the duplicate the user wants gone.
         val hasRealBlocks = blocks.any { it.kind != "info" }
         val hasVisibleContent = hasRealBlocks || message.content.isNotEmpty()
-        if (message.isStreaming && (!hasVisibleContent || message.isAwaitingModelResponse)) {
+        if (message.isStreaming && !hasVisibleContent) {
             out.add(dedupe(FlatChatItem.AssistantTyping(message.id)))
         }
 
