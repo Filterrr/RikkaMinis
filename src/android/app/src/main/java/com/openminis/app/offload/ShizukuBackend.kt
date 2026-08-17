@@ -238,6 +238,20 @@ class ShizukuBackend(private val appContext: Context) {
         runCatching { outThread.join(2000) }
         runCatching { errThread.join(2000) }
         val rc = runCatching { proc.exitValue() }.getOrDefault(-1)
+
+        // [T-shizuku-binder-leak] Explicitly destroy the ShizukuRemoteProcess
+        // even on the SUCCESS path. Its stdout/stderr ride Shizuku's binder
+        // (IProcess), and the binder transaction buffers + pipe fd are
+        // mmap'd into *our* process. GC never reclaims them, and the success
+        // path previously skipped destroy() entirely (only the timeout /
+        // exception paths did), so every `android-shizuku-cli` call leaked
+        // ~100+ MB of native mappings into the UI process — the measured
+        // smoking gun behind the 6-8 GB / 17 GB VmPeak SIGABRT. destroy() tells
+        // the Shizuku daemon to tear down the remote process AND releases the
+        // local binder connection + its mapped buffers. (The stdout/stderr
+        // streams were already closed by the reader threads' `use` blocks.)
+        runCatching { proc.destroy() }
+
         return ShizukuManager.ProcessResult(rc, out.toString().trimEnd('\n'), err.toString().trimEnd('\n'))
     }
 
