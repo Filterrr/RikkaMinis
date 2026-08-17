@@ -1132,14 +1132,13 @@ class DebugRPCHandler(private val context: Context) {
      * end-to-end without driving the in-app confirm dialog.
      *
      * Params:
-     *   - `subcommand` (required): "set" | "get" | "audit-list"
+     *   - `subcommand` (required): "set" | "get"
      *   - subcommand=set:    `path` (string) + `value_json` (string)
      *   - subcommand=get:    `path` (string)
-     *   - subcommand=audit-list: optional `limit` (int)
      */
     private fun handleMinisConfigExec(params: JSONObject): JSONObject {
         val sub = params.optString("subcommand", "").takeIf { it.isNotEmpty() }
-            ?: throw RPCException(-32602, "Missing 'subcommand' — one of: set, get, audit-list")
+            ?: throw RPCException(-32602, "Missing 'subcommand' — one of: set, get")
 
         return when (sub) {
             "set" -> {
@@ -1174,10 +1173,6 @@ class DebugRPCHandler(private val context: Context) {
                     page = 0,
                     pageSize = 0,
                 )
-            }
-            "audit-list" -> {
-                val limit = params.optInt("limit", 100).coerceIn(1, 1000)
-                com.openminis.app.config.ConfigBridge.auditList(limit, null)
             }
             else -> throw RPCException(-32602, "Unknown subcommand '$sub'")
         }

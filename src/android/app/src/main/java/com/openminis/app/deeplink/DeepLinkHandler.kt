@@ -184,15 +184,8 @@ object DeepLinkHandler {
                 DeepLinkAction.OpenSettingsScreen(Routes.MOUNTED_FOLDERS)
             "shared-folders", "shared_folders" ->
                 DeepLinkAction.OpenSettingsScreen(Routes.SHARED_FOLDERS)
-            "logs" -> {
-                // Optional ?tab=… selects the segmented control on the
-                // Logs screen. Currently recognized: "logs" (default),
-                // "config-audit". Pushed onto DeepLinkCoordinator so the
-                // screen can read it on appear and clear. Mirrors iOS
-                // DeepLinkRouter.handleSettings logs handling.
-                DeepLinkCoordinator.setPendingLogsTab(uri.getQueryParameter("tab"))
+            "logs" ->
                 DeepLinkAction.OpenSettingsScreen(Routes.LOGS)
-            }
             "appearance" -> DeepLinkAction.OpenSettingsScreen(Routes.APPEARANCE)
             "background" -> DeepLinkAction.OpenSettingsScreen(Routes.BACKGROUND)
             "permissions" -> DeepLinkAction.OpenPermissionSettings

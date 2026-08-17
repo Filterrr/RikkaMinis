@@ -22,7 +22,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.BatteryFull
-import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.PhoneAndroid
@@ -91,8 +90,6 @@ fun BackgroundSettingsScreen(onBack: () -> Unit) {
     val backgroundRepo = app.backgroundSettingsRepository
     val taskNotificationsEnabled by backgroundRepo.taskNotificationsEnabled.collectAsState()
     val backgroundOverlayEnabled by backgroundRepo.backgroundOverlayEnabled.collectAsState()
-    // [T-android-dynamic-island] Live-Updates toggle + device capability.
-    val dynamicIslandEnabled by backgroundRepo.dynamicIslandEnabled.collectAsState()
 
     var ignoringOptimizations by remember {
         mutableStateOf(PowerOptimizationManager.isIgnoringBatteryOptimizations(context))
@@ -101,14 +98,6 @@ fun BackgroundSettingsScreen(onBack: () -> Unit) {
         mutableStateOf(
             Build.VERSION.SDK_INT < Build.VERSION_CODES.M ||
                 Settings.canDrawOverlays(context),
-        )
-    }
-    // [T-android-dynamic-island] Re-probed on ON_RESUME (spec §3) so a
-    // Live-Updates grant the user toggled in system settings is picked up
-    // without an app restart.
-    var dynamicIslandCapable by remember {
-        mutableStateOf(
-            com.openminis.app.service.DynamicIslandSupport.isDynamicIslandCapable(context),
         )
     }
 
@@ -121,8 +110,6 @@ fun BackgroundSettingsScreen(onBack: () -> Unit) {
                 canDrawOverlays =
                     Build.VERSION.SDK_INT < Build.VERSION_CODES.M ||
                         Settings.canDrawOverlays(context)
-                dynamicIslandCapable =
-                    com.openminis.app.service.DynamicIslandSupport.isDynamicIslandCapable(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -208,29 +195,6 @@ fun BackgroundSettingsScreen(onBack: () -> Unit) {
                 },
             )
 
-            // [T-android-dynamic-island] Live Updates / "dynamic island" toggle.
-            // Only interactive when the device is capable (Android 16+ with the
-            // per-app Live-Updates grant). When ON it REPLACES the floating
-            // overlay — the mutual-exclusion guard lives in
-            // AgentForegroundService.applyOverlayState. Disabled + explained on
-            // devices/versions that don't support it.
-            Spacer(Modifier.size(8.dp))
-            BgToggleRow(
-                icon = Icons.Outlined.Bolt,
-                iconColor = ChatColors.success,
-                title = stringResource(R.string.settings_dynamic_island),
-                checked = dynamicIslandEnabled && dynamicIslandCapable,
-                enabled = dynamicIslandCapable,
-                onCheckedChange = { backgroundRepo.setDynamicIslandEnabled(it) },
-            )
-            BgFooter(
-                if (!dynamicIslandCapable) {
-                    stringResource(R.string.settings_dynamic_island_unsupported)
-                } else {
-                    stringResource(R.string.settings_dynamic_island_footer)
-                },
-            )
-
             Spacer(Modifier.size(16.dp))
             BgSectionTitle(stringResource(R.string.battery_opt_section_title))
             BgRow(
@@ -305,18 +269,13 @@ private fun BgToggleRow(
     title: String,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
-    // [T-android-dynamic-island] When false the row is greyed out and both the
-    // whole-row tap and the Switch are inert (used for the dynamic-island
-    // toggle on devices that don't support Live Updates).
-    enabled: Boolean = true,
 ) {
-    val rowAlpha = if (enabled) 1f else 0.4f
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(12.dp))
-            .clickable(enabled = enabled) { onCheckedChange(!checked) }
+            .clickable { onCheckedChange(!checked) }
             .padding(horizontal = 12.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -324,13 +283,13 @@ private fun BgToggleRow(
             modifier = Modifier
                 .size(28.dp)
                 .clip(RoundedCornerShape(6.dp))
-                .background(iconColor.copy(alpha = 0.15f * rowAlpha)),
+                .background(iconColor.copy(alpha = 0.15f)),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = iconColor.copy(alpha = rowAlpha),
+                tint = iconColor,
                 modifier = Modifier.size(18.dp),
             )
         }
@@ -339,13 +298,12 @@ private fun BgToggleRow(
             text = title,
             fontSize = 15.sp,
             fontWeight = FontWeight.Medium,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = rowAlpha),
+            color = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.weight(1f),
         )
         Switch(
             checked = checked,
             onCheckedChange = onCheckedChange,
-            enabled = enabled,
             colors = SwitchDefaults.colors(),
         )
     }

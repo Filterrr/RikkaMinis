@@ -891,7 +891,6 @@
     </plurals>
 
     <!-- T288 — 로그 / 설정 변경 -->
-    <string name="logs_tab_config_changes">설정 변경</string>
     <string name="logs_config_used_count">%1$d / %2$d 사용됨</string>
     <string name="logs_config_clear_all">모두 지우기</string>
     <string name="logs_config_empty">설정 변경 기록이 아직 없습니다.</string>

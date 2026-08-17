@@ -948,9 +948,6 @@
     <string name="settings_bg_overlay">后台任务悬浮窗</string>
     <string name="settings_bg_overlay_footer">Minis 处于后台时，显示一个小型悬浮胶囊展示当前工具。需要"显示在其他应用上层"权限。点击悬浮窗回到 Minis；拖拽可移动位置。</string>
     <string name="settings_bg_overlay_permission_needed">需先授予"显示在其他应用上层"权限</string>
-    <string name="settings_dynamic_island">灵动岛（实时更新）</string>
-    <string name="settings_dynamic_island_footer">在 Android 16 状态胶囊上显示实时的助手状态。开启后将取代悬浮窗，避免同时出现两个状态指示。</string>
-    <string name="settings_dynamic_island_unsupported">当前系统版本暂不支持实时更新（需 Android 16 及以上并已开启该功能）。</string>
 
     <!-- T182 agent loop section i18n -->
     <string name="agent_loop_section_title">智能体循环可用模型</string>
@@ -1168,7 +1165,6 @@
     </plurals>
 
     <!-- T288 — 日志 / 配置变更 -->
-    <string name="logs_tab_config_changes">配置变更</string>
     <string name="logs_config_used_count">%1$d / %2$d 已使用</string>
     <string name="logs_config_clear_all">清除全部</string>
     <string name="logs_config_empty">暂无配置变更记录。</string>

@@ -1,9 +1,5 @@
 package com.openminis.app.config
 
-import com.openminis.app.config.audit.ConfigAuditActor
-import com.openminis.app.config.audit.ConfigAuditEntry
-import com.openminis.app.config.audit.ConfigAuditLog
-import com.openminis.app.config.audit.ConfigAuditStatus
 import com.openminis.app.config.confirm.ConfigConfirmationGate
 import com.openminis.app.config.confirm.ConfirmOutcome
 import com.openminis.app.config.confirm.PendingConfigChange
@@ -12,16 +8,11 @@ import com.openminis.app.logging.AppLogger
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import java.util.TimeZone
-import java.util.UUID
 
 /**
  * Bridge between the offload handler (Kotlin / shell args / JSON
- * stdout) and the rest of the Config module (registry, gate, audit
- * log). Mirrors iOS `ConfigOffloadBridge.swift`.
+ * stdout) and the rest of the Config module (registry, gate). Mirrors
+ * iOS `ConfigOffloadBridge.swift`.
  *
  * Returns plain [JSONObject] envelopes so the handler just wraps them
  * in [com.openminis.app.sandbox.NativeOffloadResult]. The handler
@@ -33,10 +24,6 @@ object ConfigBridge {
     private const val TAG = "ConfigBridge"
     private const val DEFAULT_PAGE_SIZE = 20
     private const val MAX_PAGE_SIZE = 100
-
-    private val isoFormatter = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply {
-        timeZone = TimeZone.getTimeZone("UTC")
-    }
 
     /** First-line gate — returns true when the master switch is on. */
     fun isEnabled(): Boolean = MinisConfigPermissionStore.isEnabled
@@ -271,8 +258,7 @@ object ConfigBridge {
     /**
      * Write one or more fields. Each item is a JSON object
      * `{ "path": ..., "value_json": ... }`. Returns the standard
-     * envelope including `applied[]`, `audit_ids[]`, `audit_url`,
-     * and `user_message`.
+     * envelope including `applied[]` and `user_message`.
      */
     fun writeFields(
         items: JSONArray,
@@ -295,10 +281,9 @@ object ConfigBridge {
     }
 
     /**
-     * Internal write path — used by both [writeFields] and the audit-
-     * revert flow. `skipConfirmation` is for user-initiated reverts
-     * from the in-app Logs UI: the user already confirmed via a local
-     * dialog, so the gate would be redundant.
+     * Internal write path — used by [writeFields] and routed through the
+     * confirmation gate. `skipConfirmation` lets the debug/offload RPC apply
+     * without a UI dialog when the caller has already collected consent.
      */
     suspend fun performWriteBatch(
         items: JSONArray,
@@ -351,10 +336,10 @@ object ConfigBridge {
                 }
                 // [T-minis-config-provider-add] Redact credential values
                 // (apiKey / oauthToken / manualOAuthToken) BEFORE they reach
-                // the confirmation sheet or the audit log. The collection's
+                // the confirmation sheet. The collection's
                 // add() still receives the un-redacted `parsedValue` so it
                 // can persist the real secret to the encrypted store; only
-                // the displayed / audit-logged copy is masked. A `$$ENV`
+                // the displayed copy is masked. A `$$ENV`
                 // reference passes through (it's a pointer, not the
                 // secret). Mirrors iOS ConfigOffloadBridge:435-441.
                 val redactedNewValue = if (isAppend) parsedValue.redactingSecrets() else parsedValue
@@ -538,25 +523,9 @@ object ConfigBridge {
             ConfigConfirmationGate.requestConfirmation(pending)
         }
 
-        // 3. Map outcome → audit + user_message.
-        val actor = ConfigAuditActor.fromRaw(actorRaw)
-        val audit = ConfigAuditLog.get()
+        // 3. Map outcome → confirmation status/user_message.
         return when (outcome) {
             is ConfirmOutcome.TimedOut -> {
-                val now = System.currentTimeMillis()
-                for (r in resolved) {
-                    audit.append(
-                        ConfigAuditEntry(
-                            id = UUID.randomUUID().toString(),
-                            at = now, actor = actor, sessionId = sessionId,
-                            scope = r.scope, key = r.rawPath,
-                            oldValueJSON = r.oldValue.jsonString(),
-                            newValueJSON = r.newValue.jsonString(),
-                            confirmedAt = null, status = ConfigAuditStatus.TIMEOUT,
-                            revertOf = null, caption = caption,
-                        )
-                    )
-                }
                 JSONObject().apply {
                     put("ok", false)
                     put("error", "timeout")
@@ -565,20 +534,6 @@ object ConfigBridge {
                 }
             }
             is ConfirmOutcome.Rejected -> {
-                val now = System.currentTimeMillis()
-                for (r in resolved) {
-                    audit.append(
-                        ConfigAuditEntry(
-                            id = UUID.randomUUID().toString(),
-                            at = now, actor = actor, sessionId = sessionId,
-                            scope = r.scope, key = r.rawPath,
-                            oldValueJSON = r.oldValue.jsonString(),
-                            newValueJSON = r.newValue.jsonString(),
-                            confirmedAt = now, status = ConfigAuditStatus.REJECTED,
-                            revertOf = null, caption = caption,
-                        )
-                    )
-                }
                 JSONObject().apply {
                     put("ok", false)
                     put("error", "user_rejected")
@@ -587,9 +542,7 @@ object ConfigBridge {
                 }
             }
             is ConfirmOutcome.Approved -> {
-                val now = System.currentTimeMillis()
                 val applied = JSONArray()
-                val auditIds = JSONArray()
                 // Per-row error envelope captured for any collection.add
                 // that surfaces a structural error (already_exists,
                 // permission_denied) — we abort the batch and surface
@@ -600,17 +553,6 @@ object ConfigBridge {
                     if (idx >= resolved.size) continue
                     val r = resolved[idx]
                     if (!row.isApproved) {
-                        val auditId = UUID.randomUUID().toString()
-                        audit.append(
-                            ConfigAuditEntry(
-                                id = auditId, at = now, actor = actor, sessionId = sessionId,
-                                scope = r.scope, key = r.rawPath,
-                                oldValueJSON = r.oldValue.jsonString(),
-                                newValueJSON = r.newValue.jsonString(),
-                                confirmedAt = now, status = ConfigAuditStatus.REJECTED,
-                                revertOf = null, caption = caption,
-                            )
-                        )
                         continue
                     }
                     try {
@@ -626,10 +568,10 @@ object ConfigBridge {
                                 CollectionVerb.APPEND -> {
                                     // newValue is the un-redacted payload —
                                     // the collection persists the real
-                                    // credential. Audit / display rows pull
-                                    // from auditNewValue (redacted copy)
-                                    // when supplied so the secret never
-                                    // lands in the audit DB.
+                                    // credential. Display rows pull from
+                                    // auditNewValue (redacted copy) when
+                                    // supplied so the secret never lands on
+                                    // the user's screen or write envelope.
                                     val newId = r.collection.add(r.newValue)
                                     val auditPayload = r.auditNewValue ?: r.newValue
                                     val withId = augmentWithEntryId(auditPayload, newId)
@@ -658,9 +600,9 @@ object ConfigBridge {
                             displayName = r.field.displayName
                             displayPath = r.field.path
                             // [T-minis-config-provider-add] If this is a
-                            // credential field, audit/display rows pull
-                            // from the redacted copy so the secret never
-                            // reaches the audit DB or the user's screen.
+                            // credential field, display rows pull from the
+                            // redacted copy so the secret never reaches the
+                            // user's screen or write envelope.
                             if (r.auditNewValue != null) {
                                 effectiveNewJSON = r.auditNewValue.jsonString()
                                 effectiveNewDisplay = r.auditNewValue.displayString
@@ -668,18 +610,6 @@ object ConfigBridge {
                         } else {
                             continue
                         }
-                        val auditId = UUID.randomUUID().toString()
-                        audit.append(
-                            ConfigAuditEntry(
-                                id = auditId, at = now, actor = actor, sessionId = sessionId,
-                                scope = r.scope, key = r.rawPath,
-                                oldValueJSON = effectiveOldJSON,
-                                newValueJSON = effectiveNewJSON,
-                                confirmedAt = now, status = ConfigAuditStatus.APPLIED,
-                                revertOf = null, caption = caption,
-                            )
-                        )
-                        auditIds.put(auditId)
                         applied.put(JSONObject().apply {
                             put("path", displayPath)
                             put("display_name", displayName)
@@ -730,9 +660,7 @@ object ConfigBridge {
                     JSONObject().apply {
                         put("ok", true)
                         put("applied", applied)
-                        put("audit_ids", auditIds)
-                        put("audit_url", "minis://settings/logs?tab=config-audit")
-                        put("user_message", "Settings updated. Review or revert at [Logs → Config Changes](minis://settings/logs?tab=config-audit).")
+                        put("user_message", "Settings updated.")
                     }
                 }
             }
@@ -783,9 +711,8 @@ object ConfigBridge {
     }
 
     /**
-     * Splice the just-created entry id into the audit payload so the
-     * revert path can locate the new row without re-reading repository
-     * state (which may have churned by the time the user reverts).
+     * Splice the just-created entry id into the returned payload so the
+     * write envelope's `new` display shows the id the collection minted.
      */
     private fun augmentWithEntryId(payload: ConfigValue, entryId: String): ConfigValue {
         val baseMap = (payload as? ConfigValue.Obj)?.value?.toMutableMap()
@@ -796,11 +723,9 @@ object ConfigBridge {
 
     /**
      * Build a JSON snapshot of a collection child by walking its
-     * exposed fields. Used by the .remove path so audit-revert can
-     * reconstruct the original entry. Only includes scalar / array
-     * fields the collection actually surfaces — derived fields go
-     * along for the ride but the collection.add() input contract
-     * decides what's honored on replay.
+     * exposed fields. Used by the .remove path so the applied row's
+     * `old` value shows the full removed child. Only includes scalar /
+     * array fields the collection actually surfaces.
      */
     private fun snapshotCollectionChild(coll: ConfigCollection, childId: String): ConfigValue {
         val out = LinkedHashMap<String, ConfigValue>()
@@ -811,151 +736,5 @@ object ConfigBridge {
             out[leaf] = v
         }
         return ConfigValue.Obj(out)
-    }
-
-    // -- audit --
-
-    fun auditList(limit: Int, scope: String?): JSONObject {
-        if (!MinisConfigPermissionStore.isEnabled) return disabledErrorEnvelope()
-        val entries = ConfigAuditLog.get().recent(limit, scope)
-        val usage = ConfigAuditLog.get().usage()
-        return JSONObject().apply {
-            put("ok", true)
-            put("count", entries.size)
-            put("capacity", usage.capacity)
-            put("total_used", usage.count)
-            put("entries", JSONArray().also { arr -> for (e in entries) arr.put(auditEntryDict(e)) })
-        }
-    }
-
-    fun auditGet(id: String): JSONObject {
-        if (!MinisConfigPermissionStore.isEnabled) return disabledErrorEnvelope()
-        val e = ConfigAuditLog.get().get(id) ?: return JSONObject().apply {
-            put("ok", false)
-            put("error", "not_found")
-            put("reason", "No audit entry with id '$id'.")
-        }
-        return JSONObject().apply {
-            put("ok", true)
-            put("entry", auditEntryDict(e))
-        }
-    }
-
-    private fun auditEntryDict(e: ConfigAuditEntry): JSONObject = JSONObject().apply {
-        put("id", e.id)
-        put("at", isoFormatter.format(Date(e.at)))
-        put("actor", e.actor.raw)
-        put("scope", e.scope)
-        put("key", e.key)
-        put("old", e.oldValueJSON)
-        put("new", e.newValueJSON)
-        put("status", e.status.raw)
-        if (e.sessionId != null) put("session_id", e.sessionId)
-        if (e.confirmedAt != null) put("confirmed_at", isoFormatter.format(Date(e.confirmedAt)))
-        if (e.revertOf != null) put("revert_of", e.revertOf)
-        if (!e.caption.isNullOrEmpty()) put("caption", e.caption)
-    }
-
-    /**
-     * Revert a previous applied entry. Builds a synthetic write
-     * operation that flips old↔new and routes through the same
-     * confirmation path so the user sees what's about to roll back.
-     *
-     * `skipConfirmation` is for user-initiated reverts from the
-     * in-app Logs UI — the user already confirmed via a local dialog,
-     * and stacking a second dialog over the Logs sheet would queue
-     * silently behind it.
-     */
-    fun auditRevert(
-        id: String,
-        actorRaw: String,
-        sessionId: String?,
-        skipConfirmation: Boolean,
-    ): JSONObject {
-        if (!MinisConfigPermissionStore.isEnabled) return disabledErrorEnvelope()
-        val entry = ConfigAuditLog.get().get(id) ?: return JSONObject().apply {
-            put("ok", false)
-            put("error", "not_found")
-            put("reason", "No audit entry with id '$id'.")
-        }
-        if (entry.status != ConfigAuditStatus.APPLIED) return JSONObject().apply {
-            put("ok", false)
-            put("error", "not_revertable")
-            put("reason", "Entry is ${entry.status.raw}; only applied entries can be reverted.")
-        }
-
-        // Collection ops: rebuild the inverse write. .append → .remove
-        // by the recorded entry_id; .remove → .append with the saved
-        // snapshot payload (sans entry_id, which the collection will
-        // mint fresh — chats hooked to the old id will not auto-rebind).
-        val items: JSONArray = if (entry.key.endsWith(".append") || entry.key.endsWith(".remove")) {
-            val basePath = entry.key.substringBeforeLast('.')
-            val coll = ConfigRegistry.get().collection(basePath)
-                ?: return JSONObject().apply {
-                    put("ok", false)
-                    put("error", "not_revertable")
-                    put("reason", "Collection '$basePath' no longer registered.")
-                }
-            if (entry.key.endsWith(".append")) {
-                // Inverse of append = remove. Pull entry_id out of the
-                // recorded new value.
-                val newVal = ConfigValue.decode(entry.newValueJSON) as? ConfigValue.Obj
-                val entryId = (newVal?.value?.get("entry_id") as? ConfigValue.Str)?.value
-                    ?: return JSONObject().apply {
-                        put("ok", false)
-                        put("error", "not_revertable")
-                        put("reason", "Audit entry missing entry_id; cannot reverse the add.")
-                    }
-                JSONArray().put(JSONObject().apply {
-                    put("path", "${coll.basePath}.remove")
-                    put("value_json", ConfigValue.Str(entryId).jsonString())
-                })
-            } else {
-                // Inverse of remove = append. Replay the snapshot we
-                // captured at delete time, but strip volatile keys the
-                // collection.add() schema may reject (entry_id, etc.).
-                val oldVal = (ConfigValue.decode(entry.oldValueJSON) as? ConfigValue.Obj)?.value
-                    ?: return JSONObject().apply {
-                        put("ok", false)
-                        put("error", "not_revertable")
-                        put("reason", "Audit entry missing old-value snapshot; cannot reverse the remove.")
-                    }
-                // Translate the snapshot's leaf field names back into
-                // collection.add() payload keys. For ModelsCollection
-                // we need provider_id + model_id + display_name.
-                val replay = LinkedHashMap<String, ConfigValue>()
-                oldVal["providerInstanceId"]?.let { replay["instance_id"] = it }
-                oldVal["modelId"]?.let { replay["model_id"] = it }
-                oldVal["displayName"]?.let { replay["display_name"] = it }
-                JSONArray().put(JSONObject().apply {
-                    put("path", "${coll.basePath}.append")
-                    put("value_json", ConfigValue.Obj(replay).jsonString())
-                })
-            }
-        } else {
-            val field = ConfigRegistry.get().resolveField(entry.key)
-            if (field == null || !field.revertable) return JSONObject().apply {
-                put("ok", false)
-                put("error", "not_revertable")
-                put("reason", "Field '${entry.key}' no longer registered, or doesn't support revert.")
-            }
-            JSONArray().put(JSONObject().apply {
-                put("path", entry.key)
-                put("value_json", entry.oldValueJSON)
-            })
-        }
-        val res = runBlocking {
-            performWriteBatch(
-                items = items,
-                caption = "minis-config audit revert ${entry.id.take(8)}",
-                actorRaw = actorRaw,
-                sessionId = sessionId,
-                skipConfirmation = skipConfirmation,
-            )
-        }
-        if (res.optBoolean("ok", false)) {
-            ConfigAuditLog.get().markReverted(entry.id)
-        }
-        return res
     }
 }

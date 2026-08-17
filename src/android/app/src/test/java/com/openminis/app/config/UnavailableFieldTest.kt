@@ -16,11 +16,10 @@ class UnavailableFieldTest {
 
     /** Minimal stand-in for a real registered field. */
     private class FakeField(
-        override val path: String = "background.dynamicIsland",
+        override val path: String = "some.feature.foo",
         override val access: ConfigAccess = ConfigAccess.READWRITE,
     ) : ConfigField {
-        override val displayName = "Live Updates (dynamic island)"
-        override val description = "Show agent progress in the Live Updates chip."
+        override val displayName = "Sample feature"
         override val valueSchema = ConfigSchema.Bool
         override val risk = ConfigRisk.NORMAL
         override val revertable = true
@@ -60,11 +59,11 @@ class UnavailableFieldTest {
     fun `the unavailable envelope uses its own error code, not permission_denied`() {
         // Distinct code matters: permission_denied invites the agent to ask the
         // user to grant something; feature_unavailable tells it retrying is futile.
-        val env = ConfigBridge.unavailableErrorEnvelope("background.dynamicIsland", "needs Android 16")
+        val env = ConfigBridge.unavailableErrorEnvelope("some.feature.foo", "needs Android 16")
         assertEquals(false, env.getBoolean("ok"))
         assertEquals("feature_unavailable", env.getString("error"))
         assertEquals("needs Android 16", env.getString("reason"))
-        assertTrue(env.getString("user_message").contains("background.dynamicIsland"))
+        assertTrue(env.getString("user_message").contains("some.feature.foo"))
         assertTrue(env.getString("user_message").contains("needs Android 16"))
     }
 }

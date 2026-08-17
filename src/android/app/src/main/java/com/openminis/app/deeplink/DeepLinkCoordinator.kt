@@ -26,22 +26,6 @@ object DeepLinkCoordinator {
     }
 
     /**
-     * Optional `?tab=…` hint from `minis://settings/logs?tab=config-audit`.
-     * The Logs screen reads this on appear to land on the right
-     * segmented-control tab. Cleared by the screen after consumption.
-     * Mirrors iOS DeepLinkCoordinator.pendingLogsTab.
-     */
-    private val _pendingLogsTab = MutableStateFlow<String?>(null)
-    val pendingLogsTab: StateFlow<String?> = _pendingLogsTab.asStateFlow()
-
-    fun setPendingLogsTab(tab: String?) { _pendingLogsTab.value = tab }
-    fun consumePendingLogsTab(): String? {
-        val current = _pendingLogsTab.value
-        _pendingLogsTab.value = null
-        return current
-    }
-
-    /**
      * Pending pinned-shortcut HTML preview: filesystem path + cached title.
      * MainActivity sets this on `minis://preview/html` deep link; ChatScreen
      * reads it on first composition and routes into WebPreviewFullscreen.

@@ -892,7 +892,6 @@
     </plurals>
 
     <!-- T288 — ログ / 設定変更 -->
-    <string name="logs_tab_config_changes">設定変更</string>
     <string name="logs_config_used_count">%1$d / %2$d 使用中</string>
     <string name="logs_config_clear_all">すべてクリア</string>
     <string name="logs_config_empty">設定変更の記録はまだありません。</string>

@@ -108,7 +108,6 @@ class ConfigRegistry private constructor() {
             providerRepository: ProviderRepository,
             envVarRepository: EnvVarRepository,
             chatRepository: ChatRepository,
-            isDynamicIslandCapable: Boolean,
             sessionIdProvider: () -> String?,
         ): ConfigRegistry {
             INSTANCE?.let { return it }
@@ -118,7 +117,7 @@ class ConfigRegistry private constructor() {
                 if (r.initialized.compareAndSet(false, true)) {
                     ConfigBuiltins.registerInto(
                         r, context, providerRepository, envVarRepository, chatRepository,
-                        isDynamicIslandCapable, sessionIdProvider,
+                        sessionIdProvider,
                     )
                 }
                 INSTANCE = r

@@ -54,25 +54,6 @@ class BackgroundSettingsRepository(context: Context) {
     }
 
     /**
-     * [T-android-dynamic-island] "Show live status on the dynamic island"
-     * toggle (Android 16 Live Updates). Defaults to OFF — the capability only
-     * exists on Android 16+ with the per-app grant, and when ON it REPLACES the
-     * floating overlay (mutual exclusion in AgentForegroundService.applyOverlayState),
-     * so we don't want it silently changing behavior on upgrade. Reactive:
-     * flipping it re-drives the FG service's combined flow so the overlay
-     * appears/disappears without an app restart.
-     */
-    private val _dynamicIslandEnabled =
-        MutableStateFlow(prefs.getBoolean(KEY_DYNAMIC_ISLAND_ENABLED, false))
-    val dynamicIslandEnabled: StateFlow<Boolean> =
-        _dynamicIslandEnabled.asStateFlow()
-
-    fun setDynamicIslandEnabled(value: Boolean) {
-        prefs.edit().putBoolean(KEY_DYNAMIC_ISLAND_ENABLED, value).apply()
-        _dynamicIslandEnabled.value = value
-    }
-
-    /**
      * Last persisted overlay position (window x/y in pixels) from the
      * previous drag. -1 means "no remembered position — let the overlay
      * controller pick a default near the bottom-left, 10 dp from each
@@ -91,6 +72,5 @@ class BackgroundSettingsRepository(context: Context) {
         private const val KEY_BG_OVERLAY_ENABLED = "backgroundOverlayEnabled"
         private const val KEY_BG_OVERLAY_X = "backgroundOverlayX"
         private const val KEY_BG_OVERLAY_Y = "backgroundOverlayY"
-        private const val KEY_DYNAMIC_ISLAND_ENABLED = "dynamicIslandEnabled"
     }
 }

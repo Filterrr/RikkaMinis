@@ -8,7 +8,6 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
@@ -49,11 +48,6 @@ class AgentForegroundService : Service() {
         private const val EXTRA_SESSION_COUNT = "session_count"
         private const val EXTRA_TOOL_STATUS = "tool_status"
 
-        // [T-android-dynamic-island] Framework extras key read by
-        // Notification.isRequestPromotedOngoing() (Android 16). Not exported as
-        // a public SDK constant; value verified by decompiling the on-device
-        // framework.jar (const-string "android.requestPromotedOngoing").
-        private const val EXTRA_REQUEST_PROMOTED_ONGOING = "android.requestPromotedOngoing"
         private const val ACTION_STOP = "com.openminis.app.STOP_AGENT_SERVICE"
 
         /**
@@ -326,10 +320,6 @@ class AgentForegroundService : Service() {
                 SessionActivityTracker.lastToolTitle,
                 SessionActivityTracker.lastToolStatus,
                 SessionActivityTracker.activeSessions,
-                // [T-android-dynamic-island] Reactive dynamic-island toggle —
-                // flipping it must appear/hide the overlay live (mutual
-                // exclusion) without an app restart.
-                backgroundRepo.dynamicIslandEnabled,
             ) { values: Array<Any?> ->
                 @Suppress("UNCHECKED_CAST")
                 val activeSessions = values[13] as Set<String>
@@ -348,7 +338,6 @@ class AgentForegroundService : Service() {
                     lastToolTitle = values[11] as String?,
                     lastToolStatus = values[12] as String?,
                     hasActiveStream = activeSessions.isNotEmpty(),
-                    dynamicIslandEnabled = values[14] as Boolean,
                 )
             }.distinctUntilChanged().collect { state -> applyOverlayState(state) }
         }
@@ -374,50 +363,12 @@ class AgentForegroundService : Service() {
         // uses to decide whether to surface — the previous "linger after
         // completion" semantics are dropped per spec.
         val hasActiveStream: Boolean,
-        // [T-android-dynamic-island] User toggle for the Android 16 Live
-        // Updates surface. When this is ON *and* the device is capable, the
-        // floating overlay is suppressed (see applyOverlayState) so the two
-        // status UIs never render simultaneously.
-        val dynamicIslandEnabled: Boolean,
     )
 
     private fun applyOverlayState(state: OverlayState) {
         val controller = overlayController ?: return
         val hasPerm = controller.hasOverlayPermission()
 
-        // [T-android-dynamic-island] MUTUAL EXCLUSION (critical): when the
-        // Android 16 Live Updates "dynamic island" surface is the active status
-        // UI — i.e. the user enabled the toggle AND the device is capable
-        // (canPostPromotedNotifications) — we must NOT also show the floating
-        // overlay capsule, or the user sees two duplicate real-time status UIs
-        // at once. This is a hard short-circuit that overrides even an
-        // explicitly-enabled backgroundOverlayEnabled toggle: the higher-tier
-        // dynamic-island wins. Re-checked reactively because
-        // state.dynamicIslandEnabled comes through the combined flow and
-        // capability is re-probed here, so toggling either the app switch or
-        // the system Live-Updates grant hides/reveals the overlay live.
-        if (DynamicIslandSupport.isDynamicIslandActive(this, state.dynamicIslandEnabled)) {
-            if (controller.isShown) controller.hide()
-            lingerJob?.cancel()
-            lingerJob = null
-            hasCompletionPending = false
-            wasBusy = state.hasActiveStream || state.isRunning
-            // [T-android-dynamic-island] The overlay hid reactively above; make
-            // the notification switch to the promoted ProgressStyle promptly too
-            // (rather than waiting for the next tool/status tick that rebuilds
-            // it). Only when we're actually foregrounded as a service — a bare
-            // notify() here would post a non-FGS notification. Guard on active
-            // sessions since that's when the FG service is alive.
-            if (SessionActivityTracker.activeSessions.value.isNotEmpty()) {
-                refreshOngoingNotification()
-            }
-            Log.d(
-                TAG,
-                "applyOverlayState: dynamic-island active — overlay suppressed " +
-                    "(dynamicIslandEnabled=${state.dynamicIslandEnabled})",
-            )
-            return
-        }
         // [T-android-overlay-show-if-busy] Overlay surfaces while the
         // agent is actively working — either an assistant streamJob is
         // mid-generation OR a tool is executing.
@@ -531,27 +482,6 @@ class AgentForegroundService : Service() {
         // e.g. the turn ended in foreground), so the old "task finished →
         // proactively hide" semantics still hold for those cases.
         if (controller.isShown) controller.hide()
-    }
-
-    /**
-     * [T-android-dynamic-island] Re-post the ongoing status notification with
-     * the current session/status so a dynamic-island toggle flip switches the
-     * notification style (promoted ProgressStyle ↔ plain) without waiting for
-     * the next tool tick. Uses NotificationManager.notify on the same id — the
-     * service is already in the foreground for this id, so this updates it in
-     * place rather than posting a duplicate.
-     */
-    private fun refreshOngoingNotification() {
-        try {
-            val notification = buildNotification(
-                SessionActivityTracker.activeSessions.value.size,
-                SessionActivityTracker.currentToolStatus.value,
-            )
-            getSystemService(NotificationManager::class.java)
-                ?.notify(NOTIFICATION_ID, notification)
-        } catch (t: Throwable) {
-            Log.w(TAG, "refreshOngoingNotification failed: ${t.message}")
-        }
     }
 
     private fun acquireWakeLock() {
@@ -710,40 +640,6 @@ class AgentForegroundService : Service() {
             R.string.bg_service_notification_text, sessionLabel, toolStatus, timeString,
         )
 
-        // [T-android-dynamic-island] Short critical text — the ~7-char glyph
-        // the system shows on the always-on / compact chip. Available since
-        // Android 12 (API 31) on the native Builder, so we compute it for all
-        // branches and apply it wherever the API exists. Prefer the elapsed
-        // time (most glanceable); fall back to a tool hint.
-        val shortCritical = timeString
-
-        // [T-android-dynamic-island] Tier 3: Android 16 (Baklava) Live Updates.
-        // When the device is capable AND the user enabled the toggle, build the
-        // ongoing notification with Notification.ProgressStyle and request
-        // promotion (FLAG_PROMOTED_ONGOING) so it surfaces on the status chip /
-        // "dynamic island". androidx.core 1.15 has none of these APIs, so this
-        // branch drops to the native Notification.Builder. Everything the
-        // promoted-notification contract requires is satisfied here: ongoing,
-        // a contentTitle, a supported style (ProgressStyle), NOT a group
-        // summary, NOT colorized, and the channel importance is LOW (not MIN).
-        val dynamicIslandUserEnabled = (applicationContext as? MinisApp)
-            ?.backgroundSettingsRepository?.dynamicIslandEnabled?.value == true
-        val dynamicIslandOn = DynamicIslandSupport.isDynamicIslandActive(
-            this,
-            dynamicIslandUserEnabled,
-        )
-        if (dynamicIslandOn && Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) {
-            return buildPromotedNotification(
-                titleText = titleText,
-                collapsedText = collapsedText,
-                shortCritical = shortCritical,
-                smallIcon = toolSmallIconRes(toolName),
-                isToolRunning = isToolRunning,
-                contentIntent = pendingIntent,
-                stopIntent = stopPendingIntent,
-            )
-        }
-
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(toolSmallIconRes(toolName))
             // [T-notification-brand] Brand tint so the ongoing row reads as
@@ -776,100 +672,6 @@ class AgentForegroundService : Service() {
         }
 
         return builder.build()
-    }
-
-    /**
-     * [T-android-dynamic-island] Build the Android 16 promoted / Live Updates
-     * variant of the ongoing status notification using the native
-     * Notification.Builder (androidx.core 1.15 lacks these APIs). Requires
-     * API >= 36 — callers gate on Build.VERSION.SDK_INT before invoking.
-     *
-     * Uses Notification.ProgressStyle with an indeterminate segment while a
-     * tool is running (tools are open-ended: shell/browser/a11y rarely report
-     * determinate progress), and requests promotion via FLAG_PROMOTED_ONGOING.
-     */
-    @androidx.annotation.RequiresApi(Build.VERSION_CODES.BAKLAVA)
-    private fun buildPromotedNotification(
-        titleText: String,
-        collapsedText: String,
-        shortCritical: String,
-        smallIcon: Int,
-        isToolRunning: Boolean,
-        contentIntent: PendingIntent,
-        stopIntent: PendingIntent,
-    ): Notification {
-        // [T-android-dynamic-island] A ProgressStyle only counts as a valid
-        // *promotable* style when it carries at least one progress segment with
-        // positive length — an empty ProgressStyle (even an indeterminate one)
-        // fails Notification.hasPromotableCharacteristics() and the notification
-        // silently drops to a plain ongoing row (confirmed on-device: every
-        // other precondition passed, only the ProgressStyle validity failed).
-        // So we ALWAYS seed one full-length segment, and additionally set the
-        // indeterminate flag while a tool is running so the bar animates rather
-        // than showing a static filled track.
-        val progressStyle = Notification.ProgressStyle()
-            .addProgressSegment(Notification.ProgressStyle.Segment(100))
-            .setProgressIndeterminate(isToolRunning)
-
-        val stopAction = Notification.Action.Builder(
-            Icon.createWithResource(this, android.R.drawable.ic_menu_close_clear_cancel),
-            getString(R.string.bg_service_stop_action),
-            stopIntent,
-        ).build()
-
-        val builder = Notification.Builder(this, CHANNEL_ID)
-            .setSmallIcon(smallIcon)
-            // [T-notification-brand] Same brand tint as the non-promoted
-            // builder. The large app icon was dropped per user request — the
-            // small icon carries the identity.
-            .setColor(ContextCompat.getColor(this, R.color.notification_brand_color))
-            .setContentTitle(titleText)
-            .setContentText(collapsedText)
-            .setStyle(progressStyle)
-            .setOngoing(true)
-            .setShowWhen(false)
-            .setOnlyAlertOnce(true)
-            .setContentIntent(contentIntent)
-            .addAction(stopAction)
-            // Explicitly NOT colorized and NOT a group summary — both would
-            // disqualify the notification from promotion.
-            .setColorized(false)
-            .setShortCriticalText(shortCritical)
-
-        // [T-android-dynamic-island] Request the always-visible "dynamic island"
-        // promotion. The public builder method `setRequestPromotedOngoing(true)`
-        // is NOT in the android-36 SDK stubs yet (@FlaggedApi / not exported),
-        // and — importantly — this is NOT the same as FLAG_PROMOTED_ONGOING:
-        // decompiling the on-device framework showed
-        // Notification.hasPromotableCharacteristics() gates on
-        // isRequestPromotedOngoing(), which reads the extras boolean
-        // "android.requestPromotedOngoing" — the FLAG is what the *system* sets
-        // AFTER it decides to promote, not the request. So we set the extras
-        // key directly (verified against the decompiled getBoolean call).
-        builder.addExtras(android.os.Bundle().apply {
-            putBoolean(EXTRA_REQUEST_PROMOTED_ONGOING, true)
-        })
-
-        val notification = builder.build()
-        if (!notification.hasPromotableCharacteristics()) {
-            // Not fatal — the notification still posts as a normal ongoing FGS
-            // row; it just won't get the promoted chip. Dump each individual
-            // promotion precondition so the failing one is diagnosable.
-            val flags = notification.flags
-            Log.w(
-                TAG,
-                "promoted notification lacks promotable characteristics — diag: " +
-                    "requestPromotedOngoing=${notification.extras.getBoolean(EXTRA_REQUEST_PROMOTED_ONGOING)} " +
-                    "FLAG_ONGOING_EVENT=${(flags and Notification.FLAG_ONGOING_EVENT) != 0} " +
-                    "hasTitle=${!notification.extras.getCharSequence(Notification.EXTRA_TITLE).isNullOrEmpty()} " +
-                    "smallIcon=${notification.smallIcon != null} " +
-                    "isGroupSummary=${(flags and Notification.FLAG_GROUP_SUMMARY) != 0} " +
-                    "styleTemplate=${notification.extras.getString(Notification.EXTRA_TEMPLATE)}",
-            )
-        } else {
-            Log.d(TAG, "promoted notification OK — hasPromotableCharacteristics=true")
-        }
-        return notification
     }
 
     /**

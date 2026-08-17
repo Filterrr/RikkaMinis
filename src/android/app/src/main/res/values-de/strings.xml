@@ -892,7 +892,6 @@
     </plurals>
 
     <!-- T288 — Protokolle / Konfigurationsänderungen -->
-    <string name="logs_tab_config_changes">Konfigurationsänderungen</string>
     <string name="logs_config_used_count">%1$d / %2$d belegt</string>
     <string name="logs_config_clear_all">Alle löschen</string>
     <string name="logs_config_empty">Noch keine Konfigurationsänderungen aufgezeichnet.</string>

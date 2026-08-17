@@ -883,9 +883,6 @@
     <string name="settings_bg_overlay">Оверлей фоновых задач</string>
     <string name="settings_bg_overlay_footer">Показывать небольшую плавающую капсулу с текущим инструментом, пока Minis в фоне. Требуется разрешение на отображение поверх других приложений. Нажмите капсулу, чтобы вывести Minis на передний план; перетащите, чтобы переместить её.</string>
     <string name="settings_bg_overlay_permission_needed">Разрешите отображение поверх других приложений для включения</string>
-    <string name="settings_dynamic_island">Динамический остров (Live Updates)</string>
-    <string name="settings_dynamic_island_footer">Показывать статус агента на чипе состояния Android 16. Когда включено, заменяет плавающий оверлей, чтобы не было двух индикаторов сразу.</string>
-    <string name="settings_dynamic_island_unsupported">Ваша версия системы пока не поддерживает Live Updates (нужен Android 16+ с включённой функцией).</string>
     <string name="agent_loop_section_title">Доступные модели в цикле агента</string>
     <string name="agent_loop_section_footer">Перечисленные здесь модели и группы можно вызывать из терминала через minis-model-use. Только они видны агенту.</string>
     <string name="agent_loop_section_empty_hint">Модели и группы не добавлены</string>
@@ -1008,7 +1005,6 @@
     <string name="model_picker_non_text_warning_body">%1$s выводит %2$s и обычно не может выполнять задачу Агента. Выберите для сессии модель с текстовым выводом или добавьте эту модель в цикл Агента как инструмент, чтобы агент мог вызывать её по запросу для генерации %3$s.</string>
     <string name="model_picker_non_text_warning_use_anyway">Всё равно использовать</string>
     <string name="model_picker_non_text_warning_choose_other">Выбрать другую модель</string>
-    <string name="logs_tab_config_changes">Изменения конфигурации</string>
     <string name="logs_config_used_count">%1$d / %2$d использовано</string>
     <string name="logs_config_clear_all">Очистить всё</string>
     <string name="logs_config_empty">Изменения конфигурации пока не записаны.</string>
