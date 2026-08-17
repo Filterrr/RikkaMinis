@@ -53,7 +53,7 @@ class UnavailableFieldTest {
         assertEquals(real.access, wrapped.access)
         assertEquals(real.risk, wrapped.risk)
         assertEquals(real.revertable, wrapped.revertable)
-        assertEquals("background", wrapped.scope)
+        assertEquals("some", wrapped.scope)
     }
 
     @Test
