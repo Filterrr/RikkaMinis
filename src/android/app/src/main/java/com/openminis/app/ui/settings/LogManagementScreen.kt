@@ -18,9 +18,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Share
@@ -87,14 +84,6 @@ fun LogManagementScreen(
     var showDeleteAllConfirm by remember { mutableStateOf(false) }
     var loggingEnabled by remember { mutableStateOf(AppLogger.isEnabled(context)) }
 
-    // T-config: Logs / Config Changes segmented control. Default to
-    // "logs"; a `?tab=config-audit` deep-link query lands users straight
-    // on the audit list. Mirrors iOS LogManagementView.
-    val initialTab = remember {
-        com.openminis.app.deeplink.DeepLinkCoordinator.consumePendingLogsTab() ?: "logs"
-    }
-    var tab by remember { mutableStateOf(initialTab) }
-
     val refreshTrigger = remember { mutableStateOf(0) }
     LaunchedEffect(refreshTrigger.value) {
         loading = true
@@ -128,46 +117,20 @@ fun LogManagementScreen(
         onBack = null, // top-level page: rely on system back gesture / bottom nav
         scrollable = false,
     ) {
-        // Segmented selector lives outside the scrolling content so the
-        // tabs stay visible as the body scrolls.
-        SingleChoiceSegmentedButtonRow(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-        ) {
-            SegmentedButton(
-                selected = tab == "logs",
-                onClick = { tab = "logs" },
-                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-            ) { Text(stringResource(R.string.log_title)) }
-            SegmentedButton(
-                selected = tab == "config-audit",
-                onClick = { tab = "config-audit" },
-                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-            ) { Text(stringResource(R.string.logs_tab_config_changes)) }
-        }
-
-        if (tab == "config-audit") {
-            // Audit body. Owns its own scrolling.
-            ConfigAuditScreen(modifier = Modifier.fillMaxSize())
-        } else {
-            // Logs body — original layout. The LazyColumn picks up
-            // viewport height since the scaffold gave us a Column slot.
-            LogsBody(
-                context = context,
-                dailyLogs = dailyLogs,
-                crashLogs = crashLogs,
-                totalSize = totalSize,
-                loading = loading,
-                loggingEnabled = loggingEnabled,
-                onToggleLogging = {
-                    loggingEnabled = it
-                    AppLogger.setEnabled(context, it)
-                },
-                onLogFileClick = onLogFileClick,
-                onDeleteAll = { showDeleteAllConfirm = true },
-            )
-        }
+        LogsBody(
+            context = context,
+            dailyLogs = dailyLogs,
+            crashLogs = crashLogs,
+            totalSize = totalSize,
+            loading = loading,
+            loggingEnabled = loggingEnabled,
+            onToggleLogging = {
+                loggingEnabled = it
+                AppLogger.setEnabled(context, it)
+            },
+            onLogFileClick = onLogFileClick,
+            onDeleteAll = { showDeleteAllConfirm = true },
+        )
     }
 
     if (showDeleteAllConfirm) {
@@ -195,7 +158,7 @@ fun LogManagementScreen(
     }
 }
 
-/** Original logs-tab body, extracted so the segmented selector can switch into the audit view. */
+/** Logs body — the LogManagementScreen content. */
 @Composable
 private fun LogsBody(
     context: Context,

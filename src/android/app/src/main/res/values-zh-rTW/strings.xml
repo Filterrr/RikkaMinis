@@ -629,7 +629,6 @@
     <string name="env_var_other_header">其他環境變數</string>
 
     <!-- T288 — 日誌 / 設定變更 -->
-    <string name="logs_tab_config_changes">設定變更</string>
     <string name="logs_config_used_count">%1$d / %2$d 已使用</string>
     <string name="logs_config_clear_all">清除全部</string>
     <string name="logs_config_empty">尚無設定變更記錄。</string>
@@ -826,9 +825,6 @@
     <string name="error_empty_response_after_tool">在工具結果之後，即使經過提醒，模型仍未回傳任何回應。它可能已過載 —— 請重試或切換模型。</string>
     <string name="thinking_truncated_hint">顯示最後 %1$dK / 共 %2$dK 字元</string>
     <string name="thinking_view_full">查看完整內容</string>
-    <string name="settings_dynamic_island">靈動島（即時更新）</string>
-    <string name="settings_dynamic_island_footer">在 Android 16 狀態膠囊上顯示即時的助手狀態。開啟後將取代懸浮視窗，避免同時出現兩個狀態指示。</string>
-    <string name="settings_dynamic_island_unsupported">目前系統版本尚不支援即時更新（需 Android 16 以上並已開啟該功能）。</string>
     <!-- Spoken substitutions for links during read-aloud (TTS) -->
     <string name="voice_link_to_host">%1$s 的連結</string>
     <string name="voice_bare_link">連結</string>

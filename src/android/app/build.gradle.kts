@@ -34,12 +34,10 @@ val ciVersionSuffix: String? = System.getenv("MINIS_VERSION_NAME_SUFFIX")
 
 android {
     namespace = "com.openminis.app"
-    // [T-android-dynamic-island] Bumped 35→36 so the Android 16 (Baklava)
-    // Live Updates APIs — Notification.ProgressStyle, FLAG_PROMOTED_ONGOING,
-    // NotificationManager.canPostPromotedNotifications(), setShortCriticalText —
-    // are available to compile against. targetSdk stays 35 to avoid pulling in
-    // Android 16 behavior changes; the Live Updates path is runtime-gated on
-    // Build.VERSION.SDK_INT >= 36 (see DynamicIslandSupport / AgentForegroundService).
+    // compileSdk 36 (Android 16) — retained for the current framework version
+    // even though the Live Updates / "dynamic island" feature was removed
+    // (2026-08-17). targetSdk stays 35 to avoid pulling in Android 16
+    // behavior changes.
     compileSdk = 36
 
     defaultConfig {

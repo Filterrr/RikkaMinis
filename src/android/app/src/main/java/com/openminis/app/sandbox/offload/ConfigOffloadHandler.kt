@@ -13,10 +13,10 @@ import java.io.File
 /**
  * `minis-config` offload handler. Mirrors iOS `ConfigOffload.m`.
  *
- * Subcommands: list-topics, topic-help, get, set, set-batch,
- * audit-list, audit-get, audit-revert. The shell-friendly flags
- * `--filter`/`-f`, `--page`/`-p`, `--page-size`/`-s`, `--caption`,
- * `--actor`, `--session` follow exact iOS semantics.
+ * Subcommands: list-topics, topic-help, get, set, set-batch.
+ * The shell-friendly flags `--filter`/`-f`, `--page`/`-p`,
+ * `--page-size`/`-s`, `--caption`, `--actor`, `--session` follow exact
+ * iOS semantics.
  *
  * Collection-level writes:
  *   set models.append '{"provider_id":"…","model_id":"…", …}'
@@ -46,7 +46,7 @@ class ConfigOffloadHandler : NativeOffloadHandler {
         const val EXIT_PERMISSION_DENIED = 126
 
         const val HELP_TEXT =
-            "minis-config - read or change Minis app settings (logged + revertable)\n" +
+            "minis-config - read or change Minis app settings\n" +
                 "\n" +
                 "USAGE:\n" +
                 "  minis-config <subcommand> [args]\n" +
@@ -95,14 +95,7 @@ class ConfigOffloadHandler : NativeOffloadHandler {
                 "                               stdin. One confirm dialog for the batch.\n" +
                 "                               Each item may use the .append/.remove suffix.\n" +
                 "\n" +
-                "AUDIT:\n" +
-                "  audit-list [--limit N] [--scope <topic>]\n" +
-                "  audit-get  <audit-id>\n" +
-                "  audit-revert <audit-id>      Roll back a previous applied entry.\n" +
-                "\n" +
                 "FLAGS:\n" +
-                "  --session <id>               Tag the audit row with the active session.\n" +
-                "  --actor agent|user|...       Override audit actor (default: agent).\n" +
                 "  --caption <text>             Caption shown above the confirm dialog.\n" +
                 "  --help, -h                   Show this help.\n" +
                 "\n" +
@@ -114,8 +107,7 @@ class ConfigOffloadHandler : NativeOffloadHandler {
                 "  126  permission denied (master switch off, or hidden field)\n" +
                 "\n" +
                 "Every write requires user confirmation in-app. The response includes\n" +
-                "a `user_message` field — relay it to the user so they know how to\n" +
-                "review or revert via Logs → Config Changes.\n"
+                "a `user_message` field — relay it to the user.\n"
     }
 
     override fun handle(request: NativeOffloadRequest): NativeOffloadResult {
@@ -134,9 +126,6 @@ class ConfigOffloadHandler : NativeOffloadHandler {
                 "set" -> cmdSet(args)
                 "add" -> cmdAdd(args)
                 "set-batch" -> cmdSetBatch(args, request)
-                "audit-list" -> cmdAuditList(args)
-                "audit-get" -> cmdAuditGet(args)
-                "audit-revert" -> cmdAuditRevert(args)
                 else -> errorResult(
                     args, EXIT_INVALID_ARGS,
                     "INVALID_ARGS",
@@ -241,7 +230,7 @@ class ConfigOffloadHandler : NativeOffloadHandler {
      * `add <topic> <value-json>` — create a new child in an addable collection
      * (e.g. `add providers …`, `add groups …`). Sugar over `set
      * <topic>.append <value-json>`: it reuses the exact same collection-add
-     * path in the bridge, so the confirm dialog, audit row, redaction, exit
+     * path in the bridge, so the confirm dialog, redaction, exit
      * codes, and the new child's auto-generated UUID (returned in
      * applied[0].new) are all identical. Mirrors iOS `cmd_add`. (The bridge's
      * collection-add suffix is `.append` on Android.)
@@ -305,33 +294,6 @@ class ConfigOffloadHandler : NativeOffloadHandler {
         val actor = args.get("actor") ?: "agent"
         val sessionId = args.get("session")
         val envelope = ConfigBridge.writeFields(parsed, caption, actor, sessionId)
-        return envelopeResult(args, envelope)
-    }
-
-    private fun cmdAuditList(args: OffloadArgs): NativeOffloadResult {
-        val limit = args.getInt("limit")?.coerceIn(1, 1000) ?: 100
-        val scope = args.get("scope")
-        val envelope = ConfigBridge.auditList(limit, scope)
-        return envelopeResult(args, envelope)
-    }
-
-    private fun cmdAuditGet(args: OffloadArgs): NativeOffloadResult {
-        val id = args.positional.getOrNull(1) ?: return errorResult(
-            args, EXIT_INVALID_ARGS, "INVALID_ARGS",
-            "audit-get <audit-id> requires an id."
-        )
-        val envelope = ConfigBridge.auditGet(id)
-        return envelopeResult(args, envelope)
-    }
-
-    private fun cmdAuditRevert(args: OffloadArgs): NativeOffloadResult {
-        val id = args.positional.getOrNull(1) ?: return errorResult(
-            args, EXIT_INVALID_ARGS, "INVALID_ARGS",
-            "audit-revert <audit-id> requires an id."
-        )
-        val actor = args.get("actor") ?: "agent-revert"
-        val sessionId = args.get("session")
-        val envelope = ConfigBridge.auditRevert(id, actor, sessionId, skipConfirmation = false)
         return envelopeResult(args, envelope)
     }
 

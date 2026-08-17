@@ -33,12 +33,9 @@ internal object ConfigBuiltins {
 
     /**
      * [T8-2] Dependency-injected registration. The config layer must not
-     * import service/UI classes — the two UI-coupled values are supplied
+     * import service/UI classes — the UI-coupled values are supplied
      * by the caller instead:
      *
-     * @param isDynamicIslandCapable computed once by the caller (MinisApp)
-     *   via the same service probe the UI uses; refines the
-     *   `background.dynamicIsland` field to an UnavailableField when false.
      * @param sessionIdProvider live provider of the foregrounded chat
      *   session id (null when no chat is open). ConfigBuiltins reads it at
      *   field-read/write time, so it always reflects the current screen.
@@ -49,14 +46,13 @@ internal object ConfigBuiltins {
         providerRepo: ProviderRepository,
         envVarRepo: EnvVarRepository,
         chatRepo: ChatRepository,
-        isDynamicIslandCapable: Boolean,
         sessionIdProvider: () -> String?,
     ) {
         registerSelfMeta(r)
         registerSession(r, providerRepo, chatRepo, sessionIdProvider)
         registerAppearance(r, context)
         registerChat(r, context)
-        registerBackground(r, context, isDynamicIslandCapable)
+        registerBackground(r, context)
         registerLogs(r, context)
         registerProviderCollections(r, providerRepo, envVarRepo)
         registerDefaults(r, providerRepo)
@@ -616,7 +612,7 @@ internal object ConfigBuiltins {
 
     // -- Background --
 
-    private fun registerBackground(r: ConfigRegistry, context: Context, isDynamicIslandCapable: Boolean) {
+    private fun registerBackground(r: ConfigRegistry, context: Context) {
         val prefs = context.getSharedPreferences("background_settings", Context.MODE_PRIVATE)
         r.register(
             PrefsBoolField(
@@ -640,42 +636,8 @@ internal object ConfigBuiltins {
             )
         )
         // [T-android-config-feature-unavailable] Live Updates / "dynamic
-        // island". Settings → Background renders this toggle DISABLED with an
-        // "unsupported" footer unless the device is capable, so minis-config
-        // must not be a side door around that gate: on an incapable device the
-        // path stays registered (help/list still describe it) but every read
-        // and write is refused with `feature_unavailable`.
-        //
-        // Capability = Android 16+ AND the per-app Live-Updates grant, probed
-        // via the same capability probe the UI uses. The grant can be
-        // revoked at runtime, so the probe runs at REGISTRATION time here and
-        // the registry is rebuilt on the paths that re-register — matching how
-        // the UI re-probes on resume. Mirrors iOS gating background.liveActivity
-        // on isLiveActivitySupported (dba46d42).
-        //
-        // Writes go through the same SharedPreferences file+key the repository
-        // reads (background_settings / dynamicIslandEnabled), so a change made
-        // here is picked up by AgentForegroundService's overlay/promoted
-        // mutual-exclusion logic exactly like a UI toggle.
-        val dynamicIslandField = PrefsBoolField(
-            path = "background.dynamicIsland",
-            displayName = "Live Updates (dynamic island)",
-            description = "Show agent progress in the Android 16 Live Updates status chip.",
-            prefs = prefs,
-            key = "dynamicIslandEnabled",
-            defaultValue = false,
-        )
-        r.register(
-            if (isDynamicIslandCapable) {
-                dynamicIslandField
-            } else {
-                UnavailableField(
-                    dynamicIslandField,
-                    "Live Updates requires Android 16 or newer plus the per-app " +
-                        "Live Updates permission; this device doesn't support it.",
-                )
-            }
-        )
+        // island" was removed 2026-08-17 — this feature (and its registration)
+        // is gone; nothing between the two notification fields references it.
     }
 
     // -- Logs --

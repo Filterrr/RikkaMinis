@@ -1104,9 +1104,6 @@
     <string name="settings_bg_overlay_footer">Show a small floating capsule with the current tool while Minis is in the background. Requires permission to display over other apps. Tap the capsule to bring Minis to the foreground; drag to move it.</string>
     <string name="settings_bg_overlay_permission_needed">Allow drawing over other apps to enable</string>
     <!-- [T-android-dynamic-island] Android 16 Live Updates / dynamic-island toggle. -->
-    <string name="settings_dynamic_island">Dynamic Island (Live Updates)</string>
-    <string name="settings_dynamic_island_footer">Show live agent status on the Android 16 status chip. When on, this replaces the floating overlay so you don\'t see two status indicators at once.</string>
-    <string name="settings_dynamic_island_unsupported">Your current system version doesn\'t support Live Updates yet (requires Android 16+ with the feature enabled).</string>
 
     <!-- T182 agent loop section i18n -->
     <string name="agent_loop_section_title">Available Models in Agent Loop</string>
@@ -1335,7 +1332,6 @@
     <string name="model_picker_non_text_warning_choose_other">Choose another model</string>
 
     <!-- T288 — Logs / Config Changes screen i18n. -->
-    <string name="logs_tab_config_changes">Config Changes</string>
     <string name="logs_config_used_count">%1$d / %2$d used</string>
     <string name="logs_config_clear_all">Clear All</string>
     <string name="logs_config_empty">No config changes recorded yet.</string>

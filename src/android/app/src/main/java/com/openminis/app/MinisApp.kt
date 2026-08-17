@@ -377,12 +377,10 @@ class MinisApp : Application(), ImageLoaderFactory {
         // ConfigRegistry.get() is safe from any thread for the rest of
         // the process. Mirrors iOS ConfigRegistry.shared.registerBuiltinsIfNeeded().
         com.openminis.app.config.MinisConfigPermissionStore.init(this)
-        com.openminis.app.config.audit.ConfigAuditLog.init(this)
         com.openminis.app.config.ConfigRegistry.init(
             this, providerRepository, envVarRepository, chatRepository,
             // [T8-2] Config layer no longer imports service/UI classes —
-            // capability probe + session-id provider are injected here.
-            com.openminis.app.service.DynamicIslandSupport.isDynamicIslandCapable(this),
+            // session-id provider is injected here.
             { com.openminis.app.ui.chat.ChatViewModelStore.activeSessionId },
         )
 

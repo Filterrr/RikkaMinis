@@ -20,7 +20,10 @@ interface ConfigField {
     val access: ConfigAccess
     val risk: ConfigRisk
 
-    /** Whether `audit-revert` may roll a write back. */
+    /**
+     * Whether a field may be written to. Consulted for collection/path
+     * validation and to build the applied row for the write envelope.
+     */
     val revertable: Boolean
 
     /**

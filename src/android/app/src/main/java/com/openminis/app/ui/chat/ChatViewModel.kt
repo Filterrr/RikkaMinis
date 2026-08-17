@@ -1906,6 +1906,20 @@ class ChatViewModel(
             // since Android's agentHistory and UI list are tighter-coupled.
             var i = history.lastIndex
             while (i >= 0 && history[i].dbMessageId.isNullOrEmpty()) i -= 1
+            // [Compact-keep-answer-active] The final message right after a
+            // turn is the assistant's ANSWER (persisted with a dbMessageId).
+            // If we anchor there, the divider lands after it and the just-
+            // delivered reply gets grayed out into the summary. More natural:
+            // keep the answer OUTSIDE the compaction — fall back to the last
+            // persisted USER prompt so everything after it (tool work + the
+            // final answer) stays in the active, un-grayed region. Skip pure
+            // tool-result entries (role=USER but contentParts all ToolResult).
+            if (i > 0) {
+                while (i >= 0 && (history[i].role != LLMMessage.Role.USER ||
+                    history[i].contentParts.all { p -> p is AgentContentPart.ToolResult } ||
+                    history[i].dbMessageId.isNullOrEmpty())
+                ) i -= 1
+            }
             i
         }
         if (anchorIdx < 0) {
