@@ -721,38 +721,53 @@ internal fun buildFlatChatItems(
         // ─────────────────────────────────────────────────────────────────
         // [T-android-run-group-first] Emit the rows of one assistant message
         // in a FIXED order regardless of the order the model produced the
-        // blocks in. The run-group card (thinking + tools, collapsed to a
-        // one-line summary by default — never auto-expanded) comes FIRST:
-        // process before result reads naturally, and because the card stays
-        // collapsed it never pushes the answer around. Then the answer text,
-        // then info rows.
+        // blocks in: thinking row → tool run card → answer text. Rows come
+        // FIRST (process before result reads naturally); because thinking and
+        // the tool card are collapsed by default, they never push the answer
+        // around. Then the answer text, then info rows.
         //
-        // Pass 1 — the run group: thinking + tool_use fold into ONE card.
-        // [T-android-run-group-thinking] "One agent turn" = one card: the
-        // merged thinking section on top, tool pills below, sharing a single
-        // collapsible header ("N tools · total" / "Deep Thinking"). Emitted
-        // once whenever EITHER kind is present — a lone tool, thinking alone,
-        // or a mixed batch all produce exactly one AssistantToolRunGroup. The
-        // individual AssistantThinking / AssistantToolUse rows are no longer
-        // emitted (classes kept for the exhaustive `when` in ChatScreen, so
-        // this stays a minimal, revertable change).
+        // [T-thinking-split-row] Thinking is emitted as ONE independent
+        // AssistantThinking row (all same-message thinking blocks merged),
+        // BEFORE the tool run group. This drops the old double-fold where
+        // thinking was hidden inside a group that was itself collapsed: a
+        // thinking turn now needs ONE tap to reveal, collapses independently
+        // of the tools, and never fights the run-group expand state.
+        // Default-collapsed, tap-to-expand remains the ThinkingBlock contract.
         val thinkingBlocks = blocks.filter { it.kind == "thinking" }
-        if (thinkingBlocks.isNotEmpty() || firstToolIndex >= 0) {
+        if (thinkingBlocks.isNotEmpty()) {
+            // The row carries ONE thinking block whose content is the merged
+            // reasoning of all same-message blocks (keeps the first id for
+            // stable ThinkingBlock state). Whether it's the message's last
+            // *visible* block of any kind drives the streaming auto-fold
+            // signal: if a sibling text/tool_use exists, thinking is already
+            // "done" and the row collapses the moment that sibling arrives.
+            val lastRealBlock = blocks.lastOrNull { !(it.kind == "text" && it.content.isEmpty()) }
+            val thinkingIsTrailing = thinkingBlocks.any { it === lastRealBlock }
+            val mergedThinking = thinkingBlocks.first().copy(
+                content = thinkingBlocks.joinToString("\n") { it.content },
+            )
+            out.add(dedupe(FlatChatItem.AssistantThinking(
+                messageId = message.id,
+                block = mergedThinking,
+                isLast = true,
+                messageIsStreaming = message.isStreaming,
+                messageThinkingLevel = message.thinkingLevel,
+                isLastBlockOverall = thinkingIsTrailing,
+            )))
+        }
+
+        // Tool run group — tools ONLY now (thinking lives in its own row above).
+        if (firstToolIndex >= 0) {
             out.add(dedupe(FlatChatItem.AssistantToolRunGroup(
                 messageId = message.id,
                 tools = toolPillBlocks,
-                thinkingBlocks = thinkingBlocks,
-                isRunning = (thinkingBlocks + toolPillBlocks).any {
+                // No thinking blocks folded in — they are a separate
+                // AssistantThinking row emitted above.
+                thinkingBlocks = emptyList(),
+                isRunning = toolPillBlocks.any {
                     it.toolStatus == ToolBlockStatus.STREAMING ||
                         it.toolStatus == ToolBlockStatus.PENDING ||
-                        it.toolStatus == ToolBlockStatus.RUNNING ||
-                        // Fresh thinking blocks carry a null status while
-                        // streaming (flipped to SUCCESS only when text or a
-                        // tool_use arrives) — the message-level streaming
-                        // flag is the reliable liveness signal for the
-                        // thinking phase, same signal the retired
-                        // AssistantThinking row used (messageIsStreaming).
-                        (it.kind == "thinking" && it.toolStatus == null && message.isStreaming)
+                        it.toolStatus == ToolBlockStatus.RUNNING
                 },
                 isLastCancelled = lastCancelledToolId != null &&
                     lastCancelledToolId == toolPillBlocks.lastOrNull()?.id,

@@ -919,17 +919,12 @@ internal fun ToolCallRunGroup(
     onOpenDetail: (String) -> Unit = {},
     onRerunFromHere: (() -> Unit)? = null,
     onCopyDetails: (() -> Unit)? = null,
-    // [T-android-run-group-thinking] Thinking-section gate, resolved by the
-    // caller from the message's T300 snapshot ?: the chat's current level —
-    // mirrors the retired AssistantThinking row's hide-when-off behaviour.
-    thinkingEnabled: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val isRunning = group.isRunning
-    val thinkingVisible = thinkingEnabled && group.thinkingBlocks.isNotEmpty()
-    // Thinking hidden AND no tools → nothing to render (the retired
-    // AssistantThinking row was omitted entirely in this state).
-    if (!thinkingVisible && group.tools.isEmpty()) return
+    // No tools → nothing to render (thinking no longer lives in this card;
+    // it's a separate AssistantThinking row upstream).
+    if (group.tools.isEmpty()) return
     // [T-android-run-group-manual] The card is collapsed by default and
     // never auto-expands, not even while running — the header itself IS the
     // live status (spinner + "Running N tools" / "Thinking…"), so an
@@ -1058,26 +1053,6 @@ internal fun ToolCallRunGroup(
                 .padding(start = 8.dp),
         ) {
             Column(modifier = Modifier.fillMaxWidth()) {
-                // [T-android-run-group-thinking] Thinking first (merged into
-                // one block, content joined with "\n" — same merge the
-                // retired Pass 2 used), then tool pills. The merged block
-                // keeps the FIRST block's id so ThinkingBlock's per-block
-                // expand state stays stable across recompositions. It reads
-                // as streaming while the group is live AND its own status
-                // isn't terminal (a fresh thinking block carries a null
-                // status until text/tool_use arrives — group.isRunning
-                // covers that window).
-                if (thinkingVisible) {
-                    group.thinkingBlocks.firstOrNull()?.let { first ->
-                        ThinkingBlock(
-                            block = first.copy(
-                                content = group.thinkingBlocks.joinToString("\n") { it.content },
-                            ),
-                            isStreaming = group.isRunning && first.toolStatus != ToolBlockStatus.SUCCESS,
-                            isLast = true,
-                        )
-                    }
-                }
                 group.tools.forEach { block ->
                     ToolCallPill(
                         block = block,
