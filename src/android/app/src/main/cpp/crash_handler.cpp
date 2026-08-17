@@ -15,6 +15,7 @@
 #include <fcntl.h>
 #include <cstring>
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
 #include <sys/stat.h>
 #include <sys/syscall.h>
