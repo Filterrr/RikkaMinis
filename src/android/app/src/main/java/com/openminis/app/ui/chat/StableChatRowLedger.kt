@@ -342,17 +342,18 @@ internal class StableChatRowLedger {
                     }
                 }
             }
-            // If the message has fully converged (no live state) and the live
-            // pass above didn't touch anything, do a full replacement of ALL
-            // rows owned by this message — including text/markdown rows that
-            // the live pass skips. This catches the "interrupted thinking"
-            // case: the stream is torn down, isStreaming flips to false, but
-            // the old thinking markdown block stays in the ledger because the
-            // main reconcile append branch didn't run (message count unchanged)
-            // and the live pass skips markdown rows. The canonical fresh rows
-            // have no thinking content for this message any more, so we can
-            // safely swap in the full canonical set.
-            if (!rowsTouched && !isLiveAssistant(freshMsg)) {
+            // If the message has fully converged (no live state), do a full
+            // replacement of ALL rows owned by this message — including
+            // text/markdown blocks that the live pass deliberately skips.
+            // This catches the "interrupted thinking" leftover: the stream is
+            // torn down, isStreaming flips to false, but the old thinking
+            // markdown block stays in the ledger because the main reconcile
+            // append branch didn't run (message count unchanged) and the live
+            // pass skips markdown rows. Once converged, the canonical fresh
+            // rows ARE the terminal truth (thinking collapsed to a stopped
+            // summary, tools flipped to CANCELLED), so swap in the full set
+            // regardless of whether the live pass touched anything.
+            if (!isLiveAssistant(freshMsg)) {
                 // Check whether the published rows actually differ from the
                 // canonical ones — if they're already identical, skip.
                 val publishedEnd = start + rows.subList(start, rows.size)
@@ -361,8 +362,8 @@ internal class StableChatRowLedger {
                 if (publishedTake != freshAll) {
                     rows.subList(start, publishedEnd).clear()
                     rows.addAll(start, freshAll)
-                    activeAssistantIds.remove(messageId)
                 }
+                activeAssistantIds.remove(messageId)
             } else if (!rowsTouched) {
                 // Canonical has no live rows for it anymore — drop the stale
                 // typing placeholder if any.
