@@ -112,6 +112,15 @@ object NativeOffloadServer {
     private var serverSocket: LocalServerSocket? = null
     private var acceptThread: Thread? = null
 
+    // [T-offload-tmpfile-leak] The last response tmpfile written to rootfs
+    // /tmp. The guest cat's it synchronously after receiving our reply, so by
+    // the time the NEXT offload request arrives it is always safe to delete.
+    // Without this the rootfs /tmp (a tmpfs = RAM-backed) accumulates one
+    // .native-offload-* file per call forever — with large outputs (logcat,
+    // ps) that is real RAM the UI process never gets back.
+    @Volatile
+    private var lastTmpHost: File? = null
+
     @Volatile
     private var rootfsTmpDir: File? = null
 
@@ -256,9 +265,20 @@ object NativeOffloadServer {
 
         val tmpDir = rootfsTmpDir ?: throw IllegalStateException("server not started")
         tmpDir.mkdirs()
+
+        // Reclaim the PREVIOUS response tmpfile. It was cat'd by the guest
+        // synchronously after our last reply, so it is always safe to remove
+        // now (agent tool calls are serial per turn). This keeps rootfs /tmp
+        // (tmpfs → RAM) from growing unboundedly with one file per call.
+        lastTmpHost?.let { old ->
+            lastTmpHost = null
+            runCatching { old.delete() }
+        }
+
         val seq = counter.incrementAndGet()
         val tmpHost = File(tmpDir, ".native-offload-$pid-$seq")
         tmpHost.writeText(result.output)
+        lastTmpHost = tmpHost
         val tmpGuest = "/tmp/${tmpHost.name}"
 
         Log.d(TAG, "reply name='$name' exit=${result.exitCode} outBytes=${result.output.length} " +
