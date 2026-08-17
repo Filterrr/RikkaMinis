@@ -206,6 +206,16 @@ jobs:
           cd src/android
           ./gradlew compileDebugAndroidTestKotlin --stacktrace
 
+      # Force a fresh build: AGP keeps a `cache: gradle` (actions/setup-java)
+      # that can restore stale native/CMake output, silently shipping an OLD
+      # .so. Tier 0 caught exactly this — the crash-handler .so in the APK
+      # predated the code change. clean + drop .cxx so cpp changes actually
+      # get recompiled from source.
+      - name: Clean native build (cpp freshness)
+        run: |
+          cd src/android
+          ./gradlew clean --stacktrace
+
       - name: Build APK with Gradle
         run: |
           cd src/android
