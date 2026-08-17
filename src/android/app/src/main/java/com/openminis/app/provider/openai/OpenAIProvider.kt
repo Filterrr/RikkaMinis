@@ -230,6 +230,7 @@ class OpenAIProvider constructor(
     private val azureBase: String? = null,
 ) : LLMProvider {
     override val name = "OpenAI"
+    override var instanceContext: com.openminis.app.data.model.ProviderInstance? = null
 
     companion object {
         /**

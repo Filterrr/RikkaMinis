@@ -15,6 +15,13 @@ interface LLMProvider {
     var model: LLMModel
 
     /**
+     * The ProviderInstance this provider was created from, when known (set by ProviderFactory).
+     * Used by Direction-A offload (chat stream to :modelservice) to rebuild the provider
+     * in the service process. Null for hand-constructed/mock providers → offload skipped.
+     */
+    var instanceContext: com.openminis.app.data.model.ProviderInstance?
+
+    /**
      * Effective max output tokens ceiling for the given model.
      * Priority: model.maxOutputTokens > provider-level default.
      * Used as the upper bound in dynamicMaxTokens().

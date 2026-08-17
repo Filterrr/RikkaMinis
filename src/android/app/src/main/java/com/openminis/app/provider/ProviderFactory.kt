@@ -30,7 +30,7 @@ object ProviderFactory {
         // completions endpoint suffix at OpenAIProvider.kt:710 then
         // produces a single-slash join.
         val basePath = instance.effectiveBaseURL
-        return when (instance.providerType) {
+        return (when (instance.providerType) {
             ProviderType.anthropic -> {
                 // [T-provider-custom-user-agent] Only meaningful for custom-base
                 // (relay) instances; on the official direct path it's null.
@@ -94,6 +94,8 @@ object ProviderFactory {
                     basePath = base,
                 )
             }
+        }).also { provider ->
+            provider.instanceContext = instance
         }
     }
 }

@@ -48,6 +48,7 @@ class AnthropicProvider(
     private val customUserAgent: String? = null,
 ) : LLMProvider {
     override val name = "Anthropic"
+    override var instanceContext: com.openminis.app.data.model.ProviderInstance? = null
     override val defaultMaxOutputTokens: Int get() = 64_000
 
     /**
