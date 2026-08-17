@@ -58,6 +58,15 @@ jobs:
       - name: Build proot from source
         run: ./deps/build_proot.sh clean
 
+      # ExternalNativeBuild (CMake) is disabled in-build: proot is built by
+      # build_proot.sh above (a W^X prebuilt), and enabling CMake would
+      # overwrite it. Consequently crash_handler.cpp is NOT compiled by Gradle
+      # — it ships as a VENDORED prebuilt under jniLibs. Rebuild it from source
+      # so cpp changes (e.g. the Tier 0 crash-report fields) actually land in
+      # the APK. Same NDK r28 toolchain as build_proot.sh.
+      - name: Rebuild crash handler native lib from source
+        run: ./deps/build_crash_handler.sh
+
       # build.gradle.kts wires `stageDebugSkillAssets` into every debug asset
       # merge. The script is `onlyIf { script.exists() }`, but it reads
       # .claude/skills/debug-server/ which is private and absent from this
