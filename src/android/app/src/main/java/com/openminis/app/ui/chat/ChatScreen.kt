@@ -148,6 +148,9 @@ import com.openminis.app.logging.AppLogger
 import com.openminis.app.ui.components.MinisAlertDialog
 import com.openminis.app.ui.components.MinisMenu
 import com.openminis.app.ui.components.MinisMenuDivider
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -729,6 +732,11 @@ fun ChatScreen(
     var showClearChatDialog by remember { mutableStateOf(false) }
     // [T-android-enhanced-cache] First-enable confirmation dialog visibility.
     var showEnhancedCacheDialog by remember { mutableStateOf(false) }
+
+    // [T-context-exhausted-dialog] 'Context Full' prompt — surfaced directly
+    // from the ViewModel (send-at-capacity stash), so the dialog renders
+    // whenever the VM asks, with no local trigger of its own.
+    val showContextExhaustedDialog by viewModel.showContextExhaustedDialog.collectAsState()
 
     // Bridge VM's slash-command "/clear" request into local Compose state so
     // the menu and slash-command entry points share a single confirmation
@@ -5398,6 +5406,68 @@ fun ChatScreen(
                         onMoveToSession(targetId)
                     },
                 )
+            }
+
+            // [T-context-exhausted-dialog] iOS 'Context Full' alert parity:
+            // the context reached its capacity and the user tried to send.
+            // Offer a real way forward (new chat / clear chat) instead of a
+            // silent drop. Cancel restores the stashed message to the input.
+            if (showContextExhaustedDialog) {
+                Dialog(
+                    onDismissRequest = { viewModel.dismissContextExhaustedDialog(restoreInput = true) },
+                    properties = DialogProperties(dismissOnBackPress = true, dismissOnClickOutside = true),
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = MaterialTheme.colorScheme.surface,
+                        tonalElevation = 6.dp,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Text(
+                                text = stringResource(R.string.context_full_dialog_title),
+                                style = MaterialTheme.typography.titleLarge,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 24.dp),
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = stringResource(R.string.context_full_dialog_body),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 24.dp),
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            // New Chat
+                            TextButton(
+                                onClick = {
+                                    viewModel.dismissContextExhaustedDialog(restoreInput = false)
+                                    onNewChat()
+                                },
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                            ) { Text(stringResource(R.string.chat_menu_new_chat)) }
+                            // Clear Chat (destructive, iOS parity)
+                            TextButton(
+                                onClick = {
+                                    viewModel.dismissContextExhaustedDialog(restoreInput = false)
+                                    viewModel.clearChat()
+                                },
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.chat_menu_clear_chat),
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            }
+                            // Cancel — restore the stashed message to the input
+                            TextButton(
+                                onClick = { viewModel.dismissContextExhaustedDialog(restoreInput = true) },
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                            ) { Text(stringResource(R.string.common_cancel)) }
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+                    }
+                }
             }
 
             // T137: Clear Chat confirmation. Wipes messages + agent history +

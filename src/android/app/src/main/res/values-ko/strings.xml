@@ -139,8 +139,12 @@
     <string name="token_usage_context_used">사용된 컨텍스트</string>
     <string name="token_usage_context_window">컨텍스트 윈도우</string>
     <string name="token_usage_context_window_group_limit"> (그룹 제한 %1$s)</string>
+    <string name="token_usage_context_window_group_limit_applied"> (그룹 제한 기준 %1$s)</string>
+    <string name="token_usage_context_window_heuristic_warning">모델이 실제 컨텍스트 윈도우를 보고하지 않습니다. 이는 추정치입니다. 모델 상세 화면에서 수정하세요.</string>
     <string name="token_usage_context_window_group_unlimited"> (무제한)</string>
     <string name="token_usage_max_output">최대 출력</string>
+    <string name="context_full_dialog_title">컨텍스트 가득 참</string>
+    <string name="context_full_dialog_body">대화 컨텍스트가 한도에 도달했습니다. 계속하려면 새 채팅을 시작하거나 채팅을 비우세요. 초안이 저장되었습니다 — 취소하면 복원됩니다.</string>
     <string name="token_usage_section_thinking">사고</string>
     <string name="token_usage_thinking_label">사고</string>
     <string name="token_usage_thinking_level">수준</string>

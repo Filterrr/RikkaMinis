@@ -139,8 +139,12 @@
     <string name="token_usage_context_used">使用済みコンテキスト</string>
     <string name="token_usage_context_window">コンテキストウィンドウ</string>
     <string name="token_usage_context_window_group_limit">（グループ上限 %1$s）</string>
+    <string name="token_usage_context_window_group_limit_applied">（グループ上限に基づく %1$s）</string>
+    <string name="token_usage_context_window_heuristic_warning">モデルが実際のコンテキストウィンドウを報告していません。これは推測値です。モデル詳細画面で修正してください。</string>
     <string name="token_usage_context_window_group_unlimited">（無制限）</string>
     <string name="token_usage_max_output">最大出力</string>
+    <string name="context_full_dialog_title">コンテキスト上限</string>
+    <string name="context_full_dialog_body">会話コンテキストが上限に達しました。続けるには新しいチャットを開始するか、チャットをクリアしてください。下書きは保存されています — キャンセルで復元します。</string>
     <string name="token_usage_section_thinking">思考</string>
     <string name="token_usage_thinking_label">思考</string>
     <string name="token_usage_thinking_level">レベル</string>

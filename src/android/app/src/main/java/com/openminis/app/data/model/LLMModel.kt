@@ -16,6 +16,25 @@ data class LLMModel(
     val inputModalities: List<String>? = null,
     val outputModalities: List<String>? = null,
 ) {
+    /**
+     * Where the effective context window actually comes from. For models
+     * without a real `contextWindow` value, [contextWindowTokens] falls back
+     * to an id-based heuristic guess — and a 1M-context model whose metadata
+     * wasn't reported (custom/router/image-output/obscure ids) silently lands
+     * on the 128K guess, which both UNDER-triggers nothing (safe) but also
+     * caps offload/compaction judgment at ⅛ of real capacity (wastes paid
+     * context). We surface the source so the UI can mark guesses as guesses
+     * and steer the user to correct them.
+     *
+     * [contextWindowSource] is meant to be read on a *user-override-resolved*
+     * model (i.e. `ModelEntry.model`, which folds `ModelOverrides.contextWindow`
+     * into `contextWindow`), so an explicit user-set value classifies as explicit.
+     */
+    enum class ContextWindowSource { EXPLICIT, HEURISTIC }
+
+    /** EXPLICIT when `contextWindow` is set (>0); HEURISTIC otherwise. */
+    val contextWindowSource: ContextWindowSource
+        get() = if ((contextWindow ?: 0) > 0) ContextWindowSource.EXPLICIT else ContextWindowSource.HEURISTIC
     companion object {
         // Anthropic — mirrors iOS LLMTypes.swift allAnthropic.
         // [T-android-claude-opus48-thinking-toggle] (Sow Sow 38845/38850) Every

@@ -23,6 +23,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.stringResource
 import com.openminis.app.data.model.ModelOverrides
+import com.openminis.app.data.model.inferContextWindowTokens
 import com.openminis.app.data.model.normalizeModalityName
 import com.openminis.app.data.repository.ProviderRepository
 import com.openminis.app.ui.components.RowLabel
@@ -64,7 +65,19 @@ fun ModelEntryDetailScreen(
     var modelId by remember { mutableStateOf(baseModel.id) }
     var displayName by remember { mutableStateOf(overrides.displayName ?: baseModel.displayName) }
     var maxOutputTokensText by remember { mutableStateOf(overrides.maxOutputTokens?.toString() ?: "") }
-    var contextWindowText by remember { mutableStateOf(overrides.contextWindow?.toString() ?: "") }
+    var contextWindowText by remember {
+        mutableStateOf(
+            (overrides.contextWindow ?: baseModel.contextWindow?.takeIf { it > 0 })
+                ?.toString()
+                // [T-context-window-sources] No real value anywhere (no user
+                // override, no metadata from models.dev / catalog) → the
+                // runtime will fall back to the id-heuristic guess. Pre-fill
+                // that guess so the user SEES it (a 1M model silently landing
+                // on 128K wastes paid context) and can correct it before it
+                // ever caps offload/compaction judgment.
+                ?: inferContextWindowTokens(baseModel).toString()
+        )
+    }
     var thinkingEnabled by remember {
         mutableStateOf(overrides.supportsReasoning ?: baseModel.supportsReasoning ?: false)
     }
