@@ -175,8 +175,12 @@
     <string name="token_usage_context_used">Использовано контекста</string>
     <string name="token_usage_context_window">Окно контекста</string>
     <string name="token_usage_context_window_group_limit"> (лимит группы %1$s)</string>
+    <string name="token_usage_context_window_group_limit_applied"> (по лимиту группы %1$s)</string>
+    <string name="token_usage_context_window_heuristic_warning">Модель не сообщает реальное контекстное окно — это оценка. Исправьте ее в деталях модели.</string>
     <string name="token_usage_context_window_group_unlimited"> (без ограничений)</string>
     <string name="token_usage_max_output">Макс. вывод</string>
+    <string name="context_full_dialog_title">Контекст заполнен</string>
+    <string name="context_full_dialog_body">Контекст разговора достиг предела. Чтобы продолжить, начните новый чат или очистите чат. Ваш черновик сохранен — Отмена восстановит его.</string>
     <string name="token_usage_section_thinking">Размышление</string>
     <string name="token_usage_thinking_label">Размышление</string>
     <string name="token_usage_thinking_level">Уровень</string>

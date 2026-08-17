@@ -605,6 +605,18 @@ class ChatViewModel(
     private val _inputText = MutableStateFlow("")
     val inputText: StateFlow<String> = _inputText.asStateFlow()
 
+    // [T-context-exhausted-dialog] iOS-parity prompt for send-at-capacity. When
+    // the context reaches EXHAUSTED the send is NOT silently dropped (Android
+    // pre-fix behaviour) nor hard-blocked behind an inline message — instead
+    // the pending message is stashed and the user is asked what to do
+    // (New Session / Clear Chat / Cancel), mirroring iOS AIChatView's
+    // "Context Full" alert. Cancel restores the stashed text+attachments to
+    // the input field.
+    private val _showContextExhaustedDialog = MutableStateFlow(false)
+    val showContextExhaustedDialog: StateFlow<Boolean> = _showContextExhaustedDialog.asStateFlow()
+    private var pendingExhaustedText: String = ""
+    private var pendingExhaustedHasAttachments = false
+
     /**
      * [T-android-slash-menu-align-ios-prepend] One-shot caret position the
      * composer should apply on the NEXT inputText emission, mirroring iOS
@@ -1398,7 +1410,7 @@ class ChatViewModel(
         get() = effectiveContextWindowTokens()
 
     /**
-     * [T-context-window-live-read] Effective context window for capacity
+     * [T-context-window-sources] Effective context window for capacity
      * judgment (compaction warnings, tool-output offload, empty-response
      * heuristic, Token Usage sheet). Reads LIVE state on every call instead of
      * the `currentModel` snapshot, so editing the model's context window or
@@ -1409,9 +1421,20 @@ class ChatViewModel(
      *      only when the entry can't be found (e.g. synced sessions before
      *      config finished loading);
      *   2. the result is clamped by the bound group's `contextLimitTokens`
-     *      (null / <=0 = unlimited). Pre-fix that group field was write-only
-     *      on Android — persisted by the group editor but never consulted at
-     *      runtime.
+     *      (null / <=0 = unlimited).
+     *
+     * [T-context-window-sources] GROUP-PRIORITY policy: when the model's
+     * context window is only a heuristic id-guess (`[LLMModel.ContextWindowSource].HEURISTIC` —
+     * no real metadata from models.dev / catalog / user override), the guess
+     * has NO authority — a 1M-context model silently landing on the 128K guess
+     * would waste paid context by capping offload/trim at ⅛ of real capacity.
+     * In that case the user's explicit group `contextLimitTokens` IS the
+     * authoritative budget (the user's deliberate expression of how much they
+     * want to spend), so we use it directly instead of `minOf(guess, group)`.
+     * The guess is only kept as a display/capacity fallback when the group has
+     * no limit set either (unlimited). When the model window is EXPLICIT (real
+     * value), we keep the minOf clamp — never assume a window larger than the
+     * model physically supports.
      */
     private fun effectiveContextWindowTokens(): Int? {
         val config = providerRepository.config.value
@@ -1422,8 +1445,38 @@ class ChatViewModel(
         val groupLimit = _selectedGroupId.value
             ?.let { gid -> config.modelGroups.find { it.id == gid }?.contextLimitTokens }
             ?.takeIf { it > 0 }
+        // Group-priority: if the model window is only guessed and the user set
+        // an explicit group limit, the group limit IS the budget.
+        if (liveModel?.contextWindowSource == LLMModel.ContextWindowSource.HEURISTIC && groupLimit != null) {
+            // "Unlimited" means "no override — use the model's own window", so
+            // honour that intent by falling back to the model's (heuristic)
+            // window rather than returning Int.MAX_VALUE as a real capacity.
+            if (groupLimit == Int.MAX_VALUE) return window
+            return groupLimit
+        }
         return if (groupLimit != null) minOf(window, groupLimit) else window
     }
+
+    /**
+     * [T-context-window-sources] Source of the *model-side* context window,
+     * so the Token Usage sheet can flag heuristic guesses (a 1M model whose
+     * metadata wasn't reported silently lands on the 128K id-guess and wastes
+     * paid context) and steer the user to correct the value in the model's
+     * details screen. Mirrors [effectiveContextWindowTokens]'s live-model
+     * resolution: re-resolve the active entry from the current repository
+     * config (folding `ModelOverrides` in), so a user-set override classifies
+     * as explicit. The group-limit clamp is intentionally NOT folded in here —
+     * group clamping is a deliberate user decision, not a metadata gap, so it
+     * must not raise the "heuristic guess" red flag.
+     */
+    val currentModelContextWindowSource: LLMModel.ContextWindowSource?
+        get() {
+            val config = providerRepository.config.value
+            val liveModel = _activeEntryId.value
+                ?.let { id -> config.modelEntries.find { it.id == id }?.model }
+                ?: currentModel
+            return liveModel?.contextWindowSource
+        }
 
     val currentModelMaxOutputTokens: Int?
         get() = currentModel?.maxOutputTokens
@@ -2940,14 +2993,11 @@ class ChatViewModel(
                 true
             }
             ContextPolicy.CheckResult.EXHAUSTED -> {
-                appendSystemInfo(
-                    text = "Context is near the model's limit ($tokens / $window tokens). Send blocked — start a new chat or /compact to continue.",
-                    iconKind = "compact",
-                )
-                // [T-context-enforce-exhausted] Mirror iOS: block the send at the
-                // exhausted boundary instead of letting the context grow past the
-                // window. The user can /compact (folds older turns into a summary)
-                // or start a new chat to continue.
+                // [T-context-exhausted-dialog] iOS parity: don't inline a
+                // "Send blocked" notice here — sendMessage stashes the pending
+                // content and shows the New Session / Clear Chat / Cancel
+                // dialog instead (see sendMessage). Returning false stops the
+                // send; the dialog drives the next action.
                 false
             }
         }
@@ -4434,6 +4484,22 @@ class ChatViewModel(
     // moved to ChatViewModelUiStateExt.kt (extension functions).
 
     /**
+     * [T-context-exhausted-dialog] Dismiss the 'Context Full' dialog.
+     *
+     * @param restoreInput true = Cancel: put the stashed pending message back
+     *   into the input field so nothing the user typed is lost. false = the
+     *   dialog led to New Session / Clear Chat, so the stash is discarded.
+     */
+    fun dismissContextExhaustedDialog(restoreInput: Boolean) {
+        _showContextExhaustedDialog.value = false
+        if (restoreInput) {
+            setInputText(pendingExhaustedText)
+        }
+        pendingExhaustedText = ""
+        pendingExhaustedHasAttachments = false
+    }
+
+    /**
      * T137: Wipe in-memory and on-disk message state for the current session
      * without touching the session's chat files (workspace/, attachments/,
      * offloads/). Mirrors iOS [AIChatViewModel.clearChat] — same surface area,
@@ -5565,7 +5631,17 @@ class ChatViewModel(
         // Context pressure check — warns at the needsCompact threshold but
         // BLOCKS the send at the exhausted threshold (mirroring iOS's
         // compact-before-send dialog). /compact folds history to continue.
-        if (!checkContextBeforeSend()) return
+        // [T-context-exhausted-dialog] On EXHAUSTED we don't just drop the
+        // send: stash the pending message and ask the user via dialog whether
+        // to start a new session / clear chat / cancel (iOS 'Context Full'
+        // alert parity) instead of leaving them stranded behind an inline
+        // "Send blocked" notice.
+        if (!checkContextBeforeSend()) {
+            pendingExhaustedText = trimmed
+            pendingExhaustedHasAttachments = _attachments.value.isNotEmpty()
+            _showContextExhaustedDialog.value = true
+            return
+        }
         // [T5-auto-compact] At the compact line but below the hard ceiling —
         // trigger the existing compact pipeline automatically instead of only
         // warning (OmniBot AgentConversationContextCompactor parity). Must
@@ -6200,12 +6276,14 @@ class ChatViewModel(
         // The global cap means we never send more than 128K regardless of
         // what the model claims it can output.
         val maxOutputCeiling = minOf(GLOBAL_MAX_TOKENS_CEILING, provider.effectiveMaxOutputTokens(model))
-        // Context window: model.contextWindow if known, else the shared
-        // model-id heuristic. [T-anthropic-context-window] Route through
-        // LLMModel.contextWindowTokens so the corrected Claude-1M / Gemini-1M
-        // values apply here too, instead of the stale local "everything 200K"
-        // copy that under-reported modern Claude/Gemini windows.
-        val contextWindow = model.contextWindowTokens
+        // [T-context-window-sources] Single source of truth for the context
+        // window: route through effectiveContextWindowTokens() (group-priority
+        // when the model window is heuristic, minOf clamp when explicit) so
+        // output sizing uses the SAME window as offload/trim/block — not the
+        // raw model guess, which for a 1M model silently reported as 128K
+        // would cap output alongside capping the budget. Falls back to the
+        // model's own window when effective resolution fails (no live model).
+        val contextWindow = effectiveContextWindowTokens() ?: model.contextWindowTokens
         if (contextWindow <= 0) return maxOutputCeiling
         val inputTokens = if (lastContextTokens > 0) lastContextTokens else 0
         val remaining = contextWindow - inputTokens

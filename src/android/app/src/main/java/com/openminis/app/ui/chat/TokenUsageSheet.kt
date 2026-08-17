@@ -27,6 +27,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.openminis.app.R
+import com.openminis.app.data.model.LLMModel
 
 /**
  * Session Token Usage bottom sheet — mirrors iOS `TokenUsageSheet` and uses
@@ -51,6 +52,7 @@ fun TokenUsageSheet(
 ) {
     var stats by remember { mutableStateOf<ChatViewModel.SessionTokenStats?>(null) }
     val contextWindow = remember { viewModel.currentModelContextWindow }
+    val contextWindowSource = remember { viewModel.currentModelContextWindowSource }
     val groupLimit = remember { viewModel.currentGroupContextLimit }
     val maxOutput = remember { viewModel.currentModelMaxOutputTokens }
     val thinking = remember { viewModel.thinkingInfo() }
@@ -87,29 +89,48 @@ fun TokenUsageSheet(
             StatSection(title = stringResource(R.string.token_usage_section_context)) {
                 StatRow(stringResource(R.string.token_usage_context_used), formatTokens(s?.context ?: 0))
                 contextWindow?.let { w ->
-                    // T-token-sheet-group-limit-annotation: when the effective
-                    // window is clamped by the model's physical window below
-                    // the group-configured limit (or the group is "Unlimited"),
-                    // annotate so the row doesn't look like it disagrees with
-                    // the group editor. The minOf clamp itself stays — capacity
-                    // judgment must never assume a window larger than the
-                    // model actually supports.
-                    val annotation = groupLimit?.let { gl ->
-                        when {
-                            gl.unlimited ->
-                                stringResource(R.string.token_usage_context_window_group_unlimited)
-                            w < gl.tokens ->
-                                stringResource(
-                                    R.string.token_usage_context_window_group_limit,
-                                    formatTokens(gl.tokens),
-                                )
-                            else -> null
-                        }
+                    // [T-context-window-sources] Source-aware display.
+                    //  * EXPLICIT model window: value = model window (minOf with
+                    //    group limit). Annotate when clamped by the group limit.
+                    //  * HEURISTIC model window (no metadata): group-priority —
+                    //    if a group limit exists, w IS that limit (authoritative
+                    //    budget), otherwise w is the id-guess. In both cases the
+                    //    element's SelestialGuess shadow should not masquerade as
+                    //    fact, and the running "group limit" provenance should be
+                    //    called out.
+                    val isHeuristic = contextWindowSource == LLMModel.ContextWindowSource.HEURISTIC
+                    val annotation = when {
+                        isHeuristic && groupLimit != null && !groupLimit.unlimited ->
+                            // Model window guessed + group limit set → group limit
+                            // is the authoritative budget we're running on.
+                            stringResource(R.string.token_usage_context_window_group_limit_applied, formatTokens(w))
+                        groupLimit?.unlimited == true ->
+                            stringResource(R.string.token_usage_context_window_group_unlimited)
+                        groupLimit != null && w < groupLimit.tokens ->
+                            stringResource(
+                                R.string.token_usage_context_window_group_limit,
+                                formatTokens(groupLimit.tokens),
+                            )
+                        else -> null
                     }
                     StatRow(
                         stringResource(R.string.token_usage_context_window),
                         if (annotation != null) formatTokens(w) + annotation else formatTokens(w),
                     )
+                    if (isHeuristic) {
+                        // Model side is only an id-guess (no models.dev / catalog
+                        // metadata, no user override). A 1M model silently
+                        // landing on the 128K guess wastes paid context, so flag
+                        // it and point to the model-details fix. When a group
+                        // limit is set it has already taken over as the budget,
+                        // so this is informational about the model's real window.
+                        Text(
+                            text = stringResource(R.string.token_usage_context_window_heuristic_warning),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(top = 4.dp, bottom = 8.dp),
+                        )
+                    }
                 }
                 maxOutput?.let { StatRow(stringResource(R.string.token_usage_max_output), formatTokens(it)) }
             }
