@@ -1,7 +1,9 @@
 package com.openminis.app.sandbox
 
+import android.annotation.SuppressLint
 import android.app.ActivityManager
 import android.content.Context
+import android.content.Intent
 import android.os.Debug
 import android.os.SystemClock
 import android.util.Log
@@ -10,6 +12,8 @@ import com.openminis.app.agent.runtime.RetryOutcome
 import com.openminis.app.agent.runtime.RetryPolicy
 import com.openminis.app.agent.runtime.RetrySafety
 import com.openminis.app.data.repository.EnvVarRepository
+import com.openminis.app.sandbox.offload.ModelExecutionService
+import com.openminis.app.sandbox.offload.ModelExecutionService
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
@@ -696,8 +700,39 @@ object ExecutionCoordinator {
             ))
             Log.w(TAG, "Post-recycle GC: native ${startingNative}→${nativeNow}MB (freed ${startingNative - nativeNow}MB), " +
                 "java ${startingJava}→${javaNow}MB (freed ${startingJava - javaNow}MB), rounds=$roundsUsed")
+            // [direction-A step4] Pressure reclaim: if the app native heap is still
+            // at/above the LOCKED floor after GC, kill the :modelservice process so the
+            // DirectByteBuffer/streaming native held there is returned to the OS. This
+            // keeps offloaded chat streaming from pushing the app to the lock point;
+            // the next offload startService restarts the service fresh.
+            maybeReclaimModelService(nativeNowMb = nativeNow)
         } catch (_: Throwable) {
             // Never let memory recovery break the calling flow.
+        }
+    }
+
+    /**
+     * [direction-A step4] Kill the :modelservice process when the app native heap is
+     * still above the locked floor after GC. The generation of streaming LLM calls is
+     * offloaded to :modelservice (direction A); its process holds DirectByteBuffer /
+     * streaming native that GC in the app process cannot touch. Stopping the service
+     * terminates that process and returns its native to the OS; the next offload call
+     * (ChatStreamOffloadHandler.stream) restarts it. Only acts when pressure is real.
+     */
+    @SuppressLint("MissingPermission")
+    private fun maybeReclaimModelService(nativeNowMb: Long) {
+        if (!::appContext.isInitialized) return
+        // Only reclaim when the app is itself in the locked/pressure band; don't
+        // kill the service on every idle GC (level 0/1 are normal operation).
+        val memAvailMb = systemMemAvailableMB()
+        val phase = internalDegradationPhase(nativeNowMb, memAvailMb)
+        if (phase.ordinal < ShellPhase.CRITICAL.ordinal) return // not pressurized enough
+        try {
+            appContext.stopService(Intent(appContext, ModelExecutionService::class.java))
+            Log.w(TAG, "[direction-A] Reclaimed :modelservice (native still ${nativeNowMb}MB, phase $phase) — " +
+                "service will restart on next offload")
+        } catch (e: Throwable) {
+            Log.w(TAG, "[direction-A] stopService(:modelservice) failed", e)
         }
     }
 
