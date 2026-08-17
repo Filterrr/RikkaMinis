@@ -6,6 +6,7 @@ import android.util.Log
 import com.openminis.app.data.model.LLMStreamChunk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
@@ -53,11 +54,11 @@ object ChatStreamOffloadHandler {
             throw RuntimeException("stream staging failed", e)
         }
 
+        val cancelFile = File(dir, ModelExecutionService.CANCEL_FILE)
         try {
             val requestFile = File(dir, "request.json")
             val streamFile = File(dir, ModelExecutionService.STREAM_FILE)
             val resultFile = File(dir, ModelExecutionService.RESULT_FILE)
-            val cancelFile = File(dir, ModelExecutionService.CANCEL_FILE)
             try { streamFile.createNewFile() } catch (e: Exception) {
                 throw RuntimeException("cannot create stream file", e)
             }

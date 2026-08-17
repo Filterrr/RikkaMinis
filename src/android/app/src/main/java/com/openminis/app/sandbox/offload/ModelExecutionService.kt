@@ -420,18 +420,20 @@ class ModelExecutionService : Service() {
             // ── Provider ──
             @Suppress("UNCHECKED_CAST")
             val provider = com.openminis.app.provider.ProviderFactory.create(instance, apiKey, model, this)
-            provider.streamMessage(
-                messages = messages,
-                systemPrompt = systemPrompt,
-                maxTokens = maxTokens,
-                temperature = temperature,
-                tools = tools,
-                thinkingLevel = thinkingLevel,
-            ).collect { chunk ->
-                if (cancelFile.exists()) {
-                    throw IllegalStateException("cancelled")
+            kotlinx.coroutines.runBlocking {
+                provider.streamMessage(
+                    messages = messages,
+                    systemPrompt = systemPrompt,
+                    maxTokens = maxTokens,
+                    temperature = temperature,
+                    tools = tools,
+                    thinkingLevel = thinkingLevel,
+                ).collect { chunk ->
+                    if (cancelFile.exists()) {
+                        throw IllegalStateException("cancelled")
+                    }
+                    appendLine(ChatStreamJsonl.encode(chunk))
                 }
-                appendLine(ChatStreamJsonl.encode(chunk))
             }
             appendLine(ChatStreamJsonl.DONE_LINE)
             resultFile.writeText(JSONObject().apply {
