@@ -29,7 +29,9 @@ class NativeCrashHandlerTest {
             var lineEnd = i
             while (lineEnd < text.length && text[lineEnd] != '\n') lineEnd++
             val lineLen = lineEnd - lineStart
-            if (lineLen >= keyLen && text.regionMatches(lineStart, key, 0, keyLen)) {
+            if (lineLen >= keyLen && text.regionMatches(lineStart, key, 0, keyLen) &&
+                lineStart + keyLen < lineEnd && text[lineStart + keyLen] == ':'
+            ) {
                 // Extract value after key
                 var v = lineStart + keyLen
                 if (v < lineEnd && text[v] == ':') v++
