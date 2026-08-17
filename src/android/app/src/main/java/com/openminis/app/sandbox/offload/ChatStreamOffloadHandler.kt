@@ -79,7 +79,7 @@ object ChatStreamOffloadHandler {
             }
 
             var lastRead = 0L
-            val completedNormally = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
+            val timedOut = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
                 while (true) {
                     ensureActive()
                     val newLen = streamFile.length()
@@ -97,8 +97,8 @@ object ChatStreamOffloadHandler {
                     }
                     delay(POLL_INTERVAL_MS)
                 }
-            } ?: false
-            if (!completedNormally) {
+            } == null
+            if (timedOut) {
                 throw RuntimeException("stream timed out after ${STREAM_TIMEOUT_MS}ms")
             }
         } finally {
