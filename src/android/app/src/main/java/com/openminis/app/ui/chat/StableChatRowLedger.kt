@@ -316,8 +316,34 @@ internal class StableChatRowLedger {
      * (typing placeholder) are dropped as transient.
      */
     private fun syncActiveAssistantStatus(messages: List<ChatMessage>) {
-        if (activeAssistantIds.isEmpty()) return
+        // ── Pass 0: converged run-group cards, independent of the active
+        // set. The user's interrupt (send while streaming) converges the
+        // message (isStreaming=false, tools CANCELLED) and prune() removes
+        // it from activeAssistantIds on the very next reconcile — so a
+        // card-dependent pass would never reach it. But the card itself is
+        // still published. Scan the published rows directly: for every
+        // AssistantToolRunGroup whose message is no longer live, rebuild the
+        // canonical card and swap it in place. Only that row moves; nothing
+        // else (text rows, other turns) is touched, and the key
+        // ("toolrun:<id>") is byte-identical, so the LazyColumn slot is
+        // updated in place with zero churn — the local refresh the user
+        // asked for ("刷新那个折叠思考和工具的框").
         val freshById = messages.associateBy { it.id }
+        for (i in rows.indices) {
+            val row = rows[i]
+            if (row !is FlatChatItem.AssistantToolRunGroup) continue
+            val freshMsg = freshById[row.messageId] ?: continue
+            if (isLiveAssistant(freshMsg)) continue
+            // Message converged. Build its canonical rows and find the
+            // fresh card with the same key.
+            val freshAll = buildNewMessageRows(freshMsg, null)
+            val freshCard = freshAll.firstOrNull { it.key == row.key } ?: continue
+            if (freshCard !is FlatChatItem.AssistantToolRunGroup) continue
+            if (!sameLiveView(row, freshCard)) {
+                rows[i] = freshCard
+            }
+        }
+        if (activeAssistantIds.isEmpty()) return
         for (messageId in activeAssistantIds.toList()) {
             val freshMsg = freshById[messageId] ?: continue
             val start = rows.indexOfFirst { it.owningMessageId() == messageId }
