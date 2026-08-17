@@ -20,6 +20,7 @@ class UnavailableFieldTest {
         override val access: ConfigAccess = ConfigAccess.READWRITE,
     ) : ConfigField {
         override val displayName = "Sample feature"
+        override val description = "A sample feature."
         override val valueSchema = ConfigSchema.Bool
         override val risk = ConfigRisk.NORMAL
         override val revertable = true
