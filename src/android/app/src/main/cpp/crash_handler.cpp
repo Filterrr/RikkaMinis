@@ -64,7 +64,8 @@ static bool read_status_field(const char* key, char* outbuf, size_t outsize) {
             size_t line_end = line_start;
             while (line_end < total && scan[line_end] != '\n') line_end++;
             size_t line_len = line_end - line_start;
-            if (line_len >= keylen && memcmp(scan + line_start, key, keylen) == 0) {
+            if (line_len >= keylen && memcmp(scan + line_start, key, keylen) == 0 &&
+                line_start + keylen < line_end && scan[line_start + keylen] == ':') {
                 // Value begins after key, skip spaces/tabs (status uses ": ").
                 size_t v = line_start + keylen;
                 if (v < line_end && scan[v] == ':') v++;
