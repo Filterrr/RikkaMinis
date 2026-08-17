@@ -47,7 +47,7 @@ interface ConfigField {
     /** Apply [value]. Schema validation runs in the bridge before this. */
     fun write(value: ConfigValue)
 
-    /** Top-level scope = first dot segment. Used for audit `--scope` filtering. */
+    /** Top-level scope = first dot segment. Used to group fields by topic in help. */
     val scope: String
         get() = path.substringBefore('.', missingDelimiterValue = "unknown")
 }
