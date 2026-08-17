@@ -47,6 +47,8 @@ import com.openminis.app.data.model.LLMStreamChunk
 import com.openminis.app.data.model.LLMUsage
 import com.openminis.app.data.model.ModelGroup
 import com.openminis.app.data.model.ThinkingLevel
+import com.openminis.app.sandbox.offload.ChatStreamOffloadHandler
+import com.openminis.app.sandbox.offload.ModelExecutionDispatcher
 import com.openminis.app.R
 import com.openminis.app.data.repository.ChatRepository
 import com.openminis.app.data.repository.MemoryRepository
@@ -91,6 +93,9 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.async
@@ -121,6 +126,8 @@ class ChatViewModel(
 
     companion object {
         internal const val TAG = "ChatViewModel"
+        /** Direction A: prefer offloading chat turns to :modelservice (remote process). Set false to disable. */
+        private const val CHAT_STREAM_OFFLOAD_ENABLED = true
         // [T-preflight-tool-title-nonblocking] Fields kept in each tool's
         // `required` list (so the schema keeps nudging the model to emit them —
         // tool_title drives the live pill header) but which must NOT block the
@@ -6644,6 +6651,60 @@ class ChatViewModel(
         return 0
     }
 
+    /**
+     * Direction A: stream a chat turn, preferring :modelservice (remote process) so native heap
+     * from the LLM call is reclaimed when the service dies. Falls back to in-process streaming
+     * when the provider has no instance context, remote launch fails, or the setting is off.
+     */
+    private fun streamChatTurnOffloaded(
+        provider: LLMProvider,
+        messages: List<LLMMessage>,
+        systemPrompt: String?,
+        maxTokens: Int,
+        temperature: Double?,
+        imageParts: List<LLMMessage.ImagePart>,
+        tools: List<AgentToolDefinition>,
+        thinkingLevel: ThinkingLevel,
+    ): Flow<LLMStreamChunk> {
+        val instance = provider.instanceContext
+        if (instance == null || !CHAT_STREAM_OFFLOAD_ENABLED) {
+            // No instance context (hand-built/mock provider) or offload disabled → in-process.
+            return provider.streamMessage(
+                messages, systemPrompt, maxTokens, temperature, imageParts, tools, thinkingLevel,
+            )
+        }
+        val requestJson = runCatching {
+            ModelExecutionDispatcher.buildRequestJson(
+                instance = instance,
+                model = provider.model,
+                messages = messages,
+                systemPrompt = systemPrompt,
+                maxTokens = maxTokens,
+                temperature = temperature,
+                imageParts = imageParts,
+                inputJson = null,
+                outputExt = null,
+                tools = tools,
+                thinkingLevel = thinkingLevel,
+                streaming = true,
+            )
+        }.getOrNull()
+        if (requestJson == null) {
+            Log.w(TAG, "chat stream offload: request build failed; in-process fallback")
+            return provider.streamMessage(
+                messages, systemPrompt, maxTokens, temperature, imageParts, tools, thinkingLevel,
+            )
+        }
+        return runCatching {
+            ChatStreamOffloadHandler.stream(context, requestJson)
+        }.getOrElse { e ->
+            Log.w(TAG, "chat stream offload launch failed; in-process fallback", e)
+            provider.streamMessage(
+                messages, systemPrompt, maxTokens, temperature, imageParts, tools, thinkingLevel,
+            )
+        }
+    }
+
     private suspend fun runAgentLoop(
         provider: LLMProvider,
         systemPrompt: String?,
@@ -7028,9 +7089,12 @@ class ChatViewModel(
                     // [_compactSummary] is prepended as a `<context-summary>`
                     // user message. Falls through to the raw agentHistory when
                     // no compact has happened, so the common path stays zero-copy.
-                    currentProvider.streamMessage(
-                        applyRequestImageBudget(effectiveAgentHistory()),
-                        systemPrompt, dynamicMaxTokens(currentProvider, lastContextTokens),
+                    streamChatTurnOffloaded(
+                        provider = currentProvider,
+                        messages = applyRequestImageBudget(effectiveAgentHistory()),
+                        systemPrompt = systemPrompt,
+                        maxTokens = dynamicMaxTokens(currentProvider, lastContextTokens),
+                        imageParts = emptyList(),
                         tools = agentTools,
                         thinkingLevel = if (currentModelSupportsReasoning) _thinkingLevel.value else ThinkingLevel.OFF,
                     ).collect { chunk ->

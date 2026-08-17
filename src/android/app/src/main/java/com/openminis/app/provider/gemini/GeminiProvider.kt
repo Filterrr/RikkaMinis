@@ -41,6 +41,7 @@ class GeminiProvider(
     private val basePath: String = "https://generativelanguage.googleapis.com/v1beta",
 ) : LLMProvider {
     override val name = "Google"
+    override var instanceContext: com.openminis.app.data.model.ProviderInstance? = null
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
