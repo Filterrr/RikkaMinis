@@ -42,4 +42,14 @@ object NativeCrashHandler {
     }
 
     private external fun nativeInstall(logDir: String)
+
+    /**
+     * Trigger a native abort for testing purposes.
+     * Only available in debug builds.
+     */
+    fun triggerNativeAbort() {
+        nativeTriggerAbort()
+    }
+
+    private external fun nativeTriggerAbort()
 }

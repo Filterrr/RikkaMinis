@@ -36,6 +36,7 @@ import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Terminal
+import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -88,6 +89,9 @@ fun SettingsScreen(
     // OEM autostart guidance). Default no-op so older callers/tests
     // don't need to be retrofitted.
     onBackgroundClick: () -> Unit = {},
+    // Tier 0: native crash test trigger (debug builds only). Trigger a
+    // controlled native abort to verify the crash handler's report.
+    onCrashTestClick: () -> Unit = {},
 ) {
     val context = LocalContext.current
     Scaffold(
@@ -266,6 +270,18 @@ fun SettingsScreen(
                     title = stringResource(R.string.settings_section_logs),
                     subtitle = stringResource(R.string.settings_logs_subtitle),
                     onClick = onLogsClick,
+                    showDivider = false,
+                )
+            }
+
+            // -- Crash test (temporary verification, removed post-Tier0) --
+            SettingsSection(title = "Crash Test (temp)") {
+                SettingsItem(
+                    icon = Icons.Outlined.Warning,
+                    iconColor = ChatColors.error,
+                    title = "Trigger Native Crash",
+                    subtitle = "abort() to verify crash handler fields",
+                    onClick = onCrashTestClick,
                     showDivider = false,
                 )
             }
