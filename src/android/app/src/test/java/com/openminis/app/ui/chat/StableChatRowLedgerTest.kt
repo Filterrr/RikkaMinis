@@ -82,16 +82,17 @@ class StableChatRowLedgerTest {
         // Turn starts: thinking streams (no status yet).
         val t1 = listOf(userMessage("u1"), assistantMessage(msgId, blocks = listOf(thinkingBlock("th1", "Reasoning")), isStreaming = true))
         val k1 = keysOf(ledger.reconcile(t1))
-        // header + one toolrun group (thinking folded in)
-        assertEquals(listOf("user:u1", "header:a1", "toolrun:a1"), k1)
+        // header + one independent thinking row (thinking no longer folded
+        // into a tool run group — no tool yet).
+        assertEquals(listOf("user:u1", "header:a1", "thinking:a1:th1"), k1)
 
-        // Tool appears.
+        // Tool appears → the tool run group row appears alongside thinking.
         val t2 = listOf(userMessage("u1"), assistantMessage(msgId,
             blocks = listOf(thinkingBlock("th1", "Reasoning", ToolBlockStatus.SUCCESS), toolBlock("tool_1", ToolBlockStatus.RUNNING)),
             isStreaming = true))
         val k2 = keysOf(ledger.reconcile(t2))
-        // toolrun already published — no key churn, content updated in place.
-        assertEquals(k1, k2)
+        // thinking row + new toolrun row; no key churn on the prefix.
+        assertEquals(listOf("user:u1", "header:a1", "thinking:a1:th1", "toolrun:a1"), k2)
 
         // Tool finished + text starts.
         val t3 = listOf(userMessage("u1"), assistantMessage(msgId,
@@ -301,7 +302,7 @@ class StableChatRowLedgerTest {
             assistantMessage("a1", blocks = listOf(thinkingBlock("th1", "Reasoning")), isStreaming = true),
         )
         val k1 = keysOf(ledger.reconcile(turn1))
-        assertTrue(k1.contains("toolrun:a1")) // thinking folded into the toolrun row
+        assertTrue(k1.contains("thinking:a1:th1")) // thinking is its own row (no tool yet)
 
         // User interrupts while streaming: queued bubble appears (enqueuePrompt),
         // A1 is still in the list.
@@ -325,7 +326,7 @@ class StableChatRowLedgerTest {
         // What ChatScreen does on incompatibility: full seed → stale rows gone.
         ledger.seed(buildFlatChatItems(afterCancel), afterCancel.size)
         val k3 = keysOf(ledger.snapshot())
-        assertFalse("stale thinking row must be gone", k3.contains("toolrun:a1"))
+        assertFalse("stale thinking row must be gone", k3.contains("thinking:a1:th1"))
         assertTrue(k3.contains("user:q2"))
     }
 
