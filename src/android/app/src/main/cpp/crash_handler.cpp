@@ -15,7 +15,6 @@
 #include <fcntl.h>
 #include <cstring>
 #include <cstdio>
-#include <cstdlib>
 #include <ctime>
 #include <sys/stat.h>
 #include <sys/syscall.h>
@@ -277,14 +276,4 @@ Java_com_openminis_app_crash_NativeCrashHandler_nativeInstall(
 
     __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
         "installed: dir=%s", g_log_dir);
-}
-
-extern "C" JNIEXPORT void JNICALL
-Java_com_openminis_app_crash_NativeCrashHandler_nativeTriggerAbort(
-        JNIEnv* env, jobject /*thiz*/) {
-    // Trigger a controlled native abort. This is a test-only entry point
-    // to verify the crash handler's output (Process, VmRSS, Threads fields).
-    // The signal handler writes the crash report, then re-raises SIG_DFL
-    // so the app exits normally.
-    abort();
 }

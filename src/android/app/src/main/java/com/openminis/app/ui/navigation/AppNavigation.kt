@@ -629,8 +629,6 @@ fun AppNavigation(
                 onMountedFoldersClick = { navController.safeNavigate(Routes.MOUNTED_FOLDERS) },
                 onSharedFoldersClick = { navController.safeNavigate(Routes.SHARED_FOLDERS) },
                 onBackupClick = { navController.safeNavigate(Routes.BACKUP) },
-                // Tier 0 temporary: trigger a native abort to verify crash handler output
-                onCrashTestClick = { com.openminis.app.crash.NativeCrashHandler.triggerNativeAbort() },
             )
         }
 
