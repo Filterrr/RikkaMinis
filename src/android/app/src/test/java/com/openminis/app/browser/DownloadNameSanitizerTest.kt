@@ -28,7 +28,7 @@ class DownloadNameSanitizerTest {
     }
 
     @Test fun `200 character name passes`() {
-        val name = "a".repeat(200) + ".html"
+        val name = "a".repeat(200)
         assertEquals(name, BrowserTabPool.sanitizeDownloadName(name))
     }
 
@@ -58,7 +58,7 @@ class DownloadNameSanitizerTest {
     }
 
     @Test fun `201 character name is rejected`() {
-        assertNull(BrowserTabPool.sanitizeDownloadName("a".repeat(201) + ".html"))
+        assertNull(BrowserTabPool.sanitizeDownloadName("a".repeat(201)))
     }
 
     @Test fun `trailing slash is rejected as a directory`() {
