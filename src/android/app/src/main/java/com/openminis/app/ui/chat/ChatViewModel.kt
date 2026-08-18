@@ -2678,79 +2678,11 @@ class ChatViewModel(
      *
      * Mirrors iOS `WalkBackResult` in AIChatViewModel.swift (8b76cd74).
      */
-    private data class WalkBackResult(
-        val priorIdx: Int?,
-        val userTextTurnsFound: Int,
-        val messageCount: Int,
-        /** "userTextTargetMet" | "messageCapWouldExceed" | "reachedStart" | "invalidAnchor" */
-        val stopReason: String,
-    )
-
-    /**
-     * Walk back from `anchorIdx` toward 0, deciding ONLY at user-message
-     * boundaries whether to include the next round. Stops when:
-     * - we've collected `maxUserTextTurns` user-text turns (success), OR
-     * - including the next user round would push total messages over
-     *   `maxMessages` (cap reason — don't split a user/assistant/tool round
-     *   in the middle, otherwise a tool_use would be orphaned without its
-     *   tool_result), OR
-     * - we hit index 0 (start of history).
-     *
-     * Port of iOS `walkBackUserTurnsBounded` (AIChatViewModel.swift, 8b76cd74).
-     */
     private fun walkBackUserTurnsBounded(
         anchorIdx: Int,
         maxUserTextTurns: Int,
         maxMessages: Int,
-    ): WalkBackResult {
-        if (anchorIdx < 0 || anchorIdx >= agentHistory.size) {
-            return WalkBackResult(null, 0, 0, "invalidAnchor")
-        }
-        var acceptedPriorIdx: Int? = null
-        var acceptedUserTextTurns = 0
-        var acceptedMessageCount = 0
-
-        var i = anchorIdx
-        while (i >= 0) {
-            val msg = agentHistory[i]
-            if (msg.role != LLMMessage.Role.USER) {
-                i -= 1
-                continue
-            }
-            val candidateMessageCount = anchorIdx - i + 1
-            if (candidateMessageCount > maxMessages) {
-                return WalkBackResult(
-                    priorIdx = acceptedPriorIdx,
-                    userTextTurnsFound = acceptedUserTextTurns,
-                    messageCount = acceptedMessageCount,
-                    stopReason = "messageCapWouldExceed",
-                )
-            }
-            // Accept this user as the new tentative priorIdx.
-            acceptedPriorIdx = i
-            acceptedMessageCount = candidateMessageCount
-            val hasText = msg.content.isNotBlank() ||
-                msg.contentParts.any { it is AgentContentPart.Text && it.text.isNotBlank() }
-            if (hasText) {
-                acceptedUserTextTurns += 1
-                if (acceptedUserTextTurns >= maxUserTextTurns) {
-                    return WalkBackResult(
-                        priorIdx = acceptedPriorIdx,
-                        userTextTurnsFound = acceptedUserTextTurns,
-                        messageCount = acceptedMessageCount,
-                        stopReason = "userTextTargetMet",
-                    )
-                }
-            }
-            i -= 1
-        }
-        return WalkBackResult(
-            priorIdx = acceptedPriorIdx,
-            userTextTurnsFound = acceptedUserTextTurns,
-            messageCount = acceptedMessageCount,
-            stopReason = "reachedStart",
-        )
-    }
+    ): WalkBackResult = walkBackUserTurnsBounded(agentHistory, anchorIdx, maxUserTextTurns, maxMessages)
 
     /**
      * Summarize [messages], recursively halving and merging when the input
@@ -2866,19 +2798,6 @@ class ChatViewModel(
      * `isContextTooLargeError` uses (AIChatViewModel+Compaction.swift:879).
      * When true, the splitter halves the input and retries.
      */
-    private fun isContextTooLargeError(error: Throwable): Boolean {
-        val desc = (error.message ?: error.toString()).lowercase()
-        return desc.contains("too many tokens") ||
-            desc.contains("context length") ||
-            desc.contains("max_tokens") ||
-            desc.contains("content is too long") ||
-            desc.contains("exceeds the model") ||
-            desc.contains("request too large") ||
-            desc.contains("prompt is too long") ||
-            desc.contains("token limit") ||
-            desc.contains("context window")
-    }
-
     /**
      * Consult [ContextPolicy] before sending. Returns true to proceed.
      *
@@ -8912,42 +8831,6 @@ class ChatViewModel(
             val file = traceRunFile ?: return
             file.appendText("$line\n")
         }
-    }
-
-    /**
-     * T7-A: 把 [AgentExecutionBudget] 的上限序列化为 trace_start 的
-     * initial_budget JSON（schema §initial_budget：max_* 上限字段）。
-     * 只写结构化计数，不写任何 token 原文。
-     */
-    private fun t7InitialBudgetJson(budget: AgentExecutionBudget): String {
-        val o = org.json.JSONObject()
-        o.put("deadline_monotonic_ms", budget.deadlineMonotonicMs)
-        o.put("max_turns", budget.maxTurns)
-        o.put("max_provider_attempts", budget.maxProviderAttempts)
-        o.put("max_tool_calls", budget.maxToolCalls)
-        o.put("max_shell_commands", budget.maxShellCommands)
-        o.put("max_compaction_calls", budget.maxCompactionCalls)
-        o.put("max_concurrent_tools", budget.maxConcurrentTools)
-        budget.maxEstimatedTokens?.let { o.put("max_estimated_tokens", it) }
-        return o.toString()
-    }
-
-    /**
-     * T7-A: 把 [BudgetSnapshot] 序列化为 trace_end 的 budget_final_snapshot
-     * JSON（schema：`*_consumed` 已用量字段）。estimatedTokensUsed 为 null
-     * 时省略，不伪造精确值。写失败不影响主执行。
-     */
-    private fun t7BudgetSnapshotJson(snapshot: BudgetSnapshot): String {
-        val o = org.json.JSONObject()
-        o.put("turns_consumed", snapshot.turnsUsed)
-        o.put("provider_attempts_consumed", snapshot.providerAttemptsUsed)
-        o.put("tool_calls_consumed", snapshot.toolCallsUsed)
-        o.put("shell_commands_consumed", snapshot.shellCommandsUsed)
-        o.put("compaction_calls_consumed", snapshot.compactionCallsUsed)
-        snapshot.estimatedTokensUsed?.let { o.put("estimated_tokens_consumed", it) }
-        o.put("concurrent_tools_active", snapshot.concurrentToolsActive)
-        o.put("is_expired", snapshot.isExpired)
-        return o.toString()
     }
 
     /**
