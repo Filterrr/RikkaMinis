@@ -4,6 +4,7 @@ import com.openminis.app.data.db.CompactMarkerEntity
 import com.openminis.app.data.model.AgentContentPart
 import com.openminis.app.data.model.LLMMessage
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -174,5 +175,67 @@ class ChatCompactionLogicTest {
         )
         val out = buildConversationTextForSummary(h)
         assertTrue(out.contains("[result:toolname]: the output"))
+    }
+
+    // ── isContextTooLargeError ─────────────────────────────────
+
+    @Test
+    fun `isContextTooLargeError matches known too-large substrings`() {
+        assertTrue(isContextTooLargeError(IllegalStateException("context length exceeded")))
+        assertTrue(isContextTooLargeError(IllegalStateException("request too large")))
+        assertTrue(isContextTooLargeError(IllegalStateException("message too many tokens")))
+        assertTrue(isContextTooLargeError(IllegalStateException("exceeds the model's context window")))
+    }
+
+    @Test
+    fun `isContextTooLargeError is case insensitive and rejects unrelated`() {
+        assertTrue(isContextTooLargeError(IllegalStateException("CONTEXT WINDOW limit")))
+        assertFalse(isContextTooLargeError(IllegalStateException("network timeout")))
+        assertFalse(isContextTooLargeError(IllegalStateException("rate limited")))
+    }
+
+    // ── walkBackUserTurnsBounded ───────────────────────────────
+
+    @Test
+    fun `walkBack invalid anchor returns invalidAnchor`() {
+        assertEquals("invalidAnchor", walkBackUserTurnsBounded(emptyList(), 0, 2, 100).stopReason)
+        assertEquals("invalidAnchor", walkBackUserTurnsBounded(listOf(user("u1")), 5, 2, 100).stopReason)
+    }
+
+    @Test
+    fun `walkBack collects user text turns until target met`() {
+        val h = listOf(
+            user("u1"), assistant("a1"),
+            user("u2"), assistant("a2"),
+            user("u3"),
+        )
+        val r = walkBackUserTurnsBounded(h, anchorIdx = 4, maxUserTextTurns = 2, maxMessages = 100)
+        assertEquals("userTextTargetMet", r.stopReason)
+        assertEquals(2, r.userTextTurnsFound)
+        assertEquals(2, r.priorIdx)   // u2 at index 2 is the 2nd user turn
+    }
+
+    @Test
+    fun `walkBack stops at message cap without splitting a round`() {
+        // 5 messages, cap=3 → walking back from index 4 would take (4-0+1)=5 > 3,
+        // so it must stop before including the oldest round.
+        val h = listOf(
+            user("u1"), assistant("a1"),   // round 1
+            user("u2"), assistant("a2"),   // round 2
+            user("u3"),                    // round 3
+        )
+        val r = walkBackUserTurnsBounded(h, anchorIdx = 4, maxUserTextTurns = 10, maxMessages = 3)
+        assertEquals("messageCapWouldExceed", r.stopReason)
+        // accepted: u2 at idx2 and u3 at idx4 are within cap (3 messages = idx2..4)
+        assertEquals(2, r.userTextTurnsFound)
+        assertEquals(2, r.priorIdx)
+    }
+
+    @Test
+    fun `walkBack reaches start when history is short`() {
+        val h = listOf(user("u1"), assistant("a1"))
+        val r = walkBackUserTurnsBounded(h, anchorIdx = 1, maxUserTextTurns = 10, maxMessages = 100)
+        assertEquals("reachedStart", r.stopReason)
+        assertEquals(1, r.userTextTurnsFound)   // only u1 has text
     }
 }

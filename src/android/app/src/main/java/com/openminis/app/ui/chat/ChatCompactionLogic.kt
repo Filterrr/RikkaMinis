@@ -130,3 +130,98 @@ fun buildConversationTextForSummary(history: List<LLMMessage>): String = buildSt
         }
     }
 }
+
+/**
+ * Match provider error text against the substring set iOS
+ * `isContextTooLargeError` uses (AIChatViewModel+Compaction.swift:879).
+ * When true, the splitter halves the input and retries.
+ */
+fun isContextTooLargeError(error: Throwable): Boolean {
+    val desc = (error.message ?: error.toString()).lowercase()
+    return desc.contains("too many tokens") ||
+        desc.contains("context length") ||
+        desc.contains("max_tokens") ||
+        desc.contains("content is too long") ||
+        desc.contains("exceeds the model") ||
+        desc.contains("request too large") ||
+        desc.contains("prompt is too long") ||
+        desc.contains("token limit") ||
+        desc.contains("context window")
+}
+
+/** Result of [walkBackUserTurnsBounded]. */
+data class WalkBackResult(
+    val priorIdx: Int?,
+    val userTextTurnsFound: Int,
+    val messageCount: Int,
+    /** "userTextTargetMet" | "messageCapWouldExceed" | "reachedStart" | "invalidAnchor" */
+    val stopReason: String,
+)
+
+/**
+ * Walk back from [anchorIdx] toward 0, deciding ONLY at user-message
+ * boundaries whether to include the next round. Stops when:
+ *  - we've collected [maxUserTextTurns] user-text turns (success), OR
+ *  - including the next user round would push total messages over
+ *    [maxMessages] (cap reason — don't split a user/assistant/tool round
+ *    in the middle, otherwise a tool_use would be orphaned without its
+ *    tool_result), OR
+ *  - we hit index 0 (start of history).
+ *
+ * Port of iOS `walkBackUserTurnsBounded` (AIChatViewModel.swift, 8b76cd74).
+ * Pure after parameterizing [agentHistory] as [history]; extracted verbatim.
+ */
+fun walkBackUserTurnsBounded(
+    history: List<LLMMessage>,
+    anchorIdx: Int,
+    maxUserTextTurns: Int,
+    maxMessages: Int,
+): WalkBackResult {
+    if (anchorIdx < 0 || anchorIdx >= history.size) {
+        return WalkBackResult(null, 0, 0, "invalidAnchor")
+    }
+    var acceptedPriorIdx: Int? = null
+    var acceptedUserTextTurns = 0
+    var acceptedMessageCount = 0
+
+    var i = anchorIdx
+    while (i >= 0) {
+        val msg = history[i]
+        if (msg.role != LLMMessage.Role.USER) {
+            i -= 1
+            continue
+        }
+        val candidateMessageCount = anchorIdx - i + 1
+        if (candidateMessageCount > maxMessages) {
+            return WalkBackResult(
+                priorIdx = acceptedPriorIdx,
+                userTextTurnsFound = acceptedUserTextTurns,
+                messageCount = acceptedMessageCount,
+                stopReason = "messageCapWouldExceed",
+            )
+        }
+        // Accept this user as the new tentative priorIdx.
+        acceptedPriorIdx = i
+        acceptedMessageCount = candidateMessageCount
+        val hasText = msg.content.isNotBlank() ||
+            msg.contentParts.any { it is AgentContentPart.Text && it.text.isNotBlank() }
+        if (hasText) {
+            acceptedUserTextTurns += 1
+            if (acceptedUserTextTurns >= maxUserTextTurns) {
+                return WalkBackResult(
+                    priorIdx = acceptedPriorIdx,
+                    userTextTurnsFound = acceptedUserTextTurns,
+                    messageCount = acceptedMessageCount,
+                    stopReason = "userTextTargetMet",
+                )
+            }
+        }
+        i -= 1
+    }
+    return WalkBackResult(
+        priorIdx = acceptedPriorIdx,
+        userTextTurnsFound = acceptedUserTextTurns,
+        messageCount = acceptedMessageCount,
+        stopReason = "reachedStart",
+    )
+}
