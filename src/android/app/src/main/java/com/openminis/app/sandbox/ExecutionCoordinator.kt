@@ -12,6 +12,7 @@ import com.openminis.app.agent.runtime.RetryOutcome
 import com.openminis.app.agent.runtime.RetryPolicy
 import com.openminis.app.agent.runtime.RetrySafety
 import com.openminis.app.data.repository.EnvVarRepository
+import com.openminis.app.sandbox.offload.ChatStreamOffloadHandler
 import com.openminis.app.sandbox.offload.ModelExecutionService
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -726,6 +727,16 @@ object ExecutionCoordinator {
         val memAvailMb = systemMemAvailableMB()
         val phase = internalDegradationPhase(nativeNowMb, memAvailMb)
         if (phase.ordinal < ShellPhase.CRITICAL.ordinal) return // not pressurized enough
+        // [B2] Never sever an in-flight stream. If a chat stream is actively being
+        // offloaded to :modelservice right now, killing the service would leave
+        // stream.jsonl truncated (no DONE, no error) and the UI silently stalled
+        // until the poll timeout. Skip reclaim and let the next non-streaming
+        // pressure tick handle it.
+        if (ChatStreamOffloadHandler.activeStreams > 0) {
+            Log.w(TAG, "[direction-A] skipped reclaim: active stream in progress " +
+                "(activeStreams=${ChatStreamOffloadHandler.activeStreams}, native ${nativeNowMb}MB)")
+            return
+        }
         try {
             appContext.stopService(Intent(appContext, ModelExecutionService::class.java))
             Log.w(TAG, "[direction-A] Reclaimed :modelservice (native still ${nativeNowMb}MB, phase $phase) — " +

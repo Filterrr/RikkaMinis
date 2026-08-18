@@ -36,6 +36,20 @@ object ChatStreamOffloadHandler {
     private const val STREAM_TIMEOUT_MS = 6 * 60 * 1000L
 
     /**
+     * [direction-A / B2] Global count of in-flight streaming runs (this process).
+     * Incremented at the start of [stream], decremented in its finally. Read by
+     * [com.openminis.app.sandbox.ExecutionCoordinator.maybeReclaimModelService]
+     * to skip stopService(:modelservice) while a stream is active — otherwise the
+     * app process kill would sever the stream mid-answer (stream.jsonl left without
+     * DONE/error, leaving the UI silently stalled until the poll timeout).
+     * @Volatile because it is incremented/decremented from stream coroutines but
+     * read from a different execution context (reclaim path).
+     */
+    @Volatile
+    var activeStreams = 0
+        private set
+
+    /**
      * Execute a streaming request and expose decoded chunks as a [Flow].
      * The flow completes when the service writes the done marker; throws when it writes an error line.
      * Cancelling the flow writes the cancel marker so the service aborts promptly.
@@ -44,6 +58,7 @@ object ChatStreamOffloadHandler {
         context: Context,
         requestJson: String,
     ): Flow<LLMStreamChunk> = flow {
+        activeStreams++
         val dir = try {
             val root = File(context.cacheDir, STAGING_ROOT)
             root.mkdirs()
@@ -102,6 +117,9 @@ object ChatStreamOffloadHandler {
                 throw RuntimeException("stream timed out after ${STREAM_TIMEOUT_MS}ms")
             }
         } finally {
+            // [B2] A stream is no longer in flight regardless of how we exited
+            // (timeout / external cancel / normal close).
+            activeStreams--
             // On any termination (timeout / external cancel / normal close), signal the
             // service to stop streaming so it doesn't keep appending to a deleted file.
             try { cancelFile.createNewFile() } catch (_: Exception) {}

@@ -270,7 +270,7 @@ class SessionConcurrencyManagerTest {
 
     @Test
     fun `ELEVATED pressure delays admission but does not reclaim`() = runTest {
-        MemoryPressureGate.rssReader = { 300L }
+        MemoryPressureGate.rssReader = { 700L }
         var reclaimed = 0
         MemoryPressureGate.reclaimHook = { reclaimed++ }
         val started = System.currentTimeMillis()
@@ -285,7 +285,7 @@ class SessionConcurrencyManagerTest {
 
     @Test
     fun `CRITICAL pressure triggers reclaim hook before admission`() = runTest {
-        MemoryPressureGate.rssReader = { 350L }
+        MemoryPressureGate.rssReader = { 900L }
         var reclaimed = 0
         MemoryPressureGate.reclaimHook = { reclaimed++ }
 
@@ -297,7 +297,7 @@ class SessionConcurrencyManagerTest {
 
     @Test
     fun `CRITICAL pressure still admits after reclaim window`() = runTest {
-        MemoryPressureGate.rssReader = { 350L }
+        MemoryPressureGate.rssReader = { 900L }
         var reclaimed = 0
         MemoryPressureGate.reclaimHook = { reclaimed++ }
 
