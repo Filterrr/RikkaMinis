@@ -197,6 +197,13 @@ class AnthropicProvider(
         var currentToolId: String? = null
         var currentToolName: String? = null
         val toolInputBuffer = StringBuilder()
+        // [RC2-truncated-detection] Accumulated assistant text/thinking chars
+        // and whether the stream reached a clean terminal (message_delta with
+        // stop_reason). If the loop exits by EOF / [DONE] before a clear
+        // finish, emit a truncated Finished below so the partial reply is
+        // retried instead of silently saved as complete.
+        var contentChars = 0
+        var sawClearFinish = false
 
         try {
             var line: String?
@@ -232,11 +239,17 @@ class AnthropicProvider(
                         when (delta.safeOptString("type", "")) {
                             "text_delta" -> {
                                 val text = delta.safeOptString("text", "")
-                                if (text.isNotEmpty()) send(LLMStreamChunk.Text(text))
+                                if (text.isNotEmpty()) {
+                                    contentChars += text.length
+                                    send(LLMStreamChunk.Text(text))
+                                }
                             }
                             "thinking_delta" -> {
                                 val thinking = delta.safeOptString("thinking", "")
-                                if (thinking.isNotEmpty()) send(LLMStreamChunk.ThinkingDelta(thinking))
+                                if (thinking.isNotEmpty()) {
+                                    contentChars += thinking.length
+                                    send(LLMStreamChunk.ThinkingDelta(thinking))
+                                }
                             }
                             "input_json_delta" -> {
                                 val partial = delta.safeOptString("partial_json", "")
@@ -268,9 +281,23 @@ class AnthropicProvider(
                         }
                         val stopReason = event.optJSONObject("delta")
                             ?.safeOptString("stop_reason", "")?.ifEmpty { null }
+                        // message_delta with stop_reason is the Anthropic clean
+                        // terminal — mark it so the EOF path below doesn't emit
+                        // a redundant truncated Finished.
+                        sawClearFinish = true
                         send(LLMStreamChunk.Finished(stopReason))
                     }
                 }
+            }
+            // [RC2-truncated-detection] Loop exited by EOF / [DONE] before any
+            // message_delta (server cut mid-stream after text/thinking deltas but
+            // before the terminal event). Without this, ChatViewModel would see no
+            // Finished, treat it as a clean finish, and silently save a partial
+            // answer. Signal truncated so the turnTruncated retry owns it. Gated on
+            // accumulated content — a fully empty EOF is handled by
+            // failOnSilentEmptyCompletion and must not be flagged.
+            if (!sawClearFinish && contentChars > 0) {
+                send(LLMStreamChunk.Finished(null, truncated = true))
             }
         } catch (e: Exception) {
             cancel("Stream error", mapError(e))

@@ -770,6 +770,12 @@ class OpenAIProvider constructor(
         var sawFinishReason = false
         var sawUsageBlock = false
         var lastUsageJson: JSONObject? = null
+        // [RC2-truncated-detection] True once the stream sent its terminal
+        // Finished (the [DONE] branch). If the loop exits by EOF (connection
+        // drop / server cut) before [DONE], this stays false and we emit a
+        // truncated Finished below so ChatViewModel's turnTruncated retry
+        // path owns the partial reply instead of silently saving it.
+        var finishedSent = false
 
         try {
             send(LLMStreamChunk.Started)
@@ -806,6 +812,7 @@ class OpenAIProvider constructor(
                         send(LLMStreamChunk.ReasoningContent(reasoningAccum.toString()))
                     }
                     send(LLMStreamChunk.Finished(finishReason, truncated = !sawFinishReason))
+                    finishedSent = true
                     break
                 }
 
@@ -1166,6 +1173,19 @@ class OpenAIProvider constructor(
                 }
             }
             responsesToolCalls.clear()
+
+            // [RC2-truncated-detection] EOF without [DONE] / finish_reason but
+            // with accumulated content — the model reply was cut mid-stream
+            // (connection drop / server truncation). The `[DONE]` branch above
+            // already signalled a (possibly truncated) finish; reaching here via
+            // EOF means NO Finished was emitted, which would otherwise let
+            // ChatViewModel treat the stub as a clean finish (finishedCleanly=true)
+            // and silently save a half answer. Signal truncated so the
+            // turnTruncated retry owns it. Only fires for non-empty EOF: a fully
+            // empty EOF is already handled by failOnSilentEmptyCompletion.
+            if (!finishedSent && (contentLen > 0 || reasoningLen > 0)) {
+                send(LLMStreamChunk.Finished(finishReason, truncated = !sawFinishReason))
+            }
 
             // Final usage summary — printed once at stream end instead of per-delta.
             if (lastUsageJson != null) {
