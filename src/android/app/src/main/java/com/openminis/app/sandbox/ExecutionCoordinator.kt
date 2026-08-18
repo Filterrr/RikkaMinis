@@ -477,7 +477,23 @@ object ExecutionCoordinator {
             // rebuilding the shell is safer than leaving a dead shell around.
             val shellDied = result.exitCode == -1 || result.exitCode == 124 || !shell.isAlive
             if (!shouldRetryCommand(result.exitCode, shell.isAlive, attempt)) {
-                if (shellDied && attempt >= MAX_AUTO_RETRIES) {
+                // [audit-RC7] Timeout must ALWAYS reclaim the shell, even on
+                // the final attempt. withTimeoutOrNull only cancels the
+                // coroutine — the command keeps running inside the PTY with
+                // pendingCallback already nulled, so its late output (and the
+                // stale __MINIS_DONE_<marker>__ line) would be scanned into
+                // the NEXT command's output on this shell. Killing the shell
+                // here guarantees the invariant: exitCode==124 ⇒ no orphan
+                // command, no cross-command output pollution.
+                if (internalShouldReclaimOnExhaustedTimeout(result.exitCode)) {
+                    Log.w(
+                        TAG,
+                        "[$sessionId] Command timed out with retries exhausted — " +
+                            "reclaiming shell to kill the orphaned command"
+                    )
+                    sessionDidTerminate(sessionId)
+                    lastShell = null
+                } else if (shellDied && attempt >= MAX_AUTO_RETRIES) {
                     lastShell = null // shell is dead and we're out of retries
                 }
                 return CommandResult(output = result.output, exitCode = result.exitCode, durationMs = 0L, truncated = result.truncated) to lastShell
@@ -882,6 +898,22 @@ internal fun internalShouldRetryCommand(
     val shellDied = exitCode == -1 || exitCode == 124 || !shellAlive
     return shellDied && attempt < maxRetries
 }
+
+/**
+ * [audit-RC7] Pure decision: when the retry budget is EXHAUSTED, must the
+ * shell still be reclaimed? True only for timeout (124). With timeout,
+ * `withTimeoutOrNull` merely cancels the coroutine — the command itself
+ * keeps running inside the PTY with `pendingCallback` already nulled, so
+ * its late output (including the stale `__MINIS_DONE_<marker>__` line)
+ * would be scanned into the NEXT command's output on the same shell
+ * (`readLoop` accumulates unmatched text once a new callback is set).
+ * Reclaiming the shell kills the orphaned command and guarantees the
+ * invariant: exitCode==124 ⇒ no cross-command output pollution.
+ *
+ * Other death kinds (-1 / dead shell) leave nothing running in the PTY;
+ * the pre-existing dead-shell path already handles those without this.
+ */
+internal fun internalShouldReclaimOnExhaustedTimeout(exitCode: Int): Boolean = exitCode == 124
 
 // ──────────────────────────────────────────────────────────────────────────
 // [T3-retry-side-effects] Side-effect-aware retry policy — pure functions
