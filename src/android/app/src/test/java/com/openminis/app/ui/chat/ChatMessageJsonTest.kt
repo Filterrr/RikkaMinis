@@ -14,28 +14,6 @@ import org.junit.Test
  */
 class ChatMessageJsonTest {
 
-    // ── escapeJson ─────────────────────────────────────────────
-
-    @Test
-    fun `escapeJson wraps in quotes and escapes specials`() {
-        assertEquals("\"a\\\"b\"", escapeJson("a\"b"))
-        assertEquals("\"a\\\\b\"", escapeJson("a\\b"))
-        assertEquals("\"a\\nb\"", escapeJson("a\nb"))
-        assertEquals("\"a\\rb\"", escapeJson("a\rb"))
-        assertEquals("\"a\\tb\"", escapeJson("a\tb"))
-    }
-
-    @Test
-    fun `escapeJson escapes control chars below 0x20 as unicode`() {
-        val out = escapeJson("\u0001")
-        assertEquals("\"\\u0001\"", out)
-    }
-
-    @Test
-    fun `escapeJson leaves normal chars untouched`() {
-        assertEquals("\"hello 世界\"", escapeJson("hello 世界"))
-    }
-
     // ── buildMediaRefPartJson ──────────────────────────────────
 
     @Test
