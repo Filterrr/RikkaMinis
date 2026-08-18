@@ -142,25 +142,37 @@ internal fun scanThinkTags(
 
     while (i < buffer.length) {
         if (!tagActive) {
-            // Search for any open tag (case-insensitive)
-            var found = false
+            // Search for the EARLIEST open tag in the whole (remaining) buffer,
+            // across all formats (case-insensitive). We pick by index, not by
+            // FORMAT ORDER — the previous directory-order scan could latch onto
+            // a `<thinking>` that appears LATER than a `<response>` that precedes
+            // it, wrongly swallowing text and letting true thinking leak into
+            // the visible body.
+            var bestFmt: ThinkTagDef? = null
+            var bestIdx = -1
             for (fmt in formats) {
-                // Case-insensitive: match against the lowered buffer with the
-                // lowered open tag (a mixed-case tag like <Thought> must work).
                 val openLower = fmt.open.lowercase()
-                val openIdx = bufLower.indexOf(openLower, i)
-                if (openIdx != -1) {
-                    visibleBuilder.append(buffer, i, openIdx)
-                    tagActive = true
-                    activeFormat = fmt
-                    i = openIdx + fmt.open.length
-                    found = true
-                    break
+                val idx = bufLower.indexOf(openLower, i)
+                if (idx != -1 && (bestIdx == -1 || idx < bestIdx)) {
+                    bestIdx = idx
+                    bestFmt = fmt
                 }
             }
-            if (!found) {
-                // Fast path: emit everything except a possible open-tag
-                // prefix at the tail (kept buffered across chunks).
+            if (bestFmt != null) {
+                // Found a real open tag: emit the preceding visible text, enter
+                // the thinking region, and CONSUME the open tag. Continue the
+                // loop so a region closed in this same buffer (e.g.
+                // <thinking>…</thinking>) can open the next one — previously a
+                // single scan returned after the first open tag and dropped
+                // everything between it and the close, leaking it to visible.
+                val openLen = bestFmt.open.length
+                visibleBuilder.append(buffer, i, bestIdx)
+                tagActive = true
+                activeFormat = bestFmt
+                i = bestIdx + openLen
+            } else {
+                // No open tag anywhere ahead: emit everything except a possible
+                // open-tag PREFIX at the tail (kept buffered across chunks).
                 val prefixLen = maxOpenTagPrefixLen()
                 val keepFrom = buffer.length - prefixLen
                 visibleBuilder.append(buffer, i, keepFrom)
@@ -168,41 +180,51 @@ internal fun scanThinkTags(
                 return ThinkTagScanResult(visibleBuilder.toString(), thinkingBuilder.toString(), remaining, false, null)
             }
         } else {
-            val fmt = activeFormat ?: formats[0] // fallback (shouldn't happen)
-            // Close candidates: primary close + altClose (e.g. <thinking> can
-            // end with either </thinking> or <response>); take the earliest.
-            val closes = listOfNotNull(fmt.close, fmt.altClose).map { it.lowercase() }
-            var bestIdx = -1
-            var bestLen = 0
-            for (c in closes) {
-                val idx = bufLower.indexOf(c, i)
-                if (idx != -1 && (bestIdx == -1 || idx < bestIdx)) {
-                    bestIdx = idx
-                    bestLen = c.length
-                }
-            }
-            if (bestIdx == -1) {
-                // Close tag not yet arrived — emit thinking text except a
-                // possible close-tag prefix at the tail (any close candidate).
-                var best = 0
+            val fmt = activeFormat
+            if (fmt != null) {
+                // Close candidates: primary close + altClose (e.g. <thinking>
+                // can end with either </thinking> or <response>); take the
+                // earliest.
+                val closes = listOfNotNull(fmt.close, fmt.altClose).map { it.lowercase() }
+                var bestIdx = -1
+                var bestLen = 0
                 for (c in closes) {
-                    val maxLen = minOf(c.length - 1, bufLower.length)
-                    for (len in maxLen downTo 1) {
-                        if (c.startsWith(bufLower.substring(bufLower.length - len))) {
-                            if (len > best) best = len
-                            break
-                        }
+                    val idx = bufLower.indexOf(c, i)
+                    if (idx != -1 && (bestIdx == -1 || idx < bestIdx)) {
+                        bestIdx = idx
+                        bestLen = c.length
                     }
                 }
-                val keepFrom = buffer.length - best
-                thinkingBuilder.append(buffer, i, keepFrom)
-                val remaining = buffer.substring(keepFrom)
-                return ThinkTagScanResult(visibleBuilder.toString(), thinkingBuilder.toString(), remaining, true, activeFormat)
+                if (bestIdx == -1) {
+                    // Close tag not yet arrived — emit thinking text except a
+                    // possible close-tag prefix at the tail (any close candidate).
+                    var best = 0
+                    for (c in closes) {
+                        val maxLen = minOf(c.length - 1, bufLower.length)
+                        for (len in maxLen downTo 1) {
+                            if (c.startsWith(bufLower.substring(bufLower.length - len))) {
+                                if (len > best) best = len
+                                break
+                            }
+                        }
+                    }
+                    val keepFrom = buffer.length - best
+                    thinkingBuilder.append(buffer, i, keepFrom)
+                    val remaining = buffer.substring(keepFrom)
+                    return ThinkTagScanResult(visibleBuilder.toString(), thinkingBuilder.toString(), remaining, true, activeFormat)
+                } else {
+                    thinkingBuilder.append(buffer, i, bestIdx)
+                    i = bestIdx + bestLen
+                    tagActive = false
+                    activeFormat = null
+                    // Loop continues scanning for the next open tag in this
+                    // same buffer (handles multiple consecutive regions and
+                    // the text between them).
+                }
             } else {
-                thinkingBuilder.append(buffer, i, bestIdx)
-                i = bestIdx + bestLen
-                tagActive = false
-                activeFormat = null
+                // Defensive: activeFormat should never be null while tagActive.
+                // Treat as no-op so the stream never spins.
+                break
             }
         }
     }
@@ -734,8 +756,11 @@ class OpenAIProvider constructor(
         val reasoningAccum = StringBuilder()
         var sawReasoningField = false
         val hasThinkTags = true  // safe: extractThinkTags is a no-op when no tags are present
-        thinkTagBuffer = StringBuilder()
-        insideThinkTag = false
+        // [T-thinking-fold-leak] Per-STREAM think-tag state. Created here,
+        // inside rawStreamMessage, so a cancelled/errored/reused provider can
+        // never bleed a half-open tag into the next stream. Cleared on every
+        // exit path (see catch / channel.close / awaitClose below).
+        val thinkState = ThinkTagState()
 
         // T321: turn-level SSE counters for empty-response triage.
         var sseEventCount = 0
@@ -768,13 +793,13 @@ class OpenAIProvider constructor(
                 }
                 if (payload == "[DONE]") {
                     // Flush any remaining buffered content from think tag extraction
-                    if (hasThinkTags && thinkTagBuffer.isNotEmpty()) {
-                        val remaining = thinkTagBuffer.toString()
-                        thinkTagBuffer = StringBuilder()
-                        if (insideThinkTag) {
-                            send(LLMStreamChunk.ThinkingDelta(remaining))
-                        } else {
-                            send(LLMStreamChunk.Text(remaining))
+                    if (hasThinkTags) {
+                        flushThinkTags(thinkState)?.let { remaining ->
+                            if (thinkState.insideTag) {
+                                send(LLMStreamChunk.ThinkingDelta(remaining))
+                            } else {
+                                send(LLMStreamChunk.Text(remaining))
+                            }
                         }
                     }
                     if (sawReasoningField) {
@@ -1047,7 +1072,7 @@ class OpenAIProvider constructor(
                         // are present, so this path is safe for plain text)
                         delta?.safeOptString("content", "")?.let { text ->
                             if (text.isNotEmpty()) {
-                                val extracted = extractThinkTags(text)
+                                val extracted = extractThinkTags(text, thinkState)
                                 if (extracted.thinking.isNotEmpty()) send(LLMStreamChunk.ThinkingDelta(extracted.thinking))
                                 if (extracted.visible.isNotEmpty()) send(LLMStreamChunk.Text(extracted.visible))
                             }
@@ -1105,13 +1130,13 @@ class OpenAIProvider constructor(
             }
 
             // Flush any remaining buffered content
-            if (hasThinkTags && thinkTagBuffer.isNotEmpty()) {
-                val remaining = thinkTagBuffer.toString()
-                thinkTagBuffer = StringBuilder()
-                if (insideThinkTag) {
-                    send(LLMStreamChunk.ThinkingDelta(remaining))
-                } else {
-                    send(LLMStreamChunk.Text(remaining))
+            if (hasThinkTags) {
+                flushThinkTags(thinkState)?.let { remaining ->
+                    if (thinkState.insideTag) {
+                        send(LLMStreamChunk.ThinkingDelta(remaining))
+                    } else {
+                        send(LLMStreamChunk.Text(remaining))
+                    }
                 }
             }
 
@@ -1179,6 +1204,10 @@ class OpenAIProvider constructor(
         } finally {
             reader.close()
             response.close()
+            // [T-thinking-fold-leak] Always drop the per-stream tag state on
+            // every exit (normal, error, cancellation) so a half-open tag can
+            // never leak into the next stream served by this provider instance.
+            thinkState.reset()
         }
         channel.close()
         // T171: when the coroutine is cancelled (user tapped stop), the
@@ -1189,6 +1218,10 @@ class OpenAIProvider constructor(
         awaitClose {
             try { call.cancel() } catch (_: Exception) {}
             try { response.close() } catch (_: Exception) {}
+            // [T-thinking-fold-leak] Belt-and-braces: some cancellation paths
+            // tear down via awaitClose only; reset the state again so the
+            // next stream always starts clean.
+            thinkState.reset()
         }
     }
 
@@ -2137,17 +2170,33 @@ class OpenAIProvider constructor(
      */
     private data class ThinkExtractResult(val visible: String, val thinking: String)
 
-    private var thinkTagBuffer = StringBuilder()
-    private var insideThinkTag = false
-    private var currentTagFormat: ThinkTagDef? = null
+    private class ThinkTagState {
+        var buffer = StringBuilder()
+        var insideTag = false
+        var currentFormat: ThinkTagDef? = null
 
-    private fun extractThinkTags(text: String): ThinkExtractResult {
-        thinkTagBuffer.append(text)
-        val result = scanThinkTags(thinkTagBuffer.toString(), insideThinkTag, currentTagFormat, THINK_TAG_FORMATS)
-        thinkTagBuffer = StringBuilder(result.remainingBuffer)
-        insideThinkTag = result.insideTag
-        currentTagFormat = result.currentFormat
+        fun reset() {
+            buffer = StringBuilder()
+            insideTag = false
+            currentFormat = null
+        }
+    }
+
+    private fun extractThinkTags(text: String, state: ThinkTagState): ThinkExtractResult {
+        state.buffer.append(text)
+        val result = scanThinkTags(state.buffer.toString(), state.insideTag, state.currentFormat, THINK_TAG_FORMATS)
+        state.buffer = StringBuilder(result.remainingBuffer)
+        state.insideTag = result.insideTag
+        state.currentFormat = result.currentFormat
         return ThinkExtractResult(result.visible, result.thinking)
+    }
+
+    /** Flush any residual think-tag buffer at stream end; returns the buffered string. */
+    private fun flushThinkTags(state: ThinkTagState): String? {
+        if (state.buffer.isEmpty()) return null
+        val remaining = state.buffer.toString()
+        state.buffer = StringBuilder()
+        return remaining
     }
 
     // MARK: - Codex image generation (gpt-image-2)
