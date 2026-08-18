@@ -185,31 +185,33 @@ class AppendOnlyMarkdownSegmenterTest {
 
     // ── non-append divergence ───────────────────────────────────────────────
 
-    @Test fun `divergence absorbs into live slot and records invariant error`() {
+    @Test fun `divergence rewrites tail from fresh and records invariant error`() {
         val seg = AppendOnlyMarkdownSegmenter()
         seg.update("Alpha\n\nBeta", streamEnded = false)
         assertEquals(2, seg.snapshot().size)
 
-        // Model rewrites the FIRST fragment — published keys must not churn.
+        // Model rewrites the FIRST fragment — published keys must not churn,
+        // but the divergent content must be re-derived from the fresh split,
+        // NOT concatenated (which produced "Alpha" + "XXX...Alpha" duplication).
         val s = seg.update("XXX\n\nBeta\n\nGamma", streamEnded = false)
-        // Slot 0 keeps its frozen content.
-        assertEquals("Alpha", s[0].rawText)
+        // Rewritten tail is authoritative-fresh: "Alpha" was replaced, not kept.
+        assertEquals(listOf("XXX", "Beta", "Gamma"), s.map { it.rawText })
         assertTrue(s[0].settled)
-        // Divergent tail absorbed into the live slot.
-        assertEquals("XXX\n\nBeta\n\nGamma", s[1].rawText)
-        assertFalse(s[1].settled)
-        assertEquals(listOf(0, 1), s.map { it.ordinal })
+        assertTrue(s[1].settled)
+        assertFalse(s[2].settled)
+        assertEquals(listOf(0, 1, 2), s.map { it.ordinal })
         assertEquals(1, seg.invariantErrorCount)
     }
 
-    @Test fun `divergence never creates or deletes settled slots`() {
+    @Test fun `divergence keeps ordinals contiguous and content fresh`() {
         val seg = AppendOnlyMarkdownSegmenter()
         seg.update("A\n\nB\n\nC", streamEnded = false)
-        val before = seg.snapshot().size
         seg.update("CHANGED\n\nB\n\nC\n\nD", streamEnded = false)
         val after = seg.snapshot()
-        assertEquals(before, after.size)
-        assertEquals(listOf(0, 1, 2), after.map { it.ordinal })
+        // Content is the fresh split (the rewrite replaced "A" with "CHANGED").
+        assertEquals(listOf("CHANGED", "B", "C", "D"), after.map { it.rawText })
+        // Ordinals stay contiguous (no gaps, no reorder) for stable LazyColumn keys.
+        assertEquals(listOf(0, 1, 2, 3), after.map { it.ordinal })
         assertEquals(1, seg.invariantErrorCount)
     }
 
@@ -223,5 +225,56 @@ class AppendOnlyMarkdownSegmenterTest {
         val keys2 = seg.snapshot().map { "mdslot:$messageId:$blockId:${it.ordinal}" }
         assertTrue(keys2.take(keys1.size) == keys1)
         assertEquals(3, keys2.size)
+    }
+
+    // ── token-level duplication regression (root cause B) ──────────────────
+
+    @Test fun `partial-word growth at a settled seam does NOT duplicate`() {
+        // Root cause B: a throttled snapshot grows the first fragment by a
+        // partial word AFTER it was already settled (e.g. "致命伤" settled, then
+        // the same line grows to "致命伤致命"). The old absorb path concatenated
+        // the settled slot with the fresh tail → "致命伤致命伤致命". The rewrite
+        // path must emit the fresh text exactly once.
+        val seg = AppendOnlyMarkdownSegmenter()
+        // First a paragraph boundary settles "致命伤" as slot 0.
+        seg.update("致命伤\n\n竞态", streamEnded = false)
+        // Next snapshot: the first fragment grew by a partial word.
+        val s = seg.update("致命伤致命\n\n竞态", streamEnded = false)
+
+        val joined = s.joinToString("\n\n") { it.rawText }
+        assertEquals("致命伤致命\n\n竞态", joined)
+        assertFalse(joined.contains("致命伤致命伤"))
+        assertFalse(joined.contains("竞态竞态"))
+    }
+
+    @Test fun `prefix-growth at a settled seam keeps exactly one copy`() {
+        // Defensive variant: the whole settled slot is a strict prefix of the
+        // fresh first fragment (settled "AB", fresh "AB·追加").
+        val seg = AppendOnlyMarkdownSegmenter()
+        seg.update("AB\n\nC", streamEnded = false)
+        // "AB" settled as slot 0; now it grows to "AB追加" (same boundary).
+        val s = seg.update("AB追加\n\nC", streamEnded = false)
+
+        val joined = s.joinToString("\n\n") { it.rawText }
+        assertEquals("AB追加\n\nC", joined)
+        assertFalse(joined.contains("AB追加AB"))
+    }
+
+    @Test fun `rollback-then-reattach does not leak stale segmenter state`() {
+        // Root cause A companion: after a retry/fallback rewinds the turn and
+        // a text block id is recycled, a stale segmenter must not carry content
+        // from the previous stream into the new one. A FRESH segmenter (the
+        // fix re-keys by making block ids globally unique) starts from empty,
+        // so the new stream's text is authoritative with no ghost prefix.
+        val seg = AppendOnlyMarkdownSegmenter()
+        // Simulate the fresh-segmenter contract: first update seeds cleanly.
+        val s = seg.update("分叉于 08-09，它没继承", streamEnded = false)
+        assertEquals(listOf("分叉于 08-09，它没继承"), s.map { it.rawText })
+        // A fresh stream (new segmenter instance, or reset state) never re-emits
+        // the old text — the content is exactly what the new stream produced.
+        val seg2 = AppendOnlyMarkdownSegmenter()
+        val s2 = seg2.update("分叉于 08-09，它没继承", streamEnded = false)
+        assertEquals(s.map { it.rawText }, s2.map { it.rawText })
+        assertEquals(1, s2.map { it.rawText }.size)
     }
 }

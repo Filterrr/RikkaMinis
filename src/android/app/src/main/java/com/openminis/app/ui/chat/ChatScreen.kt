@@ -2905,7 +2905,20 @@ fun ChatScreen(
                 // [forward-stable] Session-lifetime stable row ledger. Owns the
                 // row list once seeded: cold open builds canonically, then every
                 // tick is an incremental reconcile with prefix-stable keys.
-                val rowLedger = remember(sessionId) { StableChatRowLedger() }
+                val rowLedger = remember(sessionId) {
+                    StableChatRowLedger(
+                        onDivergence = { messageId, blockId, count, snippet ->
+                            // [fix/stream-segmenter-duplication] Real-device breadcrumb
+                            // for the segmenter divergence path — the former source of
+                            // token-level duplication. Any non-zero count during normal
+                            // streaming is worth surfacing while we validate the rewrite.
+                            AppLogger.warning(
+                                "SegmenterDivergence",
+                                "msg=$messageId block=$blockId count=$count snippet=[$snippet]",
+                            )
+                        },
+                    )
+                }
                 // [T-android-coldload-offmain-parse] Composition-snapshot
                 // prewarmer (captures the markdown palette) used by the
                 // flatten effect below to warm the parse caches for the

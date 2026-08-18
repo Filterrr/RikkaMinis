@@ -335,6 +335,11 @@ class ChatViewModel(
          */
         private const val MAX_AGENT_TURNS = 200
         private const val MIN_MAX_TOKENS = 1024
+        // [fix/voice-crash-observability] Generous cap on the persisted draft
+        // string (see syncComposerDraft). Covers the vast majority of voice
+        // dictations while bounding per-keystroke SharedPreferences serialization
+        // cost during high-frequency IME bursts.
+        private const val MAX_PERSISTED_DRAFT_CHARS = 5000
         /**
          * Hard ceiling on max_tokens we ever send to a provider, regardless
          * of what the model itself claims. Some models advertise 128K+
@@ -689,7 +694,22 @@ class ChatViewModel(
         if (value.isBlank()) {
             com.openminis.app.data.ComposerDraftStore.clearDraft(context, sessionId)
         } else {
-            com.openminis.app.data.ComposerDraftStore.saveText(context, sessionId, value)
+            // [fix/voice-crash-observability] Cap the persisted draft length.
+            // IME voice dictation drives onValueChange with high-frequency,
+            // large text bursts; persisting the FULL draft on every burst means
+            // re-serializing a multi-KB string into SharedPreferences on every
+            // keystroke — pure memory/GC pressure on the main thread (the same
+            // thread that is also reconciling the whole history list). Truncating
+            // the persisted copy to a generous ceiling bounds that cost without
+            // changing any user-visible behavior except recovering a (rare,
+            // >MAX_PERSISTED_DRAFT_CHARS long) draft slightly shortened after
+            // process death. The in-memory composer is untouched.
+            val persisted = if (value.length > MAX_PERSISTED_DRAFT_CHARS) {
+                value.substring(0, MAX_PERSISTED_DRAFT_CHARS)
+            } else {
+                value
+            }
+            com.openminis.app.data.ComposerDraftStore.saveText(context, sessionId, persisted)
         }
     }
 
@@ -6704,6 +6724,17 @@ class ChatViewModel(
         // (turnStartBlockIndex is captured at iteration start to 0 after reset).
         var assistantId = "assistant_${System.currentTimeMillis()}"
         val allToolBlocks = mutableListOf<AssistantBlock>()
+        // [fix/stream-segmenter-duplication] Monotonic, function-scoped (NOT
+        // turn-scoped) block sequence. Text block ids are built as
+        //   "text_${turn}_${allToolBlocks.size}_${blockSeq++}"
+        // so a block id can NEVER be recycled across turns, retries, or
+        // fallback rollbacks. This is the structural fix for the StableChatRowLedger
+        // segmenter-reattach bug: a recycled id previously let a stale
+        // AppendOnlyMarkdownSegmenter (holding the PREVIOUS stream's full text)
+        // re-attach to the NEW stream and re-emit ghost content (whole-paragraph
+        // duplication). With ids globally unique, textReset's id-set comparison
+        // is naturally correct and stale segmenters are guaranteed unreachable.
+        var blockSeq = 0
         // Per-tool ring of the most recent `accumulated` JSON snapshots emitted
         // by `LLMStreamChunk.ToolInputDelta`. Capped at TOOL_INPUT_CHUNK_RING_MAX
         // entries per tool id so memory stays bounded even on long streams.
@@ -7095,7 +7126,7 @@ class ChatViewModel(
                             val freshSb = StringBuilder(chunk.text)
                             currentTextBlockSb = freshSb
                             val block = AssistantBlock(
-                                id = "text_${turn}_${allToolBlocks.size}",
+                                id = "text_${turn}_${allToolBlocks.size}_${blockSeq++}",
                                 kind = "text",
                                 content = chunk.text,
                             )
