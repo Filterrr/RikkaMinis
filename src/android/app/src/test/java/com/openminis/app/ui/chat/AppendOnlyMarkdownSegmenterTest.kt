@@ -315,18 +315,28 @@ class AppendOnlyMarkdownSegmenterTest {
         assertEquals(s.size, again.size)
     }
 
-    @Test fun `divergence where fresh shrinks below settled keeps old live, count stable`() {
+    @Test fun `divergence where fresh shrinks below settled keeps prefix, count stable`() {
         val seg = AppendOnlyMarkdownSegmenter()
         seg.update("A\n\nB\n\nC", streamEnded = false)  // [A(s),B(s),C(live)], settledCount=2
         // Fresh split collapses to a single fragment — below the settled prefix.
         val s = seg.update("X", streamEnded = false)
-        assertEquals(3, s.size)                     // count stable (2 settled + 1 live)
+        assertEquals(2, s.size)                     // count stable — ONLY settled stay
         assertEquals("A", s[0].rawText)
         assertEquals("B", s[1].rawText)
-        // Old live content is kept (nothing sensible to absorb), never blanked
-        // to a fabricated partial tail.
-        assertEquals("C", s[2].rawText)
-        assertFalse(s[2].settled)
+        assertTrue(s.all { it.settled })            // nothing live left
         assertEquals(1, seg.invariantErrorCount)
+    }
+
+    @Test fun `repeated divergence on empty fresh tail never adds empty slots`() {
+        // The regression this guards: the old absorbDivergence appended an
+        // EMPTY live slot when fresh shrank to the settled prefix, publishing
+        // a new LazyColumn key for no content — the jump shape again.
+        val seg = AppendOnlyMarkdownSegmenter()
+        seg.update("A\n\nB", streamEnded = false)       // [A(s), B(live)]
+        seg.update("X\n\nB", streamEnded = true)        // diverge → [A(s), B(s)]
+        val third = seg.update("X\n\nB", streamEnded = true)  // settledCount=2, fresh same → NO empty 3rd slot
+        assertEquals(2, third.size)
+        assertEquals(listOf("A", "B"), third.map { it.rawText })
+        assertTrue(third.all { it.settled })
     }
 }
