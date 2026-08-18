@@ -4,6 +4,7 @@ import com.openminis.app.data.db.CompactMarkerEntity
 import com.openminis.app.data.model.AgentContentPart
 import com.openminis.app.data.model.LLMMessage
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -138,5 +139,40 @@ class ChatCompactionLogicTest {
         val h = listOf(user("u1"), assistant("a1"))
         val m = marker(version = 2, lastCompacted = "ghost")
         assertEquals(0, resolveCompactStartIdx(h, m))
+    }
+
+    // ── buildConversationTextForSummary ────────────────────────
+
+    @Test
+    fun `buildConversationTextForSummary renders role and content lines`() {
+        val h = listOf(
+            LLMMessage(role = LLMMessage.Role.USER, content = "hello", dbMessageId = "u1"),
+            LLMMessage(role = LLMMessage.Role.ASSISTANT, content = "world", dbMessageId = "a1"),
+        )
+        val out = buildConversationTextForSummary(h)
+        assertTrue(out.contains("user: hello"))
+        assertTrue(out.contains("assistant: world"))
+    }
+
+    @Test
+    fun `buildConversationTextForSummary truncates content to 500`() {
+        val long = "x".repeat(1000)
+        val h = listOf(LLMMessage(role = LLMMessage.Role.USER, content = long))
+        val out = buildConversationTextForSummary(h)
+        assertTrue(out.contains("x".repeat(500)))
+        assertTrue(!out.contains("x".repeat(501)))
+    }
+
+    @Test
+    fun `buildConversationTextForSummary renders tool result part`() {
+        val h = listOf(
+            LLMMessage(
+                role = LLMMessage.Role.USER,
+                content = "",
+                contentParts = listOf(AgentContentPart.ToolResult("t", "toolname", "the output")),
+            ),
+        )
+        val out = buildConversationTextForSummary(h)
+        assertTrue(out.contains("[result:toolname]: the output"))
     }
 }

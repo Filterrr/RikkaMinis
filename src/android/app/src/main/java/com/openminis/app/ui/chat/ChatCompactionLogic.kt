@@ -93,3 +93,40 @@ fun resolveCompactStartIdx(
     else if (prevMarker.version >= 2) prevIdx + 1
     else prevIdx
 }
+
+/**
+ * Builds the plain-text transcript fed to the compaction-summary model.
+ *
+ * Pure and side-effect-free (extracted verbatim from ChatViewModel,
+ * fcf9470): each message is rendered as `role: <content>` plus one line per
+ * structured content part (text / tool-use / tool-result / image), truncated
+ * to bound the summarizer input.
+ */
+fun buildConversationTextForSummary(history: List<LLMMessage>): String = buildString {
+    for (msg in history) {
+        val role = msg.role.name.lowercase()
+        val text = msg.content.take(500)
+        if (text.isNotEmpty()) {
+            append(role).append(": ").append(text).append('\n')
+        }
+        for (part in msg.contentParts) {
+            when (part) {
+                is AgentContentPart.Text -> {
+                    append(role).append(": ").append(part.text.take(500)).append('\n')
+                }
+                is AgentContentPart.ToolUse -> {
+                    val preview = part.input.toString().take(200)
+                    append(role).append(" [tool:").append(part.name).append("]: ")
+                        .append(preview).append('\n')
+                }
+                is AgentContentPart.ToolResult -> {
+                    append(role).append(" [result:").append(part.name).append("]: ")
+                        .append(part.content.take(500)).append('\n')
+                }
+                is AgentContentPart.ImageData -> {
+                    append(role).append(" [image: ").append(part.mimeType).append("]\n")
+                }
+            }
+        }
+    }
+}

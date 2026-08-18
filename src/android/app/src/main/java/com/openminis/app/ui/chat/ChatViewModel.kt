@@ -2753,41 +2753,6 @@ class ChatViewModel(
     }
 
     /**
-     * Format the agent history as a plain-text transcript for the
-     * summarisation LLM. Keeps role prefixes and truncates long tool arg /
-     * output bodies so we stay well under any context window. Mirrors iOS
-     * `buildConversationTextForSummary`.
-     */
-    private fun buildConversationTextForSummary(history: List<LLMMessage>): String = buildString {
-        for (msg in history) {
-            val role = msg.role.name.lowercase()
-            val text = msg.content.take(500)
-            if (text.isNotEmpty()) {
-                append(role).append(": ").append(text).append('\n')
-            }
-            for (part in msg.contentParts) {
-                when (part) {
-                    is AgentContentPart.Text -> {
-                        append(role).append(": ").append(part.text.take(500)).append('\n')
-                    }
-                    is AgentContentPart.ToolUse -> {
-                        val preview = part.input.toString().take(200)
-                        append(role).append(" [tool:").append(part.name).append("]: ")
-                            .append(preview).append('\n')
-                    }
-                    is AgentContentPart.ToolResult -> {
-                        append(role).append(" [result:").append(part.name).append("]: ")
-                            .append(part.content.take(500)).append('\n')
-                    }
-                    is AgentContentPart.ImageData -> {
-                        append(role).append(" [image: ").append(part.mimeType).append("]\n")
-                    }
-                }
-            }
-        }
-    }
-
-    /**
      * Summarize [messages], recursively halving and merging when the input
      * exceeds the model's context window. Mirrors iOS
      * `generateCompactSummaryWithSplitting` (AIChatViewModel+Compaction.swift:820).
@@ -10705,53 +10670,6 @@ Environment variables:
         }
     }
 
-    private fun buildMediaRefPartJson(
-        ref: com.openminis.app.data.model.MediaRef,
-        linuxPath: String? = null,
-    ): String {
-        val value = JSONObject()
-            .put("id", ref.id)
-            .put("relativePath", ref.relativePath)
-            .put("mimeType", ref.mimeType)
-        if (ref.originalFileName != null) value.put("originalFileName", ref.originalFileName)
-        // Carry the iSH-visible uploads path through persistence so that
-        // restored history can reconstruct AgentContentPart.ImageData with
-        // its original linuxPath. Restored images that miss this field
-        // (older rows written before this column existed) get linuxPath=null
-        // and fall back to spillover at budget-elide time.
-        if (linuxPath != null) value.put("linuxPath", linuxPath)
-        return JSONObject().put("type", "mediaRef").put("value", value).toString()
-    }
-
-    /**
-     * Build the parts_json array for a user message: a `text` part (omitted
-     * when the user only sent attachments with no caption) followed by one
-     * `mediaRef` part per persisted image. Mirrors the existing single-part
-     * shape when there are no attachments.
-     */
-    private fun buildUserPartsJson(
-        text: String,
-        mediaRefPartsJson: List<String>,
-        // [T-android-retry-attachment-loss] The <user-attached-files> XML
-        // inventory (non-image file paths/sizes the model uses to `cat` the
-        // file). iOS persists this same XML as a trailing text part so it
-        // round-trips through retry / rerun / session-reload unchanged — the
-        // model keeps seeing the /var/minis/attachments/uploads/... paths.
-        // Android previously only added it to the in-memory agentHistory and
-        // never persisted it, so a retry silently dropped the file inventory.
-        // Persist it here as a text part (iOS parity); toLLMMessage restores
-        // it via the plain "text" case with zero special-casing.
-        attachedFilesXml: String? = null,
-    ): String {
-        val parts = mutableListOf<String>()
-        if (text.isNotEmpty() || mediaRefPartsJson.isEmpty()) {
-            parts.add("""{"type":"text","value":${escapeJson(text)}}""")
-        }
-        parts.addAll(mediaRefPartsJson)
-        attachedFilesXml?.let { parts.add("""{"type":"text","value":${escapeJson(it)}}""") }
-        return parts.joinToString(prefix = "[", postfix = "]", separator = ",")
-    }
-
     /** LLM-based title + category generation, mirrors iOS generateSessionTitleIfNeeded(). */
     private var titleGenerationAttempts = 0
     private var titleGenerationInFlight = false
@@ -10994,28 +10912,6 @@ Environment variables:
     }
 
     /** Parse LLM response for title/category JSON. Multiple fallback strategies. */
-    private fun parseTitleResponse(text: String): Pair<String, String?> {
-        val cleaned = text.trim()
-            .removePrefix("```json").removePrefix("```")
-            .removeSuffix("```").trim()
-        // Try JSON parse
-        try {
-            val json = JSONObject(cleaned)
-            val title = json.optString("title", "").trim()
-            val category = json.optString("category", "").trim().ifEmpty { null }
-            if (title.isNotEmpty()) return title to category
-        } catch (_: Exception) {}
-        // Regex fallback: extract "title" value
-        val titleMatch = Regex("\"title\"\\s*:\\s*\"([^\"]+)\"").find(cleaned)
-        val catMatch = Regex("\"category\"\\s*:\\s*\"([^\"]+)\"").find(cleaned)
-        if (titleMatch != null) {
-            return titleMatch.groupValues[1].trim() to catMatch?.groupValues?.getOrNull(1)?.trim()
-        }
-        // Plain text fallback: use first line
-        val firstLine = cleaned.lines().firstOrNull()?.trim() ?: ""
-        return firstLine.take(50) to null
-    }
-
     /**
      * [T-android-overlay-reply-status-34599] Pull the most recent
      * assistant text out of `_messages` and hand it to
@@ -11527,25 +11423,6 @@ Environment variables:
 
     fun clearError() {
         _error.value = null
-    }
-
-    private fun escapeJson(text: String): String {
-        val sb = StringBuilder("\"")
-        for (c in text) {
-            when (c) {
-                '"' -> sb.append("\\\"")
-                '\\' -> sb.append("\\\\")
-                '\n' -> sb.append("\\n")
-                '\r' -> sb.append("\\r")
-                '\t' -> sb.append("\\t")
-                else -> {
-                    if (c.code < 0x20) sb.append("\\u%04x".format(c.code))
-                    else sb.append(c)
-                }
-            }
-        }
-        sb.append("\"")
-        return sb.toString()
     }
 
     /**
