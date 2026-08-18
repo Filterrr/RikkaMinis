@@ -134,11 +134,12 @@ class AppendOnlyMarkdownSegmenter {
     /**
      * Divergence path (absorb, NOT rewrite): keep the settled slots frozen,
      * and re-derive ONLY the live slot's content from the fresh split's tail
-     * AFTER the settled prefix (`fresh[settledCount..]`). The slot COUNT stays
-     * `settledCount + 1` (identical to the old absorb behaviour and to any
+     * AFTER the settled prefix — i.e. everything the fresh split produces
+     * beyond the frozen settled slots. The slot COUNT stays
+     * settledCount + 1 (identical to the old absorb behaviour and to any
      * normal-append tick), so LazyColumn keys never churn and anchors never
      * jump. Because the live slot starts AFTER the settled prefix, it can
-     * never re-emit a settled slot's text — no `致命伤致命伤` duplication.
+     * never re-emit a settled slot's text — no duplication.
      *
      * If the fresh split shrank below `settledCount` (the model deleted whole
      * paragraphs), we keep the previous live slot content — settled slots are
