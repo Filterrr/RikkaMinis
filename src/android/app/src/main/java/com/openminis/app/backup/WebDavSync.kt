@@ -37,13 +37,26 @@ object WebDavSync {
     const val SYNC_PREFIX = "rikkaminis-sync-"
 
     /**
-     * On the WebDAV server the auto-sync snapshots live in their own
-     * *subdirectory* (`<backup-path>/sync/`) rather than mixed alongside the
-     * manual full backups in the backup root. That way the sync snapshots —
-     * auto-generated, pruned, and key-bearing — never share a folder with the
-     * curated manual backups the user chooses to keep.
+     * On the WebDAV server the auto-sync state lives in its own *subdirectory*
+     * (`<backup-path>/sync/`) rather than mixed alongside the manual full
+     * backups in the backup root. That way the sync state — auto-generated and
+     * key-bearing — never shares a folder with the curated manual backups the
+     * user chooses to keep.
      */
     const val SYNC_SUBDIR = "sync"
+
+    /** Canonical filename for the single merged auto-sync state document.
+     *  [RC16-sync-if-match] The sync snapshot converges onto ONE file rather
+     *  than an accumulating, pruned set of timestamped snapshots: with a
+     *  stable name the pull→conditional-push cycle can carry an `If-Match`
+     *  precondition (overwrite only the exact version we just pulled) so a
+     *  concurrent sibling push is refused with a 412 instead of silently
+     *  clobbering our freshly pulled state. */
+    const val SYNC_STATE_FILE = SYNC_PREFIX + "latest" + BACKUP_SUFFIX
+
+    /** Result of [pullLatestSync]: the merged doc body plus the server ETag
+     *  it was read under, for the conditional re-push ([RC16-sync-if-match]). */
+    data class PulledSync(val json: String, val etag: String?)
 
     /** Verify the server + credentials. Throws on failure. */
     fun testConnection(config: WebDavConfig, client: OkHttpClient = WebDavClient.defaultClient()) {
@@ -130,26 +143,38 @@ object WebDavSync {
     }
 
     /**
-     * Push a multi-device sync snapshot ([MultiDeviceSync]) as a new
-     * timestamped file named under [SYNC_PREFIX]. Same transport and
-     * auto-create semantics as [backup] — the only difference is the filename,
-     * which keeps auto-sync snapshots out of the manual remote-backup list.
-     * Returns the created displayName.
+     * Push the merged multi-device sync state ([MultiDeviceSync]) into the
+     * canonical [SYNC_STATE_FILE]. Same transport and auto-create semantics
+     * as [backup] — transports a *subset* payload (config + providers + env
+     * vars + memory) under the sync prefix so it never mixes with manual
+     * remote-backup files. Returns the created displayName.
+     *
+     * [RC16-sync-if-match] Conditional write: pass the [pulledEtag] read by
+     * [pullLatestSync] to guard the overwrite with `If-Match` (fails 412 if
+     * a sibling pushed first); pass [expectAbsent] when the server is
+     * expected to hold nothing yet, guarding the create with
+     * `If-None-Match: *` against two simultaneous first pushes. On conflict
+     * [WebDavClient.put] throws [WebDavException] with status 412 and the
+     * caller surfaces "conflict: remote changed, retry" instead of clobbering.
      */
     fun pushSync(
         config: WebDavConfig,
         payload: String,
         client: OkHttpClient = WebDavClient.defaultClient(),
+        pulledEtag: String? = null,
+        expectAbsent: Boolean = false,
     ): String {
         val dav = WebDavClient(config, client)
         dav.ensureCollectionExists()
         dav.ensureCollectionExists(SYNC_SUBDIR)
-        val name = "$SYNC_PREFIX${
-            java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
-                .format(java.util.Date())
-        }$BACKUP_SUFFIX"
-        dav.put("$SYNC_SUBDIR/$name", payload.toByteArray(Charsets.UTF_8), "application/json")
-        return name
+        dav.put(
+            "$SYNC_SUBDIR/$SYNC_STATE_FILE",
+            payload.toByteArray(Charsets.UTF_8),
+            "application/json",
+            ifMatchETag = pulledEtag,
+            ifNoneMatch = expectAbsent,
+        )
+        return SYNC_STATE_FILE
     }
 
     /** Remote auto-sync snapshots, newest first. They live in the
@@ -183,15 +208,19 @@ object WebDavSync {
     }
 
     /** Download the newest auto-sync snapshot, or null when the folder has
-     *  none yet. */
+     *  none yet. Returns the doc body plus the ETag it was read under so the
+     *  caller can re-push it conditionally ([RC16-sync-if-match]). */
     fun pullLatestSync(
         config: WebDavConfig,
         client: OkHttpClient = WebDavClient.defaultClient(),
-    ): String? {
-        return listSyncFiles(config, client).firstOrNull()?.let {
-            WebDavClient(config, client)
-                .get("$SYNC_SUBDIR/${it.displayName}")
-                .toString(Charsets.UTF_8)
+    ): PulledSync? {
+        return listSyncFiles(config, client).firstOrNull()?.let { item ->
+            val got = WebDavClient(config, client)
+                .getWithEtag("$SYNC_SUBDIR/${item.displayName}")
+            PulledSync(
+                json = got.bytes.toString(Charsets.UTF_8),
+                etag = got.etag,
+            )
         }
     }
 }

@@ -24,10 +24,14 @@ import okhttp3.OkHttpClient
  * document minus the skills/mcp/chat sections, which import() skips silently
  * (optJSONArray returns null/empty for absent keys).
  *
- * Conflict handling is deliberately the simplest possible: the newest snapshot
- * wins (whole-file push, per-entry import merge). There is no merge editor.
- * This is acceptable because no device is a heavy concurrent writer — the
- * rare collision resolves to "the last device to act is the latest intent".
+ * Conflict handling is an optimistic lock over a single canonical state file
+ * ([WebDavSync.SYNC_STATE_FILE]): every sync reads the remote doc plus its
+ * ETag, imports it (per-entry merge), then re-pushes the merged local state
+ * guarded by `If-Match` — a sibling write between our pull and push is refused
+ * with a 412 and surfaces as "conflict: remote changed, retry", so a concurrent
+ * device can never silently clobber the freshly-pulled state. There is no merge
+ * editor; the remaining loss window is a conflict the user declines to retry.
+ * This is acceptable because no device is a heavy concurrent writer.
  */
 object MultiDeviceSync {
     private const val TAG = "MultiDeviceSync"
@@ -43,10 +47,6 @@ object MultiDeviceSync {
     /** Debounce window: config writes within this interval coalesce into a
      *  single push, so a settings edit that fires N writes pushes once. */
     const val PUSH_DEBOUNCE_MS = 4000L
-
-    /** Keep at most this many auto-sync snapshots in the folder. Older ones
-     *  are pruned so the user does not have to. */
-    const val MAX_REMOTE_SYNC_FILES = 7
 
     /**
      * Whether auto-sync is turned on for this install.
@@ -111,29 +111,6 @@ object MultiDeviceSync {
         )
     }
 
-    /**
-     * Push the sync subset to WebDAV, then prune old snapshots down to
-     * [MAX_REMOTE_SYNC_FILES]. Returns the displayName of the pushed file.
-     */
-    fun pushSyncPayload(
-        config: WebDavConfig,
-        payload: String,
-        client: OkHttpClient,
-    ): String {
-        val name = WebDavSync.pushSync(config, payload, client)
-        pruneSyncFiles(config, client)
-        return name
-    }
-
-    /** Delete old auto-sync snapshots beyond the retention cap. */
-    private fun pruneSyncFiles(config: WebDavConfig, client: OkHttpClient) {
-        val remote = WebDavSync.listSyncFiles(config, client)
-        if (remote.size <= MAX_REMOTE_SYNC_FILES) return
-        for (stale in remote.drop(MAX_REMOTE_SYNC_FILES)) {
-            runCatching { WebDavSync.deleteBackupFile(config, stale, client, WebDavSync.SYNC_SUBDIR) }
-        }
-    }
-
     /** Preferences key: hash of the last successfully pushed sync payload
      *  (content-only; createdAt stamps are stripped before hashing). Used by
      *  [T-backup-sync-change-detect] to skip redundant PUTs when nothing
@@ -151,10 +128,10 @@ object MultiDeviceSync {
      * recent action on any device ends up authoritative.
      *
      * [T-backup-sync-change-detect] Step 2 is skipped when (a) the server still
-     * holds at least one sync file AND (b) the freshly exported payload hashes
+     * holds a sync file AND (b) the freshly exported payload hashes
      * identically to the last successfully pushed one (createdAt stamps
      * excluded). Every foreground previously did a full pull + import + export
-     * + PUT + prune even when nothing had changed; the PUT of the whole config
+     * + PUT even when nothing had changed; the PUT of the whole config
      * is the dominant traffic. The pull/import side is intentionally NOT gated:
      * it is the only way to receive sibling changes, and it keeps the "last
      * writer wins" convergence semantics intact (a sibling's newer state
@@ -184,7 +161,7 @@ object MultiDeviceSync {
             runCatching {
                 ConfigBackup.import(
                     providerRepo = providerRepo,
-                    json = pulled,
+                    json = pulled.json,
                     envVarRepo = envVarRepo,
                     skillRepo = null,
                     memoryRepo = memoryRepo,
@@ -195,9 +172,10 @@ object MultiDeviceSync {
             }
         }
 
-        // (2) Export the local light state and push it (with retention prune).
-        // Export failure (e.g. payload over MAX_PAYLOAD_BYTES) must degrade
-        // gracefully — never crash the foreground-triggered coroutine.
+        // (2) Export the local light state and push it down the optimistic-lock
+        // path (carrying the pull's ETag). Export failure (e.g. payload over
+        // MAX_PAYLOAD_BYTES) must degrade gracefully — never crash the
+        // foreground-triggered coroutine.
         val payload = runCatching {
             exportSyncPayload(
                 providerRepo = providerRepo,
@@ -211,17 +189,33 @@ object MultiDeviceSync {
 
         // [T-backup-sync-change-detect] No-op detection: same content as the
         // last successful push (and the server still holds our file) → skip
-        // the PUT + prune. createdAt stamps are stripped because every export
+        // the PUT. createdAt stamps are stripped because every export
         // mints a fresh one; content-only comparison is what we want.
         val contentHash = sha256(payload.replace(Regex("\"createdAt\"\\s*:\\s*\\d+"), ""))
         if (serverHasSyncFile && contentHash == prefs.getString(PREF_KEY_LAST_PUSHED_HASH, null)) {
             return "no-change: skipped push"
         }
 
+        // [RC16-sync-if-match] Optimistic-lock push: carry the ETag we just
+        // read under If-Match (or If-None-Match:* when the server held nothing
+        // yet, guarding a double first push). A 412 Precondition Failed means
+        // a sibling device wrote between our pull and this push — we must NOT
+        // clobber it. We surface "conflict: remote changed, retry" so the user
+        // can retry; the retry re-pulls the sibling's merged state first, so no
+        // this-device change is lost (only the clobber is avoided).
         return try {
-            val name = pushSyncPayload(config, payload, client)
+            val name = WebDavSync.pushSync(
+                config,
+                payload,
+                client,
+                pulledEtag = pulled?.etag,
+                expectAbsent = pulled == null,
+            )
             prefs.edit().putString(PREF_KEY_LAST_PUSHED_HASH, contentHash).apply()
             "pushed: $name"
+        } catch (t: WebDavException) {
+            if (t.statusCode == 412) "conflict: remote changed, retry"
+            else "push-failed: ${t.message}"
         } catch (t: Throwable) {
             "push-failed: ${t.message}"
         }
