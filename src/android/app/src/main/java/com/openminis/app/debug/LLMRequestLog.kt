@@ -69,6 +69,24 @@ object LLMRequestLog {
     @Synchronized
     fun clear() = entries.clear()
 
+    /** Case-insensitive sensitive header names whose values must never be
+     *  emitted by the debug endpoint (they can contain API keys/tokens). */
+    private val SENSITIVE_HEADERS = setOf("authorization", "x-api-key", "cookie")
+
+    /**
+     * [T-android-debugserver-auth] Redact sensitive request-header values
+     * before serialization. Authorization / x-api-key / cookie (matched
+     * case-insensitively, e.g. "X-API-Key" or "Authorization") are replaced
+     * with "[redacted:len]" so `debug.llmRequests` / `debug.agentTrace`
+     * never leak credential material to the wire.
+     */
+    internal fun redactHeaders(headers: Map<String, String>): Map<String, String> {
+        if (headers.isEmpty()) return headers
+        return headers.map { (k, v) ->
+            if (k.lowercase() in SENSITIVE_HEADERS) k to "[redacted:${v.length}]" else k to v
+        }.toMap()
+    }
+
     fun toJSON(last: Int? = null): JSONObject {
         val list = if (last != null) getLast(last) else getAll()
         val array = JSONArray()
@@ -78,7 +96,7 @@ object LLMRequestLog {
                 put("timestamp", entry.timestamp)
                 put("requestURL", entry.requestURL)
                 put("requestMethod", entry.requestMethod)
-                put("requestHeaders", JSONObject(entry.requestHeaders))
+                put("requestHeaders", JSONObject(redactHeaders(entry.requestHeaders)))
                 put("requestBody", try { JSONObject(entry.requestBody) } catch (_: Exception) { entry.requestBody })
                 put("durationMs", entry.durationMs)
                 put("responseStatusCode", entry.responseStatusCode)

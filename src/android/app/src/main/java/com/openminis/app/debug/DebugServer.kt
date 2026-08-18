@@ -14,9 +14,16 @@ import java.net.ServerSocket
 import java.net.Socket
 
 /**
- * Debug-only JSON-RPC 2.0 server on port 8321.
+ * Debug-only JSON-RPC 2.0 server on port 5321.
  * Listens on all interfaces (0.0.0.0) so it's reachable from the local network for debugging.
  * Mirrors the iOS DebugServer for parity with the debug-server CLI skill.
+ *
+ * Auth model: EVERY client (loopback AND LAN) must present X-Minis-Token /
+ * Authorization: Bearer. Loopback is no longer exempt — on-device browser
+ * pages can fetch `http://127.0.0.1:5321/` from any origin, so a token-free
+ * loopback would be a drive-by RPC surface. adb / curl pass the token
+ * explicitly and keep working. CORS is stripped (no Access-Control-Allow-Origin),
+ * so a browser page cannot read the response body even with the token.
  *
  * IMPORTANT: Only start this in debug builds. Never start in release.
  */
@@ -28,21 +35,24 @@ class DebugServer(
         private const val TAG = "DebugServer"
 
         /**
-         * [T-android-debugserver-auth] Remote-connection auth decision, kept
-         * pure for unit testing. Loopback connections (adb forward — the
-         * developer's own machine over USB) stay token-free so the local
-         * tooling keeps working unchanged; any NON-loopback (LAN) connection
-         * must present the device token. Rationale: Android debug builds are
-         * never distributed (release channel ships assembleRelease without
-         * this server), but the dev workflow leaves the device reachable on
-         * the LAN for remote-worker e2e — an unauthenticated 0.0.0.0 RPC
-         * surface there can read logs/files and burn API quota. The iOS
+         * [T-android-debugserver-auth] Auth decision, kept pure for unit
+         * testing. EVERY client — loopback AND LAN — must present the device
+         * token. The previous model waived loopback because "adb forward is
+         * the developer's own machine", but a debug build is reachable from
+         * any web page on the device (even loopback: a page can
+         * `fetch('http://127.0.0.1:5321/')`), so unauthenticated loopback
+         * grants a drive-by RPC surface (shellExecute / writeFile / provider
+         * import / LLM header exfiltration). With the token gate on all paths
+         * plus CORS removed (no Access-Control-Allow-Origin), a browser page
+         * can no longer obtain a valid token *or* read a response. adb/curl
+         * are unaffected — they send the token explicitly. The iOS
          * protocol-v1 encrypted envelope (358e3ded) is deliberately NOT
          * ported: with no distribution surface the token gate is the
          * proportionate hardening (evaluated in the A8 batch report).
+         * @param isLoopback retained for signature stability / audit log
+         *   labelling; it does NOT skip authentication.
          */
         fun isAuthorized(isLoopback: Boolean, providedToken: String?, expectedToken: String): Boolean {
-            if (isLoopback) return true
             if (expectedToken.isEmpty()) return false
             val provided = providedToken ?: return false
             if (provided.length != expectedToken.length) return false
@@ -61,8 +71,8 @@ class DebugServer(
     private val rpcHandler = DebugRPCHandler(context)
 
     /**
-     * [T-android-debugserver-auth] Per-install token required from
-     * non-loopback clients. Generated once, persisted in filesDir so the
+     * [T-android-debugserver-auth] Per-install token required from ALL
+     * clients (loopback AND LAN). Generated once, persisted in filesDir so the
      * developer can read it with:
      *   adb shell run-as com.openminis.app cat files/debug_server_token
      * Also logged at startup (logcat is adb-only — not readable remotely).
@@ -97,7 +107,7 @@ class DebugServer(
                 val ss = ServerSocket(port, 10)
                 serverSocket = ss
                 Log.i(TAG, "Debug server listening on port $port (all interfaces)")
-                Log.i(TAG, "Remote (non-loopback) clients must send X-Minis-Token: $authToken")
+                Log.i(TAG, "Clients must send X-Minis-Token: $authToken")
 
                 while (!stopped) {
                     try {
@@ -174,8 +184,10 @@ class DebugServer(
                     }
                 }
 
-                // [T-android-debugserver-auth] Gate BEFORE any RPC dispatch:
-                // loopback (adb forward) is exempt; LAN clients need the token.
+                // [T-android-debugserver-auth] Gate BEFORE any RPC dispatch.
+                // EVERY client (loopback AND LAN) must present the token:
+                // on-device browser pages reach 127.0.0.1 from any origin, so a
+                // loopback exemption would leave an unauthenticated RPC surface.
                 val isLoopback = s.inetAddress?.isLoopbackAddress == true
                 if (!isAuthorized(isLoopback, providedToken, authToken)) {
                     Log.w(TAG, "401 unauthorized ${if (isLoopback) "loopback" else s.inetAddress?.hostAddress ?: "?"} (missing/wrong token)")
@@ -190,9 +202,9 @@ class DebugServer(
                 // Deliberately placed AFTER the auth gate above: unlike iOS
                 // (whose /skill is unauthenticated because every RPC is still
                 // sealed by the v1 envelope), Android's RPCs are plaintext, so
-                // the token remains the only barrier for LAN clients and must not
-                // be bypassed. Over `adb forward` (loopback) it's token-free,
-                // which is the path the tooling actually uses.
+                // the token is the only barrier for EVERY client (loopback AND
+                // LAN) and must not be bypassed. adb tooling reads the token via
+                // `run-as ... cat files/debug_server_token` and sends it explicitly.
                 if (method == "GET") {
                     val wantsHuman = accept.contains("text/html") ||
                         accept.contains("text/markdown") ||
@@ -334,20 +346,18 @@ class DebugServer(
         writer.print("Content-Type: $contentType\r\n")
         writer.print("Content-Length: ${bytes.size}\r\n")
         writer.print("Connection: close\r\n")
-        writer.print("Access-Control-Allow-Origin: *\r\n")
-        writer.print("Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n")
-        writer.print("Access-Control-Allow-Headers: Content-Type, X-Minis-Token, Authorization\r\n")
         writer.print("\r\n")
         writer.print(body)
         writer.flush()
     }
 
+    // [T-android-debugserver-auth] No `Access-Control-Allow-Origin` header is
+    // sent on any response (including this preflight). Without it a browser
+    // cross-origin request is rejected by CORS on the client side, so an
+    // on-device web page cannot read the response body even if it obtains a
+    // token. adb / curl do not enforce CORS and are unaffected.
     private fun sendCorsPreflightResponse(writer: PrintWriter) {
         writer.print("HTTP/1.1 204 No Content\r\n")
-        writer.print("Access-Control-Allow-Origin: *\r\n")
-        writer.print("Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n")
-        writer.print("Access-Control-Allow-Headers: Content-Type, X-Minis-Token, Authorization\r\n")
-        writer.print("Access-Control-Max-Age: 86400\r\n")
         writer.print("Connection: close\r\n")
         writer.print("\r\n")
         writer.flush()
