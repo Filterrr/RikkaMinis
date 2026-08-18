@@ -141,7 +141,7 @@ import com.openminis.app.data.FileMentionIndex
 import com.openminis.app.logging.AppLogger
 import com.openminis.app.ui.components.MinisAlertDialog
 import com.openminis.app.ui.components.MinisMenu
-import com.openminis.app.ui.components.MinisDialogDivider
+import com.openminis.app.ui.components.MinisMenuDivider
 import com.openminis.app.ui.components.providerDotColor
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Surface
