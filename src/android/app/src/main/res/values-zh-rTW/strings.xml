@@ -536,7 +536,7 @@
     <string name="backup_saved">備份已儲存</string>
     <string name="backup_notify_failed">備份失敗</string>
     <string name="backup_secret_title">備份將包含 API 金鑰</string>
-    <string name="backup_secret_body">匯出的檔案含有提供商的 API 金鑰與登入憑證，任何取得該檔案的人都能使用。請妥善保管，勿分享。</string>
+    <string name="backup_secret_body">匯出的檔案含有提供商的 API 金鑰與登入憑證，任何取得該檔案的人都能使用。請妥善保管，勿分享。金鑰以明文 Base64 儲存（未加密），任何拿到檔案的人都能讀取。</string>
     <string name="backup_secret_confirm">包含金鑰並匯出</string>
     <string name="backup_secret_without">不含金鑰</string>
     <string name="backup_generating_title">正在產生備份…</string>
