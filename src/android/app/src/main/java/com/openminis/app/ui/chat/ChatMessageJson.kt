@@ -8,31 +8,12 @@ import org.json.JSONObject
  * route B, fcf9470). State-free and JVM-testable: they take plain values and
  * return strings. [org.json.JSONObject] is available in unit tests via the
  * `org.json:json` test dependency.
+ *
+ * Note: [escapeJson] is intentionally NOT redefined here — it already lives in
+ * [ChatViewModelUtils] (an earlier FE split) and is reused directly by
+ * [buildUserPartsJson] / [buildMediaRefPartJson]. This removes a long-standing
+ * duplicate `private fun escapeJson` that used to live inside ChatViewModel.
  */
-
-/**
- * JSON-escapes [text] and wraps it in double quotes, ready to be inlined as a
- * JSON string value (the callers build `{"type":"text","value":<here>}`
- * fragments by hand for performance).
- */
-fun escapeJson(text: String): String {
-    val sb = StringBuilder("\"")
-    for (c in text) {
-        when (c) {
-            '"' -> sb.append("\\\"")
-            '\\' -> sb.append("\\\\")
-            '\n' -> sb.append("\\n")
-            '\r' -> sb.append("\\r")
-            '\t' -> sb.append("\\t")
-            else -> {
-                if (c.code < 0x20) sb.append("\\u%04x".format(c.code))
-                else sb.append(c)
-            }
-        }
-    }
-    sb.append("\"")
-    return sb.toString()
-}
 
 /**
  * Serializes a [MediaRef] into a `{"type":"mediaRef","value":{...}}` JSON
