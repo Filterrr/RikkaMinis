@@ -93,15 +93,21 @@ class AppendOnlyMarkdownSegmenter {
         }
 
         if (matched < settledCount) {
-            // Non-append divergence: earlier fragments changed. Published
-            // slots are frozen — but instead of absorbing the whole divergent
-            // tail into the live slot (which duplicated characters at the
-            // seam when a throttled snapshot grew the first fragment by a
-            // partial word), re-derive the tail from the fresh split starting
-            // at the first mismatch. Keys stay stable; content after the
-            // common prefix is authoritative-fresh, never duplicated.
+            // Non-append divergence: earlier fragments changed (model rewrote
+            // text mid-stream, or a retry/fallback re-emitted a different
+            // prefix). KEY INVARIANT preserved: the published settled prefix
+            // stays put and the slot COUNT stays `settledCount + 1` — no key
+            // churn, no LazyColumn anchor jump. Only the live slot's content
+            // is re-derived from the fresh split's tail AFTER the settled
+            // prefix, so we never re-emit text the settled slots already show.
+            // The length-growth of a settled fragment (A → A+Δ, e.g. "致命伤"
+            // → "致命伤致命") is deliberately dropped: the settled slot is
+            // immutable, and absorbing Δ would duplicate its prefix — the exact
+            // `致命伤致命伤` artifact. (The first fix attempted here rewrote the
+            // tail with ALL fresh fragments, which let the slot count track
+            // fresh.size and regressed the scrolling-jump fix.)
             invariantErrorCount++
-            return rewriteDivergentTail(matched, fresh, streamEnded)
+            return absorbDivergence(fresh, settledCount, streamEnded)
         }
 
         // ── 2. Prefix OK — rebuild slots = frozen prefix + fresh tail ──
@@ -126,42 +132,40 @@ class AppendOnlyMarkdownSegmenter {
     }
 
     /**
-     * Divergence path (rewrite, NOT absorb): keep the settled slots
-     * 0..[matched] frozen (they are the longest byte-identical common prefix
-     * with the fresh split), then re-derive every slot from [matched] onward
-     * out of the fresh fragments. The published ORDINALS stay stable (no key
-     * churn — LazyColumn anchors never move), but their content is the fresh
-     * authoritative text, so a partial-word growth at the seam (settled
-     * "致命伤" vs fresh "致命伤致命") renders once, never duplicated.
+     * Divergence path (absorb, NOT rewrite): keep the settled slots frozen,
+     * and re-derive ONLY the live slot's content from the fresh split's tail
+     * AFTER the settled prefix (`fresh[settledCount..]`). The slot COUNT stays
+     * `settledCount + 1` (identical to the old absorb behaviour and to any
+     * normal-append tick), so LazyColumn keys never churn and anchors never
+     * jump. Because the live slot starts AFTER the settled prefix, it can
+     * never re-emit a settled slot's text — no `致命伤致命伤` duplication.
      *
-     * The invariant that "a settled slot's rawText never changes" is relaxed
-     * ONLY where the prefix match proved it already diverged — that is the
-     * documented non-append-divergence exception, and it is strictly better
-     * than the old absorb behaviour which joined the entire fresh tail (with
-     * its already-shown prefix) into one live slot, producing the visible
-     * `致命伤致命伤` / `竞态 | 竞态` token-level duplication.
+     * If the fresh split shrank below `settledCount` (the model deleted whole
+     * paragraphs), we keep the previous live slot content — settled slots are
+     * immutable and there is no sensible fresh tail to show.
      *
-     * @param matched number of leading settled slots that byte-match fresh.
-     * @param fresh    the full fresh split of the cumulative text.
+     * @param fresh        the full fresh split of the cumulative text.
+     * @param settledCount number of published settled slots (frozen).
      */
-    private fun rewriteDivergentTail(matched: Int, fresh: List<String>, streamEnded: Boolean): List<StableMarkdownSlot> {
-        val rebuilt = ArrayList<StableMarkdownSlot>(fresh.size)
-        // 1. Freeze the byte-identical common prefix.
-        for (i in 0 until matched) {
-            rebuilt.add(slots[i])
+    private fun absorbDivergence(fresh: List<String>, settledCount: Int, streamEnded: Boolean): List<StableMarkdownSlot> {
+        val rebuilt = ArrayList<StableMarkdownSlot>(settledCount + 1)
+        for (i in 0 until settledCount) rebuilt.add(slots[i])
+
+        val liveText = if (fresh.size > settledCount) {
+            fresh.subList(settledCount, fresh.size).joinToString("\n\n")
+        } else {
+            // Fresh split shrank below the settled prefix — keep the old live
+            // content rather than fabricate a partial tail.
+            slots.lastOrNull()?.takeIf { !it.settled }?.rawText.orEmpty()
         }
-        // 2. Re-derive everything after the first mismatch from the fresh
-        //    split, reusing the same ordinals (matched..) so keys are stable.
-        for (i in matched until fresh.size) {
-            val isLast = i == fresh.size - 1
-            rebuilt.add(
-                StableMarkdownSlot(
-                    ordinal = i,
-                    rawText = fresh[i],
-                    settled = streamEnded || !isLast,
-                )
+
+        rebuilt.add(
+            StableMarkdownSlot(
+                ordinal = settledCount,
+                rawText = liveText,
+                settled = streamEnded,
             )
-        }
+        )
         slots.clear()
         slots.addAll(rebuilt)
         return snapshot()
