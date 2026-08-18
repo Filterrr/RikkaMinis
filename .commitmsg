@@ -1,0 +1,15 @@
+fix(audit-RC1): normalize dot-segments + canonical prefix guard in path resolution
+
+All File(base, userPath) joins in resolveSessionHostPath and
+resolveHostPath now go through safeResolveWithin():
+1. Dot-segment normalization (RFC 3986) - traversal that climbs
+   above base is rejected (returns null).
+2. canonicalFile startsWith prefix guard - detects symlink-based
+   escape even when dot-segments are clean.
+
+Covers all 4 entry points (browser intercept, ChatLinkResolver,
+WebAppPathResolver, DeepLink OpenHtmlPreview) via the two
+existing functions.
+
+Also adds a pure-function normalizeDotSegments() at top level
+(zero Android deps) with 10 JVM unit tests.
