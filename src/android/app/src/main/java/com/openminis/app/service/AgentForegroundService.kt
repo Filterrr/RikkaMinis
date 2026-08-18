@@ -22,6 +22,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
@@ -135,7 +136,11 @@ class AgentForegroundService : Service() {
         }
         createNotificationChannel()
         startTimeMs = SystemClock.elapsedRealtime()
-        acquireWakeLock()
+        // [RC4] The CPU wakelock is no longer tied to the service lifecycle.
+        // It is held only while an active stream is in flight — driven by
+        // SessionActivityTracker.activeSessions (see startOverlayObserver's
+        // wakelock collector). A present-only FGS (user composing/reading,
+        // no stream) keeps the stable foreground adj without pinning the CPU.
         startOverlayObserver()
         Log.d(TAG, "Service created")
     }
@@ -263,6 +268,9 @@ class AgentForegroundService : Service() {
     }
 
     override fun onDestroy() {
+        // [RC4] The wakelock is normally driven by the active-stream collector
+        // below; releaseWakeLock() here is a defensive final cleanup (it is
+        // idempotent) so a service teardown can never leave a wakelock behind.
         releaseWakeLock()
         try {
             overlayController?.hide()
@@ -340,6 +348,24 @@ class AgentForegroundService : Service() {
                     hasActiveStream = activeSessions.isNotEmpty(),
                 )
             }.distinctUntilChanged().collect { state -> applyOverlayState(state) }
+        }
+
+        // [RC4] CPU wakelock is held ONLY while an active stream is in
+        // flight. We take `activeSessions` empty -> non-empty as "stream
+        // started" (acquire) and non-empty -> empty as "stream ended"
+        // (release). A present-only FGS (composing/reading, no stream) does
+        // NOT pin the CPU — it keeps the stable foreground adj via the
+        // notification alone. collectLatest would race release-on-empty with
+        // a re-acquire; a plain collect on the StateFlow gives us every
+        // observed value so the acquire/release edge logic stays correct.
+        overlayScope.launch {
+            SessionActivityTracker.activeSessions.collect { active ->
+                if (active.isNotEmpty()) {
+                    acquireWakeLock()
+                } else {
+                    releaseWakeLock()
+                }
+            }
         }
     }
 
