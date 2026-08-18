@@ -1945,62 +1945,15 @@ class ChatViewModel(
         // 644-657 "walk back through agentHistory looking for dbMessageId
         // AND allRaw.contains" — split across two phases to honor suspend
         // boundaries.
-        val anchorIdx: Int = if (anchorIdxOverride != null) {
-            // compactBefore() supplied a specific anchor — walk back from
-            // there to the closest entry with a dbMessageId (mirrors the
-            // tail-walk-back logic but bounded to [0..override]).
-            var i = anchorIdxOverride.coerceIn(0, history.lastIndex)
-            while (i >= 0 && history[i].dbMessageId.isNullOrEmpty()) i -= 1
-            i
-        } else {
-            // compactAll() — walk back from the tail to the closest
-            // persisted entry. iOS compactAll calls compactBefore with the
-            // last active UI message; we go through agentHistory directly
-            // since Android's agentHistory and UI list are tighter-coupled.
-            var i = history.lastIndex
-            while (i >= 0 && history[i].dbMessageId.isNullOrEmpty()) i -= 1
-            // [Compact-keep-answer-active] The final message right after a
-            // turn is the assistant's ANSWER (persisted with a dbMessageId).
-            // If we anchor there, the divider lands after it and the just-
-            // delivered reply gets grayed out into the summary. More natural:
-            // keep the answer OUTSIDE the compaction — fall back to the last
-            // persisted USER prompt so everything after it (tool work + the
-            // final answer) stays in the active, un-grayed region. Skip pure
-            // tool-result entries (role=USER but contentParts all ToolResult).
-            if (i > 0) {
-                while (i >= 0 && (history[i].role != LLMMessage.Role.USER ||
-                    history[i].contentParts.all { p -> p is AgentContentPart.ToolResult } ||
-                    history[i].dbMessageId.isNullOrEmpty())
-                ) i -= 1
-            }
-            i
-        }
+        val anchorIdx: Int = resolveCompactAnchorIdx(history, anchorIdxOverride)
         if (anchorIdx < 0) {
             appendSystemInfo("Cannot compact: no persisted messages yet.", "compact")
             return
         }
 
-        // Slice to compact = (prev marker's anchor + 1) … anchorIdx inclusive.
-        // For v2 prev markers, lastCompactedMessageId IS the prev anchor —
-        // start at prevIdx + 1. For v1 prev markers, firstKeptMessageId points
-        // at "first kept" — start AT prevIdx (it was exclusive on right edge).
-        val prev = _cachedLatestMarker
-        val effectiveStartIdx: Int = if (prev == null) {
-            0
-        } else {
-            val prevAnchorOrFirstKept: String? = if (prev.version >= 2) {
-                prev.lastCompactedMessageId?.takeIf { it.isNotEmpty() }
-            } else {
-                prev.firstKeptMessageId?.takeIf { it.isNotEmpty() }
-                    ?: prev.boundaryMessageId?.takeIf { it.isNotEmpty() }
-            }
-            val prevIdx = prevAnchorOrFirstKept?.let { id ->
-                history.indexOfFirst { it.dbMessageId == id }
-            } ?: -1
-            if (prevIdx < 0) 0   // prev anchor not in current history — restart from top
-            else if (prev.version >= 2) prevIdx + 1
-            else prevIdx
-        }
+        // Slice to compact = (prev marker's anchor + 1) … anchorIdx inclusive
+        // (v2/v1 boundary resolution delegated to resolveCompactStartIdx).
+        val effectiveStartIdx: Int = resolveCompactStartIdx(history, _cachedLatestMarker)
         if (effectiveStartIdx > anchorIdx) {
             appendSystemInfo("Already compacted up to this point.", "compact")
             return
