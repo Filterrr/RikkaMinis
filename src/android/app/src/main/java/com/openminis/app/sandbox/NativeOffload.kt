@@ -112,14 +112,15 @@ object NativeOffloadServer {
     private var serverSocket: LocalServerSocket? = null
     private var acceptThread: Thread? = null
 
-    // [T-offload-tmpfile-leak] The last response tmpfile written to rootfs
-    // /tmp. The guest cat's it synchronously after receiving our reply, so by
-    // the time the NEXT offload request arrives it is always safe to delete.
-    // Without this the rootfs /tmp (a tmpfs = RAM-backed) accumulates one
-    // .native-offload-* file per call forever — with large outputs (logcat,
-    // ps) that is real RAM the UI process never gets back.
-    @Volatile
-    private var lastTmpHost: File? = null
+    // [T-offload-tmpfile-leak] Response tmpfiles written to rootfs /tmp,
+    // tracked by a bounded ledger ([OffloadTmpFileLedger], audit-RC7) instead
+    // of the old single-slot `lastTmpHost`. Without tracking, the rootfs /tmp
+    // (a tmpfs = RAM-backed) accumulates one .native-offload-* file per call
+    // forever — with large outputs (logcat, ps) that is real RAM the UI
+    // process never gets back. The single-slot design also raced under
+    // concurrent sessions (leaked files / deleted not-yet-cat'd files); the
+    // ledger keeps the newest files and evicts oldest-first under one lock.
+    private val tmpLedger = OffloadTmpFileLedger()
 
     @Volatile
     private var rootfsTmpDir: File? = null
@@ -179,6 +180,10 @@ object NativeOffloadServer {
         try { serverSocket?.close() } catch (_: Exception) {}
         serverSocket = null
         acceptThread = null
+        // [audit-RC7] Server is going away — no guest will ever cat the
+        // tracked tmpfiles again. Reclaim them now instead of leaking RAM
+        // until the next rootfs reset.
+        tmpLedger.clearAll()
     }
 
     private fun runAcceptLoop(s: LocalServerSocket) {
@@ -266,19 +271,16 @@ object NativeOffloadServer {
         val tmpDir = rootfsTmpDir ?: throw IllegalStateException("server not started")
         tmpDir.mkdirs()
 
-        // Reclaim the PREVIOUS response tmpfile. It was cat'd by the guest
-        // synchronously after our last reply, so it is always safe to remove
-        // now (agent tool calls are serial per turn). This keeps rootfs /tmp
-        // (tmpfs → RAM) from growing unboundedly with one file per call.
-        lastTmpHost?.let { old ->
-            lastTmpHost = null
-            runCatching { old.delete() }
-        }
-
+        // [audit-RC7] Register the new tmpfile in the bounded ledger. The
+        // ledger evicts (deletes) the oldest tracked file once it exceeds
+        // capacity — an evicted file has survived several full reply→cat
+        // cycles, so the guest has long consumed it. Deletion happens for
+        // exactly one thread per file (ledger-internal lock): no orphan, no
+        // double-delete, no deleting a file the guest hasn't cat'd yet.
         val seq = counter.incrementAndGet()
         val tmpHost = File(tmpDir, ".native-offload-$pid-$seq")
         tmpHost.writeText(result.output)
-        lastTmpHost = tmpHost
+        tmpLedger.rotate(tmpHost)
         val tmpGuest = "/tmp/${tmpHost.name}"
 
         Log.d(TAG, "reply name='$name' exit=${result.exitCode} outBytes=${result.output.length} " +
