@@ -52,6 +52,27 @@ class BrowserTabPool(private val context: Context) : ComponentCallbacks2 {
         const val PREF_GLOBAL_VIEWPORT_HEIGHT = "browser_custom_viewport_height"
 
         /**
+         * [audit-RC11] Sanitize a download filename before it reaches the
+         * filesystem. Returns null when the name is unusable (empty after
+         * trim, > 200 chars, or it smuggles any path component) so callers can
+         * refuse or fall back to a safe default. Defense-in-depth companion to
+         * PRootKernel path normalization: a download name is itself untrusted
+         * input from the page and must never be able to escape the workspace
+         * directory (e.g. "../../shell" or "/etc/passwd").
+         */
+        internal fun sanitizeDownloadName(name: String): String? {
+            val n = name.trim()
+            if (n.isEmpty() || n.length > 200) return null
+            // Path separators (POSIX & Windows), and the NUL delimiter, would
+            // turn a "filename" into a path that escapes the download dir.
+            if (n.any { it == '/' || it == '\\' || it == '\u0000' }) return null
+            // Belt-and-braces: any resolve that sees a parent component means a
+            // path, not a bare name.
+            if (File(n).parent != null) return null
+            return n
+        }
+
+        /**
          * [T-browser-use-per-tab-serial-android] Max time a browser_use call
          * waits to acquire the per-tab-id serial lock before giving up. This is
          * ONLY the lock-acquisition wait (waiting for another tool's operation
@@ -426,7 +447,9 @@ class BrowserTabPool(private val context: Context) : ComponentCallbacks2 {
             Log.w(TAG, "download rejected: no session bound to pool")
             return
         }
-        val name = android.webkit.URLUtil.guessFileName(url, contentDisposition, mimeType)
+        val name = sanitizeDownloadName(
+            android.webkit.URLUtil.guessFileName(url, contentDisposition, mimeType)
+        ) ?: "download-${System.currentTimeMillis()}"
         val dest = uniqueFile(dir, name)
         onDownloadEvent?.invoke("Downloading ${middleTruncated(dest.name)}…")
         val id = registerDownload(dest, contentLength)
@@ -482,9 +505,16 @@ class BrowserTabPool(private val context: Context) : ComponentCallbacks2 {
             Log.w(TAG, "blob download rejected: no session bound to pool")
             return
         }
+        // [audit-RC11] The filename comes from page-controlled JS (`<a download>`
+        // attribute / fetch blob name). Refuse outright if it carries any path
+        // component or is otherwise unusable — never let it escape the download dir.
+        val safe = sanitizeDownloadName(filename) ?: run {
+            Log.w(TAG, "blob download rejected: unsafe filename '${filename.take(80)}'")
+            return
+        }
         // guessFileName on a blob: URL yields "downloadfile.bin" — refine the
         // extension from the blob's actual MIME type when we have one.
-        var name = filename
+        var name: String = safe
         if ((name.endsWith(".bin") || !name.contains('.')) && mimeType != null) {
             android.webkit.MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType)?.let { ext ->
                 name = name.substringBeforeLast('.') + "." + ext
