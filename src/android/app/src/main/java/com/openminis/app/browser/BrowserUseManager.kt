@@ -179,6 +179,13 @@ class BrowserUseManager(
          */
         @JavascriptInterface
         fun saveBlobDownload(dataUrl: String, filename: String) {
+            // [audit-RC11] Defense-in-depth: page-provided names are untrusted.
+            // The pool also sanitizes, but refuse as early as possible so the
+            // bytes are never even handed off for an unsafe name.
+            val safeName = BrowserTabPool.sanitizeDownloadName(filename) ?: run {
+                Log.w(TAG, "blob download rejected: unsafe filename '${filename.take(80)}'")
+                return
+            }
             val comma = dataUrl.indexOf(',')
             if (comma < 0 || !dataUrl.startsWith("data:")) {
                 Log.w(TAG, "blob download: malformed data URL (len=${dataUrl.length})")
@@ -198,8 +205,8 @@ class BrowserUseManager(
                 Log.w(TAG, "blob download: payload decode failed: ${t.message}")
                 return
             }
-            Log.i(TAG, "blob download decoded: $filename (${bytes.size} bytes, mime=$mime)")
-            onBlobDownloadData?.invoke(bytes, filename, mime)
+            Log.i(TAG, "blob download decoded: $safeName (${bytes.size} bytes, mime=$mime)")
+            onBlobDownloadData?.invoke(bytes, safeName, mime)
         }
 
         @JavascriptInterface
@@ -388,6 +395,20 @@ class BrowserUseManager(
             ): android.webkit.WebResourceResponse? {
                 val url = request.url ?: return null
                 if (url.scheme != "minis") return null
+                // [audit-RC13] Only serve minis:// from page-initiated loads that
+                // are either the main frame (agent navigation / top-level href)
+                // or a same-origin subresource (Origin starts with minis:// or the
+                // bundled app assets origin). A cross-origin frame with an explicit
+                // Origin header is a potential SSRF/scanning vector and must not be
+                // able to pull local workspace files through it.
+                if (!request.isForMainFrame) {
+                    val origin = request.requestHeaders?.get("Origin")
+                    if (!origin.isNullOrEmpty() &&
+                        !origin.startsWith("minis://") &&
+                        !origin.startsWith("https://appassets")) {
+                        return null
+                    }
+                }
                 return interceptMinisURL(url)
             }
         }
@@ -419,7 +440,7 @@ class BrowserUseManager(
                 localFile.inputStream()
             }
             return android.webkit.WebResourceResponse(mimeType, "UTF-8", 200, "OK",
-                mapOf("Access-Control-Allow-Origin" to "*"),
+                emptyMap(),
                 stream)
         } catch (e: Exception) {
             Log.w(TAG, "minis:// intercept error: ${e.message}")
