@@ -1635,12 +1635,18 @@ fun ChatScreen(
             .pendingHtmlPreview.value ?: return@LaunchedEffect
         if (pending.sessionId != sessionId) return@LaunchedEffect
         com.openminis.app.deeplink.DeepLinkCoordinator.consumePendingHtmlPreview()
-        val absPath = "/var/minis" + pending.resourcePath
-        val file = java.io.File(absPath)
-        if (!file.exists()) {
+        // Resolve through PRootKernel so dot-segments / separators can never
+        // escape the `/var/minis` sandbox into an arbitrary host path — the
+        // preview WebView serves from the host file, so we must hand it the
+        // normalized host File rather than naively concatenating the raw
+        // resource path onto `/var/minis`.
+        val file = com.openminis.app.sandbox.PRootKernel.resolveHostPath(
+            "/var/minis${pending.resourcePath}"
+        )
+        if (file == null || !file.exists()) {
             com.openminis.app.logging.AppLogger.warning(
                 "ChatScreen",
-                "pinned HTML preview path missing: $absPath",
+                "pinned HTML preview path missing or unsafe: ${pending.resourcePath}",
             )
             return@LaunchedEffect
         }
