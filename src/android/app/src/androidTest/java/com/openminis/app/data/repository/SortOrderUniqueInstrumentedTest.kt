@@ -46,7 +46,7 @@ class SortOrderUniqueInstrumentedTest {
         // A session row is required — messages FK to sessions(id) ON DELETE CASCADE.
         runBlocking {
             repo.dao.insertSession(
-                ChatSessionEntity(id = "s1", title = "t", modelId = "m"),
+                ChatSessionEntity(id = "s1", title = "t", modelId = "m", createdAt = 0L, updatedAt = 0L),
             )
         }
     }
