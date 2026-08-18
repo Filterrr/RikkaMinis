@@ -1958,6 +1958,17 @@ class ProviderRepository(private val context: Context) {
             // when set; old/new readers without the key decode to null →
             // default UA. Field name matches iOS for cross-platform interop.
             instance.customUserAgent?.takeIf { it.isNotBlank() }?.let { put("customUserAgent", it) }
+            // [RC5 / P0-pinned + GH#68] Additive provider run-config fields.
+            // These were previously NEVER written by the backup export, so a
+            // config restore / device migration silently reset them to
+            // defaults (pinned=false, enabled=true, azure/image mode cleared).
+            // Same root cause as the Room-layer P0-pinned & GH#68 fixes — the
+            // JSON backup serializer drifted from the model. Each key is
+            // additive + optional: older readers ignore unknown keys, and the
+            // import below reads each independently with defaults for missing
+            // keys so old backups still restore cleanly. Delegated to the pure
+            // [writeRunConfigFields] seam so the round-trip is JVM-testable.
+            writeRunConfigFields(this, instance)
         }
         return obj.toString(2)
     }
@@ -1993,6 +2004,15 @@ class ProviderRepository(private val context: Context) {
         // [T-provider-custom-user-agent] Additive: old exports lack the key →
         // empty → null → default UA. Field name matches iOS.
         val customUserAgent = dict.optString("customUserAgent", "").ifEmpty { null }
+        // [RC5 / P0-pinned + GH#68] Restore the run-config fields written by
+        // [exportInstanceJSON]. Each defaults to the model's own default when
+        // the key is absent (old backup) so nothing crashes and a legacy
+        // restore behaves exactly as before. Enum names parsed via
+        // runCatching + fallback, mirroring ProviderConfigMapping — an unknown
+        // enum name from a future build degrades to auto / no cache instead of
+        // throwing away the whole import. Delegated to the pure
+        // [readRunConfigFields] seam so the round-trip is JVM-testable.
+        val rc = readRunConfigFields(dict)
 
         val instance = ProviderInstance(
             id = java.util.UUID.randomUUID().toString(),
@@ -2003,6 +2023,11 @@ class ProviderRepository(private val context: Context) {
             appendV1Suffix = appendV1,
             useResponsesAPI = useResponsesAPI,
             customUserAgent = customUserAgent,
+            isEnabled = rc.isEnabled,
+            azureMode = rc.azureMode,
+            imageEndpointMode = rc.imageEndpointMode,
+            imageEndpointResolved = rc.imageEndpointResolved,
+            pinned = rc.pinned,
         )
         addInstance(instance)
 
@@ -2292,4 +2317,72 @@ enum class ModelRefreshResult {
     PRESERVED,
     /** All known sources failed. */
     FAILURE,
+}
+
+/**
+ * [RC5 / P0-pinned + GH#68] Pure JSON seam for the ProviderInstance
+ * run-config fields on the backup export/import path
+ * ([exportInstanceJSON] → [importInstanceJSON]). Hosted as internal
+ * file-scope functions (not methods on [ProviderRepository], which needs an
+ * Android Context) so the round-trip is JVM-unit-testable without Robolectric.
+ *
+ * History: these five fields were NEVER written by the backup export, so a
+ * config restore / device migration silently reset them to defaults
+ * (pinned=false, enabled=true, azureMode=false, image mode → auto). Same root
+ * cause as the Room-layer P0-pinned & GH#68 fixes — the JSON backup serializer
+ * drifted from the ProviderInstance model. Every writer key is additive +
+ * optional: older readers ignore unknown keys, and [readRunConfigFields]
+ * defaults each field when the key is absent so old backups still restore
+ * cleanly (no crash, byte-for-byte previous behavior).
+ */
+private const val RCF_IS_ENABLED = "isEnabled"
+private const val RCF_AZURE_MODE = "azureMode"
+private const val RCF_IMG_MODE = "imageEndpointMode"
+private const val RCF_IMG_RESOLVED = "imageEndpointResolved"
+private const val RCF_PINNED = "pinned"
+
+/** Round-tripped run-config of a [ProviderInstance] decoded from backup JSON. */
+internal data class RunConfigSnapshot(
+    val isEnabled: Boolean,
+    val azureMode: Boolean,
+    val imageEndpointMode: ImageEndpointMode,
+    val imageEndpointResolved: ImageEndpointMode?,
+    val pinned: Boolean,
+)
+
+/**
+ * Write the five run-config fields onto [obj]. Enum names use
+ * [ImageEndpointMode.name] — matching [ProviderConfigMapping]'s persistence
+ * convention — so a restored config is byte-identical to a Room round-trip.
+ */
+internal fun writeRunConfigFields(obj: org.json.JSONObject, instance: ProviderInstance) {
+    obj.put(RCF_IS_ENABLED, instance.isEnabled)
+    obj.put(RCF_AZURE_MODE, instance.azureMode)
+    obj.put(RCF_IMG_MODE, instance.imageEndpointMode.name)
+    instance.imageEndpointResolved?.name?.let { obj.put(RCF_IMG_RESOLVED, it) }
+    obj.put(RCF_PINNED, instance.pinned)
+}
+
+/**
+ * Read the five run-config fields from [dict], each defaulting to the model's
+ * own default when the key is absent (old backup). Enum names parsed via
+ * runCatching + fallback, mirroring [ProviderConfigMapping]: an unknown enum
+ * name from a future build degrades to `auto` / no cache instead of throwing
+ * away the whole import.
+ */
+internal fun readRunConfigFields(dict: org.json.JSONObject): RunConfigSnapshot {
+    val imageEndpointMode = dict.optString(RCF_IMG_MODE, "")
+        .takeIf { it.isNotBlank() }
+        ?.let { m -> runCatching { ImageEndpointMode.valueOf(m) }.getOrNull() }
+        ?: ImageEndpointMode.auto
+    val imageEndpointResolved = dict.optString(RCF_IMG_RESOLVED, "")
+        .takeIf { it.isNotBlank() }
+        ?.let { m -> runCatching { ImageEndpointMode.valueOf(m) }.getOrNull() }
+    return RunConfigSnapshot(
+        isEnabled = dict.optBoolean(RCF_IS_ENABLED, true),
+        azureMode = dict.optBoolean(RCF_AZURE_MODE, false),
+        imageEndpointMode = imageEndpointMode,
+        imageEndpointResolved = imageEndpointResolved,
+        pinned = dict.optBoolean(RCF_PINNED, false),
+    )
 }
