@@ -10,6 +10,17 @@ on:
       - '.github/workflows/build-apk.yml'
   workflow_dispatch:
 
+# [audit-RC6] Serialize overlapping builds of the SAME ref. The release path
+# replaces the rolling android-latest asset in place (same tag every build), so
+# two concurrent `main` runs could interleave and let an OLDER (lower
+# versionCode) build overwrite a NEWER one — or race each other mid-upload and
+# leave android-latest pointing at a stale/failed artifact. Grouping by ref
+# (here: every run of this workflow, keyed on the branch/tag being built) plus
+# cancel-in-progress drops the stale one so only the newest completes.
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -93,6 +104,23 @@ jobs:
       # read back. It would silently fall back to generating a throwaway debug
       # key, and the published APK would fail to install as an upgrade.
       # Write to a fixed absolute path and point Gradle at it explicitly.
+      # Restore signing keystore. [audit-RC6] SIGNING-IDENTITY RISK: the release
+      # build is signed with the DEBUG keystore — alias `androiddebugkey`,
+      # store/key password `android`, and the key material shipped as the
+      # DEBUG_KEYSTORE_B64 secret. These are PUBLIC, well-known constants (the
+      # AOSP debug key format + the debug keystore is reproducible/guessable),
+      # so the resulting signature proves NOTHING about authorship: anyone can
+      # rebuild and re-sign an APK with the same identity. This is a deliberate
+      # trade-off so every CI build installs OVER the previous one without
+      # uninstall/reinstall, at the cost of NO origin trust. It also means a
+      # forged "RikkaMinis" APK signed with this same key would pass as a valid
+      # upgrade. [audit-RC6] Hard gate: production releases MUST use an
+      # independent, non-public release keystore (unique alias, non-trivial
+      # password, held privately) rather than the debug identity. TODO
+      # (separate follow-up): provision a dedicated release keystore and swap
+      # buildTypes.release.signingConfig off `debug` in build.gradle.kts.
+      # Until then, keep DEBUG_KEYSTORE_B64 set (gate below) and verify the APK
+      # digest post-build so at least the asset is byte-deterministic.
       - name: Restore signing keystore
         env:
           KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_B64 }}
