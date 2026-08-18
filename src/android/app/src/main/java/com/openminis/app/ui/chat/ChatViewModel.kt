@@ -7608,10 +7608,11 @@ class ChatViewModel(
                         // Roll back partial blocks from the failed stream attempt so the retried
                         // stream's deltas don't double-append on top of stale content. Previous
                         // turns (everything before turnStartBlockIndex) are preserved.
-                        if (allToolBlocks.size > turnStartBlockIndex) {
-                            while (allToolBlocks.size > turnStartBlockIndex) {
-                                allToolBlocks.removeAt(allToolBlocks.size - 1)
-                            }
+                        // RC3: shared production helper — the retry path and the fallback path
+                        // must apply the same "no fake blocks survive a failed attempt" semantic,
+                        // or they drift (historically fallback missed this; see F-T01-01).
+                        val hadPartialBlocks = rollbackTurnBlocksTo(allToolBlocks, turnStartBlockIndex)
+                        if (hadPartialBlocks) {
                             // [T-android-fallback-text-rewind] Keep this turn's
                             // already-streamed text on screen across the rollback.
                             // `accumulatedText` only folds in `turnTextSb` after the
@@ -7802,6 +7803,14 @@ class ChatViewModel(
                         // `accumulatedText` would rewind the visible reply. The new
                         // provider streams into a fresh `turnTextSb` (reset just
                         // below) and re-publishes `accumulatedText + newTurnText`.
+                        // RC3 (F-T01-01): BEFORE switching to the fallback provider,
+                        // roll back this turn's partial blocks — a failed provider may
+                        // have emitted one or more fake `tool_use` blocks (PENDING) that
+                        // must not survive into the new provider's completed turn, the
+                        // persisted parts, or the next request's sanitize-injected
+                        // placeholder tool_result. Mirrors the retry path's rollback so
+                        // the two paths cannot drift.
+                        rollbackTurnBlocksTo(allToolBlocks, turnStartBlockIndex)
                         withContext(Dispatchers.Main) {
                             updateAssistantMessage(assistantId, accumulatedText + turnTextSb.toString(), true, allToolBlocks)
                         }
@@ -9899,32 +9908,15 @@ class ChatViewModel(
      * original stream order is preserved by the list slice order. Thinking and info
      * blocks are skipped (they're persisted via `reasoningContent` or not at all).
      */
-    private fun buildTurnParts(
+    internal fun buildTurnParts(
         allToolBlocks: List<AssistantBlock>,
         turnStartBlockIndex: Int,
         toolCallInputs: Map<String, String>,
-    ): List<AgentContentPart> {
-        if (turnStartBlockIndex >= allToolBlocks.size) return emptyList()
-        val out = mutableListOf<AgentContentPart>()
-        for (i in turnStartBlockIndex until allToolBlocks.size) {
-            val block = allToolBlocks[i]
-            when (block.kind) {
-                "text" -> if (block.content.isNotEmpty()) {
-                    out.add(AgentContentPart.Text(block.content))
-                }
-                "tool_use" -> {
-                    val name = block.toolName
-                    if (name.isBlank()) continue
-                    val inputStr = toolCallInputs[block.id] ?: "{}"
-                    val inputJson = try { JSONObject(inputStr) } catch (_: Exception) { JSONObject() }
-                    out.add(AgentContentPart.ToolUse(block.id, name, inputJson))
-                }
-                // "thinking" / "info" → not persisted in parts
-                else -> { /* skip */ }
-            }
-        }
-        return out
-    }
+    ): List<AgentContentPart> =
+        // RC3: delegate to the top-level pure builder (production-used) so the
+        // turn-persistence semantics are directly JVM-testable and cannot drift
+        // from its tests. See F-T01-01 acceptance invariant.
+        buildTurnPartsPure(allToolBlocks, turnStartBlockIndex, toolCallInputs)
 
     /**
      * Persist a single agent turn: the ordered list of AgentContentParts produced
@@ -12093,3 +12085,74 @@ internal fun ensureRoleAlternationBeforeUserAppend(
     }
 }
 
+/**
+ * RC3: Roll the current turn's assistant blocks back to [turnStartBlockIndex],
+ * dropping every block added since the current stream attempt began (the
+ * failed attempt's partial / fake blocks). Blocks from earlier turns (all
+ * indices before [turnStartBlockIndex]) are preserved.
+ *
+ * This is the canonical "no fake `tool_use` blocks survive a failed attempt"
+ * semantic that BOTH the retry path and the fallback path of [runAgentLoop]
+ * must honor. Extracted into a single production helper so the two paths
+ * cannot drift (historically the fallback path missed this rollback and leaked
+ * a failed provider's PENDING tool_use blocks into the completed turn's
+ * persisted parts and the next request's sanitize-injected placeholder — see
+ * F-T01-01). It operates on the mutable shared list in place and mirrors the
+ * original `while (size > index) removeAt(last)` truncation.
+ *
+ * Pure + JVM-testable (no ViewModel/Android dependencies).
+ *
+ * @return true if any block was removed (i.e. there were partial blocks).
+ */
+internal fun rollbackTurnBlocksTo(
+    blocks: MutableList<AssistantBlock>,
+    turnStartBlockIndex: Int,
+): Boolean {
+    if (blocks.size <= turnStartBlockIndex) return false
+    while (blocks.size > turnStartBlockIndex) {
+        blocks.removeAt(blocks.size - 1)
+    }
+    return true
+}
+
+/**
+ * RC3: Pure builder for a turn's persisted `AgentContentPart` list, walking the
+ * slice of `allToolBlocks` that belongs to the current turn (from
+ * [turnStartBlockIndex] to the end). Text blocks become `Text`, tool_use blocks
+ * become `ToolUse` preserving stream order; thinking/info blocks are skipped.
+ *
+ * Extracted from the production instance method [ChatViewModel.buildTurnParts]
+ * (which now delegates here) so the turn-persistence semantics are directly
+ * JVM-testable and cannot drift from their tests. This is the seam that proves
+ * the F-T01-01 acceptance invariant: after the fallback path rolls back a failed
+ * provider's fake blocks via [rollbackTurnBlocksTo], the completed turn's parts
+ * contain only tool_use blocks that were actually executed.
+ *
+ * Pure + JVM-testable (no ViewModel/Android dependencies).
+ */
+internal fun buildTurnPartsPure(
+    allToolBlocks: List<AssistantBlock>,
+    turnStartBlockIndex: Int,
+    toolCallInputs: Map<String, String>,
+): List<AgentContentPart> {
+    if (turnStartBlockIndex >= allToolBlocks.size) return emptyList()
+    val out = mutableListOf<AgentContentPart>()
+    for (i in turnStartBlockIndex until allToolBlocks.size) {
+        val block = allToolBlocks[i]
+        when (block.kind) {
+            "text" -> if (block.content.isNotEmpty()) {
+                out.add(AgentContentPart.Text(block.content))
+            }
+            "tool_use" -> {
+                val name = block.toolName
+                if (name.isBlank()) continue
+                val inputStr = toolCallInputs[block.id] ?: "{}"
+                val inputJson = try { JSONObject(inputStr) } catch (_: Exception) { JSONObject() }
+                out.add(AgentContentPart.ToolUse(block.id, name, inputJson))
+            }
+            // "thinking" / "info" → not persisted in parts
+            else -> { /* skip */ }
+        }
+    }
+    return out
+}
