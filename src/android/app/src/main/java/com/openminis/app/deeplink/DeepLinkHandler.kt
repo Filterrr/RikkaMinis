@@ -134,6 +134,13 @@ object DeepLinkHandler {
                 when {
                     sid.isNullOrBlank() -> DeepLinkAction.Unknown
                     segments.size == 1 -> DeepLinkAction.OpenSession(sid)
+                    // Reject any resource path that carries a traversal / path
+                    // separator segment — refuse the whole link instead of
+                    // degrading silently. Note Uri.getPath() already decodes
+                    // percent-encoding, so an encoded `%2e%2e` arrives here as
+                    // a literal `..` segment and is caught.
+                    segments.drop(1).any { DeepLinkPathGuard.isUnsafeSegment(it) } ->
+                        DeepLinkAction.Unknown
                     else -> {
                         val resourcePath = "/" + segments.drop(1).joinToString("/")
                         val title = uri.getQueryParameter("title").orEmpty()
