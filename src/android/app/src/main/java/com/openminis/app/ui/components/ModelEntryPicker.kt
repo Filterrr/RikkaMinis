@@ -40,6 +40,7 @@ import androidx.annotation.StringRes
 import com.openminis.app.data.model.LLMModel
 import com.openminis.app.data.model.ModelEntry
 import com.openminis.app.data.model.ProviderInstance
+import com.openminis.app.ui.theme.ProviderAccents
 import com.openminis.app.data.model.ProviderType
 import com.openminis.app.data.model.SystemVoiceEntries
 import com.openminis.app.data.model.hasAudioInput
@@ -398,11 +399,11 @@ fun modalityBadges(model: LLMModel): List<String> {
 /** Provider color dot — same RGB across ChatScreen, AddModelsToGroup, and
  *  the agent-loop sheets so the visual cue stays consistent everywhere. */
 fun providerDotColor(providerType: ProviderType?): Color = when (providerType) {
-    ProviderType.anthropic -> Color(0xFFAB47BC)
-    ProviderType.gemini -> Color(0xFF42A5F5)
-    ProviderType.openAI -> Color(0xFF4CAF50)
-    ProviderType.openRouter -> Color(0xFF00BCD4)
-    ProviderType.xAI -> Color(0xFFFF7043)
-    ProviderType.kimiCode -> Color(0xFF5C6BC0) // indigo — Kimi accent
-    null -> Color(0xFF8E8E93)
+    ProviderType.anthropic -> ProviderAccents.anthropic
+    ProviderType.gemini -> ProviderAccents.gemini
+    ProviderType.openAI -> ProviderAccents.openAI
+    ProviderType.openRouter -> ProviderAccents.openRouter
+    ProviderType.xAI -> ProviderAccents.xAI
+    ProviderType.kimiCode -> ProviderAccents.kimiCode // indigo — Kimi accent
+    null -> ProviderAccents.fallback
 }

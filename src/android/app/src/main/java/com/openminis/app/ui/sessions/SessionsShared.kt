@@ -63,6 +63,7 @@ import androidx.compose.ui.unit.sp
 import com.openminis.app.R
 import com.openminis.app.data.db.ChatSessionEntity
 import com.openminis.app.ui.components.MinisTextButton
+import com.openminis.app.ui.theme.CategoryAccents
 import java.util.Calendar
 import java.util.Date
 import java.util.concurrent.TimeUnit
@@ -72,23 +73,23 @@ internal data class CategoryStyle(val icon: ImageVector, val color: Color)
 // 16 categories matching iOS (ContentView.swift:1897-1916)
 internal fun categoryStyle(category: String?): CategoryStyle {
     return when (category?.lowercase()) {
-        "code"         -> CategoryStyle(Icons.Outlined.Code, Color(0xFFF09A37))
-        "writing"      -> CategoryStyle(Icons.Outlined.Description, Color(0xFF3478F6))
-        "research"     -> CategoryStyle(Icons.Outlined.Language, Color(0xFF30B0C7))
-        "analysis"     -> CategoryStyle(Icons.Outlined.BarChart, Color(0xFF5856D6))
-        "creative"     -> CategoryStyle(Icons.Outlined.Brush, Color(0xFFFF2D55))
-        "chat"         -> CategoryStyle(Icons.Outlined.Forum, Color(0xFF34C759))
-        "math"         -> CategoryStyle(Icons.Outlined.Calculate, Color(0xFF9B59B6))
-        "translation"  -> CategoryStyle(Icons.Outlined.Translate, Color(0xFF00BCD4))
-        "health"       -> CategoryStyle(Icons.Outlined.Favorite, Color(0xFFFF3B30))
-        "finance"      -> CategoryStyle(Icons.Outlined.Payments, Color(0xFF00C7BE))
-        "travel"       -> CategoryStyle(Icons.Outlined.Map, Color(0xFFF09A37))
-        "education"    -> CategoryStyle(Icons.Outlined.Book, Color(0xFF3478F6))
-        "design"       -> CategoryStyle(Icons.Outlined.Palette, Color(0xFFFF2D55))
-        "productivity" -> CategoryStyle(Icons.Outlined.CalendarMonth, Color(0xFFFFCC00))
-        "support"      -> CategoryStyle(Icons.Outlined.Settings, Color(0xFF8B6914))
-        "other"        -> CategoryStyle(Icons.Outlined.GridView, Color(0xFF8E8E93))
-        else           -> CategoryStyle(Icons.Outlined.Forum, Color(0xFF8E8E93))
+        "code"         -> CategoryStyle(Icons.Outlined.Code, CategoryAccents.code)
+        "writing"      -> CategoryStyle(Icons.Outlined.Description, CategoryAccents.writing)
+        "research"     -> CategoryStyle(Icons.Outlined.Language, CategoryAccents.research)
+        "analysis"     -> CategoryStyle(Icons.Outlined.BarChart, CategoryAccents.analysis)
+        "creative"     -> CategoryStyle(Icons.Outlined.Brush, CategoryAccents.creative)
+        "chat"         -> CategoryStyle(Icons.Outlined.Forum, CategoryAccents.chat)
+        "math"         -> CategoryStyle(Icons.Outlined.Calculate, CategoryAccents.math)
+        "translation"  -> CategoryStyle(Icons.Outlined.Translate, CategoryAccents.translation)
+        "health"       -> CategoryStyle(Icons.Outlined.Favorite, CategoryAccents.health)
+        "finance"      -> CategoryStyle(Icons.Outlined.Payments, CategoryAccents.finance)
+        "travel"       -> CategoryStyle(Icons.Outlined.Map, CategoryAccents.travel)
+        "education"    -> CategoryStyle(Icons.Outlined.Book, CategoryAccents.education)
+        "design"       -> CategoryStyle(Icons.Outlined.Palette, CategoryAccents.design)
+        "productivity" -> CategoryStyle(Icons.Outlined.CalendarMonth, CategoryAccents.productivity)
+        "support"      -> CategoryStyle(Icons.Outlined.Settings, CategoryAccents.support)
+        "other"        -> CategoryStyle(Icons.Outlined.GridView, CategoryAccents.other)
+        else           -> CategoryStyle(Icons.Outlined.Forum, CategoryAccents.fallback)
     }
 }
 
