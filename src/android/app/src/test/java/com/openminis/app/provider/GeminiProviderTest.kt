@@ -309,7 +309,7 @@ class GeminiProviderTest {
     }
 
     @Test
-    fun `streamMessage defaults to end_turn when no finishReason in SSE`() = runBlocking {
+    fun `streamMessage marks EOF without finishReason but with content as truncated`() = runBlocking {
         val sseBody = buildString {
             appendLine("""data: {"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}""")
             appendLine()
@@ -321,7 +321,11 @@ class GeminiProviderTest {
 
         val finished = chunks.filterIsInstance<LLMStreamChunk.Finished>()
         assertEquals(1, finished.size)
-        assertEquals("end_turn", finished[0].stopReason)
+        // [audit-RC2] EOF without a finish_reason but with accumulated content is a
+        // truncated turn, not a clean end_turn — ChatViewModel's turnTruncated retry
+        // must own it instead of silently saving a partial answer.
+        assertNull(finished[0].stopReason)
+        assertTrue(finished[0].truncated)
     }
 
     @Test
