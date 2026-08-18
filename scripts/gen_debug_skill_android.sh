@@ -10,9 +10,10 @@
 #
 # Why a separate script from gen_debug_skill.sh (iOS): iOS embeds base64 into a
 # generated Swift source file; Android just needs plain files on disk. And the
-# CLIENT differs — Android's debug server uses plaintext JSON-RPC + an optional
-# X-Minis-Token header, NOT the iOS protocol-v1 encrypted envelope, so shipping
-# the iOS envelope clients here would actively mislead.
+# CLIENT differs — Android's debug server uses plaintext JSON-RPC + a REQUIRED
+# X-Minis-Token on every connection (loopback AND LAN), NOT the iOS protocol-v1
+# encrypted envelope, so shipping the iOS envelope clients here would actively
+# mislead.
 #
 # DO NOT COMMIT the output (src/debug/ is gitignored).
 set -eu
@@ -31,7 +32,7 @@ else
 fi
 
 # 2. An Android-specific Python client (stdlib only). Deliberately NOT the iOS
-#    envelope clients: Android needs plaintext JSON-RPC + optional token.
+#    envelope clients: Android needs plaintext JSON-RPC + required token.
 cat > "$OUT_DIR/examples/minis_rpc_android.py" <<'PYCLIENT'
 #!/usr/bin/env python3
 """Minis ANDROID debug server client (stdlib only).
@@ -48,11 +49,11 @@ Transport notes (Android differs from iOS!):
   - Port is 5321 (iOS uses 8321).
   - Payloads are PLAINTEXT JSON-RPC 2.0 — there is no encrypted envelope and no
     /pair step. Do not use the iOS protocol-v1 clients against this server.
-  - Auth: loopback (via `adb forward`) needs no token. NON-loopback (LAN)
-    clients must send the per-install device token:
+  - Auth: EVERY client (loopback AND LAN) must send the per-install device token:
         adb shell run-as com.openminis.app cat files/debug_server_token
     Passed as X-Minis-Token (Authorization: Bearer also accepted).
-    Or set MINIS_DEBUG_TOKEN in the environment.
+    Or set MINIS_DEBUG_TOKEN in the environment. There is no loopback exemption —
+    an on-device browser page could otherwise fetch 127.0.0.1 token-free.
 """
 
 import json
@@ -78,10 +79,10 @@ def call(host: str, method: str, params: dict, token: str | None) -> dict:
         payload = e.read().decode(errors="replace")
         if e.code == 401:
             raise SystemExit(
-                "401 Unauthorized — this is a non-loopback (LAN) connection, so a token is\n"
-                "required. Read it with:\n"
+                "401 Unauthorized — this server requires a token on EVERY connection\n"
+                "(loopback and LAN). Read it with:\n"
                 "  adb shell run-as com.openminis.app cat files/debug_server_token\n"
-                "then pass --token / MINIS_DEBUG_TOKEN. (Over `adb forward` no token is needed.)\n"
+                "then pass --token / MINIS_DEBUG_TOKEN. (There is no loopback exemption.)\n"
                 f"server said: {payload}"
             )
         raise SystemExit(f"HTTP {e.code}: {payload}")
@@ -115,24 +116,28 @@ cat > "$OUT_DIR/examples/curl.md" <<'CURLDOC'
 
 Port **5321** (iOS uses 8321). Plaintext JSON-RPC 2.0; no /pair, no envelope.
 
-```bash
-# Loopback via adb — no token needed
-adb forward tcp:5321 tcp:5321
-curl -s localhost:5321/ -d '{"jsonrpc":"2.0","id":1,"method":"debug.appInfo","params":{}}'
+Every connection (loopback via `adb forward` included) must present the token —
+an on-device browser page could otherwise reach 127.0.0.1 token-free.
 
-# LAN (non-loopback) — token required
+```bash
+# Every connection needs the token
 TOK=$(adb shell run-as com.openminis.app cat files/debug_server_token)
+adb forward tcp:5321 tcp:5321
+curl -s localhost:5321/ -H "X-Minis-Token: $TOK" \
+     -d '{"jsonrpc":"2.0","id":1,"method":"debug.appInfo","params":{}}'
+
+# LAN (loose device) — same token header
 curl -s http://<device-ip>:5321/ \
      -H "X-Minis-Token: $TOK" \
      -d '{"jsonrpc":"2.0","id":1,"method":"debug.appInfo","params":{}}'
 ```
 
-Fetch this skill off the device (no auth on loopback):
+Fetch this skill off the device (token required):
 
 ```bash
-curl -H 'Accept: text/markdown' localhost:5321/skill        # the manual
-curl localhost:5321/skill                                   # JSON + inlined clients
-curl localhost:5321/skill/examples/python > minis_rpc_android.py
+curl -H 'Accept: text/markdown' -H "X-Minis-Token: $TOK" localhost:5321/skill   # the manual
+curl -H "X-Minis-Token: $TOK" localhost:5321/skill                              # JSON + inlined clients
+curl -H "X-Minis-Token: $TOK" localhost:5321/skill/examples/python > minis_rpc_android.py
 ```
 CURLDOC
 
