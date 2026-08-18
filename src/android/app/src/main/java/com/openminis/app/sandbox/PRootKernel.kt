@@ -11,6 +11,7 @@ import android.util.Log
 import com.openminis.app.data.FileMentionIndex
 import com.openminis.app.data.MountedFoldersStore
 import java.io.File
+import java.io.IOException
 import java.util.TimeZone
 import kotlin.math.abs
 
@@ -701,6 +702,31 @@ object PRootKernel {
     private val perSessionSubdirs = setOf("attachments", "offloads", "workspace", "browser")
 
     /**
+     * Join [tail] under [base] after normalizing dot-segments, and return null
+     * if the result would land outside [base] (either by `..` traversal or by
+     * a symlink pointing out of the tree). Guards every `File(base, userPath)`
+     * style join against escaping a session/mount/rootfs boundary.
+     *
+     * Dot-segment normalization: split [tail] on '/', drop empty/`.` segments,
+     * pop the stack on `..`; a `..` that would pop an already-empty stack means
+     * the path climbs above [base] and is rejected.
+     */
+    private fun safeResolveWithin(base: File, tail: String): File? {
+        if (tail.isEmpty()) return base
+        val segments = normalizeDotSegments(tail) ?: return null
+        if (segments.isEmpty()) return base
+
+        var resolved = base
+        for (segment in segments) resolved = File(resolved, segment)
+
+        val basePath = try { base.canonicalPath } catch (e: IOException) { return null }
+        val resolvedPath = try { resolved.canonicalPath } catch (e: IOException) { return null }
+        if (resolvedPath == basePath) return resolved
+        if (!resolvedPath.startsWith("$basePath${File.separator}")) return null
+        return resolved
+    }
+
+    /**
      * Resolve a `/var/minis/...` Linux path directly against a specific session's
      * host directory, bypassing the global [bindMounts] map. Use this when the
      * caller knows the owning session (chat link resolver, file preview, etc.) —
@@ -718,7 +744,10 @@ object PRootKernel {
         if (subdir !in perSessionSubdirs) return resolveHostPath(linuxPath)
         val sessionBase = File(context.filesDir, "minis-sessions/$sessionId/$subdir")
         val tail = if (slash < 0) "" else rest.substring(slash + 1)
-        return if (tail.isEmpty()) sessionBase else File(sessionBase, tail)
+        if (tail.isEmpty()) return sessionBase
+        // Normalize dot-segments and enforce the resolved path stays inside
+        // sessionBase (guards `..`/symlink escapes out of the session tree).
+        return safeResolveWithin(sessionBase, tail)
     }
 
     /**
@@ -742,11 +771,13 @@ object PRootKernel {
             if (linuxPath == mountPoint || linuxPath.startsWith("$mountPoint/")) {
                 val hostBase = bindMounts[mountPoint]!!
                 val relativePath = linuxPath.removePrefix(mountPoint).removePrefix("/")
-                return if (relativePath.isEmpty()) {
+                if (relativePath.isEmpty()) {
                     File(hostBase)
                 } else {
-                    File(hostBase, relativePath)
-                }
+                    // Normalize dot-segments and enforce the resolved path stays
+                    // inside hostBase (guards `..`/symlink escapes out of the mount).
+                    safeResolveWithin(File(hostBase), relativePath)
+                }.let { return it }
             }
         }
 
@@ -764,8 +795,8 @@ object PRootKernel {
                     sessionsRoot.listFiles()?.forEach { sessionDir ->
                         if (!sessionDir.isDirectory) return@forEach
                         val candidate = if (tail.isEmpty()) File(sessionDir, subdir)
-                        else File(sessionDir, "$subdir/$tail")
-                        if (candidate.exists()) return candidate
+                        else safeResolveWithin(File(sessionDir, subdir), tail)
+                        if (candidate?.exists() == true) return candidate
                     }
                 }
                 // No existing file in any session — fall through to rootfs
@@ -776,7 +807,10 @@ object PRootKernel {
         // Fallback: resolve relative to rootfs
         if (!::rootfsManager.isInitialized) return null
         val stripped = linuxPath.removePrefix("/")
-        return if (stripped.isEmpty()) rootfsManager.rootfsDir else File(rootfsManager.rootfsDir, stripped)
+        if (stripped.isEmpty()) return rootfsManager.rootfsDir
+        // Normalize dot-segments and keep the resolved path inside the rootfs —
+        // never allow `..` (or symlinks) to climb out into the host filesystem.
+        return safeResolveWithin(rootfsManager.rootfsDir, stripped)
     }
 
     /**
@@ -1000,4 +1034,27 @@ object PRootKernel {
         tmpDir.mkdirs()
         return tmpDir
     }
+}
+
+/**
+ * RFC-3986-style dot-segment normalization of a relative path tail.
+ * Splits on '/', drops empty and `.` segments, pops the stack on `..`.
+ * Returns null when a `..` would climb above the root (i.e. the relative
+ * tail resolves outside its base), otherwise the normalized segment list.
+ *
+ * Top-level (not a member) so it can be unit-tested with zero Android deps.
+ */
+internal fun normalizeDotSegments(tail: String): List<String>? {
+    val stack = mutableListOf<String>()
+    var climbsAboveBase = false
+    for (segment in tail.split('/')) {
+        when (segment) {
+            "", "." -> Unit
+            ".." -> {
+                if (stack.isEmpty()) climbsAboveBase = true else stack.removeAt(stack.size - 1)
+            }
+            else -> stack.add(segment)
+        }
+    }
+    return if (climbsAboveBase) null else stack
 }
