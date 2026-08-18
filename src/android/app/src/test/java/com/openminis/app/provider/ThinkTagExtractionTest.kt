@@ -245,6 +245,70 @@ class ThinkTagExtractionTest {
     }
 
     @Test
+    fun `earliest open tag wins regardless of format order`() {
+        // [T-thinking-fold-leak] The scanner must pick the EARLIEST open tag in
+        // the whole buffer, not the first format in the catalog that happens to
+        // match. Here a plain-text `<response>` appears before the real
+        // `<thinking>`; the scanner must open the thinking region at the actual
+        // `<thinking>` and treat `<response>` as ordinary body text.
+        val acc = ScanAccumulator()
+        acc.append("pre <response> then <thinking>real thinking</thinking> post")
+        val (visible, thinking) = acc.flush()
+        assertEquals("pre <response> then  post", visible)
+        assertEquals("real thinking", thinking)
+    }
+
+    @Test
+    fun `bare response tag never opens a thinking region`() {
+        // `<response>` is only an altClose terminator inside a region, never an
+        // opener. Bare body text mentioning `<response>` must stay visible.
+        val acc = ScanAccumulator()
+        acc.append("t1 <response> still text")
+        val (visible, thinking) = acc.flush()
+        assertEquals("t1 <response> still text", visible)
+        assertEquals("", thinking)
+    }
+
+    @Test
+    fun `multiple regions in one stream no longer swallow middle text`() {
+        // [T-thinking-fold-leak] Previously a single scan returned after the
+        // first open tag, so everything up to the (never-looked-for) close
+        // leaked to visible. Now a region closed in the same buffer lets the
+        // loop continue and the text between regions stays visible.
+        val acc = ScanAccumulator()
+        acc.append("<thinking>one</thinking>between <thinking>two</thinking>end")
+        val (visible, thinking) = acc.flush()
+        assertEquals("between end", visible)
+        assertEquals("onetwo", thinking)
+    }
+
+    @Test
+    fun `text after a closed region is not swallowed`() {
+        val acc = ScanAccumulator()
+        acc.append("<thinking>t</thinking>answer here")
+        val (visible, thinking) = acc.flush()
+        assertEquals("answer here", visible)
+        assertEquals("t", thinking)
+    }
+
+    @Test
+    fun `cancelled stream does not bleed into next stream`() {
+        // [T-thinking-fold-leak] The per-stream ThinkTagState must start clean.
+        // A first stream that died inside an unclosed region leaves NO state; a
+        // brand-new ScanAccumulator session (what a fresh stream equals) parses
+        // the next response correctly.
+        val interrupted = ScanAccumulator()
+        interrupted.append("start <thinking>half")
+        // (do NOT flush — simulate cancellation; state is discarded)
+
+        val fresh = ScanAccumulator()
+        fresh.append("fresh <thinking>real</thinking> text")
+        val (visible, thinking) = fresh.flush()
+        assertEquals("fresh  text", visible)
+        assertEquals("real", thinking)
+    }
+
+    @Test
     fun `tag formats list contains all documented variants`() {
         val opens = THINK_TAG_FORMATS.map { it.open }
         assertTrue(opens.contains("<thinking>"))
