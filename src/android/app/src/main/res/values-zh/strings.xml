@@ -1083,7 +1083,7 @@
     <string name="backup_saved">备份已保存</string>
     <string name="backup_notify_failed">备份失败</string>
     <string name="backup_secret_title">备份将包含 API 密钥</string>
-    <string name="backup_secret_body">导出的文件含有提供商的 API 密钥和登录凭据，可被任何拿到该文件的人使用。请妥善保管，不要分享。</string>
+    <string name="backup_secret_body">导出的文件含有提供商的 API 密钥和登录凭据，可被任何拿到该文件的人使用。请妥善保管，不要分享。密钥以明文 Base64 存储（未加密），任何拿到文件的人都能读取。</string>
     <string name="backup_secret_confirm">包含密钥并导出</string>
     <string name="backup_secret_without">不含密钥</string>
     <string name="backup_generating_title">正在生成备份…</string>

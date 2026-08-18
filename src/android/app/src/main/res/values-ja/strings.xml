@@ -1109,6 +1109,10 @@
     <string name="backup_restored_notify_body">%1$d 個のプロバイダーと %2$d 個のグループを復元しました。</string>
     <string name="webdav_notify_title_failed">WebDAV 操作に失敗しました</string>
     <string name="backup_notify_failed">バックアップに失敗しました</string>
+    <string name="backup_secret_title">バックアップにAPIキーが含まれます</string>
+    <string name="backup_secret_body">エクスポートされたファイルにはプロバイダーのAPIキーとログイン資格情報が含まれており、入手した人は誰でも使用できます。安全に保管し、共有しないでください。キーは平文のBase64（暗号化なし）で保存され、ファイルを入手した人なら誰でも読み取れます。</string>
+    <string name="backup_secret_confirm">キーを含めてエクスポート</string>
+    <string name="backup_secret_without">キーなし</string>
     <string name="webdav_notify_title_restored">WebDAV 復元</string>
     <string name="webdav_notify_title">WebDAV バックアップ</string>
     <string name="webdav_loading">バックアップを読み込み中…</string>
