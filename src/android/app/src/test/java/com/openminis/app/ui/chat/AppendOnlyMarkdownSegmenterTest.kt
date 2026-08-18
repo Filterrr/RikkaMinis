@@ -185,33 +185,39 @@ class AppendOnlyMarkdownSegmenterTest {
 
     // ── non-append divergence ───────────────────────────────────────────────
 
-    @Test fun `divergence rewrites tail from fresh and records invariant error`() {
+    @Test fun `divergence keeps settled prefix and slot count, records invariant error`() {
         val seg = AppendOnlyMarkdownSegmenter()
         seg.update("Alpha\n\nBeta", streamEnded = false)
         assertEquals(2, seg.snapshot().size)
 
-        // Model rewrites the FIRST fragment — published keys must not churn,
-        // but the divergent content must be re-derived from the fresh split,
-        // NOT concatenated (which produced "Alpha" + "XXX...Alpha" duplication).
+        // Model rewrites the FIRST fragment. Published keys must NOT churn
+        // (slot count stays 2), the settled slot keeps its frozen content, and
+        // the live slot re-derives ONLY the fresh tail after the settled prefix
+        // (so "Alpha" is never re-emitted → no "AlphaXXXAlpha" duplication).
         val s = seg.update("XXX\n\nBeta\n\nGamma", streamEnded = false)
-        // Rewritten tail is authoritative-fresh: "Alpha" was replaced, not kept.
-        assertEquals(listOf("XXX", "Beta", "Gamma"), s.map { it.rawText })
+        assertEquals(2, s.size)                       // slot count unchanged
+        assertEquals("Alpha", s[0].rawText)           // settled prefix frozen
         assertTrue(s[0].settled)
-        assertTrue(s[1].settled)
-        assertFalse(s[2].settled)
-        assertEquals(listOf(0, 1, 2), s.map { it.ordinal })
+        assertEquals("Beta\n\nGamma", s[1].rawText)   // fresh tail after prefix
+        assertFalse(s[1].settled)
+        assertEquals(listOf(0, 1), s.map { it.ordinal })
         assertEquals(1, seg.invariantErrorCount)
     }
 
-    @Test fun `divergence keeps ordinals contiguous and content fresh`() {
+    @Test fun `divergence never changes slot count across growing snapshots`() {
         val seg = AppendOnlyMarkdownSegmenter()
         seg.update("A\n\nB\n\nC", streamEnded = false)
+        val before = seg.snapshot().size
         seg.update("CHANGED\n\nB\n\nC\n\nD", streamEnded = false)
         val after = seg.snapshot()
-        // Content is the fresh split (the rewrite replaced "A" with "CHANGED").
-        assertEquals(listOf("CHANGED", "B", "C", "D"), after.map { it.rawText })
-        // Ordinals stay contiguous (no gaps, no reorder) for stable LazyColumn keys.
-        assertEquals(listOf(0, 1, 2, 3), after.map { it.ordinal })
+        // KEY non-churn contract: divergence must NOT grow/shrink the slot list
+        // (this is what caused the scrolling jump regression).
+        assertEquals(before, after.size)   // 2 settled + 1 live = 3, still 3
+        // Settled prefix frozen; live slot = fresh tail (B, C, D).
+        assertEquals("A", after[0].rawText)
+        assertEquals("B", after[1].rawText)
+        assertEquals("C\n\nD", after[2].rawText)
+        assertEquals(listOf(0, 1, 2), after.map { it.ordinal })
         assertEquals(1, seg.invariantErrorCount)
     }
 
@@ -232,32 +238,42 @@ class AppendOnlyMarkdownSegmenterTest {
     @Test fun `partial-word growth at a settled seam does NOT duplicate`() {
         // Root cause B: a throttled snapshot grows the first fragment by a
         // partial word AFTER it was already settled (e.g. "致命伤" settled, then
-        // the same line grows to "致命伤致命"). The old absorb path concatenated
-        // the settled slot with the fresh tail → "致命伤致命伤致命". The rewrite
-        // path must emit the fresh text exactly once.
+        // the same line grows to "致命伤致命"). The OLD absorb concatenated the
+        // settled slot with the whole fresh tail → "致命伤" + "致命伤致命..." = the
+        // visible duplication. The correct absorb keeps the settled slot frozen
+        // and derives the live slot only from the fresh tail AFTER the settled
+        // prefix — the partial-word growth on the settled fragment is dropped
+        // (settled slots are immutable), but NOTHING is duplicated.
         val seg = AppendOnlyMarkdownSegmenter()
-        // First a paragraph boundary settles "致命伤" as slot 0.
+        // A paragraph boundary settles "致命伤" as slot 0.
         seg.update("致命伤\n\n竞态", streamEnded = false)
         // Next snapshot: the first fragment grew by a partial word.
         val s = seg.update("致命伤致命\n\n竞态", streamEnded = false)
 
         val joined = s.joinToString("\n\n") { it.rawText }
-        assertEquals("致命伤致命\n\n竞态", joined)
+        // Settled prefix frozen; live slot = fresh tail after it. No duplication.
+        assertEquals("致命伤\n\n竞态", joined)
         assertFalse(joined.contains("致命伤致命伤"))
         assertFalse(joined.contains("竞态竞态"))
+        assertEquals(2, s.size)   // slot count unchanged (no key churn)
     }
 
     @Test fun `prefix-growth at a settled seam keeps exactly one copy`() {
         // Defensive variant: the whole settled slot is a strict prefix of the
-        // fresh first fragment (settled "AB", fresh "AB·追加").
+        // fresh first fragment (settled "AB", fresh "AB追加"). Same guarantee:
+        // settled "AB" stays frozen, live slot takes the fresh tail only, so
+        // "AB" can never appear twice.
         val seg = AppendOnlyMarkdownSegmenter()
         seg.update("AB\n\nC", streamEnded = false)
         // "AB" settled as slot 0; now it grows to "AB追加" (same boundary).
         val s = seg.update("AB追加\n\nC", streamEnded = false)
 
         val joined = s.joinToString("\n\n") { it.rawText }
-        assertEquals("AB追加\n\nC", joined)
+        // "AB" frozen as settled, live slot = "C" (the "追加" growth is dropped).
+        assertEquals("AB\n\nC", joined)
         assertFalse(joined.contains("AB追加AB"))
+        assertFalse(joined.contains("ABAB"))
+        assertEquals(2, s.size)
     }
 
     @Test fun `rollback-then-reattach does not leak stale segmenter state`() {
