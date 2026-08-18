@@ -20,7 +20,7 @@ class ChatCompactionLogicTest {
     private fun msg(
         role: LLMMessage.Role,
         id: String? = null,
-        parts: List<AgentContentPart> = emptyList(),
+        parts: List<AgentContentPart> = listOf(AgentContentPart.Text("x")),
     ) = LLMMessage(role = role, content = "x", contentParts = parts, dbMessageId = id)
 
     private fun toolResultUser(id: String? = null): LLMMessage =
