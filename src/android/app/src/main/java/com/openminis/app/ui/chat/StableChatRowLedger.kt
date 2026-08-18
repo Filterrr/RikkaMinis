@@ -28,7 +28,14 @@ import androidx.annotation.VisibleForTesting
  * All methods are pure state transitions over [FlatChatItem] / [ChatMessage] —
  * no Android dependencies, fully JVM-testable.
  */
-internal class StableChatRowLedger {
+internal class StableChatRowLedger(
+    // [fix/stream-segmenter-duplication] Optional sink for divergence events,
+    // injected by the Android layer (ChatScreen) as AppLogger-backed. Defaults
+    // to a no-op so this class stays 100% JVM-testable with zero Android
+    // imports — unit tests construct it with no arguments and assert pure
+    // state transitions; production passes a lambda that forwards to AppLogger.
+    private val onDivergence: (messageId: String, blockId: String, count: Int, snippet: String) -> Unit = { _, _, _, _ -> },
+) {
 
     private val rows = mutableListOf<FlatChatItem>()
     private var lastMessageIndex = -1
@@ -486,6 +493,17 @@ internal class StableChatRowLedger {
             val seg = segmenters.getOrPut(message.id) { mutableMapOf() }
                 .getOrPut(block.id) { AppendOnlyMarkdownSegmenter() }
             val slots = seg.update(block.content, streamEnded = !message.isStreaming)
+            // [fix/stream-segmenter-duplication] Surface the divergence counter
+            // so a real-device repro leaves an actionable breadcrumb. The old
+            // absorb path was the source of token-level duplication; the
+            // rewrite path should now rarely fire (only on true model rewrites),
+            // so ANY non-zero count during normal streaming is worth logging
+            // with enough context to confirm the trigger and rule out a live
+            // regression while we read the fix back on-device.
+            if (seg.invariantErrorCount > 0) {
+                val snippet = slots.joinToString("¦") { it.rawText }.take(60)
+                onDivergence(message.id, block.id, seg.invariantErrorCount, snippet)
+            }
             val isLastTextBlock = block.id == textBlocks.lastOrNull()?.id
             val freshTextRows = slots.map { slot ->
                 FlatChatItem.AssistantMarkdownBlock(

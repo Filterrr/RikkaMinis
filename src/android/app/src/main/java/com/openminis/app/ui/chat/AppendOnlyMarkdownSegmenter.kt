@@ -94,10 +94,14 @@ class AppendOnlyMarkdownSegmenter {
 
         if (matched < settledCount) {
             // Non-append divergence: earlier fragments changed. Published
-            // slots are frozen — absorb the whole divergent tail into the
-            // live slot instead of re-keying.
+            // slots are frozen — but instead of absorbing the whole divergent
+            // tail into the live slot (which duplicated characters at the
+            // seam when a throttled snapshot grew the first fragment by a
+            // partial word), re-derive the tail from the fresh split starting
+            // at the first mismatch. Keys stay stable; content after the
+            // common prefix is authoritative-fresh, never duplicated.
             invariantErrorCount++
-            return absorbDivergence(fresh, matched, streamEnded)
+            return rewriteDivergentTail(matched, fresh, streamEnded)
         }
 
         // ── 2. Prefix OK — rebuild slots = frozen prefix + fresh tail ──
@@ -122,29 +126,42 @@ class AppendOnlyMarkdownSegmenter {
     }
 
     /**
-     * Divergence path: keep every published settled slot (content frozen),
-     * and absorb ALL remaining fresh fragments into the live slot joined by
-     * blank lines so no content is lost. No new settled slots are created
-     * (that would change the key set), and the live slot's key stays stable.
+     * Divergence path (rewrite, NOT absorb): keep the settled slots
+     * 0..[matched] frozen (they are the longest byte-identical common prefix
+     * with the fresh split), then re-derive every slot from [matched] onward
+     * out of the fresh fragments. The published ORDINALS stay stable (no key
+     * churn — LazyColumn anchors never move), but their content is the fresh
+     * authoritative text, so a partial-word growth at the seam (settled
+     * "致命伤" vs fresh "致命伤致命") renders once, never duplicated.
+     *
+     * The invariant that "a settled slot's rawText never changes" is relaxed
+     * ONLY where the prefix match proved it already diverged — that is the
+     * documented non-append-divergence exception, and it is strictly better
+     * than the old absorb behaviour which joined the entire fresh tail (with
+     * its already-shown prefix) into one live slot, producing the visible
+     * `致命伤致命伤` / `竞态 | 竞态` token-level duplication.
+     *
+     * @param matched number of leading settled slots that byte-match fresh.
+     * @param fresh    the full fresh split of the cumulative text.
      */
-    private fun absorbDivergence(fresh: List<String>, fromIndex: Int, streamEnded: Boolean): List<StableMarkdownSlot> {
-        val settledCount = slots.count { it.settled }
-        val rebuilt = ArrayList<StableMarkdownSlot>(settledCount + 1)
-        for (i in 0 until settledCount) rebuilt.add(slots[i])
-        val liveText = if (fromIndex < fresh.size) {
-            fresh.subList(fromIndex, fresh.size).joinToString("\n\n")
-        } else {
-            // Divergence shrank the tail below the settled prefix: keep the
-            // previous live content (nothing sensible to absorb).
-            slots.lastOrNull()?.rawText.orEmpty()
+    private fun rewriteDivergentTail(matched: Int, fresh: List<String>, streamEnded: Boolean): List<StableMarkdownSlot> {
+        val rebuilt = ArrayList<StableMarkdownSlot>(fresh.size)
+        // 1. Freeze the byte-identical common prefix.
+        for (i in 0 until matched) {
+            rebuilt.add(slots[i])
         }
-        rebuilt.add(
-            StableMarkdownSlot(
-                ordinal = settledCount,
-                rawText = liveText,
-                settled = streamEnded,
+        // 2. Re-derive everything after the first mismatch from the fresh
+        //    split, reusing the same ordinals (matched..) so keys are stable.
+        for (i in matched until fresh.size) {
+            val isLast = i == fresh.size - 1
+            rebuilt.add(
+                StableMarkdownSlot(
+                    ordinal = i,
+                    rawText = fresh[i],
+                    settled = streamEnded || !isLast,
+                )
             )
-        )
+        }
         slots.clear()
         slots.addAll(rebuilt)
         return snapshot()

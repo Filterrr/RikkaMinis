@@ -167,6 +167,17 @@ static void crash_signal_handler(int sig, siginfo_t* info, void* ctx) {
         return;
     }
 
+    // [fix/voice-crash-observability] Sentinel write BEFORE gathering any
+    // context. If the process is SIGKILL'd mid-handler (lmkd / kernel OOM
+    // killer — uncatchable, no tombstone, no dialog), the file is at least
+    // non-empty: the sentinel proves "signal reached the handler, then the
+    // process was externally killed before we could write the report". A
+    // 0-byte file means the handler never even ran its write path — which
+    // by itself is a decisive signal we could not capture before.
+    static const char SENTINEL[] = "SIGNAL-REACHED\n";
+    ssize_t sentinel_written = write(fd, SENTINEL, sizeof(SENTINEL) - 1);
+    (void)sentinel_written; // best-effort; ignore partial write
+
     // Gather process identity + memory context (async-signal-safe reads).
     char cmdline[256] = {0};
     read_cmdline(cmdline, sizeof(cmdline));
