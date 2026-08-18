@@ -1259,6 +1259,10 @@
     <string name="backup_restored_notify_body">Восстановлено %1$d провайдеров и %2$d групп.</string>
     <string name="webdav_notify_title_failed">Ошибка операции WebDAV</string>
     <string name="backup_notify_failed">Ошибка резервного копирования</string>
+    <string name="backup_secret_title">Резервная копия содержит ключи API</string>
+    <string name="backup_secret_body">Экспортированный файл содержит ключи API и учётные данные провайдеров и может использоваться любым, кто его получит. Храните его в безопасности и не передавайте другим. Ключи хранятся в виде обычного Base64 (без шифрования) и могут быть прочитаны любым, у кого есть файл.</string>
+    <string name="backup_secret_confirm">Включить ключи и экспортировать</string>
+    <string name="backup_secret_without">Без ключей</string>
     <string name="webdav_notify_title_restored">Восстановление WebDAV</string>
     <string name="webdav_notify_title">Резервная копия WebDAV</string>
     <string name="webdav_loading">Загрузка резервных копий…</string>

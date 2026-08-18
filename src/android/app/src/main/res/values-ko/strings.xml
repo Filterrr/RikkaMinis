@@ -1101,6 +1101,10 @@
     <string name="backup_restored_notify_body">%1$d개 제공자와 %2$d개 그룹을 복원했습니다.</string>
     <string name="webdav_notify_title_failed">WebDAV 작업 실패</string>
     <string name="backup_notify_failed">백업 실패</string>
+    <string name="backup_secret_title">백업에 API 키가 포함됩니다</string>
+    <string name="backup_secret_body">내보낸 파일에는 공급자의 API 키와 로그인 자격 증명이 포함되어 있으며, 이를 입수한 사람은 누구나 사용할 수 있습니다. 안전하게 보관하고 공유하지 마세요. 키는 일반 Base64(암호화되지 않음)로 저장되며, 파일을 가진 사람은 누구나 읽을 수 있습니다.</string>
+    <string name="backup_secret_confirm">키 포함 내보내기</string>
+    <string name="backup_secret_without">키 없이</string>
     <string name="webdav_notify_title_restored">WebDAV 복원</string>
     <string name="webdav_notify_title">WebDAV 백업</string>
     <string name="webdav_loading">백업을 불러오는 중…</string>
