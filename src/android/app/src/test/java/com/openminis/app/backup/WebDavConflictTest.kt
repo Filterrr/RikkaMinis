@@ -168,6 +168,8 @@ class WebDavConflictTest {
         val pulled = WebDavSync.pullLatestSync(config, client)
         assertEquals("{\"formatVersion\":1}", pulled?.json)
         assertEquals("\"etag-2\"", pulled?.etag)
+        // listSyncFiles issues a depth-1 PROPFIND before the GET.
+        assertEquals("PROPFIND", server.takeRequest().method)
         val get = server.takeRequest()
         assertEquals("GET", get.method)
         assertEquals(
