@@ -141,7 +141,8 @@ import com.openminis.app.data.FileMentionIndex
 import com.openminis.app.logging.AppLogger
 import com.openminis.app.ui.components.MinisAlertDialog
 import com.openminis.app.ui.components.MinisMenu
-import com.openminis.app.ui.components.MinisMenuDivider
+import com.openminis.app.ui.components.MinisDialogDivider
+import com.openminis.app.ui.components.providerDotColor
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -1095,13 +1096,4 @@ internal fun ModelPickerSheet(
 
 }
 
-// iOS: provider color dot helper
-private fun providerDotColor(providerType: ProviderType?): Color = when (providerType) {
-    ProviderType.anthropic -> Color(0xFFAB47BC) // purple
-    ProviderType.gemini -> Color(0xFF42A5F5)    // blue
-    ProviderType.openAI -> Color(0xFF4CAF50)    // green
-    ProviderType.openRouter -> Color(0xFF00BCD4) // cyan
-    ProviderType.xAI -> Color(0xFFFF7043)        // orange — Grok brand
-    ProviderType.kimiCode -> Color(0xFF5C6BC0)   // indigo — Kimi accent
-    null -> Color(0xFF8E8E93)                    // gray
-}
+// providerDotColor is shared from com.openminis.app.ui.components.ModelEntryPicker (single source).

@@ -67,6 +67,7 @@ import androidx.compose.ui.res.stringResource
 import com.openminis.app.data.model.ProviderCredential
 import com.openminis.app.data.model.ProviderInstance
 import com.openminis.app.data.model.ProviderType
+import com.openminis.app.ui.theme.ProviderAccents
 import com.openminis.app.data.repository.ProviderRepository
 import com.openminis.app.MinisApp
 import com.openminis.app.R
@@ -134,13 +135,13 @@ private val providerDisplayOrder = listOf(
 
 /** Icon and color per provider type, matching iOS SF Symbols. */
 private fun providerIcon(type: ProviderType): Pair<ImageVector, Color> = when (type) {
-    ProviderType.openAI -> Icons.Default.Hub to Color(0xFF4CAF50)           // green
-    ProviderType.anthropic -> Icons.Default.AutoAwesome to Color(0xFFAB47BC) // purple
-    ProviderType.gemini -> Icons.Default.Diamond to Color(0xFF42A5F5)        // blue
-    ProviderType.openRouter -> Icons.Default.AltRoute to Color(0xFF00BCD4)    // cyan
-    ProviderType.xAI -> Icons.Default.FlashOn to Color(0xFFFF7043)           // orange — Grok visual cue
+    ProviderType.openAI -> Icons.Default.Hub to ProviderAccents.openAI             // green
+    ProviderType.anthropic -> Icons.Default.AutoAwesome to ProviderAccents.anthropic // purple
+    ProviderType.gemini -> Icons.Default.Diamond to ProviderAccents.gemini         // blue
+    ProviderType.openRouter -> Icons.Default.AltRoute to ProviderAccents.openRouter // cyan
+    ProviderType.xAI -> Icons.Default.FlashOn to ProviderAccents.xAI               // orange — Grok visual cue
     // [T-kimi-oauth] Indigo — matches iOS's Kimi accent.
-    ProviderType.kimiCode -> Icons.Default.Terminal to Color(0xFF5C6BC0)
+    ProviderType.kimiCode -> Icons.Default.Terminal to ProviderAccents.kimiCode
 }
 
 // -- Step 1: Choose Provider Type --

@@ -11,22 +11,23 @@ import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.ui.graphics.Color
+import com.openminis.app.ui.theme.ToolAccents
 
 // [T-android-split-chat] Pure tool-label / duration / timestamp formatting
 // helpers have been moved to ChatFormattingUtils.kt for JVM testability.
 // This file retains only the Compose-dependent helpers.
 
-// Helper: tool accent color
+// Helper: tool accent color (single source: ToolAccents)
 internal fun toolAccentColor(toolName: String): Color = when (toolName) {
-    "shell_execute" -> Color(0xFF34C759)
-    "file_read" -> Color(0xFF32ADE6)
-    "file_write" -> Color(0xFF007AFF)
-    "file_edit" -> Color(0xFFFF9500)
-    "browser_use" -> Color(0xFF007AFF)
-    "read_image" -> Color(0xFFAF52DE)
-    "memory_write", "memory_get" -> Color(0xFFFF2D55)
-    "web_search" -> Color(0xFF32ADE6)    // iOS: .cyan for search
-    else -> Color(0xFF8E8E93)
+    "shell_execute" -> ToolAccents.shell
+    "file_read" -> ToolAccents.fileRead
+    "file_write" -> ToolAccents.fileWrite
+    "file_edit" -> ToolAccents.fileEdit
+    "browser_use" -> ToolAccents.browser
+    "read_image" -> ToolAccents.image
+    "memory_write", "memory_get" -> ToolAccents.memory
+    "web_search" -> ToolAccents.search    // iOS: .cyan for search
+    else -> ToolAccents.fallback
 }
 
 // Helper: tool icon (iOS: distinct SF Symbols per tool type)
