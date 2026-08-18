@@ -152,13 +152,20 @@ class AppendOnlyMarkdownSegmenter {
         val rebuilt = ArrayList<StableMarkdownSlot>(settledCount + 1)
         for (i in 0 until settledCount) rebuilt.add(slots[i])
 
-        val liveText = if (fresh.size > settledCount) {
-            fresh.subList(settledCount, fresh.size).joinToString("\n\n")
-        } else {
-            // Fresh split shrank below the settled prefix — keep the old live
-            // content rather than fabricate a partial tail.
-            slots.lastOrNull()?.takeIf { !it.settled }?.rawText.orEmpty()
+        if (fresh.size <= settledCount) {
+            // Fresh split shrank below (or equal to) the settled prefix — there
+            // is no fresh tail to absorb. Keep ONLY the frozen settled slots:
+            // appending an empty live slot here would publish a new key for no
+            // content (LazyColumn churn — the exact jump regression). The prior
+            // old-live content is dropped deliberately: showing it would
+            // duplicate a paragraph the model has now removed.
+            slots.clear()
+            slots.addAll(rebuilt)
+            if (streamEnded) settleLiveSlot()
+            return snapshot()
         }
+
+        val liveText = fresh.subList(settledCount, fresh.size).joinToString("\n\n")
 
         rebuilt.add(
             StableMarkdownSlot(
