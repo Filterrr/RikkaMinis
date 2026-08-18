@@ -293,4 +293,40 @@ class AppendOnlyMarkdownSegmenterTest {
         assertEquals(s.map { it.rawText }, s2.map { it.rawText })
         assertEquals(1, s2.map { it.rawText }.size)
     }
+
+    // ── divergence + streamEnded combination guard ─────────────────────────
+    // Previously UNTESTED (the exact coverage gap pattern behind the jump
+    // regression): the divergence path with streamEnded=true must keep the
+    // slot count stable AND settle everything, whatever the fresh tail holds.
+
+    @Test fun `divergence with streamEnd settles the live slot, count stable`() {
+        val seg = AppendOnlyMarkdownSegmenter()
+        seg.update("A\n\nB", streamEnded = false)   // [A(s), B(live)], settledCount=1
+        // Diverge (A rewritten) AND end the stream in the same tick.
+        val s = seg.update("X\n\nB", streamEnded = true)
+        assertEquals(2, s.size)                     // count stable — no key churn
+        assertEquals("A", s[0].rawText)             // settled prefix frozen
+        assertEquals("B", s[1].rawText)             // live = fresh tail after prefix
+        assertTrue(s.all { it.settled })            // everything settled
+        assertEquals(1, seg.invariantErrorCount)
+        // Idempotent: a repeated streamEnded tick with the same text is a no-op.
+        val again = seg.update("X\n\nB", streamEnded = true)
+        assertEquals(s.map { it.rawText }, again.map { it.rawText })
+        assertEquals(s.size, again.size)
+    }
+
+    @Test fun `divergence where fresh shrinks below settled keeps old live, count stable`() {
+        val seg = AppendOnlyMarkdownSegmenter()
+        seg.update("A\n\nB\n\nC", streamEnded = false)  // [A(s),B(s),C(live)], settledCount=2
+        // Fresh split collapses to a single fragment — below the settled prefix.
+        val s = seg.update("X", streamEnded = false)
+        assertEquals(3, s.size)                     // count stable (2 settled + 1 live)
+        assertEquals("A", s[0].rawText)
+        assertEquals("B", s[1].rawText)
+        // Old live content is kept (nothing sensible to absorb), never blanked
+        // to a fabricated partial tail.
+        assertEquals("C", s[2].rawText)
+        assertFalse(s[2].settled)
+        assertEquals(1, seg.invariantErrorCount)
+    }
 }
