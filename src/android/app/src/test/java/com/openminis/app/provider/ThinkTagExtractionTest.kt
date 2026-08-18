@@ -107,6 +107,24 @@ class ThinkTagExtractionTest {
     }
 
     @Test
+    fun `extracts Thought variant tag`() {
+        val acc = ScanAccumulator()
+        acc.append("A <Thought>inner reasoning</Thought> B")
+        val (visible, thinking) = acc.flush()
+        assertEquals("A  B", visible)
+        assertEquals("inner reasoning", thinking)
+    }
+
+    @Test
+    fun `extracts analysis variant tag`() {
+        val acc = ScanAccumulator()
+        acc.append("<analysis>step by step</analysis>final")
+        val (visible, thinking) = acc.flush()
+        assertEquals("final", visible)
+        assertEquals("step by step", thinking)
+    }
+
+    @Test
     fun `extracts bracket Think variant`() {
         val acc = ScanAccumulator()
         acc.append("A [Think]inner voice[/Think] B")
@@ -235,8 +253,15 @@ class ThinkTagExtractionTest {
         assertTrue(opens.contains("[reasoning]"))
         // DeepSeek R1 alternative terminator rides on the thinking entry
         assertEquals("<response>", THINK_TAG_FORMATS.first { it.open == "<thinking>" }.altClose)
-        // standard-close entries have no altClose
-        assertTrue(THINK_TAG_FORMATS.filter { it.open != "<thinking>" }.all { it.altClose == null })
+        // angle-bracket tag entries carry an altClose fallback (legacy
+        // gateways strip `</...>` closers and end at the next <response>);
+        // bracket-style tags are strictly standard-close. (standard-close
+        // also holds for <analysis> which uses `</analysis>`.)
+        assertTrue(THINK_TAG_FORMATS.filter { it.open.startsWith("[") }.all { it.altClose == null })
+        // [T-think-tag-catalog-expand] <Thought>/<analysis> must be present so
+        // the "thinking leaked into body" case is covered.
+        assertTrue(opens.contains("<Thought>"))
+        assertTrue(opens.contains("<analysis>"))
     }
 
     // -- Integration: relay merges reasoning into content (all models) --

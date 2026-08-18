@@ -72,9 +72,19 @@ internal data class ThinkTagDef(
  */
 internal val THINK_TAG_FORMATS: List<ThinkTagDef> = listOf(
     ThinkTagDef("<thinking>", "</thinking>", altClose = "<response>"), // DeepSeek R1 style
-    ThinkTagDef("<reasoning>", "</reasoning>"),
+    ThinkTagDef("<reasoning>", "</reasoning>", altClose = "<response>"),
     ThinkTagDef("[think]", "[/think]"),
     ThinkTagDef("[reasoning]", "[/reasoning]"),
+    // [T-think-tag-catalog-expand] Common third-party/self-consistent labels
+    // some OpenAI-compatible relays emit inside `content` (half of the
+    // "thinking leaked into body" bug): explicit symmetric tags are safe to
+    // scan for — an explicit tag can't collide with plain prose. `<Thought>`
+    // is seen from several argoshas (case-insensitive, so `<thought>` also
+    // matches); `<analysis>` from reflect-style models. altClose handles the
+    // common "ends at next <response>" legacy terminator used by gateways
+    // that strip `</...>` closers.
+    ThinkTagDef("<Thought>", "</Thought>", altClose = "<response>"),
+    ThinkTagDef("<analysis>", "</analysis>", altClose = "<response>"),
 )
 
 /**
@@ -135,7 +145,10 @@ internal fun scanThinkTags(
             // Search for any open tag (case-insensitive)
             var found = false
             for (fmt in formats) {
-                val openIdx = bufLower.indexOf(fmt.open, i)
+                // Case-insensitive: match against the lowered buffer with the
+                // lowered open tag (a mixed-case tag like <Thought> must work).
+                val openLower = fmt.open.lowercase()
+                val openIdx = bufLower.indexOf(openLower, i)
                 if (openIdx != -1) {
                     visibleBuilder.append(buffer, i, openIdx)
                     tagActive = true
