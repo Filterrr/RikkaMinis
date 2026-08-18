@@ -1,6 +1,7 @@
 package com.openminis.app.data.repository
 
 import android.database.sqlite.SQLiteBlobTooBigException
+import android.database.sqlite.SQLiteConstraintException
 import com.openminis.app.data.db.ChatDao
 import com.openminis.app.data.db.ChatSessionEntity
 import com.openminis.app.data.db.MessageEntity
@@ -355,10 +356,19 @@ class ChatRepository(
             sortOrder = sortOrder,
             reasoningContent = reasoningContent,
         )
-        dao.insertMessage(message)
+        val persisted: MessageEntity = try {
+            dao.insertMessage(message)
+            message
+        } catch (e: SQLiteConstraintException) {
+            // [RC15] Unique (session_id, sort_order) constraint violated —
+            // another concurrent append raced to the same sort_order. Retry
+            // with a fresh sort_order from the DB.
+            val retrySortOrder = dao.nextSortOrder(sessionId)
+            message.copy(sortOrder = retrySortOrder).also { dao.insertMessage(it) }
+        }
         val preview = extractTextPreview(capped)
         dao.updateLastMessage(sessionId, preview, now)
-        return message
+        return persisted
     }
 
     /**

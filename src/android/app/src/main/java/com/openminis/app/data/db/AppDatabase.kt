@@ -14,7 +14,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         CompactMarkerEntity::class,
         WebAppShortcutEntity::class,
     ],
-    version = 10,
+    version = 11,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -163,6 +163,84 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * [RC15] Enforce a unique (session_id, sort_order) combination on
+         * `messages`. `nextSortOrder` reads MAX(sort_order)+1 outside a
+         * transaction, so two concurrent appends in the same session can race
+         * onto the same value and (with the prior non-unique index) silently
+         * REPLACE each other — losing a message. A unique index turns that into
+         * a hard constraint violation the append path can detect and retry.
+         *
+         * Before creating the unique index we have to defensively renumber any
+         * existing duplicate (session_id, sort_order) groups in the field — a
+         * legacy DB may already contain dupes (e.g. from the race above, or an
+         * odd import). Duplicate sort_order values are reassigned in ascending
+         * rowid order so the resulting order is stable and the unique index can
+         * be created without failing on dirty data. This is a read-then-write
+         * over the full table and must run inside a transaction (Room wraps
+         * each Migration in one) so the renumber + index creation are atomic.
+         */
+        val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // 1. Renumber sort_order within each session into a dense,
+                //    gap-free 0..N-1 sequence ordered by (sort_order, rowid).
+                //    This repairs any legacy duplicate (session_id, sort_order)
+                //    groups in the field — the exact race we're closing, also
+                //    reachable via odd imports — so the unique index can be
+                //    created without failing on dirty data.
+                //
+                //    We snapshot the rank into a temp table FIRST, then apply
+                //    it. A self-referencing UPDATE whose subquery reads the
+                //    table being written would see rows land in undefined order
+                //    and could mis-rank; the temp table forces a single stable
+                //    read pass (rank = number of rows in the same session with
+                //    a strictly-lower (sort_order, rowid) tuple — the
+                //    AUTOINCREMENT-free rowid is a unique, stable tiebreaker).
+                db.execSQL(
+                    """
+                    CREATE TEMP TABLE _sort_order_renumber (
+                        rowid INTEGER PRIMARY KEY,
+                        new_sort_order INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO _sort_order_renumber (rowid, new_sort_order)
+                    SELECT m.rowid,
+                           (SELECT COUNT(*)
+                            FROM messages AS other
+                            WHERE other.session_id = m.session_id
+                              AND (other.sort_order < m.sort_order
+                                   OR (other.sort_order = m.sort_order
+                                       AND other.rowid < m.rowid)))
+                    FROM messages AS m
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    UPDATE messages
+                    SET sort_order = (
+                        SELECT new_sort_order
+                        FROM _sort_order_renumber
+                        WHERE _sort_order_renumber.rowid = messages.rowid
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("DROP TABLE _sort_order_renumber")
+
+                // 2. Drop the old non-unique index (houskeeping) and create the
+                //    unique one. Room names generated indices
+                //    `index_<table>_<col>_<col>`; the older non-unique index has
+                //    the same name so we replace it wholesale.
+                db.execSQL("DROP INDEX IF EXISTS index_messages_session_id_sort_order")
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS index_messages_session_id_sort_order " +
+                        "ON messages(session_id, sort_order)"
+                )
+            }
+        }
+
         val MIGRATION_3_4 = object : Migration(3, 4) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 // sessions: add iOS-parity columns
@@ -200,7 +278,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "minis.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11)
                     .build()
                     .also { INSTANCE = it }
             }
