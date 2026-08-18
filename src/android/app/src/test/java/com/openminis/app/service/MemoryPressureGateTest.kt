@@ -39,31 +39,31 @@ class MemoryPressureGateTest {
     // --- Threshold classification ---
 
     @Test
-    fun `levelFor below 280MB is NORMAL`() {
+    fun `levelFor below 600MB is NORMAL`() {
         assertEquals(MemoryPressureLevel.NORMAL, MemoryPressureGate.levelFor(100L))
-        assertEquals(MemoryPressureLevel.NORMAL, MemoryPressureGate.levelFor(279L))
+        assertEquals(MemoryPressureLevel.NORMAL, MemoryPressureGate.levelFor(599L))
     }
 
     @Test
-    fun `levelFor at 280-319MB is ELEVATED`() {
-        assertEquals(MemoryPressureLevel.ELEVATED, MemoryPressureGate.levelFor(280L))
-        assertEquals(MemoryPressureLevel.ELEVATED, MemoryPressureGate.levelFor(300L))
-        assertEquals(MemoryPressureLevel.ELEVATED, MemoryPressureGate.levelFor(319L))
+    fun `levelFor at 600-799MB is ELEVATED`() {
+        assertEquals(MemoryPressureLevel.ELEVATED, MemoryPressureGate.levelFor(600L))
+        assertEquals(MemoryPressureLevel.ELEVATED, MemoryPressureGate.levelFor(700L))
+        assertEquals(MemoryPressureLevel.ELEVATED, MemoryPressureGate.levelFor(799L))
     }
 
     @Test
-    fun `levelFor at or above 320MB is CRITICAL`() {
-        assertEquals(MemoryPressureLevel.CRITICAL, MemoryPressureGate.levelFor(320L))
-        assertEquals(MemoryPressureLevel.CRITICAL, MemoryPressureGate.levelFor(364L))
+    fun `levelFor at or above 800MB is CRITICAL`() {
+        assertEquals(MemoryPressureLevel.CRITICAL, MemoryPressureGate.levelFor(800L))
+        assertEquals(MemoryPressureLevel.CRITICAL, MemoryPressureGate.levelFor(900L))
     }
 
     @Test
     fun `level() uses injected rssReader`() {
         MemoryPressureGate.rssReader = { 150L }
         assertEquals(MemoryPressureLevel.NORMAL, MemoryPressureGate.level())
-        MemoryPressureGate.rssReader = { 300L }
+        MemoryPressureGate.rssReader = { 700L }
         assertEquals(MemoryPressureLevel.ELEVATED, MemoryPressureGate.level())
-        MemoryPressureGate.rssReader = { 350L }
+        MemoryPressureGate.rssReader = { 850L }
         assertEquals(MemoryPressureLevel.CRITICAL, MemoryPressureGate.level())
         MemoryPressureGate.rssReader = { MemoryPressureGate.readRssFromProc() }
     }
@@ -73,7 +73,7 @@ class MemoryPressureGateTest {
     @Test
     fun `notify fires listener only for non-NORMAL levels`() {
         var fired = mutableListOf<Pair<MemoryPressureLevel, Long>>()
-        MemoryPressureGate.rssReader = { 321L }
+        MemoryPressureGate.rssReader = { 900L }
         MemoryPressureGate.pressureListener = { level, rss -> fired.add(level to rss) }
 
         MemoryPressureGate.notify(MemoryPressureLevel.NORMAL)

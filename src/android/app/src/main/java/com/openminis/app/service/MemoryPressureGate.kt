@@ -13,9 +13,13 @@ import java.io.File
  * native heap），对 **进程 RSS 中的线程栈 / mmap 部分完全盲区**（崩溃时
  * native heap 可能是 100MB 而 RSS 已 280MB+）。本类补上 RSS 维度。
  *
- * 阈值依据（实测）：PID 23721 正常运行 RSS≈277MB；崩溃进程 native heap
- * 364MB 时 mmap 失败。取 ELEVATED=280MB（预警）、CRITICAL=320MB（硬门槛），
- * 留出缓冲。
+ * 阈值依据（实测，2026-08-18 更新）：旧阈值（ELEVATED=280 / CRITICAL=320）
+ * 基于老设备实测（PID 23721 正常 RSS≈277MB、崩时 native 364MB mmap 失败）。
+ * 但当前设备（11GB 内存）健康时 app RSS 就达 354~400MB → 旧阈值让
+ * MemoryPressureGate 永远判 CRITICAL，每次开答都被拖 2 秒 + 频繁触发
+ * GC/shell 回收。取 ELEVATED=600MB（预警）、CRITICAL=800MB（硬门槛），
+ * 为健康 RSS（≈354-400MB）留足余量，同时保留对真泄漏（>800MB 明显不健康）
+ * 的兜底。
  *
  * 可测试性：rssReader / reclaimHook / pressureListener 全部可注入，
  * 生产路径在 [com.openminis.app.MinisApp] 装配。
@@ -25,10 +29,10 @@ enum class MemoryPressureLevel { NORMAL, ELEVATED, CRITICAL }
 object MemoryPressureGate {
 
     /** 预警水线（MB）：超过后新 session 准入短暂等待 + 触发回收。 */
-    const val ELEVATED_RSS_MB = 280L
+    const val ELEVATED_RSS_MB = 600L
 
     /** 硬门槛（MB）：超过后新 session 准入触发全局回收并等待恢复。 */
-    const val CRITICAL_RSS_MB = 320L
+    const val CRITICAL_RSS_MB = 800L
 
     /** 可注入的 RSS 读取器。生产读 /proc/self/status；测试注入 fake。 */
     @Volatile
