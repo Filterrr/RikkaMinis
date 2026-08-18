@@ -43,6 +43,18 @@ class ShareReceiverActivity : ComponentActivity() {
         private const val MAX_FILE_BYTES = 100L * 1024 * 1024   // 100 MB per file
         private const val MAX_TOTAL_BYTES = 500L * 1024 * 1024  // 500 MB total
         private const val IO_TIMEOUT_MS = 30_000L               // 30 s per file
+
+        /**
+         * Process-lifetime cumulative counter of bytes staged for the pending
+         * share, tracked as a companion [java.util.concurrent.atomic.AtomicLong]
+         * (not an instance field) so it survives Activity re-creation
+         * (rotation / low-memory death while the staged files themselves remain
+         * on disk). Resets only when the whole process is reaped, matching the
+         * lifecycle of [SharedShareStore]'s dirty staging files. Guards against
+         * a single user flooding many share intents past [MAX_TOTAL_BYTES]
+         * across Activity instances.
+         */
+        private val totalStagedBytes = java.util.concurrent.atomic.AtomicLong(0)
     }
 
     // T-n01-andmenu-l10n: pre-Tiramisu locale override (see MainActivity).
@@ -246,8 +258,6 @@ class ShareReceiverActivity : ComponentActivity() {
      *  filename (relative to sharedFileDirectory) or null on failure.
      *  Enforces per-file and cumulative size limits and cleans up partial
      *  files on any failure. */
-    private var totalStagedBytes = 0L
-
     private fun copyUriToStaging(uri: Uri, mimeType: String): String? {
         val ext = guessExtension(mimeType, uri)
         val prefix = when {
@@ -266,6 +276,8 @@ class ShareReceiverActivity : ComponentActivity() {
                     while (true) {
                         if (System.currentTimeMillis() > deadline) {
                             AppLogger.warning(TAG, "copyUriToStaging($uri) timed out after ${IO_TIMEOUT_MS}ms")
+                            // Remove the partial file left behind by the timeout.
+                            runCatching { dest.delete() }
                             return null
                         }
                         val n = input.read(buf)
@@ -273,15 +285,17 @@ class ShareReceiverActivity : ComponentActivity() {
                         total += n
                         if (total > MAX_FILE_BYTES) {
                             AppLogger.warning(TAG, "copyUriToStaging($uri) exceeded ${MAX_FILE_BYTES} bytes")
+                            runCatching { dest.delete() }
                             return null
                         }
-                        if (totalStagedBytes + total > MAX_TOTAL_BYTES) {
+                        if (totalStagedBytes.get() + total > MAX_TOTAL_BYTES) {
                             AppLogger.warning(TAG, "copyUriToStaging($uri) would exceed cumulative ${MAX_TOTAL_BYTES} bytes")
+                            runCatching { dest.delete() }
                             return null
                         }
                         output.write(buf, 0, n)
                     }
-                    totalStagedBytes += total
+                    totalStagedBytes.addAndGet(total)
                 }
             }
             name
