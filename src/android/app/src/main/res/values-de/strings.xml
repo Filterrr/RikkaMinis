@@ -1102,6 +1102,10 @@
     <string name="backup_restored_notify_body">%1$d Anbieter und %2$d Gruppen wiederhergestellt.</string>
     <string name="webdav_notify_title_failed">WebDAV-Vorgang fehlgeschlagen</string>
     <string name="backup_notify_failed">Sicherung fehlgeschlagen</string>
+    <string name="backup_secret_title">Die Sicherung enthält API-Schlüssel</string>
+    <string name="backup_secret_body">Die exportierte Datei enthält API-Schlüssel und Anmeldedaten von Anbietern und kann von jedem verwendet werden, der Zugriff darauf erhält. Bewahren Sie sie sicher auf und geben Sie sie nicht weiter. Die Schlüssel werden als Klartext-Base64 gespeichert (nicht verschlüsselt) und können von jedem gelesen werden, der die Datei besitzt.</string>
+    <string name="backup_secret_confirm">Schlüssel einschließen und exportieren</string>
+    <string name="backup_secret_without">Ohne Schlüssel</string>
     <string name="webdav_notify_title_restored">WebDAV-Wiederherstellung</string>
     <string name="webdav_notify_title">WebDAV-Backup</string>
     <string name="webdav_loading">Lade Backups…</string>

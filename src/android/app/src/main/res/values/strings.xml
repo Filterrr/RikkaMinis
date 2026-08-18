@@ -1235,7 +1235,7 @@
     <string name="backup_saved">Backup saved</string>
     <string name="backup_notify_failed">Backup failed</string>
     <string name="backup_secret_title">Backup will include API keys</string>
-    <string name="backup_secret_body">The exported file contains provider API keys and login credentials, usable by anyone who obtains it. Keep it safe and do not share it.</string>
+    <string name="backup_secret_body">The exported file contains provider API keys and login credentials, usable by anyone who obtains it. Keep it safe and do not share it. Keys are stored as plain Base64 (not encrypted) and can be read by anyone who has the file.</string>
     <string name="backup_secret_confirm">Include keys and export</string>
     <string name="backup_secret_without">Without keys</string>
     <string name="backup_generating_title">Generating backup…</string>
