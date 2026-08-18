@@ -134,6 +134,11 @@ class GeminiProvider(
         try {
             var started = false
             var lastFinishReason: String? = null
+            // [RC2-truncated-detection] Accumulated text+thinking chars. Used to
+            // distinguish "server cut a partial reply" (EOF, no finish_reason,
+            // content present → truncated) from a genuinely empty EOF (left to
+            // failOnSilentEmptyCompletion).
+            var contentChars = 0
             var line: String?
             while (reader.readLine().also { line = it } != null) {
                 val l = line ?: continue
@@ -150,9 +155,11 @@ class GeminiProvider(
                 // Separate thought parts from text parts
                 val (text, thinking) = extractTextAndThinking(json)
                 if (thinking.isNotEmpty()) {
+                    contentChars += thinking.length
                     send(LLMStreamChunk.ThinkingDelta(thinking))
                 }
                 if (text.isNotEmpty()) {
+                    contentChars += text.length
                     send(LLMStreamChunk.Text(text))
                 }
 
@@ -172,7 +179,18 @@ class GeminiProvider(
                     lastFinishReason = reason
                 }
             }
-            send(LLMStreamChunk.Finished(lastFinishReason ?: "end_turn"))
+            // [RC2-truncated-detection] EOF without a finish_reason but with
+            // accumulated content = the server cut the reply mid-stream.
+            // Previously this fell through to `Finished("end_turn")`, making
+            // ChatViewModel treat a partial answer as a clean finish. Now we
+            // signal truncated so the turnTruncated retry path owns it. A fully
+            // empty EOF (contentChars == 0) is left to failOnSilentEmptyCompletion
+            // and is not flagged here.
+            if (lastFinishReason == null && contentChars > 0) {
+                send(LLMStreamChunk.Finished(null, truncated = true))
+            } else {
+                send(LLMStreamChunk.Finished(lastFinishReason ?: "end_turn"))
+            }
         } catch (e: Exception) {
             cancel("Stream error", mapError(e))
         } finally {
