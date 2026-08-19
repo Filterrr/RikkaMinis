@@ -103,4 +103,27 @@ class MemoryPressureGateTest {
         val rss = MemoryPressureGate.readRssFromProc()
         assertTrue("rss=$rss should be >= 0", rss >= 0L)
     }
+
+    // --- [native-rss-tool-guard] post-reclaim rejection ---
+
+    @Test
+    fun `shouldRejectAfterReclaim is false below critical and true at or above`() {
+        assertTrue(MemoryPressureGate.shouldRejectAfterReclaim(800L))
+        assertTrue(MemoryPressureGate.shouldRejectAfterReclaim(900L))
+        assertFalse(MemoryPressureGate.shouldRejectAfterReclaim(799L))
+        assertFalse(MemoryPressureGate.shouldRejectAfterReclaim(0L))
+    }
+
+    @Test
+    fun `shouldRejectAfterReclaim rejects when reader reports critical after reclaim`() {
+        MemoryPressureGate.rssReader = { 850L }
+        assertTrue(
+            MemoryPressureGate.shouldRejectAfterReclaim(MemoryPressureGate.rssReader())
+        )
+        MemoryPressureGate.rssReader = { 400L }
+        assertFalse(
+            MemoryPressureGate.shouldRejectAfterReclaim(MemoryPressureGate.rssReader())
+        )
+        MemoryPressureGate.rssReader = { MemoryPressureGate.readRssFromProc() }
+    }
 }
