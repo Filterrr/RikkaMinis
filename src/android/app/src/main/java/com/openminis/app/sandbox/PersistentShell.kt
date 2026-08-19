@@ -214,7 +214,7 @@ class PersistentShell(
             cmd.add("$hostPath:$linuxPath")
         }
 
-        val handlers = NativeOffloadServer.registeredHandlers
+        val handlers = OffloadHandlerCatalog.allHandlerNames
         if (handlers.isNotEmpty()) {
             cmd.add("--native-offload=${NativeOffloadServer.socketName}:${handlers.joinToString(",")}")
         }

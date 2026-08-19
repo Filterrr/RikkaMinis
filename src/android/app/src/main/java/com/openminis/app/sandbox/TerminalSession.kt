@@ -418,7 +418,7 @@ class TerminalSession(private val context: Context) {
         }
 
         // Native offload socket.
-        val handlers = NativeOffloadServer.registeredHandlers
+        val handlers = OffloadHandlerCatalog.allHandlerNames
         if (handlers.isNotEmpty()) {
             args.add("--native-offload=${NativeOffloadServer.socketName}:${handlers.joinToString(",")}")
         }
