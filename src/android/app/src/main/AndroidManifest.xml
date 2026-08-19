@@ -326,6 +326,14 @@
             android:process=":modelservice"
             android:exported="false" />
 
+        <!-- [native-oom Phase 1] Isolated process for native_offload socket
+             server + handler registry. Keeps the heavy per-tool native/mmap
+             load out of the main process. See ToolExecutionService. -->
+        <service
+            android:name=".service.ToolExecutionService"
+            android:process=":toolservice"
+            android:exported="false" />
+
         <!-- Alarm broadcast receiver (also handles BOOT_COMPLETED for re-scheduling) -->
         <receiver
             android:name=".offload.AlarmReceiver"
