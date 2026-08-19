@@ -62,6 +62,13 @@ object MemoryPressureGate {
         else -> MemoryPressureLevel.NORMAL
     }
 
+    /**
+     * [native-rss-tool-guard] 回收后仍处于硬门槛是否应拒绝新执行。
+     * 纯函数可单测：主进程 RSS 已超过 800MB 时，即使刚触发过全局回收，
+     * 也不应继续接受会进一步堆 native/mmap 的工具请求。
+     */
+    fun shouldRejectAfterReclaim(rssMB: Long): Boolean = rssMB >= CRITICAL_RSS_MB
+
     /** 读取当前进程 VmRSS（MB）。读失败返回 0（安全侧：不触发降级）。 */
     fun readRssFromProc(): Long {
         return try {

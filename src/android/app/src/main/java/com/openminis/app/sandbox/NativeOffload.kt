@@ -105,6 +105,12 @@ object NativeOffloadServer {
     private const val MAGIC_RSP = 0x52464F4E  // 'N' 'O' 'F' 'R'
     private const val VERSION = 1
 
+    // [native-rss-tool-guard] Maximum concurrent native-offload worker
+    // threads. Matches the shell coordinator's MAX_CONCURRENT_SHELLS so a
+    // burst of concurrent offload requests never exceeds the concurrency the
+    // rest of the memory-budget machinery was sized for.
+    internal const val MAX_CONCURRENT_WORKERS = 2
+
     const val socketName: String = SOCKET_NAME
 
     private val handlers = ConcurrentHashMap<String, NativeOffloadHandler>()
@@ -121,6 +127,15 @@ object NativeOffloadServer {
     // concurrent sessions (leaked files / deleted not-yet-cat'd files); the
     // ledger keeps the newest files and evicts oldest-first under one lock.
     private val tmpLedger = OffloadTmpFileLedger()
+
+    // [native-rss-tool-guard] Bounded worker concurrency. Previously each
+    // accepted connection spawned an unbounded `thread {}` — with several
+    // concurrent sessions each offloading repeatedly, the per-thread native
+    // stack + handler allocations accumulate in the main process with no
+    // backpressure. Cap concurrent worker threads to the same bound as the
+    // shell coordinator; excess requests queue on the semaphore instead of
+    // spawning a new OS thread.
+    private val workerConcurrency = java.util.concurrent.Semaphore(MAX_CONCURRENT_WORKERS, true)
 
     @Volatile
     private var rootfsTmpDir: File? = null
@@ -196,11 +211,26 @@ object NativeOffloadServer {
             }
             Log.d(TAG, "accepted client from proot extension")
             thread(name = "native-offload-worker", isDaemon = true) {
+                // [native-rss-tool-guard] Bounded concurrency: acquire the
+                // worker slot BEFORE reading the frame so a burst of
+                // concurrent offload requests queues here instead of each
+                // spawning an unbounded handler thread that bloats native
+                // heap. The slot is released on every exit path (success,
+                // decode error, handler throw) so one bad client can't leak
+                // the worker permit.
+                val acquired = try {
+                    workerConcurrency.acquire()
+                } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    runCatching { client.close() }
+                    return@thread
+                }
                 try {
                     handleClient(client)
                 } catch (e: Exception) {
                     Log.w(TAG, "worker error: ${e.message}", e)
                 } finally {
+                    workerConcurrency.release()
                     try { client.close() } catch (_: Exception) {}
                 }
             }

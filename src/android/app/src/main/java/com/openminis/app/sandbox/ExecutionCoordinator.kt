@@ -14,6 +14,8 @@ import com.openminis.app.agent.runtime.RetrySafety
 import com.openminis.app.data.repository.EnvVarRepository
 import com.openminis.app.sandbox.offload.ChatStreamOffloadHandler
 import com.openminis.app.sandbox.offload.ModelExecutionService
+import com.openminis.app.service.MemoryPressureGate
+import com.openminis.app.service.MemoryPressureLevel
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
@@ -241,6 +243,27 @@ object ExecutionCoordinator {
         timeout: Long = 600_000L,
         lineCallback: ((String) -> Unit)? = null
     ): CommandResult {
+        // [native-rss-tool-guard] Process-RSS hard gate BEFORE any shell work.
+        // Debug.getNativeHeapAllocatedSize() is blind to mmap/thread-stack/mapped
+        // tmpfile growth — the exact shape of the 2026-08-19 crash (RSS 5.8–6.0GB
+        // while the native-heap-only tiers stayed below their cliffs). Read real
+        // VmRSS: if it is already CRITICAL, reclaim once, then re-check; if still
+        // critical, reject the command with a retryable, structured error instead
+        // of letting one more heavy command push the process over the edge.
+        val rssBeforeMB = MemoryPressureGate.rssReader()
+        if (MemoryPressureGate.levelFor(rssBeforeMB) == MemoryPressureLevel.CRITICAL) {
+            MemoryPressureGate.reclaimAndWait(waitMs = 2_000L)
+            val rssAfterMB = MemoryPressureGate.rssReader()
+            if (MemoryPressureGate.shouldRejectAfterReclaim(rssAfterMB)) {
+                Log.w(TAG, "[$sessionId] Process RSS ${rssAfterMB}MB still critical after reclaim — rejecting command (rssBefore=${rssBeforeMB}MB)")
+                return CommandResult(
+                    "[System busy: process memory is critically high (${rssAfterMB}MB). " +
+                        "Please wait for the system to settle and retry.]",
+                    -1, 0, true,
+                )
+            }
+        }
+
         // [shell-generation-scheduler] Progressive pre-execution gate.
         // Instead of a single 350MB cliff that freezes ALL commands (even
         // `true`), degrade by tier: at CRITICAL (≥120MB) block only heavy

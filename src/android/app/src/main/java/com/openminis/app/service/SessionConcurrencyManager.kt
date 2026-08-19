@@ -28,7 +28,11 @@ import kotlin.coroutines.resume
  * 去重是展示层行为，不影响内部按 runId 的精确并发控制）。
  */
 object SessionConcurrencyManager {
-    const val MAX_CONCURRENT = 5
+    // [native-rss-tool-guard] 与 ExecutionCoordinator.MAX_CONCURRENT_SHELLS 对齐。
+    // 2026-08-19 现场：多个并发 agent 会话共享主进程 native/mmap 资源，
+    // 可在几分钟内把主进程 RSS 推到 5.8–6.0GB 并触发 SIGABRT。把第三个
+    // agent loop 排队，先保证系统不会被并发工具流量拖到 native OOM。
+    const val MAX_CONCURRENT = 2
 
     private val controller = SessionSlotController(maxConcurrent = MAX_CONCURRENT)
 
