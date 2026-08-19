@@ -211,7 +211,7 @@ object PRootKernel {
             "nativeLibDir=$nativeLibDir " +
             "loader=$prootLoaderPath " +
             "bindMounts=${bindMounts.size} " +
-            "offloadHandlers=${NativeOffloadServer.registeredHandlers.sorted()}")
+            "offloadHandlers=${OffloadHandlerCatalog.allHandlerNames.sorted()}")
     }
 
     fun addBindMount(linuxPath: String, hostPath: String) {
@@ -682,9 +682,11 @@ object PRootKernel {
             }
         }
 
-        // Native offload: route registered handler names to the host-side
-        // NativeOffloadServer over the abstract unix socket.
-        val handlers = NativeOffloadServer.registeredHandlers
+        // Native offload: route cataloged handler names to the host-side
+        // NativeOffloadServer over the abstract unix socket. The main process
+        // only needs the STATIC name list (OffloadHandlerCatalog) — it does
+        // not own handler instances, which live in :toolservice (Phase 1).
+        val handlers = OffloadHandlerCatalog.allHandlerNames
         if (handlers.isNotEmpty()) {
             cmd.add("--native-offload=${NativeOffloadServer.socketName}:${handlers.joinToString(",")}")
         }
@@ -823,7 +825,7 @@ object PRootKernel {
         val binDir = File(rootfsDir, "usr/local/bin").also { it.mkdirs() }
         var created = 0
         var existed = 0
-        for (name in NativeOffloadServer.registeredHandlers) {
+        for (name in OffloadHandlerCatalog.allHandlerNames) {
             val stub = File(binDir, name)
             if (stub.exists()) { existed++; continue }
             stub.writeText("#!/bin/sh\nexit 0\n")
