@@ -33,7 +33,11 @@ import kotlin.concurrent.thread
  */
 class SessionSlotControllerTest {
 
-    private val capacity = SessionConcurrencyManager.MAX_CONCURRENT
+    // SessionSlotController is a generic, capacity-parameterized pure controller.
+    // Its unit tests must NOT couple to the production SessionConcurrencyManager
+    // MAX_CONCURRENT (which is a runtime tuning knob, currently 2). Use a fixed
+    // local capacity so the FIFO/cancel/snapshot logic assertions stay deterministic.
+    private val capacity = 5
 
     // --- 4 并发全成功 / 第 5 边界 / 第 6 FIFO ---
 
