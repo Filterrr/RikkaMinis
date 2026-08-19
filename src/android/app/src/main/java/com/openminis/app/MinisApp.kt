@@ -239,6 +239,19 @@ class MinisApp : Application(), ImageLoaderFactory {
             return
         }
 
+        // [native-oom Phase 1] The :toolservice process (ToolExecutionService)
+        // will own the native-offload socket + handler registry. It must
+        // NEVER run the main-process heavy init (Room, PRoot, offload-server
+        // bind, repositories) — it only builds the tool-specific dependency
+        // graph inside ToolExecutionService. This branch is dormant until the
+        // socket ownership actually moves to :toolservice (Migration step 3);
+        // right now nothing spawns this process.
+        if (isToolServiceProcess()) {
+            Log.i("MinisApp", "skipping app init in :toolservice process")
+            com.openminis.app.data.FastModePrefs.prime(this)
+            return
+        }
+
         // [T-codex-fast-mode] Capture the app context + warm the Fast Mode
         // flag cache so the provider layer (no Context) can read it at
         // request-build time — including offload / title-gen calls that
@@ -761,6 +774,28 @@ class MinisApp : Application(), ImageLoaderFactory {
      * prefs blob that AlarmOffloadHandler previously read, so list/cancel
      * commands will no longer surface them.
      */
+    /**
+     * [native-oom Phase 1] True when the current process is the isolated
+     * `:toolservice` process (see [ToolExecutionService]). Used by [onCreate]
+     * to skip the heavy main-process subsystem initialisation (below) and
+     * instead let ToolExecutionService own the tool-specific dependency
+     * graph — mirroring how `:modelservice` skips app init.
+     */
+    private fun isToolServiceProcess(): Boolean {
+        return try {
+            if (android.os.Build.VERSION.SDK_INT >= 28) {
+                Application.getProcessName()?.endsWith(":toolservice") == true
+            } else {
+                // minSdk 26 (< API 28): fall back to ActivityManager pid lookup.
+                val am = getSystemService(ACTIVITY_SERVICE) as? android.app.ActivityManager ?: return false
+                val pid = android.os.Process.myPid()
+                am.runningAppProcesses?.any { it.pid == pid && it.processName.endsWith(":toolservice") } == true
+            }
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
     /**
      * [model-exec-service] True when the current process is the isolated
      * `:modelservice` process (see [ModelExecutionService]). Used by
