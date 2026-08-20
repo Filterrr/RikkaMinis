@@ -59,6 +59,7 @@ import com.openminis.app.sandbox.offload.WeatherOffloadHandler
 import com.openminis.app.service.MemoryPressureGate
 import com.openminis.app.service.MemoryPressureLevel
 import com.openminis.app.service.SessionActivityTracker
+import com.openminis.app.service.TrimPolicy
 import com.openminis.app.ui.MinisImageFetcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -887,12 +888,14 @@ class MinisApp : Application(), ImageLoaderFactory {
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
         runCatching {
-            if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE) {
-                Log.w("MinisApp", "onTrimMemory($level): reclaiming shells + gc")
+            if (TrimPolicy.shouldReclaimShellsAndGc(level)) {
+                Log.w("MinisApp", "onTrimMemory($level): reclaiming shells + gc (foreground pressure)")
                 ExecutionCoordinator.recycleIdleShells()
                 System.gc()
+            } else if (TrimPolicy.isBackground(level)) {
+                Log.i("MinisApp", "onTrimMemory($level): background/UI-hidden — skip aggressive reclaim (keep view state)")
             }
-            if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
+            if (TrimPolicy.shouldEngageMemoryGate(level)) {
                 // Flip the gate: new session admissions must wait for
                 // RSS to drop below the critical watermark before acquiring.
                 Log.w("MinisApp", "onTrimMemory($level): CRITICAL — memory gate engaged")

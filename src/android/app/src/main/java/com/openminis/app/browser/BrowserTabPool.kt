@@ -6,6 +6,7 @@ import android.content.res.Configuration
 import android.os.Message
 import android.util.Log
 import android.webkit.WebView
+import com.openminis.app.service.TrimPolicy
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -1199,11 +1200,16 @@ class BrowserTabPool(private val context: Context) : ComponentCallbacks2 {
      * [T-android-trim-memory] Android invokes this when the system is low on
      * memory. WebViews are the pool's biggest consumer (one renderer process
      * per tab, 50-100 MB each), so we sacrifice idle tabs before the OS kills
-     * the whole process. Tiers:
-     *  - RUNNING_MODERATE (5): drop the single least-recently-active idle tab.
-     *  - RUNNING_LOW (10) / UI_HIDDEN (20)+: drop every idle tab.
+     * the whole process. Tiers driven by [TrimPolicy]:
      *  - RUNNING_CRITICAL (15): drop everything except the selected tab —
      *    the agent's active context survives a near-kill.
+     *  - RUNNING_MODERATE/LOW (5/10) + MODERATE/COMPLETE (60/80): drop idle tabs.
+     *  - UI_HIDDEN/BACKGROUND (20/40): [fix-trim-memory-semantics] drop ONLY
+     *    long-idle tabs. The old code routed UI_HIDDEN(20)+ into the LOW(10)
+     *    branch and killed every idle tab on a mere background switch —
+     *    a background switch isn't memory-critical, so we keep recently-used
+     *    and selected tabs alive (2026-08-20 real-device: browser tabs killed
+     *    on every app-background).
      * Tabs in use (an agent action is mid-flight) and the selected tab are
      * protected so ongoing work isn't corrupted mid-evaluation. Dropped tab
      * URLs are saved to [savedURLs] so state persists and a later implicit tab
@@ -1211,22 +1217,24 @@ class BrowserTabPool(private val context: Context) : ComponentCallbacks2 {
      */
     override fun onTrimMemory(level: Int) {
         if (_tabs.value.isEmpty()) return
-        val victims = when {
-            level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL -> {
+        val policy = TrimPolicy.browserTabKillPolicy(level)
+        val idleTimeoutMs = idleTimeoutMs
+        val now = System.currentTimeMillis()
+        val isLongIdle = { tab: Tab -> !tab.inUse && (now - tab.lastActivityDate.time) >= idleTimeoutMs }
+        val victims = when (policy) {
+            TrimPolicy.BrowserTabKillPolicy.DROP_ALL_BUT_SELECTED -> {
                 // Keep only the selected tab.
                 _tabs.value.filter { it.id != _selectedTabId.value }
             }
-            level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW -> {
-                // Drop all idle tabs.
+            TrimPolicy.BrowserTabKillPolicy.DROP_ALL_IDLE -> {
+                // Drop all idle tabs (foreground low pressure / overall pressure).
                 _tabs.value.filter { !it.inUse }
             }
-            level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE -> {
-                // Light pressure: drop the single LRU idle tab.
-                _tabs.value.filter { !it.inUse }
-                    .minByOrNull { it.lastActivityDate.time }
-                    ?.let { listOf(it) } ?: emptyList()
+            TrimPolicy.BrowserTabKillPolicy.DROP_LONG_IDLE_ONLY -> {
+                // Background / UI-hidden: drop only long-idle tabs, keep
+                // recently-used ones so returning to the app preserves view state.
+                _tabs.value.filter { isLongIdle(it) }
             }
-            else -> emptyList()
         }
         if (victims.isEmpty()) return
         Log.i(TAG, "onTrimMemory($level): destroying ${victims.size} tab(s)")
