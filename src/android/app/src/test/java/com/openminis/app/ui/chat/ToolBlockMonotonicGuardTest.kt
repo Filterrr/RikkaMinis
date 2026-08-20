@@ -137,6 +137,16 @@ class ToolBlockMonotonicGuardTest {
 
     // ── isTerminal edge cases ───────────────────────────────────────
     @Test
+    fun `terminal to null is clamped without crash`() {
+        val prev = listOf(block("t1", ToolBlockStatus.SUCCESS, content = "done"))
+        val next = listOf(block("t1", status = null, content = "lost"))
+        val result = ToolBlockMonotonicGuard.guard(prev, next)
+        // Regresses to null (no status) — must clamp to terminal, not crash.
+        assertEquals(ToolBlockStatus.SUCCESS, result.blocks.single().toolStatus)
+        assertEquals("done", result.blocks.single().content)
+    }
+
+    @Test
     fun `isTerminal classification`() {
         assertTrue(ToolBlockMonotonicGuard.isTerminal(ToolBlockStatus.SUCCESS))
         assertTrue(ToolBlockMonotonicGuard.isTerminal(ToolBlockStatus.FAILED))
