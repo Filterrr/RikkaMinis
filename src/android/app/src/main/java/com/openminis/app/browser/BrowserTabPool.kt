@@ -580,8 +580,13 @@ class BrowserTabPool(private val context: Context) : ComponentCallbacks2 {
         input: BrowserActionInput,
         singleTab: Boolean = false,
     ): BrowserActionResult {
-        // Handle tab management actions at pool level
-        return when (input.action) {
+        // [browser-rss P4] 打点定位：每个 action 执行前后各读一次主进程 VmRSS，
+        // 把增量归因到具体 action（navigate/screenshot/click/…）。WebView 渲染
+        // 进程是主进程 native/mmap 之外的另一大内存来源，但这条 browser 路径
+        // 不经 offload socket，之前没有任何 RSS 归因——这是「泄漏涨在哪个
+        // handler」的最后一块盲区。零副作用，不影响 action 结果。
+        val rssBeforeKb = BrowserRssProbe.rssKb()
+        val result = when (input.action) {
             BrowserAction.NEW_TAB -> newTab(input.url)
             BrowserAction.CLOSE_TAB -> closeTab(input.tabId)
             BrowserAction.LIST_TABS -> listTabs()
@@ -634,6 +639,9 @@ class BrowserTabPool(private val context: Context) : ComponentCallbacks2 {
                 }
             }
         }
+        val rssAfterKb = BrowserRssProbe.rssKb()
+        BrowserRssProbe.record(input.action.value, rssBeforeKb, rssAfterKb)
+        return result
     }
 
     /**
