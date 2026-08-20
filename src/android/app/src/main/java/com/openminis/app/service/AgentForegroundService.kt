@@ -154,7 +154,7 @@ class AgentForegroundService : Service() {
         if (com.openminis.app.crash.CrashFrequencyDetector.isSafeMode()) {
             try {
                 val stub = androidx.core.app.NotificationCompat.Builder(this, CHANNEL_ID)
-                    .setContentTitle("Minis")
+                    .setContentTitle("RikkaMinis")
                     .setSmallIcon(android.R.drawable.stat_sys_warning)
                     .setOngoing(false)
                     .build()
@@ -708,15 +708,15 @@ class AgentForegroundService : Service() {
      * so the user still gets a hint about what's running.
      */
     private fun toolDisplayLabel(toolName: String): String = when (toolName) {
-        "shell_execute" -> "Minis is using Shell"
-        "file_read" -> "Minis is reading File"
-        "file_write" -> "Minis is using Editor"
-        "file_edit" -> "Minis is editing File"
-        "browser_use" -> "Minis is using Browser"
-        "read_image" -> "Minis is reading Image"
-        "memory_write", "memory_get" -> "Minis is using Memory"
-        "web_search" -> "Minis is using Search"
-        else -> "Minis is using $toolName"
+        "shell_execute" -> "RikkaMinis is using Shell"
+        "file_read" -> "RikkaMinis is reading File"
+        "file_write" -> "RikkaMinis is using Editor"
+        "file_edit" -> "RikkaMinis is editing File"
+        "browser_use" -> "RikkaMinis is using Browser"
+        "read_image" -> "RikkaMinis is reading Image"
+        "memory_write", "memory_get" -> "RikkaMinis is using Memory"
+        "web_search" -> "RikkaMinis is using Search"
+        else -> "RikkaMinis is using $toolName"
     }
 
     /**

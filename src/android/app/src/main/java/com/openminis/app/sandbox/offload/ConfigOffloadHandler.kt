@@ -46,7 +46,7 @@ class ConfigOffloadHandler : NativeOffloadHandler {
         const val EXIT_PERMISSION_DENIED = 126
 
         const val HELP_TEXT =
-            "minis-config - read or change Minis app settings\n" +
+            "minis-config - read or change RikkaMinis app settings\n" +
                 "\n" +
                 "USAGE:\n" +
                 "  minis-config <subcommand> [args]\n" +

@@ -50,15 +50,15 @@ internal fun toolDisplayName(toolName: String): String = when (toolName) {
 }
 
 internal fun toolTitleLabel(toolName: String): String = when (toolName) {
-    "shell_execute" -> "Minis is using Shell"
-    "file_read" -> "Minis is reading File"
-    "file_write" -> "Minis is using Editor"
-    "file_edit" -> "Minis is editing File"
-    "browser_use" -> "Minis is using Browser"
-    "read_image" -> "Minis is reading Image"
-    "memory_write", "memory_get" -> "Minis is using Memory"
-    "web_search" -> "Minis is using Search"
-    else -> "Minis is using ${toolDisplayName(toolName)}"
+    "shell_execute" -> "RikkaMinis is using Shell"
+    "file_read" -> "RikkaMinis is reading File"
+    "file_write" -> "RikkaMinis is using Editor"
+    "file_edit" -> "RikkaMinis is editing File"
+    "browser_use" -> "RikkaMinis is using Browser"
+    "read_image" -> "RikkaMinis is reading Image"
+    "memory_write", "memory_get" -> "RikkaMinis is using Memory"
+    "web_search" -> "RikkaMinis is using Search"
+    else -> "RikkaMinis is using ${toolDisplayName(toolName)}"
 }
 
 internal fun formatToolDuration(ms: Long): String {

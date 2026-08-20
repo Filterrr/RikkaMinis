@@ -56,7 +56,7 @@
     <string name="search_no_results">\"%1$s\" の結果はありません</string>
     <string name="stop_tool">ツールを停止</string>
     <string name="mic_permission_title">マイクの権限が必要です</string>
-    <string name="mic_permission_message">音声入力にはマイクの権限が必要です。「設定を開く」をタップして Minis に許可を与えてください。</string>
+    <string name="mic_permission_message">音声入力にはマイクの権限が必要です。「設定を開く」をタップして RikkaMinis に許可を与えてください。</string>
     <string name="mic_permission_open_settings">設定を開く</string>
     <string name="mic_permission_cancel">キャンセル</string>
     <string name="bg_section_header">バックグラウンドと通知</string>
@@ -64,7 +64,7 @@
     <string name="bg_section_footer">長時間のエージェントタスクは画面オフ中も CPU を起動状態に保つ権限が必要です。これらの設定がないと、システムは数分後にバックグラウンド推論を停止することがあります。</string>
     <string name="bg_service_channel_name">エージェントの状態</string>
     <string name="bg_service_channel_description">実行中のエージェントセッションの状態を表示します。</string>
-    <string name="bg_service_notification_title">Minis Agent 実行中</string>
+    <string name="bg_service_notification_title">RikkaMinis Agent 実行中</string>
     <string name="bg_service_notification_text">%1$s | %2$s | %3$s</string>
     <string name="bg_service_stop_action">停止</string>
     <plurals name="bg_service_sessions">
@@ -75,11 +75,11 @@
     <string name="battery_opt_section_footer">除外設定にすると、Android はタスク実行中にアプリをスリープさせません。この画面に戻るたびに再確認します。</string>
     <string name="battery_opt_row_title">バックグラウンド実行を許可</string>
     <string name="battery_opt_already_exempt">許可済み</string>
-    <string name="battery_opt_request_subtitle">タップして Minis の中断のない実行を許可</string>
+    <string name="battery_opt_request_subtitle">タップして RikkaMinis の中断のない実行を許可</string>
     <string name="rom_autostart_section_title">自動起動の権限</string>
-    <string name="rom_autostart_section_footer">一部の Android UI（%1$s）では、標準のシステム設定に加えて自動起動の権限が必要です。これがないと Minis はバックグラウンドへ移行後に数分で強制終了される可能性があります。</string>
+    <string name="rom_autostart_section_footer">一部の Android UI（%1$s）では、標準のシステム設定に加えて自動起動の権限が必要です。これがないと RikkaMinis はバックグラウンドへ移行後に数分で強制終了される可能性があります。</string>
     <string name="rom_autostart_row_title">自動起動の設定を開く</string>
-    <string name="rom_autostart_row_subtitle">%1$s で Minis を有効にする</string>
+    <string name="rom_autostart_row_subtitle">%1$s で RikkaMinis を有効にする</string>
     <string name="browser_settings_ua_not_set">未設定</string>
     <!-- T135 — Settings + About i18n keys -->
     <string name="settings_title">設定</string>
@@ -376,8 +376,8 @@
     <string name="storage_overview_sessions">セッションファイル</string>
     <string name="storage_section_sessions">セッション</string>
     <string name="storage_no_sessions">セッションなし</string>
-    <string name="storage_section_minis_files">Minis ファイル</string>
-    <string name="storage_no_minis_files">Minis ファイルなし</string>
+    <string name="storage_section_minis_files">RikkaMinis ファイル</string>
+    <string name="storage_no_minis_files">RikkaMinis ファイルなし</string>
     <string name="storage_section_media">メディアファイル</string>
     <string name="storage_no_media_files">メディアファイルなし</string>
     <string name="storage_clear_session_footer">このセッションで生成されたすべてのファイルを削除します。会話自体は保持されます。</string>
@@ -456,7 +456,7 @@
     <string name="common_close">閉じる</string>
     <string name="common_skip">スキップ</string>
     <string name="common_next">次へ</string>
-    <string name="onboarding_welcome_title">Minis へようこそ</string>
+    <string name="onboarding_welcome_title">RikkaMinis へようこそ</string>
     <string name="onboarding_welcome_subtitle">ターミナル、ブラウザ、ネイティブデバイスへのアクセスを備えた AI エージェント。</string>
     <string name="onboarding_get_started">はじめる</string>
     <string name="onboarding_provider_title">プロバイダーを追加</string>
@@ -553,7 +553,7 @@
     <string name="browser_nav_forward">進む</string>
     <string name="browser_stop">停止</string>
     <string name="browser_reload">再読み込み</string>
-    <string name="browser_minis_browsing">Minis がブラウジング中</string>
+    <string name="browser_minis_browsing">RikkaMinis がブラウジング中</string>
     <string name="chat_typing_indicator">%1$s が考えています</string>
     <string name="chat_input_placeholder">%1$s にメッセージ（@ でファイルを参照）</string>
     <string name="browser_takeover">操作引き継ぎ</string>
@@ -586,7 +586,7 @@
     <string name="browser_history_results">結果</string>
     <string name="browser_history_clear_dialog_title">閲覧履歴を消去しますか？</string>
     <string name="browser_history_clear_dialog_message">すべての閲覧履歴が削除されます。この操作は元に戻せません。</string>
-    <string name="terminal_title">Minis シェル</string>
+    <string name="terminal_title">RikkaMinis シェル</string>
     <string name="terminal_clear">クリア</string>
     <string name="terminal_show_keyboard">表示</string>
     <string name="terminal_hide_keyboard">非表示</string>
@@ -771,8 +771,8 @@
     <string name="notif_config_confirm_channel_name">設定の承認</string>
     <string name="notif_config_confirm_channel_description">アプリがバックグラウンドの間、設定変更が承認待ちのときに通知します。</string>
     <string name="notif_config_confirm_title">⚙️ 設定変更が承認待ちです</string>
-    <string name="notif_config_confirm_body_single">確認が必要な変更があります —— Minis を開いて承認または拒否してください。</string>
-    <string name="notif_config_confirm_body_multi">確認が必要な変更が %d 件あります —— Minis を開いて承認または拒否してください。</string>
+    <string name="notif_config_confirm_body_single">確認が必要な変更があります —— RikkaMinis を開いて承認または拒否してください。</string>
+    <string name="notif_config_confirm_body_multi">確認が必要な変更が %d 件あります —— RikkaMinis を開いて承認または拒否してください。</string>
     <string name="notif_task_failed_body">タスクがエラーで終了しました。タップしてチャットを開きます。</string>
 
     <!-- T182 agent loop section i18n -->
@@ -941,7 +941,7 @@
 
     <!-- Welcome / onboarding (T332) -->
     <!-- TODO translate -->
-    <string name="sessionlist_welcome_title">Minis へようこそ</string>
+    <string name="sessionlist_welcome_title">RikkaMinis へようこそ</string>
     <string name="sessionlist_welcome_subtitle">最初のオンデバイス Agent がもうすぐ準備完了です。</string>
     <string name="sessionlist_welcome_step1_title">プロバイダを追加</string>
     <string name="sessionlist_welcome_step1_subtitle">API キーを設定するか OAuth でサインイン</string>
@@ -969,10 +969,10 @@
     <string name="update_error_open_releases">GitHub Releases を開く</string>
     <!-- T-android-crash-freq-share -->
     <string name="crash_freq_dialog_title">複数回のクラッシュを検出</string>
-    <string name="crash_freq_dialog_message">Minis は過去 1 時間に複数回クラッシュしました。問題解決のためにクラッシュログを共有しますか？</string>
+    <string name="crash_freq_dialog_message">RikkaMinis は過去 1 時間に複数回クラッシュしました。問題解決のためにクラッシュログを共有しますか？</string>
     <string name="crash_freq_dialog_share">ログを共有</string>
     <string name="crash_freq_dialog_dismiss">後で</string>
-    <string name="crash_freq_email_subject">Minis クラッシュレポート %1$s</string>
+    <string name="crash_freq_email_subject">RikkaMinis クラッシュレポート %1$s</string>
     <string name="crash_freq_share_chooser">クラッシュログを送信</string>
     <string name="image_action_copy">コピー</string>
     <string name="image_action_share">共有</string>
@@ -1075,7 +1075,7 @@
     <string name="voice_provider_system">システム</string>
     <string name="add_provider_subtitle_kimi">Kimi Coding Plan — Kimi アカウントでサインイン</string>
     <string name="kimi_login_title">Kimi Code でサインイン</string>
-    <string name="kimi_login_instructions">認証ページを開き、このコードを入力して Minis を許可してください:</string>
+    <string name="kimi_login_instructions">認証ページを開き、このコードを入力して RikkaMinis を許可してください:</string>
     <string name="kimi_login_copy_code">コードをコピー</string>
     <string name="kimi_login_open_verification">認証ページを開く</string>
     <string name="kimi_login_waiting">認証を待っています…</string>

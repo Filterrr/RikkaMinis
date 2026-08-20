@@ -65,7 +65,7 @@
     <string name="common_close">關閉</string>
     <string name="common_skip">跳過</string>
     <string name="common_next">下一步</string>
-    <string name="onboarding_welcome_title">歡迎使用 Minis</string>
+    <string name="onboarding_welcome_title">歡迎使用 RikkaMinis</string>
     <string name="onboarding_welcome_subtitle">集終端、瀏覽器與裝置本機存取於一身的 AI 助手。</string>
     <string name="onboarding_get_started">開始使用</string>
     <string name="onboarding_provider_title">新增提供方</string>
@@ -185,7 +185,7 @@
     <string name="browser_nav_forward">前進</string>
     <string name="browser_stop">停止</string>
     <string name="browser_reload">重新載入</string>
-    <string name="browser_minis_browsing">Minis 正在瀏覽</string>
+    <string name="browser_minis_browsing">RikkaMinis 正在瀏覽</string>
     <string name="chat_typing_indicator">%1$s 正在思考</string>
     <string name="chat_input_placeholder">傳訊息給 %1$s（@ 提及檔案）</string>
     <string name="browser_takeover">接管</string>
@@ -218,7 +218,7 @@
     <string name="browser_history_results">結果</string>
     <string name="browser_history_clear_dialog_title">清除瀏覽紀錄？</string>
     <string name="browser_history_clear_dialog_message">這將刪除所有瀏覽紀錄。此操作無法復原。</string>
-    <string name="terminal_title">Minis Shell</string>
+    <string name="terminal_title">RikkaMinis Shell</string>
     <string name="terminal_clear">清屏</string>
     <string name="terminal_show_keyboard">顯示</string>
     <string name="terminal_hide_keyboard">隱藏</string>
@@ -661,7 +661,7 @@
     <string name="logs_config_time_yesterday">昨天</string>
 
     <!-- Welcome / onboarding (T332) -->
-    <string name="sessionlist_welcome_title">歡迎使用 Minis</string>
+    <string name="sessionlist_welcome_title">歡迎使用 RikkaMinis</string>
     <string name="sessionlist_welcome_subtitle">你的第一個端側 Agent 即將就緒。</string>
     <string name="overlay_completion_completed">執行完成</string>
     <string name="overlay_completion_failed">執行失敗</string>
@@ -724,10 +724,10 @@
     <string name="update_error_open_releases">開啟 GitHub Releases</string>
     <!-- T-android-crash-freq-share -->
     <string name="crash_freq_dialog_title">偵測到多次崩潰</string>
-    <string name="crash_freq_dialog_message">Minis 在過去 1 小時內多次崩潰。是否分享崩潰日誌以協助修復？</string>
+    <string name="crash_freq_dialog_message">RikkaMinis 在過去 1 小時內多次崩潰。是否分享崩潰日誌以協助修復？</string>
     <string name="crash_freq_dialog_share">分享日誌</string>
     <string name="crash_freq_dialog_dismiss">暫不分享</string>
-    <string name="crash_freq_email_subject">Minis 崩潰報告 %1$s</string>
+    <string name="crash_freq_email_subject">RikkaMinis 崩潰報告 %1$s</string>
     <string name="crash_freq_share_chooser">傳送崩潰日誌</string>
     <string name="image_action_copy">複製</string>
     <string name="image_action_share">分享</string>
@@ -815,7 +815,7 @@
     <string name="system_permissions_a11y_oem_header">服務總是被終止？</string>
     <string name="system_permissions_a11y_oem_footer">%1$s 可能會提示「此服務出現故障」並在背景停止無障礙服務。請將本應用加入自啟動白名單，並取消省電限制，使其保持連線。</string>
     <string name="system_permissions_a11y_oem_autostart">加入自啟動白名單</string>
-    <string name="system_permissions_a11y_oem_autostart_sub">開啟自啟動管理並啟用 Minis</string>
+    <string name="system_permissions_a11y_oem_autostart_sub">開啟自啟動管理並啟用 RikkaMinis</string>
     <string name="system_permissions_a11y_oem_battery">取消背景 / 省電限制</string>
     <string name="system_permissions_a11y_oem_battery_sub">將耗電管理設為「無限制」</string>
     <string name="error_empty_response_generic">模型回傳了空回應。請重試或切換模型。</string>
@@ -836,7 +836,7 @@
     <string name="voice_provider_system">系統</string>
     <string name="add_provider_subtitle_kimi">Kimi Coding Plan — 使用 Kimi 帳號登入</string>
     <string name="kimi_login_title">使用 Kimi Code 登入</string>
-    <string name="kimi_login_instructions">開啟驗證頁面並輸入以下代碼以授權 Minis:</string>
+    <string name="kimi_login_instructions">開啟驗證頁面並輸入以下代碼以授權 RikkaMinis:</string>
     <string name="kimi_login_copy_code">複製代碼</string>
     <string name="kimi_login_open_verification">開啟驗證頁面</string>
     <string name="kimi_login_waiting">等待授權中…</string>
