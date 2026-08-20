@@ -624,4 +624,48 @@ class StableChatRowLedgerTest {
         assertEquals("no tracked live assistant after cancel", 0,
             ledger.activeAssistantIdsCount())
     }
+
+    // ── [fix/long-session-flatten-storm] P0: text rows stay segmenter-owned ──
+
+    @Test
+    fun `reconcile text rows match canonical build (dual-split removal is lossless)`() {
+        val msgId = "a1"
+        val ledger = StableChatRowLedger()
+        ledger.seed(emptyList(), 0)
+
+        // Streaming assistant message with mature multi-paragraph text — the
+        // exact shape that previously triggered a double markdown split per
+        // 80ms tick (buildNewMessageRows split the text, reconcileMessage
+        // threw those rows away, then the segmenter split it AGAIN). After the
+        // fix the segmenter is the single owner: text rows must still match
+        // the canonical full build byte-for-byte, including the paragraph
+        // split boundaries and the block/raw content.
+        val frames = listOf(
+            assistantMessage(msgId, blocks = listOf(textBlock("text_1_0", "Intro line")), isStreaming = true),
+            assistantMessage(msgId, blocks = listOf(textBlock("text_1_0", "Intro line\n\nPara two… and a tail")), isStreaming = true),
+        )
+        for (frame in frames) {
+            val live = listOf(userMessage("u1"), frame)
+            val rows = ledger.reconcile(live)
+            val md = rows.filterIsInstance<FlatChatItem.AssistantMarkdownBlock>()
+            val expectedRaw = buildFlatChatItems(live)
+                .filterIsInstance<FlatChatItem.AssistantMarkdownBlock>()
+                .map { it.rawText }
+            assertEquals(
+                "ledger text rows must remain byte-identical to the canonical split",
+                expectedRaw,
+                md.map { it.rawText },
+            )
+        }
+
+        // Terminal frame: split fully settled, keys stable, content intact.
+        val settled = listOf(
+            userMessage("u1"),
+            assistantMessage(msgId, blocks = listOf(textBlock("text_1_0", "Intro line\n\nPara two… and a tail")), isStreaming = false),
+        )
+        val rows = ledger.reconcile(settled)
+        val md = rows.filterIsInstance<FlatChatItem.AssistantMarkdownBlock>()
+        assertEquals(2, md.size)
+        assertEquals(listOf("Intro line", "Para two… and a tail"), md.map { it.rawText })
+    }
 }
