@@ -12,11 +12,11 @@ import java.util.Locale
  * these from the same package.
  */
 
-internal val stepTimestampFormatter: SimpleDateFormat =
-    SimpleDateFormat("HH:mm:ss", Locale.US)
-
+// [P5-thread-safety] SimpleDateFormat is not thread-safe; this used to be a
+// shared top-level instance. The "HH:mm:ss" pattern is cheap to build, so a
+// per-call instance removes the cross-thread hazard for free.
 internal fun formatStepTimestamp(epochMs: Long): String =
-    stepTimestampFormatter.format(Date(epochMs))
+    SimpleDateFormat("HH:mm:ss", Locale.US).format(Date(epochMs))
 
 internal fun formatStepDuration(seconds: Long, stillRunning: Boolean): String {
     val safe = seconds.coerceAtLeast(0L)
@@ -63,9 +63,11 @@ internal fun toolTitleLabel(toolName: String): String = when (toolName) {
 
 internal fun formatToolDuration(ms: Long): String {
     val seconds = ms / 1000.0
+    // [P4-locale] Pin Locale.US — the default locale renders "1,5s" with a
+    // comma decimal separator under de/ru and friends.
     return when {
-        seconds < 1 -> String.format("%.1fs", seconds)
-        seconds < 60 -> String.format("%.0fs", seconds)
+        seconds < 1 -> String.format(Locale.US, "%.1fs", seconds)
+        seconds < 60 -> String.format(Locale.US, "%.0fs", seconds)
         else -> {
             val m = (seconds / 60).toInt()
             val s = (seconds % 60).toInt()

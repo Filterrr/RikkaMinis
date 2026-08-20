@@ -15,6 +15,7 @@ import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import java.io.File
+import java.util.Locale
 
 /**
  * Lightweight CPU/memory sampler used for shell-tool live HUDs.
@@ -194,13 +195,14 @@ class SystemResourceMonitor {
         // bound so a transient negative tick delta doesn't leak through.
         // %.0f%% (no width) avoids reserving a column when the value is
         // 1- or 2-digit and overflowing visually when it's 3-digit.
-        String.format("CPU %.0f%%", cpuUsage.coerceAtLeast(0f))
+        // [P4-locale] Locale.US keeps the decimal point under de/ru.
+        String.format(Locale.US, "CPU %.0f%%", cpuUsage.coerceAtLeast(0f))
 
     fun formattedMem(compact: Boolean = false): String {
         val usedGB = memUsedBytes / 1_073_741_824.0
-        if (compact) return String.format("MEM %.1fG", usedGB)
+        if (compact) return String.format(Locale.US, "MEM %.1fG", usedGB)
         val totalGB = memTotalBytes / 1_073_741_824.0
-        return String.format("MEM %.1f/%.1f GB", usedGB, totalGB)
+        return String.format(Locale.US, "MEM %.1f/%.1f GB", usedGB, totalGB)
     }
 }
 

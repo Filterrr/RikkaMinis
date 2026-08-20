@@ -4,6 +4,9 @@ import android.media.MediaPlayer
 import android.util.Log
 import com.openminis.app.sandbox.PRootKernel
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 /**
  * Manages multiple concurrent MediaPlayer sessions keyed by session ID.
@@ -23,7 +26,18 @@ object MediaPlayerManager {
 
     enum class PlayerState { IDLE, PLAYING, PAUSED, STOPPED }
 
-    private val sessions = mutableMapOf<String, Session>()
+    // [P3-thread-safety] NativeOffload serves android-player calls from a
+    // bounded worker pool, so play/pause/stop can run concurrently for
+    // different sessions — the map must be concurrent.
+    private val sessions = ConcurrentHashMap<String, Session>()
+
+    // [P2-release] MediaPlayer fires onCompletion/onError on its own event
+    // thread; releasing a player from inside its own callback has a history
+    // of device-specific re-entrancy crashes, so teardown is posted to this
+    // single-thread executor.
+    private val releaseExecutor: ExecutorService = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "minis-player-release").apply { isDaemon = true }
+    }
 
     private val audioExtensions = setOf(
         "mp3", "wav", "ogg", "flac", "aac", "m4a", "wma", "opus", "amr", "mid", "midi",
@@ -75,18 +89,35 @@ object MediaPlayerManager {
                 state = PlayerState.PLAYING,
             )
 
+            // Register BEFORE wiring listeners so a callback that fires
+            // immediately (short file / decode error) can never race the
+            // map insert and leave a released session registered.
+            sessions[sessionId] = session
+
+            // [P2-release] Completed/errored players must be released and
+            // unregistered — the old code only flipped the state, leaking
+            // the MediaPlayer (native resources + fd) and growing `sessions`
+            // forever when the agent plays audio to its natural end.
+            // remove(key, value) keeps a newer session that play() stored
+            // under the same id in the meantime.
             player.setOnCompletionListener {
                 Log.d(TAG, "Playback completed: session=$sessionId")
                 session.state = PlayerState.STOPPED
+                releaseExecutor.execute {
+                    releaseSession(session)
+                    sessions.remove(sessionId, session)
+                }
             }
 
             player.setOnErrorListener { _, what, extra ->
                 Log.e(TAG, "MediaPlayer error: session=$sessionId what=$what extra=$extra")
                 session.state = PlayerState.STOPPED
+                releaseExecutor.execute {
+                    releaseSession(session)
+                    sessions.remove(sessionId, session)
+                }
                 true
             }
-
-            sessions[sessionId] = session
 
             val durationMs = player.duration
             val durationStr = formatDuration(durationMs)

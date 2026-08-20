@@ -3,6 +3,7 @@ package com.openminis.app.data.routing
 import com.openminis.app.data.model.ModelEntry
 import com.openminis.app.data.model.ModelGroup
 import com.openminis.app.data.model.RoutingStrategy
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Pure-JVM group routing engine — decides "which member to use now" and "in
@@ -23,7 +24,12 @@ class GroupRouter(
     /** Clock in epoch-millis (default: System.currentTimeMillis). */
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
-    private val health = mutableMapOf<String, MemberHealth>()
+    // [P4-thread-safety] recordResult runs on the agent loop's IO dispatcher
+    // while select/clearHealth are called from the Main thread (config
+    // changes, explicit group picks) — a plain HashMap can crash a reader
+    // mid-resize. The compute-style update below keeps the failure counter
+    // atomic under concurrent recordResult calls.
+    private val health = ConcurrentHashMap<String, MemberHealth>()
 
     // ── selection ──────────────────────────────────────────────────────────
 
@@ -166,12 +172,11 @@ class GroupRouter(
                 health[entryId] = MemberHealth.Cooling(untilMs)
             }
 
-            RouteOutcome.ServerError -> {
-                val current = health[entryId]
+            RouteOutcome.ServerError -> health.compute(entryId) { _, current ->
                 val failures = if (current is MemberHealth.OpenCircuit) current.failures + 1 else 1
                 // Below threshold: OpenCircuit(now) is immediately usable but
                 // carries the counter. At threshold: circuit opens for real.
-                health[entryId] = MemberHealth.OpenCircuit(
+                MemberHealth.OpenCircuit(
                     untilMs = if (failures >= CIRCUIT_FAILURE_THRESHOLD) now + CIRCUIT_OPEN_MS else now,
                     failures = failures,
                 )
@@ -179,9 +184,11 @@ class GroupRouter(
 
             RouteOutcome.AuthError -> health[entryId] = MemberHealth.Dead
         }
-        // Bounded memory: drop the oldest entries beyond the cap (simple FIFO).
-        if (health.size > MAX_HEALTH_ENTRIES) {
-            val eldest = health.keys.firstOrNull() ?: return
+        // Bounded memory: drop an arbitrary entry beyond the cap (CHM's
+        // iteration order is unspecified — an approximate FIFO, which is all
+        // "stale members must not leak memory" needs).
+        while (health.size > MAX_HEALTH_ENTRIES) {
+            val eldest = health.keys.firstOrNull() ?: break
             health.remove(eldest)
         }
     }

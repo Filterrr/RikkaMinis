@@ -63,10 +63,26 @@ object ReadImageTool {
                 return ToolExecutionResult("Error: File not found: $path", false, toolTitle = toolTitle)
             }
 
-            val original = BitmapFactory.decodeFile(file.absolutePath)
-                ?: return ToolExecutionResult("Error: Cannot decode image: $path", false, toolTitle = toolTitle)
-
+            // [P1-oom] Two-phase decode: read the bounds first, then decode
+            // with inSampleSize. A single full-resolution decode allocates
+            // width×height×4 bytes up front — a 12000×9000 photo is ~432 MB
+            // and OOM-kills the app before the maxEdge downscale below ever
+            // runs. Sampling to ~maxEdge bounds peak memory to roughly
+            // maxEdge²×4 bytes regardless of source size.
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(file.absolutePath, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+                return ToolExecutionResult("Error: Cannot decode image: $path", false, toolTitle = toolTitle)
+            }
             val maxEdge = 2000
+            var inSampleSize = 1
+            while (maxOf(bounds.outWidth, bounds.outHeight) / (inSampleSize * 2) >= maxEdge) {
+                inSampleSize *= 2
+            }
+            val original = BitmapFactory.decodeFile(
+                file.absolutePath,
+                BitmapFactory.Options().apply { this.inSampleSize = inSampleSize },
+            ) ?: return ToolExecutionResult("Error: Cannot decode image: $path", false, toolTitle = toolTitle)
             val scaled = if (original.width > maxEdge || original.height > maxEdge) {
                 val scale = maxEdge.toFloat() / maxOf(original.width, original.height)
                 val w = (original.width * scale).toInt()
@@ -83,7 +99,9 @@ object ReadImageTool {
             if (scaled !== original) scaled.recycle()
             original.recycle()
 
-            val metadata = "[$path | ${original.width}x${original.height} | ${file.length()} bytes]"
+            // Report the TRUE source dimensions (from the bounds pass), not
+            // the sampled decode's.
+            val metadata = "[$path | ${bounds.outWidth}x${bounds.outHeight} | ${file.length()} bytes]"
             ToolExecutionResult(
                 output = metadata,
                 success = true,

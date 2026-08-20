@@ -78,38 +78,99 @@ object FileReadTool {
                 )
             }
 
-            val allLines = file.readLines()
-            val totalLines = allLines.size
-
+            // [P3-negatives] A non-positive `lines` used to reach subList()
+            // with fromIndex > toIndex and surfaced as a cryptic
+            // "Error reading file: fromIndex > toIndex".
             val requestedLines = if (args.has("lines")) args.optInt("lines") else null
+            if (requestedLines != null && requestedLines <= 0) {
+                return ToolExecutionResult("Error: 'lines' must be a positive integer", false, toolTitle = toolTitle)
+            }
 
-            val selectedLines = if (direction == "tail") {
-                val count = requestedLines ?: totalLines
-                val start = (totalLines - count).coerceAtLeast(0)
-                allLines.subList(start, totalLines)
-            } else {
-                val start = (offset - 1).coerceIn(0, totalLines)
-                val end = if (requestedLines != null) {
-                    (start + requestedLines).coerceAtMost(totalLines)
-                } else {
-                    totalLines
+            // [P2-oom] Stream the file instead of file.readLines(): the old
+            // path materialized EVERY line before slicing the window, so a
+            // multi-hundred-MB log OOM-killed the app even though the reply
+            // is capped at MAX_LENGTH_HARD_CAP. One streaming pass counts
+            // lines and retains only the selected window — head skips to
+            // offset and stops collecting once the char budget is spent;
+            // tail keeps a ring buffer of the last `lines` entries bounded
+            // by the same budget. Peak memory is proportional to the reply,
+            // not the file.
+            var totalLines = 0
+            var windowChars = 0L
+            var cutShort = false
+            val window = ArrayDeque<String>()
+
+            file.bufferedReader().useLines { lineSeq ->
+                for (line in lineSeq) {
+                    totalLines++
+                    // A single line longer than the whole reply budget can
+                    // never contribute more than maxLength chars — truncate
+                    // on ingest so one pathological line can't blow memory.
+                    val stored = if (line.length > maxLength) {
+                        cutShort = true
+                        line.take(maxLength)
+                    } else {
+                        line
+                    }
+                    if (direction == "tail") {
+                        if (requestedLines == null) {
+                            // tail without a count selected the whole file and
+                            // was then truncated from the front — equivalent to
+                            // the first maxLength chars of the file.
+                            if (windowChars <= maxLength) {
+                                window.addLast(stored)
+                                windowChars += stored.length + 1L
+                            } else {
+                                cutShort = true
+                            }
+                        } else {
+                            window.addLast(stored)
+                            windowChars += stored.length + 1L
+                            while (window.size > requestedLines) {
+                                val evicted = window.removeFirst()
+                                windowChars -= evicted.length + 1L
+                            }
+                            while (windowChars > maxLength && window.size > 1) {
+                                val evicted = window.removeFirst()
+                                windowChars -= evicted.length + 1L
+                                cutShort = true
+                            }
+                        }
+                    } else {
+                        val withinLineLimit = requestedLines == null || window.size < requestedLines
+                        if (totalLines >= offset && withinLineLimit) {
+                            if (windowChars > maxLength) {
+                                cutShort = true
+                            } else {
+                                window.addLast(stored)
+                                windowChars += stored.length + 1L
+                            }
+                        }
+                    }
                 }
-                allLines.subList(start, end)
             }
 
-            val showStart = if (direction == "tail") {
-                (totalLines - selectedLines.size) + 1
+            // Logical selection (what the header reports) — computed from the
+            // counts, independent of the char-budget trimming above.
+            val logicalSelected = if (direction == "tail") {
+                minOf(requestedLines ?: totalLines, totalLines)
             } else {
-                offset
+                minOf(requestedLines ?: totalLines, (totalLines - offset + 1).coerceAtLeast(0))
             }
-            val showEnd = showStart + selectedLines.size - 1
+            val showStart = if (direction == "tail") totalLines - logicalSelected + 1 else offset
+            val showEnd = showStart + logicalSelected - 1
+            val rangeText = if (logicalSelected > 0) {
+                "showing $showStart-$showEnd of $totalLines"
+            } else {
+                "showing 0 of $totalLines"
+            }
 
-            var content = selectedLines.joinToString("\n")
-            if (content.length > maxLength) {
+            var content = window.joinToString("\n")
+            if (content.length > maxLength || cutShort) {
                 content = content.take(maxLength) + "\n... (truncated)"
             }
 
-            val header = "[$path | $size bytes | $totalLines lines | showing $showStart-$showEnd of $totalLines]"
+            val header = "[$path | $size bytes | $totalLines lines | $rangeText]"
             ToolExecutionResult("$header\n$content", true, toolTitle = toolTitle)
         } catch (e: Exception) {
             ToolExecutionResult("Error reading file: ${e.message}", false)

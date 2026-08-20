@@ -1,5 +1,7 @@
 package com.openminis.app.browser
 
+import java.util.Locale
+
 /**
  * Pure utility functions extracted from [BrowserUseManager] so they can be
  * JVM-unit-tested without Android dependencies.
@@ -65,8 +67,9 @@ internal fun extensionForMimeType(mime: String): String {
  */
 internal fun formatBytes(bytes: Int): String = when {
     bytes < 1024 -> "$bytes B"
-    bytes < 1024 * 1024 -> "%.1f KB".format(bytes / 1024.0)
-    else -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
+    // [P4-locale] Locale.US keeps the decimal point under de/ru.
+    bytes < 1024 * 1024 -> "%.1f KB".format(Locale.US, bytes / 1024.0)
+    else -> "%.1f MB".format(Locale.US, bytes / (1024.0 * 1024.0))
 }
 
 /**

@@ -12,6 +12,7 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.provider.OpenableColumns
 import java.io.File
+import java.util.Locale
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.asAndroidBitmap
@@ -1525,7 +1526,7 @@ private fun EditorCard(
     val bytes = bodyText.toByteArray(Charsets.UTF_8).size
     val sizeLabel = when {
         bodyText.isEmpty() -> null
-        bytes >= 1024 -> String.format("%.1f KB", bytes / 1024.0)
+        bytes >= 1024 -> String.format(Locale.US, "%.1f KB", bytes / 1024.0)
         else -> "$bytes B"
     }
     // Match iOS fileEditorContent (ToolLiveSheet.swift:1350) instead of the

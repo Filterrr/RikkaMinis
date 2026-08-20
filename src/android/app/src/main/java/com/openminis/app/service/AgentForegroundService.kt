@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 /**
  * Foreground service that displays a persistent notification while agent sessions
@@ -622,7 +623,7 @@ class AgentForegroundService : Service() {
         val elapsedSeconds = (elapsedMs / 1000).toInt()
         val minutes = elapsedSeconds / 60
         val seconds = elapsedSeconds % 60
-        val timeString = String.format("%d:%02d", minutes, seconds)
+        val timeString = String.format(Locale.US, "%d:%02d", minutes, seconds)
 
         val mainIntent = Intent(this, Class.forName("com.openminis.app.MainActivity")).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP

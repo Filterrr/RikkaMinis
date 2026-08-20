@@ -12,6 +12,7 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.provider.OpenableColumns
 import java.io.File
+import java.util.Locale
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.asAndroidBitmap
@@ -713,8 +714,8 @@ internal fun ToolCallPill(
     // Duration text (iOS: "0.4s" format)
     val durationText = if (block.durationMs > 0 && !isRunning) {
         val seconds = block.durationMs / 1000.0
-        if (seconds < 10) String.format("%.1fs", seconds)
-        else String.format("%.0fs", seconds)
+        if (seconds < 10) String.format(Locale.US, "%.1fs", seconds)
+        else String.format(Locale.US, "%.0fs", seconds)
     } else null
 
     // T125: drop the spinner that used to replace the tool icon while

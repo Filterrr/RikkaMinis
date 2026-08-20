@@ -66,6 +66,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CoroutineScope
 import androidx.compose.runtime.rememberCoroutineScope
+import java.util.Locale
 
 private const val TAG = "QuickTest"
 
@@ -401,7 +402,8 @@ private fun AudioReplyContent(data: ByteArray) {
             )
         }
         Text(
-            "%.1f KB".format(data.size / 1024.0),
+            // [P4-locale] Locale.US keeps the decimal point under de/ru.
+            "%.1f KB".format(Locale.US, data.size / 1024.0),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

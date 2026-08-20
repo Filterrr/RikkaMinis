@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.openminis.app.R
 import com.openminis.app.data.model.LLMModel
+import java.util.Locale
 
 /**
  * Session Token Usage bottom sheet — mirrors iOS `TokenUsageSheet` and uses
@@ -209,9 +210,10 @@ private fun StatRow(label: String, value: String) {
 }
 
 // iOS formatting: "%.1fM" >= 1M, "%.1fK" >= 1k, raw otherwise.
+// [P4-locale] Locale.US keeps the decimal point under de/ru.
 private fun formatTokens(n: Long): String = when {
-    n >= 1_000_000L -> String.format("%.1fM", n / 1_000_000.0)
-    n >= 1_000L -> String.format("%.1fK", n / 1_000.0)
+    n >= 1_000_000L -> String.format(Locale.US, "%.1fM", n / 1_000_000.0)
+    n >= 1_000L -> String.format(Locale.US, "%.1fK", n / 1_000.0)
     else -> n.toString()
 }
 

@@ -531,9 +531,10 @@ class MemoryRepository(private val memoryDir: File) {
     private fun formatFileSize(bytes: Long): String {
         if (bytes < 1024) return "$bytes B"
         val kb = bytes / 1024.0
-        if (kb < 1024) return "%.1f KB".format(kb)
+        // [P4-locale] Locale.US keeps the decimal point under de/ru.
+        if (kb < 1024) return "%.1f KB".format(Locale.US, kb)
         val mb = kb / 1024.0
-        return "%.1f MB".format(mb)
+        return "%.1f MB".format(Locale.US, mb)
     }
 
     /**
