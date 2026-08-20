@@ -70,7 +70,7 @@
 
     <!-- T67: Voice permission settings-gate dialog (shown when RECORD_AUDIO is permanently denied) -->
     <string name="mic_permission_title">Microphone permission needed</string>
-    <string name="mic_permission_message">Voice input needs microphone permission. Tap Open Settings to allow it for Minis.</string>
+    <string name="mic_permission_message">Voice input needs microphone permission. Tap Open Settings to allow it for RikkaMinis.</string>
     <string name="mic_permission_open_settings">Open Settings</string>
     <string name="mic_permission_cancel">Cancel</string>
 
@@ -84,7 +84,7 @@
     <string name="bg_overlay_nudge_channel_name">Background Overlay Permission</string>
     <string name="bg_overlay_nudge_channel_description">Reminds you to grant the system overlay permission so the background task overlay can appear.</string>
     <string name="bg_overlay_nudge_title">Enable background overlay</string>
-    <string name="bg_overlay_nudge_body">Grant "Display over other apps" to let Minis show the current tool while you switch to another app. Tap to open the permission screen.</string>
+    <string name="bg_overlay_nudge_body">Grant "Display over other apps" to let RikkaMinis show the current tool while you switch to another app. Tap to open the permission screen.</string>
     <!-- T-android-overlay-reply-status-34599 — manual-dismiss button on the floating overlay -->
     <string name="overlay_dismiss">Dismiss</string>
     <!-- T-android-overlay-finalize item 3 — completion fallback labels -->
@@ -92,7 +92,7 @@
     <string name="overlay_completion_failed">Failed</string>
     <string name="overlay_completion_cancelled">Cancelled</string>
     <string name="overlay_completion_timeout">Timed out</string>
-    <string name="bg_service_notification_title">Minis Agent Active</string>
+    <string name="bg_service_notification_title">RikkaMinis Agent Active</string>
     <string name="bg_service_notification_text">%1$s | %2$s | %3$s</string>
     <string name="bg_service_stop_action">Stop</string>
     <plurals name="bg_service_sessions">
@@ -103,11 +103,11 @@
     <string name="battery_opt_section_footer">When exempted, Android won\'t put the app to sleep mid-task. Re-checked on each return to this screen.</string>
     <string name="battery_opt_row_title">Allow background work</string>
     <string name="battery_opt_already_exempt">Already allowed</string>
-    <string name="battery_opt_request_subtitle">Tap to allow Minis to run uninterrupted</string>
+    <string name="battery_opt_request_subtitle">Tap to allow RikkaMinis to run uninterrupted</string>
     <string name="rom_autostart_section_title">Autostart permission</string>
-    <string name="rom_autostart_section_footer">Some Android skins (%1$s) require an extra autostart permission on top of the standard system settings. Without it, Minis can be killed within minutes of going to background.</string>
+    <string name="rom_autostart_section_footer">Some Android skins (%1$s) require an extra autostart permission on top of the standard system settings. Without it, RikkaMinis can be killed within minutes of going to background.</string>
     <string name="rom_autostart_row_title">Open autostart settings</string>
-    <string name="rom_autostart_row_subtitle">Enable Minis on %1$s</string>
+    <string name="rom_autostart_row_subtitle">Enable RikkaMinis on %1$s</string>
 
     <!-- T68: Browser settings — UA list "Not set" placeholder for empty Custom UA -->
     <string name="browser_settings_ua_not_set">Not set</string>
@@ -317,7 +317,7 @@
     <string name="common_close">Close</string>
     <string name="common_skip">Skip</string>
     <string name="common_next">Next</string>
-    <string name="onboarding_welcome_title">Welcome to Minis</string>
+    <string name="onboarding_welcome_title">Welcome to RikkaMinis</string>
     <string name="onboarding_welcome_subtitle">Your AI agent with terminal, browser, and native device access.</string>
     <string name="onboarding_get_started">Get Started</string>
     <string name="onboarding_provider_title">Add a Provider</string>
@@ -451,10 +451,10 @@
     <string name="browser_nav_forward">Forward</string>
     <string name="browser_stop">Stop</string>
     <string name="browser_reload">Reload</string>
-    <string name="browser_minis_browsing">Minis is browsing</string>
-    <!-- Streaming indicator shown while the assistant is composing a reply. %1$s is the Soul-customized assistant name (default "Minis"). -->
+    <string name="browser_minis_browsing">RikkaMinis is browsing</string>
+    <!-- Streaming indicator shown while the assistant is composing a reply. %1$s is the Soul-customized assistant name (default "RikkaMinis"). -->
     <string name="chat_typing_indicator">%1$s is thinking</string>
-    <!-- Composer placeholder. %1$s is the Soul-customized assistant name (default "Minis"). The parenthetical is an inline hint reminding the user that typing '@' opens the file-mention picker. T-android-placeholder-single-line collapses the prior two-row (title + hint) layout into a single line, matching iOS 19e1d61f. -->
+    <!-- Composer placeholder. %1$s is the Soul-customized assistant name (default "RikkaMinis"). The parenthetical is an inline hint reminding the user that typing '@' opens the file-mention picker. T-android-placeholder-single-line collapses the prior two-row (title + hint) layout into a single line, matching iOS 19e1d61f. -->
     <string name="chat_input_placeholder">Message %1$s (@ to mention files)</string>
     <string name="chat_attachment_limit">Only the first %1$d items were attached.</string>
     <string name="browser_takeover">Takeover</string>
@@ -487,7 +487,7 @@
     <string name="browser_history_results">Results</string>
     <string name="browser_history_clear_dialog_title">Clear Browsing History?</string>
     <string name="browser_history_clear_dialog_message">This will remove all browsing history. This cannot be undone.</string>
-    <string name="terminal_title">Minis Shell</string>
+    <string name="terminal_title">RikkaMinis Shell</string>
     <string name="terminal_clear">Clear</string>
     <string name="terminal_show_keyboard">Show</string>
     <string name="terminal_hide_keyboard">Hide</string>
@@ -660,20 +660,20 @@
     <string name="shizuku_title">Shizuku</string>
     <string name="shizuku_settings_subtitle">Privileged Android control via Shizuku or AXManager</string>
     <string name="shizuku_status_header">Status</string>
-    <string name="shizuku_status_footer">Shizuku exposes privileged system APIs to user apps without root, by running a small service started via wireless ADB or root. Two compatible manager apps are supported — Shizuku (RikkaApps) and AXManager (Axeron); install either one. Once authorized, Minis can use the android-shizuku-cli CLI for package, permission, settings, input, and activity management.</string>
+    <string name="shizuku_status_footer">Shizuku exposes privileged system APIs to user apps without root, by running a small service started via wireless ADB or root. Two compatible manager apps are supported — Shizuku (RikkaApps) and AXManager (Axeron); install either one. Once authorized, RikkaMinis can use the android-shizuku-cli CLI for package, permission, settings, input, and activity management.</string>
     <string name="shizuku_actions_header">Next Step</string>
     <string name="shizuku_capabilities_header">Capabilities</string>
     <string name="shizuku_capabilities_footer">android-shizuku-cli exposes the full subcommand surface: package, permission, activity, display, settings, user, network, input, notification, file, device, service. Run `android-shizuku-cli --help` from a shell to see usage.</string>
     <string name="shizuku_install_footer">Install either Shizuku (RikkaApps) or AXManager (Axeron) — both implement the same protocol and are fully interchangeable. Pick one, install from GitHub releases, then return here.</string>
-    <string name="shizuku_start_footer">Open the manager app and start the service via wireless ADB (no PC) or root. After it shows running, return here.\n\nUsing AXManager? Also enable Settings → "AX-Permission Intercept" inside AXManager — only that switch makes AXManager push its Shizuku-compatible binder to Minis.</string>
-    <string name="shizuku_grant_footer">The service is running. Tap Authorize Minis to grant access. A system dialog from the manager app will ask you to confirm.</string>
+    <string name="shizuku_start_footer">Open the manager app and start the service via wireless ADB (no PC) or root. After it shows running, return here.\n\nUsing AXManager? Also enable Settings → "AX-Permission Intercept" inside AXManager — only that switch makes AXManager push its Shizuku-compatible binder to RikkaMinis.</string>
+    <string name="shizuku_grant_footer">The service is running. Tap Authorize RikkaMinis to grant access. A system dialog from the manager app will ask you to confirm.</string>
 
     <string name="shizuku_state_not_installed">Manager Not Installed</string>
     <string name="shizuku_state_not_installed_subtitle">Install Shizuku or AXManager — either one works.</string>
     <string name="shizuku_state_not_running">Service Not Running</string>
     <string name="shizuku_state_not_running_subtitle">Open the manager app and press Start.</string>
     <string name="shizuku_state_need_permission">Authorization Required</string>
-    <string name="shizuku_state_need_permission_subtitle">The service is running but Minis is not authorized.</string>
+    <string name="shizuku_state_need_permission_subtitle">The service is running but RikkaMinis is not authorized.</string>
     <string name="shizuku_state_ready">Ready</string>
     <string name="shizuku_ready_subtitle">version=%1$d, uid=%2$d</string>
 
@@ -690,7 +690,7 @@
     <string name="shizuku_open_btn_subtitle">Launch the installed manager to start or manage the service</string>
     <string name="shizuku_recheck_btn">Recheck</string>
     <string name="shizuku_recheck_subtitle">Re-poll state after starting the service</string>
-    <string name="shizuku_grant_btn">Authorize Minis</string>
+    <string name="shizuku_grant_btn">Authorize RikkaMinis</string>
     <string name="shizuku_grant_subtitle">Show the permission dialog</string>
 
     <!-- [T-android-privileged-backend] Privileged backend (Shizuku / AXManager) -->
@@ -768,7 +768,7 @@
     <string name="storage_overview_sessions">Session Files</string>
     <string name="storage_section_sessions">Sessions</string>
     <string name="storage_no_sessions">No sessions</string>
-    <string name="storage_section_minis_files">Minis Files</string>
+    <string name="storage_section_minis_files">RikkaMinis Files</string>
     <string name="storage_no_minis_files">No minis files</string>
     <string name="storage_section_media">Media Files</string>
     <string name="storage_no_media_files">No media files</string>
@@ -852,7 +852,7 @@
     <string name="provider_import_success">Imported provider \"%1$s\"</string>
     <string name="provider_import_invalid_file">Invalid provider configuration file</string>
     <string name="provider_import_read_error">Failed to read file</string>
-    <!-- [T-android-json-open-provider-import-prompt] Shown when a JSON opened/shared into Minis looks like a Provider export. -->
+    <!-- [T-android-json-open-provider-import-prompt] Shown when a JSON opened/shared into RikkaMinis looks like a Provider export. -->
     <string name="share_provider_json_title">Provider configuration detected</string>
     <string name="share_provider_json_message">This JSON file looks like an exported provider. What would you like to do?</string>
     <string name="share_provider_json_import">Import Provider</string>
@@ -1086,8 +1086,8 @@
     <string name="notif_config_confirm_channel_name">Config Approvals</string>
     <string name="notif_config_confirm_channel_description">Notifies when a configuration change is waiting for your approval while the app is backgrounded.</string>
     <string name="notif_config_confirm_title">⚙️ Config change awaiting approval</string>
-    <string name="notif_config_confirm_body_single">A change needs your review — open Minis to approve or reject.</string>
-    <string name="notif_config_confirm_body_multi">%d changes need your review — open Minis to approve or reject.</string>
+    <string name="notif_config_confirm_body_single">A change needs your review — open RikkaMinis to approve or reject.</string>
+    <string name="notif_config_confirm_body_multi">%d changes need your review — open RikkaMinis to approve or reject.</string>
     <string name="notif_task_failed_body">Task ended with an error. Tap to open the chat.</string>
 
     <!-- T-selection-add-to-input — long-press text selection menu action -->
@@ -1109,7 +1109,7 @@
 
     <!-- T-bg-overlay phase 2 — floating tool-status overlay toggle. -->
     <string name="settings_bg_overlay">Background Task Overlay</string>
-    <string name="settings_bg_overlay_footer">Show a small floating capsule with the current tool while Minis is in the background. Requires permission to display over other apps. Tap the capsule to bring Minis to the foreground; drag to move it.</string>
+    <string name="settings_bg_overlay_footer">Show a small floating capsule with the current tool while RikkaMinis is in the background. Requires permission to display over other apps. Tap the capsule to bring RikkaMinis to the foreground; drag to move it.</string>
     <string name="settings_bg_overlay_permission_needed">Allow drawing over other apps to enable</string>
     <!-- [T-android-dynamic-island] Android 16 Live Updates / dynamic-island toggle. -->
 
@@ -1371,23 +1371,23 @@
     <string name="system_permissions_title">System Permissions</string>
     <string name="system_permissions_subtitle">OS-level permissions granted from system Settings</string>
     <string name="system_permissions_section_a11y">Accessibility</string>
-    <string name="system_permissions_a11y_row">Minis Accessibility Service</string>
+    <string name="system_permissions_a11y_row">RikkaMinis Accessibility Service</string>
     <string name="system_permissions_a11y_enabled">Enabled — android-a11y-cli is ready</string>
     <string name="system_permissions_a11y_disabled">Disabled — tap to enable in system Settings</string>
-    <string name="system_permissions_a11y_footer">Required by android-a11y-cli for UI-tree reads, gesture injection, and event monitoring. Without this, AI agents cannot drive other apps. Toggle the switch under Minis on the next screen.</string>
+    <string name="system_permissions_a11y_footer">Required by android-a11y-cli for UI-tree reads, gesture injection, and event monitoring. Without this, AI agents cannot drive other apps. Toggle the switch under RikkaMinis on the next screen.</string>
     <string name="system_permissions_a11y_oem_header">Service keeps getting killed?</string>
     <string name="system_permissions_a11y_oem_footer">%1$s may show \"this service has failed\" and stop the accessibility service in the background. Whitelist autostart and remove the battery restriction so it stays connected.</string>
     <string name="system_permissions_a11y_oem_autostart">Add to autostart whitelist</string>
-    <string name="system_permissions_a11y_oem_autostart_sub">Open the autostart manager and enable Minis</string>
+    <string name="system_permissions_a11y_oem_autostart_sub">Open the autostart manager and enable RikkaMinis</string>
     <string name="system_permissions_a11y_oem_battery">Remove background / battery restriction</string>
     <string name="system_permissions_a11y_oem_battery_sub">Set battery usage to \"No restrictions\"</string>
-    <string name="a11y_service_label">Minis Accessibility</string>
-    <string name="a11y_service_description">Lets Minis read on-screen UI structure, perform taps and gestures, and receive system events on behalf of AI agents invoking android-a11y-cli.</string>
-    <string name="a11y_service_summary">UI-layer automation backend for Minis</string>
+    <string name="a11y_service_label">RikkaMinis Accessibility</string>
+    <string name="a11y_service_description">Lets RikkaMinis read on-screen UI structure, perform taps and gestures, and receive system events on behalf of AI agents invoking android-a11y-cli.</string>
+    <string name="a11y_service_summary">UI-layer automation backend for RikkaMinis</string>
     <string name="back">Back</string>
 
     <!-- Welcome / onboarding (T332) -->
-    <string name="sessionlist_welcome_title">Welcome to Minis</string>
+    <string name="sessionlist_welcome_title">Welcome to RikkaMinis</string>
     <string name="sessionlist_welcome_subtitle">Your first On-Device Agent is almost ready.</string>
     <string name="sessionlist_welcome_step1_title">Add a Provider</string>
     <string name="sessionlist_welcome_step1_subtitle">Configure an API key or sign in with OAuth</string>
@@ -1400,7 +1400,7 @@
     <string name="sessionlist_welcome_step_done">Done</string>
 
     <!-- T-pwa-1: WebApp shortcut foundation (renamed from PWA) -->
-    <string name="webapp_activity_label">Minis WebApp</string>
+    <string name="webapp_activity_label">RikkaMinis WebApp</string>
     <string name="webapp_source_missing">Source file no longer exists.</string>
     <string name="webapp_external_nav_blocked">External navigation blocked.</string>
     <string name="webapp_pin_unsupported">Pin shortcut not supported on this launcher.</string>
@@ -1415,7 +1415,7 @@
     <string name="webapp_pin_success">Added to home screen</string>
     <string name="webapp_source_missing_title">Source file no longer exists</string>
     <string name="webapp_source_missing_body">The file backing this shortcut was moved or deleted.</string>
-    <string name="webapp_open_in_minis">Open in Minis</string>
+    <string name="webapp_open_in_minis">Open in RikkaMinis</string>
     <!-- T-pwa-preview-polish: floating toolbar -->
     <string name="webapp_action_close">Close</string>
     <string name="webapp_action_fullscreen">Enter fullscreen</string>
@@ -1452,11 +1452,11 @@
     <string name="update_error_open_releases">Open GitHub Releases</string>
     <!-- T-android-crash-freq-share -->
     <string name="crash_freq_dialog_title">Multiple crashes detected</string>
-    <string name="crash_freq_dialog_message">Minis has crashed several times in the last hour. Share crash logs to help fix the issue?</string>
+    <string name="crash_freq_dialog_message">RikkaMinis has crashed several times in the last hour. Share crash logs to help fix the issue?</string>
     <string name="crash_freq_dialog_share">Share logs</string>
     <string name="crash_freq_dialog_dismiss">Not now</string>
-    <string name="crash_freq_email_subject">Minis Crash Report %1$s</string>
-    <string name="crash_freq_email_body">Crash log zip is attached. Device model, Minis version, and timestamp are included inside.</string>
+    <string name="crash_freq_email_subject">RikkaMinis Crash Report %1$s</string>
+    <string name="crash_freq_email_body">Crash log zip is attached. Device model, RikkaMinis version, and timestamp are included inside.</string>
     <string name="crash_freq_share_chooser">Send crash logs</string>
     <string name="crash_freq_pick_files_title">Multiple recent crashes detected — share the logs below with the developer?</string>
     <string name="crash_freq_pick_continue">Continue</string>
@@ -1519,7 +1519,7 @@
     <string name="voice_provider_system">System</string>
     <string name="add_provider_subtitle_kimi">Kimi Coding Plan — sign in with your Kimi account</string>
     <string name="kimi_login_title">Sign in with Kimi Code</string>
-    <string name="kimi_login_instructions">Open the verification page and enter this code to authorize Minis:</string>
+    <string name="kimi_login_instructions">Open the verification page and enter this code to authorize RikkaMinis:</string>
     <string name="kimi_login_copy_code">Copy code</string>
     <string name="kimi_login_open_verification">Open verification page</string>
     <string name="kimi_login_waiting">Waiting for authorization…</string>
