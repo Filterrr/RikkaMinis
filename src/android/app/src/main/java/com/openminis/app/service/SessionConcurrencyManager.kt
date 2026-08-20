@@ -1,5 +1,6 @@
 package com.openminis.app.service
 
+import android.util.Log
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -28,13 +29,21 @@ import kotlin.coroutines.resume
  * 去重是展示层行为，不影响内部按 runId 的精确并发控制）。
  */
 object SessionConcurrencyManager {
-    // [native-rss-tool-guard] 与 ExecutionCoordinator.MAX_CONCURRENT_SHELLS 对齐。
-    // 2026-08-19 现场：多个并发 agent 会话共享主进程 native/mmap 资源，
-    // 可在几分钟内把主进程 RSS 推到 5.8–6.0GB 并触发 SIGABRT。把第三个
-    // agent loop 排队，先保证系统不会被并发工具流量拖到 native OOM。
-    const val MAX_CONCURRENT = 2
+    // [native-rss-tool-guard / D-2] 与 ExecutionCoordinator / NativeOffloadServer
+    // 三处对齐的跨会话并发上限。2026-08-19 现场：多个并发 agent 会话共享主进程
+    // native/mmap 资源，可在几分钟内把主进程 RSS 推到 5.8–6.0GB 并触发 SIGABRT。
+    // Phase 0 先钳到 2 槽；D-2 参数化为 [ConcurrencyPrefs] 可配置 + 可观测，让用户
+    // 长期用 2 槽、读出占用后评估放宽到 3。默认值保持 2（与 Phase 0 一致），
+    // 三处仍共用同一配置源，避免单点放松导致其他路径冲破内存预算。
+    val maxConcurrent: Int get() = com.openminis.app.data.ConcurrencyPrefs.maxConcurrentSessions()
 
-    private val controller = SessionSlotController(maxConcurrent = MAX_CONCURRENT)
+    /** 关键打点 tag —— 真机 `logcat -b all | grep 'concurrency'` 观测槽占用。 */
+    private const val TAG = "ConcurrencyProbe"
+
+    // 延迟到首次访问（Prime 已跑后）构造，容量从配置读；运行期不再重建。
+    private val controller: SessionSlotController by lazy {
+        SessionSlotController(maxConcurrent = maxConcurrent)
+    }
 
     private val _runningSessions = MutableStateFlow<Set<String>>(emptySet())
     val runningSessions: StateFlow<Set<String>> = _runningSessions.asStateFlow()
@@ -82,6 +91,7 @@ object SessionConcurrencyManager {
         }
 
         val runId = controller.newRunId()
+        val queuedForLog = BooleanArray(1)
         val outcome: SessionSlotController.AcquireOutcome = synchronized(this) {
             val r = controller.acquire(runId)
             when (r) {
@@ -90,6 +100,7 @@ object SessionConcurrencyManager {
                     activeRunIdsBySession.getOrPut(sessionId) { ArrayDeque() }.addLast(runId)
                 }
                 is SessionSlotController.AcquireOutcome.Queued -> {
+                    queuedForLog[0] = true
                     _suspendedSessions.value = _suspendedSessions.value + sessionId
                     pending[runId] = PendingRun(sessionId, runId)
                 }
@@ -98,6 +109,17 @@ object SessionConcurrencyManager {
                 }
             }
             r
+        }
+        if (queuedForLog[0]) {
+            // [D-2] 排队 = 当前并发已打满上限。真机观测：queue 打点越频繁，
+            // 说明 2 槽越不够 —— 它就是"判断容量够不够"的直接证据。
+            Log.i(
+                TAG,
+                "[concurrency] queue session=$sessionId " +
+                    "active=${controller.snapshot().activeCount} " +
+                    "waiting=${controller.snapshot().waitingCount} " +
+                    "cap=${maxConcurrent}",
+            )
         }
         when (outcome) {
             is SessionSlotController.AcquireOutcome.Acquired -> return
@@ -147,6 +169,19 @@ object SessionConcurrencyManager {
 
     fun isSuspended(sessionId: String): Boolean = sessionId in _suspendedSessions.value
 
+    /**
+     * [D-2] 当前并发槽占用快照（active 运行中 / waiting 排队中）。
+     * UI / 诊断直接读它判断"cap 够不够"：waiting > 0 说明有会话在排队。
+     */
+    data class Occupancy(val active: Int, val waiting: Int) {
+        val total: Int get() = active + waiting
+    }
+
+    fun occupancy(): Occupancy {
+        val snap = controller.snapshot()
+        return Occupancy(active = snap.activeCount, waiting = snap.waitingCount)
+    }
+
     /** 仅测试用：清空全部状态（生产路径不调用）。 */
     internal fun resetForTesting() {
         synchronized(this) {
@@ -176,6 +211,10 @@ object SessionConcurrencyManager {
             // 保留 PROMOTED 条目，等挂起块注册 continuation 时立即恢复，避免 resume 丢失。
         }
         toResume?.resume(Unit)
+        // [D-2] 槽位释放后队列头部被提升：记录释放后的占用，配合 queue 打点完整还原
+        // 每一轮占压-释放周期，判断 cap 是否够用。
+        val snap = controller.snapshot()
+        Log.i(TAG, "[concurrency] promote active=${snap.activeCount} waiting=${snap.waitingCount} cap=${maxConcurrent}")
     }
 
     /** 协程取消回调：从队列原子移除；已被提升的过期取消直接忽略。 */

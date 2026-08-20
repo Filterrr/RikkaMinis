@@ -99,7 +99,9 @@ object ExecutionCoordinator {
     // trajectory stays within the 512MB Java heap limit + 120MB native
     // headroom. Excess sessions queue on the Semaphore and get a resource-
     // busy error after 30s.
-    private const val MAX_CONCURRENT_SHELLS = 2
+    // [D-2] default cap, aligned with SessionConcurrencyManager / NativeOffload.
+    // Overridden at init() from ConcurrencyPrefs (single shared knob).
+    internal const val MAX_CONCURRENT_SHELLS = 2
 
     // [P2-app-native-hardcap] Hard cap for app-process native heap. When
     // this is exceeded, new commands are rejected immediately (before
@@ -196,7 +198,15 @@ object ExecutionCoordinator {
     // the per-session mutex so that a session waiting for the global slot
     // does not block another session's per-session mutex. Fair ordering
     // prevents starvation of any single session.
-    private val globalConcurrency = Semaphore(MAX_CONCURRENT_SHELLS, true)
+    // [D-2] sized at init() from the shared ConcurrencyPrefs cap (kept aligned
+    // with SessionConcurrencyManager / NativeOffloadServer). @Volatile because it
+    // is replaced once in init(); never resized at runtime.
+    @Volatile
+    private var globalConcurrency = Semaphore(MAX_CONCURRENT_SHELLS, true)
+
+    /** [D-2] current effective shell-concurrency cap (from shared pref). */
+    @Volatile
+    private var maxConcurrentShells: Int = MAX_CONCURRENT_SHELLS
 
     // [memory-dynamic-budget] Heavy 命令全局串行闸（Semaphore(1)）：任何
     // 时刻最多 1 个 heavy 命令在跑。锁序：先 heavyGate 后 globalConcurrency
@@ -207,6 +217,13 @@ object ExecutionCoordinator {
 
     fun init(context: Context) {
         appContext = context.applicationContext
+        // [D-2] size the shared shell cap from ConcurrencyPrefs. Runs after
+        // ConcurrencyPrefs.prime in MinisApp.onCreate, so the effective cap is
+        // the user-configured value (default 2), kept aligned with the other
+        // two coordinated gates.
+        maxConcurrentShells = com.openminis.app.data.ConcurrencyPrefs.maxConcurrentSessions()
+        globalConcurrency = Semaphore(maxConcurrentShells, true)
+        Log.i(TAG, "shell concurrency cap=$maxConcurrentShells (D-2 parameterized)")
     }
 
     /**
@@ -313,7 +330,7 @@ object ExecutionCoordinator {
             Log.w(TAG, "[$sessionId] Global concurrency slot timeout after 60s — rejecting command")
             postRecycleMemoryRecovery()
             return CommandResult(
-                "[System busy: too many concurrent sessions (limit $MAX_CONCURRENT_SHELLS). " +
+                "[System busy: too many concurrent sessions (limit $maxConcurrentShells). " +
                     "Please wait for other sessions to complete and retry.]",
                 -1, 0, true
             )

@@ -133,6 +133,11 @@
     <string name="soul_save_error_title">保存失败</string>
     <string name="settings_env_vars">环境变量</string>
     <string name="settings_env_vars_subtitle">注入到沙箱内的变量</string>
+
+    <string name="settings_max_concurrent">并发会话数</string>
+    <string name="settings_max_concurrent_subtitle">上限：%1$d · 运行中：%2$d · 排队中：%3$d</string>
+    <string name="settings_max_concurrent_dialog_title">最大并发会话数</string>
+    <string name="settings_max_concurrent_restart_hint">下次启动应用时生效。</string>
     <string name="settings_section_storage">存储</string>
     <string name="settings_storage_subtitle">管理 Alpine Linux rootfs 并浏览文件</string>
     <string name="settings_section_permissions">权限</string>

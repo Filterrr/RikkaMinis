@@ -137,6 +137,11 @@
     <string name="soul_save_error_title">Не удалось сохранить</string>
     <string name="settings_env_vars">Переменные окружения</string>
     <string name="settings_env_vars_subtitle">Переменные, добавляемые в Песочницу</string>
+
+    <string name="settings_max_concurrent">Одновременные сеансы</string>
+    <string name="settings_max_concurrent_subtitle">Лимит: %1$d · Активных: %2$d · Ожидают: %3$d</string>
+    <string name="settings_max_concurrent_dialog_title">Макс. одновременных сеансов</string>
+    <string name="settings_max_concurrent_restart_hint">Применяется при следующем запуске приложения.</string>
     <string name="settings_section_storage">Хранилище</string>
     <string name="settings_storage_subtitle">Управление корневой ФС Alpine Linux и просмотр файлов</string>
     <string name="settings_section_permissions">Разрешения</string>

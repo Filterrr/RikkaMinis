@@ -194,6 +194,31 @@ class SessionConcurrencyManagerTest {
         assertEquals(emptySet<String>(), SessionConcurrencyManager.runningSessions.value)
     }
 
+    // --- [D-2] observable occupancy ---
+
+    @Test
+    fun `occupancy reflects active and waiting slot counts`() = runTest {
+        assertEquals(0, SessionConcurrencyManager.occupancy().active)
+        assertEquals(0, SessionConcurrencyManager.occupancy().waiting)
+
+        val holders = (1..2).map { i -> async { SessionConcurrencyManager.acquireSlot("s$i") } }
+        holders.awaitAll()
+        assertEquals(2, SessionConcurrencyManager.occupancy().active)
+        assertEquals(0, SessionConcurrencyManager.occupancy().waiting)
+
+        val third = async { SessionConcurrencyManager.acquireSlot("s3") }
+        runCurrent()
+        assertEquals(2, SessionConcurrencyManager.occupancy().active)
+        assertEquals(1, SessionConcurrencyManager.occupancy().waiting)
+        assertEquals(3, SessionConcurrencyManager.occupancy().total)
+
+        SessionConcurrencyManager.releaseSlot("s1")
+        third.await()
+        // third promoted into the freed slot: active back to 2, waiting empty
+        assertEquals(2, SessionConcurrencyManager.occupancy().active)
+        assertEquals(0, SessionConcurrencyManager.occupancy().waiting)
+    }
+
     // --- 真实多线程交错 ---
 
     @Test

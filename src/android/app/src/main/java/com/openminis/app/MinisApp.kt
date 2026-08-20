@@ -258,6 +258,12 @@ class MinisApp : Application(), ImageLoaderFactory {
         // never pass through a ViewModel.
         com.openminis.app.data.FastModePrefs.prime(this)
 
+        // [D-2] Warm the cross-session concurrency cap from prefs so the three
+        // coordinated gates (SessionConcurrencyManager / ExecutionCoordinator /
+        // NativeOffloadServer) read the user-configured value at first use.
+        // Runs before ExecutionCoordinator.init / NativeOffloadServer.start.
+        com.openminis.app.data.ConcurrencyPrefs.prime(this)
+
         // T283: install NDK signal handler for native crashes (SIGSEGV/
         // SIGABRT/SIGBUS/SIGFPE/SIGILL/SIGSYS). Writes a one-shot text
         // report to filesDir/logs/native-crash-<stamp>.log before re-raising
