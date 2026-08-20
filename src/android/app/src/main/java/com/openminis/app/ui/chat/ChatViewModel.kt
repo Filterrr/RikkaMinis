@@ -1387,7 +1387,7 @@ class ChatViewModel(
     val mentionSelectedIndex: StateFlow<Int> = _mentionSelectedIndex.asStateFlow()
 
     val currentModelSupportsReasoning: Boolean
-        get() = currentModel?.supportsReasoning == true
+        get() = currentModel?.supportsReasoning != false
 
     /**
      * [T-android-thinking-level-arch] The thinking ceiling the currently-bound
