@@ -50,6 +50,11 @@ import com.openminis.app.ui.settings.keepScreenAwakeEnabled
 import com.openminis.app.ui.theme.MinisTheme
 
 private const val KEY_CURRENT_CHAT_SESSION_ID = "minis.current_chat_session_id"
+/** [P3-crash-recovery] 进程级持久化的 lastSessionId（独立 prefs 文件，非 savedInstanceState）。
+ * native SIGABRT 不经过 Activity 生命周期，saved state 会丢；这个文件
+ * 在每次进入 chat 路由时同步写入，作为崩溃后「重进即回到崩溃前会话」的可靠来源。 */
+private const val PREF_CRASH_RECOVERY = "minis_crash_recovery"
+private const val KEY_LAST_CHAT_SESSION_ID = "last_chat_session_id"
 
 class MainActivity : ComponentActivity() {
 
@@ -220,6 +225,13 @@ class MainActivity : ComponentActivity() {
         // covers the path where saved-state would override the
         // launch-mode dispatch entirely.
         restoredChatSessionId = savedInstanceState?.getString(KEY_CURRENT_CHAT_SESSION_ID)
+            // [P3-crash-recovery] If the saved-state bundle is empty (native
+            // SIGABRT doesn't write one), fall back to the process-level
+            // last-session file written on every chat-route change. Either way,
+            // honour the crash-frequency force-home grace so we don't drop the
+            // user straight back into the chat that may have been the crash trigger.
+            ?: getSharedPreferences(PREF_CRASH_RECOVERY, MODE_PRIVATE)
+                .getString(KEY_LAST_CHAT_SESSION_ID, null)
             ?.takeUnless {
                 com.openminis.app.crash.CrashFrequencyDetector.shouldForceHomeOnLaunch(this)
             }
@@ -396,6 +408,16 @@ class MainActivity : ComponentActivity() {
                                     SessionActivityTracker.setPresent(sid)
                                 }
                                 currentChatSessionId = sid
+                                // [P3-crash-recovery] Persist the last-opened
+                                // session id at the process level so a native
+                                // crash (no saved-state bundle) can still land
+                                // the user back in this chat on next launch.
+                                if (sid != null) {
+                                    getSharedPreferences(PREF_CRASH_RECOVERY, MODE_PRIVATE)
+                                        .edit()
+                                        .putString(KEY_LAST_CHAT_SESSION_ID, sid)
+                                        .apply()
+                                }
                             }
                         }
                     }

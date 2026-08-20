@@ -889,9 +889,26 @@ class MinisApp : Application(), ImageLoaderFactory {
         super.onTrimMemory(level)
         runCatching {
             if (TrimPolicy.shouldReclaimShellsAndGc(level)) {
-                Log.w("MinisApp", "onTrimMemory($level): reclaiming shells + gc (foreground pressure)")
+                // [P2-active-session-guard] Foreground pressure: recycle idle
+                // shells unconditionally (that's side-effect-free for in-flight
+                // work — only shells idle past the timeout are recycled), but
+                // SKIP the synchronous System.gc() when a session is actively
+                // executing (stream or tool in flight). A forced GC mid-execution
+                // pauses all threads and can stall/abort the very task that's
+                // driving the pressure — degrading the "peak-hour" experience the
+                // trim callback is supposed to protect.
+                val hasActiveWork =
+                    SessionActivityTracker.activeSessions.value.isNotEmpty() ||
+                        SessionActivityTracker.isToolRunning.value
+                Log.w(
+                    "MinisApp",
+                    "onTrimMemory($level): reclaiming shells (foreground pressure, activeWork=$hasActiveWork)" +
+                        (if (hasActiveWork) " — skipping sync gc" else " + gc"),
+                )
                 ExecutionCoordinator.recycleIdleShells()
-                System.gc()
+                if (!hasActiveWork) {
+                    System.gc()
+                }
             } else if (TrimPolicy.isBackground(level)) {
                 Log.i("MinisApp", "onTrimMemory($level): background/UI-hidden — skip aggressive reclaim (keep view state)")
             }
