@@ -64,8 +64,13 @@ object ToolBlockMonotonicGuard {
             val prevBlock = prevById[candidate.id] ?: return@map candidate
             val prevStatus = prevBlock.toolStatus
             val nextStatus = candidate.toolStatus
-            if (isTerminal(prevStatus) && !isTerminal(nextStatus)) {
-                regressions += Regression(candidate.id, prevStatus!!, nextStatus!!)
+            if (prevStatus != null && isTerminal(prevStatus) && !isTerminal(nextStatus)) {
+                // prevStatus is terminal (non-null). nextStatus is alive OR
+                // null — both are a regression away from terminal; keep prev's
+                // terminal block and (if nextStatus is non-null) log it.
+                if (nextStatus != null) {
+                    regressions += Regression(candidate.id, prevStatus, nextStatus)
+                }
                 prevBlock
             } else {
                 candidate
