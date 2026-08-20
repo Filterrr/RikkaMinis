@@ -36,14 +36,20 @@ import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Terminal
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -192,6 +198,10 @@ fun SettingsScreen(
                     onClick = onEnvVarsClick,
                     showDivider = false,
                 )
+                // [D-2] Cross-session concurrency cap — configurable + observable.
+                // Lets the user run at the Phase-0 floor (2 slots) for a while,
+                // read live occupancy (running/waiting) and evaluate widening to 3.
+                ConcurrencySlotSetting()
             }
 
             // -- Storage --
@@ -402,6 +412,76 @@ private fun SettingsItem(
                     .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
             )
         }
+    }
+}
+
+/**
+ * [D-2] Cross-session concurrency cap setting: shows the configured cap plus
+ * live slot occupancy (running / waiting) and lets the user pick 1–4 slots.
+ * The cap is read once at app start (ConcurrencyPrefs.prime) and sized into
+ * the three coordinated gates, so a change takes effect on the next process
+ * start — the dialog surfaces that hint.
+ */
+@Composable
+private fun ConcurrencySlotSetting() {
+    val context = LocalContext.current
+    var showDialog by remember { mutableStateOf(false) }
+
+    // Poll live occupancy (~1s) so the user can watch running/waiting while
+    // multi-session chat is active in another surface.
+    val occupancy by produceState(
+        initialValue = com.openminis.app.service.SessionConcurrencyManager.occupancy(),
+    ) {
+        while (true) {
+            value = com.openminis.app.service.SessionConcurrencyManager.occupancy()
+            kotlinx.coroutines.delay(1000L)
+        }
+    }
+
+    SettingsItem(
+        icon = Icons.Outlined.BarChart,
+        iconColor = Color(0xFF5AC8FA),
+        title = stringResource(R.string.settings_max_concurrent),
+        subtitle = stringResource(
+            R.string.settings_max_concurrent_subtitle,
+            com.openminis.app.data.ConcurrencyPrefs.maxConcurrentSessions(),
+            occupancy.active,
+            occupancy.waiting,
+        ),
+        onClick = { showDialog = true },
+        showDivider = false,
+    )
+
+    if (showDialog) {
+        val options = (com.openminis.app.data.ConcurrencyPrefs.MIN..com.openminis.app.data.ConcurrencyPrefs.MAX)
+            .map { it.toString() }
+        AlertDialog(
+            onDismissRequest = { showDialog = false },
+            title = { Text(stringResource(R.string.settings_max_concurrent_dialog_title)) },
+            text = {
+                Column {
+                    options.forEach { opt ->
+                        val v = opt.toInt()
+                        TextButton(onClick = {
+                            com.openminis.app.data.ConcurrencyPrefs.setMaxConcurrentSessions(context, v)
+                            showDialog = false
+                        }) {
+                            Text(opt)
+                        }
+                    }
+                    Text(
+                        text = stringResource(R.string.settings_max_concurrent_restart_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showDialog = false }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            },
+        )
     }
 }
 

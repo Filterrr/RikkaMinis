@@ -128,14 +128,18 @@ object NativeOffloadServer {
     // ledger keeps the newest files and evicts oldest-first under one lock.
     private val tmpLedger = OffloadTmpFileLedger()
 
-    // [native-rss-tool-guard] Bounded worker concurrency. Previously each
+    // [native-rss-tool-guard / D-2] Bounded worker concurrency. Previously each
     // accepted connection spawned an unbounded `thread {}` — with several
     // concurrent sessions each offloading repeatedly, the per-thread native
     // stack + handler allocations accumulate in the main process with no
     // backpressure. Cap concurrent worker threads to the same bound as the
     // shell coordinator; excess requests queue on the semaphore instead of
     // spawning a new OS thread.
-    private val workerConcurrency = java.util.concurrent.Semaphore(MAX_CONCURRENT_WORKERS, true)
+    // [D-2] sized at start() from the shared ConcurrencyPrefs cap (kept aligned
+    // with SessionConcurrencyManager / ExecutionCoordinator). @Volatile because
+    // it is replaced once in start(); never resized at runtime.
+    @Volatile
+    private var workerConcurrency = java.util.concurrent.Semaphore(MAX_CONCURRENT_WORKERS, true)
 
     @Volatile
     private var rootfsTmpDir: File? = null
@@ -151,6 +155,13 @@ object NativeOffloadServer {
     @Synchronized
     fun start(rootfsDir: File) {
         rootfsTmpDir = File(rootfsDir, "tmp")
+        // [D-2] size the offload worker cap from the shared ConcurrencyPrefs
+        // knob (runs after ConcurrencyPrefs.prime in MinisApp.onCreate), kept
+        // aligned with the shell coordinator + session slot cap.
+        workerConcurrency = java.util.concurrent.Semaphore(
+            com.openminis.app.data.ConcurrencyPrefs.maxConcurrentSessions(),
+            true,
+        )
         if (serverSocket != null) return
 
         // T287-followup: bind with bounded retry. Linux abstract sockets are
