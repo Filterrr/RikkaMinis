@@ -8,6 +8,7 @@ import com.openminis.app.data.model.LLMResponse
 import com.openminis.app.data.model.LLMStreamChunk
 import com.openminis.app.data.model.ThinkingLevel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 
 interface LLMProvider {
@@ -66,10 +67,20 @@ interface LLMProvider {
         imageParts: List<LLMMessage.ImagePart> = emptyList(),
         tools: List<AgentToolDefinition> = emptyList(),
         thinkingLevel: ThinkingLevel = ThinkingLevel.OFF,
-    ): LLMResponse = sendMessageClamped(
-        messages, systemPrompt, maxTokens, temperature, imageParts, tools,
-        clampThinkingLevel(thinkingLevel),
-    )
+    ): LLMResponse {
+        // [provider-rss D3] 打点定位：聊天直连 provider 的非流式调用，捕获主进程
+        // VmRSS 增量。零副作用（读 /proc 失败返回 0），不影响调用结果。
+        val beforeKb = ProviderRssProbe.rssKb()
+        return try {
+            sendMessageClamped(
+                messages, systemPrompt, maxTokens, temperature, imageParts, tools,
+                clampThinkingLevel(thinkingLevel),
+            )
+        } finally {
+            val afterKb = ProviderRssProbe.rssKb()
+            ProviderRssProbe.record("sendMessage:$name", beforeKb, afterKb)
+        }
+    }
 
     /** See [sendMessage] — the clamped, provider-implemented counterpart. */
     fun streamMessage(
@@ -80,10 +91,22 @@ interface LLMProvider {
         imageParts: List<LLMMessage.ImagePart> = emptyList(),
         tools: List<AgentToolDefinition> = emptyList(),
         thinkingLevel: ThinkingLevel = ThinkingLevel.OFF,
-    ): Flow<LLMStreamChunk> = streamMessageClamped(
-        messages, systemPrompt, maxTokens, temperature, imageParts, tools,
-        clampThinkingLevel(thinkingLevel),
-    )
+    ): Flow<LLMStreamChunk> = flow {
+        // [provider-rss D3] 打点定位：聊天直连 provider 的流式调用。streamMessage
+        // 是冷 Flow，打点放在真正被 collect（发出请求）的前后。
+        val beforeKb = ProviderRssProbe.rssKb()
+        try {
+            emitAll(
+                streamMessageClamped(
+                    messages, systemPrompt, maxTokens, temperature, imageParts, tools,
+                    clampThinkingLevel(thinkingLevel),
+                )
+            )
+        } finally {
+            val afterKb = ProviderRssProbe.rssKb()
+            ProviderRssProbe.record("streamMessage:$name", beforeKb, afterKb)
+        }
+    }
 
     /**
      * [T-android-thinking-level-arch] Provider implementations override THIS
