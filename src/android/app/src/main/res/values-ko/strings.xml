@@ -295,7 +295,7 @@
     <string name="perm_agent_policy">에이전트 권한</string>
     <string name="perm_a11y_system_ready">서비스 활성화됨</string>
     <string name="perm_a11y_system_disabled">서비스 비활성화됨</string>
-    <string name="perm_allow_minis_config">minis-config 허용</string>
+    <string name="perm_allow_minis_config">설정 도구 허용</string>
     <string name="perm_minis_config_desc">비활성화하면 에이전트는 minis-config로 설정을 읽거나 수정할 수 없습니다. 로그 → 설정 변경에서 변경 이력은 계속 확인할 수 있습니다. 에이전트는 permission_denied 오류를 받고 딥 링크로 안내합니다.</string>
     <string name="perm_section_privacy">개인정보</string>
     <string name="perm_section_media">미디어</string>

@@ -503,7 +503,7 @@
     <string name="perm_agent_policy">Разрешение агента</string>
     <string name="perm_a11y_system_ready">Служба включена</string>
     <string name="perm_a11y_system_disabled">Служба не включена</string>
-    <string name="perm_allow_minis_config">Разрешить minis-config</string>
+    <string name="perm_allow_minis_config">Разрешить инструмент настройки</string>
     <string name="perm_minis_config_desc">Когда отключено, агент не может считывать или изменять какие-либо настройки через minis-config. История изменений в Журналы → Изменения настроек остаётся доступной. Агент получит ошибку permission_denied и сможет вместо этого направить вас через глубокие ссылки.</string>
     <string name="perm_section_privacy">Конфиденциальность</string>
     <string name="perm_section_media">Медиа</string>
