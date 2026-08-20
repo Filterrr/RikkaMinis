@@ -2976,6 +2976,19 @@ fun ChatScreen(
                     // Throttle (unchanged): conflate() + sample(80) keeps UI
                     // publication at ~12fps regardless of token rate.
                     var streamWasActive = false
+                    // [fix/long-session-flatten-storm] Content-noop detection:
+                    // the merged list from the LAST collect tick, used to skip
+                    // the incremental reconcile when the underlying data is
+                    // byte-identical (stream drained, side-channel stable).
+                    // Data-class `==` covers every rendering-relevant field
+                    // (content, toolBlocks incl. all toolStatus, isStreaming,
+                    // error, queued, ...), so a matched fingerprint is a true
+                    // "nothing to do" — skipping avoids re-running segmenters
+                    // (full markdown re-split of the accumulated text) and
+                    // re-building non-text rows on every 80ms tick during a
+                    // long tool execution. Resets to null on each effect
+                    // restart (session switch / messages key change).
+                    var lastMergedFingerprint: List<ChatMessage>? = null
                     // [T-android-stream-pipeline-incremental] Flush the perf
                     // turn when this effect is CANCELLED mid-turn: the
                     // turn-end drain emits `_messages` FIRST (restarting this
@@ -3075,20 +3088,41 @@ fun ChatScreen(
                             } else {
                                 // Incremental reconcile, or a full re-seed when
                                 // the message list structure changed.
-                                if (!rowLedger.isIncrementallyCompatible(merged)) {
-                                    val tRebuildStart = System.nanoTime()
-                                    val rows = withContext(Dispatchers.Default) {
-                                        buildFlatChatItems(merged, sessionId)
+                                // [fix/long-session-flatten-storm] Content-noop
+                                // skip: when `merged` is byte-identical to the
+                                // previous tick (streaming drained and the
+                                // side-channel is stable — e.g. the whole time
+                                // the agent loop is blocked on a long tool
+                                // execution), reconcile would only re-run each
+                                // AppendOnlyMarkdownSegmenter (a full
+                                // re-split of the accumulated 10k+ char answer)
+                                // and re-build the same non-text rows, producing
+                                // identical rows. Skip it entirely — the
+                                // fingerprint is the full data-class-equal
+                                // list, so no field change can be missed
+                                // (it covers content, toolBlocks with all
+                                // toolStatus, isStreaming, error, queued, ...).
+                                // The turn-end tick is NOT skipped: it drains
+                                // the side-channel into merged (final terminal
+                                // tool states + complete text), so it differs
+                                // from the live-stream tick that precedes it.
+                                if (merged != lastMergedFingerprint) {
+                                    if (!rowLedger.isIncrementallyCompatible(merged)) {
+                                        val tRebuildStart = System.nanoTime()
+                                        val rows = withContext(Dispatchers.Default) {
+                                            buildFlatChatItems(merged, sessionId)
+                                        }
+                                        val buildMs = (System.nanoTime() - tRebuildStart) / 1_000_000
+                                        rowLedger.seed(rows, merged.size)
+                                        com.openminis.app.diagnostics.PerfLongCtx.step(
+                                            sessionId,
+                                            "buildFlatChatItems.ledgerReseed",
+                                            "msgCount=${msgs.size} rowCount=${rows.size} buildMs=$buildMs",
+                                        )
                                     }
-                                    val buildMs = (System.nanoTime() - tRebuildStart) / 1_000_000
-                                    rowLedger.seed(rows, merged.size)
-                                    com.openminis.app.diagnostics.PerfLongCtx.step(
-                                        sessionId,
-                                        "buildFlatChatItems.ledgerReseed",
-                                        "msgCount=${msgs.size} rowCount=${rows.size} buildMs=$buildMs",
-                                    )
+                                    rowLedger.reconcile(merged)
                                 }
-                                rowLedger.reconcile(merged)
+                                lastMergedFingerprint = merged
                             }
                             flatItems = rowLedger.snapshot()
                             // [forward-stable] Verify the append-only prefix
