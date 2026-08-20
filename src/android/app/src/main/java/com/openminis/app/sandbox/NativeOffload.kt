@@ -279,6 +279,13 @@ object NativeOffloadServer {
 
         val t0 = System.nanoTime()
         val handler = handlers[name]
+
+        // [offload-rss] 打点定位：handler 执行前后各读一次主进程 VmRSS，
+        // 把增量归因到具体 handler 名（model-use/sessions/browser-use/weather …）。
+        // 泄漏的 mmap / thread-stack / mapped-tmpfile 增长正是 2026-08-17/19 SIGABRT 的形态，
+        // 但之前这条 native-offload 路径没有任何 RSS 归因——这是「泄漏涨在哪个 handler」的盲区。
+        // 打点零副作用（OffloadRssProbe 读 /proc 失败返回 0），不影响 handler 结果。
+        val rssBeforeKb = OffloadRssProbe.rssKb()
         val result = if (handler == null) {
             Log.w(TAG, "no handler registered for '$name' (known=${handlers.keys})")
             NativeOffloadResult(exitCode = 127, output = "native_offload: no handler for '$name'\n")
@@ -295,6 +302,10 @@ object NativeOffloadServer {
                 Log.w(TAG, "handler '$name' threw: ${e.message}", e)
                 NativeOffloadResult(exitCode = 1, output = "native_offload: ${e.message}\n")
             }
+        }
+        val rssAfterKb = OffloadRssProbe.rssKb()
+        if (handler != null) {
+            OffloadRssProbe.record(name, rssBeforeKb, rssAfterKb)
         }
         val elapsedMs = (System.nanoTime() - t0) / 1_000_000
 
