@@ -1569,7 +1569,7 @@ class ChatViewModel(
     /** Read-only view of the current thinking configuration for the model. */
     fun thinkingInfo(): ThinkingInfo? {
         val model = currentModel ?: return null
-        val supported = model.supportsReasoning == true
+        val supported = model.supportsReasoning != false
         val level = _thinkingLevel.value
         val enabled = supported && level.isEnabled
         val levelText = if (enabled) level.displayName else "—"
