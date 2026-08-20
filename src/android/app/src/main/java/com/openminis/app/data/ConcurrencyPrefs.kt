@@ -28,9 +28,16 @@ object ConcurrencyPrefs {
     private const val PREFS = "minis_concurrency_prefs"
     private const val KEY_MAX_CONCURRENT_SESSIONS = "maxConcurrentSessions"
 
-    /** Bounds kept tight: 1–4 slots is a sane knob for a phone-sized agent host. */
+    /**
+     * Bounds. [MIN] floors at 1 (the slot controller requires strictly
+     * positive). [MAX] is a soft upper sanity bound — effectively "uncapped"
+     * for any realistic on-device use: with several concurrent agent sessions
+     * the real backstop is no longer this knob but the process-RSS hard gate
+     * and the heavy-command serializer in [ExecutionCoordinator], which stay
+     * in force regardless of how many slots the user opens here.
+     */
     const val MIN = 1
-    const val MAX = 4
+    const val MAX = 16
 
     /** Default matches Phase 0's hard-coded cap (2 aligned gates). */
     const val DEFAULT = 2

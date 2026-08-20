@@ -41,6 +41,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -417,10 +418,10 @@ private fun SettingsItem(
 
 /**
  * [D-2] Cross-session concurrency cap setting: shows the configured cap plus
- * live slot occupancy (running / waiting) and lets the user pick 1–4 slots.
- * The cap is read once at app start (ConcurrencyPrefs.prime) and sized into
- * the three coordinated gates, so a change takes effect on the next process
- * start — the dialog surfaces that hint.
+ * live slot occupancy (running / waiting) and lets the user pick 1–16 slots
+ * (effectively uncapped). The cap is read once at app start
+ * (ConcurrencyPrefs.prime) and sized into the three coordinated gates, so a
+ * change takes effect on the next process start — the dialog surfaces that hint.
  */
 @Composable
 private fun ConcurrencySlotSetting() {
@@ -453,22 +454,28 @@ private fun ConcurrencySlotSetting() {
     )
 
     if (showDialog) {
-        val options = (com.openminis.app.data.ConcurrencyPrefs.MIN..com.openminis.app.data.ConcurrencyPrefs.MAX)
-            .map { it.toString() }
+        var sliderValue by remember {
+            mutableStateOf(
+                com.openminis.app.data.ConcurrencyPrefs.maxConcurrentSessions().toFloat(),
+            )
+        }
         AlertDialog(
             onDismissRequest = { showDialog = false },
             title = { Text(stringResource(R.string.settings_max_concurrent_dialog_title)) },
             text = {
                 Column {
-                    options.forEach { opt ->
-                        val v = opt.toInt()
-                        TextButton(onClick = {
-                            com.openminis.app.data.ConcurrencyPrefs.setMaxConcurrentSessions(context, v)
-                            showDialog = false
-                        }) {
-                            Text(opt)
-                        }
-                    }
+                    Text(
+                        text = sliderValue.toInt().toString(),
+                        style = MaterialTheme.typography.headlineMedium,
+                    )
+                    Slider(
+                        value = sliderValue,
+                        onValueChange = { sliderValue = it },
+                        valueRange = com.openminis.app.data.ConcurrencyPrefs.MIN.toFloat()..
+                            com.openminis.app.data.ConcurrencyPrefs.MAX.toFloat(),
+                        steps = com.openminis.app.data.ConcurrencyPrefs.MAX -
+                            com.openminis.app.data.ConcurrencyPrefs.MIN - 1,
+                    )
                     Text(
                         text = stringResource(R.string.settings_max_concurrent_restart_hint),
                         style = MaterialTheme.typography.bodySmall,
@@ -477,6 +484,17 @@ private fun ConcurrencySlotSetting() {
                 }
             },
             confirmButton = {
+                TextButton(onClick = {
+                    com.openminis.app.data.ConcurrencyPrefs.setMaxConcurrentSessions(
+                        context,
+                        sliderValue.toInt(),
+                    )
+                    showDialog = false
+                }) {
+                    Text(stringResource(R.string.common_save))
+                }
+            },
+            dismissButton = {
                 TextButton(onClick = { showDialog = false }) {
                     Text(stringResource(R.string.common_cancel))
                 }
