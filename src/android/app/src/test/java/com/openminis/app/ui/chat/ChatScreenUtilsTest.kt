@@ -185,4 +185,40 @@ class ChatScreenUtilsTest {
         assertFalse(isCompactedItem(userBubble("m_user"), emptyMap()))
         assertFalse(isCompactedItem(FlatChatItem.AssistantInfo("m_info", block("b1", "info")), emptyMap()))
     }
+
+    // ── shouldDebounceImeBurst ────────────────────────────────────────
+
+    @Test
+    fun `ordinary typing is never debounced`() {
+        assertFalse(shouldDebounceImeBurst("", "a"))
+        assertFalse(shouldDebounceImeBurst("ab", "abc"))
+        assertFalse(shouldDebounceImeBurst("hello worl", "hello world"))
+    }
+
+    @Test
+    fun `delta exactly at threshold is not debounced`() {
+        // growth of exactly 8 chars — boundary is "greater than", not ">="
+        assertFalse(shouldDebounceImeBurst("1234", "123456789012"))
+    }
+
+    @Test
+    fun `delta just past threshold is debounced`() {
+        assertTrue(shouldDebounceImeBurst("1234", "1234567890123"))
+    }
+
+    @Test
+    fun `large voice dictation burst is debounced`() {
+        assertTrue(shouldDebounceImeBurst("", "The quick brown fox jumps over the lazy dog"))
+    }
+
+    @Test
+    fun `deletion is never a burst`() {
+        assertFalse(shouldDebounceImeBurst("a long sentence", "a"))
+        assertFalse(shouldDebounceImeBurst("ab", "a"))
+    }
+
+    @Test
+    fun `replacement with no net growth is not debounced`() {
+        assertFalse(shouldDebounceImeBurst("abcdefgh", "ABCDEFGH"))
+    }
 }
