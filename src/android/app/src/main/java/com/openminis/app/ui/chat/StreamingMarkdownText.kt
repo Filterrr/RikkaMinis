@@ -3037,6 +3037,20 @@ private object MarkdownParseCaches {
         sizer = { k, _ -> k.length },
     )
 
+    /**
+     * [fix/voice-crash-observability tail] Drop every cached parse result in
+     * one shot. Called from the app's onTrimMemory(CRITICAL) hook so the
+     * inline/math/blocks Lru caches — which hold large AnnotatedString backing
+     * arrays (see CHAR_BUDGET_PER_CACHE rationale) — release their resident
+     * heap when the system is about to kill us for memory. Re-parses on the
+     * next frame are cache misses; acceptable at a CRITICAL-memory moment.
+     */
+    fun clearAll() {
+        synchronized(inlineLru) { inlineLru.clear() }
+        synchronized(mathLru) { mathLru.clear() }
+        synchronized(blocksLru) { blocksLru.clear() }
+    }
+
     // Double-checked get: the lock is held only for map access, never during a
     // parse — a slow parse on Default must not block a main-thread hit on a
     // DIFFERENT key. A concurrent miss on the same key computes twice and the
@@ -3208,6 +3222,16 @@ private object MarkdownParseCaches {
         val math = mathLatexIncremental(last.raw)
         synchronized(mathLru) { mathLru[last.raw] = math }
     }
+}
+
+/**
+ * [fix/voice-crash-observability tail] Package-visible entry point for the
+ * app-level memory-pressure hook. [MarkdownParseCaches] is a private object,
+ * so MinisApp reaches its CRITICAL trim action through this top-level function
+ * instead of widening the object's visibility.
+ */
+internal fun clearMarkdownParseCachesForMemoryPressure() {
+    MarkdownParseCaches.clearAll()
 }
 
 // ─── Inline markdown parser → AnnotatedString ───────────────────────────────

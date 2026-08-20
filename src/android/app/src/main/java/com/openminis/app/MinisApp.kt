@@ -21,6 +21,7 @@ import com.openminis.app.backup.WebDavConfigStore
 import com.openminis.app.data.db.AppDatabase
 import com.openminis.app.data.repository.BackgroundSettingsRepository
 import com.openminis.app.data.repository.ChatRepository
+import com.openminis.app.ui.chat.clearMarkdownParseCachesForMemoryPressure
 import com.openminis.app.data.repository.EnvVarRepository
 import com.openminis.app.data.MountedFoldersStore
 import com.openminis.app.data.repository.MemoryRepository
@@ -957,6 +958,14 @@ class MinisApp : Application(), ImageLoaderFactory {
                 // Flip the gate: new session admissions must wait for
                 // RSS to drop below the critical watermark before acquiring.
                 Log.w("MinisApp", "onTrimMemory($level): CRITICAL — memory gate engaged")
+                // [fix/voice-crash-observability tail] Give lmkd a "self-rescue"
+                // window: drop the markdown parse caches (inline/math/blocks Lru
+                // caches hold large AnnotatedString backing arrays) and force a
+                // second GC pass. The next render re-parses as cache misses —
+                // acceptable when the alternative is being OOM-killed mid-voice-
+                // dictation.
+                runCatching { clearMarkdownParseCachesForMemoryPressure() }
+                System.gc()
             }
         }.onFailure {
             Log.w("MinisApp", "onTrimMemory($level) handler failed: ${it.message}")

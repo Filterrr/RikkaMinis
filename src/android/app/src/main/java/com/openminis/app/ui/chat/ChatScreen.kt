@@ -53,6 +53,8 @@ import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -633,6 +635,13 @@ fun ChatScreen(
     // their pending candidate back through onValueChange even after we
     // cleared inputText. Drop those late commits during a short window.
     var lastSendTimeMs by remember { mutableStateOf(0L) }
+    // [fix/voice-crash-observability tail] IME burst debounce state. Buffers
+    // the latest large-increment edit and the job that flushes it 150 ms
+    // after the last burst, so voice dictation's N-event bursts collapse to
+    // a single setInputText commit (see shouldDebounceImeBurst). Null buffer =
+    // nothing pending; the job is cancelled+replaced on every new burst.
+    var imeBurstBuffer by remember { mutableStateOf<String?>(null) }
+    var imeBurstJob by remember { mutableStateOf<Job?>(null) }
     // Commit the composer input-mode pref on send. Voice input was removed, so
     // every composition is now "text"; the old voiceUsedSinceClear tracker and
     // the VoiceCorrection vocabulary miner went with it.
@@ -4988,8 +4997,36 @@ fun ChatScreen(
                                 // an already-stale inputFieldValue.selection.
                                 lastTrueCaretEnd = tfv.selection.end.coerceAtLeast(0)
                                 if (inputText != tfv.text) {
-                                    viewModel.setInputText(tfv.text)
-                                    viewModel.updateSlashMenuState(tfv.text)
+                                    // [fix/voice-crash-observability tail] IME
+                                    // voice dictation drives onValueChange with
+                                    // high-frequency, large text bursts. Each
+                                    // burst used to call setInputText
+                                    // immediately, re-serializing the draft +
+                                    // recomputing slash/mention state + running
+                                    // the full ledger reconcile on the main
+                                    // thread. A single large increment (>8
+                                    // chars — see shouldDebounceImeBurst) is
+                                    // debounced: buffer locally and flush once
+                                    // 150 ms after the last burst, so a burst
+                                    // of N events collapses to one commit.
+                                    // Ordinary typing (<=8 chars) and deletes
+                                    // go through immediately — instant feedback
+                                    // is preserved.
+                                    if (shouldDebounceImeBurst(inputText, tfv.text)) {
+                                        imeBurstBuffer = tfv.text
+                                        imeBurstJob?.cancel()
+                                        imeBurstJob = coroutineScope.launch {
+                                            delay(150)
+                                            val flushed = imeBurstBuffer
+                                            if (flushed != null && flushed != inputText) {
+                                                viewModel.setInputText(flushed)
+                                                viewModel.updateSlashMenuState(flushed)
+                                            }
+                                        }
+                                    } else {
+                                        viewModel.setInputText(tfv.text)
+                                        viewModel.updateSlashMenuState(tfv.text)
+                                    }
                                 }
                                 // Drive the @ mention picker on every keystroke
                                 // and selection change — caret position alone

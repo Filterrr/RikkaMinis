@@ -69,3 +69,37 @@ internal fun shiftedIndexAfterHeadInsert(index: Int, headInsertedCount: Int): In
 /** Reverse-space → forward-space conversion for legacy call sites. */
 internal fun forwardIndexFromReversed(reversedIndex: Int, rowCount: Int): Int =
     rowCount - 1 - reversedIndex
+
+// ── IME burst debounce (voice dictation memory-pressure relief) ────────────
+
+/**
+ * Threshold (in characters) above which a single IME-driven text edit is
+ * treated as a "burst" rather than ordinary typing. Voice dictation pushes
+ * large blocks (often tens/hundreds of chars) in one onValueChange, each
+ * triggering a full [ChatViewModel.setInputText] (draft serialization +
+ * slash/mention recompute + history reconcile) on the main thread. Typing
+ * advances 1-2 chars per event and must never be debounced.
+ */
+const val IME_BURST_DELTA_THRESHOLD = 8
+
+/**
+ * Whether an IME onValueChange edit from [oldText] to [newText] is a *large
+ * incremental burst* that should be debounced before committing to the
+ * ViewModel. Mirrors the composer's `newText.length - oldText.length > 8`
+ * detection but as a pure, JVM-testable function.
+ *
+ * Rules:
+ *  - A net *deletion* (new shorter than old) is never a burst — deletes are
+ *    cheap single-pass edits and the user expects instant backspace feedback.
+ *  - A net growth of more than [IME_BURST_DELTA_THRESHOLD] characters is a
+ *    burst candidate (voice dictation, large paste).
+ *  - Anything else (ordinary typing, small paste) is NOT debounced.
+ *
+ * Note: this only *classifies* the edit. The debounce scheduling (150 ms
+ * buffer + flush) lives in the composable so it can own a coroutine scope;
+ * the pure classifier is what's unit-tested here.
+ */
+internal fun shouldDebounceImeBurst(oldText: String, newText: String): Boolean {
+    val delta = newText.length - oldText.length
+    return delta > IME_BURST_DELTA_THRESHOLD
+}
