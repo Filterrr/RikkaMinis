@@ -3119,6 +3119,24 @@ fun ChatScreen(
                             if (stream.isEmpty() && streamWasActive) {
                                 streamWasActive = false
                                 com.openminis.app.diagnostics.StreamPerfMonitor.turnEnd()
+                                // [T-streamlining-thinking-fix] On turn end,
+                                // force a full canonical rebuild instead of
+                                // relying on the incremental reconcile path to
+                                // converge. The side-channel drains the delta
+                                // into `_messages` as a single emit, so this
+                                // tick's `merged` already reflects the final
+                                // terminal tool states and complete text — a
+                                // full re-seed guarantees the UI reflects
+                                // them even if the incremental reconcile
+                                // dropped a terminal flip along the way.
+                                // Runs AFTER snapshot() and BEFORE the next
+                                // publish tick, so it doesn't double-render in
+                                // the same tick.
+                                val rows = withContext(Dispatchers.Default) {
+                                    buildFlatChatItems(merged, sessionId)
+                                }
+                                rowLedger.seed(rows, merged.size)
+                                flatItems = rowLedger.snapshot()
                             }
                         }
                     } finally {
