@@ -617,6 +617,18 @@ internal fun buildFlatChatItems(
     // prefix so the defensive key-collision suffixing behaves exactly as a
     // single full build would.
     seedKeys: Set<String> = emptySet(),
+    // [fix/long-session-flatten-storm] Skip the expensive Pass 2 text-block
+    // markdown split entirely. Used by the StableChatRowLedger's live-tail
+    // reconcile path, where per-block text is ALWAYS owned by the
+    // AppendOnlyMarkdownSegmenter (pass 3) and the freshly-split
+    // AssistantMarkdownBlock rows would be immediately discarded by
+    // `filterNot { it is AssistantMarkdownBlock }` — a full re-split paid for
+    // twice, with one result thrown away. Turning it off eliminates that
+    // dual-split allocation storm on every 80ms streaming tick without
+    // changing any published row: non-text rows (header / tool group /
+    // thinking / info / typing / error) are byte-identical either way, and
+    // text rows never derive from this builder in the ledger path.
+    skipTextBlocks: Boolean = false,
 ): List<FlatChatItem> {
     val out = mutableListOf<FlatChatItem>()
     val usedKeys = if (seedKeys.isEmpty()) mutableSetOf() else seedKeys.toMutableSet()
@@ -776,6 +788,7 @@ internal fun buildFlatChatItems(
         }
 
         // Pass 2 — text blocks (the answer), in model order.
+        if (!skipTextBlocks) {
         blocks.forEachIndexed { index, block ->
             if (block.kind != "text") return@forEachIndexed
             if (block.content.isNotEmpty()) {
@@ -861,6 +874,7 @@ internal fun buildFlatChatItems(
                         }
                     }
                 }
+        }
         // Pass 3 — info blocks (inline system notices), in model order.
         blocks.forEach { block ->
             if (block.kind == "info") {

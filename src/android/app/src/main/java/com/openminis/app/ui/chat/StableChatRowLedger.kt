@@ -189,8 +189,12 @@ internal class StableChatRowLedger(
                 val msg = messages[idx]
                 val prevRole = prevNonSystemRole(messages, idx)
                 if (msg.role == "assistant") {
-                    val fresh = buildNewMessageRows(msg, prevRole)
-                    val nonText = fresh.filterNot { it is FlatChatItem.AssistantMarkdownBlock }
+                    // [fix/long-session-flatten-storm] Non-text rows only — the
+                    // text rows of this new assistant message are produced by
+                    // reconcileMessage's segmenters (pass 3) right below, so
+                    // splitting the text here and filtering it away was a wasted
+                    // full markdown parse per append.
+                    val nonText = buildNewMessageNonTextRows(msg, prevRole)
                     rows.addAll(nonText)
                     reconcileMessage(msg, prevRole)
                 } else {
@@ -232,6 +236,45 @@ internal class StableChatRowLedger(
         // this build; the ledger's own published keys are the merge target
         // (same message id → same keys expected), not collisions to avoid.
         val built = buildFlatChatItems(listOf(message), seedKeys = emptySet())
+        return annotateRows(built, message, prevNonSystemRole)
+    }
+
+    /**
+     * [fix/long-session-flatten-storm] Same as [buildNewMessageRows] but skips
+     * the expensive Pass 2 text-block markdown split entirely
+     * (`buildFlatChatItems(..., skipTextBlocks = true)`).
+     *
+     * Used by the live-tail paths (message [append] branch and
+     * [reconcileMessage]) where per-block answer text is ALWAYS owned by the
+     * [AppendOnlyMarkdownSegmenter] in pass 3 — emitting freshly-split
+     * AssistantMarkdownBlock rows here would only have them thrown away by
+     * `filterNot { it is AssistantMarkdownBlock }` a moment later. That was a
+     * full `splitMarkdownIntoBlockTexts` paid for twice per 80ms streaming
+     * tick, one result discarded (the GC/CPU storm this fix targets).
+     *
+     * Non-text rows (header / tool run group / thinking / info / typing /
+     * error) are emitted identically either way; the typing-indicator
+     * retirement decision only reads `AssistantTyping` presence, which is
+     * computed independently of text-row emission.
+     */
+    private fun buildNewMessageNonTextRows(
+        message: ChatMessage,
+        prevNonSystemRole: String?,
+    ): List<FlatChatItem> {
+        val built = buildFlatChatItems(
+            listOf(message),
+            seedKeys = emptySet(),
+            skipTextBlocks = true,
+        )
+        return annotateRows(built, message, prevNonSystemRole)
+    }
+
+    /** Shared header-suppression + precededByUser annotation for single-message builds. */
+    private fun annotateRows(
+        built: List<FlatChatItem>,
+        message: ChatMessage,
+        prevNonSystemRole: String?,
+    ): List<FlatChatItem> {
         val suppressHeader = message.role == "assistant" && prevNonSystemRole == "assistant"
         return built.mapNotNull { row ->
             when {
@@ -429,8 +472,13 @@ internal class StableChatRowLedger(
             rows.addAll(buildNewMessageRows(message, prevNonSystemRole))
             return
         }
-        val freshAll = buildNewMessageRows(message, prevNonSystemRole)
-        val freshNonText = freshAll.filterNot { it is FlatChatItem.AssistantMarkdownBlock }
+        // [fix/long-session-flatten-storm] Non-text rows only. The text rows
+        // of this LAST assistant message are owned by the per-block segmenters
+        // in pass 3 below; the freshly-split AssistantMarkdownBlock rows the
+        // old full build produced were thrown away by the filterNot. Building
+        // WITHOUT the text-block markdown split halves the per-tick parse cost.
+        val freshAll = buildNewMessageNonTextRows(message, prevNonSystemRole)
+        val freshNonText = freshAll
 
         // ── typing indicator retirement ──
         // The freshly-built canonical rows carry NO AssistantTyping row once
