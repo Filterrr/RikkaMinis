@@ -133,21 +133,21 @@ class ChatFormattingTest {
 
     @Test
     fun `toolTitleLabel shell_execute`() {
-        assertEquals("Minis is using Shell", toolTitleLabel("shell_execute"))
+        assertEquals("RikkaMinis is using Shell", toolTitleLabel("shell_execute"))
     }
 
     @Test
     fun `toolTitleLabel unknown tool uses display name`() {
-        assertEquals("Minis is using my_custom_tool", toolTitleLabel("my_custom_tool"))
+        assertEquals("RikkaMinis is using my_custom_tool", toolTitleLabel("my_custom_tool"))
     }
 
     @Test
     fun `toolTitleLabel memory_write`() {
-        assertEquals("Minis is using Memory", toolTitleLabel("memory_write"))
+        assertEquals("RikkaMinis is using Memory", toolTitleLabel("memory_write"))
     }
 
     @Test
     fun `toolTitleLabel web_search`() {
-        assertEquals("Minis is using Search", toolTitleLabel("web_search"))
+        assertEquals("RikkaMinis is using Search", toolTitleLabel("web_search"))
     }
 }
