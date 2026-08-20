@@ -9573,10 +9573,26 @@ class ChatViewModel(
                 unflushed >= NEWLINE_FLUSH_MIN_CHARS
 
             fun publish(text: String, blocks: List<AssistantBlock>, awaiting: Boolean) {
+                // [T-streamlining-thinking-fix] Monotonic terminal guard: a tool
+                // block published in a terminal state (SUCCESS/FAILED/TIMEOUT/
+                // CANCELLED) must never regress to an alive state (RUNNING/
+                // STREAMING/PENDING) in a later snapshot — otherwise the tool card
+                // can get stuck "being called" indefinitely. Reads prev blocks
+                // fresh from the side-channel (not the outer `prev`, which may be
+                // stale across trailing publishes).
+                val prevBlocks = _streamingById.value[id]?.toolBlocks
+                val guarded = ToolBlockMonotonicGuard.guard(prevBlocks, blocks)
+                guarded.regressions.forEach { r ->
+                    AppLogger.warning(
+                        TAG,
+                        "ToolMonotonic block id=${r.blockId} regressed " +
+                            "${r.prevStatus} -> ${r.nextStatus} (messageId=$id); clamped",
+                    )
+                }
                 _streamingById.value = _streamingById.value + (
                     id to StreamingDelta(
                         content = text,
-                        toolBlocks = blocks,
+                        toolBlocks = guarded.blocks,
                         isAwaitingModelResponse = awaiting,
                     )
                 )
