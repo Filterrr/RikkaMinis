@@ -219,7 +219,7 @@ object NativeOffloadServer {
             queueSize = e.queue.size,
             largestPoolSize = e.largestPoolSize,
             taskCount = e.taskCount,
-            completedCount = e.completedCount,
+            completedCount = e.completedTaskCount,
             rejectedTotal = rejectedTotal.get(),
         )
     }
@@ -251,7 +251,8 @@ object NativeOffloadServer {
         if (executor == null && serverSocket == null) {
             val nThreads = com.openminis.app.data.ConcurrencyPrefs.maxConcurrentSessions()
             executorNThreads = nThreads
-            val queue = ArrayBlockingQueue<Runnable>(nThreads * 4)
+            val queueCapacity = nThreads * 4
+            val queue = ArrayBlockingQueue<Runnable>(queueCapacity)
             executor = ThreadPoolExecutor(
                 nThreads, nThreads,
                 60L, TimeUnit.SECONDS,
@@ -259,7 +260,7 @@ object NativeOffloadServer {
                 { r -> Thread(r, "native-offload-worker").apply { isDaemon = true } },
                 ThreadPoolExecutor.AbortPolicy(),
             )
-            Log.i(TAG, "offload bounded admission pool size=$nThreads queue=${queue.capacity()}")
+            Log.i(TAG, "offload bounded admission pool size=$nThreads queue=$queueCapacity")
         }
         if (serverSocket != null) return
 
