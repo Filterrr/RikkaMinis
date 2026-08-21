@@ -71,7 +71,7 @@ object PRootKernel {
         // shell we wait (bounded) for that process to signal it has bound the
         // socket — otherwise the first guest execve of an android-* handler
         // could race a not-yet-bound socket and get a retryable 127/1 error.
-        waitForToolServiceReady(bootContext)
+        waitForToolServiceReady(bootContext!!)
 
         rootfsManager.installIfNeeded()
         rootfsManager.installProotIfNeeded()

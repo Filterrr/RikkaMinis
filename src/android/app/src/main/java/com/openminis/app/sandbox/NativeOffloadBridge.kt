@@ -125,7 +125,7 @@ object NativeOffloadBridge {
     )
 
     /** Light handler names that execute in-process inside `:toolservice`. */
-    val lightHandlerNames: Set<String> = OffloadHandlerCatalog.baseHandlerNames - heavyHandlerNames
+    val lightHandlerNames: Set<String> = OffloadHandlerCatalog.baseHandlerNames.toSet() - heavyHandlerNames
 
     // -------------------- client (used by :toolservice) --------------------
 
