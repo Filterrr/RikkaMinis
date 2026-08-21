@@ -198,15 +198,13 @@ class ModelExecutionService : Service() {
 
     internal enum class ReapDecision { KILL, DEFER }
 
-    companion object {
-        /**
-         * [process-idle-reap-aggressive-reclaim] Pure watchdog decision, kept
-         * separate so the concurrency rule is JVM-testable: kill the process only
-         * when NO request is in flight ([activeRequests] == 0); otherwise defer.
-         */
-        internal fun reapDecision(activeRequests: Int): ReapDecision =
-            if (activeRequests > 0) ReapDecision.DEFER else ReapDecision.KILL
-    }
+    /**
+     * [process-idle-reap-aggressive-reclaim] Pure watchdog decision, kept
+     * separate so the concurrency rule is JVM-testable: kill the process only
+     * when NO request is in flight ([activeRequests] == 0); otherwise defer.
+     */
+    internal fun reapDecision(activeRequests: Int): ReapDecision =
+        if (activeRequests > 0) ReapDecision.DEFER else ReapDecision.KILL
 
     private fun cancelIdleReap() {
         val handler = reapHandler ?: return
