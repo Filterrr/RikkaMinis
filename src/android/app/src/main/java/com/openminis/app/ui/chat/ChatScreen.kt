@@ -357,6 +357,18 @@ private fun isBottomSentinelVisible(
     return total > 0 && layoutInfo.visibleItemsInfo.any { it.index == total - 1 }
 }
 
+/**
+ * [fix/chat-sentinel-crash-on-import] Resolve the bottom-sentinel scroll index
+ * safely. `requestScrollToItem` throws `IllegalArgumentException("Index should
+ * be non-negative (-1)")` when handed a negative index; a cold-open
+ * InitialOpen request can fire before the LazyColumn has measured anything
+ * (layoutInfo.totalItemsCount == 0), so `totalItemsCount - 1` is -1. Returning
+ * null means "nothing to scroll yet" — the next committed row revision will
+ * raise the real bottom request once rows exist.
+ */
+internal fun safeBottomScrollIndex(totalItems: Int): Int? =
+    if (totalItems > 0) totalItems - 1 else null
+
 private fun Modifier.verticalScrollbar(
     listState: androidx.compose.foundation.lazy.LazyListState,
     width: Dp = 3.dp,
@@ -1351,8 +1363,22 @@ fun ChatScreen(
             !listState.isScrollInProgress &&
             !isBottomSentinelVisible(listState.layoutInfo)
         ) {
-            AppLogger.debug("ScrollSrc", "request-bottom reason=$reason revision=${followState.rowRevision}")
-            listState.requestScrollToItem(listState.layoutInfo.totalItemsCount - 1)
+            // [fix/chat-sentinel-crash-on-import] Guard against a stale/empty
+            // layoutInfo. On an imported long session the first flatten publish
+            // can be consumed before the LazyColumn has measured any item:
+            // layoutInfo reports totalItemsCount=0, `totalItemsCount - 1` is
+            // -1, and requestScrollToItem(-1) throws
+            // IllegalArgumentException("Index should be non-negative (-1)").
+            // The cold-open InitialOpen request must not crash the app — skip
+            // it and let the next StreamRowsChanged revision (raised once rows
+            // actually land) issue the real bottom scroll.
+            val scrollIdx = safeBottomScrollIndex(listState.layoutInfo.totalItemsCount)
+            if (scrollIdx != null) {
+                AppLogger.debug("ScrollSrc", "request-bottom reason=$reason revision=${followState.rowRevision}")
+                listState.requestScrollToItem(scrollIdx)
+            } else {
+                AppLogger.debug("ScrollSrc", "request-bottom skipped (empty layoutInfo) reason=$reason revision=${followState.rowRevision}")
+            }
         } else if (!followState.isFollowing) {
             AppLogger.debug("ScrollInvariant", "forbidden_scroll reason=$reason revision=${followState.rowRevision}")
         }
