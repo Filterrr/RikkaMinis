@@ -70,20 +70,6 @@ class ModelExecutionService : Service() {
     private var reapHandler: android.os.Handler? = null
     private var reapRunnable: Runnable? = null
 
-    /**
-     * [process-idle-reap-aggressive-reclaim] Number of requests currently
-     * being processed by this process (streaming or non-streaming).
-     * Incremented in [onStartCommand] before dispatch, decremented in the
-     * worker's finally. The idle-reap runnable consults it before
-     * [Process.killProcess] — a concurrent request must never be severed
-     * mid-answer. Without this guard, parallel sessions on the same
-     * :modelservice process would kill each other: session A finishes,
-     * arms the 30s reap, and 30s later session B (still streaming) is
-     * silently killed, leaving its stream.jsonl without DONE/error and the
-     * UI stalled until the 6-min poll timeout.
-     */
-    private val activeRequests = java.util.concurrent.atomic.AtomicInteger(0)
-
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -96,20 +82,13 @@ class ModelExecutionService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // A real request arrived — register it BEFORE cancelling the reap.
-        // Order matters: the reap runnable consults [activeRequests] before
-        // killProcess; if we cancelled the reap first and registered after,
-        // a reap firing in that gap would see count=0 and sever this very
-        // request (the "mid-answer stall" race). Register-then-cancel closes
-        // the window: the runnable can never observe 0 while this request is
-        // being dispatched.
-        activeRequests.incrementAndGet()
-        // Defer any pending reap (reuse the warm process for this burst). The
-        // deadline is re-armed in the worker's finally once the request completes.
+        // A real request arrived — defer any pending reap (reuse the warm
+        // process for this burst). The deadline is re-armed in the worker's
+        // finally once the request completes.
         cancelIdleReap()
 
         val requestDir = intent?.getStringExtra(EXTRA_REQUEST_DIR)
-            ?: run { activeRequests.decrementAndGet(); stopSelf(startId); return START_NOT_STICKY }
+            ?: run { stopSelf(startId); return START_NOT_STICKY }
 
         val dir = File(requestDir)
         val requestFile = File(dir, "request.json")
@@ -117,7 +96,6 @@ class ModelExecutionService : Service() {
 
         if (!requestFile.exists()) {
             Log.w(TAG, "request.json not found")
-            activeRequests.decrementAndGet()
             stopSelf(startId)
             return START_NOT_STICKY
         }
@@ -125,8 +103,6 @@ class ModelExecutionService : Service() {
         // Execute on a background thread; re-arm the idle-reap deadline after
         // the result lands — the process now lingers IDLE_REAP_DELAY_MS for a
         // burst of follow-up calls, then killProcess returns all native heap.
-        // (The request was already registered via activeRequests increment at
-        // the top of onStartCommand — this worker only owns the decrement.)
         Thread {
             try {
                 val requestText = requestFile.readText()
@@ -148,7 +124,6 @@ class ModelExecutionService : Service() {
                     }.toString())
                 } catch (_: Throwable) {}
             } finally {
-                activeRequests.decrementAndGet()
                 // The result (success or error) is durably on disk (resultFile
                 // written above, or stream.jsonl flushed by executeStreamingRun
                 // before it returns). Re-arm the idle-reap; stopSelf only stops
@@ -175,36 +150,12 @@ class ModelExecutionService : Service() {
         }
         cancelIdleReap()
         val runnable = Runnable {
-            // [process-idle-reap-aggressive-reclaim] Watchdog check: never kill
-            // the process while a request is still in flight. If one is (a
-            // parallel session is streaming right now), re-arm instead of
-            // severing it — the kill would leave that stream's stream.jsonl
-            // truncated (no DONE/error) and the UI stalled until the 6-min
-            // poll timeout (exactly the "回答着回答着突然卡住" report).
-            when (reapDecision(activeRequests.get())) {
-                ReapDecision.DEFER -> {
-                    Log.i(TAG, "idle reap deferred: ${activeRequests.get()} request(s) in flight — re-arming ${IDLE_REAP_DELAY_MS}ms")
-                    scheduleIdleReap()
-                }
-                ReapDecision.KILL -> {
-                    Log.i(TAG, "idle ${IDLE_REAP_DELAY_MS}ms — killing process to return native heap (pid=${android.os.Process.myPid()})")
-                    android.os.Process.killProcess(android.os.Process.myPid())
-                }
-            }
+            Log.i(TAG, "idle ${IDLE_REAP_DELAY_MS}ms — killing process to return native heap (pid=${android.os.Process.myPid()})")
+            android.os.Process.killProcess(android.os.Process.myPid())
         }
         reapRunnable = runnable
         handler.postDelayed(runnable, IDLE_REAP_DELAY_MS)
     }
-
-    private enum class ReapDecision { KILL, DEFER }
-
-    /**
-     * [process-idle-reap-aggressive-reclaim] Pure watchdog decision, kept
-     * separate so the concurrency rule is JVM-testable: kill the process only
-     * when NO request is in flight ([activeRequests] == 0); otherwise defer.
-     */
-    internal fun reapDecision(activeRequests: Int): ReapDecision =
-        if (activeRequests > 0) ReapDecision.DEFER else ReapDecision.KILL
 
     private fun cancelIdleReap() {
         val handler = reapHandler ?: return
