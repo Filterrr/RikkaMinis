@@ -81,15 +81,6 @@ object ExecutionCoordinator {
 
     private const val TAG = "ExecutionCoordinator"
 
-    // [process-idle-reap-aggressive-reclaim] Short idle window (ms) for the
-    // aggressive shell teardown. The soft sweep ([recycleIdleShells]) waits for
-    // SHELL_IDLE_TIMEOUT_MS (10 min) — too long when the process is already at
-    // the hard RSS ceiling. The aggressive pass uses a much shorter window but
-    // still skips shells with an in-flight command, so actively-working sessions
-    // are never severed. Commands within an agent turn are sub-second apart, so
-    // a 30s window recycles only shells whose session has genuinely gone quiet.
-    private const val AGGRESSIVE_SHELL_IDLE_MS = 30_000L
-
     // [P2-proot-native-leak]
     // High-water mark (MB) for PRoot *child process* RSS. Normal operation is
     // ~35-55MB. A long-lived PRoot tracer leaks native memory monotonically
@@ -278,22 +269,12 @@ object ExecutionCoordinator {
         // of letting one more heavy command push the process over the edge.
         val rssBeforeMB = MemoryPressureGate.rssReader()
         if (MemoryPressureGate.levelFor(rssBeforeMB) == MemoryPressureLevel.CRITICAL) {
-            // [process-idle-reap-aggressive-reclaim] 软回收先试；仍超门槛则做
-            // 激进回收（强杀空闲 shell / 回收 :modelservice / 清缓存 / 二次 GC），
-            // 目标是把"划卡片才能恢复"变成"系统自动恢复"。只有激进回收后仍
-            // CRITICAL 才拒绝——护栏本身保留，但拒绝必须是最后手段而非第一反应。
             MemoryPressureGate.reclaimAndWait(waitMs = 2_000L)
-            val rssAfterSoftMB = MemoryPressureGate.rssReader()
-            val rssAfterReclaimMB = if (MemoryPressureGate.shouldRejectAfterReclaim(rssAfterSoftMB)) {
-                Log.w(TAG, "[$sessionId] RSS ${rssAfterSoftMB}MB still critical after soft reclaim — aggressive reclaim (rssBefore=${rssBeforeMB}MB)")
-                MemoryPressureGate.aggressiveReclaimAndWait()
-            } else {
-                rssAfterSoftMB
-            }
-            if (MemoryPressureGate.shouldRejectAfterReclaim(rssAfterReclaimMB)) {
-                Log.w(TAG, "[$sessionId] Process RSS ${rssAfterReclaimMB}MB still critical after aggressive reclaim — rejecting command (rssBefore=${rssBeforeMB}MB)")
+            val rssAfterMB = MemoryPressureGate.rssReader()
+            if (MemoryPressureGate.shouldRejectAfterReclaim(rssAfterMB)) {
+                Log.w(TAG, "[$sessionId] Process RSS ${rssAfterMB}MB still critical after reclaim — rejecting command (rssBefore=${rssBeforeMB}MB)")
                 return CommandResult(
-                    "[System busy: process memory is critically high (${rssAfterReclaimMB}MB). " +
+                    "[System busy: process memory is critically high (${rssAfterMB}MB). " +
                         "Please wait for the system to settle and retry.]",
                     -1, 0, true,
                 )
@@ -835,37 +816,6 @@ object ExecutionCoordinator {
                 sessionDidTerminate(sessionId)
             }
         }
-    }
-
-    /**
-     * [process-idle-reap-aggressive-reclaim] Aggressive shell teardown for the
-     * hard-RSS path: recycle shells idle past [AGGRESSIVE_SHELL_IDLE_MS] (30s,
-     * not the 10-min soft sweep) but SKIP any shell with an in-flight command
-     * ([PersistentShell.isBusy]) so actively-working sessions are never severed.
-     * This is what turns "划卡片才能恢复" into a self-healing reclaim: the PRoot
-     * tracer + child process tree for every recently-quiet session is torn down,
-     * its native footprint returned to the OS, and the next command re-spawns a
-     * clean shell at baseline.
-     *
-     * @return number of shells recycled (0 when none were quiet/busy-guarded).
-     */
-    fun aggressiveRecycleShells(): Int {
-        val now = SystemClock.elapsedRealtime()
-        var recycled = 0
-        for (sessionId in shells.keys.toList()) {
-            val shell = shells[sessionId] ?: continue
-            if (shell.isBusy) continue
-            val last = lastActiveMs[sessionId] ?: 0L
-            if (last != 0L && (now - last) > AGGRESSIVE_SHELL_IDLE_MS) {
-                Log.w(TAG, "[$sessionId] aggressive recycle: shell idle ${(now - last) / 1000}s (threshold ${AGGRESSIVE_SHELL_IDLE_MS / 1000}s)")
-                sessionDidTerminate(sessionId)
-                recycled++
-            }
-        }
-        if (recycled > 0) {
-            Log.w(TAG, "aggressive recycle: torn down $recycled idle shell(s)")
-        }
-        return recycled
     }
 
     /**
