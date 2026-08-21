@@ -60,6 +60,7 @@ object ConfigBackup {
         "soul",         // SOUL.md persona fields
         "memory",       // memory feature toggles
         "logs",         // log retention preferences
+        "runtime",      // agent-runtime knobs (e.g. max concurrent sessions)
     )
     // NOTE: `session.*` is deliberately NOT backed up. Despite the dot-path
     // prefix it is not a persisted preference — session.primaryModel /

@@ -650,7 +650,12 @@ fun ModelGroupDetailScreen(
                     onClick = {
                         providerRepository.removeGroup(groupId)
                         showDeleteDialog = false
-                        onBack()
+                        // NB: NO explicit onBack() here. removeGroup mutates the
+                        // config StateFlow, so this composable recomposes with
+                        // group == null and the null-guard at the top calls
+                        // onBack() exactly once — back to the groups list.
+                        // Calling onBack() here too would pop TWO levels
+                        // (detail → groups → settings) and land on settings.
                     },
                 ) {
                     Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error)

@@ -25,8 +25,8 @@ import android.content.SharedPreferences
  * the budget the rest of the memory machinery was sized for).
  */
 object ConcurrencyPrefs {
-    private const val PREFS = "minis_concurrency_prefs"
-    private const val KEY_MAX_CONCURRENT_SESSIONS = "maxConcurrentSessions"
+    const val PREFS = "minis_concurrency_prefs"
+    const val KEY_MAX_CONCURRENT_SESSIONS = "maxConcurrentSessions"
 
     /**
      * Bounds. [MIN] floors at 1 (the slot controller requires strictly
