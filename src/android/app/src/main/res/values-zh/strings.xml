@@ -239,9 +239,6 @@
     <string name="appearance_tool_preview_footer">控制 Agent 调用工具时输入框上方显示的悬浮条：可隐藏整个状态栏，或仅隐藏实时预览缩略图。</string>
     <string name="appearance_tool_status_bar_title">工具状态栏</string>
     <string name="appearance_tool_preview_title">工具预览窗口</string>
-    <string name="appearance_section_auto_focus_after_reply">回复后自动聚焦输入框</string>
-    <string name="appearance_auto_focus_after_reply_title">回复后自动聚焦输入框</string>
-    <string name="appearance_auto_focus_after_reply_footer">开启后，模型回复结束会自动弹出键盘，方便你立即追加输入。默认开启；如果你更希望先读完回复，可以关掉避免键盘意外弹出。</string>
     <string name="appearance_section_deep_thinking">深度思考</string>
     <string name="appearance_auto_expand_thinking_title">流式输出时展开思考</string>
     <string name="appearance_auto_expand_thinking_footer">开启后，模型思考时新的思考块会自动展开，思考结束后自动折叠。关闭后，思考块保持折叠状态——点击即可查看。</string>

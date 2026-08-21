@@ -58,6 +58,7 @@ internal object ConfigBuiltins {
         registerDefaults(r, providerRepo)
         registerSoul(r, context)
         registerMemory(r, context)
+        registerRuntime(r, context)
     }
 
     // -- Memory — global default toggle for the persistent memory feature --
@@ -84,6 +85,34 @@ internal object ConfigBuiltins {
                 prefs = prefs,
                 key = "memory.global.enabled",
                 defaultValue = true,
+            )
+        )
+    }
+
+    // -- Runtime / agent knobs --
+    //
+    // Settings surfaced under Settings → Agent Runtime, stored in their own
+    // prefs file (minis_concurrency_prefs). Registering them here folds them
+    // into the ConfigRegistry so (a) minis-config / the agent can read them
+    // and (b) the in-app backup carries them — a user's chosen max-concurrent
+    // cap previously lived in a standalone prefs file that ConfigBackup never
+    // walked, so a restore silently reset it to the default.
+
+    private fun registerRuntime(r: ConfigRegistry, context: Context) {
+        val prefs = context.getSharedPreferences(
+            com.openminis.app.data.ConcurrencyPrefs.PREFS,
+            Context.MODE_PRIVATE,
+        )
+        r.register(
+            PrefsIntField(
+                path = "runtime.maxConcurrentSessions",
+                displayName = "Max concurrent sessions",
+                description = "Upper bound on how many agent-loop sessions run at once. Applies on next app start (the controller and semaphores are sized at boot). Bounds 1..16.",
+                prefs = prefs,
+                key = com.openminis.app.data.ConcurrencyPrefs.KEY_MAX_CONCURRENT_SESSIONS,
+                defaultValue = com.openminis.app.data.ConcurrencyPrefs.DEFAULT,
+                minValue = com.openminis.app.data.ConcurrencyPrefs.MIN,
+                maxValue = com.openminis.app.data.ConcurrencyPrefs.MAX,
             )
         )
     }
@@ -362,10 +391,6 @@ internal object ConfigBuiltins {
                 defaultValue = false,
             )
         )
-        // (No autoFocusAfterReply entry here — it lives in
-        // PREF_APPEARANCE alongside the visible AppearanceScreen toggle.
-        // Registered further down in this method where the
-        // appearance-prefs section starts.)
         // T311: chat.toolPreview / inputFontSize / messageFontSize live in
         // `appearance_prefs` — same SharedPreferences AppearanceScreen.kt
         // reads/writes, so flipping via minis-config flows back into the
@@ -396,23 +421,6 @@ internal object ConfigBuiltins {
                 description = "When ON, the floating bar above the composer while the agent calls tools is shown (status text, spinner, and thumbnail preview). Turn OFF to hide it entirely.",
                 prefs = appearancePrefs,
                 key = com.openminis.app.ui.settings.KEY_TOOL_STATUS_BAR,
-                defaultValue = true,
-            )
-        )
-        // [T-keyboard-auto-pop default flip] On by default — iOS gates
-        // the existing post-stream auto-focus behind this. Android
-        // currently does not auto-focus on stream end (it only
-        // auto-focuses on brand-new sessions starting with "__new__"),
-        // so on this platform the setting is registered for parity.
-        // When a future Android change adds stream-end auto-focus, it
-        // should read this same pref key.
-        r.register(
-            PrefsBoolField(
-                path = "chat.autoFocusAfterReply",
-                displayName = "Auto-focus input after reply",
-                description = "When ON, the keyboard pops up automatically after the model finishes a reply so the input is ready for a follow-up. Turn OFF if you prefer to read the response without an unexpected keyboard.",
-                prefs = appearancePrefs,
-                key = com.openminis.app.ui.settings.KEY_AUTO_FOCUS_AFTER_REPLY,
                 defaultValue = true,
             )
         )

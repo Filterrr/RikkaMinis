@@ -38,7 +38,6 @@ import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.FormatSize
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Home
-import androidx.compose.material.icons.outlined.Keyboard
 import androidx.compose.material.icons.outlined.Launch
 import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material.icons.outlined.MoreVert
@@ -93,11 +92,6 @@ const val KEY_TOOL_PREVIEW = "tool_preview"        // Boolean, default false
 // behavior. Key name mirrors iOS `appearance.show_tool_status_bar` for future
 // cross-platform sync.
 const val KEY_TOOL_STATUS_BAR = "appearance.show_tool_status_bar"  // Boolean, default true
-// [T-keyboard-auto-pop default flip] Default ON — most users want the
-// composer ready for a follow-up immediately after the model finishes.
-// Key name mirrors iOS `@AppStorage("chat.autoFocusAfterReply")` so a
-// future cross-platform sync reads the same pref.
-const val KEY_AUTO_FOCUS_AFTER_REPLY = "chat.autoFocusAfterReply"  // Boolean, default true
 // T-chat-title-pill: shows a sticky session-title pill above the chat list
 // while the user scrolls back through history. Cross-platform key name
 // (matches iOS @AppStorage("appearance.show_chat_title")) so future config
@@ -183,7 +177,6 @@ fun AppearanceScreen(
     var keepScreenAwake by remember { mutableStateOf(prefs.getBoolean(KEY_KEEP_SCREEN_AWAKE, false)) }
     var toolPreview by remember { mutableStateOf(prefs.getBoolean(KEY_TOOL_PREVIEW, false)) }
     var toolStatusBar by remember { mutableStateOf(prefs.getBoolean(KEY_TOOL_STATUS_BAR, true)) }
-    var autoFocusAfterReply by remember { mutableStateOf(prefs.getBoolean(KEY_AUTO_FOCUS_AFTER_REPLY, true)) }
     var autoExpandThinking by remember { mutableStateOf(prefs.getBoolean(KEY_AUTO_EXPAND_THINKING, false)) }
     var showChatTitle by remember { mutableStateOf(prefs.getBoolean(KEY_SHOW_CHAT_TITLE, true)) }
     var chatInputLevel by remember { mutableIntStateOf(prefs.getInt(KEY_FONT_CHAT_INPUT, 0)) }
@@ -207,7 +200,6 @@ fun AppearanceScreen(
                 KEY_KEEP_SCREEN_AWAKE -> keepScreenAwake = prefs.getBoolean(key, false)
                 KEY_TOOL_PREVIEW -> toolPreview = prefs.getBoolean(key, false)
                 KEY_TOOL_STATUS_BAR -> toolStatusBar = prefs.getBoolean(key, true)
-                KEY_AUTO_FOCUS_AFTER_REPLY -> autoFocusAfterReply = prefs.getBoolean(key, true)
                 KEY_AUTO_EXPAND_THINKING -> autoExpandThinking = prefs.getBoolean(key, false)
                 KEY_SHOW_CHAT_TITLE -> showChatTitle = prefs.getBoolean(key, true)
                 KEY_FONT_CHAT_INPUT -> chatInputLevel = prefs.getInt(key, 0)
@@ -413,26 +405,6 @@ fun AppearanceScreen(
                 onCheckedChange = {
                     autoExpandThinking = it
                     prefs.edit().putBoolean(KEY_AUTO_EXPAND_THINKING, it).apply()
-                },
-                showDivider = false,
-            )
-        }
-
-        // [T-keyboard-auto-pop default flip] -- Auto-Focus After Reply --
-        // Default ON — most users want the composer ready for a follow-up
-        // immediately after the model finishes.
-        SettingsSection(
-            header = stringResource(R.string.appearance_section_auto_focus_after_reply),
-            footer = stringResource(R.string.appearance_auto_focus_after_reply_footer),
-        ) {
-            SettingsSwitchRow(
-                icon = Icons.Outlined.Keyboard,
-                iconColor = tileBlue,
-                title = stringResource(R.string.appearance_auto_focus_after_reply_title),
-                checked = autoFocusAfterReply,
-                onCheckedChange = {
-                    autoFocusAfterReply = it
-                    prefs.edit().putBoolean(KEY_AUTO_FOCUS_AFTER_REPLY, it).apply()
                 },
                 showDivider = false,
             )
