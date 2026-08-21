@@ -68,20 +68,6 @@ class PersistentShell(
         get() = process?.isAlive == true
 
     /**
-     * [process-idle-reap-aggressive-reclaim] True while a command is in flight
-     * on this shell (a [CommandCallback] is pending). Aggressive reclamation
-     * consults this to avoid tearing down a shell whose tracer is mid-command —
-     * killing that would sever the in-flight work and return a -1 exit for a
-     * command that actually started. Volatile-free by construction: the flag is
-     * written/read from the coordinator + reader threads, but it only ever
-     * needs to be *approximately* correct — a stale `false` (we tear down just
-     * after a callback was set) is the same worst case as today's [stop], which
-     * already destroys a shell with a pending callback and reports -1.
-     */
-    val isBusy: Boolean
-        get() = pendingCallback != null
-
-    /**
      * [P2-app-native-oom] Number of commands executed on this shell instance.
      * Reset to 0 by [stop]. ExecutionCoordinator uses this to recycle the
      * shell after a dense tool-call sequence (e.g. 20+ git/shell commands

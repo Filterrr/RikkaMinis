@@ -127,32 +127,4 @@ class MemoryPressureGateTest {
         )
         MemoryPressureGate.rssReader = { MemoryPressureGate.readRssFromProc() }
     }
-
-    // --- [process-idle-reap-aggressive-reclaim] aggressive reclaim ---
-
-    @Test
-    fun `aggressiveReclaimAndWait runs soft hook then aggressive hook and returns rss`() =
-        kotlinx.coroutines.test.runTest {
-            val order = mutableListOf<String>()
-            MemoryPressureGate.reclaimHook = { order.add("soft") }
-            MemoryPressureGate.aggressiveReclaimHook = { order.add("hard") }
-            MemoryPressureGate.rssReader = { 350L }
-            val after = MemoryPressureGate.aggressiveReclaimAndWait(softWaitMs = 1L, hardWaitMs = 1L)
-            assertEquals(listOf("soft", "hard"), order)
-            assertEquals(350L, after)
-            MemoryPressureGate.reclaimHook = {}
-            MemoryPressureGate.aggressiveReclaimHook = {}
-            MemoryPressureGate.rssReader = { MemoryPressureGate.readRssFromProc() }
-        }
-
-    @Test
-    fun `aggressiveReclaimAndWait is safe when aggressive hook is never wired`() =
-        kotlinx.coroutines.test.runTest {
-            MemoryPressureGate.reclaimHook = {}
-            MemoryPressureGate.aggressiveReclaimHook = {} // default no-op
-            MemoryPressureGate.rssReader = { 400L }
-            val after = MemoryPressureGate.aggressiveReclaimAndWait(softWaitMs = 1L, hardWaitMs = 1L)
-            assertEquals(400L, after)
-            MemoryPressureGate.rssReader = { MemoryPressureGate.readRssFromProc() }
-        }
 }
