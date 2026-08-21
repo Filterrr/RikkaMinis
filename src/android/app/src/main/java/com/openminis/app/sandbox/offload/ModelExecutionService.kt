@@ -59,16 +59,6 @@ class ModelExecutionService : Service() {
          * this exact injury — "stopSelf() 不杀进程，native 堆不归零".
          */
         const val IDLE_REAP_DELAY_MS = 30_000L
-
-        /**
-         * [process-idle-reap-aggressive-reclaim] Watchdog decision: kill the
-         * process only when NO request is in flight; defer (re-arm) when any
-         * request is being processed, so a concurrent stream is never severed
-         * mid-answer (the "回答着回答着突然卡住" regression). Pure function for
-         * JVM-testability.
-         */
-        internal fun reapDecision(activeRequests: Int): ReapDecision =
-            if (activeRequests > 0) ReapDecision.DEFER else ReapDecision.KILL
     }
 
     /**
@@ -207,6 +197,16 @@ class ModelExecutionService : Service() {
     }
 
     internal enum class ReapDecision { KILL, DEFER }
+
+    companion object {
+        /**
+         * [process-idle-reap-aggressive-reclaim] Pure watchdog decision, kept
+         * separate so the concurrency rule is JVM-testable: kill the process only
+         * when NO request is in flight ([activeRequests] == 0); otherwise defer.
+         */
+        internal fun reapDecision(activeRequests: Int): ReapDecision =
+            if (activeRequests > 0) ReapDecision.DEFER else ReapDecision.KILL
+    }
 
     private fun cancelIdleReap() {
         val handler = reapHandler ?: return
