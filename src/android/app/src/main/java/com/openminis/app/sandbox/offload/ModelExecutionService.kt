@@ -196,7 +196,7 @@ class ModelExecutionService : Service() {
         handler.postDelayed(runnable, IDLE_REAP_DELAY_MS)
     }
 
-    private enum class ReapDecision { KILL, DEFER }
+    internal enum class ReapDecision { KILL, DEFER }
 
     /**
      * [process-idle-reap-aggressive-reclaim] Pure watchdog decision, kept
