@@ -36,27 +36,14 @@ import com.openminis.app.offload.OffloadPermissionManager
 import com.openminis.app.provider.ModelsDevApi
 import com.openminis.app.sandbox.ExecutionCoordinator
 import com.openminis.app.sandbox.MountedFolderCoordinator
-import com.openminis.app.sandbox.NativeOffloadServer
+import com.openminis.app.sandbox.NativeOffloadBridge
 import com.openminis.app.sandbox.PRootKernel
 import com.openminis.app.sandbox.RootfsManager
 import com.openminis.app.sandbox.offload.AccessibilityOffloadHandler
-import com.openminis.app.sandbox.offload.AlarmOffloadHandler
 import com.openminis.app.sandbox.offload.BrowserUseOffloadHandler
-import com.openminis.app.sandbox.offload.CalendarOffloadHandler
-import com.openminis.app.sandbox.offload.ClipboardOffloadHandler
-import com.openminis.app.sandbox.offload.ContactsOffloadHandler
-import com.openminis.app.sandbox.offload.DeviceOffloadHandler
-import com.openminis.app.sandbox.offload.LocationOffloadHandler
 import com.openminis.app.sandbox.offload.ModelUseOffloadHandler
 import com.openminis.app.sandbox.offload.SessionsOffloadHandler
 import com.openminis.app.sandbox.offload.ShizukuOffloadHandler
-import com.openminis.app.sandbox.offload.NotificationOffloadHandler
-import com.openminis.app.sandbox.offload.OpenOffloadHandler
-import com.openminis.app.sandbox.offload.PhotosOffloadHandler
-import com.openminis.app.sandbox.offload.PlayerOffloadHandler
-import com.openminis.app.sandbox.offload.SpeakOffloadHandler
-import com.openminis.app.sandbox.offload.SpeechOffloadHandler
-import com.openminis.app.sandbox.offload.WeatherOffloadHandler
 import com.openminis.app.service.MemoryPressureGate
 import com.openminis.app.service.MemoryPressureLevel
 import com.openminis.app.service.SessionActivityTracker
@@ -459,62 +446,49 @@ class MinisApp : Application(), ImageLoaderFactory {
         // end of boot to materialize the targets once rootfs is on disk).
         PRootKernel.applyMountedFoldersSnapshot(this)
 
-        // Register native_offload handlers and start the server eagerly —
-        // the server only needs the rootfs tmp directory, which can be
-        // materialized lazily. Starting here means the abstract socket is
-        // reachable even before any shell session is launched.
-        NativeOffloadServer.register("android-alarm", AlarmOffloadHandler(this))
-        NativeOffloadServer.register("android-calendar", CalendarOffloadHandler(this))
-        NativeOffloadServer.register("android-clipboard", ClipboardOffloadHandler(this))
-        NativeOffloadServer.register("android-contacts", ContactsOffloadHandler(this))
-        NativeOffloadServer.register("android-device", DeviceOffloadHandler(this))
-        NativeOffloadServer.register("android-location", LocationOffloadHandler(this))
-        NativeOffloadServer.register("android-notification", NotificationOffloadHandler(this))
-        NativeOffloadServer.register("android-open", OpenOffloadHandler(this))
-        NativeOffloadServer.register("android-photos", PhotosOffloadHandler(this))
-        NativeOffloadServer.register("android-player", PlayerOffloadHandler())
-        NativeOffloadServer.register("android-speak", SpeakOffloadHandler(this))
-        NativeOffloadServer.register("android-speech", SpeechOffloadHandler(this))
-        NativeOffloadServer.register("android-weather", WeatherOffloadHandler(this))
-        // T323: UI-layer automation backed by MinisAccessibilityService.
-        NativeOffloadServer.register("android-a11y-cli", AccessibilityOffloadHandler(this))
-        NativeOffloadServer.register("minis-model-use", ModelUseOffloadHandler(this, providerRepository))
+        // [native-oom Phase 1 做法B] The native_offload socket now lives in
+        // the :toolservice process (ToolExecutionService). This main process
+        // registers ONLY the heavy handlers whose dependency graph (Room /
+        // BrowserTabPool / ProviderRepository / AccessibilityService /
+        // Shizuku binder) cannot be replicated inside :toolservice — they are
+        // served over the `native-offload-bridge` abstract socket. The 13
+        // light android-* handlers are registered inside ToolExecutionService
+        // and execute entirely in that process, so their native/mmap/thread
+        // load can never pollute the UI process.
+        NativeOffloadBridge.Server.register("android-a11y-cli", AccessibilityOffloadHandler(this))
+        NativeOffloadBridge.Server.register("minis-model-use", ModelUseOffloadHandler(this, providerRepository))
         // T-config: minis-config — agent-facing settings management
         // (read/write registered ConfigFields with audit + revert).
         // Mirrors iOS `config_offload_register()` in ISHKernel.m.
-        NativeOffloadServer.register(
+        NativeOffloadBridge.Server.register(
             "minis-config",
             com.openminis.app.sandbox.offload.ConfigOffloadHandler(),
         )
-        NativeOffloadServer.register("minis-browser-use", BrowserUseOffloadHandler(this))
+        NativeOffloadBridge.Server.register("minis-browser-use", BrowserUseOffloadHandler(this))
         // T188: minis-sessions-cli — agent-side query of chat history.
         // Registers next to the other minis-* tools so PRootKernel.
         // installHandlerStubs() picks it up on the next rootfs boot
         // (writes a 17-byte exit-0 stub at /usr/local/bin/minis-sessions-cli
         // so PATH lookup succeeds; PRoot intercepts the execve before
         // the stub runs and routes to this handler).
-        NativeOffloadServer.register("minis-sessions-cli", SessionsOffloadHandler(chatRepository))
+        NativeOffloadBridge.Server.register("minis-sessions-cli", SessionsOffloadHandler(chatRepository))
         // T322: android-shizuku-cli — privileged Android control via Shizuku.
         // The handler short-circuits with a typed error envelope when the
         // user hasn't installed / started / authorized Shizuku, so we
         // can register unconditionally; ShizukuManager.init below wires
         // up the binder lifecycle listeners + StateFlow.
-        NativeOffloadServer.register("android-shizuku-cli", ShizukuOffloadHandler(this))
+        NativeOffloadBridge.Server.register("android-shizuku-cli", ShizukuOffloadHandler(this))
         com.openminis.app.offload.ShizukuManager.init(this)
 
-        // T-android-minis-debug-cli: shell-side CLI wrapper around the in-app
-        // DebugServer (127.0.0.1:5321) JSON-RPC. DEBUG-only — Release builds
-        // ship neither the DebugServer nor this handler, so the
-        // `/usr/local/bin/minis-debug` stub is also absent (PRootKernel.
-        // installHandlerStubs enumerates currently-registered handlers).
-        if (BuildConfig.DEBUG) {
-            NativeOffloadServer.register(
-                "minis-debug",
-                com.openminis.app.sandbox.offload.DebugOffloadHandler(this),
-            )
+        // Start the bridge server (owns the main-process side of the
+        // forwarding + permission bridge) and the :toolservice process
+        // (owns the PRoot-facing native_offload socket).
+        NativeOffloadBridge.Server.start()
+        runCatching {
+            startService(android.content.Intent(this, com.openminis.app.service.ToolExecutionService::class.java))
+        }.onFailure { e ->
+            Log.w("MinisApp", "failed to start ToolExecutionService: ${e.message}")
         }
-
-        NativeOffloadServer.start(RootfsManager.getInstance(this).rootfsDir)
 
         // Initialize session activity tracker for foreground service management
         SessionActivityTracker.init(this)

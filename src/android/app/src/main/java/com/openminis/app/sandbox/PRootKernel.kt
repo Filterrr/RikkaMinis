@@ -14,6 +14,7 @@ import java.io.File
 import java.io.IOException
 import java.util.TimeZone
 import kotlin.math.abs
+import kotlinx.coroutines.delay
 
 /**
  * PRoot configuration holder and command builder.
@@ -64,6 +65,14 @@ object PRootKernel {
 
         bootContext = context.applicationContext
         rootfsManager = RootfsManager.getInstance(context)
+
+        // [toolservice-ready] The native_offload socket is owned by the
+        // :toolservice process (ToolExecutionService). Before booting a
+        // shell we wait (bounded) for that process to signal it has bound the
+        // socket — otherwise the first guest execve of an android-* handler
+        // could race a not-yet-bound socket and get a retryable 127/1 error.
+        waitForToolServiceReady(bootContext)
+
         rootfsManager.installIfNeeded()
         rootfsManager.installProotIfNeeded()
 
@@ -187,10 +196,13 @@ object PRootKernel {
         // can resolve /var/minis/{memory,skills,shared}/... (idempotent).
         registerGlobalBindMounts(context)
 
-        // Start the native_offload server so the proot extension can reach it
-        // over the abstract unix socket. Handlers must have been registered
-        // via NativeOffloadServer.register() before this point.
-        NativeOffloadServer.start(rootfsManager.rootfsDir)
+        // [native-oom Phase 1 做法B] The native_offload socket is owned by
+        // the :toolservice process (ToolExecutionService), NOT by the main
+        // process. We only generate the stub binaries here (below); the
+        // socket must already be reachable from ToolExecutionService before
+        // any PRoot shell boots — MinisApp.onCreate starts that service
+        // before any session can be created. If the socket is not yet up a
+        // guest execve will get a retryable 127/1 error.
 
         // Materialize stub binaries inside the rootfs for each handler so
         // /bin/sh's PATH search succeeds and triggers an execve the extension
@@ -821,6 +833,27 @@ object PRootKernel {
      * to trigger an execve — proot's native_offload extension intercepts
      * that execve before the stub actually runs.
      */
+    /**
+     * [toolservice-ready] Wait (bounded) for the `:toolservice` process to
+     * signal that it has bound the native_offload abstract socket. The
+     * marker file is written by ToolExecutionService.onCreate after
+     * NativeOffloadServer.start() succeeds. Bounded so a crashed/restarting
+     * toolservice cannot block shell boot forever — on timeout we proceed
+     * (the first offload execve will fail with a retryable error and the
+     * coordinator can restart the shell).
+     */
+    private suspend fun waitForToolServiceReady(context: Context) {
+        val marker = java.io.File(context.filesDir, "toolservice_ready")
+        repeat(50) { attempt ->  // 50 × 100ms = 5s max
+            if (marker.exists()) {
+                Log.i(TAG, "toolservice ready marker found (attempt ${attempt + 1})")
+                return
+            }
+            delay(100)
+        }
+        Log.w(TAG, "toolservice readiness marker not found after 5s — proceeding anyway")
+    }
+
     private fun installHandlerStubs(rootfsDir: File) {
         val binDir = File(rootfsDir, "usr/local/bin").also { it.mkdirs() }
         var created = 0

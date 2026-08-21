@@ -368,6 +368,14 @@ object OffloadPermissionManager {
                 val grants = sessionGrants.getOrPut(sessionId) { mutableSetOf() }
                 if (toolName in grants) return true
 
+                // [toolservice-permission-bridge] In the :toolservice process
+                // the Compose dialog doesn't exist — delegate the ASK_ONCE
+                // decision to the main process over the bridge socket.
+                val remote = remoteCheck
+                if (remote != null) {
+                    return remote(toolName, toolTitle, sessionId)
+                }
+
                 // Show dialog and wait for response.
                 val info = toolRegistry.find { it.toolName == toolName }
                 val response = suspendCancellableCoroutine<Response> { cont ->
@@ -410,5 +418,27 @@ object OffloadPermissionManager {
     fun clearSessionGrants(sessionId: String) {
         sessionGrants.remove(sessionId)
         sessionDenials.remove(sessionId)
+    }
+
+    /**
+     * [toolservice-permission-bridge] Optional cross-process permission
+     * checker. Set by the `:toolservice` process to delegate ASK_ONCE checks
+     * to the main process (whose Compose UI shows the dialog). The main
+     * process leaves this null and uses the in-process
+     * [pendingContinuation]/[respondToRequest] path.
+     *
+     * The signature is an async suspend function (like [checkPermission]
+     * itself) so the caller can bridge over a socket; returning null means
+     * "no remote checker — fall through to the in-process dialog".
+     */
+    @Volatile
+    var remoteCheck: (suspend (toolName: String, toolTitle: String, sessionId: String) -> Boolean)? = null
+
+    /**
+     * [toolservice-permission-bridge] Restore the in-process dialog path
+     * (used when a process does NOT host the Compose permission dialog).
+     */
+    fun clearRemoteCheck() {
+        remoteCheck = null
     }
 }
