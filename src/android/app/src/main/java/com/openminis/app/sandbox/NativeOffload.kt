@@ -8,7 +8,12 @@ import java.io.DataOutputStream
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
 
@@ -22,6 +27,17 @@ import kotlin.concurrent.thread
  * requests are a few KB, so 1 MiB is generous headroom.
  */
 internal const val MAX_REQUEST_BYTES = 1024 * 1024  // 1 MiB
+
+/**
+ * Hard cap on the total size of a single handler's serialized output
+ * (response text) modulo the enclosing Linux file wrapper. Bounds the
+ * StringBuilder / tmpfile write in [NativeOffloadServer.handleClient] so a
+ * runaway handler can't balloon host RAM. The response output itself is
+ * written to a rootfs tmpfile and the guest `cat`s it, so the practical cap
+ * trims only pathologically large handler output — Mirrors the shell-output
+ * cap precedent ([PersistentShell.MAX_OUTPUT_CHARS]).
+ */
+internal const val MAX_HANDLER_OUTPUT_CHARS = 4 * 1024 * 1024  // 4 MiB chars
 
 /**
  * Monotonic byte counter for decoding one offload request frame. Aborts
@@ -58,6 +74,32 @@ internal fun DataInputStream.readLEString(budget: OffloadRequestBudget): String 
     val buf = ByteArray(len)
     readFully(buf)
     return String(buf, Charsets.UTF_8)
+}
+
+/**
+ * [offload-bounded-admission] Cap a handler's serialized output text to
+ * [reachable MAX_HANDLER_OUTPUT_CHARS]. Pure JVM function so the trimming
+ * semantics are unit-testable without Android. Returns (trimmedText, wasTrimmed).
+ */
+internal fun internalTruncateHandlerOutput(text: String, max: Int = MAX_HANDLER_OUTPUT_CHARS): Pair<String, Boolean> {
+    if (text.length <= max) return text to false
+    val trimmed = text.substring(0, max) +
+        "\n[output truncated: ${text.length} chars > $max]"
+    return trimmed to true
+}
+
+/**
+ * [offload-bounded-admission] Prefix guard: is [candidate] (as a canonical
+ * path) strictly underneath [root] (also canonical), without a path-separator
+ * boundary ambiguity or `..` escape? Pure JVM file logic for the mailbox
+ * path discipline. Rejects when either path cannot be canonicalized.
+ */
+internal fun isPathUnderRoot(root: java.io.File, candidate: java.io.File): Boolean {
+    val rootCanonical = runCatching { root.canonicalPath }.getOrNull() ?: return false
+    val candCanonical = runCatching { candidate.canonicalPath }.getOrNull() ?: return false
+    if (candCanonical == rootCanonical) return true
+    val prefix = rootCanonical.removeSuffix(java.io.File.separator) + java.io.File.separator
+    return candCanonical.startsWith(prefix)
 }
 
 /**
@@ -128,18 +170,66 @@ object NativeOffloadServer {
     // ledger keeps the newest files and evicts oldest-first under one lock.
     private val tmpLedger = OffloadTmpFileLedger()
 
-    // [native-rss-tool-guard / D-2] Bounded worker concurrency. Previously each
-    // accepted connection spawned an unbounded `thread {}` — with several
-    // concurrent sessions each offloading repeatedly, the per-thread native
-    // stack + handler allocations accumulate in the main process with no
-    // backpressure. Cap concurrent worker threads to the same bound as the
-    // shell coordinator; excess requests queue on the semaphore instead of
-    // spawning a new OS thread.
-    // [D-2] sized at start() from the shared ConcurrencyPrefs cap (kept aligned
-    // with SessionConcurrencyManager / ExecutionCoordinator). @Volatile because
-    // it is replaced once in start(); never resized at runtime.
+    // [offload-bounded-admission] Fixed-size executor for native-offload
+    // client tasks. Replaces the old per-connection `thread {}` + Semaphore
+    // pattern which still spawned one OS thread per accepted socket (so a
+    // burst of concurrent connections grew ~1MB-stack threads unboundedly —
+    // the `pthread_create(1040KB stack) failed` crash shape). The executor
+    // bounds live worker THREADS (fixed core/max) and queued-but-unprocessed
+    // connections (bounded queue); rejected submissions get an immediate
+    // busy reply instead of blocking.
     @Volatile
-    private var workerConcurrency = java.util.concurrent.Semaphore(MAX_CONCURRENT_WORKERS, true)
+    private var executor: ThreadPoolExecutor? = null
+    @Volatile
+    private var executorNThreads: Int = MAX_CONCURRENT_WORKERS
+
+    private val queueBacklog = AtomicInteger(0)
+    private val acceptedTotal = AtomicLong(0)
+    private val rejectedTotal = AtomicLong(0)
+    private val completedTotal = AtomicLong(0)
+
+    /** Live diagnostics for [offload-bounded-admission]. */
+    data class AdmissionStats(
+        val corePoolSize: Int,
+        val maxPoolSize: Int,
+        val poolSize: Int,
+        val activeCount: Int,
+        val queueSize: Int,
+        val largestPoolSize: Int,
+        val taskCount: Long,
+        val completedCount: Long,
+        val rejectedTotal: Long,
+    )
+
+    /** Immutable counter snapshot (pure JVM, testable without Android). */
+    data class AdmissionCounters(
+        val queueBacklog: Int,
+        val acceptedTotal: Long,
+        val rejectedTotal: Long,
+        val completedTotal: Long,
+    )
+
+    fun admissionStats(): AdmissionStats? {
+        val e = executor ?: return null
+        return AdmissionStats(
+            corePoolSize = e.corePoolSize,
+            maxPoolSize = e.maximumPoolSize,
+            poolSize = e.poolSize,
+            activeCount = e.activeCount,
+            queueSize = e.queue.size,
+            largestPoolSize = e.largestPoolSize,
+            taskCount = e.taskCount,
+            completedCount = e.completedCount,
+            rejectedTotal = rejectedTotal.get(),
+        )
+    }
+
+    fun admissionCounters(): AdmissionCounters = AdmissionCounters(
+        queueBacklog = queueBacklog.get(),
+        acceptedTotal = acceptedTotal.get(),
+        rejectedTotal = rejectedTotal.get(),
+        completedTotal = completedTotal.get(),
+    )
 
     @Volatile
     private var rootfsTmpDir: File? = null
@@ -155,13 +245,22 @@ object NativeOffloadServer {
     @Synchronized
     fun start(rootfsDir: File) {
         rootfsTmpDir = File(rootfsDir, "tmp")
-        // [D-2] size the offload worker cap from the shared ConcurrencyPrefs
-        // knob (runs after ConcurrencyPrefs.prime in MinisApp.onCreate), kept
-        // aligned with the shell coordinator + session slot cap.
-        workerConcurrency = java.util.concurrent.Semaphore(
-            com.openminis.app.data.ConcurrencyPrefs.maxConcurrentSessions(),
-            true,
-        )
+        // [offload-bounded-admission] Build the fixed worker pool if absent.
+        // Core size = shared concurrency cap; queue = cap * 4 so a transient
+        // burst queues before being rejected, but NEVER spawns more threads.
+        if (executor == null && serverSocket == null) {
+            val nThreads = com.openminis.app.data.ConcurrencyPrefs.maxConcurrentSessions()
+            executorNThreads = nThreads
+            val queue = ArrayBlockingQueue<Runnable>(nThreads * 4)
+            executor = ThreadPoolExecutor(
+                nThreads, nThreads,
+                60L, TimeUnit.SECONDS,
+                queue,
+                { r -> Thread(r, "native-offload-worker").apply { isDaemon = true } },
+                ThreadPoolExecutor.AbortPolicy(),
+            )
+            Log.i(TAG, "offload bounded admission pool size=$nThreads queue=${queue.capacity()}")
+        }
         if (serverSocket != null) return
 
         // T287-followup: bind with bounded retry. Linux abstract sockets are
@@ -206,6 +305,8 @@ object NativeOffloadServer {
         try { serverSocket?.close() } catch (_: Exception) {}
         serverSocket = null
         acceptThread = null
+        executor?.shutdownNow()
+        executor = null
         // [audit-RC7] Server is going away — no guest will ever cat the
         // tracked tmpfiles again. Reclaim them now instead of leaking RAM
         // until the next rootfs reset.
@@ -220,31 +321,52 @@ object NativeOffloadServer {
                 Log.i(TAG, "accept loop terminated: ${e.message}")
                 return
             }
-            Log.d(TAG, "accepted client from proot extension")
-            thread(name = "native-offload-worker", isDaemon = true) {
-                // [native-rss-tool-guard] Bounded concurrency: acquire the
-                // worker slot BEFORE reading the frame so a burst of
-                // concurrent offload requests queues here instead of each
-                // spawning an unbounded handler thread that bloats native
-                // heap. The slot is released on every exit path (success,
-                // decode error, handler throw) so one bad client can't leak
-                // the worker permit.
-                val acquired = try {
-                    workerConcurrency.acquire()
-                } catch (e: InterruptedException) {
-                    Thread.currentThread().interrupt()
-                    runCatching { client.close() }
-                    return@thread
-                }
+            acceptTotal(client)
+        }
+    }
+
+    /**
+     * Admit one accepted connection to the bounded executor. Pure/synchronous
+     * so the acceptance path never blocks on a full queue: if the executor is
+     * gone or its queue is full, reply `busy` and close immediately instead
+     * of spawning any new thread.
+     */
+    private fun acceptTotal(client: LocalSocket) {
+        acceptedTotal.incrementAndGet()
+        val e = executor
+        if (e == null || e.isShutdown) {
+            rejectedTotal.incrementAndGet()
+            runCatching { client.close() }
+            Log.w(TAG, "offload admission: executor unavailable — dropping connection")
+            return
+        }
+        queueBacklog.incrementAndGet()
+        try {
+            e.execute {
+                queueBacklog.decrementAndGet()
                 try {
                     handleClient(client)
-                } catch (e: Exception) {
-                    Log.w(TAG, "worker error: ${e.message}", e)
+                } catch (ex: Exception) {
+                    Log.w(TAG, "worker error: ${ex.message}", ex)
                 } finally {
-                    workerConcurrency.release()
-                    try { client.close() } catch (_: Exception) {}
+                    completedTotal.incrementAndGet()
+                    runCatching { client.close() }
                 }
             }
+        } catch (re: RejectedExecutionException) {
+            queueBacklog.decrementAndGet()
+            rejectedTotal.incrementAndGet()
+            // Queue full — the guest will get an immediate busy reply so it
+            // can surface "system busy" instead of hanging on the socket.
+            try {
+                val output = DataOutputStream(client.outputStream)
+                output.writeLEInt(MAGIC_RSP)
+                output.writeLEInt(127)          // exit code: not executed
+                output.writeLEString("/tmp/native-offload-busy")
+                output.flush()
+            } catch (_: Exception) {}
+            runCatching { client.close() }
+            Log.w(TAG, "offload admission: queue full — busy reply sent")
         }
     }
 
@@ -320,6 +442,12 @@ object NativeOffloadServer {
         }
         val elapsedMs = (System.nanoTime() - t0) / 1_000_000
 
+        // [offload-bounded-admission] Cap the serialized handler output so a
+        // runaway handler can't balloon host RAM via the tmpfile write. The
+        // guest `cat`s the tmpfile, so real (non-pathological) outputs are
+        // unaffected; oversized ones are trimmed and flagged.
+        val (outText, trimmed) = internalTruncateHandlerOutput(result.output)
+
         val tmpDir = rootfsTmpDir ?: throw IllegalStateException("server not started")
         tmpDir.mkdirs()
 
@@ -331,12 +459,13 @@ object NativeOffloadServer {
         // double-delete, no deleting a file the guest hasn't cat'd yet.
         val seq = counter.incrementAndGet()
         val tmpHost = File(tmpDir, ".native-offload-$pid-$seq")
-        tmpHost.writeText(result.output)
+        tmpHost.writeText(outText)
         tmpLedger.rotate(tmpHost)
         val tmpGuest = "/tmp/${tmpHost.name}"
 
-        Log.d(TAG, "reply name='$name' exit=${result.exitCode} outBytes=${result.output.length} " +
-            "tmpGuest=$tmpGuest elapsed=${elapsedMs}ms")
+        Log.d(TAG, "reply name='$name' exit=${result.exitCode} outBytes=${outText.length}" +
+            (if (trimmed) " (trimmed)" else "") +
+            " tmpGuest=$tmpGuest elapsed=${elapsedMs}ms")
 
         output.writeLEInt(MAGIC_RSP)
         output.writeLEInt(result.exitCode)
