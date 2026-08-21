@@ -128,8 +128,11 @@ class NativeOffloadBridgeTest {
         val out = DataOutputStream(bos)
         out.writeLEString("")
         out.flush()
+        // readLEString() reads its own length prefix (0) internally, then
+        // returns "" — the wire encoding is len=0 with no payload bytes.
         val input = DataInputStream(ByteArrayInputStream(bos.toByteArray()))
-        assertEquals(0, input.readLEInt())
         assertEquals("", input.readLEString())
+        // Exactly 4 bytes on the wire (the zero length int) — nothing more.
+        assertEquals(-1, input.read())
     }
 }
