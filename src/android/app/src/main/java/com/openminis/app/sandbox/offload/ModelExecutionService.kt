@@ -43,11 +43,50 @@ class ModelExecutionService : Service() {
         const val STREAM_FILE = "stream.jsonl"
         /** Cancellation signal file: when created, a running stream aborts. */
         const val CANCEL_FILE = "cancel"
+
+        /**
+         * [native-oom Phase 1 / Tier 1 hard-injury 1] Idle-reap delay. After a
+         * request finishes we do NOT immediately die — we hold the process alive
+         * for this long so a burst of consecutive offload calls reuses the warm
+         * process (no cold-start per call). If no new request arrives within this
+         * window we [Process.killProcess] ourselves so the native heap
+         * (DirectByteBuffer response bodies, JSON parse scratch, decoded media)
+         * is returned to the OS deterministically.
+         *
+         * Why killProcess and not stopSelf: [stopSelf] only stops the Service
+         * component; the process survives in Android's cached-process pool and
+         * its native heap is NOT reclaimed. The 2026-08-17 plan (Tier 1) records
+         * this exact injury — "stopSelf() 不杀进程，native 堆不归零".
+         */
+        const val IDLE_REAP_DELAY_MS = 30_000L
     }
+
+    /**
+     * [native-oom Phase 1] Main-looper handler + the armed reap runnable. Held
+     * as fields so [cancelIdleReap] can remove the exact runnable that
+     * [scheduleIdleReap] posted — without this, a stale killProcess would fire
+     * mid-request and sever an in-flight stream.
+     */
+    private var reapHandler: android.os.Handler? = null
+    private var reapRunnable: Runnable? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    override fun onCreate() {
+        super.onCreate()
+        // [native-oom Phase 1] Prime the idle-reap deadline at process birth.
+        // If no request is dispatched before the window elapses (the process
+        // was spawned but never used — e.g. an aborted offload), reap it so it
+        // doesn't sit in the cached-process pool holding native heap.
+        scheduleIdleReap()
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // A real request arrived — defer any pending reap (reuse the warm
+        // process for this burst). The deadline is re-armed in the worker's
+        // finally once the request completes.
+        cancelIdleReap()
+
         val requestDir = intent?.getStringExtra(EXTRA_REQUEST_DIR)
             ?: run { stopSelf(startId); return START_NOT_STICKY }
 
@@ -61,7 +100,9 @@ class ModelExecutionService : Service() {
             return START_NOT_STICKY
         }
 
-        // Execute on a background thread; stopSelf after the result lands.
+        // Execute on a background thread; re-arm the idle-reap deadline after
+        // the result lands — the process now lingers IDLE_REAP_DELAY_MS for a
+        // burst of follow-up calls, then killProcess returns all native heap.
         Thread {
             try {
                 val requestText = requestFile.readText()
@@ -83,11 +124,44 @@ class ModelExecutionService : Service() {
                     }.toString())
                 } catch (_: Throwable) {}
             } finally {
+                // The result (success or error) is durably on disk (resultFile
+                // written above, or stream.jsonl flushed by executeStreamingRun
+                // before it returns). Re-arm the idle-reap; stopSelf only stops
+                // the component — the process lives until the reap fires.
+                scheduleIdleReap()
                 stopSelf(startId)
             }
         }.apply { isDaemon = false }.start()
 
         return START_NOT_STICKY
+    }
+
+    /**
+     * [native-oom Phase 1] Idle-reap machinery. The only reliable way to give
+     * this process's native heap back to the OS is to kill the process itself;
+     * [stopSelf] alone leaves it in the cached-process pool. [scheduleIdleReap]
+     * arms a deferred [Process.killProcess]; [cancelIdleReap] defuses it when a
+     * new request arrives so a burst reuses the warm process instead of paying
+     * cold-start per call.
+     */
+    private fun scheduleIdleReap() {
+        val handler = reapHandler ?: android.os.Handler(android.os.Looper.getMainLooper()).also {
+            reapHandler = it
+        }
+        cancelIdleReap()
+        val runnable = Runnable {
+            Log.i(TAG, "idle ${IDLE_REAP_DELAY_MS}ms — killing process to return native heap (pid=${android.os.Process.myPid()})")
+            android.os.Process.killProcess(android.os.Process.myPid())
+        }
+        reapRunnable = runnable
+        handler.postDelayed(runnable, IDLE_REAP_DELAY_MS)
+    }
+
+    private fun cancelIdleReap() {
+        val handler = reapHandler ?: return
+        val runnable = reapRunnable ?: return
+        handler.removeCallbacks(runnable)
+        reapRunnable = null
     }
 
     private fun executeRun(requestJson: String): String {

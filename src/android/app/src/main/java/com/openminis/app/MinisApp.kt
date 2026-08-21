@@ -39,6 +39,8 @@ import com.openminis.app.sandbox.MountedFolderCoordinator
 import com.openminis.app.sandbox.NativeOffloadServer
 import com.openminis.app.sandbox.PRootKernel
 import com.openminis.app.sandbox.RootfsManager
+import com.openminis.app.sandbox.offload.ChatStreamOffloadHandler
+import com.openminis.app.sandbox.offload.ModelExecutionService
 import com.openminis.app.sandbox.offload.AccessibilityOffloadHandler
 import com.openminis.app.sandbox.offload.AlarmOffloadHandler
 import com.openminis.app.sandbox.offload.BrowserUseOffloadHandler
@@ -114,6 +116,25 @@ class MinisApp : Application(), ImageLoaderFactory {
     private var foregroundActivityCount: Int = 0
 
     fun isAppForeground(): Boolean = foregroundActivityCount > 0
+
+    /**
+     * [process-idle-reap-aggressive-reclaim] Stop the :modelservice process when
+     * the app is at the hard RSS ceiling and no chat stream is in flight. This
+     * forces its native heap (DirectByteBuffer / JSON parse / decoded media) back
+     * to the OS — the same containment the idle-reap in [ModelExecutionService]
+     * does lazily, but triggered on demand by the memory gate. Guarded by
+     * [ChatStreamOffloadHandler.activeStreams] so we never sever an in-flight
+     * stream (which would leave stream.jsonl without DONE/error).
+     */
+    private fun reclaimModelServiceIfIdle() {
+        if (ChatStreamOffloadHandler.activeStreams > 0) {
+            AppLogger.warning("MemoryPressureGate", "aggressive reclaim: skipped :modelservice (stream in flight)")
+            return
+        }
+        runCatching { stopService(Intent(this, ModelExecutionService::class.java)) }
+            .onSuccess { AppLogger.info("MemoryPressureGate", "aggressive reclaim: stopped :modelservice process") }
+            .onFailure { AppLogger.warning("MemoryPressureGate", "aggressive reclaim: stopService(:modelservice) failed: ${it.message}") }
+    }
 
     /**
      * T-multidevice: kick off a multi-device auto-sync when the app comes to
@@ -527,6 +548,22 @@ class MinisApp : Application(), ImageLoaderFactory {
         MemoryPressureGate.reclaimHook = {
             runCatching { ExecutionCoordinator.recycleIdleShells() }
             runCatching { sharedBrowserTabPool.evictIdleTabs() }
+        }
+        // [process-idle-reap-aggressive-reclaim] Aggressive teardown for the
+        // hard-RSS path (soft reclaim left the process ≥ CRITICAL). Order:
+        //   1. force-recycle quiet shells (PRoot tracer + child tree) — the
+        //      single biggest native/mmap owner in the main process
+        //   2. reclaim :modelservice (native heap → 0 deterministically) when
+        //      no stream is in flight
+        //   3. release idle WebView tabs + drop markdown parse caches + GC
+        // The result: the system "swipes the card" for itself — the user should
+        // rarely have to force-kill to recover.
+        MemoryPressureGate.aggressiveReclaimHook = {
+            runCatching { ExecutionCoordinator.aggressiveRecycleShells() }
+            runCatching { reclaimModelServiceIfIdle() }
+            runCatching { sharedBrowserTabPool.aggressiveEvictTabs() }
+            runCatching { clearMarkdownParseCachesForMemoryPressure() }
+            runCatching { System.gc() }
         }
         MemoryPressureGate.pressureListener = { level, rssMB ->
             AppLogger.warning("MemoryPressureGate", "level=$level rss=${rssMB}MB — " +
