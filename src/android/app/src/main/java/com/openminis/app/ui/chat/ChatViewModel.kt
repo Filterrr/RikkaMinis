@@ -8288,6 +8288,10 @@ class ChatViewModel(
             // Persist the assistant+tools turn (with full input JSON and thinking).
             // Capture the persisted DB id so we can back-fill agentHistory's last
             // assistant entry — compact-marker boundary resolution depends on it.
+            // [Diag-appendMessage] Boundary markers around the persist block so a
+            // hang between tool-END and the next REQ can be attributed to the
+            // persist phase vs the next-turn dispatch.
+            android.util.Log.i("ChatVMStream", "runAgentLoop turn=$turn persist-begin blocks=${allToolBlocks.size}")
             val turnParts = buildTurnParts(allToolBlocks, turnStartBlockIndex, toolInputMap)
             val blockMeta = allToolBlocks.filter { it.kind == "tool_use" }.associateBy { it.id }
             val assistantDbId = persistAssistantTurn(turnParts, lastUsage, turnReasoningContent, blockMeta)
@@ -8299,7 +8303,9 @@ class ChatViewModel(
             }
 
             // Persist tool results as user-role message (mirrors iOS)
+            android.util.Log.i("ChatVMStream", "runAgentLoop turn=$turn persist assistant done (dbId=$assistantDbId), toolResult-begin")
             val toolResultDbId = persistToolResultMessage(resultParts)
+            android.util.Log.i("ChatVMStream", "runAgentLoop turn=$turn persist-both done (toolDbId=$toolResultDbId)")
 
             // Add tool results to history
             agentHistory.add(LLMMessage(
