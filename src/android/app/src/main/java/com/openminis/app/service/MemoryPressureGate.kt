@@ -46,6 +46,18 @@ object MemoryPressureGate {
     var reclaimHook: () -> Unit = {}
 
     /**
+     * [process-idle-reap-aggressive-reclaim] 可注入的「激进回收」动作——
+     * 软回收（[reclaimHook]）之后仍处于硬门槛时的最后一搏，目标是「系统自己
+     * 划卡片」而不是让用户手动杀进程。生产（MinisApp 装配）装配为：
+     *   1. 强制回收所有空闲 PersistentShell（含 PRoot tracer 子进程树）
+     *   2. 回收 :modelservice 进程（若空闲，native 堆确定性归零）
+     *   3. 释放 WebView 标签 + 清 markdown 解析缓存 + System.gc()
+     * 测试注入 spy。未装配时等价于空操作（安全侧：不触发降级）。
+     */
+    @Volatile
+    var aggressiveReclaimHook: () -> Unit = {}
+
+    /**
      * 可注入的压力通知。生产（MinisApp 装配）接到 AppLogger；
      * 测试注入计数器。只在 ELEVATED / CRITICAL 时触发。
      */
@@ -89,6 +101,20 @@ object MemoryPressureGate {
     suspend fun reclaimAndWait(waitMs: Long = 2_000L) {
         reclaimHook()
         delay(waitMs)
+    }
+
+    /**
+     * [process-idle-reap-aggressive-reclaim] 软回收无效后的最后一搏：
+     * 先执行常规 [reclaimHook]，再执行 [aggressiveReclaimHook]（强杀空闲
+     * shell / 回收子进程 / 清缓存 / 二次 GC），然后等待更长让内核归还 mmap。
+     * 返回回收后的 RSS（MB），供调用方决定是否仍要拒绝。
+     */
+    suspend fun aggressiveReclaimAndWait(softWaitMs: Long = 1_000L, hardWaitMs: Long = 3_000L): Long {
+        reclaimHook()
+        delay(softWaitMs)
+        aggressiveReclaimHook()
+        delay(hardWaitMs)
+        return rssReader()
     }
 
     /** 通知压力事件（只对非 NORMAL 级别；NORMAL 静默）。 */

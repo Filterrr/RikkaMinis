@@ -1287,6 +1287,33 @@ class BrowserTabPool(private val context: Context) : ComponentCallbacks2 {
         }
     }
 
+    /**
+     * [process-idle-reap-aggressive-reclaim] Destroy every NOT-in-use tab except
+     * the currently selected one, ignoring the idle-timeout grace (we're at the
+     * hard RSS ceiling, so the normal 15-min eviction is too patient). WebView
+     * teardown frees 50-100 MB/tab of renderer memory. Dispatched to Main
+     * because [destroyTab] is main-thread-only; skips the selected tab so the
+     * user's visible view survives, and skips any inUse tab (an agent action is
+     * mid-flight on it — destroying would fail/race that action).
+     */
+    fun aggressiveEvictTabs() {
+        evictionScope.launch {
+            withContext(Dispatchers.Main) {
+                val currentTabs = _tabs.value.toMutableList()
+                val victims = currentTabs.filter { !it.inUse && it.id != _selectedTabId.value }
+                if (victims.isEmpty()) return@withContext
+                Log.i(TAG, "aggressive evict: destroying ${victims.size} tab(s) (hard-RSS reclaim)")
+                for (tab in victims) {
+                    val url = tab.manager.currentURL.value
+                    if (url.isNotEmpty()) savedURLs[tab.id] = url
+                    destroyTab(currentTabs, tab)
+                }
+                _tabs.value = currentTabs
+                saveState()
+            }
+        }
+    }
+
     // -- Viewport API (mirrors iOS BrowserTabPool) --
 
     /**
