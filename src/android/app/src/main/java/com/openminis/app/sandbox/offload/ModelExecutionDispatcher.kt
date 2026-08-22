@@ -37,6 +37,10 @@ object ModelExecutionDispatcher {
     private const val TAG = "ModelExecDispatcher"
     private const val REQUEST_TIMEOUT_MS = 3 * 60_000L  // matches agent tool timeout headroom
     private const val POLL_INTERVAL_MS = 200L
+    /** Bounded wait for the worker's self-reap before deleting the request dir. */
+    private const val REAP_WAIT_MS = 3_000L
+    private const val REAP_SETTLE_MS = 300L
+    private const val REAP_POLL_MS = 50L
 
     /** Default base directory for request/result staging. */
     private const val STAGING_ROOT = "model-exec"
@@ -244,12 +248,52 @@ object ModelExecutionDispatcher {
             read
         }
 
-        if (result == null) {
+        if (result != null) {
+            // [TF-B ack] Tell the worker we consumed the result so it can
+            // self-reap immediately instead of waiting out its ack timeout.
+            try {
+                ModelExecutionMailbox.writeClientAck(dir)
+            } catch (_: Exception) {}
+        } else {
             Log.w(TAG, "timeout waiting for model-exec result — falling back in-process")
+            // Try to stop the worker (it may be mid-run); it self-reaps on cancel
+            // / shutdown. Then settle briefly before deleting the dir so we never
+            // delete under a worker still writing result.json.
+            try { ModelExecutionMailbox.writeCancel(dir) } catch (_: Exception) {}
         }
-        // Cleanup best-effort; the service may still be draining.
+
+        // [TF-B] Delete the request dir ONLY after the worker acknowledged the
+        // terminal state (client.ack consumed / cancel.ack received) or its
+        // process has gone away — never delete under a worker still appending
+        // to result.json / stream.jsonl. Bounded wait: if the worker is already
+        // gone (self-reaped after ack), we proceed immediately.
+        waitForWorkerReap(dir, REAP_WAIT_MS)
         try { dir.deleteRecursively() } catch (_: Exception) {}
         return result
+    }
+
+    /**
+     * [TF-B] Wait (bounded) for the :modelservice worker's process to disappear
+     * after a result was consumed — the worker self-reaps when quiescent, so
+     * once its pid is gone the dir is safe to delete. Absent pid file → assume
+     * safe immediately (the worker may never have started the pid write).
+     */
+    private suspend fun waitForWorkerReap(dir: File, timeoutMs: Long) {
+        val pidFile = File(dir, "worker.pid")
+        var pid = runCatching { pidFile.readText().trim().toInt() }.getOrNull()
+        if (pid == null) {
+            // No pid yet (worker may still be starting). Give it a short settle
+            // before the caller deletes, to avoid tearing a just-written result.
+            kotlinx.coroutines.delay(REAP_SETTLE_MS)
+            pid = runCatching { pidFile.readText().trim().toInt() }.getOrNull()
+        }
+        if (pid == null) return
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (!java.io.File("/proc/$pid").exists()) return
+            delay(REAP_POLL_MS)
+        }
+        Log.w(TAG, "worker pid $pid still alive after ${timeoutMs}ms — deleting dir anyway (worker may be mid-drain)")
     }
 
     private fun logDispatchFailure(dir: File) {

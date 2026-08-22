@@ -3,7 +3,6 @@ package com.openminis.app.sandbox
 import android.annotation.SuppressLint
 import android.app.ActivityManager
 import android.content.Context
-import android.content.Intent
 import android.os.Debug
 import android.os.SystemClock
 import android.util.Log
@@ -13,7 +12,7 @@ import com.openminis.app.agent.runtime.RetryPolicy
 import com.openminis.app.agent.runtime.RetrySafety
 import com.openminis.app.data.repository.EnvVarRepository
 import com.openminis.app.sandbox.offload.ChatStreamOffloadHandler
-import com.openminis.app.sandbox.offload.ModelExecutionService
+import com.openminis.app.sandbox.offload.ModelExecutionMailbox
 import com.openminis.app.service.MemoryPressureGate
 import com.openminis.app.service.MemoryPressureLevel
 import kotlinx.coroutines.sync.Mutex
@@ -768,12 +767,15 @@ object ExecutionCoordinator {
     }
 
     /**
-     * [direction-A step4] Kill the :modelservice process when the app native heap is
-     * still above the locked floor after GC. The generation of streaming LLM calls is
-     * offloaded to :modelservice (direction A); its process holds DirectByteBuffer /
-     * streaming native that GC in the app process cannot touch. Stopping the service
-     * terminates that process and returns its native to the OS; the next offload call
-     * (ChatStreamOffloadHandler.stream) restarts it. Only acts when pressure is real.
+     * [direction-A step4] Ask the :modelservice process to drain+die when the
+     * app native heap is still above the locked floor after GC. Unlike the old
+     * `stopService` (which killed the process out from under an in-flight
+     * stream and was reverted), TF-B uses a file-based shutdown REQUEST: the
+     * worker checks it via [ModelExecutionMailbox] and only kills itself after
+     * confirming quiescence (active==0, queue==0, no un-acked response, stream
+     * flushed). The request is written into the staging root; the worker
+     * re-checks on each request finish. A new request that arrives after the
+     * request simply revives the worker (onStartCommand → ACTIVE).
      */
     @SuppressLint("MissingPermission")
     private fun maybeReclaimModelService(nativeNowMb: Long) {
@@ -786,19 +788,24 @@ object ExecutionCoordinator {
         // [B2] Never sever an in-flight stream. If a chat stream is actively being
         // offloaded to :modelservice right now, killing the service would leave
         // stream.jsonl truncated (no DONE, no error) and the UI silently stalled
-        // until the poll timeout. Skip reclaim and let the next non-streaming
-        // pressure tick handle it.
+        // until the poll timeout. Skip the shutdown request and let the next
+        // non-streaming pressure tick handle it.
         if (ChatStreamOffloadHandler.activeStreams > 0) {
             Log.w(TAG, "[direction-A] skipped reclaim: active stream in progress " +
                 "(activeStreams=${ChatStreamOffloadHandler.activeStreams}, native ${nativeNowMb}MB)")
             return
         }
         try {
-            appContext.stopService(Intent(appContext, ModelExecutionService::class.java))
-            Log.w(TAG, "[direction-A] Reclaimed :modelservice (native still ${nativeNowMb}MB, phase $phase) — " +
-                "service will restart on next offload")
+            // Write the shutdown REQUEST into the staging root; the worker
+            // drains and kills itself when quiescent. Never stopService — the
+            // worker owns its own death timing.
+            val root = File(appContext.cacheDir, "model-exec")
+            root.mkdirs()
+            ModelExecutionMailbox.writeShutdownRequest(File(root, ModelExecutionMailbox.FILE_SHUTDOWN))
+            Log.w(TAG, "[direction-A] shutdown REQUESTED for :modelservice (native still ${nativeNowMb}MB, phase $phase) — " +
+                "worker self-reaps when quiescent")
         } catch (e: Throwable) {
-            Log.w(TAG, "[direction-A] stopService(:modelservice) failed", e)
+            Log.w(TAG, "[direction-A] shutdown request write failed", e)
         }
     }
 
