@@ -801,7 +801,7 @@ object ExecutionCoordinator {
             // worker owns its own death timing.
             val root = File(appContext.cacheDir, "model-exec")
             root.mkdirs()
-            ModelExecutionMailbox.writeShutdownRequest(File(root, ModelExecutionMailbox.FILE_SHUTDOWN))
+            ModelExecutionMailbox.writeShutdownRequest(root)
             Log.w(TAG, "[direction-A] shutdown REQUESTED for :modelservice (native still ${nativeNowMb}MB, phase $phase) — " +
                 "worker self-reaps when quiescent")
         } catch (e: Throwable) {

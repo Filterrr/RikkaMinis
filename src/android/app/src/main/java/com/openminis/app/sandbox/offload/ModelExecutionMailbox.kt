@@ -64,16 +64,18 @@ object ModelExecutionMailbox {
     /* ── Shutdown (main process → worker) ─────────────────────────── */
 
     /**
-     * Main process → worker: drain then die. Idempotent. The worker checks the
-     * marker and only self-reaps once quiescent; never stopService as proof.
+     * Main process → worker: drain then die. Idempotent. Writes the `shutdown`
+     * marker into the given directory (the staging root, shared by all request
+     * dirs); the worker checks the same marker and only self-reaps once
+     * quiescent — never stopService as proof.
      */
-    fun writeShutdownRequest(markerFile: File) {
-        markerFile.createNewFile()
+    fun writeShutdownRequest(dir: File) {
+        File(dir, FILE_SHUTDOWN).createNewFile()
     }
 
     /** Worker: was the main process asking us to drain? */
-    fun shutdownRequested(markerFile: File): Boolean =
-        markerFile.exists()
+    fun shutdownRequested(dir: File): Boolean =
+        File(dir, FILE_SHUTDOWN).exists()
 
     /* ── State dump (worker → main) ───────────────────────────────── */
 
