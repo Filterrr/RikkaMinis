@@ -21,16 +21,27 @@ import java.io.File
  *   - result.json           worker → client: terminal result (atomic rename)
  *   - state.json            worker: lifecycle state dump (ACTIVE / STOPPING / DEAD …)
  *   - client.ack            client → worker: client consumed the result
- *   - worker.pid            worker: its own pid (worker_died classification)
+ *   - worker.pid            worker: verifiable pid/runId/nonce ref (see ModelExecutionRunDir)
+ *   - worker.ready          worker: fully started & pid ref written
+ *   - terminal.json         worker: LAST marker — stream flushed + result committed
+ *                           + final state written, then terminal.json created
+ *                           atomically; followed by client.ack + self-reap.
+ *
+ * TF-F ownership rules:
+ *   - terminal.json (NOT result.json / cancel.ack alone) is the definitive
+ *     "worker has stopped writing to this run dir" signal. result.json can
+ *     exist while the worker is still in finishRequest() (writeState) — that
+ *     exact race produced the P0 state.json ENOENT FATAL.
+ *   - The client deletes a run dir ONLY after [ModelExecutionRunDir.safeToDelete]
+ *     (terminal + confirmed worker-pid gone). UNKNOWN liveness ≠ safe.
+ *   - All worker writes are defensive (return Boolean, never throw): a
+ *     reclaimed dir must log a protocol violation, never crash the worker.
  *
  * Atomicity: the worker writes result.tmp, flush + fsync, then renames to
  * result.json — the client NEVER observes a partial result. Cancel is
  * acknowledged with cancel.ack BEFORE the client deletes the directory (the
  * old code wrote cancel then immediately deleteRecursively, which raced the
  * worker's appends to stream.jsonl / result.json).
- *
- * Directory deletion only ever happens after a confirmed terminal state or an
- * ACK (cancel.ack / client.ack, or a result.json already present).
  */
 object ModelExecutionMailbox {
 
@@ -42,7 +53,6 @@ object ModelExecutionMailbox {
     const val FILE_STATE = "state.json"
     const val FILE_CLIENT_ACK = "client.ack"
     const val FILE_SHUTDOWN = "shutdown"
-    const val FILE_WORKER_PID = "worker.pid"
 
     /* ── Cancellation ─────────────────────────────────────────────── */
 
@@ -51,9 +61,15 @@ object ModelExecutionMailbox {
         File(dir, FILE_CANCEL).createNewFile()
     }
 
-    /** Worker → client: acknowledge that the worker saw the cancel. */
-    fun writeCancelAck(dir: File) {
+    /** Worker → client: acknowledge that the worker saw the cancel.
+     *  Defensive (never throws): the run dir may already have been reclaimed
+     *  by the client — a cancelled stream must not FATAL the worker. */
+    fun writeCancelAck(dir: File): Boolean = runCatching {
         File(dir, FILE_CANCEL_ACK).createNewFile()
+        true
+    }.getOrElse {
+        android.util.Log.w(ModelExecutionRunDir.TAG, "writeCancelAck failed: ${it.message}")
+        false
     }
 
     /** Client → worker: result consumed. Lets the worker self-reap promptly. */
@@ -83,20 +99,34 @@ object ModelExecutionMailbox {
      * Persist the worker's current lifecycle state + a quiescence snapshot.
      * Written before each state transition so diagnostics can answer "why is
      * :modelservice still alive?" without trusting main-process counters.
+     *
+     * TF-F: defensive — the run dir may have been reclaimed by the client
+     * (old P0 FATAL: uncaught `FileNotFoundException .../state.json ENOENT`).
+     * Returns true on success, false on any failure (never throws): the
+     * caller records a `protocol_violation` and proceeds without crashing.
+     * When the dir is absent we still return false so the caller can log the
+     * violation with pid/runId/activeRequests.
      */
     fun writeState(
         dir: File,
         state: ModelExecutionWorkerState,
         active: Int,
         unacked: Int = 0,
-    ) {
-        val obj = JSONObject().apply {
-            put("state", state.name)
-            put("active", active)
-            put("unacked", unacked)
-            put("at", System.currentTimeMillis())
+    ): Boolean {
+        if (!dir.isDirectory) return false
+        return runCatching {
+            val obj = JSONObject().apply {
+                put("state", state.name)
+                put("active", active)
+                put("unacked", unacked)
+                put("at", System.currentTimeMillis())
+            }
+            File(dir, FILE_STATE).writeText(obj.toString())
+            true
+        }.getOrElse {
+            android.util.Log.w(ModelExecutionRunDir.TAG, "writeState failed (${dir.name}): ${it.message}")
+            false
         }
-        File(dir, FILE_STATE).writeText(obj.toString())
     }
 
     /** Read the worker's persisted state JSON text (or null when absent). */

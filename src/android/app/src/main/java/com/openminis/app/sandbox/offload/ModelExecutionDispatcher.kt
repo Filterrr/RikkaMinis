@@ -37,9 +37,10 @@ object ModelExecutionDispatcher {
     private const val TAG = "ModelExecDispatcher"
     private const val REQUEST_TIMEOUT_MS = 3 * 60_000L  // matches agent tool timeout headroom
     private const val POLL_INTERVAL_MS = 200L
-    /** Bounded wait for the worker's self-reap before deleting the request dir. */
+    /** Bounded wait for the worker's terminal marker before deleting the dir. */
+    private const val TERMINAL_WAIT_MS = 5_000L
+    /** Bounded wait for the worker's self-reap before deciding to keep the dir as orphan. */
     private const val REAP_WAIT_MS = 3_000L
-    private const val REAP_SETTLE_MS = 300L
     private const val REAP_POLL_MS = 50L
 
     /** Default base directory for request/result staging. */
@@ -262,38 +263,91 @@ object ModelExecutionDispatcher {
             try { ModelExecutionMailbox.writeCancel(dir) } catch (_: Exception) {}
         }
 
-        // [TF-B] Delete the request dir ONLY after the worker acknowledged the
-        // terminal state (client.ack consumed / cancel.ack received) or its
-        // process has gone away — never delete under a worker still appending
-        // to result.json / stream.jsonl. Bounded wait: if the worker is already
-        // gone (self-reaped after ack), we proceed immediately.
-        waitForWorkerReap(dir, REAP_WAIT_MS)
-        try { dir.deleteRecursively() } catch (_: Exception) {}
+        // [TF-F P0-A] Delete the request dir ONLY after BOTH:
+        //   1. the terminal marker exists (worker finished writing run-dir
+        //      files: stream flushed + result committed + final state), AND
+        //   2. the worker's process is confirmed gone for THIS run's pid ref
+        //      (or there never was a valid ref).
+        // The old code deleted on result.json/cancel.ack alone, killing the
+        // worker mid-finishRequest (state.json ENOENT FATAL). Timeout with the
+        // worker still alive/unknown → leave the dir as an ORPHAN (never
+        // delete) and let the orphan reaper reclaim later when the pid is
+        // dead + terminal.
+        val terminalSeen = awaitTerminal(dir, TERMINAL_WAIT_MS)
+        val reaped = waitForWorkerReap(dir, REAP_WAIT_MS)
+        if (terminalSeen && reaped) {
+            try { dir.deleteRecursively() } catch (_: Exception) {}
+        } else {
+            Log.w(
+                TAG,
+                "run dir kept as orphan (terminal=$terminalSeen reaped=$reaped dir=${dir.name}) — " +
+                    "pid still alive/unknown or terminal not reached; orphan reaper may reclaim",
+            )
+        }
         return result
     }
 
     /**
-     * [TF-B] Wait (bounded) for the :modelservice worker's process to disappear
-     * after a result was consumed — the worker self-reaps when quiescent, so
-     * once its pid is gone the dir is safe to delete. Absent pid file → assume
-     * safe immediately (the worker may never have started the pid write).
+     * [TF-F] Wait (bounded) for the run's terminal marker. Returns true when
+     * the worker finished writing all run-dir files (terminal.json present).
+     * The old code treated result.json as "worker is done writing"; now only
+     * terminal.json (the worker's LAST write) counts as the write-barrier.
      */
-    private suspend fun waitForWorkerReap(dir: File, timeoutMs: Long) {
-        val pidFile = File(dir, "worker.pid")
-        var pid = runCatching { pidFile.readText().trim().toInt() }.getOrNull()
-        if (pid == null) {
-            // No pid yet (worker may still be starting). Give it a short settle
-            // before the caller deletes, to avoid tearing a just-written result.
-            kotlinx.coroutines.delay(REAP_SETTLE_MS)
-            pid = runCatching { pidFile.readText().trim().toInt() }.getOrNull()
-        }
-        if (pid == null) return
+    private suspend fun awaitTerminal(dir: File, timeoutMs: Long): Boolean {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
-            if (!java.io.File("/proc/$pid").exists()) return
+            if (ModelExecutionRunDir.terminalPresent(dir)) return true
+            // Already committed the result → the terminal write is imminent;
+            // keep polling (bounded) rather than assuming.
+            delay(POLL_INTERVAL_MS)
+        }
+        return ModelExecutionRunDir.terminalPresent(dir)
+    }
+
+    /**
+     * [TF-F] Wait (bounded) for the :modelservice worker's process to
+     * disappear (workers self-reap when quiescent). Returns TRUE only when we
+     * confirmed the pid referenced by THIS run dir is gone. NO valid/current
+     * pid ref → UNKNOWN liveness → returns false (do NOT delete! the worker
+     * may still be starting or finishing). A worker still alive after the
+     * timeout equally returns false — the caller must leave the dir alone.
+     */
+    private suspend fun waitForWorkerReap(dir: File, timeoutMs: Long): Boolean {
+        val runId = runIdOf(dir)
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            when (ModelExecutionRunDir.probeLiveness(dir, runId)) {
+                ModelExecutionRunDir.WorkerLiveness.DEAD -> return true
+                ModelExecutionRunDir.WorkerLiveness.ALIVE -> { /* keep waiting */ }
+                ModelExecutionRunDir.WorkerLiveness.UNKNOWN -> {
+                    // No valid ref for THIS run — cannot confirm death. The
+                    // worker may not have written pid yet. Keep polling the
+                    // bounded window; if still unknown at the end we return
+                    // false so the caller leaves the dir as an orphan.
+                }
+            }
             delay(REAP_POLL_MS)
         }
-        Log.w(TAG, "worker pid $pid still alive after ${timeoutMs}ms — deleting dir anyway (worker may be mid-drain)")
+        // Final check — the pid may have appeared + died within one poll.
+        val last = ModelExecutionRunDir.probeLiveness(dir, runId)
+        val gone = last == ModelExecutionRunDir.WorkerLiveness.DEAD
+        if (!gone) {
+            Log.w(
+                TAG,
+                "worker for ${dir.name} not confirmed gone within ${timeoutMs}ms " +
+                    "(liveness=$last) — NOT deleting dir",
+            )
+        }
+        return gone
+    }
+
+    /** Extract the stable runId from a `run-<uuid>` dir name (shared helper). */
+    internal fun runIdOf(dir: File): String? {
+        val name = dir.name
+        val prefix = "run-"
+        return if (name.startsWith(prefix) && name.length > prefix.length) {
+            name.substring(prefix.length)
+        } else name
     }
 
     private fun logDispatchFailure(dir: File) {
