@@ -81,23 +81,27 @@ object ModelExecutionRunLog {
     fun readTail(dir: File): List<String> = runCatching {
         val f = file(dir)
         if (!f.exists()) return emptyList()
-        val raw = if (f.length() <= TAIL_BYTES) {
-            f.readText()
+        val len = f.length()
+        if (len == 0L) return emptyList()
+        val readLen = minOf(len, TAIL_BYTES.toLong()).toInt()
+        val start = (len - readLen).coerceAtLeast(0L)
+        val s: String
+        if (len <= TAIL_BYTES) {
+            s = f.readText()
         } else {
+            // Read the LAST TAIL_BYTES (a window that may start mid-line).
             java.io.RandomAccessFile(f, "r").use { raf ->
-                raf.seek(f.length() - TAIL_BYTES)
-                // Skip a torn leading line (seek landed mid-line).
-                val len = f.length() - raf.filePointer
-                val bytes = ByteArray(len.toInt())
+                raf.seek(start)
+                val bytes = ByteArray(readLen)
                 raf.readFully(bytes)
-                var s = String(bytes, Charsets.UTF_8)
-                val nl = s.indexOf('\n')
-                if (nl >= 0) s = s.substring(nl + 1)
-                s
+                s = String(bytes, Charsets.UTF_8)
             }
         }
-        raw.split('\n').map { it.trim() }.filter { it.isNotEmpty() }
-            .takeLast(MAX_LINES)
+        // When the window was trimmed from the front, the first segment is a
+        // torn partial line — drop it so we only return COMPLETE tail lines.
+        var segments = s.split('\n')
+        if (start > 0L && segments.isNotEmpty()) segments = segments.drop(1)
+        segments.map { it.trim() }.filter { it.isNotEmpty() }.takeLast(MAX_LINES)
     }.getOrElse { emptyList() }
 
     /** Short one-line summary of the phase tail for embedding in a warning. */
