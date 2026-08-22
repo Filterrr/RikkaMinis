@@ -448,32 +448,22 @@ class ModelUseOffloadHandler(
         )
         if (imageRouted != null) return attachCallFeedback(imageRouted, callWarnings, appliedExtras)
 
-        val response = try {
-            runBlocking {
-                provider.sendMessage(
-                    messages = messages,
-                    systemPrompt = systemPrompt,
-                    maxTokens = maxTokens,
-                    temperature = temperature,
-                    imageParts = imageParts,
-                )
-            }
-        } catch (e: Throwable) {
-            Log.w(TAG, "sendMessage failed for ${entry.model.id}: ${e.message}", e)
-            val base = e.message ?: "model_use_failed"
-            val hint = imageParamHint(entry)
-            val combined = if (hint.isEmpty()) base else "$base\n\n$hint"
-            return NativeOffloadResult(
-                1,
-                JSONObject().put("error", "model_use_failed")
-                    .put("message", combined).toString() + "\n",
-            )
-        }
-
-        // Write output — media-first if the model returned image/audio/video and
-        // --output has a media extension, else fall back to text. Mirrors iOS
-        // ModelUseOffloadBridge.performRun (non-streaming branch).
-        return writeRunOutput(entry, response, outputPath, outputExt, request, callWarnings, appliedExtras)
+        // TF-D: the remote (:modelservice) path was the primary executor but did
+        // not produce a usable result. The app process MUST NOT fall back to an
+        // in-process provider.sendMessage call (its native heap would climb in
+        // the main process — the exact problem this isolation exists to solve).
+        // Surface a structured error so the caller can retry via the gateway /
+        // switch provider / inform the user — no silent in-process fallback.
+        Log.w(TAG, "remote model-use run produced no usable result — returning structured error")
+        return NativeOffloadResult(
+            1,
+            JSONObject().put("error", "model_use_remote_unavailable")
+                .put(
+                    "message",
+                    "The model execution service did not produce a result for ${entry.model.id}. " +
+                        "Please retry the run.",
+                ).toString() + "\n",
+        )
     }
 
     /**

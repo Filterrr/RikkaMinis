@@ -47,8 +47,8 @@ import com.openminis.app.data.model.LLMStreamChunk
 import com.openminis.app.data.model.LLMUsage
 import com.openminis.app.data.model.ModelGroup
 import com.openminis.app.data.model.ThinkingLevel
-import com.openminis.app.sandbox.offload.ChatStreamOffloadHandler
-import com.openminis.app.sandbox.offload.ModelExecutionDispatcher
+import com.openminis.app.sandbox.offload.ModelStreamErrorException
+import com.openminis.app.sandbox.offload.ProviderExecutionGateway
 import com.openminis.app.R
 import com.openminis.app.data.repository.ChatRepository
 import com.openminis.app.data.repository.MemoryRepository
@@ -126,8 +126,6 @@ class ChatViewModel(
 
     companion object {
         internal const val TAG = "ChatViewModel"
-        /** Direction A: prefer offloading chat turns to :modelservice (remote process). Set false to disable. */
-        private const val CHAT_STREAM_OFFLOAD_ENABLED = true
         // [T-preflight-tool-title-nonblocking] Fields kept in each tool's
         // `required` list (so the schema keeps nudging the model to emit them —
         // tool_title drives the live pill header) but which must NOT block the
@@ -2794,7 +2792,15 @@ class ChatViewModel(
         val maxOut = maxOf(1024, minOf(8192, contextWindow - estimatedInput))
         val provider = currentProvider
             ?: throw IllegalStateException("No LLM provider available for compaction")
-        val response = provider.sendMessage(
+        val instance = provider.instanceContext
+            ?: throw IllegalStateException("No provider instance context for compaction")
+        // TF-D: compaction runs through :modelservice via the gateway — the main
+        // process never calls provider.sendMessage. A remote failure (typed)
+        // throws so the splitter can halve the input and retry.
+        return when (val r = ProviderExecutionGateway.send(
+            context = context,
+            instance = instance,
+            model = provider.model,
             messages = listOf(
                 LLMMessage(role = LLMMessage.Role.USER, content = userMessage)
             ),
@@ -2809,8 +2815,13 @@ class ChatViewModel(
             imageParts = emptyList(),
             tools = emptyList(),
             thinkingLevel = ThinkingLevel.OFF,
-        )
-        return response.text
+        )) {
+            is ProviderExecutionGateway.SendResult.Success -> r.response.text
+            is ProviderExecutionGateway.SendResult.RemoteFailure ->
+                throw IllegalStateException("compaction failed (${r.code}): ${r.message}")
+            is ProviderExecutionGateway.SendResult.Unavailable ->
+                throw IllegalStateException("compaction unavailable: ${r.reason}")
+        }
     }
 
     /**
@@ -6601,9 +6612,14 @@ class ChatViewModel(
     }
 
     /**
-     * Direction A: stream a chat turn, preferring :modelservice (remote process) so native heap
-     * from the LLM call is reclaimed when the service dies. Falls back to in-process streaming
-     * when the provider has no instance context, remote launch fails, or the setting is off.
+     * Direction A: stream a chat turn through the [ProviderExecutionGateway]
+     * (:modelservice process) so native heap from the LLM call is reclaimed
+     * when the worker self-reaps.
+     *
+     * TF-D: the app process NEVER falls back to an in-process provider call.
+     * A cold Flow is returned; failure surfaces when collected as a typed
+     * [ModelExecutionStreamException] (0-chunk → caller MAY retry, has-chunk →
+     * caller MUST NOT re-send). There is no silent in-process fallback.
      */
     private fun streamChatTurnOffloaded(
         provider: LLMProvider,
@@ -6616,42 +6632,27 @@ class ChatViewModel(
         thinkingLevel: ThinkingLevel,
     ): Flow<LLMStreamChunk> {
         val instance = provider.instanceContext
-        if (instance == null || !CHAT_STREAM_OFFLOAD_ENABLED) {
-            // No instance context (hand-built/mock provider) or offload disabled → in-process.
-            return provider.streamMessage(
-                messages, systemPrompt, maxTokens, temperature, imageParts, tools, thinkingLevel,
+            ?: throw ModelStreamErrorException(
+                "no provider instance context for remote execution",
+                hadChunks = false,
             )
-        }
-        val requestJson = runCatching {
-            ModelExecutionDispatcher.buildRequestJson(
-                instance = instance,
-                model = provider.model,
-                messages = messages,
-                systemPrompt = systemPrompt,
-                maxTokens = maxTokens,
-                temperature = temperature,
-                imageParts = imageParts,
-                inputJson = "",
-                outputExt = null,
-                tools = tools,
-                thinkingLevel = thinkingLevel,
-                streaming = true,
-            )
-        }.getOrNull()
-        if (requestJson == null) {
-            Log.w(TAG, "chat stream offload: request build failed; in-process fallback")
-            return provider.streamMessage(
-                messages, systemPrompt, maxTokens, temperature, imageParts, tools, thinkingLevel,
-            )
-        }
-        return runCatching {
-            ChatStreamOffloadHandler.stream(context, requestJson)
-        }.getOrElse { e ->
-            Log.w(TAG, "chat stream offload launch failed; in-process fallback", e)
-            provider.streamMessage(
-                messages, systemPrompt, maxTokens, temperature, imageParts, tools, thinkingLevel,
-            )
-        }
+        AppLogger.info(
+            TAG_STREAM,
+            "chat stream offload -> :modelservice provider=${provider.name} model=${provider.model.id}",
+        )
+        // Single gateway path — no in-process fallback exists by design.
+        return ProviderExecutionGateway.stream(
+            context = context,
+            instance = instance,
+            model = provider.model,
+            messages = messages,
+            systemPrompt = systemPrompt,
+            maxTokens = maxTokens,
+            temperature = temperature,
+            imageParts = imageParts,
+            tools = tools,
+            thinkingLevel = thinkingLevel,
+        )
     }
 
     private suspend fun runAgentLoop(
@@ -8720,18 +8721,26 @@ class ChatViewModel(
         try {
             while (turns < config.maxTurns) {
                 turns++
-                val chunks = provider.streamMessage(
+                val instance = provider.instanceContext ?: return ToolExecutionResult(
+                    "Error: No provider instance context for sub-agent remote execution",
+                    false, toolTitle = title,
+                )
+                val textSb = StringBuilder()
+                val toolCalls = mutableListOf<SubagentToolCall>()
+
+                // TF-D: sub-agent runs through :modelservice via the gateway. Chunks
+                // are accumulated incrementally as they stream in — never buffered
+                // wholesale via `toList()` (unbounded retention of the whole turn).
+                ProviderExecutionGateway.stream(
+                    context = context,
+                    instance = instance,
+                    model = provider.model,
                     messages = history.toList(),
                     systemPrompt = systemPrompt,
                     maxTokens = config.maxOutputTokens,
                     tools = subagentTools,
                     thinkingLevel = ThinkingLevel.OFF,
-                ).toList()
-
-                val textSb = StringBuilder()
-                val toolCalls = mutableListOf<SubagentToolCall>()
-
-                for (chunk in chunks) {
+                ).collect { chunk ->
                     when (chunk) {
                         is LLMStreamChunk.Text -> textSb.append(chunk.text)
                         is LLMStreamChunk.ToolCallComplete -> {
@@ -10721,7 +10730,19 @@ Environment variables:
                 // default), keep the T334 budget bump so it can finish thinking
                 // and still emit the JSON. Unified with regenerateTitle's ladder.
                 val titleMaxTokens = if (provider.model.supportsReasoning == true) 2048 else 100
-                val response = provider.sendMessage(
+                val titleInstance = provider.instanceContext ?: run {
+                    // Cannot dispatch a provider-created title call without an
+                    // instance — surface as a typed error (never in-process).
+                    AppLogger.warning("TitleGen", "outcome=no-instance-context attempt=$titleGenerationAttempts")
+                    if (titleGenerationAttempts >= TITLE_MAX_ATTEMPTS) {
+                        applyFallbackTitleFromFirstMessage("no provider instance context")
+                    }
+                    return@launch
+                }
+                val titleResult = ProviderExecutionGateway.send(
+                    context = context,
+                    instance = titleInstance,
+                    model = provider.model,
                     messages = listOf(LLMMessage(role = LLMMessage.Role.USER, content = prompt)),
                     systemPrompt = effectiveSystemPrompt,
                     maxTokens = titleMaxTokens,
@@ -10732,6 +10753,29 @@ Environment variables:
                     temperature = null,
                     thinkingLevel = ThinkingLevel.OFF,
                 )
+                val response = when (titleResult) {
+                    is ProviderExecutionGateway.SendResult.Success -> titleResult.response
+                    is ProviderExecutionGateway.SendResult.RemoteFailure -> {
+                        AppLogger.warning(
+                            "TitleGen",
+                            "outcome=remote-failure attempt=$titleGenerationAttempts (${titleResult.code}): ${titleResult.message.take(200)}",
+                        )
+                        if (titleGenerationAttempts >= TITLE_MAX_ATTEMPTS) {
+                            applyFallbackTitleFromFirstMessage("remote failure ${titleResult.code}")
+                        }
+                        return@launch
+                    }
+                    is ProviderExecutionGateway.SendResult.Unavailable -> {
+                        AppLogger.warning(
+                            "TitleGen",
+                            "outcome=unavailable attempt=$titleGenerationAttempts: ${titleResult.reason}",
+                        )
+                        if (titleGenerationAttempts >= TITLE_MAX_ATTEMPTS) {
+                            applyFallbackTitleFromFirstMessage("title service unavailable: ${titleResult.reason}")
+                        }
+                        return@launch
+                    }
+                }
 
                 AppLogger.info(
                     "TitleGen",
