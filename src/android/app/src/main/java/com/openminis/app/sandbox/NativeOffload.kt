@@ -3,6 +3,7 @@ package com.openminis.app.sandbox
 import android.net.LocalServerSocket
 import android.net.LocalSocket
 import android.util.Log
+import com.openminis.app.BuildConfig
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
@@ -100,7 +101,7 @@ fun interface NativeOffloadHandler {
 
 object NativeOffloadServer {
     private const val TAG = "NativeOffloadServer"
-    private const val SOCKET_NAME = "native-offload"
+    private const val SOCKET_BASE = "native-offload"
     private const val MAGIC_REQ = 0x46464F4E  // 'N' 'O' 'F' 'F' little-endian
     private const val MAGIC_RSP = 0x52464F4E  // 'N' 'O' 'F' 'R'
     private const val VERSION = 1
@@ -111,7 +112,20 @@ object NativeOffloadServer {
     // rest of the memory-budget machinery was sized for.
     internal const val MAX_CONCURRENT_WORKERS = 2
 
-    const val socketName: String = SOCKET_NAME
+    // [dual-appid] The abstract unix socket name MUST be unique per install
+    // identity (applicationId), otherwise a co-existing lab build
+    // (com.openminis.app.lab) and the stable build (com.openminis.app) fight
+    // over the same abstract socket name and one of them fails to bind
+    // ("failed to bind abstract socket 'native-offload' ... previous process
+    // holding the namespace?") and crashes in MinisApp.onCreate. Keying the
+    // name off BuildConfig.APPLICATION_ID makes each install bind its own
+    // socket. libproot's native_offload extension is fully parameterized over
+    // this name (received via `--native-offload=<name>:<handlers>` in
+    // PRootKernel), so the Kotlin and C sides stay consistent.
+    private val SOCKET_NAME =
+        SOCKET_BASE + "-" + BuildConfig.APPLICATION_ID.replace('.', '_')
+
+    val socketName: String = SOCKET_NAME
 
     private val handlers = ConcurrentHashMap<String, NativeOffloadHandler>()
     private val counter = AtomicLong(0)
