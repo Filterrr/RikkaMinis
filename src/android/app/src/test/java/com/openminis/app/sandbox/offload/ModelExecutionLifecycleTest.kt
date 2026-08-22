@@ -138,4 +138,27 @@ class ModelExecutionLifecycleTest {
         assertFalse(ModelExecutionLifecycle.isQuiescent(busy()))
         assertFalse(ModelExecutionLifecycle.isQuiescent(idle.copy(streamFileFlushed = false)))
     }
+
+    // ── TF-G: streaming worker holding an unacked response ─────────
+
+    @Test
+    fun `streaming worker awaiting client ack (unacked=1) never reaches kill`() {
+        // A streaming run finished its stream/result flush but is STILL waiting
+        // for the client to consume (client.ack). Even with active==0 and the
+        // stream flushed, unacked=1 must keep the worker ALIVE — this is the
+        // precise P0 where the old hard-coded unacked=0 SIGKILLed the worker
+        // one line after DONE, ahead of the client reading the tail.
+        val awaitingAck = ModelExecutionQuiescenceInput(
+            activeRequests = 0,
+            queuedRequests = 0,
+            unackedResponses = 1,
+            streamFileFlushed = true,
+        )
+        assertFalse(ModelExecutionLifecycle.isQuiescent(awaitingAck))
+        val next = ModelExecutionLifecycle.transition(
+            ModelExecutionWorkerState.ACTIVE, awaitingAck, shutdownRequested = false,
+        )
+        assertEquals(ModelExecutionWorkerState.ACTIVE, next)
+        assertFalse(ModelExecutionLifecycle.shouldKill(next, awaitingAck))
+    }
 }

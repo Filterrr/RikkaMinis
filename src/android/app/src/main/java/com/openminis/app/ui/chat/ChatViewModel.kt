@@ -6703,6 +6703,13 @@ class ChatViewModel(
             reason = "RunStarted",
         )
         // T7-D: 旁路验证 —— RunStarted 事件
+        // TF-G P1-3 fix: the reducer state machine MUST be initialised BEFORE
+        // issuing RunStarted, or t7Reduce() no-ops (t7ReducerState==null → the
+        // leading `?: return`) and the FIRST event is silently dropped. Then
+        // every later event (ProviderAttemptStarted / ToolStarted / …) hits a
+        // fresh IDLE reducer that has never seen RunStarted → "requires
+        // RunStarted first" → spammy REJECTED in normal production paths.
+        t7ReducerState = AgentRunState.initial()
         t7Reduce(AgentRunEvent.RunStarted(runId))
         // T7-B: session slot lease 观察 —— streamJob 在进入 runAgentLoop 前
         // 已经成功 acquireSlot；此处登记 lease（trace 侧），语义是
@@ -6841,9 +6848,9 @@ class ChatViewModel(
         // node that burned its whole budget just pays for the same wall again).
         var lengthWallEmptyHits = 0
 
-        // T7-D: 终态 reducer 旁路验证 —— 入口初始化状态机（IDLE），
-        // 后续事件经类级 [t7Reduce] 发出；t7EndRun 落终态并清理。
-        t7ReducerState = AgentRunState.initial()
+        // T7-D: 终态 reducer 状态机入口已在 RunStarted 前初始化（见上）；
+        // 此处不再重复 init —— 重复 `AgentRunState.initial()` 会重置已经把
+        // RunStarted 消费掉的 reducer 回 IDLE，导致后续事件再次 REJECTED。
 
         try {
         for (turn in 0 until MAX_AGENT_TURNS) {

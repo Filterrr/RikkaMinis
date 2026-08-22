@@ -43,10 +43,16 @@ object ChatStreamOffloadHandler {
      * grace has elapsed AND the three-state probe confirms the pid referenced
      * by THIS run dir is gone. A slow first chunk (> this grace, worker alive)
      * is NOT a death — the flow keeps polling.
+     *
+     * TF-G: raised from 2s to 5s. A streaming worker now holds an unacked
+     * response + writes its terminal barrier before self-reaping; a 5s window
+     * keeps us from classifying a perfectly-healthy-but-just-finished worker
+     * as dead on the hair between DONE and pid-exit, while still surfacing a
+     * genuinely crashed worker promptly.
      */
-    private const val WORKER_DIED_GRACE_MS = 2_000L
+    private const val WORKER_DIED_GRACE_MS = 5_000L
     /** Bounded wait after terminal for the worker process to disappear before deleting. */
-    private const val WORKER_EXIT_WAIT_MS = 4_000L
+    private const val WORKER_EXIT_WAIT_MS = 6_000L
     private const val WORKER_EXIT_POLL_MS = 60L
 
     /**
@@ -161,7 +167,21 @@ object ChatStreamOffloadHandler {
                             !ModelExecutionRunDir.terminalPresent(dir) &&
                             !File(dir, ModelExecutionMailbox.FILE_RESULT).exists()
                         ) {
-                            throw ModelWorkerDiedException(hadChunks = emittedChunks)
+                            // TF-G P0-3: classify WHY the worker appears dead so
+                            // the caller can weigh retry (0-chunk) vs fatal, and
+                            // diagnostics get the run-log tail as evidence.
+                            val reason = classifyWorkerDeath(dir, emittedChunks)
+                            val phase = ModelExecutionRunLog.tailSummary(dir)
+                            Log.w(
+                                TAG,
+                                "worker died (${reason.name}) runId=$runId emittedChunks=$emittedChunks phase=$phase dir=${dir.name}",
+                            )
+                            throw ModelWorkerDiedException(
+                                hadChunks = emittedChunks,
+                                reason = reason,
+                                runId = runId,
+                                phaseSummary = phase,
+                            )
                         }
                     }
                     delay(POLL_INTERVAL_MS)
@@ -218,6 +238,19 @@ object ChatStreamOffloadHandler {
             File(dir, ModelExecutionMailbox.FILE_RESULT).exists() ||
             File(dir, ModelExecutionMailbox.FILE_CANCEL_ACK).exists()
 
+        // TF-G: client-ACK — the other half of the self-reap barrier. Once the
+        // client has seen the terminal barrier (it has read every emitted chunk
+        // by this point, since the loop consumed stream.jsonl as it grew), it
+        // MUST tell the worker "consumed" so the worker can stop holding an
+        // unacked response and self-reap promptly. Without this the streaming
+        // worker holds unacked>0 and (with the TF-G barrier) refuses to reap
+        // until its ack timeout + controlled drain — pinning the process for up
+        // to 45s and leaving the run dir as an orphan. The Dispatcher (non-
+        // streaming) already acks; streaming now does too.
+        if (writeBarrierSeen) {
+            try { ModelExecutionMailbox.writeClientAck(dir) } catch (_: Exception) {}
+        }
+
         // (b) worker process gone. Reuse the dispatcher's bounded wait logic.
         if (writeBarrierSeen && awaitWorkerExit(dir, runId, WORKER_EXIT_WAIT_MS)) {
             try { dir.deleteRecursively() } catch (_: Exception) {}
@@ -247,6 +280,23 @@ object ChatStreamOffloadHandler {
         }
         return ModelExecutionRunDir.probeLiveness(dir, runId) ==
             ModelExecutionRunDir.WorkerLiveness.DEAD
+    }
+
+    /**
+     * TF-G P0-3: classify WHY a worker appears dead, from THIS run dir's
+     * evidence. Pure decision is delegated to
+     * [ModelExecutionRunDir.classifyWorkerDeath] (JVM-testable); here we only
+     * assemble the per-run facts and attach the run-log tail for diagnosis.
+     */
+    private fun classifyWorkerDeath(dir: File, emittedChunks: Boolean): WorkerDeathReason {
+        val runId = ModelExecutionDispatcher.runIdOf(dir)
+        val hasPidRef = ModelExecutionRunDir.readWorkerRef(dir, runId) != null
+        val ready = File(dir, ModelExecutionRunDir.FILE_READY).exists()
+        return ModelExecutionRunDir.classifyWorkerDeath(
+            hasPidRef = hasPidRef,
+            ready = ready,
+            hadChunks = emittedChunks,
+        )
     }
 
     /** Read only the bytes appended after [offset] up to the last newline; return (lines, newOffset). */
