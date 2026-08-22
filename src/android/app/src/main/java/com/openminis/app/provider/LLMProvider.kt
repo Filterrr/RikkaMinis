@@ -69,6 +69,10 @@ interface LLMProvider {
         tools: List<AgentToolDefinition> = emptyList(),
         thinkingLevel: ThinkingLevel = ThinkingLevel.OFF,
     ): LLMResponse {
+        // [TF-E] Runtime process-domain guard: refuse to make a provider network
+        // call outside the :modelservice worker. JVM tests (null processName)
+        // pass through; the static unit-test guard owns test enforcement.
+        ProviderBoundary.enforce(ProviderBoundary.currentProcessName())
         // [provider-rss v2] 打点定位：聊天直连 provider 的非流式调用，捕获主进程
         // VmRSS 增量 + 调用期间峰值采样 + 入参/出参字节估算。零副作用，不影响调用结果。
         val beforeKb = ProviderRssProbe.rssKb()
@@ -106,6 +110,10 @@ interface LLMProvider {
         tools: List<AgentToolDefinition> = emptyList(),
         thinkingLevel: ThinkingLevel = ThinkingLevel.OFF,
     ): Flow<LLMStreamChunk> = flow {
+        // [TF-E] Runtime process-domain guard: refuse to make a provider network
+        // call outside the :modelservice worker. JVM tests (null processName)
+        // pass through; the static unit-test guard owns test enforcement.
+        ProviderBoundary.enforce(ProviderBoundary.currentProcessName())
         // [provider-rss v2] 打点定位：聊天直连 provider 的流式调用。streamMessage
         // 是冷 Flow，打点放在真正被 collect（发出请求）的前后；峰值采样 + 入参/出参字节估算。
         val beforeKb = ProviderRssProbe.rssKb()

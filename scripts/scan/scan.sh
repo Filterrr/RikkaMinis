@@ -72,8 +72,21 @@ fi
 echo ""
 
 # --- 3. Bare valueOf check (persisted enum safety) ---
-echo "━━━ [3/3] Enum parse safety check ━━━"
+echo "━━━ [3/4] Enum parse safety check ━━━"
 if python3 scripts/scan/enum_parse_safety_check.py "$ROOT"; then
+    PASS=$((PASS + 1))
+    echo ""
+else
+    RC=1
+    FAIL=$((FAIL + 1))
+    echo ""
+fi
+
+# --- 4. Provider process-boundary guard (TF-E) ---
+# Mechanical constraint: the app process must never call a provider network
+# entry point directly — only :modelservice (ModelExecutionService) owns them.
+echo "━━━ [4/4] Provider process-boundary guard ━━━"
+if python3 scripts/scan/provider_boundary_guard.py "$ROOT"; then
     PASS=$((PASS + 1))
     echo ""
 else
