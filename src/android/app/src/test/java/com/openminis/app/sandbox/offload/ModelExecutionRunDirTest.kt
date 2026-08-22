@@ -235,4 +235,33 @@ class ModelExecutionRunDirTest {
         assertFalse(ModelExecutionRunDir.safeToDelete(a, "A"))
         assertFalse(ModelExecutionRunDir.safeToDelete(b, "B"))
     }
+
+    // ── TF-G: atomic terminal marker (tmp→fsync→rename) ─────────────
+
+    @Test
+    fun `writeTerminal is atomic, leaves no tmp residue`() {
+        val d = dir()
+        assertTrue(ModelExecutionRunDir.writeTerminal(d))
+        // The marker must be at the final name, and no partial tmp remains.
+        assertTrue(File(d, ModelExecutionRunDir.FILE_TERMINAL).exists())
+        assertFalse(File(d, "${ModelExecutionRunDir.FILE_TERMINAL}.tmp").exists())
+        assertTrue(ModelExecutionRunDir.terminalPresent(d))
+    }
+
+    @Test
+    fun `writeTerminal round-trips at and can be read`() {
+        val d = dir()
+        assertTrue(ModelExecutionRunDir.writeTerminal(d))
+        val raw = File(d, ModelExecutionRunDir.FILE_TERMINAL).readText()
+        // valid JSON with an "at" timestamp
+        assertTrue(raw.contains("\"at\""))
+    }
+
+    @Test
+    fun `clientAckPresent reflects the ack file`() {
+        val d = dir()
+        assertFalse(ModelExecutionRunDir.clientAckPresent(d))
+        ModelExecutionMailbox.writeClientAck(d)
+        assertTrue(ModelExecutionRunDir.clientAckPresent(d))
+    }
 }

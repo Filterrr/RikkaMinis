@@ -114,15 +114,70 @@ object ModelExecutionRunDir {
     /**
      * Atomic creation of the terminal marker — the LAST marker a worker may
      * write into a run dir. Returns true on success. Never throws.
+     *
+     * TF-G: this is the quiescence data barrier: the worker writes
+     * `terminal.tmp` → flush + fsync → rename to `terminal.json` so a reader
+     * never observes a partial marker. After this returns the run dir is
+     * "write-complete" and the worker must NOT self-reap before the client
+     * has consumed the stream (see the stream-ACK barrier in
+     * [ModelExecutionService]).
      */
     fun writeTerminal(dir: File): Boolean = runCatching {
-        File(dir, FILE_TERMINAL).writeText(
-            JSONObject().put("at", System.currentTimeMillis()).toString(),
-        )
+        val tmp = File(dir, "$FILE_TERMINAL.tmp")
+        val target = File(dir, FILE_TERMINAL)
+        java.io.FileOutputStream(tmp).use { fos ->
+            fos.write(JSONObject().put("at", System.currentTimeMillis()).toString().toByteArray(Charsets.UTF_8))
+            fos.flush()
+            try { fos.fd.sync() } catch (_: Throwable) {}
+        }
+        if (!tmp.renameTo(target)) {
+            // Fallback: if rename is rejected, write in place (still better
+            // than never marking terminal — blocks safeToDelete forever).
+            File(dir, FILE_TERMINAL).writeText(
+                JSONObject().put("at", System.currentTimeMillis()).toString(),
+            )
+        }
+        fsyncDir(dir)
         true
     }.getOrElse {
         android.util.Log.w(TAG, "writeTerminal failed: ${it.message}")
         false
+    }
+
+    /** Best-effort fsync of a directory so a rename is durable. Never throws. */
+    fun fsyncDir(dir: File) {
+        runCatching {
+            java.io.FileOutputStream(dir).use { fos -> fos.fd.sync() }
+        }
+    }
+
+    /** True when the client has acknowledged it consumed this run's output
+     *  (stream chunks / result) — the second half of the self-reap barrier. */
+    fun clientAckPresent(dir: File): Boolean = File(dir, ModelExecutionMailbox.FILE_CLIENT_ACK).exists()
+
+    /**
+     * TF-G P0-3: pure classification of WHY a worker appears dead, from the
+     * per-run evidence the client holds. Pure so it is JVM-testable across the
+     * full ready/pid/terminal/result/hadChunks matrix. The caller only invokes
+     * this AFTER [probeLiveness] already returned DEAD AND no terminal/result
+     * is present (data genuinely did not complete) — so neither UNKNOWN nor an
+     * alive worker is classified here.
+     *
+     * @param hasPidRef  a valid worker.pid ref matching our runId was read
+     * @param ready      worker.ready marker present
+     * @param hadChunks  the client already emitted ≥1 stream chunk
+     * @return a concrete [WorkerDeathReason]; never the ambiguous one.
+     */
+    fun classifyWorkerDeath(
+        hasPidRef: Boolean,
+        ready: Boolean,
+        hadChunks: Boolean,
+    ): WorkerDeathReason = when {
+        hadChunks -> WorkerDeathReason.DIED_MID_STREAM
+        hasPidRef && !ready -> WorkerDeathReason.DIED_BEFORE_READY
+        hasPidRef -> WorkerDeathReason.DIED_AFTER_READY_NO_OUTPUT
+        !hasPidRef -> WorkerDeathReason.NEVER_STARTED
+        else -> WorkerDeathReason.DIED_AFTER_READY_NO_OUTPUT
     }
 
     /**

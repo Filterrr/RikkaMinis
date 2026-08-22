@@ -856,6 +856,17 @@ object ExecutionCoordinator {
         } catch (t: Throwable) {
             Log.w(TAG, "cleanupProotTmp failed: ${t.message}")
         }
+        // TF-G P1-2: opportunistic orphan run-dir reaper (same low cadence as
+        // the tmp sweeper). Removes only terminal + worker-dead + aged model-
+        // exec run dirs that the stream/dispatch finally left behind (crashed
+        // client / lost ack). Conservative — never touches an active run.
+        runCatching {
+            val reaped = com.openminis.app.sandbox.offload.ModelExecutionOrphanReaper
+                .reapOrphans(ctx)
+            if (reaped > 0) {
+                Log.i(TAG, "orphan model-exec reaper: reclaimed $reaped run dir(s)")
+            }
+        }
     }
 
     /**
