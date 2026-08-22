@@ -7420,9 +7420,18 @@ class ChatViewModel(
                     // before considering a fallback (mirrors iOS streamWithAutoRetry).
                     // Rate limits are provider-level signals that should trigger fallback immediately,
                     // not retry on the same provider.
+                    // TF-B: a worker that died BEFORE emitting any chunk
+                    // (ModelWorkerDiedException/ModelStreamErrorException, hadChunks=false)
+                    // is safe to retry through the gateway — nothing was sent to the user yet.
+                    // A worker that died mid-stream (hadChunks=true) must NOT be re-sent:
+                    // it falls through to the fatal path below (no auto-retry, no fallback
+                    // re-send) so the user never gets a duplicate answer.
+                    val workerDiedZeroChunk =
+                        (actual is com.openminis.app.sandbox.offload.ModelWorkerDiedException) && !actual.hadChunks
                     val isTransient = actual is com.openminis.app.data.model.LLMError.NetworkError ||
                         actual is com.openminis.app.data.model.LLMError.TransientError ||
-                        is5xx
+                        is5xx ||
+                        workerDiedZeroChunk
                     // [T-fallback-retry-original] Restored original behavior: all members
                     // (including fallback chain members) get bounded retries on transient
                     // errors. This absorbs intermittent stream resets that the fallback
