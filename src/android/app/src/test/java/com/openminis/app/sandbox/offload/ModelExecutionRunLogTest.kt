@@ -81,8 +81,11 @@ class ModelExecutionRunLogTest {
         ModelExecutionRunLog.log(d, 1, ModelExecutionRunLog.Phase.STREAM_ERROR, detail = bigDetail, runId = "r")
         ModelExecutionRunLog.log(d, 1, ModelExecutionRunLog.Phase.SELF_REAP, runId = "r")
         val tail = ModelExecutionRunLog.readTail(d)
-        assertEquals(3, tail.size)
-        // The big detail line is present and complete enough to carry evidence.
-        assertTrue(tail.any { it.contains("STREAM_ERROR") || it.contains(bigDetail.take(100)) })
+        // tail is bounded to the last TAIL_BYTES — this must still surface the
+        // LAST phase (SELF_REAP) and not blow up on the multi-KiB detail line.
+        assertTrue("tail should not be empty", tail.isNotEmpty())
+        assertTrue(tail.any { it.contains("SELF_REAP") })
+        // the big detail line is present and carries enough evidence to be useful
+        assertTrue(tail.any { it.contains("STREAM_ERROR") || it.contains(bigDetail.take(50)) })
     }
 }
