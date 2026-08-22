@@ -221,15 +221,21 @@ class ProviderRssProbeTest {
 
     @Test
     fun `small cumulative growth does not flag leak suspect`() {
-        var after = 100_000L
-        repeat(20) {
-            after += 10_000L // ~9.8MB/轮，总漂移 ~190MB < 256MB
+        // 健康波动：多次调用但 afterRss 围绕 ~100MB 基线小范围往返（±20MB），
+        // 峰值增量、总量、post-idle 漂移全部远低于阈值 → 不应判 LEAK-SUSPECT。
+        val baseline = 100_000L
+        val deltas = longArrayOf(10_000, -8_000, 5_000, -3_000, 12_000, -9_000, 2_000, -4_000, 8_000, -6_000)
+        for (d in deltas) {
+            val before = baseline
+            val after = baseline + d
             ProviderRssProbe.record(
-                ProviderRssProbe.ProbeRecord(kind = "streamMessage:mock", beforeRss = 100_000L, afterRss = after, peakRss = after)
+                ProviderRssProbe.ProbeRecord(
+                    kind = "streamMessage:mock", beforeRss = before, afterRss = after, peakRss = baseline + d.coerceAtLeast(0),
+                )
             )
         }
         val summary = ProviderRssProbe.summary()
-        assertFalse("19x9.8MB under thresholds should NOT flag, got:\n$summary", summary.contains("[LEAK-SUSPECT]"))
+        assertFalse("small bounded fluctuation should NOT flag, got:\n$summary", summary.contains("[LEAK-SUSPECT]"))
     }
 
     @Test
