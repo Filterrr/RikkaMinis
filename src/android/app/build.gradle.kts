@@ -32,6 +32,21 @@ fun customizationValue(key: String): String =
 val ciVersionCode: Int? = System.getenv("MINIS_VERSION_CODE")?.toIntOrNull()
 val ciVersionSuffix: String? = System.getenv("MINIS_VERSION_NAME_SUFFIX")
 
+// [dual-appid] Co-existence switch (experiment-first via the alt account).
+// The big/main account ships applicationId "com.openminis.app" (stable).
+// The alt account can build an install-co-existing variant by setting
+//   MINIS_APP_ID_OVERRIDE=com.openminis.app.lab   (e.g. in CI or local env)
+// which re-points applicationId (the install identity that guarantees two
+// builds do NOT overwrite each other on the same device), the derived
+// sub-process names (<appId>:modelservice etc.) and the Shizuku provider
+// (<appId>.shizuku), and overrides the default app_name so the two installs
+// are distinguishable on the launcher. When unset, behavior is byte-for-byte
+// identical to the stable build (namespace stays com.openminis.app).
+val minisAppIdOverride: String? = System.getenv("MINIS_APP_ID_OVERRIDE")?.takeIf { it.isNotBlank() }
+val minisFinalAppId: String = minisAppIdOverride ?: "com.openminis.app"
+val minisAppLabel: String =
+    if (minisAppIdOverride != null) "RikkaMinis (Lab)" else "RikkaMinis"
+
 android {
     namespace = "com.openminis.app"
     // compileSdk 36 (Android 16) — retained for the current framework version
@@ -41,12 +56,26 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.openminis.app"
+        applicationId = minisFinalAppId
         minSdk = 26
         targetSdk = 35
         versionCode = ciVersionCode ?: 22
         versionName =
             if (ciVersionSuffix.isNullOrBlank()) "1.0.0" else "1.0.0$ciVersionSuffix"
+
+        // [dual-appid] Override the default-res app_name so the lab build shows
+        // "RikkaMinis (Lab)" alongside the stable "RikkaMinis" on the launcher.
+        // Locale-specific values (values-zh etc.) still read "RikkaMinis"; the
+        // applicationId is what truly guarantees co-existence.
+        resValue("string", "app_name", minisAppLabel)
+        // [dual-appid] A resource alias for the runtime applicationId, so static
+        // XML (res/xml/shortcuts.xml) can reference our real package instead of
+        // hard-coding "com.openminis.app". Resolves to the same value in both
+        // accounts; only meaningful because shortcuts targetPackage must match
+        // the installed applicationId to launch MainActivity from a launcher
+        // long-press. Mirrors AGP's own manifest placeholder expansion for
+        // build files that are not manifests.
+        resValue("string", "package_name", minisFinalAppId)
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
