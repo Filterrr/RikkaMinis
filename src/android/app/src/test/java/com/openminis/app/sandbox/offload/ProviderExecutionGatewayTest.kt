@@ -6,6 +6,7 @@ import com.openminis.app.data.model.ProviderCredential
 import com.openminis.app.data.model.ProviderInstance
 import com.openminis.app.data.model.ProviderType
 import com.openminis.app.data.model.ThinkingLevel
+import java.io.File
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
