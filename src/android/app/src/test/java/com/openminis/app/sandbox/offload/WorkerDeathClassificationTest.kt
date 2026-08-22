@@ -85,8 +85,8 @@ class WorkerDeathClassificationTest {
             (true to false) to WorkerDeathReason.DIED_BEFORE_READY,
             (true to true) to WorkerDeathReason.DIED_AFTER_READY_NO_OUTPUT,
         )
-        for ((r, hasPidRef) in listOf(false, true)) {
-            for ((q, ready) in listOf(false, true)) {
+        for (hasPidRef in listOf(false, true)) {
+            for (ready in listOf(false, true)) {
                 for (hadChunks in listOf(false, true)) {
                     val reason = ModelExecutionRunDir.classifyWorkerDeath(hasPidRef, ready, hadChunks)
                     val expect = if (hadChunks) {
