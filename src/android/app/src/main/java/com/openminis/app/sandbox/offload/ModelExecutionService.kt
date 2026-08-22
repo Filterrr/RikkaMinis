@@ -185,7 +185,7 @@ class ModelExecutionService : Service() {
      */
     private fun shutdownRequested(): Boolean {
         return runCatching {
-            ModelExecutionMailbox.shutdownRequested(File(stagingRoot(), ModelExecutionMailbox.FILE_SHUTDOWN))
+            ModelExecutionMailbox.shutdownRequested(stagingRoot())
         }.getOrElse { false }
     }
 
