@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.IBinder
 import android.util.Log
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -55,11 +56,21 @@ class ModelExecutionService : Service() {
         const val STREAM_FILE = "stream.jsonl"
         /** Cancellation signal file: when created, a running stream aborts. */
         const val CANCEL_FILE = "cancel"
-        /** Worker pid file, so the client can classify worker death. */
-        const val WORKER_PID_FILE = "worker.pid"
         /** Max time a non-streaming worker waits for the client's client.ack. */
         private const val CLIENT_ACK_TIMEOUT_MS = 8_000L
         private const val ACK_POLL_MS = 100L
+
+        /**
+         * TF-F P0-C: provider worker global serialization. `:modelservice` is a
+         * single Android process reused across requests; running two provider
+         * calls concurrently in it shares one unsafe lifecycle / one native-heap
+         * budget (the very thing the short-lived worker exists to contain). Until
+         * real evidence warrants more, requests execute ONE AT A TIME: each
+         * onStartCommand enqueues, and the first-queued acquires this mutex before
+         * dispatching to the provider. This keeps `activeRequests` (in-flight, in
+         * the provider) and the lifecycle transition honest.
+         */
+        private val executionMutex = kotlinx.coroutines.sync.Mutex()
     }
 
     /** Worker-side registry: number of requests currently being executed. */
@@ -92,43 +103,73 @@ class ModelExecutionService : Service() {
         activeRequests.incrementAndGet()
         lifecycleState = ModelExecutionWorkerState.ACTIVE
         ModelExecutionMailbox.writeState(dir, lifecycleState, activeRequests.get())
-        // Worker-pid file: the client uses this to classify worker death
-        // (worker_died) instead of waiting out the 6-minute stream timeout.
-        runCatching { File(dir, WORKER_PID_FILE).writeText(android.os.Process.myPid().toString()) }
+        // TF-F: verifiable worker-process ref (pid + runId + nonce + proc name +
+        // startedAt). The client validates runId against ITS OWN run dir so a
+        // leftover/foreign/recycled pid can never classify worker death for a
+        // different run. Nonce guards pid reuse. After the ref is durable we
+        // write `worker.ready` so the client knows "started, may be silent".
+        val runId = runIdOf(dir) ?: ""
+        val processName = runCatching { android.app.Application.getProcessName() }.getOrNull()
+            ?: "modelservice"
+        ModelExecutionRunDir.writeWorkerPid(
+            dir,
+            ModelExecutionRunDir.WorkerProcessRef(
+                pid = android.os.Process.myPid(),
+                runId = runId,
+                nonce = java.util.UUID.randomUUID().toString(),
+                processName = processName,
+                startedAtMs = System.currentTimeMillis(),
+            ),
+        )
+        ModelExecutionRunDir.writeReady(dir)
 
         // Execute on a background thread; the worker then decides whether the
         // process may die (quiescent kill) — never just stopSelf as proof.
+        // TF-F P0-C: serialize provider work across requests in this process.
         Thread {
-            try {
-                val requestText = requestFile.readText()
-                val isStreaming = JSONObject(requestText).optBoolean("streaming", false)
-                if (isStreaming) {
-                    executeStreamingRun(requestText, dir)
-                } else {
-                    val result = executeRun(requestText)
-                    writeResultAtomically(dir, result)
-                    Log.i(TAG, "result written ($result.length bytes), pid=${android.os.Process.myPid()}")
-                    // The client must have consumed result.json before we die —
-                    // otherwise a just-written result is lost when the worker
-                    // process is reaped and the caller falls back in-process
-                    // (or worse, re-dispatches and duplicates the call).
-                    waitClientAck(dir, CLIENT_ACK_TIMEOUT_MS)
+            kotlinx.coroutines.runBlocking {
+                executionMutex.withLock {
+                    try {
+                        val requestText = requestFile.readText()
+                        val isStreaming = JSONObject(requestText).optBoolean("streaming", false)
+                        if (isStreaming) {
+                            executeStreamingRun(requestText, dir)
+                        } else {
+                            val result = executeRun(requestText)
+                            writeResultAtomically(dir, result)
+                            Log.i(TAG, "result written ($result.length bytes), pid=${android.os.Process.myPid()}")
+                            // The client must have consumed result.json before we die —
+                            // otherwise a just-written result is lost when the worker
+                            // process is reaped and the caller falls back in-process
+                            // (or worse, re-dispatches and duplicates the call).
+                            waitClientAck(dir, CLIENT_ACK_TIMEOUT_MS)
+                        }
+                    } catch (t: Throwable) {
+                        Log.w(TAG, "execution failed: ${t.message}", t)
+                        try {
+                            writeResultAtomically(dir, JSONObject().apply {
+                                put("error", "model_use_failed")
+                                put("message", t.message ?: "unknown")
+                                put("exit_code", 1)
+                            }.toString())
+                        } catch (_: Throwable) {}
+                    } finally {
+                        lifecycleState = finishRequest(dir)
+                    }
                 }
-            } catch (t: Throwable) {
-                Log.w(TAG, "execution failed: ${t.message}", t)
-                try {
-                    writeResultAtomically(dir, JSONObject().apply {
-                        put("error", "model_use_failed")
-                        put("message", t.message ?: "unknown")
-                        put("exit_code", 1)
-                    }.toString())
-                } catch (_: Throwable) {}
-            } finally {
-                lifecycleState = finishRequest(dir)
             }
         }.apply { isDaemon = false }.start()
 
         return START_NOT_STICKY
+    }
+
+    /** Extract the stable runId (the UUID embedded in the `run-<uuid>` dir name). */
+    private fun runIdOf(dir: File): String? {
+        val name = dir.name
+        val prefix = "run-"
+        return if (name.startsWith(prefix) && name.length > prefix.length) {
+            name.substring(prefix.length)
+        } else name
     }
 
     /**
@@ -139,9 +180,53 @@ class ModelExecutionService : Service() {
      * decides STOPPING **and** quiescence is confirmed — the main process can
      * never kill us directly. A new request arriving after this check simply
      * revives the process (onStartCommand moves the state back to ACTIVE).
+     *
+     * TF-F P0-B terminal protocol (defensive):
+     *   1. If the run dir is gone (client reclaimed it out from under us the
+     *      moment result.json appeared — the P0 race), record a protocol
+     *      violation with pid/runId/activeRequests and DO NOT attempt any
+     *      further write to the dir. Only self-reap iff activeRequests==0 —
+     *      a concurrent request must never be killed because ANOTHER run's
+     *      dir vanished.
+     *   2. Otherwise: write the final state (defensive, never throws), then
+     *      create the terminal marker — the LAST file we write into the dir.
+     *      Ordering guarantees: stream flushed → result.json committed →
+     *      final state → terminal.json. The client deletes only after
+     *      terminal AND our pid is gone ([ModelExecutionRunDir.safeToDelete]).
      */
     private fun finishRequest(dir: File): ModelExecutionWorkerState {
         activeRequests.decrementAndGet()
+        val runId = runIdOf(dir)
+        val dirMissing = !dir.isDirectory
+        if (dirMissing) {
+            // P0: the client deleted the run dir before our final write. This
+            // used to be an uncaught FileNotFoundException FATAL killing the
+            // whole :modelservice process. Now: log + skip writes + never kill
+            // another request; only self-reap when truly idle.
+            Log.w(
+                TAG,
+                "protocol_violation=run_dir_missing runId=$runId " +
+                    "pid=${android.os.Process.myPid()} active=${activeRequests.get()}",
+            )
+            val quiescence = ModelExecutionQuiescenceInput(
+                activeRequests = activeRequests.get(),
+                queuedRequests = 0,
+                unackedResponses = 0,
+                streamFileFlushed = true,
+            )
+            val next = ModelExecutionLifecycle.transition(
+                current = lifecycleState,
+                quiescence = quiescence,
+                shutdownRequested = false,
+            )
+            lifecycleState = next
+            if (ModelExecutionLifecycle.shouldKill(next, quiescence) && activeRequests.get() == 0) {
+                Log.w(TAG, "protocol_violation run_dir_missing — self-reap (idle), pid=${android.os.Process.myPid()}")
+                selfReap()
+            }
+            return next
+        }
+
         val quiescence = ModelExecutionQuiescenceInput(
             activeRequests = activeRequests.get(),
             queuedRequests = 0, // onStartCommand always starts work immediately; no queue
@@ -156,7 +241,11 @@ class ModelExecutionService : Service() {
             shutdownRequested = shutdownRequested,
         )
         lifecycleState = next
+        // Final state write — defensive: a vanished dir must NOT throw here.
         ModelExecutionMailbox.writeState(dir, next, activeRequests.get())
+        // TF-F: terminal marker is the LAST write into the run dir. Its
+        // presence + our pid gone is the client's only safe-delete condition.
+        ModelExecutionRunDir.writeTerminal(dir)
         Log.i(
             TAG,
             "request finished: state $next active=${activeRequests.get()} " +
