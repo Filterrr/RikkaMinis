@@ -87,7 +87,10 @@ object ModelExecutionRunLog {
             java.io.RandomAccessFile(f, "r").use { raf ->
                 raf.seek(f.length() - TAIL_BYTES)
                 // Skip a torn leading line (seek landed mid-line).
-                var s = raf.readBytes().toString(Charsets.UTF_8)
+                val len = f.length() - raf.filePointer
+                val bytes = ByteArray(len.toInt())
+                raf.readFully(bytes)
+                var s = String(bytes, Charsets.UTF_8)
                 val nl = s.indexOf('\n')
                 if (nl >= 0) s = s.substring(nl + 1)
                 s
