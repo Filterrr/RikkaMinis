@@ -15,6 +15,7 @@ import org.json.JSONObject
  *
  * Line schema:
  *   {"t":"started"}
+ *   {"t":"started","run":"<runId>","seq":0}      optional correlation (provider-rss v2 / TF-A)
  *   {"t":"text","v":"..."}
  *   {"t":"td","v":"..."}                  ThinkingDelta
  *   {"t":"rc","v":"..."}                  ReasoningContent
@@ -26,6 +27,12 @@ import org.json.JSONObject
  *   {"t":"media","type":"image","mime":"image/png","b64":"..."}
  *   {"t":"error","m":"message"}
  *   {"t":"done"}                          sentinel: stream complete
+ *
+ * Correlation fields (v2): every encoded line MAY carry optional `run` (runId) and
+ * `seq` (chunk ordinal) for cross-referencing [provider-rss] log lines with the stream
+ * that produced them. They are NOT emitted by default (decode stays backwards-compatible:
+ * absent → run=null / seq=-1) and are purely observational — they never affect chunk
+ * semantics.
  *
  * Errors are represented as {"t":"error","m":"..."} lines — the consumer
  * surfaces them as failures and falls back to in-process, never as a fake
@@ -62,6 +69,41 @@ object ChatStreamJsonl {
             .put("mime", chunk.attachment.mimeType)
             .put("b64", java.util.Base64.getEncoder().encodeToString(chunk.attachment.data))
             .toString()
+    }
+
+    /**
+     * 编码为带可选关联字段（runId/seq）的 JSONL 行。仅当 [runId] 非空或 [seq] >= 0 时注入；
+     * 否则等价于 [encode]，保持零噪音。纯观测，不影响 chunk 语义。
+     */
+    fun encodeWithCorrelation(chunk: LLMStreamChunk, runId: String? = null, seq: Int = -1): String {
+        val base = encode(chunk)
+        if (runId == null && seq < 0) return base
+        val obj = try { JSONObject(base) } catch (_: Exception) { return base }
+        if (runId != null) obj.put("run", runId)
+        if (seq >= 0) obj.put("seq", seq)
+        return obj.toString()
+    }
+
+    /** 单行解码结果：chunk（不可解析/error/done 为 null）+ 可选关联字段。 */
+    data class StreamLine(
+        val chunk: LLMStreamChunk?,
+        val runId: String?,
+        val seq: Int,
+    )
+
+    /**
+     * 解码单行并同时取出可选关联字段 run/seq（provider-rss v2 / TF-A）。
+     * 纯追加：字段缺失时 runId=null、seq=-1，不与 [decode] 的语义冲突。
+     */
+    fun decodeLine(line: String): StreamLine {
+        val t = line.trim()
+        if (t.isEmpty()) return StreamLine(null, null, -1)
+        val obj = try { JSONObject(t) } catch (_: Exception) { return StreamLine(null, null, -1) }
+        return StreamLine(
+            chunk = decode(t),
+            runId = obj.optString("run", "").ifEmpty { null },
+            seq = obj.optInt("seq", -1),
+        )
     }
 
     /** Sentinel line marking the end of a stream. */

@@ -10,6 +10,7 @@ import com.openminis.app.data.model.ThinkingLevel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.onEach
 
 interface LLMProvider {
     val name: String
@@ -68,17 +69,30 @@ interface LLMProvider {
         tools: List<AgentToolDefinition> = emptyList(),
         thinkingLevel: ThinkingLevel = ThinkingLevel.OFF,
     ): LLMResponse {
-        // [provider-rss D3] 打点定位：聊天直连 provider 的非流式调用，捕获主进程
-        // VmRSS 增量。零副作用（读 /proc 失败返回 0），不影响调用结果。
+        // [provider-rss v2] 打点定位：聊天直连 provider 的非流式调用，捕获主进程
+        // VmRSS 增量 + 调用期间峰值采样 + 入参/出参字节估算。零副作用，不影响调用结果。
         val beforeKb = ProviderRssProbe.rssKb()
-        return try {
-            sendMessageClamped(
+        val peakHandle = ProviderRssProbe.startPeakSampling()
+        var response: LLMResponse? = null
+        try {
+            response = sendMessageClamped(
                 messages, systemPrompt, maxTokens, temperature, imageParts, tools,
                 clampThinkingLevel(thinkingLevel),
             )
+            return response
         } finally {
             val afterKb = ProviderRssProbe.rssKb()
-            ProviderRssProbe.record("sendMessage:$name", beforeKb, afterKb)
+            val peakKb = peakHandle.stop()
+            ProviderRssProbe.record(
+                ProviderRssProbe.ProbeRecord(
+                    kind = "sendMessage:$name",
+                    beforeRss = beforeKb,
+                    afterRss = afterKb,
+                    peakRss = peakKb,
+                    inputBytes = approxInputBytes(messages, maxTokens),
+                    outputBytes = response?.let { approxOutputBytes(it) } ?: -1L,
+                )
+            )
         }
     }
 
@@ -92,19 +106,38 @@ interface LLMProvider {
         tools: List<AgentToolDefinition> = emptyList(),
         thinkingLevel: ThinkingLevel = ThinkingLevel.OFF,
     ): Flow<LLMStreamChunk> = flow {
-        // [provider-rss D3] 打点定位：聊天直连 provider 的流式调用。streamMessage
-        // 是冷 Flow，打点放在真正被 collect（发出请求）的前后。
+        // [provider-rss v2] 打点定位：聊天直连 provider 的流式调用。streamMessage
+        // 是冷 Flow，打点放在真正被 collect（发出请求）的前后；峰值采样 + 入参/出参字节估算。
         val beforeKb = ProviderRssProbe.rssKb()
+        val peakHandle = ProviderRssProbe.startPeakSampling()
+        var outBytes = 0L
         try {
             emitAll(
                 streamMessageClamped(
                     messages, systemPrompt, maxTokens, temperature, imageParts, tools,
                     clampThinkingLevel(thinkingLevel),
-                )
+                ).onEach { chunk ->
+                    when (chunk) {
+                        is LLMStreamChunk.Text -> outBytes += chunk.text.length.toLong()
+                        is LLMStreamChunk.ThinkingDelta -> outBytes += chunk.text.length.toLong()
+                        is LLMStreamChunk.ReasoningContent -> outBytes += chunk.content.length.toLong()
+                        else -> Unit
+                    }
+                }
             )
         } finally {
             val afterKb = ProviderRssProbe.rssKb()
-            ProviderRssProbe.record("streamMessage:$name", beforeKb, afterKb)
+            val peakKb = peakHandle.stop()
+            ProviderRssProbe.record(
+                ProviderRssProbe.ProbeRecord(
+                    kind = "streamMessage:$name",
+                    beforeRss = beforeKb,
+                    afterRss = afterKb,
+                    peakRss = peakKb,
+                    inputBytes = approxInputBytes(messages, maxTokens),
+                    outputBytes = outBytes,
+                )
+            )
         }
     }
 
@@ -190,3 +223,17 @@ fun Flow<LLMStreamChunk>.failOnSilentEmptyCompletion(providerName: String): Flow
         throw LLMError.TransientError("Server returned an empty response (connection dropped or upstream error)")
     }
 }
+
+// [provider-rss v2] 入参估算（kB 粒度即可，观测用不追求精确；含 image/audio 字节）。
+private fun approxInputBytes(messages: List<LLMMessage>, maxTokens: Int): Long {
+    var bytes = 0L
+    for (m in messages) {
+        bytes += m.content.length.toLong() * 2L // UTF-16 → ~2B/char 保守
+        for (img in m.imageParts) bytes += img.data.size.toLong()
+        for (aud in m.audioParts) bytes += aud.base64Data.length.toLong()
+    }
+    return bytes
+}
+
+// [provider-rss v2] 非流式响应体估算（文本 UTF-16 长度近似）。
+private fun approxOutputBytes(r: LLMResponse): Long = r.text.length.toLong() * 2L
