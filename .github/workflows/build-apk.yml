@@ -195,7 +195,13 @@ jobs:
           VC=$((220000000 + GITHUB_RUN_NUMBER))
           echo "MINIS_VERSION_CODE=$VC" >> "$GITHUB_ENV"
           echo "MINIS_VERSION_NAME_SUFFIX=-beta.$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
-          echo "versionCode=$VC  versionNameSuffix=-beta.$GITHUB_RUN_NUMBER"
+          # [dual-appid] Alt-account builds ship the experimental "lab" identity
+          # by default so they install CO-EXISTING with the stable main-account
+          # app (applicationId com.openminis.app.lab) instead of overwriting it.
+          # Override with MINIS_APP_ID_OVERRIDE (set below) if a comparison build
+          # with the default identity is ever needed.
+          echo "MINIS_APP_ID_OVERRIDE=com.openminis.app.lab" >> "$GITHUB_ENV"
+          echo "versionCode=$VC  versionNameSuffix=-beta.$GITHUB_RUN_NUMBER  appId=com.openminis.app.lab"
 
       # JVM unit tests — the full suite. The test backlog that used to force a
       # scoped filter here is cleared:
