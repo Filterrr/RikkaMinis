@@ -8,6 +8,8 @@ import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.FileOutputStream
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Remote executor for [minis-model-use run]'s network call, running in a
@@ -21,7 +23,20 @@ import java.io.File
  *
  * Protocol (file-based, no Binder 1MB limit for media):
  *   Request:  [cacheDir]/model-exec-<uuid>/request.json
- *   Response: [cacheDir]/model-exec-<uuid>/result.json
+ *   Response: [cacheDir]/model-exec-<uuid>/result.json  (atomic via result.tmp)
+ *
+ * TF-B reliable lifecycle: the worker owns its own lifecycle via
+ * [ModelExecutionLifecycle] + [ModelExecutionMailbox]. It writes worker.pid,
+ * commits results atomically (result.tmp → flush/fsync → rename result.json),
+ * waits for client.ack on non-streaming runs before self-reaping, and only
+ * calls Process.killProcess (self-reap) after confirming quiescence. The main
+ * process never kills us directly (only a shutdown REQUEST file); a worker
+ * with in-flight work (active/queued/unacked/unflushed stream) NEVER dies.
+ *
+ * The old model — `stopSelf()` as reclamation proof with a 30s idle-kill —
+ * is deliberately gone: stopSelf is not process death, and an idle window can
+ * sever a later concurrent stream. Here the short-lived process dies
+ * immediately when quiescent and the NEXT request starts a fresh process.
  *
  * The service reads the request, reconstructs ProviderInstance + LLMModel,
  * builds the provider, injects passthrough extras, dispatches to
@@ -29,9 +44,6 @@ import java.io.File
  * result JSON whose media attachments are base64-encoded (the caller —
  * ModelUseOffloadHandler in the main process — writes them to real paths,
  * keeping ALL output-file behaviour in one place).
- *
- * The process stops itself after writing the result; Android reaps it and
- * its native heap with it.
  */
 class ModelExecutionService : Service() {
 
@@ -43,7 +55,19 @@ class ModelExecutionService : Service() {
         const val STREAM_FILE = "stream.jsonl"
         /** Cancellation signal file: when created, a running stream aborts. */
         const val CANCEL_FILE = "cancel"
+        /** Worker pid file, so the client can classify worker death. */
+        const val WORKER_PID_FILE = "worker.pid"
+        /** Max time a non-streaming worker waits for the client's client.ack. */
+        private const val CLIENT_ACK_TIMEOUT_MS = 8_000L
+        private const val ACK_POLL_MS = 100L
     }
+
+    /** Worker-side registry: number of requests currently being executed. */
+    private val activeRequests = AtomicInteger(0)
+
+    /** Worker-side lifecycle state (authoritative; main process only inspects state.json). */
+    @Volatile
+    private var lifecycleState = ModelExecutionWorkerState.ACTIVE
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -53,7 +77,6 @@ class ModelExecutionService : Service() {
 
         val dir = File(requestDir)
         val requestFile = File(dir, "request.json")
-        val resultFile = File(dir, RESULT_FILE)
 
         if (!requestFile.exists()) {
             Log.w(TAG, "request.json not found")
@@ -61,7 +84,20 @@ class ModelExecutionService : Service() {
             return START_NOT_STICKY
         }
 
-        // Execute on a background thread; stopSelf after the result lands.
+        // Any new request REVIVES the worker: if a prior request left us
+        // DRAINED/STOPPING, the incoming request moves us back to ACTIVE
+        // (quiesce re-arm). Iff STOPPING and a kill was already in flight we
+        // race it — the kill loop re-checks state before killing, so a
+        // revived ACTIVE never gets killed.
+        activeRequests.incrementAndGet()
+        lifecycleState = ModelExecutionWorkerState.ACTIVE
+        ModelExecutionMailbox.writeState(dir, lifecycleState, activeRequests.get())
+        // Worker-pid file: the client uses this to classify worker death
+        // (worker_died) instead of waiting out the 6-minute stream timeout.
+        runCatching { File(dir, WORKER_PID_FILE).writeText(android.os.Process.myPid().toString()) }
+
+        // Execute on a background thread; the worker then decides whether the
+        // process may die (quiescent kill) — never just stopSelf as proof.
         Thread {
             try {
                 val requestText = requestFile.readText()
@@ -70,24 +106,126 @@ class ModelExecutionService : Service() {
                     executeStreamingRun(requestText, dir)
                 } else {
                     val result = executeRun(requestText)
-                    resultFile.writeText(result)
+                    writeResultAtomically(dir, result)
                     Log.i(TAG, "result written ($result.length bytes), pid=${android.os.Process.myPid()}")
+                    // The client must have consumed result.json before we die —
+                    // otherwise a just-written result is lost when the worker
+                    // process is reaped and the caller falls back in-process
+                    // (or worse, re-dispatches and duplicates the call).
+                    waitClientAck(dir, CLIENT_ACK_TIMEOUT_MS)
                 }
             } catch (t: Throwable) {
                 Log.w(TAG, "execution failed: ${t.message}", t)
                 try {
-                    resultFile.writeText(JSONObject().apply {
+                    writeResultAtomically(dir, JSONObject().apply {
                         put("error", "model_use_failed")
                         put("message", t.message ?: "unknown")
                         put("exit_code", 1)
                     }.toString())
                 } catch (_: Throwable) {}
             } finally {
-                stopSelf(startId)
+                lifecycleState = finishRequest(dir)
             }
         }.apply { isDaemon = false }.start()
 
         return START_NOT_STICKY
+    }
+
+    /**
+     * Registry bookkeeping after a request finished: decrement the active
+     * counter and run the lifecycle machine. Returns the next worker state.
+     *
+     * The worker only kills its own process when [ModelExecutionLifecycle]
+     * decides STOPPING **and** quiescence is confirmed — the main process can
+     * never kill us directly. A new request arriving after this check simply
+     * revives the process (onStartCommand moves the state back to ACTIVE).
+     */
+    private fun finishRequest(dir: File): ModelExecutionWorkerState {
+        activeRequests.decrementAndGet()
+        val quiescence = ModelExecutionQuiescenceInput(
+            activeRequests = activeRequests.get(),
+            queuedRequests = 0, // onStartCommand always starts work immediately; no queue
+            unackedResponses = 0, // non-streaming waits for client ack before finishing;
+                                  // streaming is terminal-by-construction after DONE
+            streamFileFlushed = true,
+        )
+        val shutdownRequested = shutdownRequested()
+        val next = ModelExecutionLifecycle.transition(
+            current = lifecycleState,
+            quiescence = quiescence,
+            shutdownRequested = shutdownRequested,
+        )
+        lifecycleState = next
+        ModelExecutionMailbox.writeState(dir, next, activeRequests.get())
+        Log.i(
+            TAG,
+            "request finished: state $next active=${activeRequests.get()} " +
+                "shutdownRequested=$shutdownRequested pid=${android.os.Process.myPid()}",
+        )
+        if (ModelExecutionLifecycle.shouldKill(next, quiescence)) {
+            // Quiescent: no in-flight work (active==0, queue==0, no un-acked
+            // response, stream flushed). The worker kills ITS OWN process —
+            // never the main process on its own counters — so the native heap
+            // (DirectByteBuffer from the LLM HTTP call) returns to the OS.
+            // There is NO idle window: the process dies only when a request
+            // finished and nothing else is running. The next request starts
+            // a fresh process.
+            Log.i(TAG, "quiescent self-reap (no pending work), pid=${android.os.Process.myPid()}")
+            selfReap()
+        }
+        return next
+    }
+
+    /**
+     * True when the main process asked us to drain. On reclaim the main
+     * process writes the shutdown marker into the staging root; the worker
+     * checks the sibling marker file so we never kill while a new request
+     * could arrive (main process controls shutdown by the marker, we control
+     * the timing by quiescence).
+     */
+    private fun shutdownRequested(): Boolean {
+        return runCatching {
+            ModelExecutionMailbox.shutdownRequested(File(stagingRoot(), ModelExecutionMailbox.FILE_SHUTDOWN))
+        }.getOrElse { false }
+    }
+
+    /** Root staging dir the main process uses for model-exec requests. */
+    private fun stagingRoot(): File = File(cacheDir, "model-exec")
+
+    /** Wait until the client wrote client.ack, or the timeout elapsed. */
+    private fun waitClientAck(dir: File, timeoutMs: Long) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        val ack = File(dir, ModelExecutionMailbox.FILE_CLIENT_ACK)
+        while (System.currentTimeMillis() < deadline) {
+            if (ack.exists()) return
+            try { Thread.sleep(ACK_POLL_MS) } catch (_: InterruptedException) { return }
+        }
+        Log.w(TAG, "client ack timeout (${timeoutMs}ms) — proceeding anyway")
+    }
+
+    /**
+     * Atomic result commit: write to result.tmp, flush + fsync, then rename
+     * to result.json. The client NEVER observes a partial result file.
+     */
+    private fun writeResultAtomically(dir: File, content: String) {
+        val tmp = File(dir, ModelExecutionMailbox.FILE_RESULT_TMP)
+        val target = File(dir, RESULT_FILE)
+        FileOutputStream(tmp).use { fos ->
+            fos.write(content.toByteArray(Charsets.UTF_8))
+            fos.flush()
+            try { fos.fd.sync() } catch (_: Throwable) {}
+        }
+        if (!tmp.renameTo(target)) {
+            // Cross-filesystem rename can't happen here (same dir), but be
+            // defensive: copy + delete instead of leaving a broken result.
+            tmp.copyTo(target, overwrite = true)
+            tmp.delete()
+        }
+    }
+
+    /** Kill our own process — only ever called after quiescence confirmation. */
+    private fun selfReap() {
+        runCatching { android.os.Process.killProcess(android.os.Process.myPid()) }
     }
 
     private fun executeRun(requestJson: String): String {
@@ -315,7 +453,6 @@ class ModelExecutionService : Service() {
      */
     private fun executeStreamingRun(requestJson: String, dir: File) {
         val streamFile = File(dir, STREAM_FILE)
-        val resultFile = File(dir, RESULT_FILE)
         val cancelFile = File(dir, CANCEL_FILE)
         val output = java.io.BufferedWriter(java.io.OutputStreamWriter(java.io.FileOutputStream(streamFile, true)))
         val appendLine = { line: String ->
@@ -409,7 +546,7 @@ class ModelExecutionService : Service() {
             } catch (_: Exception) { "" }
             if (apiKey.isEmpty()) {
                 appendLine(ChatStreamJsonl.errorLine("missing_api_key"))
-                resultFile.writeText(JSONObject().apply {
+                writeResultAtomically(dir, JSONObject().apply {
                     put("error", "missing_api_key")
                     put("message", "No API key configured for ${instance.label}.")
                     put("exit_code", 2)
@@ -430,24 +567,34 @@ class ModelExecutionService : Service() {
                     thinkingLevel = thinkingLevel,
                 ).collect { chunk ->
                     if (cancelFile.exists()) {
-                        throw IllegalStateException("cancelled")
+                        throw ModelExecutionCancelledException()
                     }
                     appendLine(ChatStreamJsonl.encode(chunk))
                 }
             }
             appendLine(ChatStreamJsonl.DONE_LINE)
-            resultFile.writeText(JSONObject().apply {
+            writeResultAtomically(dir, JSONObject().apply {
                 put("ok", true)
                 put("streaming", true)
             }.toString())
             Log.i(TAG, "stream done, pid=${android.os.Process.myPid()}")
         } catch (t: Throwable) {
+            val cancelled = t is ModelExecutionCancelledException
             Log.w(TAG, "stream failed: ${t.message}", t)
+            // [TF-B cancel contract] The worker MUST acknowledge a cancel
+            // (or a clean terminal result) BEFORE the client deletes the
+            // directory — else the old code deleted the dir under a worker
+            // still appending to stream.jsonl / writing result.json (lost
+            // final chunks / torn result).
+            if (cancelled) {
+                runCatching { ModelExecutionMailbox.writeCancelAck(dir) }
+            }
             try {
                 appendLine(ChatStreamJsonl.errorLine(t.message ?: "stream_failed"))
             } catch (_: Throwable) {}
             try {
-                resultFile.writeText(JSONObject().apply {
+                writeResultAtomically(dir, JSONObject().apply {
+                    if (cancelled) put("cancelled", true)
                     put("error", "stream_failed")
                     put("message", t.message ?: "unknown")
                     put("exit_code", 1)
@@ -457,6 +604,9 @@ class ModelExecutionService : Service() {
             try { output.close() } catch (_: Throwable) {}
         }
     }
+
+    /** Thrown when the main process asks us to cancel an in-flight stream. */
+    private class ModelExecutionCancelledException : java.lang.RuntimeException("cancelled")
 
     private fun parseContentParts(o: JSONObject): List<com.openminis.app.data.model.AgentContentPart> {
         val parts = mutableListOf<com.openminis.app.data.model.AgentContentPart>()
