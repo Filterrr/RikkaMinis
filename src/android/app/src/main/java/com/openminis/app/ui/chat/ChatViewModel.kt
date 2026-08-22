@@ -8738,6 +8738,7 @@ class ChatViewModel(
                     messages = history.toList(),
                     systemPrompt = systemPrompt,
                     maxTokens = config.maxOutputTokens,
+                    temperature = null,
                     tools = subagentTools,
                     thinkingLevel = ThinkingLevel.OFF,
                 ).collect { chunk ->
