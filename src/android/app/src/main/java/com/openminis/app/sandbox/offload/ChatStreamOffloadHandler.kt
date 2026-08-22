@@ -34,6 +34,12 @@ object ChatStreamOffloadHandler {
     private const val STAGING_ROOT = "model-exec"
     private const val POLL_INTERVAL_MS = 160L
     private const val STREAM_TIMEOUT_MS = 6 * 60 * 1000L
+    private const val CANCEL_ACK_TIMEOUT_MS = 5_000L
+    private const val CANCEL_ACK_POLL_MS = 100L
+    /** How long the stream file may stay frozen before we check worker liveness. */
+    private const val WORKER_DIED_GRACE_MS = 2_000L
+    /** Pid file written by the worker (deliberately NOT an API — just a file). */
+    private const val WORKER_PID_FILE = "worker.pid"
 
     /**
      * [direction-A / B2] Global count of in-flight streaming runs (this process).
@@ -48,6 +54,10 @@ object ChatStreamOffloadHandler {
     @Volatile
     var activeStreams = 0
         private set
+
+    /** Dir of the in-flight stream, for the worker-liveness probe. */
+    @Volatile
+    private var lastStreamDirRef: File? = null
 
     /**
      * Execute a streaming request and expose decoded chunks as a [Flow].
@@ -94,20 +104,48 @@ object ChatStreamOffloadHandler {
             }
 
             var lastRead = 0L
+            var emittedChunks = false
+            var lastGrowAtMs = System.currentTimeMillis()
+            lastStreamDirRef = dir
             val timedOut = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
                 while (true) {
                     ensureActive()
                     val newLen = streamFile.length()
                     if (newLen > lastRead) {
+                        lastGrowAtMs = System.currentTimeMillis()
                         val chunks = readAppendedChunks(streamFile, lastRead, newLen)
                         lastRead = chunks.second
                         for (line in chunks.first) {
                             if (line.isBlank()) continue
                             if (ChatStreamJsonl.isDone(line)) return@withTimeoutOrNull true
                             if (ChatStreamJsonl.isError(line)) {
-                                throw RuntimeException("stream error: ${ChatStreamJsonl.errorMessage(line)}")
+                                throw ModelStreamErrorException(
+                                    ChatStreamJsonl.errorMessage(line),
+                                    hadChunks = emittedChunks,
+                                )
                             }
-                            ChatStreamJsonl.decode(line)?.let { emit(it) }
+                            ChatStreamJsonl.decode(line)?.let {
+                                emittedChunks = true
+                                emit(it)
+                            }
+                        }
+                    }
+                    // [TF-B crash recovery] Detect a worker process death without
+                    // waiting for the 6-minute stream timeout: if the stream file
+                    // stopped growing AND the worker is gone (process no longer
+                    // alive) we classify worker_died — 0-chunk → caller MAY
+                    // fallback, has-chunk → caller MUST NOT re-send (duplicate
+                    // answer), it surfaces the error. Guard: a terminal result
+                    // already written (or a lifecycle state dump present) means
+                    // the worker finished NORMALLY (it self-reaps right after
+                    // DONE / result) — NOT a crash. Only a missing terminal +
+                    // dead process is worker_died.
+                    if (newLen == lastRead &&
+                        System.currentTimeMillis() - lastGrowAtMs > WORKER_DIED_GRACE_MS
+                    ) {
+                        val workerAlive = isWorkerProcessAlive()
+                        if (!workerAlive && !File(dir, ModelExecutionMailbox.FILE_RESULT).exists()) {
+                            throw ModelWorkerDiedException(hadChunks = emittedChunks)
                         }
                     }
                     delay(POLL_INTERVAL_MS)
@@ -120,12 +158,42 @@ object ChatStreamOffloadHandler {
             // [B2] A stream is no longer in flight regardless of how we exited
             // (timeout / external cancel / normal close).
             activeStreams--
-            // On any termination (timeout / external cancel / normal close), signal the
-            // service to stop streaming so it doesn't keep appending to a deleted file.
-            try { cancelFile.createNewFile() } catch (_: Exception) {}
+            // [TF-B cancel contract] Signal the service to stop, then WAIT for
+            // its cancel.ack (or the terminal result) BEFORE deleting the
+            // request dir. The old code wrote cancel then immediately
+            // deleteRecursively — a race: the worker could still be appending
+            // to stream.jsonl / writing result.json while the client removed
+            // the directory under it (lost final chunks / torn result).
+            try {
+                ModelExecutionMailbox.writeCancel(cancelFile.parentFile!!)
+                val deadline = System.currentTimeMillis() + CANCEL_ACK_TIMEOUT_MS
+                while (System.currentTimeMillis() < deadline) {
+                    if (File(dir, ModelExecutionMailbox.FILE_CANCEL_ACK).exists()) break
+                    // A clean terminal result (DONE/error) is also an ack — the
+                    // worker finished before seeing the cancel.
+                    if (File(dir, ModelExecutionMailbox.FILE_RESULT).exists()) break
+                    kotlinx.coroutines.delay(CANCEL_ACK_POLL_MS)
+                }
+            } catch (_: Exception) {}
             try { dir.deleteRecursively() } catch (_: Exception) {}
         }
     }.flowOn(Dispatchers.IO)
+
+    /**
+     * Cheap liveness probe for the :modelservice worker. The worker writes its
+     * pid into worker.pid at start; we check /proc/<pid> which exists only
+     * while the process is alive. False "dead" for a torn/incomplete pid file
+     * is handled by the grace period above (we only classify death after
+     * WORKER_DIED_GRACE_MS of no growth AND the probe says dead). Unknown
+     * liveness (no pid file) → assume alive (never fabricate worker_died).
+     */
+    private fun isWorkerProcessAlive(): Boolean {
+        val dir = lastStreamDirRef ?: return true
+        val pidFile = File(dir, WORKER_PID_FILE)
+        if (!pidFile.exists()) return true // unknown liveness → assume alive
+        val pid = runCatching { pidFile.readText().trim().toInt() }.getOrNull() ?: return true
+        return java.io.File("/proc/$pid").exists()
+    }
 
     /** Read only the bytes appended after [offset] up to the last newline; return (lines, newOffset). */
     private fun readAppendedChunks(file: File, offset: Long, newLen: Long): Pair<List<String>, Long> {
