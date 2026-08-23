@@ -307,9 +307,9 @@ object ModelExecutionRunDir {
      * The old code deleted on `result.json` OR `cancel.ack` existence alone,
      * which raced the worker's `finishRequest()` → `writeState()` → ENOENT.
      */
-    fun safeToDelete(dir: File, expectedRunId: String?): Boolean {
+    fun safeToDelete(dir: File, expectedRunId: String?, procRoot: File = File("/proc")): Boolean {
         if (!terminalPresent(dir)) return false
-        return when (probeLiveness(dir, expectedRunId)) {
+        return when (probeLiveness(dir, expectedRunId, procRoot)) {
             WorkerLiveness.DEAD -> true
             // No valid ref → we cannot point at a live process that owns this
             // run (it either never started writing pid, or the pid is stale/
