@@ -101,6 +101,7 @@ data class StreamingDelta(
     val content: String,
     val toolBlocks: List<AssistantBlock>,
     val isAwaitingModelResponse: Boolean,
+    val epoch: Long = 0L,           // 回合纪元：mergeStreamingOverlay 只合并当前 epoch 的 delta
 )
 
 @Immutable

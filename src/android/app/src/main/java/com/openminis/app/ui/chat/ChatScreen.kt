@@ -2875,7 +2875,7 @@ fun ChatScreen(
                 val hasFloatingTools = remember(messages, streamingById, toolStatusBarEnabled) {
                     if (!toolStatusBarEnabled) return@remember false
                     val merged = if (streamingById.isEmpty()) messages
-                                 else mergeStreamingOverlay(messages, streamingById)
+                                 else mergeStreamingOverlay(messages, streamingById, viewModel.currentStreamEpoch())
                     merged.any { msg ->
                         msg.role == "assistant" && msg.toolBlocks.any { tb ->
                             tb.toolStatus != null && tb.kind != "thinking" && tb.kind != "info"
@@ -3047,7 +3047,7 @@ fun ChatScreen(
                             // list changes (load-older, deletion, compaction)
                             // invalidate the append-only contract and force a
                             // full re-seed via isIncrementallyCompatible().
-                            val merged = mergeStreamingOverlay(msgs, stream)
+                            val merged = mergeStreamingOverlay(msgs, stream, viewModel.currentStreamEpoch())
                             if (flatItems.isEmpty()) {
                                 val tBuildStart = System.nanoTime()
                                 com.openminis.app.diagnostics.PerfLongCtx.step(
@@ -4008,7 +4008,7 @@ fun ChatScreen(
                         kotlinx.coroutines.flow.flowOf(messages),
                         viewModel.streamingById,
                     ) { msgs, stream ->
-                        val merged = if (stream.isEmpty()) msgs else mergeStreamingOverlay(msgs, stream)
+                        val merged = if (stream.isEmpty()) msgs else mergeStreamingOverlay(msgs, stream, viewModel.currentStreamEpoch())
                         merged.filter { it.role == "assistant" }
                             .flatMap { it.toolBlocks }
                             .filter { it.toolStatus != null && it.kind != "thinking" && it.kind != "info" }

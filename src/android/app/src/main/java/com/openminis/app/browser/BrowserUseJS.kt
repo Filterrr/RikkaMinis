@@ -7,7 +7,9 @@ package com.openminis.app.browser
  */
 object BrowserUseJS {
 
-    /** Safely escape a string for embedding in JavaScript source (single-quoted). */
+    /** Maximum get_text payload sent across the browser/offload boundary. */
+    const val MAX_GET_TEXT_CHARS = 900 * 1024
+
     fun jsQuote(s: String): String = buildString {
         for (ch in s) {
             when (ch) {
@@ -119,17 +121,16 @@ object BrowserUseJS {
                     var el = document.querySelector('$sel');
                     if (!el) return JSON.stringify({error: 'Element not found: $sel'});
                     var innerTextVal = el.innerText || '';
-                    var textContentVal = el.textContent || '';
-                    var text = innerTextVal.substring(0, 10000);
-                    return JSON.stringify({text: text, length: text.length});
+                    var text = innerTextVal.substring(0, $MAX_GET_TEXT_CHARS);
+                    return JSON.stringify({text: text, length: text.length, fullLength: innerTextVal.length, truncated: text.length < innerTextVal.length});
                 })()
             """.trimIndent()
         }
         return """
             (function() {
                 var innerTextVal = document.body.innerText || '';
-                var text = innerTextVal.substring(0, 10000);
-                return JSON.stringify({text: text, length: text.length, url: location.href, title: document.title});
+                var text = innerTextVal.substring(0, $MAX_GET_TEXT_CHARS);
+                return JSON.stringify({text: text, length: text.length, fullLength: innerTextVal.length, truncated: text.length < innerTextVal.length, url: location.href, title: document.title});
             })()
         """.trimIndent()
     }

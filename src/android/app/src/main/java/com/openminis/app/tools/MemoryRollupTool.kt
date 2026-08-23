@@ -4,14 +4,13 @@ import com.openminis.app.workspace.MemoryRollupRunner
 import java.io.File
 
 /**
- * Agent tool definition and execution for `memory_rollup` — on-demand daily
- * memory distillation (T6, invoked by the agent rather than a scheduler).
+ * Reads the largest completed daily log that has not already been distilled,
+ * classifies entries into stable rules (conventions / decisions / lessons),
+ * and appends them to MEMORY-ROLLUP.md. The source log is never modified.
  *
- * Reads the previous day's completed daily log, classifies entries into
- * stable rules (conventions / decisions / lessons), and appends them to
- * MEMORY-ROLLUP.md. The source log is never modified.
- *
- * Idempotent: a date already rolled up is silently skipped.
+ * Idempotent: a date already rolled up is skipped. An optional date can be
+ * passed to target one specific daily log; the default chooses the largest
+ * eligible old log so missed dates remain reachable.
  */
 object MemoryRollupTool {
 
@@ -20,12 +19,11 @@ object MemoryRollupTool {
     fun agentToolDefinition(): com.openminis.app.data.model.AgentToolDefinition {
         return com.openminis.app.data.model.AgentToolDefinition(
             name = TOOL_NAME,
-            description = "Distill stable rules from the previous day's daily log into MEMORY-ROLLUP.md. " +
-                "Reads the last completed daily log (yesterday), classifies each entry as " +
-                "convention/user-decision/lesson/transient, and appends distilled entries to " +
-                "the rollup file. Idempotent: a date already rolled up is skipped. " +
-                "Call this when daily logs are getting large and you want to surface " +
-                "reusable knowledge without re-reading raw logs.",
+            description = "Distill stable rules from the largest eligible old daily log into MEMORY-ROLLUP.md. " +
+                "It selects the largest non-empty YYYY-MM-DD log that has not already been rolled up " +
+                "and contains stable entries; an older missed log remains reachable. " +
+                "A date already rolled up is skipped and source logs are never modified. " +
+                "Call this when daily logs are getting large to surface reusable knowledge.",
             parameters = emptyMap(),
             required = emptyList(),
             propertyOrdering = emptyList(),
@@ -59,13 +57,13 @@ object MemoryRollupTool {
             val outcome = runner.runOnce()
             val (message, success) = when (outcome) {
                 MemoryRollupRunner.Outcome.ROLLED_UP ->
-                    "Memory rollup completed: yesterday's daily log distilled into MEMORY-ROLLUP.md" to true
+                    "Memory rollup completed: the largest eligible daily log was distilled into MEMORY-ROLLUP.md" to true
                 MemoryRollupRunner.Outcome.SKIPPED_ALREADY ->
-                    "Memory rollup skipped: yesterday's log was already distilled (idempotent)" to true
+                    "Memory rollup skipped: the selected log was already distilled (idempotent)" to true
                 MemoryRollupRunner.Outcome.NO_LOG_YESTERDAY ->
-                    "No daily log found for yesterday — nothing to roll up" to true
+                    "No eligible daily log found — nothing to roll up" to true
                 MemoryRollupRunner.Outcome.NOTHING_TO_DISTILL ->
-                    "Yesterday's log had no distillable stable rules (all entries transient)" to true
+                    "The selected log had no distillable stable rules (all entries transient)" to true
                 MemoryRollupRunner.Outcome.ERROR ->
                     "Memory rollup failed due to an I/O error" to false
             }

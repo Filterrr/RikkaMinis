@@ -587,10 +587,17 @@ internal fun FlatChatItem.owningMessageId(): String = when (this) {
 internal fun mergeStreamingOverlay(
     messages: List<ChatMessage>,
     streaming: Map<String, StreamingDelta>,
+    currentEpoch: Long = 0L,
 ): List<ChatMessage> {
     if (streaming.isEmpty()) return messages
     return messages.map { m ->
         val delta = streaming[m.id] ?: return@map m
+        // [T-android-thinking-indicator-linger] Epoch filter: a delta from a
+        // previous turn (cancelled-then-resent, trailing flush that survived
+        // streamJob.cancel) carries an older epoch — ignore it here so it can
+        // never force a stale message back to isStreaming=true, which is what
+        // rendered the residual second "thinking" row.
+        if (delta.epoch != currentEpoch) return@map m
         m.copy(
             content = delta.content,
             isStreaming = true,

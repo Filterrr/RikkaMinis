@@ -984,14 +984,24 @@ internal fun ToolDetailSheet(
                                         )
                                     }
                                     HorizontalDivider(thickness = 0.5.dp, color = ChatColors.separator)
-                                    Text(
-                                        text = block.content,
-                                        fontSize = 13.sp,
-                                        fontFamily = FontFamily.Monospace,
-                                        color = ChatColors.primaryText,
-                                        lineHeight = 16.sp,
-                                        modifier = Modifier.padding(14.dp),
-                                    )
+                                    // [T-android-browser-toolresult-guard] Render browser tool
+                                    // result text through LargeContentGuard: >LARGE_MESSAGE_THRESHOLD_CHARS
+                                    // collapses to preview + expand/export instead of laying out
+                                    // (and linkifying) hundreds of KB on the main thread, which ANRs.
+                                    LargeContentGuard(
+                                        content = block.content,
+                                        isStreaming = isLive,
+                                        stableKey = "tooldetail:${block.id}",
+                                    ) {
+                                        Text(
+                                            text = block.content,
+                                            fontSize = 13.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            color = ChatColors.primaryText,
+                                            lineHeight = 16.sp,
+                                            modifier = Modifier.padding(14.dp),
+                                        )
+                                    }
                                 }
                             }
                         }

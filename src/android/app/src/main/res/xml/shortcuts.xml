@@ -16,7 +16,7 @@
         android:shortcutLongLabel="@string/shortcut_new_chat_long">
         <intent
             android:action="android.intent.action.VIEW"
-            android:targetPackage="com.openminis.app"
+            android:targetPackage="@string/package_name"
             android:targetClass="com.openminis.app.MainActivity"
             android:data="minis://action/new_chat" />
         <categories android:name="android.shortcut.conversation" />
@@ -35,7 +35,7 @@
         android:shortcutLongLabel="@string/shortcut_camera_chat_long">
         <intent
             android:action="android.intent.action.VIEW"
-            android:targetPackage="com.openminis.app"
+            android:targetPackage="@string/package_name"
             android:targetClass="com.openminis.app.MainActivity"
             android:data="minis://action/camera_chat" />
         <categories android:name="android.shortcut.conversation" />

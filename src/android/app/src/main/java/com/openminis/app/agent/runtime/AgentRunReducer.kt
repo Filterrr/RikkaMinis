@@ -42,6 +42,12 @@ sealed class AgentRunEvent {
     /** 决定切换 fallback（FALLING_BACK → CALLING_MODEL）。 */
     data class FallbackSelected(val fallbackMemberIndex: Int? = null) : AgentRunEvent()
 
+    /**
+     * TF-H: 全部 fallback 成员已耗尽，无法再切换。
+     * FALLING_BACK → FINALIZING；随后应由 [RunFinalized] 落终态。
+     */
+    data object FallbackExhausted : AgentRunEvent()
+
     /** 开始一次工具调用（仅 EXECUTING_TOOLS 内，计数 +1）。 */
     data class ToolStarted(val toolName: String) : AgentRunEvent()
 
@@ -285,6 +291,13 @@ object AgentRunReducer {
             is AgentRunEvent.FallbackSelected ->
                 if (phase == AgentRunPhase.FALLING_BACK) {
                     accepted(state.copy(phase = AgentRunPhase.CALLING_MODEL))
+                } else {
+                    invalidPhase(state, event, phase, AgentRunPhase.FALLING_BACK)
+                }
+
+            is AgentRunEvent.FallbackExhausted ->
+                if (phase == AgentRunPhase.FALLING_BACK) {
+                    accepted(state.copy(phase = AgentRunPhase.FINALIZING))
                 } else {
                     invalidPhase(state, event, phase, AgentRunPhase.FALLING_BACK)
                 }

@@ -59,8 +59,6 @@ import com.openminis.app.data.model.ModelEntry
 import com.openminis.app.data.model.normalizeModalityName
 import com.openminis.app.data.repository.ProviderRepository
 import com.openminis.app.logging.AppLogger
-import com.openminis.app.provider.ProviderFactory
-import com.openminis.app.provider.openai.OpenAIProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -505,14 +503,17 @@ private suspend fun performTest(
         }
     }
 
-    val provider = runCatching {
-        ProviderFactory.create(instance, apiKey, entry.model, context)
-    }.getOrElse { return@withContext failure(it.message ?: "Couldn't create provider.") }
-
+    // TF-D: the app process never creates a provider for the quick test either.
+    // TEXT and IMAGE_GEN route through the :modelservice worker via the
+    // ProviderExecutionGateway — the worker reads the API key and builds/runs
+    // the provider, so its native heap dies with the process.
     when (kind) {
         QuickTestKind.TEXT -> {
             runCatching {
-                val resp = provider.sendMessage(
+                when (val r = com.openminis.app.sandbox.offload.ProviderExecutionGateway.send(
+                    context = context,
+                    instance = instance,
+                    model = entry.model,
                     messages = listOf(
                         LLMMessage(
                             role = LLMMessage.Role.USER,
@@ -522,28 +523,46 @@ private suspend fun performTest(
                     systemPrompt = null,
                     maxTokens = 128,
                     temperature = null,
-                )
-                val text = resp.text.trim()
-                QuickTestState.TextReply(
-                    text.ifEmpty { context.getString(R.string.quicktest_empty_reply) },
-                )
+                )) {
+                    is com.openminis.app.sandbox.offload.ProviderExecutionGateway.SendResult.Success -> {
+                        val text = r.response.text.trim()
+                        QuickTestState.TextReply(
+                            text.ifEmpty { context.getString(R.string.quicktest_empty_reply) },
+                        )
+                    }
+                    is com.openminis.app.sandbox.offload.ProviderExecutionGateway.SendResult.RemoteFailure ->
+                        failure("${r.code}: ${r.message}")
+                    is com.openminis.app.sandbox.offload.ProviderExecutionGateway.SendResult.Unavailable ->
+                        failure(r.reason)
+                }
             }.getOrElse { failure(it.message ?: "Request failed.") }
         }
 
         QuickTestKind.IMAGE_GEN -> {
-            val openAI = provider as? OpenAIProvider
-                ?: return@withContext failure(context.getString(R.string.quicktest_image_unsupported))
+            if (instance.providerType != com.openminis.app.data.model.ProviderType.openAI) {
+                return@withContext failure(context.getString(R.string.quicktest_image_unsupported))
+            }
             runCatching {
-                val resp = openAI.generateImage(
+                when (val r = com.openminis.app.sandbox.offload.ProviderExecutionGateway.generateImage(
+                    context = context,
+                    instance = instance,
+                    model = entry.model,
                     prompt = "A friendly cute mascot logo for an app called RikkaMinis, minimalist, centered, soft colors",
                     n = 1,
                     size = "1024x1024",
                     quality = null,
-                )
-                val img = resp.mediaAttachments.firstOrNull {
-                    it.type == LLMMediaAttachment.MediaType.IMAGE
-                } ?: return@runCatching failure(context.getString(R.string.quicktest_no_image))
-                QuickTestState.ImageReply(img.data)
+                )) {
+                    is com.openminis.app.sandbox.offload.ProviderExecutionGateway.SendResult.Success -> {
+                        val img = r.response.mediaAttachments.firstOrNull {
+                            it.type == LLMMediaAttachment.MediaType.IMAGE
+                        } ?: return@runCatching failure(context.getString(R.string.quicktest_no_image))
+                        QuickTestState.ImageReply(img.data)
+                    }
+                    is com.openminis.app.sandbox.offload.ProviderExecutionGateway.SendResult.RemoteFailure ->
+                        failure("${r.code}: ${r.message}")
+                    is com.openminis.app.sandbox.offload.ProviderExecutionGateway.SendResult.Unavailable ->
+                        failure(r.reason)
+                }
             }.getOrElse { failure(it.message ?: "Image request failed.") }
         }
 

@@ -47,8 +47,8 @@ import com.openminis.app.data.model.LLMStreamChunk
 import com.openminis.app.data.model.LLMUsage
 import com.openminis.app.data.model.ModelGroup
 import com.openminis.app.data.model.ThinkingLevel
-import com.openminis.app.sandbox.offload.ChatStreamOffloadHandler
-import com.openminis.app.sandbox.offload.ModelExecutionDispatcher
+import com.openminis.app.sandbox.offload.ModelStreamErrorException
+import com.openminis.app.sandbox.offload.ProviderExecutionGateway
 import com.openminis.app.R
 import com.openminis.app.data.repository.ChatRepository
 import com.openminis.app.data.repository.MemoryRepository
@@ -126,8 +126,6 @@ class ChatViewModel(
 
     companion object {
         internal const val TAG = "ChatViewModel"
-        /** Direction A: prefer offloading chat turns to :modelservice (remote process). Set false to disable. */
-        private const val CHAT_STREAM_OFFLOAD_ENABLED = true
         // [T-preflight-tool-title-nonblocking] Fields kept in each tool's
         // `required` list (so the schema keeps nudging the model to emit them —
         // tool_title drives the live pill header) but which must NOT block the
@@ -543,6 +541,16 @@ class ChatViewModel(
      */
     private val _streamingById = MutableStateFlow<Map<String, StreamingDelta>>(emptyMap())
     val streamingById: StateFlow<Map<String, StreamingDelta>> = _streamingById.asStateFlow()
+
+    /** 单调递增回合纪元：每开一个新回合 +1，旧回合晚到 delta 由渲染层按 epoch 忽略。 */
+    private var streamEpoch = 0L
+
+    /**
+     * 当前活跃回合的 epoch，供 ChatScreen 传入 [mergeStreamingOverlay] 做过滤。
+     * 新回合入口递增后，旧回合的 trailing-flush / 残余 delta 因 epoch 不匹配被忽略，
+     * 不再产生第二条"正在思考…"残留行。
+     */
+    fun currentStreamEpoch(): Long = streamEpoch
 
     /**
      * [T-android-stream-flush-dualpath] Per-message streaming-flush state for
@@ -2794,7 +2802,15 @@ class ChatViewModel(
         val maxOut = maxOf(1024, minOf(8192, contextWindow - estimatedInput))
         val provider = currentProvider
             ?: throw IllegalStateException("No LLM provider available for compaction")
-        val response = provider.sendMessage(
+        val instance = provider.instanceContext
+            ?: throw IllegalStateException("No provider instance context for compaction")
+        // TF-D: compaction runs through :modelservice via the gateway — the main
+        // process never calls provider.sendMessage. A remote failure (typed)
+        // throws so the splitter can halve the input and retry.
+        return when (val r = ProviderExecutionGateway.send(
+            context = context,
+            instance = instance,
+            model = provider.model,
             messages = listOf(
                 LLMMessage(role = LLMMessage.Role.USER, content = userMessage)
             ),
@@ -2809,8 +2825,13 @@ class ChatViewModel(
             imageParts = emptyList(),
             tools = emptyList(),
             thinkingLevel = ThinkingLevel.OFF,
-        )
-        return response.text
+        )) {
+            is ProviderExecutionGateway.SendResult.Success -> r.response.text
+            is ProviderExecutionGateway.SendResult.RemoteFailure ->
+                throw IllegalStateException("compaction failed (${r.code}): ${r.message}")
+            is ProviderExecutionGateway.SendResult.Unavailable ->
+                throw IllegalStateException("compaction unavailable: ${r.reason}")
+        }
     }
 
     /**
@@ -3626,6 +3647,14 @@ class ChatViewModel(
                 applyCompactMarkerGraying(ordered, marker, loaded.messages, historyDbIds)
             }
 
+            // [T-android-thinking-indicator-linger] Session (re)load rebuilds
+            // _messages from DB rows — any in-memory streaming side-channel
+            // entry is a leftover from a previous session/turn (DB messages
+            // are always isStreaming=false), so drop it. Without this, the
+            // stale delta would render a "thinking" row pinned to a message
+            // after switching sessions.
+            _streamingById.value = emptyMap()
+
             // Cold-start interrupt detection: an agent loop that was killed by
             // the OS (or app force-quit) leaves agentHistory in one of three
             // tell-tale shapes. Detecting any of them lets the user tap
@@ -4221,6 +4250,7 @@ class ChatViewModel(
             _canResume.value = false
             AppLogger.info(TAG_STREAM, "$label _isStreaming=true (sync, sid=$activeSessionId)")
             _isStreaming.value = true
+            streamEpoch++
             var streamLaunched = false
             try {
                 streamLaunched = runRerunStreamTail(provider, label)
@@ -4582,6 +4612,7 @@ class ChatViewModel(
         // rejected by the entry guard (same rationale as retryFromMessage T145).
         AppLogger.info(TAG_STREAM, "rerunFromToolBlock _isStreaming=true (sync, sid=$activeSessionId)")
         _isStreaming.value = true
+        streamEpoch++
 
         viewModelScope.launch(Dispatchers.IO) {
             var streamLaunched = false
@@ -4780,6 +4811,7 @@ class ChatViewModel(
         // then flip the UI to "stopped" while the second job was still running.
         AppLogger.info(TAG_STREAM, "retry _isStreaming=true (sync, sid=$activeSessionId)")
         _isStreaming.value = true
+        streamEpoch++
 
         viewModelScope.launch(Dispatchers.IO) {
             // If setup throws before the inner streamJob is launched, the
@@ -5551,6 +5583,14 @@ class ChatViewModel(
             flushAllStreamingDeltas()
         }
 
+        // [T-android-thinking-indicator-linger] Monotonic epoch: after the
+        // orphan sweep, bump the turn epoch so any trailing-flush / residual
+        // delta that re-adds an old entry LATER (flush coroutine survives
+        // streamJob.cancel) carries the old epoch and is ignored by
+        // mergeStreamingOverlay. Must happen AFTER the sweep — the sweep
+        // handles the old turn's remnants, the epoch seals this turn.
+        streamEpoch++
+
         // T187: when the user is editing a previous message, truncate the
         // conversation from that message (inclusive) before persisting the
         // edited text as a fresh user turn. Snapshot + clear the id here so
@@ -5945,6 +5985,7 @@ class ChatViewModel(
         // T145: claim _isStreaming synchronously — see retryFromMessage for rationale.
         AppLogger.info(TAG_STREAM, "retryLast _isStreaming=true (sync, sid=$activeSessionId)")
         _isStreaming.value = true
+        streamEpoch++
 
         viewModelScope.launch(Dispatchers.IO) {
             var streamLaunched = false
@@ -6601,9 +6642,14 @@ class ChatViewModel(
     }
 
     /**
-     * Direction A: stream a chat turn, preferring :modelservice (remote process) so native heap
-     * from the LLM call is reclaimed when the service dies. Falls back to in-process streaming
-     * when the provider has no instance context, remote launch fails, or the setting is off.
+     * Direction A: stream a chat turn through the [ProviderExecutionGateway]
+     * (:modelservice process) so native heap from the LLM call is reclaimed
+     * when the worker self-reaps.
+     *
+     * TF-D: the app process NEVER falls back to an in-process provider call.
+     * A cold Flow is returned; failure surfaces when collected as a typed
+     * [ModelExecutionStreamException] (0-chunk → caller MAY retry, has-chunk →
+     * caller MUST NOT re-send). There is no silent in-process fallback.
      */
     private fun streamChatTurnOffloaded(
         provider: LLMProvider,
@@ -6616,42 +6662,27 @@ class ChatViewModel(
         thinkingLevel: ThinkingLevel,
     ): Flow<LLMStreamChunk> {
         val instance = provider.instanceContext
-        if (instance == null || !CHAT_STREAM_OFFLOAD_ENABLED) {
-            // No instance context (hand-built/mock provider) or offload disabled → in-process.
-            return provider.streamMessage(
-                messages, systemPrompt, maxTokens, temperature, imageParts, tools, thinkingLevel,
+            ?: throw ModelStreamErrorException(
+                "no provider instance context for remote execution",
+                hadChunks = false,
             )
-        }
-        val requestJson = runCatching {
-            ModelExecutionDispatcher.buildRequestJson(
-                instance = instance,
-                model = provider.model,
-                messages = messages,
-                systemPrompt = systemPrompt,
-                maxTokens = maxTokens,
-                temperature = temperature,
-                imageParts = imageParts,
-                inputJson = "",
-                outputExt = null,
-                tools = tools,
-                thinkingLevel = thinkingLevel,
-                streaming = true,
-            )
-        }.getOrNull()
-        if (requestJson == null) {
-            Log.w(TAG, "chat stream offload: request build failed; in-process fallback")
-            return provider.streamMessage(
-                messages, systemPrompt, maxTokens, temperature, imageParts, tools, thinkingLevel,
-            )
-        }
-        return runCatching {
-            ChatStreamOffloadHandler.stream(context, requestJson)
-        }.getOrElse { e ->
-            Log.w(TAG, "chat stream offload launch failed; in-process fallback", e)
-            provider.streamMessage(
-                messages, systemPrompt, maxTokens, temperature, imageParts, tools, thinkingLevel,
-            )
-        }
+        AppLogger.info(
+            TAG_STREAM,
+            "chat stream offload -> :modelservice provider=${provider.name} model=${provider.model.id}",
+        )
+        // Single gateway path — no in-process fallback exists by design.
+        return ProviderExecutionGateway.stream(
+            context = context,
+            instance = instance,
+            model = provider.model,
+            messages = messages,
+            systemPrompt = systemPrompt,
+            maxTokens = maxTokens,
+            temperature = temperature,
+            imageParts = imageParts,
+            tools = tools,
+            thinkingLevel = thinkingLevel,
+        )
     }
 
     private suspend fun runAgentLoop(
@@ -6702,6 +6733,13 @@ class ChatViewModel(
             reason = "RunStarted",
         )
         // T7-D: 旁路验证 —— RunStarted 事件
+        // TF-G P1-3 fix: the reducer state machine MUST be initialised BEFORE
+        // issuing RunStarted, or t7Reduce() no-ops (t7ReducerState==null → the
+        // leading `?: return`) and the FIRST event is silently dropped. Then
+        // every later event (ProviderAttemptStarted / ToolStarted / …) hits a
+        // fresh IDLE reducer that has never seen RunStarted → "requires
+        // RunStarted first" → spammy REJECTED in normal production paths.
+        t7ReducerState = AgentRunState.initial()
         t7Reduce(AgentRunEvent.RunStarted(runId))
         // T7-B: session slot lease 观察 —— streamJob 在进入 runAgentLoop 前
         // 已经成功 acquireSlot；此处登记 lease（trace 侧），语义是
@@ -6840,9 +6878,9 @@ class ChatViewModel(
         // node that burned its whole budget just pays for the same wall again).
         var lengthWallEmptyHits = 0
 
-        // T7-D: 终态 reducer 旁路验证 —— 入口初始化状态机（IDLE），
-        // 后续事件经类级 [t7Reduce] 发出；t7EndRun 落终态并清理。
-        t7ReducerState = AgentRunState.initial()
+        // T7-D: 终态 reducer 状态机入口已在 RunStarted 前初始化（见上）；
+        // 此处不再重复 init —— 重复 `AgentRunState.initial()` 会重置已经把
+        // RunStarted 消费掉的 reducer 回 IDLE，导致后续事件再次 REJECTED。
 
         try {
         for (turn in 0 until MAX_AGENT_TURNS) {
@@ -7419,9 +7457,18 @@ class ChatViewModel(
                     // before considering a fallback (mirrors iOS streamWithAutoRetry).
                     // Rate limits are provider-level signals that should trigger fallback immediately,
                     // not retry on the same provider.
+                    // TF-B: a worker that died BEFORE emitting any chunk
+                    // (ModelWorkerDiedException/ModelStreamErrorException, hadChunks=false)
+                    // is safe to retry through the gateway — nothing was sent to the user yet.
+                    // A worker that died mid-stream (hadChunks=true) must NOT be re-sent:
+                    // it falls through to the fatal path below (no auto-retry, no fallback
+                    // re-send) so the user never gets a duplicate answer.
+                    val workerDiedZeroChunk =
+                        (actual is com.openminis.app.sandbox.offload.ModelWorkerDiedException) && !actual.hadChunks
                     val isTransient = actual is com.openminis.app.data.model.LLMError.NetworkError ||
                         actual is com.openminis.app.data.model.LLMError.TransientError ||
-                        is5xx
+                        is5xx ||
+                        workerDiedZeroChunk
                     // [T-fallback-retry-original] Restored original behavior: all members
                     // (including fallback chain members) get bounded retries on transient
                     // errors. This absorbs intermittent stream resets that the fallback
@@ -7721,11 +7768,21 @@ class ChatViewModel(
                                         ?: actual.message?.takeIf { it.isNotBlank() }
                                         ?: "Unknown error"
                                 }
+                                // TF-H: reducer must leave FALLING_BACK before
+                                // finalizing — otherwise RunFinalized is REJECTED
+                                // with "requires FINALIZING (current=FALLING_BACK)".
+                                t7Reduce(AgentRunEvent.FallbackExhausted)
                                 throw com.openminis.app.data.model.FallbackExhaustedError(
                                     summary = summary,
                                     detail = "$trail\n${actual.message ?: actual.toString()}",
                                 )
                             }
+                        }
+                        // TF-H: even when the error is not fallbackable, make sure
+                        // the reducer has left the running phases before the outer
+                        // finalizer sends RunFinalized.
+                        if (!shouldFallback) {
+                            t7Reduce(AgentRunEvent.ProcessInterrupted("provider_fatal_not_fallbackable"))
                         }
                         throw actual  // re-throw unwrapped, all fallbacks exhausted
                     }
@@ -8720,18 +8777,27 @@ class ChatViewModel(
         try {
             while (turns < config.maxTurns) {
                 turns++
-                val chunks = provider.streamMessage(
-                    messages = history.toList(),
-                    systemPrompt = systemPrompt,
-                    maxTokens = config.maxOutputTokens,
-                    tools = subagentTools,
-                    thinkingLevel = ThinkingLevel.OFF,
-                ).toList()
-
+                val instance = provider.instanceContext ?: return ToolExecutionResult(
+                    "Error: No provider instance context for sub-agent remote execution",
+                    false, toolTitle = title,
+                )
                 val textSb = StringBuilder()
                 val toolCalls = mutableListOf<SubagentToolCall>()
 
-                for (chunk in chunks) {
+                // TF-D: sub-agent runs through :modelservice via the gateway. Chunks
+                // are accumulated incrementally as they stream in — never buffered
+                // wholesale via `toList()` (unbounded retention of the whole turn).
+                ProviderExecutionGateway.stream(
+                    context = context,
+                    instance = instance,
+                    model = provider.model,
+                    messages = history.toList(),
+                    systemPrompt = systemPrompt,
+                    maxTokens = config.maxOutputTokens,
+                    temperature = null,
+                    tools = subagentTools,
+                    thinkingLevel = ThinkingLevel.OFF,
+                ).collect { chunk ->
                     when (chunk) {
                         is LLMStreamChunk.Text -> textSb.append(chunk.text)
                         is LLMStreamChunk.ToolCallComplete -> {
@@ -9356,6 +9422,18 @@ class ChatViewModel(
             } catch (_: Exception) { "browser_use" }
 
             var output = result.text
+            // [T-android-browser-toolresult-guard] Bound browser tool result text
+            // before it enters ToolExecutionResult → message → renderer/LLM context.
+            // A 900KiB get_text (Fix-03 cap) made the main thread hang (ANR) when
+            // the toolResult message rendered full-width, and no LLM context can
+            // use 900K chars anyway. Truncate to a readable bound with an explicit
+            // notice so the agent knows it was cut (truncated flag already flows
+            // from the bridge; this is the final belt-and-suspenders bound).
+            val browserToolResultMaxChars = 64 * 1024
+            if (output.length > browserToolResultMaxChars) {
+                val truncatedNotice = "\n\n…[tool result truncated: ${output.length} chars > $browserToolResultMaxChars — re-run get_text with a selector/scroll to read the rest]"
+                output = output.take(browserToolResultMaxChars) + truncatedNotice
+            }
             var persistentImagePath: String? = result.imageFilePath
             var inferenceBytes: ByteArray? = null
 
@@ -9600,6 +9678,7 @@ class ChatViewModel(
                         content = text,
                         toolBlocks = guarded.blocks,
                         isAwaitingModelResponse = awaiting,
+                        epoch = streamEpoch,
                     )
                 )
                 st.lastFlushMs = System.currentTimeMillis()
@@ -10205,8 +10284,9 @@ Environment variables:
             }
             if (rollupSizeHint != null && rollupBytes >= 50_000L) {
                 append("\n\nNote: Daily logs are large ($rollupSizeHint). ")
-                append("Consider calling memory_rollup to distill stable rules if you haven't already. ")
-                append("The tool is idempotent — it skips dates already rolled up.")
+                append("memory_rollup selects the largest eligible old log that has not been distilled yet; ")
+                append("call it to surface stable rules without waiting for the calendar to advance. ")
+                append("It is idempotent and leaves source logs unchanged.")
             }
             // Runtime context goes last so the prefix above stays byte-stable
             // across requests within the same day. Keep ordering deterministic
@@ -10721,7 +10801,19 @@ Environment variables:
                 // default), keep the T334 budget bump so it can finish thinking
                 // and still emit the JSON. Unified with regenerateTitle's ladder.
                 val titleMaxTokens = if (provider.model.supportsReasoning == true) 2048 else 100
-                val response = provider.sendMessage(
+                val titleInstance = provider.instanceContext ?: run {
+                    // Cannot dispatch a provider-created title call without an
+                    // instance — surface as a typed error (never in-process).
+                    AppLogger.warning("TitleGen", "outcome=no-instance-context attempt=$titleGenerationAttempts")
+                    if (titleGenerationAttempts >= TITLE_MAX_ATTEMPTS) {
+                        applyFallbackTitleFromFirstMessage("no provider instance context")
+                    }
+                    return@launch
+                }
+                val titleResult = ProviderExecutionGateway.send(
+                    context = context,
+                    instance = titleInstance,
+                    model = provider.model,
                     messages = listOf(LLMMessage(role = LLMMessage.Role.USER, content = prompt)),
                     systemPrompt = effectiveSystemPrompt,
                     maxTokens = titleMaxTokens,
@@ -10732,6 +10824,29 @@ Environment variables:
                     temperature = null,
                     thinkingLevel = ThinkingLevel.OFF,
                 )
+                val response = when (titleResult) {
+                    is ProviderExecutionGateway.SendResult.Success -> titleResult.response
+                    is ProviderExecutionGateway.SendResult.RemoteFailure -> {
+                        AppLogger.warning(
+                            "TitleGen",
+                            "outcome=remote-failure attempt=$titleGenerationAttempts (${titleResult.code}): ${titleResult.message.take(200)}",
+                        )
+                        if (titleGenerationAttempts >= TITLE_MAX_ATTEMPTS) {
+                            applyFallbackTitleFromFirstMessage("remote failure ${titleResult.code}")
+                        }
+                        return@launch
+                    }
+                    is ProviderExecutionGateway.SendResult.Unavailable -> {
+                        AppLogger.warning(
+                            "TitleGen",
+                            "outcome=unavailable attempt=$titleGenerationAttempts: ${titleResult.reason}",
+                        )
+                        if (titleGenerationAttempts >= TITLE_MAX_ATTEMPTS) {
+                            applyFallbackTitleFromFirstMessage("title service unavailable: ${titleResult.reason}")
+                        }
+                        return@launch
+                    }
+                }
 
                 AppLogger.info(
                     "TitleGen",
@@ -10963,6 +11078,7 @@ Environment variables:
             // entry guard. Mirrors sendMessage discipline.
             AppLogger.info(TAG_STREAM, "resumeQueueAfterCancel _isStreaming=true (sync, sid=$activeSessionId)")
             _isStreaming.value = true
+            streamEpoch++
             _canResume.value = false
             _error.value = null
 
@@ -11237,6 +11353,7 @@ Environment variables:
 
             AppLogger.info(TAG_STREAM, "resume _isStreaming=true (sid=$activeSessionId)")
             _isStreaming.value = true
+            streamEpoch++
             streamJob = launch(Dispatchers.IO) {
                 AppLogger.info(TAG_STREAM, "resume streamJob ENTER sid=$activeSessionId")
                 try {

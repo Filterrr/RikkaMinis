@@ -37,6 +37,11 @@ object ModelExecutionDispatcher {
     private const val TAG = "ModelExecDispatcher"
     private const val REQUEST_TIMEOUT_MS = 3 * 60_000L  // matches agent tool timeout headroom
     private const val POLL_INTERVAL_MS = 200L
+    /** Bounded wait for the worker's terminal marker before deleting the dir. */
+    private const val TERMINAL_WAIT_MS = 5_000L
+    /** Bounded wait for the worker's self-reap before deciding to keep the dir as orphan. */
+    private const val REAP_WAIT_MS = 3_000L
+    private const val REAP_POLL_MS = 50L
 
     /** Default base directory for request/result staging. */
     private const val STAGING_ROOT = "model-exec"
@@ -244,12 +249,109 @@ object ModelExecutionDispatcher {
             read
         }
 
-        if (result == null) {
+        if (result != null) {
+            // [TF-B ack] Tell the worker we consumed the result so it can
+            // self-reap immediately instead of waiting out its ack timeout.
+            try {
+                ModelExecutionMailbox.writeClientAck(dir)
+            } catch (_: Exception) {}
+        } else {
             Log.w(TAG, "timeout waiting for model-exec result — falling back in-process")
+            // Try to stop the worker (it may be mid-run); it self-reaps on cancel
+            // / shutdown. Then settle briefly before deleting the dir so we never
+            // delete under a worker still writing result.json.
+            try { ModelExecutionMailbox.writeCancel(dir) } catch (_: Exception) {}
         }
-        // Cleanup best-effort; the service may still be draining.
-        try { dir.deleteRecursively() } catch (_: Exception) {}
+
+        // [TF-F P0-A] Delete the request dir ONLY after BOTH:
+        //   1. the terminal marker exists (worker finished writing run-dir
+        //      files: stream flushed + result committed + final state), AND
+        //   2. the worker's process is confirmed gone for THIS run's pid ref
+        //      (or there never was a valid ref).
+        // The old code deleted on result.json/cancel.ack alone, killing the
+        // worker mid-finishRequest (state.json ENOENT FATAL). Timeout with the
+        // worker still alive/unknown → leave the dir as an ORPHAN (never
+        // delete) and let the orphan reaper reclaim later when the pid is
+        // dead + terminal.
+        val terminalSeen = awaitTerminal(dir, TERMINAL_WAIT_MS)
+        val reaped = waitForWorkerReap(dir, REAP_WAIT_MS)
+        if (terminalSeen && reaped) {
+            try { dir.deleteRecursively() } catch (_: Exception) {}
+        } else {
+            Log.w(
+                TAG,
+                "run dir kept as orphan (terminal=$terminalSeen reaped=$reaped dir=${dir.name}) — " +
+                    "pid still alive/unknown or terminal not reached; orphan reaper may reclaim",
+            )
+        }
         return result
+    }
+
+    /**
+     * [TF-F] Wait (bounded) for the run's terminal marker. Returns true when
+     * the worker finished writing all run-dir files (terminal.json present).
+     * The old code treated result.json as "worker is done writing"; now only
+     * terminal.json (the worker's LAST write) counts as the write-barrier.
+     */
+    private suspend fun awaitTerminal(dir: File, timeoutMs: Long): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (ModelExecutionRunDir.terminalPresent(dir)) return true
+            // Already committed the result → the terminal write is imminent;
+            // keep polling (bounded) rather than assuming.
+            delay(POLL_INTERVAL_MS)
+        }
+        return ModelExecutionRunDir.terminalPresent(dir)
+    }
+
+    /**
+     * [TF-J2] Wait (bounded) for the :modelservice worker's run to be SAFE TO
+     * DELETE. On a hidepid=invisible device the main process cannot read the
+     * worker's /proc entry (it sees only itself), so the old probeLiveness
+     * always returned UNKNOWN here and every run dir leaked as an orphan. The
+     * run is safe to delete when any of these completes the run's life:
+     *   - terminal marker present (worker's LAST durable write), or
+     *   - result.json committed AND no live beat (worker finished and reaped),
+     *     or
+     *   - the liveness beat file has gone silent/stale (worker stopped beating
+     *     → process gone or finishing).
+     * A run with a still-fresh beat and no terminal is NOT safe → keep polling.
+     */
+    private suspend fun waitForWorkerReap(dir: File, timeoutMs: Long): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (reapSafe(dir)) return true
+            delay(REAP_POLL_MS)
+        }
+        val safe = reapSafe(dir)
+        if (!safe) {
+            Log.w(
+                TAG,
+                "worker for ${dir.name} not confirmed done within ${timeoutMs}ms " +
+                    "(beat still fresh / no terminal / no result) — NOT deleting dir",
+            )
+        }
+        return safe
+    }
+
+    /** True when THIS run dir's worker is provably done writing / reaped. */
+    private fun reapSafe(dir: File): Boolean {
+        // Worker's LAST durable marker — once present, it will self-reap.
+        if (ModelExecutionRunDir.terminalPresent(dir)) return true
+        // result committed by a worker that has stopped beating.
+        val result = File(dir, ModelExecutionMailbox.FILE_RESULT).exists()
+        val beatFile = File(dir, ModelExecutionRunDir.FILE_LIVENESS_BEAT)
+        val beatGoneOrStale = !beatFile.isFile || ModelExecutionRunDir.beatStale(dir)
+        return result && beatGoneOrStale
+    }
+
+    /** Extract the stable runId from a `run-<uuid>` dir name (shared helper). */
+    internal fun runIdOf(dir: File): String? {
+        val name = dir.name
+        val prefix = "run-"
+        return if (name.startsWith(prefix) && name.length > prefix.length) {
+            name.substring(prefix.length)
+        } else name
     }
 
     private fun logDispatchFailure(dir: File) {

@@ -34,6 +34,36 @@ object ChatStreamOffloadHandler {
     private const val STAGING_ROOT = "model-exec"
     private const val POLL_INTERVAL_MS = 160L
     private const val STREAM_TIMEOUT_MS = 6 * 60 * 1000L
+    private const val CANCEL_ACK_TIMEOUT_MS = 5_000L
+    private const val CANCEL_ACK_POLL_MS = 100L
+    /**
+     * How long the stream file may stay frozen before we RE-EXAMINE worker
+     * liveness. This is NOT a "no output → dead" verdict: the worker is only
+     * classified [ModelExecutionRunDir.WorkerLiveness.DEAD] when BOTH this
+     * grace has elapsed AND the three-state probe confirms the pid referenced
+     * by THIS run dir is gone. A slow first chunk (> this grace, worker alive)
+     * is NOT a death — the flow keeps polling.
+     *
+     * TF-G: raised from 2s to 5s. A streaming worker now holds an unacked
+     * response + writes its terminal barrier before self-reaping; a 5s window
+     * keeps us from classifying a perfectly-healthy-but-just-finished worker
+     * as dead on the hair between DONE and pid-exit, while still surfacing a
+     * genuinely crashed worker promptly.
+     */
+    private const val WORKER_DIED_GRACE_MS = 5_000L
+    /**
+     * TF-I P0-B: how long an identity-mismatch must persist before the client
+     * treats it as a confirmed death. This MUST exceed the executionMutex
+     * serialization upper bound (the worker's streaming ACK barrier is up to
+     * STREAM_CLIENT_ACK_TIMEOUT_MS = 15s) so a request thread starved behind
+     * the mutex (TF-H gap 11-13s) is never killed as a false positive — the
+     * flow simply re-probes until the worker either reaches HTTP (stream
+     * grows, so this branch stops) or the pid genuinely goes MISSING.
+     */
+    private const val MISMATCH_GRACE_MS = 20_000L
+    /** Bounded wait after terminal for the worker process to disappear before deleting. */
+    private const val WORKER_EXIT_WAIT_MS = 6_000L
+    private const val WORKER_EXIT_POLL_MS = 60L
 
     /**
      * [direction-A / B2] Global count of in-flight streaming runs (this process).
@@ -70,10 +100,19 @@ object ChatStreamOffloadHandler {
         }
 
         val cancelFile = File(dir, ModelExecutionService.CANCEL_FILE)
+        // [TF-F] Declared OUTSIDE the try so the finally block can read/write
+        // them (a `finally` cannot reference locals declared inside the try's
+        // nested scope). These drive the terminal-and-exit delete decision.
+        var lastRead = 0L
+        var emittedChunks = false
+        var terminalSeen = false
+        val runId = ModelExecutionDispatcher.runIdOf(dir)
+        var lastGrowAtMs = System.currentTimeMillis()
+        // (TF-J2: death is now driven by the worker liveness beat file; see the
+        // poll-loop decision. No /proc identity-mismatch window is needed.)
         try {
             val requestFile = File(dir, "request.json")
             val streamFile = File(dir, ModelExecutionService.STREAM_FILE)
-            val resultFile = File(dir, ModelExecutionService.RESULT_FILE)
             try { streamFile.createNewFile() } catch (e: Exception) {
                 throw RuntimeException("cannot create stream file", e)
             }
@@ -93,21 +132,106 @@ object ChatStreamOffloadHandler {
                 throw RuntimeException("start model service failed", e)
             }
 
-            var lastRead = 0L
             val timedOut = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
                 while (true) {
                     ensureActive()
                     val newLen = streamFile.length()
                     if (newLen > lastRead) {
+                        lastGrowAtMs = System.currentTimeMillis()
                         val chunks = readAppendedChunks(streamFile, lastRead, newLen)
                         lastRead = chunks.second
                         for (line in chunks.first) {
                             if (line.isBlank()) continue
-                            if (ChatStreamJsonl.isDone(line)) return@withTimeoutOrNull true
-                            if (ChatStreamJsonl.isError(line)) {
-                                throw RuntimeException("stream error: ${ChatStreamJsonl.errorMessage(line)}")
+                            if (ChatStreamJsonl.isDone(line)) {
+                                terminalSeen = true
+                                return@withTimeoutOrNull true
                             }
-                            ChatStreamJsonl.decode(line)?.let { emit(it) }
+                            if (ChatStreamJsonl.isError(line)) {
+                                // [TF-F] an error LINE is a stream-terminal
+                                // event (the worker will also write result +
+                                // terminal marker in finishRequest). Mark it so
+                                // the finally never blind-deletes a live worker.
+                                terminalSeen = true
+                                throw ModelStreamErrorException(
+                                    ChatStreamJsonl.errorMessage(line),
+                                    hadChunks = emittedChunks,
+                                )
+                            }
+                            ChatStreamJsonl.decode(line)?.let {
+                                emittedChunks = true
+                                emit(it)
+                            }
+                        }
+                    }
+                    // [TF-F crash recovery] Detect worker death THREE-STATE:
+                    // only a CONFIRMED dead pid (probe returns DEAD for THIS
+                    // run's pid ref) after a no-growth grace is worker_died.
+                    // UNKNOWN (no valid pid ref / ambiguous / recycle-race) is
+                    // never classified as death — we keep polling. A slow first
+                    // chunk (>WORKER_DIED_GRACE_MS, worker ALIVE) is NOT death.
+                    // A terminal result/marker present means the worker finished
+                    // NORMALLY (it self-reaps right after) — NOT a crash.
+                    //
+                    // TF-J2: death probe is driven by the worker liveness BEAT
+                    // file (shared same-uid filesystem), NOT by /proc.
+                    //
+                    // The classic probes here — probeLiveness / probeDeathEvidence —
+                    // read `/proc/<worker-pid>`. On this device /proc is mounted
+                    // `hidepid=invisible` (gid=3009); an app process can ONLY see
+                    // its OWN pid, so the main process ALWAYS reads "proc_missing"
+                    // for a perfectly alive worker → TF-A…TF-J spurious
+                    // "worker died before any output" retry loops.
+                    //
+                    // New decision: the streaming worker rewrites
+                    // `run-<uuid>/liveness.beat` every ~2s for the whole stream.
+                    //  - beat fresh  (younger than LIVENESS_STALE_MS=4s) ⇒ worker
+                    //    provably alive → keep polling, even if no chunk yet.
+                    //  - beat present but STALE (and no terminal/result) ⇒ worker
+                    //    was alive then stopped beating with no output ⇒ real death.
+                    //  - no beat yet ⇒ worker is still starting up (service spin-up,
+                    //    provider build, first chunk wait) → keep polling; bounded
+                    //    by STREAM_TIMEOUT_MS. Not death.
+                    // This matches the old semantics (only a worker that was provably
+                    // alive and THEN stopped is dead) without touching /proc.
+                    if (newLen == lastRead &&
+                        System.currentTimeMillis() - lastGrowAtMs > WORKER_DIED_GRACE_MS
+                    ) {
+                        val terminalOrResult = ModelExecutionRunDir.terminalPresent(dir) ||
+                            File(dir, ModelExecutionMailbox.FILE_RESULT).exists()
+                        val beatPresent = File(dir, ModelExecutionRunDir.FILE_LIVENESS_BEAT).isFile
+                        val beatExistingButStale = beatPresent &&
+                            ModelExecutionRunDir.beatStale(dir)
+                        // A beat that went stale with no terminal data is decisive:
+                        // the worker was alive (it beat) and has now stopped without
+                        // ever producing output.
+                        var decisive = false
+                        if (beatExistingButStale && !terminalOrResult) decisive = true
+                        // Reset any trailing suspicion only when we see a FRESH beat
+                        // (worker manifestly alive) or no beat at all (still starting).
+                        // (mis-…grace window is no longer meaningful without /proc.)
+                        if (beatPresent && !beatExistingButStale) {
+                            // fresh beat ⇒ alive; nothing to decide.
+                            decisive = false
+                        }
+                        if (decisive &&
+                            !ModelExecutionRunDir.terminalPresent(dir) &&
+                            !File(dir, ModelExecutionMailbox.FILE_RESULT).exists()
+                        ) {
+                            // TF-G P0-3: classify WHY the worker appears dead so
+                            // the caller can weigh retry (0-chunk) vs fatal, and
+                            // diagnostics get the run-log tail as evidence.
+                            val reason = classifyWorkerDeath(dir, emittedChunks)
+                            val phase = ModelExecutionRunLog.tailSummary(dir)
+                            Log.w(
+                                TAG,
+                                "worker died (${reason.name}) runId=$runId emittedChunks=$emittedChunks phase=$phase beat_stale_without_terminal dir=${dir.name}",
+                            )
+                            throw ModelWorkerDiedException(
+                                hadChunks = emittedChunks,
+                                reason = reason,
+                                runId = runId,
+                                phaseSummary = phase,
+                            )
                         }
                     }
                     delay(POLL_INTERVAL_MS)
@@ -120,12 +244,135 @@ object ChatStreamOffloadHandler {
             // [B2] A stream is no longer in flight regardless of how we exited
             // (timeout / external cancel / normal close).
             activeStreams--
-            // On any termination (timeout / external cancel / normal close), signal the
-            // service to stop streaming so it doesn't keep appending to a deleted file.
-            try { cancelFile.createNewFile() } catch (_: Exception) {}
-            try { dir.deleteRecursively() } catch (_: Exception) {}
+            // [TF-F] Unified terminal-and-exit protocol: never delete a run dir
+            // while the worker might still be writing to it. Only when
+            //   - a terminal marker exists (worker's LAST write), AND
+            //   - the worker's pid is confirmed gone (or there is no valid ref)
+            // do we delete. `result.json`/`cancel.ack` alone are NOT enough —
+            // the worker may still be inside finishRequest() writing state.json
+            // (the exact P0 race). Timeout → leave the dir as an orphan and
+            // let the orphan reaper reclaim later.
+            try {
+                // Signal a cancel ONLY if we have not yet seen a terminal state
+                // (normal DONE / error must NOT get a cancel shoved at it).
+                if (!terminalSeen) {
+                    ModelExecutionMailbox.writeCancel(cancelFile.parentFile!!)
+                }
+                awaitTerminalAndWorkerExitThenDelete(dir, runId)
+            } catch (_: Exception) {}
         }
     }.flowOn(Dispatchers.IO)
+
+    /**
+     * [TF-F] Wait for (a) this run's terminal marker, then (b) the worker's
+     * process to disappear, and only then delete the run dir. Any timeout or
+     * ambiguity keeps the dir as an orphan (never delete under a live worker).
+     */
+    private suspend fun awaitTerminalAndWorkerExitThenDelete(dir: File, runId: String?) {
+        // (a) terminal marker. A DONE/error line usually precedes it by a
+        // hair (finishRequest writes state + terminal right after the result),
+        // so give it a bounded window.
+        val termDeadline = System.currentTimeMillis() + CANCEL_ACK_TIMEOUT_MS
+        var terminalSeen = ModelExecutionRunDir.terminalPresent(dir)
+        while (!terminalSeen && System.currentTimeMillis() < termDeadline) {
+            terminalSeen = ModelExecutionRunDir.terminalPresent(dir)
+                || File(dir, ModelExecutionMailbox.FILE_RESULT).exists()
+                || File(dir, ModelExecutionMailbox.FILE_CANCEL_ACK).exists()
+            if (!terminalSeen) kotlinx.coroutines.delay(CANCEL_ACK_POLL_MS)
+        }
+        // If the terminal marker itself never appeared but we DID see a result /
+        // cancel ack, the worker is done with run-dir writes and will write
+        // terminal (or already self-reaped). Treat result/ack as the terminal
+        // barrier for deletion — the actual deletion still requires the pid gone.
+        val writeBarrierSeen = terminalSeen ||
+            File(dir, ModelExecutionMailbox.FILE_RESULT).exists() ||
+            File(dir, ModelExecutionMailbox.FILE_CANCEL_ACK).exists()
+
+        // TF-G: client-ACK — the other half of the self-reap barrier. Once the
+        // client has seen the terminal barrier (it has read every emitted chunk
+        // by this point, since the loop consumed stream.jsonl as it grew), it
+        // MUST tell the worker "consumed" so the worker can stop holding an
+        // unacked response and self-reap promptly. Without this the streaming
+        // worker holds unacked>0 and (with the TF-G barrier) refuses to reap
+        // until its ack timeout + controlled drain — pinning the process for up
+        // to 45s and leaving the run dir as an orphan. The Dispatcher (non-
+        // streaming) already acks; streaming now does too.
+        if (writeBarrierSeen) {
+            try { ModelExecutionMailbox.writeClientAck(dir) } catch (_: Exception) {}
+        }
+
+        // (b) worker process gone. Reuse the dispatcher's bounded wait logic.
+        if (writeBarrierSeen && awaitWorkerExit(dir, runId, WORKER_EXIT_WAIT_MS)) {
+            try { dir.deleteRecursively() } catch (_: Exception) {}
+        } else {
+            Log.w(
+                TAG,
+                "stream run dir kept as orphan (terminal=$writeBarrierSeen dir=${dir.name})",
+            )
+        }
+    }
+
+    /**
+     * [TF-J2] Bounded wait for this run's worker to stop beating (its liveness
+     * heartbeat file `liveness.beat` going stale). Returns true as soon as the
+     * beat is confirmed absent-or-stale — the worker has stopped, so the run
+     * dir is safe to delete. On a healthy finish the worker stops beating and
+     * writes terminal; on a crash the beat simply goes silent.
+     *
+     * NOTE: the old /proc-based probeLiveness is unreliable here because /proc
+     * is hidepid=invisible on this device (an app process can only see itself),
+     * so the main process ALWAYS saw the worker pid as "missing" — which both
+     * false-killed live workers (above) and would have kept this wait from ever
+     * confirming a real exit. The heartbeat file, on the shared same-uid
+     * filesystem, is the source of truth instead.
+     */
+    private suspend fun awaitWorkerExit(dir: File, runId: String?, timeoutMs: Long): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            val beatFile = File(dir, ModelExecutionRunDir.FILE_LIVENESS_BEAT)
+            val gone = !beatFile.isFile ||
+                ModelExecutionRunDir.beatStale(dir) ||
+                ModelExecutionRunDir.clientAckPresent(dir)
+            // A terminal marker is the worker's LAST durable write; once present
+            // the worker is done writing and will self-reap. clientAckPresent is
+            // our own handshake confirming we consumed the output.
+            val done = ModelExecutionRunDir.terminalPresent(dir) ||
+                File(dir, ModelExecutionMailbox.FILE_RESULT).exists()
+            if (done || gone) return true
+            delay(WORKER_EXIT_POLL_MS)
+        }
+        val beatFileFinal = File(dir, ModelExecutionRunDir.FILE_LIVENESS_BEAT)
+        return !beatFileFinal.isFile ||
+            ModelExecutionRunDir.beatStale(dir) ||
+            ModelExecutionRunDir.clientAckPresent(dir) ||
+            ModelExecutionRunDir.terminalPresent(dir) ||
+            File(dir, ModelExecutionMailbox.FILE_RESULT).exists()
+    }
+
+    /**
+     * TF-H: stage-aware classification of WHY a worker appears dead, from
+     * THIS run dir's evidence + the run-log tail. The stream is only known to
+     * have reached "ready" once the request thread opened stream.jsonl; a
+     * worker that died with no run-log at all is more likely "never reached
+     * the request thread" than "ready-then-died".
+     */
+    private fun classifyWorkerDeath(dir: File, emittedChunks: Boolean): WorkerDeathReason {
+        val runId = ModelExecutionDispatcher.runIdOf(dir)
+        val hasPidRef = ModelExecutionRunDir.readWorkerRef(dir, runId) != null
+        val ready = File(dir, ModelExecutionRunDir.FILE_READY).exists()
+        val tail = ModelExecutionRunLog.readTail(dir)
+        val reachedRequestThread = tail.any { it.contains(ModelExecutionRunLog.Phase.REQUEST_THREAD_START) }
+            || tail.any { it.contains(ModelExecutionRunLog.Phase.REQUEST_ACCEPTED) }
+        val reachedHttp = tail.any { it.contains(ModelExecutionRunLog.Phase.HTTP_STARTED) }
+            || tail.any { it.contains(ModelExecutionRunLog.Phase.FIRST_CHUNK) }
+        return ModelExecutionRunDir.classifyWorkerDeathStaged(
+            hasPidRef = hasPidRef,
+            ready = ready,
+            hadChunks = emittedChunks,
+            reachedRequestThread = reachedRequestThread,
+            reachedHttp = reachedHttp,
+        )
+    }
 
     /** Read only the bytes appended after [offset] up to the last newline; return (lines, newOffset). */
     private fun readAppendedChunks(file: File, offset: Long, newLen: Long): Pair<List<String>, Long> {

@@ -21,6 +21,7 @@ import com.openminis.app.data.model.ProviderInstance
 import com.openminis.app.data.model.ProviderType
 import com.openminis.app.data.model.RoutingStrategy
 import com.openminis.app.data.model.SystemVoiceIds
+import com.openminis.app.data.model.ThinkingLevel
 import com.openminis.app.data.model.VoiceProviderTemplate
 import com.openminis.app.data.model.hasAudioInput
 import com.openminis.app.data.model.hasAudioOutput
@@ -1852,7 +1853,7 @@ class ProviderRepository(private val context: Context) {
 
     // API Key management
     fun saveApiKey(instanceId: String, key: String) {
-        encryptedPrefs.edit().putString("apikey_$instanceId", key).apply()
+        encryptedPrefs.edit().putString("apikey_$instanceId", key).commit()
     }
 
     fun loadApiKey(instanceId: String): String? {
@@ -1860,7 +1861,7 @@ class ProviderRepository(private val context: Context) {
     }
 
     fun deleteApiKey(instanceId: String) {
-        encryptedPrefs.edit().remove("apikey_$instanceId").apply()
+        encryptedPrefs.edit().remove("apikey_$instanceId").commit()
     }
 
     // -- Import / Export --
@@ -1888,6 +1889,16 @@ class ProviderRepository(private val context: Context) {
                     entry.baseModel.maxOutputTokens?.let { put("maxOutputTokens", it) }
                     entry.baseModel.supportsReasoning?.let { put("supportsReasoning", it) }
                     entry.baseModel.interleavedReasoningField?.let { put("interleavedReasoningField", it) }
+                    // [T-fix-backup-field-evap] Export the user-visible ModelEntry
+                    // fields that the backup/restore round-trip must preserve.
+                    // These four fields (costTier, userModifiedAt, maxThinkingLevel,
+                    // createdAt) were missing from the hand-written org.json
+                    // serializer — only the Room/kotlinx path carried them.
+                    // Each key is additive + optional: older readers ignore
+                    // unknown keys, and the import below reads each independently
+                    // with null defaults for missing keys.
+                    entry.costTier?.let { put("costTier", it) }
+                    entry.userModifiedAt?.let { put("userModifiedAt", it) }
                     // [T-provider-export-model-overrides] Serialize the FULL
                     // ModelOverrides layer, not just displayName/maxOutputTokens.
                     // contextWindow / supportsReasoning / modality (input+output)
@@ -1925,6 +1936,13 @@ class ProviderRepository(private val context: Context) {
                             entry.overrides.outputModalities,
                         )
                         if (bitfield != 0) o.put("modalityOverride", bitfield)
+                        // [T-fix-backup-field-evap] Export the user-set
+                        // thinking ceiling. Additive + optional: old readers
+                        // ignore the unknown key, and import reads it
+                        // independently with null fallback.
+                        entry.overrides.maxThinkingLevel?.let {
+                            o.put("maxThinkingLevel", it.name)
+                        }
                         put("overrides", o)
                     }
                     // Mirror iOS export of baseModel.modalityOverride — when
@@ -1952,6 +1970,13 @@ class ProviderRepository(private val context: Context) {
                 put("apiKey", Base64.encodeToString(key.toByteArray(), Base64.NO_WRAP))
             }
             instance.customBaseURL?.let { put("customBaseURL", it) }
+            // [T-fix-backup-field-evap] Preserve the instance creation time
+            // across backup/restore. Previously importInstanceJSON always
+            // minted a fresh ProviderInstance whose createdAt fell back to
+            // System.currentTimeMillis(), silently resetting the timestamp.
+            // Additive + optional: old readers ignore it, import reads it
+            // with a now() fallback for old backups.
+            put("createdAt", instance.createdAt)
             if (!instance.appendV1Suffix) put("appendV1Suffix", false)
             if (instance.useResponsesAPI) put("useResponsesAPI", true)
             // [T-provider-custom-user-agent] Additive, optional. Only written
@@ -2028,6 +2053,13 @@ class ProviderRepository(private val context: Context) {
             imageEndpointMode = rc.imageEndpointMode,
             imageEndpointResolved = rc.imageEndpointResolved,
             pinned = rc.pinned,
+            // [T-fix-backup-field-evap] Restore the original creation time.
+            // Old backups lack the key → fall back to now() so a legacy
+            // restore behaves exactly as before. Positive guard: a malformed
+            // non-positive value (0 / negative) would otherwise corrupt the
+            // sort/display order, so clamp to now() in that case too.
+            createdAt = dict.optLong("createdAt", 0L).takeIf { it > 0 }
+                ?: System.currentTimeMillis(),
         )
         addInstance(instance)
 
@@ -2099,6 +2131,14 @@ class ProviderRepository(private val context: Context) {
             val maxOutputTokens = if (m.has("maxOutputTokens")) m.optInt("maxOutputTokens").takeIf { it > 0 } else null
             val supportsReasoning = if (m.has("supportsReasoning")) m.optBoolean("supportsReasoning") else null
             val interleavedReasoningField = m.optString("interleavedReasoningField", "").ifEmpty { null }
+            // [T-fix-backup-field-evap] Restore the user-visible ModelEntry
+            // metadata that the hand-written serializer previously dropped.
+            // Each key is read independently with a null default when absent
+            // (old backup) — a legacy restore behaves exactly as before.
+            val costTier = m.optInt("costTier", Int.MIN_VALUE)
+                .takeIf { it != Int.MIN_VALUE }
+            val userModifiedAt = m.optLong("userModifiedAt", Long.MIN_VALUE)
+                .takeIf { it != Long.MIN_VALUE }
             // [T-provider-export-model-overrides] Restore baseModel
             // modalities. Android-native list fields win when present;
             // otherwise fall back to iOS's `modalityOverride` bitfield so
@@ -2129,6 +2169,13 @@ class ProviderRepository(private val context: Context) {
                     supportsReasoning = if (overridesObj.has("supportsReasoning")) overridesObj.optBoolean("supportsReasoning") else null,
                     inputModalities = ovIn,
                     outputModalities = ovOut,
+                    // [T-fix-backup-field-evap] Restore the user-set thinking
+                    // ceiling. Unknown enum name from a future build degrades
+                    // to null (inherit) instead of throwing away the import —
+                    // mirrors the Room path's coerceInputValues semantics.
+                    maxThinkingLevel = overridesObj.optString("maxThinkingLevel", "")
+                        .takeIf { it.isNotBlank() }
+                        ?.let { raw -> runCatching { ThinkingLevel.valueOf(raw) }.getOrNull() },
                 )
             } else {
                 ModelOverrides()
@@ -2139,6 +2186,12 @@ class ProviderRepository(private val context: Context) {
                 overrides = overrides,
                 isCustom = isCustom,
                 isHidden = isHidden,
+                // [T-fix-backup-field-evap] Restore metadata lost on the old
+                // backup path: costTier (feeds RoutingStrategy.cheapestFirst —
+                // losing it silently re-ranked every entry as "most expensive")
+                // and userModifiedAt (user-edit timestamp).
+                costTier = costTier,
+                userModifiedAt = userModifiedAt,
             ))
         }
         return entries
