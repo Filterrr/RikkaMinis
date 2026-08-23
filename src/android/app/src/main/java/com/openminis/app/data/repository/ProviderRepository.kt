@@ -1853,7 +1853,7 @@ class ProviderRepository(private val context: Context) {
 
     // API Key management
     fun saveApiKey(instanceId: String, key: String) {
-        encryptedPrefs.edit().putString("apikey_$instanceId", key).apply()
+        encryptedPrefs.edit().putString("apikey_$instanceId", key).commit()
     }
 
     fun loadApiKey(instanceId: String): String? {
@@ -1861,7 +1861,7 @@ class ProviderRepository(private val context: Context) {
     }
 
     fun deleteApiKey(instanceId: String) {
-        encryptedPrefs.edit().remove("apikey_$instanceId").apply()
+        encryptedPrefs.edit().remove("apikey_$instanceId").commit()
     }
 
     // -- Import / Export --
