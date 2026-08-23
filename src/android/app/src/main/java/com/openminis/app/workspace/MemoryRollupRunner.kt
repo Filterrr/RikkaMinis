@@ -145,13 +145,18 @@ class MemoryRollupRunner(
 
         if (eligible.isNotEmpty()) return eligible.first().second
 
-        // Preserve the useful idempotency result for the conventional case:
-        // yesterday exists and is already rolled, but no unrolled log remains.
-        val yesterday = dateFmt.format(Date(now().time - 86_400_000L))
-        val yesterdayFile = File(memoryDir, "$yesterday.md")
-        if (yesterdayFile.isFile && yesterdayFile.length() > 0L &&
-            MemoryRollupEngine.hasRollupForDate(rollupContent, yesterday)
-        ) return yesterday
-        return null
+        // If no eligible log remains, select the largest non-empty old log so
+        // callers still receive SKIPPED_ALREADY or NOTHING_TO_DISTILL rather
+        // than a misleading "no log" result.
+        return files
+            .mapNotNull { f ->
+                val datePart = f.name.removeSuffix(".md")
+                if (!DATE_FILE_PATTERN.matches(datePart)) return@mapNotNull null
+                if (datePart >= todayStr || f.length() == 0L) return@mapNotNull null
+                f to datePart
+            }
+            .sortedWith(compareByDescending<Pair<File, String>> { it.first.length() }.thenBy { it.second })
+            .firstOrNull()
+            ?.second
     }
 }
