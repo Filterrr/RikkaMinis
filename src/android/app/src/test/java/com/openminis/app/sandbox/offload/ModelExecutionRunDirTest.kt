@@ -145,7 +145,7 @@ class ModelExecutionRunDirTest {
         writeFakeProc(pid = 9005, comm = ":modelservice", startTicks = 424242L)
         ModelExecutionRunDir.writeWorkerPid(d, ref(9005, processName = ":modelservice", procStartTicks = 424242L, uid = 10123))
         File(d, ModelExecutionMailbox.FILE_RESULT).writeText("""{"ok":true}""")
-        assertFalse(ModelExecutionRunDir.safeToDelete(d, "abc"))
+        assertFalse(ModelExecutionRunDir.safeToDelete(d, "abc", fakeProcRoot()))
     }
 
     @Test
@@ -158,7 +158,7 @@ class ModelExecutionRunDirTest {
         // terminal marker written but the worker pid is STILL alive — the
         // worker may be about to self-reap; holding the delete until it is
         // gone avoids any torn cleanup.
-        assertFalse(ModelExecutionRunDir.safeToDelete(d, "abc"))
+        assertFalse(ModelExecutionRunDir.safeToDelete(d, "abc", fakeProcRoot()))
     }
 
     @Test
@@ -266,8 +266,8 @@ class ModelExecutionRunDirTest {
         // must see terminal), and B's pid must NOT be mistaken for A's.
         assertEquals(ModelExecutionRunDir.WorkerLiveness.DEAD, ModelExecutionRunDir.probeLiveness(a, "A", fake))
         assertEquals(ModelExecutionRunDir.WorkerLiveness.ALIVE, ModelExecutionRunDir.probeLiveness(b, "B", fake))
-        assertFalse(ModelExecutionRunDir.safeToDelete(a, "A"))
-        assertFalse(ModelExecutionRunDir.safeToDelete(b, "B"))
+        assertFalse(ModelExecutionRunDir.safeToDelete(a, "A", fake))
+        assertFalse(ModelExecutionRunDir.safeToDelete(b, "B", fake))
     }
 
     // ── TF-G: atomic terminal marker (tmp→fsync→rename) ─────────────
