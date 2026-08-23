@@ -78,6 +78,25 @@ class ModelExecutionService : Service() {
         private const val STREAM_DRAIN_GRACE_MS = 30_000L
 
         /**
+         * [worker-first-chunk-guard] Upper bound on how long a streaming worker
+         * may wait for the provider's FIRST chunk after HTTP_STARTED. If the
+         * upstream takes longer (slow connect, idle relay, silent SSE hang), the
+         * worker aborts the run with a first-chunk timeout instead of hanging
+         * silently — the client's 5s no-growth grace would otherwise classify the
+         * still-alive worker as DEAD via `proc_missing` and enter a retry loop.
+         *
+         * This deliberately exceeds both WORKER_DIED_GRACE_MS (5s, client-side)
+         * and STREAM_CLIENT_ACK_TIMEOUT_MS (15s) so a *legitimately slow* first
+         * chunk is not force-killed before the provider can respond, while a
+         * genuinely wedged provider (no bytes ever) is surfaced promptly.
+         *
+         * Cancellation is ALSO checked on this boundary: the old `collect{}`
+         * body only saw the cancel file once a chunk arrived, so a first-chunk
+         * stall was uncancellable and drove the dead-worker misclassification.
+         */
+        private const val FIRST_CHUNK_TIMEOUT_MS = 30_000L
+
+        /**
          * TF-F P0-C: provider worker global serialization. `:modelservice` is a
          * single Android process reused across requests; running two provider
          * calls concurrently in it shares one unsafe lifecycle / one native-heap
@@ -124,25 +143,6 @@ class ModelExecutionService : Service() {
     private val requestGeneration = AtomicLong(0L)
 
     override fun onBind(intent: Intent?): IBinder? = null
-
-    /**
-     * [worker-first-chunk-guard] Upper bound on how long a streaming worker
-     * may wait for the provider's FIRST chunk after HTTP_STARTED. If the
-     * upstream takes longer (slow connect, idle relay, silent SSE hang), the
-     * worker aborts the run with a first-chunk timeout instead of hanging
-     * silently — the client's 5s no-growth grace would otherwise classify the
-     * still-alive worker as DEAD via `proc_missing` and enter a retry loop.
-     *
-     * This deliberately exceeds both WORKER_DIED_GRACE_MS (5s, client-side)
-     * and STREAM_CLIENT_ACK_TIMEOUT_MS (15s) so a *legitimately slow* first
-     * chunk is not force-killed before the provider can respond, while a
-     * genuinely wedged provider (no bytes ever) is surfaced promptly.
-     *
-     * Cancellation is ALSO checked on this boundary: the old `collect{}`
-     * body only saw the cancel file once a chunk arrived, so a first-chunk
-     * stall was uncancellable and drove the dead-worker misclassification.
-     */
-    private const val FIRST_CHUNK_TIMEOUT_MS = 30_000L
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val requestDir = intent?.getStringExtra(EXTRA_REQUEST_DIR)
