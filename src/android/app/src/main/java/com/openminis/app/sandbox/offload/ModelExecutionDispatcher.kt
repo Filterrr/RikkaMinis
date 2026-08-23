@@ -305,40 +305,44 @@ object ModelExecutionDispatcher {
     }
 
     /**
-     * [TF-F] Wait (bounded) for the :modelservice worker's process to
-     * disappear (workers self-reap when quiescent). Returns TRUE only when we
-     * confirmed the pid referenced by THIS run dir is gone. NO valid/current
-     * pid ref → UNKNOWN liveness → returns false (do NOT delete! the worker
-     * may still be starting or finishing). A worker still alive after the
-     * timeout equally returns false — the caller must leave the dir alone.
+     * [TF-J2] Wait (bounded) for the :modelservice worker's run to be SAFE TO
+     * DELETE. On a hidepid=invisible device the main process cannot read the
+     * worker's /proc entry (it sees only itself), so the old probeLiveness
+     * always returned UNKNOWN here and every run dir leaked as an orphan. The
+     * run is safe to delete when any of these completes the run's life:
+     *   - terminal marker present (worker's LAST durable write), or
+     *   - result.json committed AND no live beat (worker finished and reaped),
+     *     or
+     *   - the liveness beat file has gone silent/stale (worker stopped beating
+     *     → process gone or finishing).
+     * A run with a still-fresh beat and no terminal is NOT safe → keep polling.
      */
     private suspend fun waitForWorkerReap(dir: File, timeoutMs: Long): Boolean {
-        val runId = runIdOf(dir)
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
-            when (ModelExecutionRunDir.probeLiveness(dir, runId)) {
-                ModelExecutionRunDir.WorkerLiveness.DEAD -> return true
-                ModelExecutionRunDir.WorkerLiveness.ALIVE -> { /* keep waiting */ }
-                ModelExecutionRunDir.WorkerLiveness.UNKNOWN -> {
-                    // No valid ref for THIS run — cannot confirm death. The
-                    // worker may not have written pid yet. Keep polling the
-                    // bounded window; if still unknown at the end we return
-                    // false so the caller leaves the dir as an orphan.
-                }
-            }
+            if (reapSafe(dir)) return true
             delay(REAP_POLL_MS)
         }
-        // Final check — the pid may have appeared + died within one poll.
-        val last = ModelExecutionRunDir.probeLiveness(dir, runId)
-        val gone = last == ModelExecutionRunDir.WorkerLiveness.DEAD
-        if (!gone) {
+        val safe = reapSafe(dir)
+        if (!safe) {
             Log.w(
                 TAG,
-                "worker for ${dir.name} not confirmed gone within ${timeoutMs}ms " +
-                    "(liveness=$last) — NOT deleting dir",
+                "worker for ${dir.name} not confirmed done within ${timeoutMs}ms " +
+                    "(beat still fresh / no terminal / no result) — NOT deleting dir",
             )
         }
-        return gone
+        return safe
+    }
+
+    /** True when THIS run dir's worker is provably done writing / reaped. */
+    private fun reapSafe(dir: File): Boolean {
+        // Worker's LAST durable marker — once present, it will self-reap.
+        if (ModelExecutionRunDir.terminalPresent(dir)) return true
+        // result committed by a worker that has stopped beating.
+        val result = File(dir, ModelExecutionMailbox.FILE_RESULT).exists()
+        val beatFile = File(dir, ModelExecutionRunDir.FILE_LIVENESS_BEAT)
+        val beatGoneOrStale = !beatFile.isFile || ModelExecutionRunDir.beatStale(dir)
+        return result && beatGoneOrStale
     }
 
     /** Extract the stable runId from a `run-<uuid>` dir name (shared helper). */

@@ -108,12 +108,8 @@ object ChatStreamOffloadHandler {
         var terminalSeen = false
         val runId = ModelExecutionDispatcher.runIdOf(dir)
         var lastGrowAtMs = System.currentTimeMillis()
-        // TF-I P0-B: start of the identity-mismatch persistence window (−1 = no
-        // active mismatch suspicion). Deciding death requires a full window of
-        // *persistent* mismatch without reverting to ALIVE — this comfortably
-        // covers the executionMutex serialization upper bound (~15s ack barrier)
-        // that starves the request thread in TF-H.
-        var mismatchGraceStartedAtMs = -1L
+        // (TF-J2: death is now driven by the worker liveness beat file; see the
+        // poll-loop decision. No /proc identity-mismatch window is needed.)
         try {
             val requestFile = File(dir, "request.json")
             val streamFile = File(dir, ModelExecutionService.STREAM_FILE)
@@ -176,45 +172,46 @@ object ChatStreamOffloadHandler {
                     // A terminal result/marker present means the worker finished
                     // NORMALLY (it self-reaps right after) — NOT a crash.
                     //
-                    // TF-I P0-B: only a *confirmed* MISSING pid is proof of
-                    // death. `probeLiveness` also maps identity-mismatch to DEAD,
-                    // which can fire while the worker is actually alive but still
-                    // blocked behind the execution mutex (TF-H up to 11-13s) —
-                    // killing the request before it reaches HTTP. So we drive the
-                    // decision off [probeDeathEvidence]: MISSING ⇒ dead now;
-                    // identity-mismatch is NOT immediate death — we keep polling
-                    // and only after it has failed to revert to ALIVE for a whole
-                    // MISMATCH_GRACE_MS window (which comfortably exceeds the
-                    // mutex serialization upper bound) do we treat it as death.
+                    // TF-J2: death probe is driven by the worker liveness BEAT
+                    // file (shared same-uid filesystem), NOT by /proc.
+                    //
+                    // The classic probes here — probeLiveness / probeDeathEvidence —
+                    // read `/proc/<worker-pid>`. On this device /proc is mounted
+                    // `hidepid=invisible` (gid=3009); an app process can ONLY see
+                    // its OWN pid, so the main process ALWAYS reads "proc_missing"
+                    // for a perfectly alive worker → TF-A…TF-J spurious
+                    // "worker died before any output" retry loops.
+                    //
+                    // New decision: the streaming worker rewrites
+                    // `run-<uuid>/liveness.beat` every ~2s for the whole stream.
+                    //  - beat fresh  (younger than LIVENESS_STALE_MS=4s) ⇒ worker
+                    //    provably alive → keep polling, even if no chunk yet.
+                    //  - beat present but STALE (and no terminal/result) ⇒ worker
+                    //    was alive then stopped beating with no output ⇒ real death.
+                    //  - no beat yet ⇒ worker is still starting up (service spin-up,
+                    //    provider build, first chunk wait) → keep polling; bounded
+                    //    by STREAM_TIMEOUT_MS. Not death.
+                    // This matches the old semantics (only a worker that was provably
+                    // alive and THEN stopped is dead) without touching /proc.
                     if (newLen == lastRead &&
                         System.currentTimeMillis() - lastGrowAtMs > WORKER_DIED_GRACE_MS
                     ) {
-                        val death = ModelExecutionRunDir.probeDeathEvidence(dir, runId)
+                        val terminalOrResult = ModelExecutionRunDir.terminalPresent(dir) ||
+                            File(dir, ModelExecutionMailbox.FILE_RESULT).exists()
+                        val beatPresent = File(dir, ModelExecutionRunDir.FILE_LIVENESS_BEAT).isFile
+                        val beatExistingButStale = beatPresent &&
+                            ModelExecutionRunDir.beatStale(dir)
+                        // A beat that went stale with no terminal data is decisive:
+                        // the worker was alive (it beat) and has now stopped without
+                        // ever producing output.
                         var decisive = false
-                        when (death.kind) {
-                            ModelExecutionRunDir.DeathKind.MISSING -> decisive = true
-                            ModelExecutionRunDir.DeathKind.IDENTITY_MISMATCH -> {
-                                // Not proof of death. Warn once per probe window so
-                                // P0-D surfaces the drifted field, but keep polling
-                                // unless the mismatch has persisted past the grace.
-                                if (mismatchGraceStartedAtMs == -1L) {
-                                    mismatchGraceStartedAtMs = System.currentTimeMillis()
-                                    Log.w(
-                                        TAG,
-                                        "worker identity mismatch (not yet DEAD) runId=$runId pid=${death.pid} ${
-                                            death.detail ?: "identity_drift"
-                                        } — keeping alive, will re-probe",
-                                    )
-                                }
-                                val persisted = System.currentTimeMillis() - mismatchGraceStartedAtMs > MISMATCH_GRACE_MS
-                                val terminalOrResult = ModelExecutionRunDir.terminalPresent(dir) ||
-                                    File(dir, ModelExecutionMailbox.FILE_RESULT).exists()
-                                if (persisted && !terminalOrResult) decisive = true
-                            }
-                            else -> {
-                                // ALIVE / UNKNOWN / NO_REF — worker (may be) alive; reset any earlier suspicion.
-                                mismatchGraceStartedAtMs = -1L
-                            }
+                        if (beatExistingButStale && !terminalOrResult) decisive = true
+                        // Reset any trailing suspicion only when we see a FRESH beat
+                        // (worker manifestly alive) or no beat at all (still starting).
+                        // (mis-…grace window is no longer meaningful without /proc.)
+                        if (beatPresent && !beatExistingButStale) {
+                            // fresh beat ⇒ alive; nothing to decide.
+                            decisive = false
                         }
                         if (decisive &&
                             !ModelExecutionRunDir.terminalPresent(dir) &&
@@ -227,7 +224,7 @@ object ChatStreamOffloadHandler {
                             val phase = ModelExecutionRunLog.tailSummary(dir)
                             Log.w(
                                 TAG,
-                                "worker died (${reason.name}) runId=$runId emittedChunks=$emittedChunks phase=$phase pid=${death.pid} death=${death.kind}:${death.detail} dir=${dir.name}",
+                                "worker died (${reason.name}) runId=$runId emittedChunks=$emittedChunks phase=$phase beat_stale_without_terminal dir=${dir.name}",
                             )
                             throw ModelWorkerDiedException(
                                 hadChunks = emittedChunks,
@@ -316,23 +313,40 @@ object ChatStreamOffloadHandler {
     }
 
     /**
-     * [TF-F] Bounded wait for this run's worker pid to disappear. Returns true
-     * only on a confirmed DEAD for THIS run's pid ref; UNKNOWN/ALIVE returns
-     * false (never delete).
+     * [TF-J2] Bounded wait for this run's worker to stop beating (its liveness
+     * heartbeat file `liveness.beat` going stale). Returns true as soon as the
+     * beat is confirmed absent-or-stale — the worker has stopped, so the run
+     * dir is safe to delete. On a healthy finish the worker stops beating and
+     * writes terminal; on a crash the beat simply goes silent.
+     *
+     * NOTE: the old /proc-based probeLiveness is unreliable here because /proc
+     * is hidepid=invisible on this device (an app process can only see itself),
+     * so the main process ALWAYS saw the worker pid as "missing" — which both
+     * false-killed live workers (above) and would have kept this wait from ever
+     * confirming a real exit. The heartbeat file, on the shared same-uid
+     * filesystem, is the source of truth instead.
      */
     private suspend fun awaitWorkerExit(dir: File, runId: String?, timeoutMs: Long): Boolean {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
-            when (ModelExecutionRunDir.probeLiveness(dir, runId)) {
-                ModelExecutionRunDir.WorkerLiveness.DEAD -> return true
-                ModelExecutionRunDir.WorkerLiveness.ALIVE,
-                ModelExecutionRunDir.WorkerLiveness.UNKNOWN,
-                -> { /* keep waiting */ }
-            }
+            val beatFile = File(dir, ModelExecutionRunDir.FILE_LIVENESS_BEAT)
+            val gone = !beatFile.isFile ||
+                ModelExecutionRunDir.beatStale(dir) ||
+                ModelExecutionRunDir.clientAckPresent(dir)
+            // A terminal marker is the worker's LAST durable write; once present
+            // the worker is done writing and will self-reap. clientAckPresent is
+            // our own handshake confirming we consumed the output.
+            val done = ModelExecutionRunDir.terminalPresent(dir) ||
+                File(dir, ModelExecutionMailbox.FILE_RESULT).exists()
+            if (done || gone) return true
             delay(WORKER_EXIT_POLL_MS)
         }
-        return ModelExecutionRunDir.probeLiveness(dir, runId) ==
-            ModelExecutionRunDir.WorkerLiveness.DEAD
+        val beatFileFinal = File(dir, ModelExecutionRunDir.FILE_LIVENESS_BEAT)
+        return !beatFileFinal.isFile ||
+            ModelExecutionRunDir.beatStale(dir) ||
+            ModelExecutionRunDir.clientAckPresent(dir) ||
+            ModelExecutionRunDir.terminalPresent(dir) ||
+            File(dir, ModelExecutionMailbox.FILE_RESULT).exists()
     }
 
     /**

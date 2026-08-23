@@ -184,6 +184,15 @@ class ModelExecutionService : Service() {
         // invisibility and the false-DEAD classification (the probe can now see
         // an ALIVE pid matching this run while it waits on the lock).
         Thread {
+            // TF-J2: a single per-request heartbeat beats the whole run's life —
+            // from thread dispatch (before the mutex, so a queue-waiting worker is
+            // still provably alive to the client) through finishRequest writing
+            // the terminal marker. Stopped in the outer finally below. Both the
+            // main process (read-side) and this worker share the same uid + data
+            // dir, so the beat file is a reliable cross-process signal where
+            // /proc (hidepid=invisible) is not.
+            val heartbeat = LivenessHeartbeat(dir)
+            heartbeat.start()
             kotlinx.coroutines.runBlocking {
                 // ── TF-I: identity registration, OUTSIDE the mutex ──
                 ModelExecutionRunLog.log(dir, android.os.Process.myPid(), ModelExecutionRunLog.Phase.REQUEST_THREAD_START, runId = runId)
@@ -232,6 +241,14 @@ class ModelExecutionService : Service() {
                             // that barrier runs outside below.
                             executeStreamingRun(requestText, dir)
                         } else {
+                            // TF-J2: non-streaming worker beats liveness too.
+                            // start() is idempotent; the beat is stopped in the
+                            // OUTER finally (after finishRequestLocked writes the
+                            // terminal marker), so the main process — which cannot
+                            // read our /proc on a hidepid=invisible device — can
+                            // both see we are alive AND know we finished writing
+                            // only once the beat goes silent after terminal.
+                            heartbeat.start()
                             ModelExecutionRunDir.writeReady(dir)
                             val result = executeRun(requestText)
                             writeResultAtomically(dir, result)
@@ -277,6 +294,13 @@ class ModelExecutionService : Service() {
                     Log.w(TAG, "ack barrier failed (non-fatal): ${t.message}", t)
                 } finally {
                     synchronized(lifecycleLock) { lifecycleState = finishRequestLocked(dir, generation) }
+                    // TF-J2: stop beating only AFTER the terminal marker is
+                    // written (finishRequestLocked writes it), so the client
+                    // never sees "stale beat + no terminal" for a worker that is
+                    // merely finishing. After this the process self-reaps (or a
+                    // future request revives it); the beat file stays as the
+                    // durable "worker finished" evidence.
+                    heartbeat.stop()
                 }
             }
         }.apply { isDaemon = false }.start()
@@ -724,6 +748,9 @@ class ModelExecutionService : Service() {
         val cancelFile = File(dir, CANCEL_FILE)
         val runId = runIdOf(dir)
         var output: java.io.BufferedWriter? = null
+        // NOTE: the worker liveness heartbeat (liveness.beat) is owned by the
+        // caller's request-thread (see onStartCommand) and beats the whole run's
+        // life — INCLUDING this streaming window. It is not restarted here.
         try {
             // TF-H: only after the stream file is successfully opened do we
             // publish `worker.ready` for this run — ready now means the request
@@ -1230,5 +1257,59 @@ class ModelExecutionService : Service() {
             for (key in hdrs.keys()) { hdrsMap[key] = hdrs.optString(key, "") }
             openAI.imageExtraHeaders = hdrsMap
         }
+    }
+}
+
+/**
+ * TF-J2: worker liveness heartbeat for a single run dir.
+ *
+ * WHY: the main process verifies worker liveness via [ModelExecutionRunDir]
+ * probes that read `/proc/<pid>`. On this device (and every modern Android
+ * where /proc is mounted `hidepid=invisible`, gid=3009 = readproc) an app
+ * process can ONLY see its own pid — another app process's `/proc/<pid>` is
+ * invisible. So the classic probe always reads "missing" for a perfectly
+ * alive worker, producing the TF-A…TF-J spurious `worker died before any
+ * output` retry loops.
+ *
+ * WHAT: while a stream is in flight the worker rewrites
+ * `run-<uuid>/liveness.beat` on a short interval. Both processes share the
+ * same uid + app data dir, so a beat file is a reliable cross-process signal:
+ * a fresh beat ⇒ worker provably alive; a stale beat with no terminal ⇒
+ * worker stopped/ crashed. This class owns the beat writer on the worker side.
+ */
+private class LivenessHeartbeat(
+    private val dir: File,
+    private val intervalMs: Long = ModelExecutionRunDir.LIVENESS_STALE_MS / 2,
+) {
+    @Volatile private var running = false
+    private var thread: Thread? = null
+
+    /** Best-effort guaranteed start; a failed beat simply warns. */
+    fun start() {
+        if (running) return
+        running = true
+        val t = Thread {
+            // First beat immediately so liveness is provable the moment the
+            // worker starts the stream (before any chunk).
+            touchBeat(dir)
+            while (running) {
+                try { Thread.sleep(intervalMs) } catch (_: InterruptedException) { break }
+                if (running) touchBeat(dir)
+            }
+        }
+        t.isDaemon = true
+        t.name = "model-liveness-heartbeat"
+        thread = t
+        t.start()
+    }
+
+    fun stop() {
+        running = false
+        thread?.interrupt()
+        thread = null
+    }
+
+    private fun touchBeat(d: File) {
+        try { ModelExecutionRunDir.touchLivenessBeat(d) } catch (_: Throwable) {}
     }
 }
