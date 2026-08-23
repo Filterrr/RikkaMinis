@@ -10,7 +10,10 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Remote executor for [minis-model-use run]'s network call, running in a
@@ -89,19 +92,35 @@ class ModelExecutionService : Service() {
     /** Worker-side registry: number of requests currently being executed. */
     private val activeRequests = AtomicInteger(0)
 
-    /**
-     * Worker-side count of responses the client has NOT yet acknowledged
-     * (client.ack). TF-G: this is the streaming/quiescence truth the old code
-     * hard-coded to 0 — a streaming worker MUST keep unacked>0 until the
-     * client consumed the stream (terminal barrier + client.ack), otherwise
-     * `finishRequest` would judge the worker "quiescent" and SIGKILL it ahead
-     * of the client reading the tail of stream.jsonl / the terminal marker.
-     */
-    private val unackedResponses = AtomicInteger(0)
-
     /** Worker-side lifecycle state (authoritative; main process only inspects state.json). */
     @Volatile
     private var lifecycleState = ModelExecutionWorkerState.ACTIVE
+
+    /**
+     * TF-H: lifecycle lock — guards the composite check of
+     * activeRequests / queuedRequests / pending ACKs / lifecycleState and the
+     * self-reap decision. The old code computed a quiescence snapshot outside
+     * the lock and then called killProcess() on it, so a NEW request that
+     * arrived between the snapshot and the kill could be killed by the old
+     * finishing thread. Everyone who mutates the counters or decides to die
+     * uses this lock.
+     */
+    private val lifecycleLock = Any()
+
+    /** TF-H: number of requests enqueued waiting on the execution mutex. */
+    private val queuedRequests = AtomicInteger(0)
+
+    /**
+     * TF-H: per-run ACK tokens, keyed by runId. A streaming worker registers
+     * one token when it commits its response and releases it exactly once when
+     * the client.ack for that run is observed (or on late ack / controlled
+     * drain). The lifecycle only self-reaps when every token is released.
+     */
+    private val pendingAckTokens = ConcurrentHashMap<String, AtomicBoolean>()
+
+    /** TF-H: request generation, incremented per run; used to invalidate
+     *  stale snapshot decisions. */
+    private val requestGeneration = AtomicLong(0L)
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -118,33 +137,17 @@ class ModelExecutionService : Service() {
             return START_NOT_STICKY
         }
 
-        // Any new request REVIVES the worker: if a prior request left us
-        // DRAINED/STOPPING, the incoming request moves us back to ACTIVE
-        // (quiesce re-arm). Iff STOPPING and a kill was already in flight we
-        // race it — the kill loop re-checks state before killing, so a
-        // revived ACTIVE never gets killed.
-        activeRequests.incrementAndGet()
-        lifecycleState = ModelExecutionWorkerState.ACTIVE
-        ModelExecutionMailbox.writeState(dir, lifecycleState, activeRequests.get())
-        // TF-F: verifiable worker-process ref (pid + runId + nonce + proc name +
-        // startedAt). The client validates runId against ITS OWN run dir so a
-        // leftover/foreign/recycled pid can never classify worker death for a
-        // different run. Nonce guards pid reuse. After the ref is durable we
-        // write `worker.ready` so the client knows "started, may be silent".
         val runId = runIdOf(dir) ?: ""
-        val processName = runCatching { android.app.Application.getProcessName() }.getOrNull()
-            ?: "modelservice"
-        ModelExecutionRunDir.writeWorkerPid(
-            dir,
-            ModelExecutionRunDir.WorkerProcessRef(
-                pid = android.os.Process.myPid(),
-                runId = runId,
-                nonce = java.util.UUID.randomUUID().toString(),
-                processName = processName,
-                startedAtMs = System.currentTimeMillis(),
-            ),
-        )
-        ModelExecutionRunDir.writeReady(dir)
+        // TF-H: register before enqueue so the completion thread always sees
+        // this request when it re-checks under the lifecycle lock.
+        synchronized(lifecycleLock) {
+            activeRequests.incrementAndGet()
+            queuedRequests.incrementAndGet()
+            lifecycleState = ModelExecutionWorkerState.ACTIVE
+            requestGeneration.incrementAndGet()
+        }
+        val generation = requestGeneration.get()
+        ModelExecutionRunLog.log(dir, android.os.Process.myPid(), ModelExecutionRunLog.Phase.REQUEST_ACCEPTED, runId = runId)
 
         // Execute on a background thread; the worker then decides whether the
         // process may die (quiescent kill) — never just stopSelf as proof.
@@ -152,13 +155,39 @@ class ModelExecutionService : Service() {
         Thread {
             kotlinx.coroutines.runBlocking {
                 executionMutex.withLock {
+                    synchronized(lifecycleLock) { queuedRequests.decrementAndGet() }
+                    // TF-H: after acquiring the exec slot, publish the request
+                    // thread start marker. `worker.ready` must not be written
+                    // from onStartCommand anymore — it represents "the request
+                    // thread is running", not "onStartCommand reached".
+                    ModelExecutionRunLog.log(dir, android.os.Process.myPid(), ModelExecutionRunLog.Phase.REQUEST_THREAD_START, runId = runId)
+                    // TF-H: only register the pid ref once, before any provider
+                    // work; ready is written later by the streaming/non-streaming
+                    // execution wrapper after the stream file / result path is
+                    // actually opened.
+                    val processName = runCatching { android.app.Application.getProcessName() }
+                        .getOrNull() ?: "modelservice"
+                    val procState = ModelExecutionRunDir.readProcIdentity(android.os.Process.myPid())
+                    ModelExecutionRunDir.writeWorkerPid(
+                        dir,
+                        ModelExecutionRunDir.WorkerProcessRef(
+                            pid = android.os.Process.myPid(),
+                            runId = runId,
+                            nonce = java.util.UUID.randomUUID().toString(),
+                            processName = processName,
+                            startedAtMs = System.currentTimeMillis(),
+                            procStartTicks = procState.identity?.procStartTicks ?: 0L,
+                            uid = android.os.Process.myUid(),
+                        ),
+                    )
                     try {
-                        ModelExecutionRunLog.log(dir, android.os.Process.myPid(), ModelExecutionRunLog.Phase.REQUEST_ACCEPTED, runId = runId)
+                        ModelExecutionRunLog.log(dir, android.os.Process.myPid(), ModelExecutionRunLog.Phase.REQUEST_PARSED, "pid registered", runId = runId)
                         val requestText = requestFile.readText()
                         val isStreaming = JSONObject(requestText).optBoolean("streaming", false)
                         if (isStreaming) {
                             executeStreamingRun(requestText, dir)
                         } else {
+                            ModelExecutionRunDir.writeReady(dir)
                             val result = executeRun(requestText)
                             writeResultAtomically(dir, result)
                             Log.i(TAG, "result written ($result.length bytes), pid=${android.os.Process.myPid()}")
@@ -178,7 +207,7 @@ class ModelExecutionService : Service() {
                             }.toString())
                         } catch (_: Throwable) {}
                     } finally {
-                        lifecycleState = finishRequest(dir)
+                        synchronized(lifecycleLock) { lifecycleState = finishRequestLocked(dir, generation) }
                     }
                 }
             }
@@ -218,15 +247,26 @@ class ModelExecutionService : Service() {
      *      final state → terminal.json. The client deletes only after
      *      terminal AND our pid is gone ([ModelExecutionRunDir.safeToDelete]).
      */
-    private fun finishRequest(dir: File): ModelExecutionWorkerState {
-        activeRequests.decrementAndGet()
+    /**
+     * TF-H: locked completion. The caller already holds [lifecycleLock]. The
+     * lock guards the counter mutations and the final kill decision together —
+     * the old code made the kill decision on an UNLOCKED quiescence snapshot,
+     * so a new request arriving between the snapshot and killProcess() could
+     * be killed. Here we re-check everything under the lock right before
+     * self-reap.
+     */
+    private fun finishRequestLocked(dir: File, generation: Long): ModelExecutionWorkerState {
         val runId = runIdOf(dir)
+        // This request is done regardless of generation: the active count must
+        // always drop. Generation only gates the final-state/terminal/reap
+        // decision for the NEWEST request.
+        activeRequests.decrementAndGet()
+        if (generation != requestGeneration.get()) {
+            Log.i(TAG, "finishRequest ignored (stale generation $generation vs ${requestGeneration.get()}), runId=$runId")
+            return lifecycleState
+        }
         val dirMissing = !dir.isDirectory
         if (dirMissing) {
-            // P0: the client deleted the run dir before our final write. This
-            // used to be an uncaught FileNotFoundException FATAL killing the
-            // whole :modelservice process. Now: log + skip writes + never kill
-            // another request; only self-reap when truly idle.
             Log.w(
                 TAG,
                 "protocol_violation=run_dir_missing runId=$runId " +
@@ -234,8 +274,8 @@ class ModelExecutionService : Service() {
             )
             val quiescence = ModelExecutionQuiescenceInput(
                 activeRequests = activeRequests.get(),
-                queuedRequests = 0,
-                unackedResponses = unackedResponses.get(),
+                queuedRequests = queuedRequests.get(),
+                unackedResponses = pendingAckTokens.size,
                 streamFileFlushed = true,
             )
             val next = ModelExecutionLifecycle.transition(
@@ -244,23 +284,14 @@ class ModelExecutionService : Service() {
                 shutdownRequested = false,
             )
             lifecycleState = next
-            if (ModelExecutionLifecycle.shouldKill(next, quiescence) && activeRequests.get() == 0) {
-                Log.w(TAG, "protocol_violation run_dir_missing — self-reap (idle), pid=${android.os.Process.myPid()}")
-                selfReap()
-            }
+            maybeSelfReapLocked(dir, next, quiescence, runId, generation)
             return next
         }
 
         val quiescence = ModelExecutionQuiescenceInput(
             activeRequests = activeRequests.get(),
-            queuedRequests = 0, // onStartCommand always starts work immediately; no queue
-            // TF-G: REAL un-acked response count. A streaming worker's
-            // awaitStreamAckBarrier keeps this > 0 until the client consumed
-            // the stream (client.ack), then returns to 0. The old code hard-
-            // wired this to 0, so finishRequest always judged the worker
-            // "quiescent" and SIGKILLed it one line after stream DONE — the
-            // P0 that severed streaming runs ahead of the client read.
-            unackedResponses = unackedResponses.get(),
+            queuedRequests = queuedRequests.get(),
+            unackedResponses = pendingAckTokens.size,
             streamFileFlushed = true,
         )
         val shutdownRequested = shutdownRequested()
@@ -270,47 +301,69 @@ class ModelExecutionService : Service() {
             shutdownRequested = shutdownRequested,
         )
         lifecycleState = next
-        // Final state write — defensive: a vanished dir must NOT throw here.
-        ModelExecutionMailbox.writeState(dir, next, activeRequests.get(), unacked = unackedResponses.get())
-        // TF-F: terminal marker is the LAST write into the run dir. Its
-        // presence + our pid gone is the client's only safe-delete condition.
-        ModelExecutionRunDir.writeTerminal(dir)
-        Log.i(
-            TAG,
-            "request finished: state $next active=${activeRequests.get()} " +
-                "unacked=${unackedResponses.get()} shutdownRequested=$shutdownRequested " +
-                "pid=${android.os.Process.myPid()}",
-        )
+        // TF-H: final state + terminal are written under the lock. terminal is
+        // now the LAST write of the run — it must not appear while the worker
+        // may still be ack-waiting.
+        ModelExecutionMailbox.writeState(dir, next, activeRequests.get(), unacked = pendingAckTokens.size)
         if (ModelExecutionLifecycle.shouldKill(next, quiescence)) {
-            // Quiescent: no in-flight work (active==0, queue==0, no un-acked
-            // response, stream flushed). The worker kills ITS OWN process —
-            // never the main process on its own counters — so the native heap
-            // (DirectByteBuffer from the LLM HTTP call) returns to the OS.
-            // There is NO idle window: the process dies only when a request
-            // finished and nothing else is running. The next request starts
-            // a fresh process.
-            //
-            // TF-G P0-2 hard barrier: even a quiescent worker must NEVER
-            // self-reap if the terminal marker is absent. If terminal didn't
-            // land (e.g. run dir reclaimed mid-finish after the data flush),
-            // the client may not have consumed the run dir yet — abort the
-            // kill and leave the process (the controlled drain / orphan reaper
-            // handle a truly dead client).
+            ModelExecutionRunDir.writeTerminal(dir)
+            maybeSelfReapLocked(dir, next, quiescence, runId, generation)
+        } else {
+            Log.i(
+                TAG,
+                "request finished (holding): state $next active=${activeRequests.get()} " +
+                    "queued=${queuedRequests.get()} pendingAck=${pendingAckTokens.size} " +
+                    "shutdownRequested=$shutdownRequested pid=${android.os.Process.myPid()}",
+            )
+        }
+        return next
+    }
+
+    /**
+     * TF-H: called while holding [lifecycleLock]. Re-checks the CURRENT
+     * counters, pending ACK tokens, queued count, terminal marker, and that
+     * this is still the newest generation before allowing self-reap. Without
+     * this, the lock-free old code killed a worker right after a new request
+     * had revived it.
+     */
+    private fun maybeSelfReapLocked(
+        dir: File,
+        state: ModelExecutionWorkerState,
+        quiescence: ModelExecutionQuiescenceInput,
+        runId: String?,
+        capturedGeneration: Long,
+    ) {
+        if (capturedGeneration != requestGeneration.get()) {
+            Log.i(TAG, "self-reap skipped (stale generation $capturedGeneration vs ${requestGeneration.get()}), runId=$runId")
+            return
+        }
+        if (ModelExecutionLifecycle.shouldKill(state, quiescence) &&
+            activeRequests.get() == 0 &&
+            queuedRequests.get() == 0 &&
+            pendingAckTokens.isEmpty()
+        ) {
             if (!ModelExecutionRunDir.terminalPresent(dir)) {
                 Log.w(
                     TAG,
                     "reap aborted: terminal absent (dir=${dir.name}) — leaving worker alive, " +
                         "pid=${android.os.Process.myPid()} active=${activeRequests.get()} " +
-                        "unacked=${unackedResponses.get()}",
+                        "queued=${queuedRequests.get()} pendingAck=${pendingAckTokens.size}",
                 )
-                return next
+                return
             }
             Log.i(TAG, "terminal written, quiescent self-reap, pid=${android.os.Process.myPid()}")
             ModelExecutionRunLog.log(dir, android.os.Process.myPid(), ModelExecutionRunLog.Phase.SELF_REAP, "quiescent", runId = runId)
             selfReap()
         }
-        return next
     }
+
+    /**
+     * TF-H: true when the request that computed this completion snapshot is
+     * still the newest request in the worker. If a newer request bumped the
+     * generation, an older thread must not decide to self-reap.
+     */
+    private fun generationMatches(capturedGeneration: Long): Boolean =
+        capturedGeneration == requestGeneration.get()
 
     /**
      * True when the main process asked us to drain. On reclaim the main
@@ -336,7 +389,7 @@ class ModelExecutionService : Service() {
             if (ack.exists()) return
             try { Thread.sleep(ACK_POLL_MS) } catch (_: InterruptedException) { return }
         }
-        Log.w(TAG, "client ack timeout (${timeoutMs}ms) — proceeding anyway")
+        Log.w(TAG, "client ack timeout (${timeoutMs}ms) on run ${dir.name} — proceeding anyway")
     }
 
     /**
@@ -362,6 +415,17 @@ class ModelExecutionService : Service() {
     /** Kill our own process — only ever called after quiescence confirmation. */
     private fun selfReap() {
         runCatching { android.os.Process.killProcess(android.os.Process.myPid()) }
+    }
+
+    /**
+     * TF-H: non-streaming runs ack like streaming ones once the client wrote
+     * client.ack. Kept here so callers can release the per-run token.
+     */
+    private fun releaseAckToken(runId: String) {
+        val removed = pendingAckTokens.remove(runId)
+        if (removed != null && removed.get()) {
+            removed.set(false)
+        }
     }
 
     private fun executeRun(requestJson: String): String {
@@ -590,12 +654,19 @@ class ModelExecutionService : Service() {
     private fun executeStreamingRun(requestJson: String, dir: File) {
         val streamFile = File(dir, STREAM_FILE)
         val cancelFile = File(dir, CANCEL_FILE)
-        val output = java.io.BufferedWriter(java.io.OutputStreamWriter(java.io.FileOutputStream(streamFile, true)))
-        val appendLine = { line: String ->
-            output.append(line).append('\n')
-            output.flush()
-        }
+        val runId = runIdOf(dir)
+        var output: java.io.BufferedWriter? = null
         try {
+            // TF-H: only after the stream file is successfully opened do we
+            // publish `worker.ready` for this run — ready now means the request
+            // thread actually started and the client can expect chunks.
+            output = java.io.BufferedWriter(java.io.OutputStreamWriter(java.io.FileOutputStream(streamFile, true)))
+            ModelExecutionRunDir.writeReady(dir)
+            ModelExecutionRunLog.log(dir, android.os.Process.myPid(), ModelExecutionRunLog.Phase.REQUEST_ACCEPTED, "stream file opened", runId = runId)
+            val appendLine = { line: String ->
+                output!!.append(line).append('\n')
+                output!!.flush()
+            }
             val req = JSONObject(requestJson)
 
             // ── Reconstruct ProviderInstance (mirrors executeRun) ──
@@ -721,17 +792,17 @@ class ModelExecutionService : Service() {
         } catch (t: Throwable) {
             val cancelled = t is ModelExecutionCancelledException
             Log.w(TAG, "stream failed: ${t.message}", t)
-            ModelExecutionRunLog.log(dir, android.os.Process.myPid(), ModelExecutionRunLog.Phase.STREAM_ERROR, t.message ?: t.javaClass.simpleName, runId = runIdOf(dir))
-            // [TF-B cancel contract] The worker MUST acknowledge a cancel
-            // (or a clean terminal result) BEFORE the client deletes the
-            // directory — else the old code deleted the dir under a worker
-            // still appending to stream.jsonl / writing result.json (lost
-            // final chunks / torn result).
+            ModelExecutionRunLog.log(dir, android.os.Process.myPid(), ModelExecutionRunLog.Phase.STREAM_ERROR, t.message ?: t.javaClass.simpleName, runId = runId)
+            // [TF-B cancel contract] Acknowledge a cancel before the client may
+            // delete the dir.
             if (cancelled) {
                 runCatching { ModelExecutionMailbox.writeCancelAck(dir) }
             }
             try {
-                appendLine(ChatStreamJsonl.errorLine(t.message ?: "stream_failed"))
+                output?.let { out ->
+                    out.append(ChatStreamJsonl.errorLine(t.message ?: "stream_failed")).append('\n')
+                    out.flush()
+                }
             } catch (_: Throwable) {}
             try {
                 writeResultAtomically(dir, JSONObject().apply {
@@ -742,15 +813,12 @@ class ModelExecutionService : Service() {
                 }.toString())
             } catch (_: Throwable) {}
         } finally {
-            try { output.close() } catch (_: Throwable) {}
-            // TF-G: stream data barrier + client-ACK barrier. Whether the run
-            // ended normal (DONE + result) or failed (error line + result),
-            // the worker must now (a) make the terminal marker durable, then
-            // (b) hold an unacked response until the client consumed the
-            // stream and wrote client.ack — so `finishRequest` runs with a
-            // truthful quiescence and never SIGKILLs ahead of the client READ.
-            // On ack timeout we schedule a controlled drain so we never leak
-            // the process across a crashed client.
+            try { output?.close() } catch (_: Throwable) {}
+            // TF-H: streaming quiescence barrier. The result/error is already
+            // committed; we do NOT write terminal here — terminal must only be
+            // written in the locked finalizer when the client ack is seen (or
+            // the ack timeout expires). Until then the run holds an ACK token
+            // and the worker is not quiescent.
             awaitStreamAckBarrier(dir)
         }
     }
@@ -778,21 +846,13 @@ class ModelExecutionService : Service() {
      */
     private fun awaitStreamAckBarrier(dir: File) {
         val pid = android.os.Process.myPid()
-        val runId = runIdOf(dir)
-        // (1) terminal data barrier — must succeed before we treat output as
-        // consumable / reapable.
-        val terminalOk = ModelExecutionRunDir.writeTerminal(dir)
-        if (terminalOk) {
-            Log.i(TAG, "terminal written, pid=${android.os.Process.myPid()}")
-            ModelExecutionRunLog.log(dir, pid, ModelExecutionRunLog.Phase.TERMINAL_WRITTEN, runId = runId)
-        } else {
-            Log.w(TAG, "terminal write failed — run dir may be reclaimed; not holding ack")
-        }
-        // (2) mark un-acked. Do this even if terminal failed: if the dir was
-        // reclaimed the client is gone, unacked is meaningless, and we rely on
-        // finishRequest's run_dir_missing path (only reaps when idle).
-        unackedResponses.incrementAndGet()
-        // (3) wait for client.ack.
+        val runId = runIdOf(dir) ?: ""
+        // TF-H: per-run ACK token — the worker is NOT quiescent while this run
+        // holds one. Terminal is deliberately NOT written here; it is written
+        // only in the locked finalizer after this barrier returns (or after
+        // the ack timeout), so final-state and terminal ordering stay correct.
+        val token = AtomicBoolean(true)
+        pendingAckTokens[runId] = token
         val deadline = System.currentTimeMillis() + STREAM_CLIENT_ACK_TIMEOUT_MS
         var ackSeen = false
         while (System.currentTimeMillis() < deadline) {
@@ -800,24 +860,26 @@ class ModelExecutionService : Service() {
             try { Thread.sleep(ACK_POLL_MS) } catch (_: InterruptedException) { break }
         }
         if (ackSeen) {
-            unackedResponses.decrementAndGet()
-            Log.i(TAG, "client ack seen, pid=${android.os.Process.myPid()}")
+            releaseAckToken(runId)
+            Log.i(TAG, "client ack seen, pid=$pid")
             ModelExecutionRunLog.log(dir, pid, ModelExecutionRunLog.Phase.CLIENT_ACK_SEEN, runId = runId)
         } else {
-            // (5) timeout — do NOT unset unacked (finishRequest sees busy →
-            // won't reap on its own). Schedule a controlled drain.
+            // Timeout: DO NOT release the token here. Leave the run holding an
+            // unacked ACK so the locked finalizer does not see quiescence; a
+            // controlled drain thread re-checks and (only terminal + genuinely
+            // idle) reaps after its grace.
             Log.w(
                 TAG,
                 "client ack timeout (${STREAM_CLIENT_ACK_TIMEOUT_MS}ms) — " +
-                    "retaining worker (unacked=1); controlled drain in $STREAM_DRAIN_GRACE_MS ms, " +
-                    "pid=${android.os.Process.myPid()}",
+                    "holding ack token for runId=$runId; controlled drain in $STREAM_DRAIN_GRACE_MS ms, " +
+                    "pid=$pid",
             )
-            scheduleControlledDrain(dir)
+            scheduleControlledDrain(dir, runId)
         }
     }
 
     /**
-     * TF-G: fire-and-forget controlled-drain reap for a streaming worker whose
+     * TF-H: fire-and-forget controlled-drain reap for a streaming worker whose
      * client.ack never arrived (client likely crashed / network dropped). The
      * terminal data barrier is already durable, so after a grace period we
      * reap the process (returning native heap) instead of leaking as an
@@ -825,33 +887,58 @@ class ModelExecutionService : Service() {
      * before this fires; we re-check activeRequests + terminal before killing
      * so we never kill in-flight or pre-terminal work.
      */
-    private fun scheduleControlledDrain(dir: File) {
+    private fun scheduleControlledDrain(dir: File, runId: String?) {
         val deadline = System.currentTimeMillis() + STREAM_DRAIN_GRACE_MS
+        val drainedAt = System.currentTimeMillis()
+        val genAtSchedule = requestGeneration.get()
         Thread {
             try {
                 while (System.currentTimeMillis() < deadline) {
-                    // If the client acked during the grace, stop and let the
-                    // normal finishRequest path reap.
+                    // Late client ack during the grace: release the token and
+                    // stop — the normal locked finalizer will reap.
                     if (ModelExecutionRunDir.clientAckPresent(dir)) {
-                        unackedResponses.decrementAndGet()
+                        runId?.let { releaseAckToken(it) }
                         Log.i(TAG, "late client ack — controlled drain cancelled")
                         return@Thread
                     }
                     Thread.sleep(200)
                 }
-                // Stock the drain barrier: only reap if this run is still
-                // terminal (never mid-stream) and no other request is running.
-                if (!ModelExecutionRunDir.terminalPresent(dir)) {
-                    Log.w(TAG, "controlled drain aborted: terminal absent")
-                    return@Thread
+                // Only reap under the lifecycle lock, with terminal present and
+                // genuinely idle; do NOT kill a new request or an un-acked run.
+                var reaped = false
+                synchronized(lifecycleLock) {
+                    // A newer request may have arrived; our drain window is stale.
+                    if (requestGeneration.get() != genAtSchedule) {
+                        Log.w(TAG, "controlled drain stale (gen ${requestGeneration.get()} != $genAtSchedule) — leaving to new request")
+                        return@synchronized
+                    }
+                    runId?.let { releaseAckToken(it) }
+                    // If the run dir is gone, nothing more to write; only the
+                    // general sweep may reap it.
+                    if (!dir.isDirectory) return@synchronized
+                    if (!ModelExecutionRunDir.terminalPresent(dir)) {
+                        // Data is durable only once result.json exists. The
+                        // client may still be waiting on terminal to delete; if
+                        // we have result.json, write terminal now (client has
+                        // the data) and then reap when idle. Otherwise the
+                        // stream was cut before any result — keep worker alive.
+                        if (File(dir, ModelExecutionMailbox.FILE_RESULT).exists()) {
+                            ModelExecutionRunDir.writeTerminal(dir)
+                        } else {
+                            Log.w(TAG, "controlled drain aborted: terminal absent and no result — worker kept alive")
+                            return@synchronized
+                        }
+                    }
+                    if (activeRequests.get() > 0 || queuedRequests.get() > 0 || pendingAckTokens.isNotEmpty()) {
+                        Log.w(TAG, "controlled drain aborted: active/queued/pending work present")
+                        return@synchronized
+                    }
+                    Log.w(TAG, "controlled drain reap (ack unconsumed, waited ${System.currentTimeMillis() - drainedAt}ms), pid=${android.os.Process.myPid()}")
+                    ModelExecutionRunLog.log(dir, android.os.Process.myPid(), ModelExecutionRunLog.Phase.SELF_REAP, "controlled_drain", runId = runIdOf(dir))
+                    selfReap()
+                    reaped = true
                 }
-                if (activeRequests.get() > 0) {
-                    Log.w(TAG, "controlled drain aborted: active request in flight")
-                    return@Thread
-                }
-                Log.w(TAG, "controlled drain reap (ack unconsumed), pid=${android.os.Process.myPid()}")
-                ModelExecutionRunLog.log(dir, android.os.Process.myPid(), ModelExecutionRunLog.Phase.SELF_REAP, "controlled_drain", runId = runIdOf(dir))
-                selfReap()
+                if (reaped) return@Thread
             } catch (_: Throwable) {}
         }.apply { isDaemon = true }.start()
     }

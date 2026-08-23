@@ -7738,11 +7738,21 @@ class ChatViewModel(
                                         ?: actual.message?.takeIf { it.isNotBlank() }
                                         ?: "Unknown error"
                                 }
+                                // TF-H: reducer must leave FALLING_BACK before
+                                // finalizing — otherwise RunFinalized is REJECTED
+                                // with "requires FINALIZING (current=FALLING_BACK)".
+                                t7Reduce(AgentRunEvent.FallbackExhausted)
                                 throw com.openminis.app.data.model.FallbackExhaustedError(
                                     summary = summary,
                                     detail = "$trail\n${actual.message ?: actual.toString()}",
                                 )
                             }
+                        }
+                        // TF-H: even when the error is not fallbackable, make sure
+                        // the reducer has left the running phases before the outer
+                        // finalizer sends RunFinalized.
+                        if (!shouldFallback) {
+                            t7Reduce(AgentRunEvent.ProcessInterrupted("provider_fatal_not_fallbackable"))
                         }
                         throw actual  // re-throw unwrapped, all fallbacks exhausted
                     }
