@@ -159,4 +159,35 @@ class RootfsHealthTest {
     fun `missing manifest entry falls back to existence-only`() {
         assertTrue(integritySizePasses("sbin/apk", actualSize = 0L, expectedSizes = emptyMap()))
     }
+
+    @Test
+    fun `missing sh is not accepted as healthy`() {
+        val h = healthy().copy(sh = false)
+        assertFalse(h.healthy)
+        assertEquals(listOf("/bin/sh"), h.missing)
+    }
+
+    @Test
+    fun `offline repair health requires sh`() {
+        val h = healthy().copy(sh = false)
+        // Mirrors autoRepair's Stage 2.6 success gate.
+        assertFalse(h.healthy)
+        assertTrue(h.bash && h.libreadline && h.libncursesw)
+    }
+
+    @Test
+    fun `rebuilds missing sh as relative busybox symlink`() {
+        val root = java.nio.file.Files.createTempDirectory("rootfs-sh-").toFile()
+        try {
+            val bin = java.io.File(root, "bin").apply { mkdirs() }
+            java.io.File(bin, "busybox").writeText("busybox")
+            assertTrue(ensureBusyboxShellSymlink(root))
+            val shell = java.io.File(bin, "sh").toPath()
+            assertTrue(java.nio.file.Files.isSymbolicLink(shell))
+            assertEquals("busybox", java.nio.file.Files.readSymbolicLink(shell).toString())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
 }
