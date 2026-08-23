@@ -36,6 +36,10 @@ data class BrowserActionResult(
     val riskChallengeKind: String? = null,
     /** Human-readable recommended next action for the agent. */
     val recommendedNextAction: String? = null,
+    /** True when the browser text payload was capped before returning. */
+    val truncated: Boolean = false,
+    /** Original text length before any browser-side cap. */
+    val fullTextLength: Int? = null,
     /** Throttle delay (ms) to wait before the next browser action. */
     val throttleDelayMs: Long = 0,
 ) {
