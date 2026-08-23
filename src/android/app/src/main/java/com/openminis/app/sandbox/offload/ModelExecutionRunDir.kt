@@ -80,6 +80,74 @@ object ModelExecutionRunDir {
     const val FILE_WORKER_PID = "worker.pid"
     const val FILE_READY = "worker.ready"
     const val FILE_TERMINAL = "terminal.json"
+    /**
+     * TF-J2: worker liveness heartbeat file. The main process CANNOT read
+     * `/proc/<worker-pid>` on devices where /proc is mounted `hidepid=invisible`
+     * (every modern Android: the only pid visible to an app process is itself).
+     * So the classic "is the worker process gone?" probe (probeLiveness /
+     * probeDeathEvidence) reads MISSING for a perfectly-alive worker → spurious
+     * `worker died before any output` → 3× retry loop, exactly the TF-A…TF-J
+     * symptom. Both processes share the same uid + app data dir, so a heartbeat
+     * *file* is a reliable cross-process liveness signal where /proc is not.
+     *
+     * Semantics: the worker periodically rewrites this file (fresh mtime). A
+     * beat that is younger than [LIVENESS_STALE_MS] means the worker is provably
+     * alive; a beat older than the stale ceiling (and with no terminal) means
+     * the worker has stopped beating and is (or soon will be) gone.
+     */
+    const val FILE_LIVENESS_BEAT = "liveness.beat"
+    /**
+     * Youngest beat mtime window that still counts as "worker alive". Must be
+     * comfortably larger than the worker's heartbeat write interval.
+     */
+    const val LIVENESS_STALE_MS = 4_000L
+
+    /**
+     * True when the liveness heartbeat is present AND fresh (mtime within
+     * [LIVENESS_STALE_MS] of now) — i.e. the worker has beaten recently, so it
+     * is provably alive for THIS run dir. Pure, JVM-testable.
+     */
+    fun beatAlive(dir: File, nowMs: Long = System.currentTimeMillis()): Boolean {
+        val f = File(dir, FILE_LIVENESS_BEAT)
+        if (!f.isFile) return false
+        val last = f.lastModified()
+        return last != 0L && nowMs - last <= LIVENESS_STALE_MS
+    }
+
+    /**
+     * True when a heartbeat file exists but has gone stale — the worker wrote a
+     * beat at some point but has NOT for [LIVENESS_STALE_MS]. Because a
+     * terminal-finished worker stops beating (and the run then has a terminal
+     * marker), a stale beat with NO terminal is strong evidence of a crashed /
+     * killed / wedged worker.
+     */
+    fun beatStale(dir: File, nowMs: Long = System.currentTimeMillis()): Boolean {
+        val f = File(dir, FILE_LIVENESS_BEAT)
+        if (!f.isFile) return false
+        val last = f.lastModified()
+        return last != 0L && nowMs - last > LIVENESS_STALE_MS
+    }
+
+    /**
+     * Worker-side: atomically refresh the liveness heartbeat so a peer process
+     * (main process) can see, via a shared-uid file, that this worker is still
+     * alive. Writes a fresh-timestamp JSON via tmp+rename so a reader never sees
+     * a torn beat. Never throws. Cheap and safe to call on a timer or per chunk.
+     */
+    fun touchLivenessBeat(dir: File): Boolean = runCatching {
+        val f = File(dir, FILE_LIVENESS_BEAT)
+        val now = System.currentTimeMillis()
+        val tmp = File(dir, "$FILE_LIVENESS_BEAT.tmp")
+        tmp.writeText(JSONObject().put("at", now).toString())
+        if (!tmp.renameTo(f)) {
+            // rename rejected (another beat raced us) — write in place, still fine.
+            f.writeText(JSONObject().put("at", now).toString())
+        }
+        true
+    }.getOrElse {
+        android.util.Log.w(TAG, "touchLivenessBeat failed: ${it.message}")
+        false
+    }
 
     /**
      * Persist the worker's process ref atomically. A partially-written ref is
