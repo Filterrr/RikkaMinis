@@ -412,7 +412,7 @@ class RootfsManager private constructor(private val context: Context) {
         Log.i(TAG, "[Repair] Stage 2.6: offline install of extra packages")
         installOfflinePackages()
         val afterOffline = verifyIntegrity()
-        if (afterOffline.bash && afterOffline.libreadline && afterOffline.libncursesw) {
+        if (afterOffline.healthy) {
             Log.i(TAG, "[Repair] rootfs healthy after offline package install")
             return@withContext true
         }
@@ -458,6 +458,11 @@ class RootfsManager private constructor(private val context: Context) {
                 val tarInput = if (assetName.endsWith(".gz")) GZIPInputStream(raw) else raw
                 extractTar(tarInput, rootfsDir, onlyPrefixes = CRITICAL_RESTORE_PREFIXES)
             }
+            // Some Android filesystems reject the tar's absolute `/bin/busybox`
+            // symlink target during targeted extraction. Recreate the Alpine
+            // canonical relative link explicitly; it remains inside the rootfs
+            // under both ordinary File checks and PRoot's guest root.
+            ensureBusyboxShellSymlink(rootfsDir)
             val h = verifyIntegrity()
             val nonDbOk = h.bash && h.sh && h.libc && h.libreadline && h.libncursesw && h.apk
             if (nonDbOk) {
@@ -1329,6 +1334,25 @@ internal val CRITICAL_RESTORE_PREFIXES = setOf(
     "usr/lib/libncurses",
     "sbin/apk",
 )
+
+internal fun ensureBusyboxShellSymlink(rootfsDir: File): Boolean {
+    val binDir = File(rootfsDir, "bin")
+    val shell = File(binDir, "sh").toPath()
+    val busybox = File(binDir, "busybox")
+    if (java.nio.file.Files.exists(shell)) return true
+    if (!busybox.exists()) return false
+    return try {
+        binDir.mkdirs()
+        if (java.nio.file.Files.exists(shell, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            java.nio.file.Files.delete(shell)
+        }
+        java.nio.file.Files.createSymbolicLink(shell, java.nio.file.Paths.get("busybox"))
+        java.nio.file.Files.exists(shell)
+    } catch (t: Exception) {
+        Log.w("RootfsManager", "Failed to rebuild bin/sh -> busybox", t)
+        false
+    }
+}
 
 // ── Apk world snapshot — pure functions (JVM-testable) ─────────────────
 
