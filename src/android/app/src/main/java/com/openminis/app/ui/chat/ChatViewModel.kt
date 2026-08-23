@@ -542,6 +542,16 @@ class ChatViewModel(
     private val _streamingById = MutableStateFlow<Map<String, StreamingDelta>>(emptyMap())
     val streamingById: StateFlow<Map<String, StreamingDelta>> = _streamingById.asStateFlow()
 
+    /** 单调递增回合纪元：每开一个新回合 +1，旧回合晚到 delta 由渲染层按 epoch 忽略。 */
+    private var streamEpoch = 0L
+
+    /**
+     * 当前活跃回合的 epoch，供 ChatScreen 传入 [mergeStreamingOverlay] 做过滤。
+     * 新回合入口递增后，旧回合的 trailing-flush / 残余 delta 因 epoch 不匹配被忽略，
+     * 不再产生第二条"正在思考…"残留行。
+     */
+    fun currentStreamEpoch(): Long = streamEpoch
+
     /**
      * [T-android-stream-flush-dualpath] Per-message streaming-flush state for
      * the dual-path throttle in [updateAssistantMessage]. Keyed by messageId so
@@ -3637,6 +3647,14 @@ class ChatViewModel(
                 applyCompactMarkerGraying(ordered, marker, loaded.messages, historyDbIds)
             }
 
+            // [T-android-thinking-indicator-linger] Session (re)load rebuilds
+            // _messages from DB rows — any in-memory streaming side-channel
+            // entry is a leftover from a previous session/turn (DB messages
+            // are always isStreaming=false), so drop it. Without this, the
+            // stale delta would render a "thinking" row pinned to a message
+            // after switching sessions.
+            _streamingById.value = emptyMap()
+
             // Cold-start interrupt detection: an agent loop that was killed by
             // the OS (or app force-quit) leaves agentHistory in one of three
             // tell-tale shapes. Detecting any of them lets the user tap
@@ -4232,6 +4250,7 @@ class ChatViewModel(
             _canResume.value = false
             AppLogger.info(TAG_STREAM, "$label _isStreaming=true (sync, sid=$activeSessionId)")
             _isStreaming.value = true
+            streamEpoch++
             var streamLaunched = false
             try {
                 streamLaunched = runRerunStreamTail(provider, label)
@@ -4593,6 +4612,7 @@ class ChatViewModel(
         // rejected by the entry guard (same rationale as retryFromMessage T145).
         AppLogger.info(TAG_STREAM, "rerunFromToolBlock _isStreaming=true (sync, sid=$activeSessionId)")
         _isStreaming.value = true
+        streamEpoch++
 
         viewModelScope.launch(Dispatchers.IO) {
             var streamLaunched = false
@@ -4791,6 +4811,7 @@ class ChatViewModel(
         // then flip the UI to "stopped" while the second job was still running.
         AppLogger.info(TAG_STREAM, "retry _isStreaming=true (sync, sid=$activeSessionId)")
         _isStreaming.value = true
+        streamEpoch++
 
         viewModelScope.launch(Dispatchers.IO) {
             // If setup throws before the inner streamJob is launched, the
@@ -5562,6 +5583,14 @@ class ChatViewModel(
             flushAllStreamingDeltas()
         }
 
+        // [T-android-thinking-indicator-linger] Monotonic epoch: after the
+        // orphan sweep, bump the turn epoch so any trailing-flush / residual
+        // delta that re-adds an old entry LATER (flush coroutine survives
+        // streamJob.cancel) carries the old epoch and is ignored by
+        // mergeStreamingOverlay. Must happen AFTER the sweep — the sweep
+        // handles the old turn's remnants, the epoch seals this turn.
+        streamEpoch++
+
         // T187: when the user is editing a previous message, truncate the
         // conversation from that message (inclusive) before persisting the
         // edited text as a fresh user turn. Snapshot + clear the id here so
@@ -5956,6 +5985,7 @@ class ChatViewModel(
         // T145: claim _isStreaming synchronously — see retryFromMessage for rationale.
         AppLogger.info(TAG_STREAM, "retryLast _isStreaming=true (sync, sid=$activeSessionId)")
         _isStreaming.value = true
+        streamEpoch++
 
         viewModelScope.launch(Dispatchers.IO) {
             var streamLaunched = false
@@ -9648,6 +9678,7 @@ class ChatViewModel(
                         content = text,
                         toolBlocks = guarded.blocks,
                         isAwaitingModelResponse = awaiting,
+                        epoch = streamEpoch,
                     )
                 )
                 st.lastFlushMs = System.currentTimeMillis()
@@ -11047,6 +11078,7 @@ Environment variables:
             // entry guard. Mirrors sendMessage discipline.
             AppLogger.info(TAG_STREAM, "resumeQueueAfterCancel _isStreaming=true (sync, sid=$activeSessionId)")
             _isStreaming.value = true
+            streamEpoch++
             _canResume.value = false
             _error.value = null
 
@@ -11321,6 +11353,7 @@ Environment variables:
 
             AppLogger.info(TAG_STREAM, "resume _isStreaming=true (sid=$activeSessionId)")
             _isStreaming.value = true
+            streamEpoch++
             streamJob = launch(Dispatchers.IO) {
                 AppLogger.info(TAG_STREAM, "resume streamJob ENTER sid=$activeSessionId")
                 try {
