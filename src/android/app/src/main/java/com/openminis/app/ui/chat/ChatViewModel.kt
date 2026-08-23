@@ -9392,6 +9392,18 @@ class ChatViewModel(
             } catch (_: Exception) { "browser_use" }
 
             var output = result.text
+            // [T-android-browser-toolresult-guard] Bound browser tool result text
+            // before it enters ToolExecutionResult → message → renderer/LLM context.
+            // A 900KiB get_text (Fix-03 cap) made the main thread hang (ANR) when
+            // the toolResult message rendered full-width, and no LLM context can
+            // use 900K chars anyway. Truncate to a readable bound with an explicit
+            // notice so the agent knows it was cut (truncated flag already flows
+            // from the bridge; this is the final belt-and-suspenders bound).
+            val browserToolResultMaxChars = 64 * 1024
+            if (output.length > browserToolResultMaxChars) {
+                val truncatedNotice = "\n\n…[tool result truncated: ${output.length} chars > $browserToolResultMaxChars — re-run get_text with a selector/scroll to read the rest]"
+                output = output.take(browserToolResultMaxChars) + truncatedNotice
+            }
             var persistentImagePath: String? = result.imageFilePath
             var inferenceBytes: ByteArray? = null
 
