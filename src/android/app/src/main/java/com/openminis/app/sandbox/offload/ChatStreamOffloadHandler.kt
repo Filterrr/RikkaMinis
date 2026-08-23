@@ -51,6 +51,16 @@ object ChatStreamOffloadHandler {
      * genuinely crashed worker promptly.
      */
     private const val WORKER_DIED_GRACE_MS = 5_000L
+    /**
+     * TF-I P0-B: how long an identity-mismatch must persist before the client
+     * treats it as a confirmed death. This MUST exceed the executionMutex
+     * serialization upper bound (the worker's streaming ACK barrier is up to
+     * STREAM_CLIENT_ACK_TIMEOUT_MS = 15s) so a request thread starved behind
+     * the mutex (TF-H gap 11-13s) is never killed as a false positive — the
+     * flow simply re-probes until the worker either reaches HTTP (stream
+     * grows, so this branch stops) or the pid genuinely goes MISSING.
+     */
+    private const val MISMATCH_GRACE_MS = 20_000L
     /** Bounded wait after terminal for the worker process to disappear before deleting. */
     private const val WORKER_EXIT_WAIT_MS = 6_000L
     private const val WORKER_EXIT_POLL_MS = 60L
@@ -98,6 +108,12 @@ object ChatStreamOffloadHandler {
         var terminalSeen = false
         val runId = ModelExecutionDispatcher.runIdOf(dir)
         var lastGrowAtMs = System.currentTimeMillis()
+        // TF-I P0-B: start of the identity-mismatch persistence window (−1 = no
+        // active mismatch suspicion). Deciding death requires a full window of
+        // *persistent* mismatch without reverting to ALIVE — this comfortably
+        // covers the executionMutex serialization upper bound (~15s ack barrier)
+        // that starves the request thread in TF-H.
+        var mismatchGraceStartedAtMs = -1L
         try {
             val requestFile = File(dir, "request.json")
             val streamFile = File(dir, ModelExecutionService.STREAM_FILE)
@@ -159,11 +175,48 @@ object ChatStreamOffloadHandler {
                     // chunk (>WORKER_DIED_GRACE_MS, worker ALIVE) is NOT death.
                     // A terminal result/marker present means the worker finished
                     // NORMALLY (it self-reaps right after) — NOT a crash.
+                    //
+                    // TF-I P0-B: only a *confirmed* MISSING pid is proof of
+                    // death. `probeLiveness` also maps identity-mismatch to DEAD,
+                    // which can fire while the worker is actually alive but still
+                    // blocked behind the execution mutex (TF-H up to 11-13s) —
+                    // killing the request before it reaches HTTP. So we drive the
+                    // decision off [probeDeathEvidence]: MISSING ⇒ dead now;
+                    // identity-mismatch is NOT immediate death — we keep polling
+                    // and only after it has failed to revert to ALIVE for a whole
+                    // MISMATCH_GRACE_MS window (which comfortably exceeds the
+                    // mutex serialization upper bound) do we treat it as death.
                     if (newLen == lastRead &&
                         System.currentTimeMillis() - lastGrowAtMs > WORKER_DIED_GRACE_MS
                     ) {
-                        val liveness = ModelExecutionRunDir.probeLiveness(dir, runId)
-                        if (liveness == ModelExecutionRunDir.WorkerLiveness.DEAD &&
+                        val death = ModelExecutionRunDir.probeDeathEvidence(dir, runId)
+                        var decisive = false
+                        when (death.kind) {
+                            ModelExecutionRunDir.DeathKind.MISSING -> decisive = true
+                            ModelExecutionRunDir.DeathKind.IDENTITY_MISMATCH -> {
+                                // Not proof of death. Warn once per probe window so
+                                // P0-D surfaces the drifted field, but keep polling
+                                // unless the mismatch has persisted past the grace.
+                                if (mismatchGraceStartedAtMs == -1L) {
+                                    mismatchGraceStartedAtMs = System.currentTimeMillis()
+                                    Log.w(
+                                        TAG,
+                                        "worker identity mismatch (not yet DEAD) runId=$runId pid=${death.pid} ${
+                                            death.detail ?: "identity_drift"
+                                        } — keeping alive, will re-probe",
+                                    )
+                                }
+                                val persisted = System.currentTimeMillis() - mismatchGraceStartedAtMs > MISMATCH_GRACE_MS
+                                val terminalOrResult = ModelExecutionRunDir.terminalPresent(dir) ||
+                                    File(dir, ModelExecutionMailbox.FILE_RESULT).exists()
+                                if (persisted && !terminalOrResult) decisive = true
+                            }
+                            else -> {
+                                // ALIVE / UNKNOWN / NO_REF — worker (may be) alive; reset any earlier suspicion.
+                                mismatchGraceStartedAtMs = -1L
+                            }
+                        }
+                        if (decisive &&
                             !ModelExecutionRunDir.terminalPresent(dir) &&
                             !File(dir, ModelExecutionMailbox.FILE_RESULT).exists()
                         ) {
@@ -174,7 +227,7 @@ object ChatStreamOffloadHandler {
                             val phase = ModelExecutionRunLog.tailSummary(dir)
                             Log.w(
                                 TAG,
-                                "worker died (${reason.name}) runId=$runId emittedChunks=$emittedChunks phase=$phase dir=${dir.name}",
+                                "worker died (${reason.name}) runId=$runId emittedChunks=$emittedChunks phase=$phase pid=${death.pid} death=${death.kind}:${death.detail} dir=${dir.name}",
                             )
                             throw ModelWorkerDiedException(
                                 hadChunks = emittedChunks,

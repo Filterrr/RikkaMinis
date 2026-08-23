@@ -206,6 +206,66 @@ object ModelExecutionRunDir {
     fun terminalPresent(dir: File): Boolean = File(dir, FILE_TERMINAL).exists()
 
     /**
+     * TF-I P0-B/P0-D: fine-grained death probe for the CLIENT death trigger.
+     *
+     * `probeLiveness` collapses "pid MISSING" and "identity mismatch" both into
+     * DEAD. For the client's `worker died` decision that is too aggressive: an
+     * identity mismatch (e.g. processName/uid/startTicks read-back drift on a
+     * real device) can fire while the worker is actually alive but blocked
+     * behind the execution mutex — killing the request 6-8s before it ever
+     * reaches HTTP. TF-H's open question (a) real provider crash vs (b) probe
+     * mismatch hinges on this distinction.
+     *
+     * This probe returns a struct so the client (and the run log, P0-D) can
+     * tell the two apart. Only [DeathEvidence.MISSING] is a *confirmed* death;
+     * [DeathEvidence.IDENTITY_MISMATCH] is suspicious but NOT proof the worker
+     * died — the worker may still be alive with drift. The client should only
+     * fire `worker died` on MISSING (optionally after a mould of identity-
+     * mismatch evidence that has not reverted to ALIVE).
+     */
+    fun probeDeathEvidence(
+        dir: File,
+        expectedRunId: String?,
+        procRoot: File = File("/proc"),
+    ): DeathEvidence {
+        val ref = readWorkerRef(dir, expectedRunId) ?: return DeathEvidence(DeathKind.NO_REF, detail = "no_pid_ref", pid = null)
+        val result = readProcIdentity(ref.pid, procRoot)
+        return when (result.status) {
+            ProcReadStatus.MISSING -> DeathEvidence(DeathKind.MISSING, detail = "proc_missing", pid = ref.pid)
+            ProcReadStatus.UNREADABLE -> DeathEvidence(DeathKind.UNKNOWN, detail = result.detail ?: "unreadable", pid = ref.pid)
+            ProcReadStatus.PRESENT -> {
+                val actual = result.identity
+                if (actual != null && procIdentityMatches(ref, actual)) {
+                    DeathEvidence(DeathKind.ALIVE, detail = "identity_matches", pid = ref.pid)
+                } else {
+                    // TF-I P0-D: surface exactly which identity field drifted
+                    // so a false-DEAD can be attributed to probe mismatch.
+                    val drift = when {
+                        actual == null -> "(no identity)"
+                        !procNameMatches(ref, actual) -> "name ref='${ref.processName}' actual='${actual.processName}'"
+                        ref.uid >= 0 && actual.uid != ref.uid -> "uid ref=${ref.uid} actual=${actual.uid}"
+                        else -> "startTicks ref=${ref.procStartTicks} actual=${actual.procStartTicks}"
+                    }
+                    DeathEvidence(DeathKind.IDENTITY_MISMATCH, detail = drift, pid = ref.pid)
+                }
+            }
+        }
+    }
+
+    /** True when the two process names agree (blank ref = wildcard). */
+    private fun procNameMatches(ref: WorkerProcessRef, actual: ProcIdentity): Boolean =
+        ref.processName.isBlank() || actual.processName == ref.processName || actual.processName.endsWith(ref.processName)
+
+    /** Fine-grained death evidence kinds. */
+    enum class DeathKind { MISSING, IDENTITY_MISMATCH, ALIVE, UNKNOWN, NO_REF }
+
+    data class DeathEvidence(
+        val kind: DeathKind,
+        val detail: String? = null,
+        val pid: Int? = null,
+    )
+
+    /**
      * Atomic creation of the terminal marker — the LAST marker a worker may
      * write into a run dir. Returns true on success. Never throws.
      *

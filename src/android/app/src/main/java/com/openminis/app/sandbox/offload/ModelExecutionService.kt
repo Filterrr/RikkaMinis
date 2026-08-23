@@ -152,50 +152,70 @@ class ModelExecutionService : Service() {
         // Execute on a background thread; the worker then decides whether the
         // process may die (quiescent kill) — never just stopSelf as proof.
         // TF-F P0-C: serialize provider work across requests in this process.
+        //
+        // TF-I P0-A: publish identity BEFORE the mutex. The client's liveness
+        // probe (`probeLiveness`) depends on this run's `worker.pid` ref; if we
+        // register it only after acquiring the global `executionMutex`, a worker
+        // whose request thread is blocked waiting for the lock (TF-H: up to
+        // 11-13s behind the previous request's ack barrier) is INVISIBLE to the
+        // client — probe returns UNKNOWN, and the fixed 5s client grace kills
+        // the request before the thread ever reaches provider work. Registering
+        // pid + thread-start immediately on thread dispatch fixes both the
+        // invisibility and the false-DEAD classification (the probe can now see
+        // an ALIVE pid matching this run while it waits on the lock).
         Thread {
             kotlinx.coroutines.runBlocking {
+                // ── TF-I: identity registration, OUTSIDE the mutex ──
+                ModelExecutionRunLog.log(dir, android.os.Process.myPid(), ModelExecutionRunLog.Phase.REQUEST_THREAD_START, runId = runId)
+                val processName = runCatching { android.app.Application.getProcessName() }
+                    .getOrNull() ?: "modelservice"
+                val procState = ModelExecutionRunDir.readProcIdentity(android.os.Process.myPid())
+                ModelExecutionRunDir.writeWorkerPid(
+                    dir,
+                    ModelExecutionRunDir.WorkerProcessRef(
+                        pid = android.os.Process.myPid(),
+                        runId = runId,
+                        nonce = java.util.UUID.randomUUID().toString(),
+                        processName = processName,
+                        startedAtMs = System.currentTimeMillis(),
+                        procStartTicks = procState.identity?.procStartTicks ?: 0L,
+                        uid = android.os.Process.myUid(),
+                    ),
+                )
+                ModelExecutionRunLog.log(
+                    dir,
+                    android.os.Process.myPid(),
+                    ModelExecutionRunLog.Phase.REQUEST_PARSED,
+                    // TF-I P0-D: self-proving identity probe — logs what the
+                    // client will read back, so a future "worker died" can be
+                    // attributed to real death vs probe mismatch.
+                    "pid registered identity=${procState.status} name=${procState.identity?.processName.orEmpty()} " +
+                        "uid=${procState.identity?.uid} startTicks=${procState.identity?.procStartTicks}",
+                    runId = runId,
+                )
+                Log.i(
+                    TAG,
+                    "request thread started pid=${android.os.Process.myPid()} runId=$runId " +
+                        "identity=${procState.status} name=${procState.identity?.processName.orEmpty()} " +
+                        "uid=${procState.identity?.uid} startTicks=${procState.identity?.procStartTicks}",
+                )
+
                 executionMutex.withLock {
                     synchronized(lifecycleLock) { queuedRequests.decrementAndGet() }
-                    // TF-H: after acquiring the exec slot, publish the request
-                    // thread start marker. `worker.ready` must not be written
-                    // from onStartCommand anymore — it represents "the request
-                    // thread is running", not "onStartCommand reached".
-                    ModelExecutionRunLog.log(dir, android.os.Process.myPid(), ModelExecutionRunLog.Phase.REQUEST_THREAD_START, runId = runId)
-                    // TF-H: only register the pid ref once, before any provider
-                    // work; ready is written later by the streaming/non-streaming
-                    // execution wrapper after the stream file / result path is
-                    // actually opened.
-                    val processName = runCatching { android.app.Application.getProcessName() }
-                        .getOrNull() ?: "modelservice"
-                    val procState = ModelExecutionRunDir.readProcIdentity(android.os.Process.myPid())
-                    ModelExecutionRunDir.writeWorkerPid(
-                        dir,
-                        ModelExecutionRunDir.WorkerProcessRef(
-                            pid = android.os.Process.myPid(),
-                            runId = runId,
-                            nonce = java.util.UUID.randomUUID().toString(),
-                            processName = processName,
-                            startedAtMs = System.currentTimeMillis(),
-                            procStartTicks = procState.identity?.procStartTicks ?: 0L,
-                            uid = android.os.Process.myUid(),
-                        ),
-                    )
                     try {
-                        ModelExecutionRunLog.log(dir, android.os.Process.myPid(), ModelExecutionRunLog.Phase.REQUEST_PARSED, "pid registered", runId = runId)
                         val requestText = requestFile.readText()
                         val isStreaming = JSONObject(requestText).optBoolean("streaming", false)
                         if (isStreaming) {
+                            // TF-I: streaming exec writes the result and closes
+                            // the stream INSIDE the lock (serialized provider
+                            // network), but does NOT wait for the client ack —
+                            // that barrier runs outside below.
                             executeStreamingRun(requestText, dir)
                         } else {
                             ModelExecutionRunDir.writeReady(dir)
                             val result = executeRun(requestText)
                             writeResultAtomically(dir, result)
                             Log.i(TAG, "result written ($result.length bytes), pid=${android.os.Process.myPid()}")
-                            // The client must have consumed result.json before we die —
-                            // otherwise a just-written result is lost when the worker
-                            // process is reaped and the caller falls back in-process
-                            // (or worse, re-dispatches and duplicates the call).
-                            waitClientAck(dir, CLIENT_ACK_TIMEOUT_MS)
                         }
                     } catch (t: Throwable) {
                         Log.w(TAG, "execution failed: ${t.message}", t)
@@ -206,9 +226,37 @@ class ModelExecutionService : Service() {
                                 put("exit_code", 1)
                             }.toString())
                         } catch (_: Throwable) {}
-                    } finally {
-                        synchronized(lifecycleLock) { lifecycleState = finishRequestLocked(dir, generation) }
                     }
+                }
+
+                // ── TF-I: the ACK barrier + finalize run OUTSIDE the mutex ──
+                // The client must have consumed the result/stream before we
+                // self-reap; a just-written result is otherwise lost when the
+                // worker is reaped and the caller falls back/re-dispatches
+                // (duplicating the call). Waiting here — not inside
+                // executionMutex — lets a concurrent request acquire the lock
+                // and start its provider work immediately. The barrier still
+                // protects data (result is durable before we wait), while the
+                // serialization only applies to the actual provider network
+                // call, never to a sleeping ack-wait. finalize must run after
+                // the barrier so its quiescence check sees the released (or
+                // held-on-timeout) ACK token.
+                val isStreaming = runCatching {
+                    JSONObject(requestFile.readText()).optBoolean("streaming", false)
+                }.getOrDefault(false)
+                try {
+                    if (isStreaming) {
+                        awaitStreamAckBarrier(dir)
+                    } else {
+                        waitClientAck(dir, CLIENT_ACK_TIMEOUT_MS)
+                    }
+                } catch (t: Throwable) {
+                    // The ack barrier is best-effort; never let a failure here
+                    // skip the locked finalizer (which decrements activeRequests
+                    // and decides self-reap) — otherwise the worker leaks.
+                    Log.w(TAG, "ack barrier failed (non-fatal): ${t.message}", t)
+                } finally {
+                    synchronized(lifecycleLock) { lifecycleState = finishRequestLocked(dir, generation) }
                 }
             }
         }.apply { isDaemon = false }.start()
@@ -767,18 +815,39 @@ class ModelExecutionService : Service() {
             val provider = com.openminis.app.provider.ProviderFactory.create(instance, apiKey, model, this)
             ModelExecutionRunLog.log(dir, android.os.Process.myPid(), ModelExecutionRunLog.Phase.PROVIDER_BUILT, "provider=${instance.providerType}", runId = runIdOf(dir))
             kotlinx.coroutines.runBlocking {
-                provider.streamMessage(
-                    messages = messages,
-                    systemPrompt = systemPrompt,
-                    maxTokens = maxTokens,
-                    temperature = temperature,
-                    tools = tools,
-                    thinkingLevel = thinkingLevel,
-                ).collect { chunk ->
-                    if (cancelFile.exists()) {
-                        throw ModelExecutionCancelledException()
+                // TF-I P0-C: publish HTTP_STARTED / FIRST_CHUNK. The death
+                // classifier reads these (reachedHttp) to distinguish "req
+                // thread ran but never reached provider/HTTP" (DIED_BEFORE_READY)
+                // from "provider reached but streamed nothing" — without them
+                // reachedHttp is恒 false and every stalled-but-*not*-dead worker
+                // is misclassified, driving the wrong retry loop. These markers
+                // must be written even if the very first collect throws.
+                ModelExecutionRunLog.log(dir, android.os.Process.myPid(), ModelExecutionRunLog.Phase.HTTP_STARTED, "streaming activate model=${model.id}", runId = runIdOf(dir))
+                var httpMarked = false
+                try {
+                    provider.streamMessage(
+                        messages = messages,
+                        systemPrompt = systemPrompt,
+                        maxTokens = maxTokens,
+                        temperature = temperature,
+                        tools = tools,
+                        thinkingLevel = thinkingLevel,
+                    ).collect { chunk ->
+                        if (cancelFile.exists()) {
+                            throw ModelExecutionCancelledException()
+                        }
+                        if (!httpMarked) {
+                            httpMarked = true
+                            ModelExecutionRunLog.log(dir, android.os.Process.myPid(), ModelExecutionRunLog.Phase.FIRST_CHUNK, "first_chunk", runId = runIdOf(dir))
+                        }
+                        appendLine(ChatStreamJsonl.encode(chunk))
                     }
-                    appendLine(ChatStreamJsonl.encode(chunk))
+                } catch (t: Throwable) {
+                    // TF-I P0-D: always publish the identity probe result on
+                    // failure so a subsequent client "worker died" can be
+                    // attributed to real death (we threw here) vs probe mismatch.
+                    Log.w(TAG, "streamMessage threw before first provider output: ${t.message}", t)
+                    throw t
                 }
             }
             appendLine(ChatStreamJsonl.DONE_LINE)
@@ -814,12 +883,14 @@ class ModelExecutionService : Service() {
             } catch (_: Throwable) {}
         } finally {
             try { output?.close() } catch (_: Throwable) {}
-            // TF-H: streaming quiescence barrier. The result/error is already
-            // committed; we do NOT write terminal here — terminal must only be
-            // written in the locked finalizer when the client ack is seen (or
-            // the ack timeout expires). Until then the run holds an ACK token
-            // and the worker is not quiescent.
-            awaitStreamAckBarrier(dir)
+            // TF-I: the ACK barrier is deliberately NOT waited here. It blocks
+            // up to STREAM_CLIENT_ACK_TIMEOUT_MS, and if it ran inside the
+            // executionMutex (this function is called from the locked region)
+            // a following request's thread would starve behind it for the whole
+            // 15s — the TF-H root cause next to the false-DEAD classification.
+            // the caller (onStartCommand) waits the barrier OUTSIDE the mutex,
+            // so 'provider one at a time' still holds while ACK-waiting and a
+            // newly-arrived request can acquire the lock immediately.
         }
     }
 
