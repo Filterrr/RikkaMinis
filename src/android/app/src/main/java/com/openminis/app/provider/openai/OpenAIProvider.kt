@@ -274,6 +274,25 @@ class OpenAIProvider constructor(
          * bound the SSE body — a flowing stream stays unlimited.
          */
         private const val STREAM_TTFB_TIMEOUT_MS = 30_000L
+
+        /**
+         * [first-data-row-watchdog] Time-to-FIRST-DATA-event budget for the SSE
+         * body, following the TTFB watchdog's pattern. OkHttp's readTimeout is
+         * 600s, so a response whose headers arrived quickly but whose first
+         * `data:` event never does (idle gateway, model queue stall, IP throttle,
+         * proxy swallowing body bytes) lets `reader.readLine()` block the worker
+         * for up to 10 minutes — well past the client's 5s death grace, which
+         * then misclassifies the live-but-wedged worker as DEAD and retries.
+         *
+         * Unlike the TTFB watchdog (only races the header phase), this one races
+         * the first SSE payload row: once the first `data:` line lands, the flow
+         * is provably live (streaming works) and the watchdog is disarmed. A
+         * stalled first row cancels the OkHttp call, which interrupts the
+         * synchronous `readLine()` (IOException) so the worker surfaces a
+         * retryable error instead of hanging. Deliberately coarser than the
+         * client's grace so legitimately slow first chunks aren't force-killed.
+         */
+        private const val STREAM_FIRST_DATA_TIMEOUT_MS = 45_000L
     }
 
     // MARK: - Image passthrough [T-android-model-use-image-passthrough GH#62]
@@ -779,6 +798,27 @@ class OpenAIProvider constructor(
 
         try {
             send(LLMStreamChunk.Started)
+            // [first-data-row-watchdog] Arms after HTTP Started. A response
+            // whose HEADERS arrived (so the TTFB watchdog already disarmed)
+            // but whose first `data:` event never does leaves the synchronous
+            // reader.readLine() blocking until OkHttp's 600s readTimeout.
+            // That hangs the :modelservice worker far past the client's death
+            // grace, misclassifying the live-but-wedged worker as DEAD and
+            // forcing a pointless retry loop (2026-08-23 agent-loop rounds).
+            // Cancel the call once the first SSE payload row proves the stream
+            // is alive; a stalled first row cancels the call, interrupting
+            // readLine (IOException→retryable error) instead of hanging.
+            val firstDataArrived = java.util.concurrent.atomic.AtomicBoolean(false)
+            val firstDataWatchdog = launch {
+                delay(STREAM_FIRST_DATA_TIMEOUT_MS)
+                if (!firstDataArrived.get()) {
+                    com.openminis.app.logging.AppLogger.warning(
+                        "OpenAIProvider",
+                        "[first-data-row] no SSE data row after ${STREAM_FIRST_DATA_TIMEOUT_MS / 1000}s (headers ok) — cancelling call",
+                    )
+                    call.cancel()
+                }
+            }
             var line: String?
             var finishReason: String? = null
 
@@ -787,6 +827,12 @@ class OpenAIProvider constructor(
 
             while (reader.readLine().also { line = it } != null) {
                 val l = line ?: continue
+                if (l.startsWith("data:")) {
+                    // First SSE payload row proves the stream is live — disarm
+                    // the first-data watchdog before we parse the row.
+                    firstDataArrived.set(true)
+                    firstDataWatchdog.cancel()
+                }
                 // Tolerate `data:` with or without the optional space — the
                 // HTML5 SSE spec only treats one leading space as ignorable,
                 // and some OpenAI-compatible servers (e.g. China Telecom's
