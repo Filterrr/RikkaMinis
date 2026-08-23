@@ -160,7 +160,42 @@ class MemoryRollupRunnerTest {
         assertEquals(log, File(memoryDir, yesterdayFile()).readText())
     }
 
-    @Test fun multipleRuns_idempotent() {
+    @Test fun largestOldEligibleLog_isSelectedOverSmallerYesterday() {
+        memoryDir.mkdirs()
+        val yesterday = yesterdayFile()
+        val oldDate = dateFmt.format(Date(fixedNow.time - 3 * dayMs))
+        File(memoryDir, yesterday).writeText("## 小日志\n必须使用分支")
+        File(memoryDir, "$oldDate.md").writeText(
+            "## 大旧日志\n" + "根因是旧日志不可达，必须按最大未蒸馏日志选择。\n".repeat(20),
+        )
+
+        assertEquals(Outcome.ROLLED_UP, MemoryRollupRunner(memoryDir, clock = fixedClock).runOnce())
+        val rollup = File(memoryDir, ROLLUP_FILE).readText()
+        assertTrue(rollup.contains("## Rollup $oldDate"))
+        assertFalse(rollup.contains("## Rollup ${yesterday.removeSuffix(".md")}"))
+    }
+
+    @Test fun alreadyRolledLargestLog_isSkippedWithoutChangingRollup() {
+        memoryDir.mkdirs()
+        val oldDate = dateFmt.format(Date(fixedNow.time - 3 * dayMs))
+        File(memoryDir, "$oldDate.md").writeText("## 纪律\n必须使用分支")
+        val existing = "## Rollup $oldDate\n\n### 约定与纪律\n- **纪律**：必须使用分支\n"
+        File(memoryDir, ROLLUP_FILE).writeText(existing)
+
+        assertEquals(Outcome.SKIPPED_ALREADY, MemoryRollupRunner(memoryDir, clock = fixedClock).runOnce())
+        assertEquals(existing, File(memoryDir, ROLLUP_FILE).readText())
+    }
+
+    @Test fun emptyLog_returnsNoLogAndLeavesSourceUntouched() {
+        memoryDir.mkdirs()
+        val yesterday = File(memoryDir, yesterdayFile())
+        yesterday.writeText("")
+
+        assertEquals(Outcome.NO_LOG_YESTERDAY, MemoryRollupRunner(memoryDir, clock = fixedClock).runOnce())
+        assertEquals("", yesterday.readText())
+        assertFalse(File(memoryDir, ROLLUP_FILE).exists())
+    }
+
         memoryDir.mkdirs()
         File(memoryDir, yesterdayFile()).writeText("## 规则\n必须使用分支")
         val runner = MemoryRollupRunner(memoryDir, clock = fixedClock)

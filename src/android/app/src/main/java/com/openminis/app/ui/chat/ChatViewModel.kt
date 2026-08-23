@@ -10241,8 +10241,9 @@ Environment variables:
             }
             if (rollupSizeHint != null && rollupBytes >= 50_000L) {
                 append("\n\nNote: Daily logs are large ($rollupSizeHint). ")
-                append("Consider calling memory_rollup to distill stable rules if you haven't already. ")
-                append("The tool is idempotent — it skips dates already rolled up.")
+                append("memory_rollup selects the largest eligible old log that has not been distilled yet; ")
+                append("call it to surface stable rules without waiting for the calendar to advance. ")
+                append("It is idempotent and leaves source logs unchanged.")
             }
             // Runtime context goes last so the prefix above stays byte-stable
             // across requests within the same day. Keep ordering deterministic
