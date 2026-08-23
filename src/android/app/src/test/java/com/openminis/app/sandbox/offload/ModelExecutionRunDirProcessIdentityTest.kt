@@ -31,11 +31,14 @@ class ModelExecutionRunDirProcessIdentityTest {
         File(dir, "status").writeText(
             "Name:\t$comm\nUid:\t$uid\t$uid\t$uid\t$uid\n",
         )
-        // field 22 starttime after the closing paren; build a 22-field stat.
-        val fields = ArrayList<String>()
-        repeat(40) { fields.add("0") }
-        fields[19] = startTicks.toString()
-        File(dir, "stat").writeText("$pid ($comm) ${fields.joinToString(" ")}\n")
+        // `/proc/<pid>/stat`: `pid (comm) state ppid ... starttime(field 22)`.
+        // After the closing paren the tokens are field 3 onward. starttime is
+        // field 22 → token index 19.
+        val tokens = mutableListOf("S")            // field 3 (state), index 0
+        repeat(18) { tokens.add("0") }             // fields 4..21, index 1..18
+        tokens.add(startTicks.toString())          // field 22, index 19
+        repeat(6) { tokens.add("0") }              // fields 23+ padding
+        File(dir, "stat").writeText("$pid ($comm) ${tokens.joinToString(" ")}\n")
     }
 
     private fun dir(): File = tmp.newFolder("run-${System.nanoTime()}")

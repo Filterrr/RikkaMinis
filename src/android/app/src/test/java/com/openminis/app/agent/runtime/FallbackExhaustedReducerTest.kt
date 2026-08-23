@@ -38,10 +38,13 @@ class FallbackExhaustedReducerTest {
             AgentRunEvent.ProviderAttemptStarted,
             AgentRunEvent.FallbackExhausted,
         )
-        assertEquals(1, batch.firstRejectedIndex)
+        // events: [0]=RunStarted accepted, [1]=ProviderAttemptStarted accepted
+        // (PREPARING→CALLING_MODEL), [2]=FallbackExhausted rejected from
+        // CALLING_MODEL.
+        assertEquals(2, batch.firstRejectedIndex)
         assertEquals(
             AgentRunRejectionReason.INVALID_PHASE_FOR_EVENT,
-            batch.transitions[1].rejection().reason,
+            batch.transitions[2].rejection().reason,
         )
     }
 
