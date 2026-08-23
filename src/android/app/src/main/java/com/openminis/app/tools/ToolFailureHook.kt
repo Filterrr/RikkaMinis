@@ -4,6 +4,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Programmatic tool-failure logger — the "failure learning automation hook"
@@ -50,7 +51,11 @@ class ToolFailureHook(
     }
 
     // ── state ──────────────────────────────────────────────────────────────
-    private val lastWriteByKey = HashMap<String, Long>()
+    // ConcurrentHashMap for thread-safe, atomic keyed ops. The dedupe
+    // decision (check + reserve) runs inside compute(), which is atomic
+    // per-key — so concurrent recordFailure() calls for the same key cannot
+    // both observe "no recent entry" and double-write.
+    private val lastWriteByKey = ConcurrentHashMap<String, Long>()
 
     // ── public API ─────────────────────────────────────────────────────────
     /**
@@ -70,12 +75,23 @@ class ToolFailureHook(
         val key = "$toolName\u0000$summary"
         val now = clock()
 
-        val last = lastWriteByKey[key]
-        if (last != null && now - last < dedupeWindowMs) return false
+        // Atomic check-and-reserve: compute() runs under the map's per-key
+        // lock, so concurrent callers cannot both read "none/expired" and
+        // double-write within the dedupe window. Only the thread that wins
+        // the reservation actually writes; the rest are deduplicated.
+        var shouldWrite = false
+        lastWriteByKey.compute(key) { _, existing ->
+            if (existing == null || now - existing >= dedupeWindowMs) {
+                shouldWrite = true   // we claim the slot with our timestamp
+                now
+            } else {
+                existing             // within window → keep timestamp, skip
+            }
+        }
+        if (!shouldWrite) return false
 
         val block = buildBlock(toolName, summary, output, argsJson, sessionId, now)
         writeErrorBlock(block)
-        lastWriteByKey[key] = now
         return true
     }
 

@@ -1289,7 +1289,11 @@ class BrowserUseManager(
                 if (json.has("error")) {
                     BrowserActionResult.error(json.getString("error"))
                 } else {
-                    BrowserActionResult(text = formatJSONResult(json))
+                    BrowserActionResult(
+                        text = formatJSONResult(json),
+                        truncated = json.optBoolean("truncated", false),
+                        fullTextLength = json.optInt("fullLength").takeIf { json.has("fullLength") },
+                    )
                 }
             } else {
                 BrowserActionResult(text = raw)
@@ -1339,8 +1343,14 @@ class BrowserUseManager(
                 if (title.isNotEmpty()) appendLine("Title: $title")
                 val text = json.optString("text", "")
                 val len = json.optInt("length", text.length)
-                appendLine("Text ($len chars):")
-                append(text.take(10000))
+                val truncated = json.optBoolean("truncated", false)
+                val fullLength = json.optInt("fullLength", len)
+                if (truncated) {
+                    appendLine("Text ($len of $fullLength chars; truncated):")
+                } else {
+                    appendLine("Text ($len chars):")
+                }
+                append(text)
             }
             json.has("count") && json.has("elements") -> {
                 val count = json.optInt("count")

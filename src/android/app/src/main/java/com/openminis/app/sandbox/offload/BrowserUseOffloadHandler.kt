@@ -240,6 +240,10 @@ class BrowserUseOffloadHandler(private val app: MinisApp) : NativeOffloadHandler
         val out = JSONObject()
         out.put("text", r.text)
         out.put("success", r.success)
+        if (r.truncated) {
+            out.put("truncated", true)
+            r.fullTextLength?.let { out.put("full_text_length", it) }
+        }
         r.pageURL?.takeIf { it.isNotEmpty() }?.let { out.put("page_url", it) }
 
         // Persist screenshot bytes under /var/minis/browser/ so shells can
