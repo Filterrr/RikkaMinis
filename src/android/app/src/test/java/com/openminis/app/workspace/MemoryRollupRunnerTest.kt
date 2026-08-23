@@ -196,6 +196,7 @@ class MemoryRollupRunnerTest {
         assertFalse(File(memoryDir, ROLLUP_FILE).exists())
     }
 
+    @Test fun multipleRuns_idempotent() {
         memoryDir.mkdirs()
         File(memoryDir, yesterdayFile()).writeText("## 规则\n必须使用分支")
         val runner = MemoryRollupRunner(memoryDir, clock = fixedClock)
