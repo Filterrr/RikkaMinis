@@ -6,6 +6,7 @@ import android.os.IBinder
 import android.util.Log
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -123,6 +124,25 @@ class ModelExecutionService : Service() {
     private val requestGeneration = AtomicLong(0L)
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    /**
+     * [worker-first-chunk-guard] Upper bound on how long a streaming worker
+     * may wait for the provider's FIRST chunk after HTTP_STARTED. If the
+     * upstream takes longer (slow connect, idle relay, silent SSE hang), the
+     * worker aborts the run with a first-chunk timeout instead of hanging
+     * silently — the client's 5s no-growth grace would otherwise classify the
+     * still-alive worker as DEAD via `proc_missing` and enter a retry loop.
+     *
+     * This deliberately exceeds both WORKER_DIED_GRACE_MS (5s, client-side)
+     * and STREAM_CLIENT_ACK_TIMEOUT_MS (15s) so a *legitimately slow* first
+     * chunk is not force-killed before the provider can respond, while a
+     * genuinely wedged provider (no bytes ever) is surfaced promptly.
+     *
+     * Cancellation is ALSO checked on this boundary: the old `collect{}`
+     * body only saw the cancel file once a chunk arrived, so a first-chunk
+     * stall was uncancellable and drove the dead-worker misclassification.
+     */
+    private const val FIRST_CHUNK_TIMEOUT_MS = 30_000L
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val requestDir = intent?.getStringExtra(EXTRA_REQUEST_DIR)
@@ -815,39 +835,52 @@ class ModelExecutionService : Service() {
             val provider = com.openminis.app.provider.ProviderFactory.create(instance, apiKey, model, this)
             ModelExecutionRunLog.log(dir, android.os.Process.myPid(), ModelExecutionRunLog.Phase.PROVIDER_BUILT, "provider=${instance.providerType}", runId = runIdOf(dir))
             kotlinx.coroutines.runBlocking {
-                // TF-I P0-C: publish HTTP_STARTED / FIRST_CHUNK. The death
-                // classifier reads these (reachedHttp) to distinguish "req
-                // thread ran but never reached provider/HTTP" (DIED_BEFORE_READY)
-                // from "provider reached but streamed nothing" — without them
-                // reachedHttp is恒 false and every stalled-but-*not*-dead worker
-                // is misclassified, driving the wrong retry loop. These markers
-                // must be written even if the very first collect throws.
-                ModelExecutionRunLog.log(dir, android.os.Process.myPid(), ModelExecutionRunLog.Phase.HTTP_STARTED, "streaming activate model=${model.id}", runId = runIdOf(dir))
-                var httpMarked = false
-                try {
-                    provider.streamMessage(
-                        messages = messages,
-                        systemPrompt = systemPrompt,
-                        maxTokens = maxTokens,
-                        temperature = temperature,
-                        tools = tools,
-                        thinkingLevel = thinkingLevel,
-                    ).collect { chunk ->
-                        if (cancelFile.exists()) {
-                            throw ModelExecutionCancelledException()
+                // [worker-first-chunk-guard] Wrap provider streaming in a bounded
+                // first-chunk timeout. A wedged/absent upstream must not hang the
+                // worker silently past the client five-second death grace (which would
+                // classify the still-alive worker as DEAD and enter a retry loop).
+                // Cancellation is ALSO checked at this boundary: the old in-collect
+                // check alone left a pre-first-chunk stall UNcancellable (loop body
+                // never ran).
+                val first = withTimeoutOrNull(FIRST_CHUNK_TIMEOUT_MS) {
+                    // Pre-check cancel before starting the cold flow: the main
+                    // process may have cancelled while we built the provider.
+                    if (cancelFile.exists()) throw ModelExecutionCancelledException()
+                    // STARTED here (before .collect) so the death classifier can tell
+                    // "never reached HTTP" (BEFORE_READY) from "reached, no output".
+                    var httpMarked = false
+                    ModelExecutionRunLog.log(dir, android.os.Process.myPid(), ModelExecutionRunLog.Phase.HTTP_STARTED, "streaming activate model=${model.id}", runId = runIdOf(dir))
+                    try {
+                        provider.streamMessage(
+                            messages = messages,
+                            systemPrompt = systemPrompt,
+                            maxTokens = maxTokens,
+                            temperature = temperature,
+                            tools = tools,
+                            thinkingLevel = thinkingLevel,
+                        ).collect { chunk ->
+                            if (cancelFile.exists()) throw ModelExecutionCancelledException()
+                            if (!httpMarked) {
+                                httpMarked = true
+                                ModelExecutionRunLog.log(dir, android.os.Process.myPid(), ModelExecutionRunLog.Phase.FIRST_CHUNK, "first_chunk", runId = runIdOf(dir))
+                            }
+                            appendLine(ChatStreamJsonl.encode(chunk))
                         }
-                        if (!httpMarked) {
-                            httpMarked = true
-                            ModelExecutionRunLog.log(dir, android.os.Process.myPid(), ModelExecutionRunLog.Phase.FIRST_CHUNK, "first_chunk", runId = runIdOf(dir))
-                        }
-                        appendLine(ChatStreamJsonl.encode(chunk))
+                    } catch (t: Throwable) {
+                        // TF-I P0-D: publish the identity probe on failure so a
+                        // subsequent "worker died" is attributed to real death (we
+                        // threw here) vs probe mismatch.
+                        Log.w(TAG, "streamMessage threw: ${t.message}", t)
+                        throw t
                     }
-                } catch (t: Throwable) {
-                    // TF-I P0-D: always publish the identity probe result on
-                    // failure so a subsequent client "worker died" can be
-                    // attributed to real death (we threw here) vs probe mismatch.
-                    Log.w(TAG, "streamMessage threw before first provider output: ${t.message}", t)
-                    throw t
+                }
+                if (first == null) {
+                    // 30s with no first chunk and no completion -> provider wedged.
+                    // Surface as a stream error so the client stops polling instead
+                    // of misclassifying a LIVE worker as DEAD after its 5s grace.
+                    // (A cancel landing mid-window treats the run the same way.)
+                    ModelExecutionRunLog.log(dir, android.os.Process.myPid(), ModelExecutionRunLog.Phase.STREAM_ERROR, "first_chunk_timeout", runId = runIdOf(dir))
+                    throw ModelStreamErrorException("provider produced no first chunk within ${FIRST_CHUNK_TIMEOUT_MS}ms (hadChunks=false)", hadChunks = false)
                 }
             }
             appendLine(ChatStreamJsonl.DONE_LINE)
