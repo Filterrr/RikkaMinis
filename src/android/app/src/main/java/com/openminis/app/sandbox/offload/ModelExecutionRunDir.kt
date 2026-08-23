@@ -149,7 +149,13 @@ object ModelExecutionRunDir {
         val fields = stat.substring(close + 2).trim().split(Regex("\\s+"))
         val startTicks = fields.getOrNull(19)?.toLongOrNull()
             ?: return ProcReadResult(ProcReadStatus.UNREADABLE, detail = "start_ticks_missing")
-        val processName = File(procDir, "cmdline").readText().trim('\u0000').substringBefore('\u0000').ifEmpty { comm }
+        // Prefer cmdline (full argv0) but tolerate its absence/emptiness —
+        // some processes (kernel threads, zombies, SELinux-restricted) make
+        // it unreadable while `comm` is always present.
+        val cmdlineRaw = runCatching {
+            File(procDir, "cmdline").readText().trim('\u0000').substringBefore('\u0000')
+        }.getOrNull().orEmpty()
+        val processName = cmdlineRaw.ifBlank { comm }.trim()
         if (processName.isEmpty()) {
             return ProcReadResult(ProcReadStatus.UNREADABLE, detail = "process_name_missing")
         }
