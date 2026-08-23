@@ -124,7 +124,7 @@ class MemoryRollupRunner(
         val rollupContent =
             if (rollupFile.exists()) runCatching { rollupFile.readText() }.getOrDefault("") else ""
         val todayStr = dateFmt.format(now())
-        val files: List<File>? = memoryDir.listFiles { f -> f.isFile && f.name.endsWith(".md") }
+        val files: Array<File>? = memoryDir.listFiles { f -> f.isFile && f.name.endsWith(".md") }
         if (files.isNullOrEmpty()) return null
 
         val eligible = files
