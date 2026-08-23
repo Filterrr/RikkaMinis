@@ -283,19 +283,27 @@ object ChatStreamOffloadHandler {
     }
 
     /**
-     * TF-G P0-3: classify WHY a worker appears dead, from THIS run dir's
-     * evidence. Pure decision is delegated to
-     * [ModelExecutionRunDir.classifyWorkerDeath] (JVM-testable); here we only
-     * assemble the per-run facts and attach the run-log tail for diagnosis.
+     * TF-H: stage-aware classification of WHY a worker appears dead, from
+     * THIS run dir's evidence + the run-log tail. The stream is only known to
+     * have reached "ready" once the request thread opened stream.jsonl; a
+     * worker that died with no run-log at all is more likely "never reached
+     * the request thread" than "ready-then-died".
      */
     private fun classifyWorkerDeath(dir: File, emittedChunks: Boolean): WorkerDeathReason {
         val runId = ModelExecutionDispatcher.runIdOf(dir)
         val hasPidRef = ModelExecutionRunDir.readWorkerRef(dir, runId) != null
         val ready = File(dir, ModelExecutionRunDir.FILE_READY).exists()
-        return ModelExecutionRunDir.classifyWorkerDeath(
+        val tail = ModelExecutionRunLog.readTail(dir)
+        val reachedRequestThread = tail.any { it.contains(ModelExecutionRunLog.Phase.REQUEST_THREAD_START) }
+            || tail.any { it.contains(ModelExecutionRunLog.Phase.REQUEST_ACCEPTED) }
+        val reachedHttp = tail.any { it.contains(ModelExecutionRunLog.Phase.HTTP_STARTED) }
+            || tail.any { it.contains(ModelExecutionRunLog.Phase.FIRST_CHUNK) }
+        return ModelExecutionRunDir.classifyWorkerDeathStaged(
             hasPidRef = hasPidRef,
             ready = ready,
             hadChunks = emittedChunks,
+            reachedRequestThread = reachedRequestThread,
+            reachedHttp = reachedHttp,
         )
     }
 

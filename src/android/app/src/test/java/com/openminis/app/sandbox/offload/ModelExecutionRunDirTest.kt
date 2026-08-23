@@ -31,22 +31,41 @@ class ModelExecutionRunDirTest {
     private val deadPid: Int = Int.MAX_VALUE
 
     /**
-     * PID 1 is the first user-space process on any Linux runner (init /
-     * container entrypoint) and always has a live /proc/1 entry. The ALIVE
-     * tests below guard on its existence so a non-Linux host (where /proc/1
-     * may be absent) simply skips rather than flaking. NOTE: no
-     * ProcessHandle/pid-of-self here — that API does not resolve against the
-     * Android boot classpath in unit tests.
+     * TF-H: procRoot is injectable so ALIVE/dead tests do not depend on the
+     * CI host's /proc (and do not hit pid-1 / real process identity quirks).
      */
-    private val alivePid: Int = 1
-    private fun procAlive(pid: Int): Boolean = File("/proc/$pid").exists()
+    private lateinit var fakeProc: File
 
-    private fun ref(pid: Int, runId: String = "abc") = ModelExecutionRunDir.WorkerProcessRef(
+    private fun fakeProcRoot(): File {
+        if (!::fakeProc.isInitialized) fakeProc = tmp.newFolder("proc-root")
+        return fakeProc
+    }
+
+    private fun writeFakeProc(pid: Int, comm: String, uid: Int = 10123, startTicks: Long = 424242L) {
+        val d = File(fakeProcRoot(), pid.toString())
+        d.mkdirs()
+        File(d, "comm").writeText(comm + "\n")
+        File(d, "status").writeText("Name:\t$comm\nUid:\t$uid\t$uid\t$uid\t$uid\n")
+        val fields = ArrayList<String>()
+        repeat(40) { fields.add("0") }
+        fields[19] = startTicks.toString()
+        File(d, "stat").writeText("$pid ($comm) ${fields.joinToString(" ")}\n")
+    }
+
+    private fun ref(
+        pid: Int,
+        runId: String = "abc",
+        processName: String = ":modelservice",
+        procStartTicks: Long = 0L,
+        uid: Int = -1,
+    ) = ModelExecutionRunDir.WorkerProcessRef(
         pid = pid,
         runId = runId,
         nonce = "nonce-1",
-        processName = ":modelservice",
+        processName = processName,
         startedAtMs = 0L,
+        procStartTicks = procStartTicks,
+        uid = uid,
     )
 
     // ── pid ref encode/decode round-trip ────────────────────────────
@@ -54,10 +73,10 @@ class ModelExecutionRunDirTest {
     @Test
     fun `worker pid ref encodes and decodes`() {
         val d = dir()
-        assertTrue(ModelExecutionRunDir.writeWorkerPid(d, ref(alivePid)))
+        assertTrue(ModelExecutionRunDir.writeWorkerPid(d, ref(deadPid)))
         val back = ModelExecutionRunDir.readWorkerRef(d, "abc")
         assertNotNull(back)
-        assertEquals(alivePid, back!!.pid)
+        assertEquals(deadPid, back!!.pid)
         assertEquals("abc", back.runId)
         assertEquals("nonce-1", back.nonce)
         assertEquals(":modelservice", back.processName)
@@ -66,7 +85,7 @@ class ModelExecutionRunDirTest {
     @Test
     fun `worker pid ref runId mismatch is not visible as ours`() {
         val d = dir()
-        ModelExecutionRunDir.writeWorkerPid(d, ref(alivePid, runId = "other-run"))
+        ModelExecutionRunDir.writeWorkerPid(d, ref(deadPid, runId = "other-run"))
         // expectedRunId="abc" ≠ "other-run" → filtered out (UNKNOWN, not ours)
         assertNull(ModelExecutionRunDir.readWorkerRef(d, "abc"))
     }
@@ -95,31 +114,41 @@ class ModelExecutionRunDirTest {
 
     @Test
     fun `matching runId with alive pid is ALIVE`() {
-        if (!procAlive(alivePid)) return // non-Linux host: skip
         val d = dir()
-        ModelExecutionRunDir.writeWorkerPid(d, ref(alivePid))
-        assertEquals(ModelExecutionRunDir.WorkerLiveness.ALIVE, ModelExecutionRunDir.probeLiveness(d, "abc"))
+        writeFakeProc(pid = 9001, comm = ":modelservice", startTicks = 424242L)
+        ModelExecutionRunDir.writeWorkerPid(d, ref(9001, processName = ":modelservice", procStartTicks = 424242L, uid = 10123))
+        val fake = fakeProcRoot()
+        assertEquals(ModelExecutionRunDir.WorkerLiveness.ALIVE, ModelExecutionRunDir.probeLiveness(d, "abc", fake))
+    }
+
+    @Test
+    fun `matching runId with debased proc identity is not ALIVE`() {
+        val d = dir()
+        writeFakeProc(pid = 9002, comm = "other.process", startTicks = 1L, uid = 1)
+        ModelExecutionRunDir.writeWorkerPid(d, ref(9002, processName = ":modelservice", procStartTicks = 424242L, uid = 10123))
+        val fake = fakeProcRoot()
+        assertTrue(
+            "identity mismatch must not be ALIVE",
+            ModelExecutionRunDir.probeLiveness(d, "abc", fake) != ModelExecutionRunDir.WorkerLiveness.ALIVE,
+        )
     }
 
     // ── safeToDelete — the P0 invariant ─────────────────────────────
 
     @Test
     fun `result json present but no terminal and worker alive is NOT safe to delete`() {
-        if (!procAlive(alivePid)) return // non-Linux host: skip
-        // The exact P0 race: client sees result.json (worker wrote it), then
-        // would delete — but the worker is still alive and has NOT written
-        // terminal (it's mid-finishRequest / writeState). Must NOT delete.
         val d = dir()
-        ModelExecutionRunDir.writeWorkerPid(d, ref(alivePid))
+        writeFakeProc(pid = 9005, comm = ":modelservice", startTicks = 424242L)
+        ModelExecutionRunDir.writeWorkerPid(d, ref(9005, processName = ":modelservice", procStartTicks = 424242L, uid = 10123))
         File(d, ModelExecutionMailbox.FILE_RESULT).writeText("""{"ok":true}""")
         assertFalse(ModelExecutionRunDir.safeToDelete(d, "abc"))
     }
 
     @Test
     fun `result json plus terminal but worker still alive is NOT safe to delete`() {
-        if (!procAlive(alivePid)) return // non-Linux host: skip
         val d = dir()
-        ModelExecutionRunDir.writeWorkerPid(d, ref(alivePid))
+        writeFakeProc(pid = 9006, comm = ":modelservice", startTicks = 424242L)
+        ModelExecutionRunDir.writeWorkerPid(d, ref(9006, processName = ":modelservice", procStartTicks = 424242L, uid = 10123))
         File(d, ModelExecutionMailbox.FILE_RESULT).writeText("""{"ok":true}""")
         ModelExecutionRunDir.writeTerminal(d)
         // terminal marker written but the worker pid is STILL alive — the
@@ -226,12 +255,13 @@ class ModelExecutionRunDirTest {
         val a = dir("run-A")
         val b = dir("run-B")
         ModelExecutionRunDir.writeWorkerPid(a, ref(deadPid, runId = "A"))
-        ModelExecutionRunDir.writeWorkerPid(b, ref(if (procAlive(alivePid)) alivePid else deadPid, runId = "B"))
+        writeFakeProc(pid = 9003, comm = ":modelservice", startTicks = 424242L)
+        ModelExecutionRunDir.writeWorkerPid(b, ref(9003, runId = "B", processName = ":modelservice", procStartTicks = 424242L, uid = 10123))
+        val fake = fakeProcRoot()
         // A should see ITS OWN worker dead with NO terminal → not safe (still
         // must see terminal), and B's pid must NOT be mistaken for A's.
-        assertEquals(ModelExecutionRunDir.WorkerLiveness.DEAD, ModelExecutionRunDir.probeLiveness(a, "A"))
-        val expectedB = if (procAlive(alivePid)) ModelExecutionRunDir.WorkerLiveness.ALIVE else ModelExecutionRunDir.WorkerLiveness.DEAD
-        assertEquals(expectedB, ModelExecutionRunDir.probeLiveness(b, "B"))
+        assertEquals(ModelExecutionRunDir.WorkerLiveness.DEAD, ModelExecutionRunDir.probeLiveness(a, "A", fake))
+        assertEquals(ModelExecutionRunDir.WorkerLiveness.ALIVE, ModelExecutionRunDir.probeLiveness(b, "B", fake))
         assertFalse(ModelExecutionRunDir.safeToDelete(a, "A"))
         assertFalse(ModelExecutionRunDir.safeToDelete(b, "B"))
     }

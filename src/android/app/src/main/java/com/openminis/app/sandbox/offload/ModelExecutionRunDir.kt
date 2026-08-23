@@ -2,6 +2,7 @@ package com.openminis.app.sandbox.offload
 
 import org.json.JSONObject
 import java.io.File
+import java.io.FileOutputStream
 
 /**
  * TF-F: run-directory ownership + worker-liveness protocol utilities.
@@ -46,7 +47,9 @@ object ModelExecutionRunDir {
     /**
      * Verifiable worker process reference. Contents pin the pid to the runId
      * (and a nonce) so a leftover worker.pid from a previous run or a recycled
-     * PID can never be mistaken for THIS run's worker.
+     * PID can never be mistaken for THIS run's worker. The process identity
+     * fields are deliberately persisted: `/proc/<pid>` existence alone is not
+     * proof that the same worker is still alive.
      */
     data class WorkerProcessRef(
         val pid: Int,
@@ -54,6 +57,23 @@ object ModelExecutionRunDir {
         val nonce: String,
         val processName: String,
         val startedAtMs: Long,
+        val procStartTicks: Long = 0L,
+        val uid: Int = -1,
+    )
+
+    /** Minimal identity read from `/proc/<pid>` for liveness verification. */
+    data class ProcIdentity(
+        val processName: String,
+        val uid: Int,
+        val procStartTicks: Long,
+    )
+
+    enum class ProcReadStatus { PRESENT, MISSING, UNREADABLE }
+
+    data class ProcReadResult(
+        val status: ProcReadStatus,
+        val identity: ProcIdentity? = null,
+        val detail: String? = null,
     )
 
     /** File names used by the run-dir ownership protocol. */
@@ -62,23 +82,37 @@ object ModelExecutionRunDir {
     const val FILE_TERMINAL = "terminal.json"
 
     /**
-     * Persist the worker's process ref in a form the client can validate.
-     * Returns true on success.
+     * Persist the worker's process ref atomically. A partially-written ref is
+     * indistinguishable from a stale/ref-reused pid to the client, so it must
+     * never replace the previous complete file in place.
      */
     fun writeWorkerPid(dir: File, ref: WorkerProcessRef): Boolean = runCatching {
-        File(dir, FILE_WORKER_PID).writeText(encodeWorkerRef(ref))
+        val tmp = File(dir, "$FILE_WORKER_PID.tmp")
+        FileOutputStream(tmp).use { fos ->
+            fos.write(encodeWorkerRef(ref).toByteArray(Charsets.UTF_8))
+            fos.flush()
+            try { fos.fd.sync() } catch (_: Throwable) {}
+        }
+        if (!tmp.renameTo(File(dir, FILE_WORKER_PID))) {
+            tmp.delete()
+            error("worker.pid rename failed")
+        }
+        fsyncDir(dir)
         true
     }.getOrElse {
         android.util.Log.w(TAG, "writeWorkerPid failed: ${it.message}")
         false
     }
 
-    /** Worker writes a `worker.ready` marker once it has fully started (after
-     *  the pid ref is written). The client uses it to distinguish "worker not
-     *  yet started" from "worker started but silent" — a slow first chunk must
-     *  NOT be misjudged as a dead worker. Idempotent. */
-    fun writeReady(dir: File) {
-        runCatching { File(dir, FILE_READY).writeText("ready") }
+    /** Worker writes a `worker.ready` marker once the request thread has
+     * started and opened its stream file. The service must not publish ready
+     * merely because onStartCommand ran. Idempotent and defensive. */
+    fun writeReady(dir: File): Boolean = runCatching {
+        File(dir, FILE_READY).writeText("ready")
+        true
+    }.getOrElse {
+        android.util.Log.w(TAG, "writeReady failed: ${it.message}")
+        false
     }
 
     /** Client → worker: runId expected to be embedded in THIS run's pid ref. */
@@ -91,21 +125,75 @@ object ModelExecutionRunDir {
     }.getOrElse { null }
 
     /**
-     * Three-state liveness probe for THIS run dir only. Never fabricates DEAD
-     * from ambiguous evidence (see [WorkerLiveness]).
-     *
-     * Note: we deliberately do NOT call /proc "not exists → immediate DEAD"
-     * when the ref was not validated against a client-supplied runId — an
-     * unvalidated foreign/stale pid could be a recycled process that happens
-     * to be gone right now, and a later delete could race a fresh worker that
-     * reused the pid. The client path always passes its runId, so the DEAD
-     * verdict there is bound to its own run.
+     * Read a process identity from a proc root. Kept injectable for JVM tests;
+     * Android production passes `/proc`. A missing pid is definitive death,
+     * while permission/IO failures remain UNKNOWN to callers.
      */
-    fun probeLiveness(dir: File, expectedRunId: String?): WorkerLiveness {
+    fun readProcIdentity(pid: Int, procRoot: File = File("/proc")): ProcReadResult = runCatching {
+        val procDir = File(procRoot, pid.toString())
+        if (!procDir.exists()) {
+            return ProcReadResult(ProcReadStatus.MISSING, detail = "proc_missing")
+        }
+        val comm = File(procDir, "comm").readText().trim()
+        val status = File(procDir, "status").readLines()
+        val uid = status.firstOrNull { it.startsWith("Uid:") }
+            ?.trim()?.split(Regex("\\s+"))?.getOrNull(1)?.toIntOrNull()
+            ?: return ProcReadResult(ProcReadStatus.UNREADABLE, detail = "uid_missing")
+        val stat = File(procDir, "stat").readText().trim()
+        val close = stat.lastIndexOf(')')
+        if (close < 0 || close + 2 >= stat.length) {
+            return ProcReadResult(ProcReadStatus.UNREADABLE, detail = "stat_malformed")
+        }
+        // `/proc/<pid>/stat` field 22 is process starttime; after comm, the
+        // remaining fields begin at field 3, so index 19 is field 22.
+        val fields = stat.substring(close + 2).trim().split(Regex("\\s+"))
+        val startTicks = fields.getOrNull(19)?.toLongOrNull()
+            ?: return ProcReadResult(ProcReadStatus.UNREADABLE, detail = "start_ticks_missing")
+        val processName = File(procDir, "cmdline").readText().trim('\u0000').substringBefore('\u0000').ifEmpty { comm }
+        if (processName.isEmpty()) {
+            return ProcReadResult(ProcReadStatus.UNREADABLE, detail = "process_name_missing")
+        }
+        ProcReadResult(
+            status = ProcReadStatus.PRESENT,
+            identity = ProcIdentity(processName, uid, startTicks),
+        )
+    }.getOrElse { error ->
+        ProcReadResult(ProcReadStatus.UNREADABLE, detail = error.javaClass.simpleName)
+    }
+
+    fun procIdentityMatches(ref: WorkerProcessRef, actual: ProcIdentity): Boolean {
+        val processMatches = ref.processName.isBlank() ||
+            actual.processName == ref.processName ||
+            actual.processName.endsWith(ref.processName)
+        val uidMatches = ref.uid < 0 || actual.uid == ref.uid
+        val startMatches = ref.procStartTicks <= 0L || actual.procStartTicks == ref.procStartTicks
+        return processMatches && uidMatches && startMatches
+    }
+
+    /**
+     * Three-state liveness probe for THIS run dir only. Identity mismatch is
+     * definitive evidence that the recorded worker is gone/replaced; unreadable
+     * proc state is UNKNOWN and must never authorize retry or deletion.
+     */
+    fun probeLiveness(
+        dir: File,
+        expectedRunId: String?,
+        procRoot: File = File("/proc"),
+    ): WorkerLiveness {
         val ref = readWorkerRef(dir, expectedRunId) ?: return WorkerLiveness.UNKNOWN
-        // Ref is valid and (when expectedRunId != null) belongs to OUR run.
-        val proc = File("/proc/${ref.pid}")
-        return if (!proc.exists()) WorkerLiveness.DEAD else WorkerLiveness.ALIVE
+        val result = readProcIdentity(ref.pid, procRoot)
+        return when (result.status) {
+            ProcReadStatus.MISSING -> WorkerLiveness.DEAD
+            ProcReadStatus.UNREADABLE -> WorkerLiveness.UNKNOWN
+            ProcReadStatus.PRESENT -> {
+                val actual = result.identity
+                if (actual != null && procIdentityMatches(ref, actual)) {
+                    WorkerLiveness.ALIVE
+                } else {
+                    WorkerLiveness.DEAD
+                }
+            }
+        }
     }
 
     /** True when this run has already reached a terminal marker. */
@@ -181,6 +269,26 @@ object ModelExecutionRunDir {
     }
 
     /**
+     * TF-H: stage-aware classification on top of the classic matrix. The
+     * caller can pass a run-log phase tail; a worker that never reached the
+     * request thread is NEVER_STARTED, one that reached the thread but never
+     * got to HTTP/chunks is DIED_BEFORE_READY, and only then does the classic
+     * ready/hadChunks matrix decide.
+     */
+    fun classifyWorkerDeathStaged(
+        hasPidRef: Boolean,
+        ready: Boolean,
+        hadChunks: Boolean,
+        reachedRequestThread: Boolean,
+        reachedHttp: Boolean,
+    ): WorkerDeathReason = when {
+        hadChunks -> WorkerDeathReason.DIED_MID_STREAM
+        hasPidRef && !reachedRequestThread -> WorkerDeathReason.NEVER_STARTED
+        hasPidRef && reachedRequestThread && !reachedHttp -> WorkerDeathReason.DIED_BEFORE_READY
+        else -> classifyWorkerDeath(hasPidRef, ready, hadChunks)
+    }
+
+    /**
      * True iff the client may safely delete this run dir.
      *
      * SAFE only when BOTH hold:
@@ -211,6 +319,8 @@ object ModelExecutionRunDir {
         put("nonce", ref.nonce)
         put("processName", ref.processName)
         put("startedAt", ref.startedAtMs)
+        put("procStartTicks", ref.procStartTicks)
+        put("uid", ref.uid)
     }.toString()
 
     fun decodeWorkerRef(raw: String): WorkerProcessRef? = runCatching {
@@ -223,6 +333,8 @@ object ModelExecutionRunDir {
             nonce = obj.optString("nonce", ""),
             processName = obj.optString("processName", ""),
             startedAtMs = obj.optLong("startedAt", 0L),
+            procStartTicks = obj.optLong("procStartTicks", 0L),
+            uid = obj.optInt("uid", -1),
         )
     }.getOrNull()
 }

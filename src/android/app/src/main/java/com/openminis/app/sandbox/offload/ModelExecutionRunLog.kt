@@ -33,6 +33,7 @@ object ModelExecutionRunLog {
     object Phase {
         const val PROCESS_START = "PROCESS_START"
         const val REQUEST_ACCEPTED = "REQUEST_ACCEPTED"
+        const val REQUEST_THREAD_START = "REQUEST_THREAD_START"
         const val REQUEST_PARSED = "REQUEST_PARSED"
         const val PROVIDER_BUILT = "PROVIDER_BUILT"
         const val HTTP_STARTED = "HTTP_STARTED"
