@@ -85,6 +85,29 @@ class ChatViewModelSanitizeTest {
     }
 
     @Test
+    fun `placeholder tool_result wording does not induce blind re-issue`() {
+        val msgs = mutableListOf(
+            userMsg("do it"),
+            assistantMsg(parts = listOf(toolUse("call_lost"))),
+            userMsg("next"),
+        )
+        sanitizeAgentHistoryMessages(msgs)
+        val asstIdx = msgs.indexOfFirst { it.role == LLMMessage.Role.ASSISTANT }
+        val results = msgs[asstIdx + 1].contentParts.filterIsInstance<AgentContentPart.ToolResult>()
+        assertEquals(1, results.size)
+        // Neutral wording: tells the model the call may or may not have
+        // completed and explicitly warns against blindly re-issuing it.
+        assertTrue(
+            "placeholder must contain the no-blind-re-issue guard",
+            results[0].content.contains("Do not blindly re-issue"),
+        )
+        assertTrue(
+            "placeholder must stay an error result",
+            results[0].isError,
+        )
+    }
+
+    @Test
     fun `mixed paired and orphan results - only orphan removed`() {
         val msgs = mutableListOf(
             userMsg("go"),

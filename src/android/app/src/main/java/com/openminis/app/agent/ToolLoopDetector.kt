@@ -403,7 +403,7 @@ class ToolLoopDetector(private val config: ToolLoopConfig = ToolLoopConfig()) {
          * (a required UI label that models commonly counter-suffix). Add new
          * entries here if other purely-cosmetic fields ever leak into params.
          */
-        private val ARGS_HASH_IGNORED_KEYS: Set<String> = setOf("tool_title")
+        internal val ARGS_HASH_IGNORED_KEYS: Set<String> = setOf("tool_title")
 
         private val UNKNOWN_TOOL_RE_1 = Regex(
             """unknown tool[:\s]+["']?([a-zA-Z0-9_.\-]+)["']?""",

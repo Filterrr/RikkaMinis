@@ -8098,7 +8098,48 @@ class ChatViewModel(
             val pending = mutableListOf<PendingTool>()
 
             // ============================ Pass 1 ============================
+            // [T-android-tool-dedupe] Same-turn dedupe of identical tool
+            // calls (same toolName + same args, ignoring cosmetic UI fields
+            // like tool_title). A model occasionally emits the SAME tool call
+            // twice in one turn — previously each call executed independently:
+            // parallel-safe tools (file_read/read_image) ran twice
+            // concurrently, everything else serialized in the queue with no
+            // visible "waiting" cue. Now the FIRST occurrence executes and
+            // every identical duplicate is dropped with a synthetic
+            // tool_result (same id) so tool_use/tool_result pairing stays
+            // balanced and the model is told not to re-issue. Cross-turn
+            // duplicates remain ToolLoopDetector's job (10-warn / 20-block).
+            val sameTurnFingerprints = mutableMapOf<String, String>()
             for ((id, name, args) in toolCalls) {
+                // [T-android-tool-dedupe] Same-turn dedupe check FIRST —
+                // identical calls are dropped before any preflight, tool
+                // status flip, or loop-detector bookkeeping runs.
+                val dedupeFingerprint = toolCallDedupeFingerprint(name, args)
+                val firstId = sameTurnFingerprints[dedupeFingerprint]
+                if (firstId != null && firstId != id) {
+                    AppLogger.warning(
+                        TAG_STREAM,
+                        "[ToolDedupe] same-call duplicate tool dropped: name=$name id=$id dup-of=$firstId",
+                    )
+                    // Skip ALL Pass 1 logic for the duplicate — no preflight,
+                    // no pending, no loop-detector record.
+                    val dupBlockIdx = allToolBlocks.indexOfFirst { it.id == id }
+                    if (dupBlockIdx >= 0) {
+                        allToolBlocks[dupBlockIdx] = allToolBlocks[dupBlockIdx].copy(
+                            toolStatus = ToolBlockStatus.FAILED,
+                            content = "Deduplicated: identical tool call already executed as $firstId",
+                            durationMs = 0,
+                        )
+                    }
+                    resultParts.add(AgentContentPart.ToolResult(
+                        id = id,
+                        name = name,
+                        content = "Deduplicated: identical tool call already executed as $firstId (its result was returned above). Do not re-issue this tool call.",
+                        isError = false,
+                    ))
+                    continue
+                }
+                sameTurnFingerprints[dedupeFingerprint] = id
                 // [T-android-overlay-tool-title] Pull tool_title uniformly
                 // from args for ALL tools — without this browser_use's
                 // tool_title never reached the overlay (only shell_execute
@@ -8246,8 +8287,24 @@ class ChatViewModel(
                 }
             } else {
                 // Any non-parallel tool (or a single call) → sequential, exactly
-                // like the original loop.
-                pending.forEach { p ->
+                // like the original loop. Each queued call gets a non-blocking
+                // "waiting" cue so the UI doesn't look hung while earlier tools
+                // still run — pure visibility, no status flip, no semantics.
+                pending.forEachIndexed { index, p ->
+                    if (index > 0) {
+                        val waitIdx = allToolBlocks.indexOfFirst { it.id == p.id }
+                        if (waitIdx >= 0) {
+                            val waitBlock = allToolBlocks[waitIdx]
+                            if (waitBlock.toolStatus == ToolBlockStatus.PENDING) {
+                                allToolBlocks[waitIdx] = waitBlock.copy(
+                                    content = "⏳ Waiting for previous tool(s) to finish…",
+                                )
+                                withContext(Dispatchers.Main) {
+                                    updateAssistantMessage(assistantId, accumulatedText, true, allToolBlocks)
+                                }
+                            }
+                        }
+                    }
                     resultsById[p.id] = executeTool(p.name, p.argsStr, p.id, allToolBlocks, assistantId, accumulatedText)
                 }
             }
@@ -11878,73 +11935,11 @@ Environment variables:
 }
 
 internal fun sanitizeAgentHistoryMessages(messages: MutableList<LLMMessage>) {
-        // Walk through history sequentially, checking each assistant message.
-        // For each assistant message with tool_use blocks, verify the NEXT message
-        // is a user message with matching tool_result blocks. If not, inject them.
-        var i = 0
-        while (i < messages.size) {
-            val msg = messages[i]
-            if (msg.role != LLMMessage.Role.ASSISTANT) { i++; continue }
-
-            val toolUses = msg.contentParts.filterIsInstance<AgentContentPart.ToolUse>()
-            if (toolUses.isEmpty()) { i++; continue }
-
-            val toolUseIds = toolUses.map { it.id }.toSet()
-
-            // Check next message for matching tool_results
-            val next = messages.getOrNull(i + 1)
-            val nextResultIds = next?.contentParts
-                ?.filterIsInstance<AgentContentPart.ToolResult>()
-                ?.map { it.id }?.toSet() ?: emptySet()
-
-            val missingIds = toolUseIds - nextResultIds
-            if (missingIds.isEmpty()) { i++; continue }
-
-            // Some tool_uses have no matching tool_result in the next message.
-            // If next message is a user message, add the missing results to it.
-            // Otherwise, inject a new user message with placeholder results.
-            val placeholders = toolUses.filter { it.id in missingIds }.map { use ->
-                AgentContentPart.ToolResult(
-                    id = use.id, name = use.name,
-                    content = "Tool execution was interrupted by an unexpected error.",
-                    isError = true,
-                )
-            }
-            Log.w("ChatViewModel", "sanitize: injecting ${placeholders.size} placeholder tool_result(s) after history[$i]")
-
-            if (next != null && next.role == LLMMessage.Role.USER &&
-                next.contentParts.any { it is AgentContentPart.ToolResult }) {
-                // Append missing results to the existing user message
-                messages[i + 1] = next.copy(
-                    contentParts = next.contentParts + placeholders
-                )
-            } else {
-                // Insert a new user message with just the placeholder results
-                messages.add(i + 1, LLMMessage(
-                    role = LLMMessage.Role.USER, content = "",
-                    contentParts = placeholders,
-                ))
-            }
-            i++
-        }
-
-        // Remove orphaned tool_results (result IDs not found in any tool_use)
-        val allToolUseIds = messages.flatMap { it.contentParts }
-            .filterIsInstance<AgentContentPart.ToolUse>().map { it.id }.toSet()
-        val iter = messages.listIterator()
-        while (iter.hasNext()) {
-            val msg = iter.next()
-            if (msg.role != LLMMessage.Role.USER) continue
-            val cleaned = msg.contentParts.filter { part ->
-                part !is AgentContentPart.ToolResult || part.id in allToolUseIds
-            }
-            if (cleaned.isEmpty() && msg.content.isBlank()) {
-                iter.remove()
-            } else if (cleaned.size < msg.contentParts.size) {
-                iter.set(msg.copy(contentParts = cleaned))
-            }
-        }
-    }
+    // [T-compact-slice-tool-pairing] Pure implementation extracted to
+    // SanitizeAgentHistory.kt so JVM unit tests exercise the exact
+    // production code path.
+    com.openminis.app.ui.chat.sanitizeAgentHistoryMessagesImpl(messages)
+}
 
 /**
  * [T-consecutive-user-bridge] Enforce "roles must alternate" just before a
@@ -11963,20 +11958,6 @@ internal fun sanitizeAgentHistoryMessages(messages: MutableList<LLMMessage>) {
  *
  * Pure + JVM-testable (no ViewModel dependencies).
  */
-internal fun ensureRoleAlternationBeforeUserAppend(
-    history: MutableList<LLMMessage>,
-    bridgeText: String = "(Interrupted mid-task by a new user message. Decide based on the new message and overall context whether the prior task should continue — do not forget or abandon it unless the user explicitly says to stop, or the new message makes clear it is no longer needed.)",
-) {
-    if (history.lastOrNull()?.role == LLMMessage.Role.USER) {
-        history.add(
-            LLMMessage(
-                role = LLMMessage.Role.ASSISTANT,
-                content = "",
-                contentParts = listOf(AgentContentPart.Text(bridgeText)),
-            ),
-        )
-    }
-}
 
 /**
  * RC3: Roll the current turn's assistant blocks back to [turnStartBlockIndex],
