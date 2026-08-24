@@ -11937,8 +11937,11 @@ Environment variables:
 internal fun sanitizeAgentHistoryMessages(messages: MutableList<LLMMessage>) {
     // [T-compact-slice-tool-pairing] Pure implementation extracted to
     // SanitizeAgentHistory.kt so JVM unit tests exercise the exact
-    // production code path.
-    com.openminis.app.ui.chat.sanitizeAgentHistoryMessagesImpl(messages)
+    // production code path. Logger injected here (Android side) so the pure
+    // impl stays JVM-testable while the action stays observable in logcat.
+    com.openminis.app.ui.chat.sanitizeAgentHistoryMessagesImpl(messages) {
+        Log.w("ChatViewModel", it)
+    }
 }
 
 /**

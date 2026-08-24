@@ -17,9 +17,15 @@ internal const val SANITIZE_PLACEHOLDER_RESULT_CONTENT =
  * on any message list (full history OR compacted slice) so no outgoing
  * request carries a dangling tool message.
  *
- * Pure + JVM-testable (no ViewModel/Android dependencies).
+ * Pure + JVM-testable (no ViewModel/Android dependencies). The optional
+ * [log] sink keeps the pure function Android-free (default no-op); the
+ * production shell in ChatViewModel injects Log.w so the sanitize action is
+ * observable in logcat under the ChatViewModel tag.
  */
-internal fun sanitizeAgentHistoryMessagesImpl(messages: MutableList<LLMMessage>) {
+internal fun sanitizeAgentHistoryMessagesImpl(
+    messages: MutableList<LLMMessage>,
+    log: (String) -> Unit = {},
+) {
     // Walk through history sequentially, checking each assistant message.
     // For each assistant message with tool_use blocks, verify the NEXT message
     // is a user message with matching tool_result blocks. If not, inject them.
@@ -52,7 +58,7 @@ internal fun sanitizeAgentHistoryMessagesImpl(messages: MutableList<LLMMessage>)
                 isError = true,
             )
         }
-        println("sanitize: injecting ${placeholders.size} placeholder tool_result(s) after history[$i]")
+        log("sanitize: injecting ${placeholders.size} placeholder tool_result(s) after history[$i]")
 
         if (next != null && next.role == LLMMessage.Role.USER &&
             next.contentParts.any { it is AgentContentPart.ToolResult }) {

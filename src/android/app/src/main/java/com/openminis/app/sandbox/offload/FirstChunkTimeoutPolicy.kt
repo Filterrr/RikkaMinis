@@ -43,6 +43,13 @@ object FirstChunkTimeoutPolicy {
     private val OFFICIAL_HOST_SUFFIXES = listOf(
         "anthropic.com", "googleapis.com", "openai.com", "openrouter.ai",
         "x.ai", "kimi.com", "api.deepseek.com", "moonshot.cn",
+        // Additional official/public endpoints (2026-08-24): these otherwise
+        // fall into the proxy bucket and get an unnecessarily loose 45s.
+        "azure.com",          // Azure OpenAI: <resource>.openai.azure.com
+        "aliyuncs.com",       // DashScope / Qwen
+        "groq.com",           // Groq
+        "minimax.io",         // MiniMax
+        "xiaomimimo.com",     // Xiaomi MiMo
     )
 
     /**
@@ -55,9 +62,16 @@ object FirstChunkTimeoutPolicy {
     fun isProxyRoute(customBaseURL: String?): Boolean {
         val base = customBaseURL?.trim()?.trimEnd('/')?.lowercase() ?: return false
         // Loopback / private ranges are unambiguous proxy/gateway indicators.
+        // 172.16.0.0–172.31.255.255 is the RFC1918 private block — match the
+        // exact second-octet range (16..31) rather than a loose "172." prefix,
+        // which would sweep the public 172.32.x–172.255.x space in as well
+        // (only loosens the budget, never produces a false failure, but the
+        // RFC-exact range is the intended scope; keep this comment so nobody
+        // "simplifies" it back to 172.).
+        val private172 = (16..31).any { base.startsWith("172.$it.") }
         if (base.startsWith("127.") || base.startsWith("localhost") ||
             base.startsWith("10.") || base.startsWith("192.168.") ||
-            base.startsWith("172.") || base.startsWith("0.0.0.0")
+            private172 || base.startsWith("0.0.0.0")
         ) return true
         // Non-https plain-http endpoints are overwhelmingly local relays.
         if (!base.startsWith("https://")) return true
