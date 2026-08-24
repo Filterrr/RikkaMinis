@@ -95,11 +95,14 @@ fun ProviderDetailScreen(
     val config by providerRepository.config.collectAsState()
     val instance = config.instances.find { it.id == instanceId }
     var showDeleteDialog by remember { mutableStateOf(false) }
-    // T143: long-press → confirm delete on a single model entry. Built-in
-    // entries (entry.isCustom == false) skip the gesture because the repo
-    // re-creates them from ProviderType.builtInModels on next refresh anyway —
-    // mirrors DebugProviderMutationMethods note "Built-in entries can't be
-    // deleted — set isHidden=true instead".
+    // T143: long-press → confirm delete on a single model entry. Every
+    // visible entry supports the gesture — built-in and custom alike — because
+    // [T-provider-no-static-seed] guarantees nothing is re-created from a
+    // static seed after removal (voice-template seeds are preserved on refresh
+    // but a deleted entry simply stays gone). Previously built-in entries
+    // skipped the gesture (isCustom gate) — that silently made manually-added
+    // models undeletable after a refresh reset their custom identity,
+    // see ProviderRepository.replaceEntries [T-provider-custom-identity].
     var entryToDelete by remember { mutableStateOf<com.openminis.app.data.model.ModelEntry?>(null) }
     var deleted by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -316,9 +319,7 @@ fun ProviderDetailScreen(
                             entry = entry,
                             showDivider = idx != entries.lastIndex,
                             onClick = { onModelEntryClick(entry.id) },
-                            onLongClick = if (entry.isCustom) {
-                                { entryToDelete = entry }
-                            } else null,
+                            onLongClick = { entryToDelete = entry },
                         )
                     }
                 }
@@ -333,9 +334,7 @@ fun ProviderDetailScreen(
                             entry = entry,
                             showDivider = idx != entries.lastIndex,
                             onClick = { onModelEntryClick(entry.id) },
-                            onLongClick = if (entry.isCustom) {
-                                { entryToDelete = entry }
-                            } else null,
+                            onLongClick = { entryToDelete = entry },
                         )
                     }
                 }
