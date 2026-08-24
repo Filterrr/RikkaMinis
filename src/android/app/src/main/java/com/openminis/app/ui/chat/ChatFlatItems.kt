@@ -584,6 +584,54 @@ internal fun FlatChatItem.owningMessageId(): String = when (this) {
  * keying / equality stays correct. When [streaming] is empty the input is
  * returned as-is to skip the per-element walk on idle frames.
  */
+/**
+ * [fix/chat-render-tick-scan] Lightweight per-message fingerprint for the
+ * streaming tick dirty check.
+ *
+ * Replaces the previous full data-class `==` across the whole message list
+ * (which deep-compared every content string, toolArgs blob, error detail,
+ * image URI list, ... on every 80ms tick — O(total bytes), the dominant
+ * cost of the main-thread scan in long sessions).
+ *
+ * The fingerprint is per-message and O(1)-per-field:
+ *  - Strings are compared by LENGTH only (content.length, and per tool block
+ *    content.length) — cheap "has content grown" proxy, never a char walk.
+ *  - Live flags (isStreaming / isAwaitingModelResponse / isQueued / error)
+ *    are plain booleans.
+ *  - toolBlocks reduce to a digest of (kind, status, content.length,
+ *    durationMs) — state + growth signals without the payload bytes.
+ *
+ * Invariant: fingerprint equality ⇒ the rendering-relevant view is
+ * unchanged, so the caller may skip reconcile. Any field LazyColumn actually
+ * renders from a ChatMessage is covered: text growth (content/tool-block
+ * lengths), live-state flips (flags + tool status), row-set changes
+ * (toolBlocks.size), tool card duration ticks (durationMs). Payload fields
+ * that never render (toolArgs internals, attachment URIs, errorDetail) are
+ * intentionally excluded.
+ *
+ * Note on turn-end: the terminal snapshot can rewrite content at the same
+ * length ("AAAA"→"BBBB") with an identical fingerprint — that blind spot is
+ * closed by [StableChatRowLedger.reconcileAndVerifyTerminalText] on the
+ * turn-end tick (content equality, not length), not by this fingerprint.
+ */
+internal fun lightFingerprint(messages: List<ChatMessage>): List<Any?> {
+    if (messages.isEmpty()) return emptyList()
+    return messages.map { m ->
+        listOf(
+            m.id,
+            m.content.length,
+            m.isStreaming,
+            m.isAwaitingModelResponse,
+            m.error != null,
+            m.isQueued,
+            m.toolBlocks.size,
+            m.toolBlocks.joinToString("|") {
+                "${it.kind}:${it.toolStatus?.name}:${it.content.length}:${it.durationMs}"
+            },
+        )
+    }
+}
+
 internal fun mergeStreamingOverlay(
     messages: List<ChatMessage>,
     streaming: Map<String, StreamingDelta>,

@@ -48,6 +48,13 @@ internal class StableChatRowLedger(
     /** messageId → (textBlockId → segmenter). Cleared per message on text reset. */
     private val segmenters = mutableMapOf<String, MutableMap<String, AppendOnlyMarkdownSegmenter>>()
 
+    /** [fix/chat-render-tick-scan] Cursor into [rows] for
+     *  [syncActiveAssistantStatus]: monotonically advances across reconciles,
+     *  so scanning the rows of the active assistant messages does not re-walk
+     *  the whole list (typically a few hundred rows) from index 0 on every
+     *  80ms tick. Invalidated on seed / structural rebuild / row removal. */
+    private var activeScanCursor = 0
+
     /**
      * messageIds whose text rows are segmenter-owned (mdslot-style mdblock
      * rows produced inside [reconcileMessage]). Attached on first text-block
@@ -110,6 +117,7 @@ internal class StableChatRowLedger(
         rows.clear()
         rows.addAll(initialRows)
         lastMessageIndex = messageCount - 1
+        activeScanCursor = 0
         headMessageId = null // caller passes the new head on next reconcile
         segmenters.clear()
         activeAssistantIds.clear()
@@ -134,6 +142,7 @@ internal class StableChatRowLedger(
             rows.clear()
             rows.addAll(buildFlatChatItems(messages))
             lastMessageIndex = messages.size - 1
+            activeScanCursor = 0
             headMessageId = messages.firstOrNull()?.id
             reconciledMessageIds.clear()
             reconciledMessageIds.addAll(messages.map { it.id })
@@ -225,6 +234,109 @@ internal class StableChatRowLedger(
         reconcileMessage(last, prevNonSystemRole(messages, messages.lastIndex))
     }
 
+    /**
+     * [fix/chat-render-turnend-settle] Turn-end convergence guard.
+     *
+     * Call right after [reconcile] on the turn-end tick (stream empty, side
+     * channel drained). The reconcile keeps every published key — by design —
+     * but [FlatChatItem.AssistantMarkdownBlock.equals] compares rawText by
+     * LENGTH only (a cheap stable-skip proxy for LazyColumn), so a same-length
+     * content rewrite between the last streaming tick and the terminal
+     * snapshot ("AAAA" → "BBBB") would be invisible to the key+equals skip
+     * decision and the stale text would stay rendered forever. This pass
+     * re-derives each owned segmenter's slots from the canonical terminal
+     * text and force-publishes any slot whose CONTENT differs (exact string
+     * equality — not length) on the same key. When the canonical text
+     * diverges so far the slot count changes (a "AAAA|BBBB" two-paragraph
+     * rewrite), the segmenter is reset and the text rows re-attached once —
+     * a deliberate, bounded re-render for a true model rewrite, the only case
+     * where the immutable-settled-slot invariant cannot represent the
+     * terminal truth.
+     *
+     * No-op for non-assistant tails, messages without text rows, or when the
+     * canonical and segmenter views already agree — so streaming ticks and
+     * ordinary settles pay zero cost.
+     */
+    fun reconcileAndVerifyTerminalText(messages: List<ChatMessage>) {
+        val last = messages.lastOrNull() ?: return
+        if (last.role != "assistant") return
+        val blocks = last.toolBlocks.filter { it.kind == "text" && it.content.isNotEmpty() }
+        if (blocks.isEmpty()) return
+        val perMsg = segmenters[last.id] ?: return
+        val start = rows.indexOfFirst { it.owningMessageId() == last.id }
+        if (start < 0) return
+
+        val published = rows.subList(start, rows.size)
+            .filterIsInstance<FlatChatItem.AssistantMarkdownBlock>().toList()
+        if (published.isEmpty()) return
+
+        val canonicalByBlock = blocks.associate { it.id to it.content }
+        val joinedMarkdown = blocks.joinToString("\n\n") { it.content }
+        val publishedByBlock = published.groupBy { it.parentBlockId }
+
+        for (block in blocks) {
+            val canonical = canonicalByBlock.getValue(block.id)
+            val canonicalSlots = publishedByBlock[block.id]?.map { it.rawText } ?: continue
+            val seg = perMsg[block.id] ?: continue
+            // Re-derive from the canonical terminal text (settle semantics —
+            // keys unchanged). Then compare published CONTENT, not length:
+            // LazyColumn's skip path uses AssistantMarkdownBlock.equals which
+            // only compares lengths, so a same-length rewrite ("AAAA"→"BBBB")
+            // must be caught here.
+            val live = seg.update(canonical, streamEnded = true)
+            val liveSlots = live.map { it.rawText }
+            if (liveSlots != canonicalSlots) {
+                // Published rows lag the segmenter/canonical — rebuild this
+                // block's rows in place (same keys when the split matches).
+                rebuildBlockRows(last.id, block.id, live, joinedMarkdown)
+                // A stale typing indicator would now sit under published
+                // text — retire it.
+                val itr = rows.listIterator(start)
+                while (itr.hasNext()) {
+                    val row = itr.next()
+                    if (row is FlatChatItem.AssistantTyping && row.owningMessageId() == last.id) {
+                        itr.remove()
+                    }
+                }
+            }
+        }
+    }
+
+    /** Replace one block's text rows with [slots] on the same message span. */
+    private fun rebuildBlockRows(
+        messageId: String,
+        blockId: String,
+        slots: List<StableMarkdownSlot>,
+        joinedMarkdown: String,
+    ) {
+        val start = rows.indexOfFirst { it.owningMessageId() == messageId }
+        if (start < 0) return
+        val fresh = slots.map { slot ->
+            FlatChatItem.AssistantMarkdownBlock(
+                messageId = messageId,
+                parentBlockId = blockId,
+                rawText = slot.rawText,
+                blockIndex = slot.ordinal,
+                isLastBlockOfMessage = false,
+                messageIsStreaming = false,
+                messageMarkdown = joinedMarkdown,
+            )
+        }
+        // Drop the old rows of this block only (other blocks / non-text rows
+        // keep their position), then splice the fresh ones in at the same
+        // place (first old row of the block).
+        var spliceAt = -1
+        val itr = rows.listIterator(start)
+        while (itr.hasNext()) {
+            val row = itr.next()
+            if (row is FlatChatItem.AssistantMarkdownBlock && row.parentBlockId == blockId) {
+                if (spliceAt < 0) spliceAt = itr.previousIndex()
+                itr.remove()
+            }
+        }
+        if (spliceAt >= 0) rows.addAll(spliceAt, fresh)
+    }
+
     // ── internals ───────────────────────────────────────────────────────────
 
     private fun buildNewMessageRows(
@@ -303,6 +415,10 @@ internal class StableChatRowLedger(
     private fun syncQueuedFlips(messages: List<ChatMessage>) {
         if (rows.none { it is FlatChatItem.UserBubble }) return
         val freshById = messages.associateBy { it.id }
+        // [fix/chat-render-tick-scan] Fast path: no queued message anywhere
+        // → nothing can flip → skip the full row walk (present in almost
+        // every idle/streaming tick).
+        if (!messages.any { it.isQueued }) return
         for (i in rows.indices) {
             val row = rows[i]
             if (row is FlatChatItem.UserBubble) {
@@ -394,9 +510,16 @@ internal class StableChatRowLedger(
             }
         }
         if (activeAssistantIds.isEmpty()) return
+        // [fix/chat-render-tick-scan] Only the ACTIVE assistant messages'
+        // rows are scanned, from a monotonic cursor; converged non-live
+        // messages are not re-walked every tick. Invalidate the cursor when
+        // rows changed size/order since the last pass.
+        if (activeScanCursor >= rows.size || rows[activeScanCursor].owningMessageId() != activeAssistantIds.firstOrNull()) {
+            activeScanCursor = 0
+        }
         for (messageId in activeAssistantIds.toList()) {
             val freshMsg = freshById[messageId] ?: continue
-            val start = rows.indexOfFirst { it.owningMessageId() == messageId }
+            val start = indexInRowsFromCursor(messageId)
             if (start < 0) continue
             val freshAll = buildNewMessageRows(freshMsg, null)
             val freshByKey = freshAll.associateBy { it.key }
@@ -457,6 +580,26 @@ internal class StableChatRowLedger(
         }
     }
 
+    /**
+     * [fix/chat-render-tick-scan] Find the first row owned by [messageId],
+     * scanning forward from the current [activeScanCursor]. Rows belonging
+     * to a given message are contiguous and message ids appear in ledger
+     * order, so the cursor stays valid across reconciles and each active
+     * message is located in amortized O(rows owned by it) — never a full
+     * list re-walk per tick.
+     */
+    private fun indexInRowsFromCursor(messageId: String): Int {
+        var i = activeScanCursor.coerceIn(0, rows.size)
+        while (i < rows.size) {
+            if (rows[i].owningMessageId() == messageId) {
+                activeScanCursor = i
+                return i
+            }
+            i++
+        }
+        return -1
+    }
+
     /** Whether two rows that share a key differ in their live-state fields. */
     private fun sameLiveView(a: FlatChatItem, b: FlatChatItem): Boolean = when {
         a is FlatChatItem.AssistantToolRunGroup && b is FlatChatItem.AssistantToolRunGroup ->
@@ -498,10 +641,15 @@ internal class StableChatRowLedger(
         val currentTextIds = message.toolBlocks
             .filter { it.kind == "text" && it.content.isNotEmpty() }
             .map { it.id }
-        val publishedTextIds = rows.subList(start, rows.size)
-            .filterIsInstance<FlatChatItem.AssistantMarkdownBlock>()
-            .map { it.parentBlockId }
-            .distinct()
+        val publishedTextIds = if (message.id in segmentedMessages) {
+            rows.subList(start, rows.size)
+                .filterIsInstance<FlatChatItem.AssistantMarkdownBlock>()
+                .map { it.parentBlockId }
+                .distinct()
+        } else {
+            // Not yet segmented → reset state needed; avoid building the set.
+            emptyList()
+        }
         // The message's text rows are segmenter-owned iff this ledger already
         // attached a segmenter for it (see [segmentedMessages]). Until then
         // (cold-open canonical build) they are plain canonical mdblock rows
