@@ -277,18 +277,30 @@ internal class StableChatRowLedger(
         for (block in blocks) {
             val canonical = canonicalByBlock.getValue(block.id)
             val canonicalSlots = publishedByBlock[block.id]?.map { it.rawText } ?: continue
-            val seg = perMsg[block.id] ?: continue
-            // Re-derive from the canonical terminal text (settle semantics —
-            // keys unchanged). Then compare published CONTENT, not length:
-            // LazyColumn's skip path uses AssistantMarkdownBlock.equals which
-            // only compares lengths, so a same-length rewrite ("AAAA"→"BBBB")
-            // must be caught here.
-            val live = seg.update(canonical, streamEnded = true)
-            val liveSlots = live.map { it.rawText }
-            if (liveSlots != canonicalSlots) {
-                // Published rows lag the segmenter/canonical — rebuild this
-                // block's rows in place (same keys when the split matches).
-                rebuildBlockRows(last.id, block.id, live, joinedMarkdown)
+            // [fix/chat-render-verify-p1] The authoritative comparison is
+            // "canonical terminal text's own split" vs "published rows" — NOT
+            // the segmenter's output. Once a block has settled, the
+            // segmenter's absorbDivergence shrink branch (fresh.size <=
+            // settledCount) refuses to adopt a rewritten canonical ("AAAA" →
+            // "BBBB"), so seg.update's returned slots stay equal to the stale
+            // published rows and a same-length rewrite is never republished.
+            // splitMarkdownIntoBlockTexts is the production splitter
+            // (StreamingMarkdownText.kt) — identical semantics to the
+            // segmenter's internal split, so when it disagrees with what's on
+            // screen we must trust it over both segmenter and LazyColumn's
+            // length-only equals.
+            val canonicalSplit = splitMarkdownIntoBlockTexts(canonical)
+            if (canonicalSplit != canonicalSlots) {
+                // Canonical terminal diverges from published → force re-attach.
+                // 1) Reset this block's segmenter (drops the frozen stale
+                //    settled slots the absorbDivergence shrink branch kept).
+                // 2) Rebuild rows directly from canonicalSplit — no dependence
+                //    on seg.update's acceptance.
+                perMsg.remove(block.id)
+                val freshSlots = canonicalSplit.mapIndexed { idx, text ->
+                    StableMarkdownSlot(ordinal = idx, rawText = text, settled = true)
+                }
+                rebuildBlockRows(last.id, block.id, freshSlots, joinedMarkdown)
                 // A stale typing indicator would now sit under published
                 // text — retire it.
                 val itr = rows.listIterator(start)
@@ -335,6 +347,12 @@ internal class StableChatRowLedger(
             }
         }
         if (spliceAt >= 0) rows.addAll(spliceAt, fresh)
+        // [fix/chat-render-verify-p1] P2: this method deletes + inserts rows,
+        // which can change the row count and shift indices mid-list — the
+        // activeScanCursor's monotonic-advance assumption (reused across
+        // reconciles by syncActiveAssistantStatus) no longer holds. Reset it
+        // so the next scoped sync re-walks from the active window's start.
+        activeScanCursor = 0
     }
 
     // ── internals ───────────────────────────────────────────────────────────
