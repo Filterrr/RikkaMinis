@@ -599,7 +599,8 @@ internal fun FlatChatItem.owningMessageId(): String = when (this) {
  *  - Live flags (isStreaming / isAwaitingModelResponse / isQueued / error)
  *    are plain booleans.
  *  - toolBlocks reduce to a digest of (kind, status, content.length,
- *    durationMs) — state + growth signals without the payload bytes.
+ *    durationMs, toolTitle) — state + growth signals without the payload
+ *    bytes (toolTitle renders on the tool card, so it participates).
  *
  * Invariant: fingerprint equality ⇒ the rendering-relevant view is
  * unchanged, so the caller may skip reconcile. Any field LazyColumn actually
@@ -626,7 +627,7 @@ internal fun lightFingerprint(messages: List<ChatMessage>): List<Any?> {
             m.isQueued,
             m.toolBlocks.size,
             m.toolBlocks.joinToString("|") {
-                "${it.kind}:${it.toolStatus?.name}:${it.content.length}:${it.durationMs}"
+                "${it.kind}:${it.toolStatus?.name}:${it.content.length}:${it.durationMs}:${it.toolTitle}"
             },
         )
     }

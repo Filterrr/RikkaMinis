@@ -724,7 +724,11 @@ class StableChatRowLedgerTest {
         ledger.reconcileAndVerifyTerminalText(terminal)
         val md = ledger.snapshot().filterIsInstance<FlatChatItem.AssistantMarkdownBlock>()
         assertEquals("terminal rewrite must be published", listOf("BBBB"), md.map { it.rawText })
-        assertEquals("converged keys stay stable", listOf("mdblock:a1:text_1_0:0"), keysOf(ledger.snapshot()))
+        assertEquals(
+            "converged keys stay stable (user row + header + mdblock)",
+            listOf("user:u1", "header:a1", "mdblock:a1:text_1_0:0"),
+            keysOf(ledger.snapshot()),
+        )
     }
 
     // ── [fix/chat-render-tick-scan] light fingerprint + scoped sync ────────
@@ -737,7 +741,7 @@ class StableChatRowLedgerTest {
 
         // Content changed but length identical — the blind spot the turn-end
         // verify pass owns; the fingerprint correctly reports "unchanged".
-        val m3 = assistantMessage("a1", content = "Hello world", blocks = listOf(textBlock("t1", "Olleh drow")), isStreaming = true)
+        val m3 = assistantMessage("a1", content = "Hello world", blocks = listOf(textBlock("t1", "Bodx")), isStreaming = true)
         assertEquals("same-length rewrite must not trip the fingerprint",
             lightFingerprint(listOf(m1)), lightFingerprint(listOf(m3)))
     }
