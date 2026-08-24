@@ -7463,8 +7463,18 @@ class ChatViewModel(
                     // A worker that died mid-stream (hadChunks=true) must NOT be re-sent:
                     // it falls through to the fatal path below (no auto-retry, no fallback
                     // re-send) so the user never gets a duplicate answer.
+                    // 2026-08-24 (diag/first-chunk-timeout): the original implementation
+                    // only matched ModelWorkerDiedException — ModelStreamErrorException
+                    // (which first_chunk_timeout throws, and the stream-error line path in
+                    // ChatStreamOffloadHandler rethrows) fell through the transient check
+                    // and was misclassified as FATAL: no same-model retry, no fallback
+                    // (unless strategy=always). With a proxy route whose first chunk
+                    // legitimately takes 20-60s, every 30s guard hit surfaced as a hard
+                    // user-visible error. Both 0-chunk types are equally safe to retry.
                     val workerDiedZeroChunk =
-                        (actual is com.openminis.app.sandbox.offload.ModelWorkerDiedException) && !actual.hadChunks
+                        ((actual is com.openminis.app.sandbox.offload.ModelWorkerDiedException) ||
+                            (actual is com.openminis.app.sandbox.offload.ModelStreamErrorException)) &&
+                        (actual as? com.openminis.app.sandbox.offload.ModelExecutionStreamException)?.hadChunks == false
                     val isTransient = actual is com.openminis.app.data.model.LLMError.NetworkError ||
                         actual is com.openminis.app.data.model.LLMError.TransientError ||
                         is5xx ||

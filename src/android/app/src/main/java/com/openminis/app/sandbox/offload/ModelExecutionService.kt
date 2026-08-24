@@ -94,6 +94,10 @@ class ModelExecutionService : Service() {
          * body only saw the cancel file once a chunk arrived, so a first-chunk
          * stall was uncancellable and drove the dead-worker misclassification.
          */
+        // [worker-first-chunk-guard] Legacy hard-coded first-chunk timeout.
+        // SUPERSEDED by FirstChunkTimeoutPolicy (2026-08-24, route-aware:
+        // 30s direct / 45s proxy). Kept as documentation + a stable default
+        // reference; production reads the policy for the effective budget.
         private const val FIRST_CHUNK_TIMEOUT_MS = 30_000L
 
         /**
@@ -869,7 +873,13 @@ class ModelExecutionService : Service() {
                 // Cancellation is ALSO checked at this boundary: the old in-collect
                 // check alone left a pre-first-chunk stall UNcancellable (loop body
                 // never ran).
-                val first = withTimeoutOrNull(FIRST_CHUNK_TIMEOUT_MS) {
+                // 2026-08-24 (diag/first-chunk-timeout): the budget is now route-aware.
+                // Proxy/gateway routes (custom base URL on a non-official host) get
+                // PROXY_TIMEOUT_SEC (aligned with the inner first-data watchdog),
+                // direct endpoints keep the conservative DIRECT_TIMEOUT_SEC.
+                val firstChunkTimeoutMs =
+                    FirstChunkTimeoutPolicy.decideTimeoutSec(instance.customBaseURL) * 1000L
+                val first = withTimeoutOrNull(firstChunkTimeoutMs) {
                     // Pre-check cancel before starting the cold flow: the main
                     // process may have cancelled while we built the provider.
                     if (cancelFile.exists()) throw ModelExecutionCancelledException()
@@ -902,12 +912,12 @@ class ModelExecutionService : Service() {
                     }
                 }
                 if (first == null) {
-                    // 30s with no first chunk and no completion -> provider wedged.
-                    // Surface as a stream error so the client stops polling instead
-                    // of misclassifying a LIVE worker as DEAD after its 5s grace.
+                    // No first chunk within the route-aware budget. Surface as a
+                    // stream error so the client stops polling instead of
+                    // misclassifying a LIVE worker as DEAD after its 5s grace.
                     // (A cancel landing mid-window treats the run the same way.)
                     ModelExecutionRunLog.log(dir, android.os.Process.myPid(), ModelExecutionRunLog.Phase.STREAM_ERROR, "first_chunk_timeout", runId = runIdOf(dir))
-                    throw ModelStreamErrorException("provider produced no first chunk within ${FIRST_CHUNK_TIMEOUT_MS}ms (hadChunks=false)", hadChunks = false)
+                    throw ModelStreamErrorException("provider produced no first chunk within ${firstChunkTimeoutMs}ms (hadChunks=false)", hadChunks = false)
                 }
             }
             appendLine(ChatStreamJsonl.DONE_LINE)
