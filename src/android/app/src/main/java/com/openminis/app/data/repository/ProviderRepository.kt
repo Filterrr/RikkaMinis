@@ -985,7 +985,17 @@ class ProviderRepository(private val context: Context) {
                 providerInstanceId = instanceId,
                 baseModel = resolved,
                 overrides = prior?.overrides ?: ModelOverrides(),
-                isCustom = false,
+                // [T-provider-custom-identity] A refresh must never strip a
+                // manually-added model's custom identity: the long-press delete
+                // gesture on the provider detail screen is gated on
+                // entry.isCustom, so wiping it here silently removes the user's
+                // only delete path (model-delete-bug: custom entry with same id
+                // returned by /v1/models became undeletable after manual
+                // Refresh). Carrying prior.isCustom forward keeps the delete
+                // gesture reachable forever; autoRefreshModels already skips
+                // instances holding custom entries, so this only matters for
+                // explicit refreshModels() calls.
+                isCustom = prior?.isCustom ?: false,
                 // [T-provider-default-hidden] Newly refreshed models come in hidden by
                 // default — mirrors rikkahub "pull everything, show the chosen
                 // few". The user unpicks them on the Manage All Models sheet;
