@@ -62,8 +62,10 @@ import kotlinx.coroutines.launch
  * and clash with the grey "provider · model" text it sits beside. Both colors
  * are theme tokens, so the badge adapts to light/dark automatically.
  *
- * The caller only mounts this when thinking is enabled, so the label is always
- * a real level (never "Off").
+ * The caller mounts this whenever the current model supports thinking. The
+ * label may therefore be "Off"; keeping the badge visible in that state is
+ * intentional because it is the only direct entry point to re-enable thinking
+ * after the user turns it off.
  *
  * It carries its OWN clickable (which consumes the tap) so a tap on the badge
  * opens the thinking-level sheet instead of the model picker owned by the

@@ -2232,23 +2232,15 @@ fun ChatScreen(
                                             // badge to the right stays intrinsic.
                                             modifier = Modifier.weight(1f, fill = false),
                                         )
-                                        // Show the badge ONLY when the model can
-                                        // think AND thinking is currently on:
-                                        //   - availableThinkingLevels non-empty →
-                                        //     the bound model actually supports
-                                        //     thinking (no badge for models that
-                                        //     can't reason);
-                                        //   - level.isEnabled (≠ Off) → thinking is
-                                        //     switched on right now.
-                                        // When Off we render NOTHING (no greyed
-                                        // placeholder): iOS found a grey "Off" pill
-                                        // read as ambiguous ("is thinking on or
-                                        // off?"), so the badge simply disappears.
-                                        // The sheet still lists Off, so users can
-                                        // turn thinking back off from there.
-                                        if (viewModel.availableThinkingLevels.isNotEmpty() &&
-                                            thinkingLevelBadgeState.isEnabled
-                                        ) {
+                                        // Show the badge whenever the bound model can
+                                        // think, including when the current level is OFF.
+                                        // The OFF state must keep this entry point alive:
+                                        // hiding the only badge that opens the level sheet
+                                        // made thinking impossible to re-enable within a
+                                        // session. In the OFF state the badge displays
+                                        // "Off"; tapping it opens the sheet and the user
+                                        // can select LOW/MEDIUM/HIGH/etc. again.
+                                        if (viewModel.availableThinkingLevels.isNotEmpty()) {
                                             ThinkingLevelBadge(
                                                 level = thinkingLevelBadgeState,
                                                 onClick = { showThinkingLevelSheet = true },
