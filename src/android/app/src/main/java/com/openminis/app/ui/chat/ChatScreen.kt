@@ -3014,7 +3014,7 @@ fun ChatScreen(
                     // re-building non-text rows on every 80ms tick during a
                     // long tool execution. Resets to null on each effect
                     // restart (session switch / messages key change).
-                    var lastMergedFingerprint: List<ChatMessage>? = null
+                    var lastMergedFingerprint: List<Any?>? = null
                     // [T-android-stream-pipeline-incremental] Flush the perf
                     // turn when this effect is CANCELLED mid-turn: the
                     // turn-end drain emits `_messages` FIRST (restarting this
@@ -3132,7 +3132,7 @@ fun ChatScreen(
                                 // the side-channel into merged (final terminal
                                 // tool states + complete text), so it differs
                                 // from the live-stream tick that precedes it.
-                                if (merged != lastMergedFingerprint) {
+                                if (lightFingerprint(merged) != lastMergedFingerprint) {
                                     if (!rowLedger.isIncrementallyCompatible(merged)) {
                                         val tRebuildStart = System.nanoTime()
                                         val rows = withContext(Dispatchers.Default) {
@@ -3148,7 +3148,7 @@ fun ChatScreen(
                                     }
                                     rowLedger.reconcile(merged)
                                 }
-                                lastMergedFingerprint = merged
+                                lastMergedFingerprint = lightFingerprint(merged)
                             }
                             flatItems = rowLedger.snapshot()
                             // [forward-stable] Verify the append-only prefix
@@ -3179,23 +3179,41 @@ fun ChatScreen(
                             if (stream.isEmpty() && streamWasActive) {
                                 streamWasActive = false
                                 com.openminis.app.diagnostics.StreamPerfMonitor.turnEnd()
-                                // [T-streamlining-thinking-fix] On turn end,
-                                // force a full canonical rebuild instead of
-                                // relying on the incremental reconcile path to
-                                // converge. The side-channel drains the delta
-                                // into `_messages` as a single emit, so this
-                                // tick's `merged` already reflects the final
-                                // terminal tool states and complete text — a
-                                // full re-seed guarantees the UI reflects
-                                // them even if the incremental reconcile
-                                // dropped a terminal flip along the way.
-                                // Runs AFTER snapshot() and BEFORE the next
-                                // publish tick, so it doesn't double-render in
-                                // the same tick.
-                                val rows = withContext(Dispatchers.Default) {
-                                    buildFlatChatItems(merged, sessionId)
-                                }
-                                rowLedger.seed(rows, merged.size)
+                                // [fix/chat-render-turnend-settle] Turn end no
+                                // longer forces a full canonical rebuild +
+                                // ledger re-seed. The side-channel drains the
+                                // delta into `_messages` as a single emit, so
+                                // this tick's `merged` already carries the
+                                // terminal tool states and complete text; the
+                                // incremental reconcile converges it in place:
+                                // textual rows are settled by their
+                                // AppendOnlyMarkdownSegmenter
+                                // (streamEnded=true — settle only, keys stay
+                                // mdslot:..., no re-split), RUNNING tool group
+                                // pills flip to their terminal state, and the
+                                // typing indicator retires. Published keys are
+                                // prefix-stable, so the LazyColumn slots are
+                                // updated in place with zero churn — this is
+                                // what kills the "list jumps / re-draws at
+                                // answer end" artifact and the per-turn
+                                // segmenter reset that made every finished
+                                // turn re-render from scratch.
+                                //
+                                // Convergence guard for the
+                                // AssistantMarkdownBlock cheap-equals blind
+                                // spot: `equals` only compares rawText LENGTH
+                                // (ChatFlatItems.kt), so a same-length
+                                // content rewrite between the last streaming
+                                // tick and the terminal snapshot would be
+                                // invisible to LazyColumn's skip decision and
+                                // the stale text would stay rendered.
+                                // reconcileAndVerifyTerminalText re-derives
+                                // each segmenter's slots from the canonical
+                                // terminal text and force-publishes any slot
+                                // whose content differs — content equality,
+                                // not length equality.
+                                rowLedger.reconcile(merged)
+                                rowLedger.reconcileAndVerifyTerminalText(merged)
                                 flatItems = rowLedger.snapshot()
                             }
                         }

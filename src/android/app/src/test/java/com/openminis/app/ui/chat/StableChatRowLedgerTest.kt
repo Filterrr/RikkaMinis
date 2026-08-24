@@ -668,4 +668,128 @@ class StableChatRowLedgerTest {
         assertEquals(2, md.size)
         assertEquals(listOf("Intro line", "Para two… and a tail"), md.map { it.rawText })
     }
+
+    // ── [fix/chat-render-turnend-settle] turn-end settle: no re-seed, key
+    //    stability, and same-length-rewrite convergence ────────────────────
+
+    @Test
+    fun `turn-end settle keeps every key identical after reconcileAndVerify`() {
+        val msgId = "a1"
+        val ledger = StableChatRowLedger()
+        ledger.seed(emptyList(), 0)
+
+        val streaming = listOf(
+            userMessage("u1"),
+            assistantMessage(msgId, blocks = listOf(textBlock("text_1_0", "P1\n\nP2 tail")), isStreaming = true),
+        )
+        val kLive = keysOf(ledger.reconcile(streaming))
+
+        val terminal = listOf(
+            userMessage("u1"),
+            assistantMessage(msgId, blocks = listOf(textBlock("text_1_0", "P1\n\nP2 tail")), isStreaming = false),
+        )
+        val kSettled = keysOf(ledger.reconcile(terminal))
+        ledger.reconcileAndVerifyTerminalText(terminal)
+
+        assertEquals("turn-end must NOT change any published key", kLive, kSettled)
+        assertEquals("verify pass must keep keys stable too", kSettled, keysOf(ledger.snapshot()))
+        val md = ledger.snapshot().filterIsInstance<FlatChatItem.AssistantMarkdownBlock>()
+        assertEquals(listOf("P1", "P2 tail"), md.map { it.rawText })
+    }
+
+    @Test
+    fun `turn-end same-length rewrite is converged by verify pass`() {
+        val msgId = "a1"
+        val ledger = StableChatRowLedger()
+        ledger.seed(emptyList(), 0)
+
+        // Live turn streams "AAAA"; the terminal snapshot rewrites the SAME
+        // length text to "BBBB". AssistantMarkdownBlock.equals only compares
+        // lengths — without the verify pass the rendered text would stay
+        // "AAAA" forever.
+        val streaming = listOf(
+            userMessage("u1"),
+            assistantMessage(msgId, blocks = listOf(textBlock("text_1_0", "AAAA")), isStreaming = true),
+        )
+        ledger.reconcile(streaming)
+
+        val terminal = listOf(
+            userMessage("u1"),
+            assistantMessage(msgId, blocks = listOf(textBlock("text_1_0", "BBBB")), isStreaming = false),
+        )
+        ledger.reconcile(terminal)
+        // BEFORE the guard: same key set, same LENGTHs → LazyColumn skips.
+        assertEquals("keys are unchanged (settle)", keysOf(ledger.snapshot()), keysOf(ledger.reconcile(terminal)))
+
+        ledger.reconcileAndVerifyTerminalText(terminal)
+        val md = ledger.snapshot().filterIsInstance<FlatChatItem.AssistantMarkdownBlock>()
+        assertEquals("terminal rewrite must be published", listOf("BBBB"), md.map { it.rawText })
+        assertEquals("converged keys stay stable", listOf("mdblock:a1:text_1_0:0"), keysOf(ledger.snapshot()))
+    }
+
+    // ── [fix/chat-render-tick-scan] light fingerprint + scoped sync ────────
+
+    @Test
+    fun `fingerprint is unchanged when rendering-relevant state is identical`() {
+        val m1 = assistantMessage("a1", content = "Hello world", blocks = listOf(textBlock("t1", "Body")), isStreaming = true)
+        val m2 = assistantMessage("a1", content = "Hello world", blocks = listOf(textBlock("t1", "Body")), isStreaming = true)
+        assertEquals("identical messages must produce identical fingerprints", lightFingerprint(listOf(m1)), lightFingerprint(listOf(m2)))
+
+        // Content changed but length identical — the blind spot the turn-end
+        // verify pass owns; the fingerprint correctly reports "unchanged".
+        val m3 = assistantMessage("a1", content = "Hello world", blocks = listOf(textBlock("t1", "Olleh drow")), isStreaming = true)
+        assertEquals("same-length rewrite must not trip the fingerprint",
+            lightFingerprint(listOf(m1)), lightFingerprint(listOf(m3)))
+    }
+
+    @Test
+    fun `fingerprint changes when any live flag or tool status flips`() {
+        val base = assistantMessage("a1", content = "x", blocks = listOf(toolBlock("tool_1", ToolBlockStatus.RUNNING)), isStreaming = true)
+        val flips = listOf(
+            base.copy(isStreaming = false),
+            base.copy(isAwaitingModelResponse = true),
+            base.copy(error = "boom"),
+            base.copy(isQueued = true),
+            base.copy(toolBlocks = listOf(toolBlock("tool_1", ToolBlockStatus.SUCCESS))),
+            base.copy(toolBlocks = listOf(toolBlock("tool_1", ToolBlockStatus.RUNNING), toolBlock("tool_2", ToolBlockStatus.RUNNING))),
+            base.copy(toolBlocks = listOf(toolBlock("tool_1", ToolBlockStatus.RUNNING, title = "different"))),
+        )
+        for ((i, flipped) in flips.withIndex()) {
+            assertFalse("flip #$i must change the fingerprint",
+                lightFingerprint(listOf(base)) == lightFingerprint(listOf(flipped)))
+        }
+    }
+
+    @Test
+    fun `syncActiveAssistantStatus only walks the active window`() {
+        val ledger = StableChatRowLedger()
+        val msgs = mutableListOf<ChatMessage>()
+        val nHistory = 8
+        for (i in 0 until nHistory) {
+            msgs.add(userMessage("u$i", content = "q"))
+            msgs.add(assistantMessage("a$i", content = "answer $i", blocks = listOf(textBlock("t_$i", "A$i"))))
+        }
+        val seedRows = buildFlatChatItems(msgs)
+        ledger.seed(seedRows, msgs.size)
+
+        // Append a streaming active turn.
+        msgs.add(userMessage("uNew"))
+        msgs.add(assistantMessage("aNew", blocks = listOf(textBlock("t_new", "live")), isStreaming = true))
+        ledger.reconcile(msgs)
+
+        val fullRows = ledger.snapshot()
+        val firstOfActive = fullRows.indexOfFirst { it.owningMessageId() == "aNew" }
+        assertTrue("active turn must be published", firstOfActive >= 0)
+        assertTrue("active window must NOT span the whole ledger (history is frozen)",
+            firstOfActive < fullRows.size - 1 && firstOfActive > 0)
+        assertTrue("only the appended live turn is tracked",
+            ledger.activeAssistantIdsCount() <= 1)
+
+        // Reconcile again with the same topology — the scoped sync must not
+        // disturb any history row.
+        val before = fullRows.filterIsInstance<FlatChatItem.AssistantMarkdownBlock>().map { it.rawText }
+        ledger.reconcile(msgs)
+        val after1 = ledger.snapshot().filterIsInstance<FlatChatItem.AssistantMarkdownBlock>().map { it.rawText }
+        assertEquals("historical text rows must be untouched by the scoped sync", before, after1)
+    }
 }
