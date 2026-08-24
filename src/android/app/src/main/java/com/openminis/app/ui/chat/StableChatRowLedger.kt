@@ -415,10 +415,11 @@ internal class StableChatRowLedger(
     private fun syncQueuedFlips(messages: List<ChatMessage>) {
         if (rows.none { it is FlatChatItem.UserBubble }) return
         val freshById = messages.associateBy { it.id }
-        // [fix/chat-render-tick-scan] Fast path: no queued message anywhere
-        // → nothing can flip → skip the full row walk (present in almost
-        // every idle/streaming tick).
-        if (!messages.any { it.isQueued }) return
+        // [fix/chat-render-tick-scan] The queued→sent flip is UNCONDITIONAL:
+        // a message published as isQueued=true keeps its id when the queue
+        // drains (flag flips to false) — the current snapshot has no queued
+        // message, but the published row must still be refreshed. No fast
+        // path here; the scan is bounded to UserBubble rows only.
         for (i in rows.indices) {
             val row = rows[i]
             if (row is FlatChatItem.UserBubble) {

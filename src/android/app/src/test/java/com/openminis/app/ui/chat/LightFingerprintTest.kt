@@ -51,8 +51,8 @@ class LightFingerprintTest {
     }
 
     @Test fun `same-length rewrite keeps fingerprint stable (owned by turn-end verify)`() {
-        val a = msg(content = "Hello world", blocks = listOf(textBlock("t1", "Old te")), isStreaming = true)
-        val b = msg(content = "Hello world", blocks = listOf(textBlock("t1", "New te")), isStreaming = true)
+        val a = msg(content = "Hello world", blocks = listOf(textBlock("t1", "Oldte")), isStreaming = true)
+        val b = msg(content = "Hello world", blocks = listOf(textBlock("t1", "Newte")), isStreaming = true)
         // Same id / same lengths / same flags -> same fingerprint (this is the
         // documented blind spot that reconcileAndVerifyTerminalText closes).
         assertEquals(lightFingerprint(listOf(a)), lightFingerprint(listOf(b)))
