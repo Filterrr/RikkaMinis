@@ -38,6 +38,19 @@ class FirstChunkTimeoutPolicyTest {
     }
 
     @Test
+    fun `additional official endpoints stay direct`() {
+        // 2026-08-24: Azure/DashScope/Groq/MiniMax/Xiaomi were missing from the
+        // official suffix list and fell into the proxy bucket (45s). Pinned
+        // here so the exact-match additions cannot silently regress.
+        assertFalse(FirstChunkTimeoutPolicy.isProxyRoute("https://myres.openai.azure.com"))
+        assertFalse(FirstChunkTimeoutPolicy.isProxyRoute("https://myres.openai.azure.com/openai/deployments/gpt-4o/chat/completions"))
+        assertFalse(FirstChunkTimeoutPolicy.isProxyRoute("https://dashscope.aliyuncs.com/compatible-mode/v1"))
+        assertFalse(FirstChunkTimeoutPolicy.isProxyRoute("https://api.groq.com/openai/v1"))
+        assertFalse(FirstChunkTimeoutPolicy.isProxyRoute("https://api.minimax.io/v1"))
+        assertFalse(FirstChunkTimeoutPolicy.isProxyRoute("https://api.xiaomimimo.com/v1"))
+    }
+
+    @Test
     fun `subdomains of official hosts count as direct`() {
         assertFalse(FirstChunkTimeoutPolicy.isProxyRoute("https://eu.api.openai.com"))
     }
@@ -50,6 +63,27 @@ class FirstChunkTimeoutPolicyTest {
         assertTrue(FirstChunkTimeoutPolicy.isProxyRoute("http://10.0.0.5:8080"))
         assertTrue(FirstChunkTimeoutPolicy.isProxyRoute("http://192.168.1.100:7890"))
         assertTrue(FirstChunkTimeoutPolicy.isProxyRoute("http://172.16.0.2:1080"))
+        // RFC1918 172.16.0.0–172.31.255.255: all second-octet values in 16..31.
+        assertTrue(FirstChunkTimeoutPolicy.isProxyRoute("http://172.16.1.1:1080"))
+        assertTrue(FirstChunkTimeoutPolicy.isProxyRoute("http://172.19.255.254:1080"))
+        assertTrue(FirstChunkTimeoutPolicy.isProxyRoute("http://172.20.0.1:1080"))
+        assertTrue(FirstChunkTimeoutPolicy.isProxyRoute("http://172.29.5.5:1080"))
+        assertTrue(FirstChunkTimeoutPolicy.isProxyRoute("http://172.30.0.1:1080"))
+        assertTrue(FirstChunkTimeoutPolicy.isProxyRoute("http://172.31.255.255:1080"))
+        assertTrue(FirstChunkTimeoutPolicy.isProxyRoute("http://172.31.1.99:1080"))
+    }
+
+    @Test
+    fun `public 172 space outside RFC1918 still proxy via suffix check`() {
+        // 172.32.0.0+ is public address space — the old loose "172." prefix
+        // swept it into the private-172 early check unnecessarily. With the
+        // RFC1918-exact fix, these addresses flow through to the normal
+        // suffix-based check instead. Since no official suffix matches a bare
+        // IP, they remain classified as proxy (non-official custom host) —
+        // the same practical outcome, but via the correct path.
+        assertTrue(FirstChunkTimeoutPolicy.isProxyRoute("https://172.32.1.1:1080"))
+        assertTrue(FirstChunkTimeoutPolicy.isProxyRoute("https://172.100.0.1:1080"))
+        assertTrue(FirstChunkTimeoutPolicy.isProxyRoute("https://172.255.255.1:1080"))
     }
 
     @Test
