@@ -1355,7 +1355,7 @@ fun ChatScreen(
     // pending flag is consumed whether or not the scroll fired. Position
     // observation is only ever read here to DECIDE — never triggers a scroll
     // from inside a listener, so no feedback loop.
-    LaunchedEffect(followState.pendingBottomRequest, followState.rowRevision, listState) {
+    LaunchedEffect(followState.pendingBottomRequest, followState.rowRevision, listState, listState.layoutInfo) {
         // [fix/scroll-follow-simplify] This consumer handles EXPLICIT user
         // intents (InitialOpen / Send / FabDown / Resume / Retry) and the
         // forceScroll edge — all of which must scroll regardless of the
@@ -1364,7 +1364,21 @@ fun ChatScreen(
         // previously raised STREAM_PROGRESS here is removed (it was
         // unreachable under AGGREGATE_MESSAGE_ITEMS anyway), so this consumer
         // never double-drives with SIMPLE_FOLLOW.
+        //
+        // [fix/history-open-at-bottom] `listState.layoutInfo` is part of the
+        // key set so the effect re-runs when rows actually land (cold-open of
+        // a history session has no StreamRowsChanged revision to nudge it —
+        // that dispatch is unreachable under AGGREGATE_MESSAGE_ITEMS). The
+        // INITIAL_OPEN request stays pending across the empty-layout window
+        // below and fires the real bottom scroll once content exists.
         val reason = followState.pendingBottomRequest ?: return@LaunchedEffect
+        val totalItems = listState.layoutInfo.totalItemsCount
+        // [fix/history-open-at-bottom] For the explicit "open the session at
+        // the bottom" intent, an empty/recomposed-away layout must NOT consume
+        // the pending request: the old comment promised "next StreamRowsChanged
+        // will re-scroll", but that dispatch no longer runs. Retain the request
+        // and let the layoutInfo key re-trigger this effect once rows land.
+        val isEmptyLayout = retainInitialOpenOnEmptyLayout(reason, totalItems)
         if (followState.isFollowing &&
             !listState.isScrollInProgress &&
             !isBottomSentinelVisible(listState.layoutInfo)
@@ -1378,7 +1392,7 @@ fun ChatScreen(
             // The cold-open InitialOpen request must not crash the app — skip
             // it and let the next StreamRowsChanged revision (raised once rows
             // actually land) issue the real bottom scroll.
-            val scrollIdx = safeBottomScrollIndex(listState.layoutInfo.totalItemsCount)
+            val scrollIdx = safeBottomScrollIndex(totalItems)
             if (scrollIdx != null) {
                 AppLogger.debug("ScrollSrc", "request-bottom reason=$reason revision=${followState.rowRevision}")
                 listState.requestScrollToItem(scrollIdx)
@@ -1388,7 +1402,13 @@ fun ChatScreen(
         } else if (!followState.isFollowing) {
             AppLogger.debug("ScrollInvariant", "forbidden_scroll reason=$reason revision=${followState.rowRevision}")
         }
-        followState = consumeBottomRequest(followState)
+        // [fix/history-open-at-bottom] Do NOT consume an INITIAL_OPEN request
+        // while the layout is still empty (cold-open window) — otherwise the
+        // "scroll to bottom on open" never fires once content arrives. Keep it
+        // pending for the next layoutInfo-keyed run of this effect.
+        if (!isEmptyLayout) {
+            followState = consumeBottomRequest(followState)
+        }
     }
 
     // T-android-use-dragging-guard: does a real pointer drag currently own the
