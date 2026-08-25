@@ -324,8 +324,41 @@ internal fun AssistantHeader() {
     }
 }
 
+/**
+ * Stage D aggregate-path per-tool-call pill actions.
+ *
+ * [AssistantMessageView] renders a whole assistant message in one item; each
+ * inner tool_use is drawn as a single [ToolCallPill] (all tools of one turn
+ * collapse into ONE LazyColumn row rather than a separate flat item each).
+ * The caller supplies per-block actions ─ stop / detail / rerun-from-here /
+ * copy / open-terminal ─ mirroring the flat [FlatChatItem.AssistantToolUse]
+ * and [FlatChatItem.AssistantToolRunGroup] branches in ChatScreen.kt, but
+ * scoped to the current tool_use block.
+ *
+ * A `null` return from the provider falls back to the pill's defaults (the
+ * legacy call site passes null everywhere → no-op actions, exactly as before
+ * this class existed).
+ */
+internal data class ToolPillActions(
+    val onRetry: (() -> Unit)? = null,
+    val onStop: (() -> Unit)? = null,
+    val onOpenTerminalWithCommand: (String) -> Unit = {},
+    val onOpenDetail: (String) -> Unit = {},
+    val onRerunFromHere: (() -> Unit)? = null,
+    val onCopyDetails: (() -> Unit)? = null,
+)
+
 @Composable
-internal fun AssistantMessageView(message: ChatMessage, onRetry: (() -> Unit)? = null) {
+internal fun AssistantMessageView(
+    message: ChatMessage,
+    onRetry: (() -> Unit)? = null,
+    // Stage D: per-tool_use-block actions for the pill (stop/detail/rerun/
+    // copy/open-terminal). Null → legacy no-op pill (all defaults).
+    toolPillActions: (AssistantBlock) -> ToolPillActions? = { null },
+    // Stage D: "Revert Compact" action for an info block whose toolName is
+    // "compact" — mirrors the flat AssistantInfo branch in ChatScreen.kt.
+    onRevert: (() -> Unit)? = null,
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -372,7 +405,7 @@ internal fun AssistantMessageView(message: ChatMessage, onRetry: (() -> Unit)? =
                     }
                 }
                 "info" -> {
-                    FallbackInfoBlock(block)
+                    FallbackInfoBlock(block, onRevert = onRevert)
                 }
                 "text" -> {
                     if (block.content.isNotEmpty()) {
@@ -395,8 +428,25 @@ internal fun AssistantMessageView(message: ChatMessage, onRetry: (() -> Unit)? =
                     }
                 }
                 else -> {
-                    // tool_use
-                    ToolCallPill(block, allToolBlocks = toolPillBlocks)
+                    // tool_use — Stage D aggregate path wires pill actions
+                    // (stop/detail/rerun/copy/open-terminal) through
+                    // [toolPillActions]; legacy/no-provider retains the
+                    // default no-op pill.
+                    val actions = toolPillActions(block)
+                    if (actions != null) {
+                        ToolCallPill(
+                            block = block,
+                            allToolBlocks = toolPillBlocks,
+                            onRetry = actions.onRetry,
+                            onStop = actions.onStop,
+                            onOpenTerminalWithCommand = actions.onOpenTerminalWithCommand,
+                            onOpenDetail = actions.onOpenDetail,
+                            onRerunFromHere = actions.onRerunFromHere,
+                            onCopyDetails = actions.onCopyDetails,
+                        )
+                    } else {
+                        ToolCallPill(block, allToolBlocks = toolPillBlocks)
+                    }
                 }
             }
         }
