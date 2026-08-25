@@ -483,6 +483,9 @@
     <string name="storage_reclaim_confirm_button">回收</string>
     <string name="usage_title">用量</string>
     <string name="usage_section_total">总用量</string>
+    <string name="usage_filter_all">所有时间</string>
+    <string name="usage_filter_7d">近 7 天</string>
+    <string name="usage_filter_30d">近 30 天</string>
     <string name="usage_label_total_input">总输入（含缓存）</string>
     <string name="usage_label_output">输出 Token</string>
     <string name="usage_label_cache_read">缓存读取</string>

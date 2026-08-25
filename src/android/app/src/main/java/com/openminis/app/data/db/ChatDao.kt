@@ -167,6 +167,17 @@ interface ChatDao {
     """)
     suspend fun allUsageRecords(): List<UsageRecord>
 
+    /** Time-windowed usage rows for the range filter on UsageStatsScreen.
+     *  Half-open window [sinceMs, untilMs). Added by feat/usage-aggregation-perf
+     *  — deliberately a NEW query so the allUsageRecords() SELECT shape is
+     *  untouched (parallel branch owns its attribution logic). */
+    @Query("""
+        SELECT s.model_id AS modelId, m.token_usage AS tokenUsage, m.created_at AS createdAt, m.session_id AS sessionId
+        FROM messages m JOIN sessions s ON m.session_id = s.id
+        WHERE m.token_usage IS NOT NULL AND m.created_at >= :sinceMs AND m.created_at < :untilMs
+    """)
+    suspend fun usageRecordsBetween(sinceMs: Long, untilMs: Long): List<UsageRecord>
+
     // Last message preview for session list
     @Query("""
         SELECT parts_json FROM messages

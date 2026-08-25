@@ -5,6 +5,7 @@ import android.database.sqlite.SQLiteConstraintException
 import com.openminis.app.data.db.ChatDao
 import com.openminis.app.data.db.ChatSessionEntity
 import com.openminis.app.data.db.MessageEntity
+import com.openminis.app.data.db.UsageRecord
 import com.openminis.app.data.storage.SessionFileStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -71,6 +72,18 @@ class ChatRepository(
 
     /** All persisted token_usage JSON strings for a session (one per LLM call). */
     suspend fun sessionTokenUsages(sessionId: String): List<String> = dao.tokenUsages(sessionId)
+
+    /**
+     * Usage rows for the stats screen. Both bounds null → legacy full scan
+     * ([ChatDao.allUsageRecords]); otherwise the time-windowed query
+     * ([ChatDao.usageRecordsBetween], half-open [since, until)).
+     */
+    suspend fun usageRecords(since: Long?, until: Long?): List<UsageRecord> =
+        if (since == null && until == null) dao.allUsageRecords()
+        else dao.usageRecordsBetween(
+            sinceMs = since ?: 0L,
+            untilMs = until ?: Long.MAX_VALUE,
+        )
 
     /**
      * [T-android-session-paused-badge-hardkill] Session ids whose agent loop was
