@@ -1727,10 +1727,13 @@ class ProviderRepository(private val context: Context) {
     }
 
 
-    suspend fun refreshModels(instance: ProviderInstance): ModelRefreshResult {
+    suspend fun refreshModels(
+        instance: ProviderInstance,
+        forceRefresh: Boolean = false,
+    ): ModelRefreshResult {
         val apiKey = loadApiKey(instance.id)
 
-        android.util.Log.i("ProviderRepo", "refreshModels: id=${instance.id} type=${instance.providerType} credential=${instance.credentialType} hasKey=${apiKey != null} keyLen=${apiKey?.length ?: 0} baseURL=${instance.effectiveBaseURL}")
+        android.util.Log.i("ProviderRepo", "refreshModels: id=${instance.id} type=${instance.providerType} credential=${instance.credentialType} hasKey=${apiKey != null} keyLen=${apiKey?.length ?: 0} baseURL=${instance.effectiveBaseURL} forceRefresh=$forceRefresh")
 
         // Step 1: Try provider API (requires API key)
         val customBase = instance.customBaseURL
@@ -1745,7 +1748,7 @@ class ProviderRepository(private val context: Context) {
                 // provider implementations directly (data→provider reverse
                 // dependency). Registry returns empty list for types without
                 // a registered fetcher.
-                ModelListProviderRegistry.fetchModels(instance, apiKey, isThirdParty)
+                ModelListProviderRegistry.fetchModels(instance, apiKey, isThirdParty, forceRefresh)
             } catch (e: Exception) {
                 android.util.Log.e("ProviderRepo", "refreshModels fetch error: ${e.message}", e)
                 emptyList()

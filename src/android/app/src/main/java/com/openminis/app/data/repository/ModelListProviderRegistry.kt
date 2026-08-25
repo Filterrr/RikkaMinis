@@ -31,10 +31,21 @@ object ModelListProviderRegistry {
      * Fetch models for [instance] via its registered provider.
      * Returns an empty list when no fetcher is registered for the
      * instance's provider type (caller falls through to its fallback).
+     *
+     * @param forceRefresh when true, bypass any underlying disk cache and
+     *   hit the live /models endpoint. Used after adding a new provider so a
+     *   previously-cached result for the same URL+key doesn't mask a real
+     *   fetch (which would leave a freshly-added custom provider with an
+     *   empty model list until the next daily auto-refresh).
      */
-    suspend fun fetchModels(instance: ProviderInstance, apiKey: String?, thirdParty: Boolean): List<LLMModel> {
+    suspend fun fetchModels(
+        instance: ProviderInstance,
+        apiKey: String?,
+        thirdParty: Boolean,
+        forceRefresh: Boolean = false,
+    ): List<LLMModel> {
         val provider = synchronized(providers) { providers[instance.providerType] } ?: return emptyList()
-        return provider.fetchModels(apiKey, instance, thirdParty)
+        return provider.fetchModels(apiKey, instance, thirdParty, forceRefresh)
     }
 
     /** Test hook: clear all registrations. */
