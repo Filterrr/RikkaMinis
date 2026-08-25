@@ -9472,6 +9472,8 @@ class ChatViewModel(
                 toolTitle = toolTitle,
                 timedOut = timedOut,
             )
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             ToolExecutionResult("Error: ${e.message}", false)
         }
@@ -9557,6 +9559,8 @@ class ChatViewModel(
                 imageFilePath = persistentImagePath,
                 imageLinuxPath = linuxImagePath,
             )
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             ToolExecutionResult("Error: ${e.message}", false)
         }
