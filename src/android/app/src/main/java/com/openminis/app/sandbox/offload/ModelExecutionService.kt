@@ -94,6 +94,10 @@ class ModelExecutionService : Service() {
          * body only saw the cancel file once a chunk arrived, so a first-chunk
          * stall was uncancellable and drove the dead-worker misclassification.
          */
+        // [worker-first-chunk-guard] Legacy hard-coded first-chunk timeout.
+        // SUPERSEDED by FirstChunkTimeoutPolicy (2026-08-24, route-aware:
+        // 30s direct / 45s proxy). Kept as documentation + a stable default
+        // reference; production reads the policy for the effective budget.
         private const val FIRST_CHUNK_TIMEOUT_MS = 30_000L
 
         /**
@@ -869,7 +873,21 @@ class ModelExecutionService : Service() {
                 // Cancellation is ALSO checked at this boundary: the old in-collect
                 // check alone left a pre-first-chunk stall UNcancellable (loop body
                 // never ran).
-                val first = withTimeoutOrNull(FIRST_CHUNK_TIMEOUT_MS) {
+                // 2026-08-25: reasoning/thinking runs get a 30-minute absolute
+                // first-chunk ceiling. A thinking model legitimately stays
+                // silent for many minutes before its first visible text (Codex
+                // Responses sits 2:50–3:10 dead-air between reasoning and text
+                // deltas; users report 10–20 min). The old 30/45s route budget
+                // force-killed those at a repeatable wall-clock boundary
+                // ("provider produced no first chunk within 45000ms"). The 30-min
+                // budget stays finite to bound a truly wedged upstream; worker
+                // liveness in the interim is proven by the liveness.beat heartbeat.
+                val firstChunkTimeoutMs =
+                    FirstChunkTimeoutPolicy.decideTimeoutSec(
+                        customBaseURL = instance.customBaseURL,
+                        thinkingEnabled = thinkingLevel.isEnabled,
+                    ) * 1000L
+                val first = withTimeoutOrNull(firstChunkTimeoutMs) {
                     // Pre-check cancel before starting the cold flow: the main
                     // process may have cancelled while we built the provider.
                     if (cancelFile.exists()) throw ModelExecutionCancelledException()
@@ -902,12 +920,12 @@ class ModelExecutionService : Service() {
                     }
                 }
                 if (first == null) {
-                    // 30s with no first chunk and no completion -> provider wedged.
-                    // Surface as a stream error so the client stops polling instead
-                    // of misclassifying a LIVE worker as DEAD after its 5s grace.
+                    // No first chunk within the route-aware budget. Surface as a
+                    // stream error so the client stops polling instead of
+                    // misclassifying a LIVE worker as DEAD after its 5s grace.
                     // (A cancel landing mid-window treats the run the same way.)
                     ModelExecutionRunLog.log(dir, android.os.Process.myPid(), ModelExecutionRunLog.Phase.STREAM_ERROR, "first_chunk_timeout", runId = runIdOf(dir))
-                    throw ModelStreamErrorException("provider produced no first chunk within ${FIRST_CHUNK_TIMEOUT_MS}ms (hadChunks=false)", hadChunks = false)
+                    throw ModelStreamErrorException("provider produced no first chunk within ${firstChunkTimeoutMs}ms (hadChunks=false)", hadChunks = false)
                 }
             }
             appendLine(ChatStreamJsonl.DONE_LINE)

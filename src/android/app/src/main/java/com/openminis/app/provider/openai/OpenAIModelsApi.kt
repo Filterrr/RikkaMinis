@@ -42,10 +42,10 @@ object OpenAIModelsApi {
         val fallback = if (isCustomBase) emptyList() else LLMModel.allOpenAI
 
         val cacheKey = (baseURL ?: "") + "|" + apiKey
-        if (context != null && !forceRefresh) {
-            cache.load(context, cacheKey)?.let { return@withContext it }
+        val ctx = context
+        if (shouldConsultCache(ctx != null, forceRefresh) && ctx != null) {
+            cache.load(ctx, cacheKey)?.let { return@withContext it }
         }
-
         val url = buildURL(baseURL)
         val request = Request.Builder()
             .url(url)
@@ -141,6 +141,20 @@ object OpenAIModelsApi {
         val lower = baseURL.lowercase()
         return lower.contains("api.openai.com") || lower.contains("chatgpt.com")
     }
+
+    /**
+     * Pure decision for whether the 7-day [`ProviderModelsCache`] should be
+     * consulted before issuing a live HTTP fetch. A brand-new provider must
+     * NOT re-use a stale cache row for the same URL+key, so callers that just
+     * added a provider pass `forceRefresh=true` to bypass the cache and
+     * re-validate against the live /models endpoint.
+     *
+     * Extracted out of [fetchModels] so this contract is JVM-testable without
+     * an Android `Context`/`SharedPreferences` runtime (the surrounding cache
+     * [ProviderModelsCache] API itself needs an Android `Context`).
+     */
+    internal fun shouldConsultCache(hasContext: Boolean, forceRefresh: Boolean): Boolean =
+        hasContext && !forceRefresh
 
     private fun buildURL(baseURL: String?): String {
         if (baseURL == null) return "https://api.openai.com/v1/models"

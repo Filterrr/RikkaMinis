@@ -547,6 +547,39 @@ internal sealed class FlatChatItem {
             return h
         }
     }
+
+    /**
+     * [fix/message-node-item-generator] Message-level aggregated item —
+     * the "one node, one card" row used by the aggregate pipeline (gated by
+     * [AGGREGATE_MESSAGE_ITEMS] in ChatScreen.kt). A whole assistant message
+     * collapses into a single item instead of being flattened into 6-7 rows
+     * (header + fragment blocks + tool run group + thinking). Stage D renders
+     * THIS item via the reused AssistantMessageView.
+     *
+     * [T-android-cheap-equals-aggregate] Like [AssistantText], equals is
+     * hand-rolled cheap: a *frozen* message (same instance every tick —
+     * the ledger path reuses frozen instances by reference) returns the
+     * identity-equal fast path so LazyColumn stable-skips; a *streaming*
+     * message arrives as a fresh instance each emit, so `message !==` is
+     * true and the row recomposes — precisely the live-tail behavior wanted
+     * for the active turn. Never a char-by-char walk of content / blocks.
+     */
+    @Immutable
+    class AssistantMessageItem(
+        val messageId: String,
+        val message: ChatMessage,
+        /** Joined raw markdown of the whole message — selection toolbar Copy Markdown. */
+        val messageMarkdown: String,
+    ) : FlatChatItem() {
+        override val key = "msg:$messageId"
+        override val contentType = "assistantMessage"
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (other !is AssistantMessageItem) return false
+            return messageId == other.messageId && message === other.message
+        }
+        override fun hashCode(): Int = messageId.hashCode() * 31 + System.identityHashCode(message)
+    }
 }
 
 /**
@@ -574,6 +607,7 @@ internal fun FlatChatItem.owningMessageId(): String = when (this) {
     is FlatChatItem.AssistantTyping -> messageId
     is FlatChatItem.AssistantError -> messageId
     is FlatChatItem.AssistantLegacyContent -> messageId
+    is FlatChatItem.AssistantMessageItem -> messageId
 }
 
 /**
@@ -584,6 +618,55 @@ internal fun FlatChatItem.owningMessageId(): String = when (this) {
  * keying / equality stays correct. When [streaming] is empty the input is
  * returned as-is to skip the per-element walk on idle frames.
  */
+/**
+ * [fix/chat-render-tick-scan] Lightweight per-message fingerprint for the
+ * streaming tick dirty check.
+ *
+ * Replaces the previous full data-class `==` across the whole message list
+ * (which deep-compared every content string, toolArgs blob, error detail,
+ * image URI list, ... on every 80ms tick — O(total bytes), the dominant
+ * cost of the main-thread scan in long sessions).
+ *
+ * The fingerprint is per-message and O(1)-per-field:
+ *  - Strings are compared by LENGTH only (content.length, and per tool block
+ *    content.length) — cheap "has content grown" proxy, never a char walk.
+ *  - Live flags (isStreaming / isAwaitingModelResponse / isQueued / error)
+ *    are plain booleans.
+ *  - toolBlocks reduce to a digest of (kind, status, content.length,
+ *    durationMs, toolTitle) — state + growth signals without the payload
+ *    bytes (toolTitle renders on the tool card, so it participates).
+ *
+ * Invariant: fingerprint equality ⇒ the rendering-relevant view is
+ * unchanged, so the caller may skip reconcile. Any field LazyColumn actually
+ * renders from a ChatMessage is covered: text growth (content/tool-block
+ * lengths), live-state flips (flags + tool status), row-set changes
+ * (toolBlocks.size), tool card duration ticks (durationMs). Payload fields
+ * that never render (toolArgs internals, attachment URIs, errorDetail) are
+ * intentionally excluded.
+ *
+ * Note on turn-end: the terminal snapshot can rewrite content at the same
+ * length ("AAAA"→"BBBB") with an identical fingerprint — that blind spot is
+ * closed by [StableChatRowLedger.reconcileAndVerifyTerminalText] on the
+ * turn-end tick (content equality, not length), not by this fingerprint.
+ */
+internal fun lightFingerprint(messages: List<ChatMessage>): List<Any?> {
+    if (messages.isEmpty()) return emptyList()
+    return messages.map { m ->
+        listOf(
+            m.id,
+            m.content.length,
+            m.isStreaming,
+            m.isAwaitingModelResponse,
+            m.error != null,
+            m.isQueued,
+            m.toolBlocks.size,
+            m.toolBlocks.joinToString("|") {
+                "${it.kind}:${it.toolStatus?.name}:${it.content.length}:${it.durationMs}:${it.toolTitle}"
+            },
+        )
+    }
+}
+
 internal fun mergeStreamingOverlay(
     messages: List<ChatMessage>,
     streaming: Map<String, StreamingDelta>,
@@ -673,6 +756,11 @@ internal fun buildFlatChatItems(
                 messageId = "${item.messageId}#$n",
                 content = item.content,
                 isStreaming = item.isStreaming,
+                messageMarkdown = item.messageMarkdown,
+            )
+            is FlatChatItem.AssistantMessageItem -> FlatChatItem.AssistantMessageItem(
+                messageId = "${item.messageId}#$n",
+                message = item.message,
                 messageMarkdown = item.messageMarkdown,
             )
         }
@@ -922,6 +1010,61 @@ internal fun buildFlatChatItems(
         message.error?.let {
             out.add(dedupe(FlatChatItem.AssistantError(message.id, it, message.errorDetail)))
         }
+    }
+    return out
+}
+
+/**
+ * [fix/message-node-item-generator] Message-level aggregate generator — the
+ * stage-D counterpart of [buildFlatChatItems]. Semantic contract: **one
+ * [ChatMessage] in → exactly one [FlatChatItem] out**.
+ *
+ *  - user role      → [FlatChatItem.UserBubble], `precededByUser` mirrors the
+ *                     existing lookback (previous message is also user).
+ *  - assistant role → [FlatChatItem.AssistantMessageItem] carrying the whole
+ *                     message; `messageMarkdown` is the joined raw markdown
+ *                     of the message's text-kind blocks (falling back to
+ *                     `content`), byte-consistent with the `joinedMarkdown`
+ *                     computed inside [buildFlatChatItems] so Copy Markdown
+ *                     semantics stay aligned.
+ *  - `isInternalBridge` messages are always skipped (defensive, mirrors the
+ *    uiMessages sink's bridge filter) — a bridge must never render.
+ *
+ * No ledger / segmenter / skipTextBlocks machinery: the whole list is built
+ * in one pass. It is the aggregate pipeline (ChatScreen AGGREGATE_MESSAGE_ITEMS)
+ * and staged by stage D / the reused AssistantMessageView.
+ */
+internal fun buildAggregateChatItems(messages: List<ChatMessage>): List<FlatChatItem> {
+    val out = mutableListOf<FlatChatItem>()
+    val usedKeys = mutableSetOf<String>()
+    for (idx in messages.indices) {
+        val message = messages[idx]
+        // [T-bridge-message-ui-leak-android] Defensive bridge filter — same
+        // contract as the uiMessages sink; an internal bridge must never
+        // surface as a chat bubble.
+        if (message.isInternalBridge) continue
+        if (message.role == "user") {
+            val prevIsUser = idx > 0 && messages[idx - 1].role == "user"
+            val key = "user:${message.id}"
+            if (usedKeys.add(key)) {
+                out.add(FlatChatItem.UserBubble(message, precededByUser = prevIsUser))
+            }
+            continue
+        }
+        // Joined raw markdown of the whole assistant message, matching the
+        // joinedMarkdown computation in buildFlatChatItems (text-kind tool
+        // blocks joined with blank lines, else message.content).
+        val messageMarkdown = run {
+            val parts = message.toolBlocks
+                .filter { it.kind == "text" && it.content.isNotEmpty() }
+                .joinToString("\n\n") { it.content }
+            if (parts.isNotEmpty()) parts else message.content
+        }
+        out.add(FlatChatItem.AssistantMessageItem(
+            messageId = message.id,
+            message = message,
+            messageMarkdown = messageMarkdown,
+        ))
     }
     return out
 }

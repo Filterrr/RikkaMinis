@@ -232,7 +232,7 @@ object ProviderExecutionGateway {
             thinkingLevel = thinkingLevel,
             streaming = true,
         )
-        return ChatStreamOffloadHandler.stream(context, requestJson)
+        return ChatStreamOffloadHandler.stream(context, requestJson, thinkingLevel.isEnabled)
     }
 
     /**

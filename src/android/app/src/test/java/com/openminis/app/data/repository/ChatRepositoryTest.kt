@@ -168,6 +168,8 @@ class ChatRepositoryCreateSessionTest {
         override suspend fun totalMessageCount(): Int = 0
         override suspend fun tokenUsages(sessionId: String): List<String> = emptyList()
         override suspend fun allUsageRecords(): List<UsageRecord> = emptyList()
+
+        override suspend fun usageRecordsBetween(sinceMs: Long, untilMs: Long): List<UsageRecord> = emptyList()
         override suspend fun lastMessageParts(sessionId: String): String? = null
         override suspend fun lastMessageTailPerSession(): List<SessionTailRow> = emptyList()
         override suspend fun updateMemoryEnabled(id: String, enabled: Int, updatedAt: Long) {}

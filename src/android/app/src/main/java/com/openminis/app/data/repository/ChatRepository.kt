@@ -5,6 +5,7 @@ import android.database.sqlite.SQLiteConstraintException
 import com.openminis.app.data.db.ChatDao
 import com.openminis.app.data.db.ChatSessionEntity
 import com.openminis.app.data.db.MessageEntity
+import com.openminis.app.data.db.UsageRecord
 import com.openminis.app.data.storage.SessionFileStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -71,6 +72,18 @@ class ChatRepository(
 
     /** All persisted token_usage JSON strings for a session (one per LLM call). */
     suspend fun sessionTokenUsages(sessionId: String): List<String> = dao.tokenUsages(sessionId)
+
+    /**
+     * Usage rows for the stats screen. Both bounds null → legacy full scan
+     * ([ChatDao.allUsageRecords]); otherwise the time-windowed query
+     * ([ChatDao.usageRecordsBetween], half-open [since, until)).
+     */
+    suspend fun usageRecords(since: Long?, until: Long?): List<UsageRecord> =
+        if (since == null && until == null) dao.allUsageRecords()
+        else dao.usageRecordsBetween(
+            sinceMs = since ?: 0L,
+            untilMs = until ?: Long.MAX_VALUE,
+        )
 
     /**
      * [T-android-session-paused-badge-hardkill] Session ids whose agent loop was
@@ -332,6 +345,11 @@ class ChatRepository(
         partsJson: String,
         tokenUsage: String? = null,
         reasoningContent: String? = null,
+        // [T-usage-attribution] Identity of the provider/model that actually
+        // produced this message's token usage (after fallback resolution).
+        // Optional with defaults so legacy call sites are untouched.
+        usageModelId: String? = null,
+        usageEntryId: String? = null,
     ): MessageEntity {
         // [Diag-appendMessage] Step markers so a hang between tool-END and the
         // next LLM round can be pinned to the exact DAO call that never returns
@@ -363,6 +381,8 @@ class ChatRepository(
             tokenUsage = tokenUsage,
             sortOrder = sortOrder,
             reasoningContent = reasoningContent,
+            usageModelId = usageModelId,
+            usageEntryId = usageEntryId,
         )
         val persisted: MessageEntity = try {
             android.util.Log.i("ChatRepository", "appendMessage: insertMessage enter id=${message.id}")

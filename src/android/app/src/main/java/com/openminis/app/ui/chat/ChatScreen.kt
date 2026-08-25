@@ -2232,23 +2232,15 @@ fun ChatScreen(
                                             // badge to the right stays intrinsic.
                                             modifier = Modifier.weight(1f, fill = false),
                                         )
-                                        // Show the badge ONLY when the model can
-                                        // think AND thinking is currently on:
-                                        //   - availableThinkingLevels non-empty →
-                                        //     the bound model actually supports
-                                        //     thinking (no badge for models that
-                                        //     can't reason);
-                                        //   - level.isEnabled (≠ Off) → thinking is
-                                        //     switched on right now.
-                                        // When Off we render NOTHING (no greyed
-                                        // placeholder): iOS found a grey "Off" pill
-                                        // read as ambiguous ("is thinking on or
-                                        // off?"), so the badge simply disappears.
-                                        // The sheet still lists Off, so users can
-                                        // turn thinking back off from there.
-                                        if (viewModel.availableThinkingLevels.isNotEmpty() &&
-                                            thinkingLevelBadgeState.isEnabled
-                                        ) {
+                                        // Show the badge whenever the bound model can
+                                        // think, including when the current level is OFF.
+                                        // The OFF state must keep this entry point alive:
+                                        // hiding the only badge that opens the level sheet
+                                        // made thinking impossible to re-enable within a
+                                        // session. In the OFF state the badge displays
+                                        // "Off"; tapping it opens the sheet and the user
+                                        // can select LOW/MEDIUM/HIGH/etc. again.
+                                        if (viewModel.availableThinkingLevels.isNotEmpty()) {
                                             ThinkingLevelBadge(
                                                 level = thinkingLevelBadgeState,
                                                 onClick = { showThinkingLevelSheet = true },
@@ -3014,7 +3006,7 @@ fun ChatScreen(
                     // re-building non-text rows on every 80ms tick during a
                     // long tool execution. Resets to null on each effect
                     // restart (session switch / messages key change).
-                    var lastMergedFingerprint: List<ChatMessage>? = null
+                    var lastMergedFingerprint: List<Any?>? = null
                     // [T-android-stream-pipeline-incremental] Flush the perf
                     // turn when this effect is CANCELLED mid-turn: the
                     // turn-end drain emits `_messages` FIRST (restarting this
@@ -3048,6 +3040,19 @@ fun ChatScreen(
                             // invalidate the append-only contract and force a
                             // full re-seed via isIncrementallyCompatible().
                             val merged = mergeStreamingOverlay(msgs, stream, viewModel.currentStreamEpoch())
+                            // [fix/message-node-item-generator] Message-level
+                            // aggregate path (default OFF). When enabled, the
+                            // whole merged list is built once into one item
+                            // per message — no ledger / segmenter. Stage D
+                            // flips this on once the shared AssistantMessageView
+                            // renders AssistantMessageItem. Early-return keeps
+                            // the ledger path below exactly as it was.
+                            if (AGGREGATE_MESSAGE_ITEMS) {
+                                flatItems = withContext(Dispatchers.Default) {
+                                    buildAggregateChatItems(merged)
+                                }
+                                return@collect
+                            }
                             if (flatItems.isEmpty()) {
                                 val tBuildStart = System.nanoTime()
                                 com.openminis.app.diagnostics.PerfLongCtx.step(
@@ -3132,7 +3137,7 @@ fun ChatScreen(
                                 // the side-channel into merged (final terminal
                                 // tool states + complete text), so it differs
                                 // from the live-stream tick that precedes it.
-                                if (merged != lastMergedFingerprint) {
+                                if (lightFingerprint(merged) != lastMergedFingerprint) {
                                     if (!rowLedger.isIncrementallyCompatible(merged)) {
                                         val tRebuildStart = System.nanoTime()
                                         val rows = withContext(Dispatchers.Default) {
@@ -3148,7 +3153,7 @@ fun ChatScreen(
                                     }
                                     rowLedger.reconcile(merged)
                                 }
-                                lastMergedFingerprint = merged
+                                lastMergedFingerprint = lightFingerprint(merged)
                             }
                             flatItems = rowLedger.snapshot()
                             // [forward-stable] Verify the append-only prefix
@@ -3179,23 +3184,41 @@ fun ChatScreen(
                             if (stream.isEmpty() && streamWasActive) {
                                 streamWasActive = false
                                 com.openminis.app.diagnostics.StreamPerfMonitor.turnEnd()
-                                // [T-streamlining-thinking-fix] On turn end,
-                                // force a full canonical rebuild instead of
-                                // relying on the incremental reconcile path to
-                                // converge. The side-channel drains the delta
-                                // into `_messages` as a single emit, so this
-                                // tick's `merged` already reflects the final
-                                // terminal tool states and complete text — a
-                                // full re-seed guarantees the UI reflects
-                                // them even if the incremental reconcile
-                                // dropped a terminal flip along the way.
-                                // Runs AFTER snapshot() and BEFORE the next
-                                // publish tick, so it doesn't double-render in
-                                // the same tick.
-                                val rows = withContext(Dispatchers.Default) {
-                                    buildFlatChatItems(merged, sessionId)
-                                }
-                                rowLedger.seed(rows, merged.size)
+                                // [fix/chat-render-turnend-settle] Turn end no
+                                // longer forces a full canonical rebuild +
+                                // ledger re-seed. The side-channel drains the
+                                // delta into `_messages` as a single emit, so
+                                // this tick's `merged` already carries the
+                                // terminal tool states and complete text; the
+                                // incremental reconcile converges it in place:
+                                // textual rows are settled by their
+                                // AppendOnlyMarkdownSegmenter
+                                // (streamEnded=true — settle only, keys stay
+                                // mdslot:..., no re-split), RUNNING tool group
+                                // pills flip to their terminal state, and the
+                                // typing indicator retires. Published keys are
+                                // prefix-stable, so the LazyColumn slots are
+                                // updated in place with zero churn — this is
+                                // what kills the "list jumps / re-draws at
+                                // answer end" artifact and the per-turn
+                                // segmenter reset that made every finished
+                                // turn re-render from scratch.
+                                //
+                                // Convergence guard for the
+                                // AssistantMarkdownBlock cheap-equals blind
+                                // spot: `equals` only compares rawText LENGTH
+                                // (ChatFlatItems.kt), so a same-length
+                                // content rewrite between the last streaming
+                                // tick and the terminal snapshot would be
+                                // invisible to LazyColumn's skip decision and
+                                // the stale text would stay rendered.
+                                // reconcileAndVerifyTerminalText re-derives
+                                // each segmenter's slots from the canonical
+                                // terminal text and force-publishes any slot
+                                // whose content differs — content equality,
+                                // not length equality.
+                                rowLedger.reconcile(merged)
+                                rowLedger.reconcileAndVerifyTerminalText(merged)
                                 flatItems = rowLedger.snapshot()
                             }
                         }
@@ -3889,6 +3912,76 @@ fun ChatScreen(
                                             messageId = item.messageId,
                                             shardId = "legacy",
                                         ),
+                                    )
+                                }
+                            }
+                            is FlatChatItem.AssistantMessageItem -> {
+                                // [fix/message-node-item-renderer] Stage D —
+                                // aggregate message row, now the MAIN path
+                                // (AGGREGATE_MESSAGE_ITEMS=true). A whole
+                                // assistant message is ONE LazyColumn item,
+                                // rendered by the reused AssistantMessageView
+                                // (thinking / text / tool_use in original
+                                // stream order). Per-tool pill actions mirror
+                                // the flat AssistantToolUse branch's behavior:
+                                // stop routes to cancelStream, detail hoists to
+                                // the ViewModel sheet, rerun-from-here cuts at
+                                // THIS tool_use block. Toolcalls of one turn all
+                                // live inside this single row, so each pill gets
+                                // its own actions keyed off the current block.
+                                BoundsTrackedBlock(
+                                    messageId = item.messageId,
+                                    slotKey = "msg",
+                                    markdown = item.messageMarkdown,
+                                ) {
+                                    SideEffect {
+                                        selectionController.rememberMessageMarkdown(item.messageId, item.messageMarkdown)
+                                    }
+                                    AssistantMessageView(
+                                        message = item.message,
+                                        onRetry = { safeMutate { viewModel.retryLast() } },
+                                        // "Revert Compact" only surfaces on the
+                                        // compact-divider info row (mirrors the
+                                        // flat AssistantInfo branch).
+                                        onRevert = if (item.message.toolBlocks.any { it.kind == "info" && it.toolName == "compact" }) {
+                                            { viewModel.revertCompact() }
+                                        } else null,
+                                        toolPillActions = { block ->
+                                            if (block.kind != "tool_use") {
+                                                null
+                                            } else {
+                                                val isCancelled = block.toolStatus == ToolBlockStatus.CANCELLED
+                                                ToolPillActions(
+                                                    // re-run only surfaces on a cancelled trailing tool (mirrors
+                                                    // flat `isLastCancelled && !isStreaming && !canResume` — here
+                                                    // derived per-block from this message's own tool status).
+                                                    onRetry = if (isCancelled && !isStreaming && !canResume) {
+                                                        { safeMutate { viewModel.retryLast() } }
+                                                    } else null,
+                                                    onStop = { viewModel.cancelStream() },
+                                                    onOpenTerminalWithCommand = onOpenTerminalWithCommand,
+                                                    onOpenDetail = { viewModel.openToolDetail(it) },
+                                                    onRerunFromHere = if (!isStreaming) ({
+                                                        val messageId = item.messageId
+                                                        val blockId = block.id
+                                                        coroutineScope.launch {
+                                                            tracedScrollToItem("RERUN-FROM-AGG-TOOL", (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0), 0)
+                                                        }
+                                                        safeMutate { viewModel.rerunFromToolBlock(messageId, blockId) }
+                                                    }) else null,
+                                                    onCopyDetails = {
+                                                        val text = formatToolDetailsForClipboard(block)
+                                                        val cb = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                                        cb.setPrimaryClip(android.content.ClipData.newPlainText("tool", text))
+                                                        android.widget.Toast.makeText(
+                                                            context,
+                                                            context.getString(R.string.tool_longpress_copied_toast),
+                                                            android.widget.Toast.LENGTH_SHORT,
+                                                        ).show()
+                                                    },
+                                                )
+                                            }
+                                        },
                                     )
                                 }
                             }
@@ -6029,3 +6122,14 @@ fun ChatScreen(
 // CompactSummarySheet / parseInlineMarkdown / rememberBrowserLiveSnapshot /
 // ResumeBanner / SwipeToSendHint moved verbatim to ChatMiscViews.kt.
 // Sun May 24 11:01:25 CST 2026
+
+// [fix/message-node-item-renderer] Message-level aggregate pipeline switch.
+// STAGE D FLIPPED TO TRUE — the aggregate path is now the MAIN path: the
+// flatten collect emits one aggregated item per ChatMessage
+// (buildAggregateChatItems) — no ledger, no segmenter. ChatScreen renders the
+// resulting AssistantMessageItem via the reused
+// ChatAssistantMessageUI.AssistantMessageView, with per-tool pill actions
+// (stop/detail/rerun/copy/open-terminal) wired for parity with the old flat
+// AssistantToolUse / AssistantToolRunGroup branches.
+internal const val AGGREGATE_MESSAGE_ITEMS: Boolean = true
+

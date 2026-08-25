@@ -395,6 +395,9 @@
     <string name="storage_reclaim_confirm_button">回収</string>
     <string name="usage_title">使用量</string>
     <string name="usage_section_total">合計使用量</string>
+    <string name="usage_filter_all">全期間</string>
+    <string name="usage_filter_7d">過去7日間</string>
+    <string name="usage_filter_30d">過去30日間</string>
     <string name="usage_label_total_input">合計入力（キャッシュ含む）</string>
     <string name="usage_label_output">出力トークン</string>
     <string name="usage_label_cache_read">キャッシュ読み取り</string>

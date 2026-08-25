@@ -87,6 +87,7 @@ object ChatStreamOffloadHandler {
     fun stream(
         context: Context,
         requestJson: String,
+        thinkingEnabled: Boolean = false,
     ): Flow<LLMStreamChunk> = flow {
         activeStreams++
         val dir = try {
@@ -108,6 +109,17 @@ object ChatStreamOffloadHandler {
         var terminalSeen = false
         val runId = ModelExecutionDispatcher.runIdOf(dir)
         var lastGrowAtMs = System.currentTimeMillis()
+        // [thinking-total-timeout] The client-side total-stream ceiling must
+        // not pre-empt the worker's 30-min first-chunk budget on a long
+        // reasoning run: a thinking model that emits nothing for 6+ min would
+        // be cut here before the worker ever sees a chunk. Extend the ceiling
+        // to match the worker's thinking ceiling; non-thinking streams keep the
+        // conservative 6 min so a wedged upstream is still surfaced promptly.
+        val streamTimeoutMs = if (thinkingEnabled) {
+            com.openminis.app.sandbox.offload.FirstChunkTimeoutPolicy.THINKING_TIMEOUT_SEC * 1000L
+        } else {
+            STREAM_TIMEOUT_MS
+        }
         // (TF-J2: death is now driven by the worker liveness beat file; see the
         // poll-loop decision. No /proc identity-mismatch window is needed.)
         try {
@@ -132,7 +144,7 @@ object ChatStreamOffloadHandler {
                 throw RuntimeException("start model service failed", e)
             }
 
-            val timedOut = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
+            val timedOut = withTimeoutOrNull(streamTimeoutMs) {
                 while (true) {
                     ensureActive()
                     val newLen = streamFile.length()
@@ -238,7 +250,7 @@ object ChatStreamOffloadHandler {
                 }
             } == null
             if (timedOut) {
-                throw RuntimeException("stream timed out after ${STREAM_TIMEOUT_MS}ms")
+                throw RuntimeException("stream timed out after ${streamTimeoutMs}ms")
             }
         } finally {
             // [B2] A stream is no longer in flight regardless of how we exited

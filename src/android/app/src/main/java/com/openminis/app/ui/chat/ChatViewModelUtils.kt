@@ -4,6 +4,66 @@ import org.json.JSONObject
 import java.net.URLConnection
 
 /**
+ * Stable same-turn identity for tool calls. UI-only fields are excluded using
+ * the same source of truth as ToolLoopDetector's cross-turn hash.
+ */
+internal fun toolCallDedupeFingerprint(name: String, args: JSONObject): String {
+    val filtered = linkedMapOf<String, Any?>()
+    val keys = args.keys().asSequence()
+        .filter { it !in com.openminis.app.agent.ToolLoopDetector.ARGS_HASH_IGNORED_KEYS }
+        .sorted()
+        .toList()
+    for (key in keys) {
+        filtered[key] = stableToolCallValue(args.get(key))
+    }
+    return "$name|${stableToolCallJson(filtered)}"
+}
+
+private fun stableToolCallValue(value: Any?): Any? = when (value) {
+    JSONObject.NULL -> null
+    is JSONObject -> {
+        val nested = linkedMapOf<String, Any?>()
+        value.keys().asSequence().sorted().forEach { key ->
+            nested[key] = stableToolCallValue(value.get(key))
+        }
+        nested
+    }
+    is org.json.JSONArray -> (0 until value.length()).map { stableToolCallValue(value.get(it)) }
+    else -> value
+}
+
+private fun stableToolCallJson(value: Any?): String = buildString {
+    appendStableToolCallJson(value)
+}
+
+private fun StringBuilder.appendStableToolCallJson(value: Any?) {
+    when (value) {
+        null -> append("null")
+        is Map<*, *> -> {
+            append('{')
+            value.entries.forEachIndexed { index, entry ->
+                if (index > 0) append(',')
+                append(JSONObject.quote(entry.key.toString()))
+                append(':')
+                appendStableToolCallJson(entry.value)
+            }
+            append('}')
+        }
+        is List<*> -> {
+            append('[')
+            value.forEachIndexed { index, item ->
+                if (index > 0) append(',')
+                appendStableToolCallJson(item)
+            }
+            append(']')
+        }
+        is String -> append(JSONObject.quote(value))
+        is Number, is Boolean -> append(value.toString())
+        else -> append(JSONObject.quote(value.toString()))
+    }
+}
+
+/**
  * Pure utility functions extracted from [ChatViewModel] so they can be
  * JVM-unit-tested without Android dependencies.
  *

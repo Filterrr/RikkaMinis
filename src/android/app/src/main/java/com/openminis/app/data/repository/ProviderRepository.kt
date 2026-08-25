@@ -985,7 +985,17 @@ class ProviderRepository(private val context: Context) {
                 providerInstanceId = instanceId,
                 baseModel = resolved,
                 overrides = prior?.overrides ?: ModelOverrides(),
-                isCustom = false,
+                // [T-provider-custom-identity] A refresh must never strip a
+                // manually-added model's custom identity: the long-press delete
+                // gesture on the provider detail screen is gated on
+                // entry.isCustom, so wiping it here silently removes the user's
+                // only delete path (model-delete-bug: custom entry with same id
+                // returned by /v1/models became undeletable after manual
+                // Refresh). Carrying prior.isCustom forward keeps the delete
+                // gesture reachable forever; autoRefreshModels already skips
+                // instances holding custom entries, so this only matters for
+                // explicit refreshModels() calls.
+                isCustom = prior?.isCustom ?: false,
                 // [T-provider-default-hidden] Newly refreshed models come in hidden by
                 // default — mirrors rikkahub "pull everything, show the chosen
                 // few". The user unpicks them on the Manage All Models sheet;
@@ -1717,10 +1727,13 @@ class ProviderRepository(private val context: Context) {
     }
 
 
-    suspend fun refreshModels(instance: ProviderInstance): ModelRefreshResult {
+    suspend fun refreshModels(
+        instance: ProviderInstance,
+        forceRefresh: Boolean = false,
+    ): ModelRefreshResult {
         val apiKey = loadApiKey(instance.id)
 
-        android.util.Log.i("ProviderRepo", "refreshModels: id=${instance.id} type=${instance.providerType} credential=${instance.credentialType} hasKey=${apiKey != null} keyLen=${apiKey?.length ?: 0} baseURL=${instance.effectiveBaseURL}")
+        android.util.Log.i("ProviderRepo", "refreshModels: id=${instance.id} type=${instance.providerType} credential=${instance.credentialType} hasKey=${apiKey != null} keyLen=${apiKey?.length ?: 0} baseURL=${instance.effectiveBaseURL} forceRefresh=$forceRefresh")
 
         // Step 1: Try provider API (requires API key)
         val customBase = instance.customBaseURL
@@ -1735,7 +1748,7 @@ class ProviderRepository(private val context: Context) {
                 // provider implementations directly (data→provider reverse
                 // dependency). Registry returns empty list for types without
                 // a registered fetcher.
-                ModelListProviderRegistry.fetchModels(instance, apiKey, isThirdParty)
+                ModelListProviderRegistry.fetchModels(instance, apiKey, isThirdParty, forceRefresh)
             } catch (e: Exception) {
                 android.util.Log.e("ProviderRepo", "refreshModels fetch error: ${e.message}", e)
                 emptyList()

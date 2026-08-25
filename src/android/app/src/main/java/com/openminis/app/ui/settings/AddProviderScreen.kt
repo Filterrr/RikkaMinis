@@ -67,8 +67,10 @@ import androidx.compose.ui.res.stringResource
 import com.openminis.app.data.model.ProviderCredential
 import com.openminis.app.data.model.ProviderInstance
 import com.openminis.app.data.model.ProviderType
+import android.widget.Toast
 import com.openminis.app.ui.theme.ProviderAccents
 import com.openminis.app.data.repository.ProviderRepository
+import com.openminis.app.data.repository.ModelRefreshResult
 import com.openminis.app.MinisApp
 import com.openminis.app.R
 import kotlinx.coroutines.launch
@@ -424,8 +426,20 @@ private fun ColumnScope.ApiKeyConfigSection(
             providerRepository.saveApiKey(instance.id, apiKey.trim())
             // Auto-refresh models in background (fetches from API or falls back to models.dev).
             // Launched on the app-scoped scope so the fetch survives this screen's disposal.
+            // forceRefresh=true bypasses the 7-day ProviderModelsCache so a brand-new provider
+            // re-validates its URL+key immediately instead of reusing a stale cached result
+            // and leaving the model list empty until the next daily auto-refresh.
             (appContext as? MinisApp)?.applicationScope?.launch {
-                providerRepository.refreshModels(instance)
+                val result = providerRepository.refreshModels(instance, forceRefresh = true)
+                if (result != ModelRefreshResult.SUCCESS_API) {
+                    val msg = when (result) {
+                        ModelRefreshResult.NO_KEY -> "已保存，但未读到 API 密钥"
+                        ModelRefreshResult.FAILURE -> "已保存，但模型列表拉取失败，请检查 URL 与密钥"
+                        ModelRefreshResult.PRESERVED -> "已保存，但无法从该地址拉取模型，请检查 URL"
+                        else -> null
+                    }
+                    msg?.let { Toast.makeText(appContext, it, Toast.LENGTH_LONG).show() }
+                }
             }
             onSaved()
         },
