@@ -450,24 +450,24 @@ class OpenAIProvider constructor(
         return apiKey ?: throw LLMError.InvalidApiKey()
     }
 
-    // T-android-openai-codex-timeout: bump readTimeout 180s → 600s to
-    // match iOS. T171 had cut it to 180s on the theory that GPT-5.x
-    // thinking warm-up tops out around 60-90s, but the Codex Responses
-    // OAuth path on gpt-5.5 with a real-world agent body (440KB, 20
-    // messages, 8 tools) routinely sits silent on the SSE stream for
-    // 2:50-3:10 between the reasoning `response.output_item.added`
-    // event and the burst of text deltas after the reasoning step
-    // completes — server-side it's still working, no keep-alive bytes
-    // arrive in between, and OkHttp's idle-data-read counter trips.
-    // The 180s cap turned that normal reasoning silence into a hard
-    // SocketTimeoutException (observed in 0.10-preview, log file
-    // minis-2026-05-27.log around 13:28 — 3:00 of silence then trip).
-    // Going back to 600s leaves room for the longest realistic
-    // reasoning bursts; the cancel-race concern T171 hedged against
-    // (OkHttp call.cancel() racing a thread inside execute()) is
-    // covered by the outer coroutine cancellation chain — Job.cancel
-    // propagates down through the agent loop and the socket gets
-    // closed via Call.cancel() from the coroutine's invokeOnCancellation,
+    // T-android-openai-codex-timeout: readTimeout defaults to the generation
+    // backstop (FirstChunkTimeoutPolicy.GENERATION_TIMEOUT_SEC = 30 min) — the
+    // single source of truth for how long a stream may sit silent before it is
+    // classified as wedged. Historically this was 180s then 600s "to match
+    // iOS", but the Codex Responses OAuth path on gpt-5.5 with a real-world
+    // agent body (440KB, 20 messages, 8 tools) routinely sits silent on the
+    // SSE stream for 2:50-3:10 between the reasoning
+    // `response.output_item.added` event and the burst of text deltas after
+    // the reasoning step completes — server-side it's still working, no
+    // keep-alive bytes arrive in between, and OkHttp's idle-data-read counter
+    // trips. A short cap turned that normal reasoning silence into a hard
+    // SocketTimeoutException. Defaulting to the 30min generation backstop
+    // leaves room for the longest realistic reasoning bursts; per-call callers
+    // that need a shorter budget override readTimeout explicitly. The
+    // cancel-race concern T171 hedged against (OkHttp call.cancel() racing a
+    // thread inside execute()) is covered by the outer coroutine cancellation
+    // chain — Job.cancel propagates down through the agent loop and the socket
+    // gets closed via Call.cancel() from the coroutine's invokeOnCancellation,
     // so a stuck OAuth read never lingers past the agent turn.
     //
     // T-android-openai-codex-timeout: also attach an OkHttp EventListener
@@ -482,7 +482,7 @@ class OpenAIProvider constructor(
     // identity hash so concurrent streams can be disambiguated.
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(600, TimeUnit.SECONDS)
+        .readTimeout(FirstChunkTimeoutPolicy.GENERATION_TIMEOUT_SEC.toLong(), TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
         // [T-android-stale-conn-retry-hang] Shared pool so NetworkMonitor's
         // network-transition eviction reaches THIS client's connections —

@@ -33,7 +33,6 @@ object ChatStreamOffloadHandler {
     private const val TAG = "ChatStreamOffload"
     private const val STAGING_ROOT = "model-exec"
     private const val POLL_INTERVAL_MS = 160L
-    private const val STREAM_TIMEOUT_MS = 6 * 60 * 1000L
     private const val CANCEL_ACK_TIMEOUT_MS = 5_000L
     private const val CANCEL_ACK_POLL_MS = 100L
     /**
@@ -211,7 +210,8 @@ object ChatStreamOffloadHandler {
                     //    was alive then stopped beating with no output ⇒ real death.
                     //  - no beat yet ⇒ worker is still starting up (service spin-up,
                     //    provider build, first chunk wait) → keep polling; bounded
-                    //    by STREAM_TIMEOUT_MS. Not death.
+                    //    by streamTimeoutMs (= GENERATION_TIMEOUT_SEC, the 30-min
+                    //    generation backstop). Not death.
                     // This matches the old semantics (only a worker that was provably
                     // alive and THEN stopped is dead) without touching /proc.
                     if (newLen == lastRead &&

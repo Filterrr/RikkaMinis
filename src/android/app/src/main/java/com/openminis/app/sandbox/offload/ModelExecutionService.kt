@@ -97,7 +97,10 @@ class ModelExecutionService : Service() {
         // [worker-first-chunk-guard] Legacy hard-coded first-chunk timeout.
         // SUPERSEDED by FirstChunkTimeoutPolicy (2026-08-24, route-aware:
         // 30s direct / 45s proxy). Kept as documentation + a stable default
-        // reference; production reads the policy for the effective budget.
+        // reference; production now reads decideGenerationTimeoutSec — the
+        // generation stream budget is a uniform 30 min (GENERATION_TIMEOUT_SEC)
+        // regardless of route, while the route-aware decideTimeoutSec (30s/45s)
+        // is deprecated and has no production callers.
         private const val FIRST_CHUNK_TIMEOUT_MS = 30_000L
 
         /**
