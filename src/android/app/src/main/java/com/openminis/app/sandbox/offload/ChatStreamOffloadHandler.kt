@@ -33,7 +33,15 @@ object ChatStreamOffloadHandler {
     private const val TAG = "ChatStreamOffload"
     private const val STAGING_ROOT = "model-exec"
     private const val POLL_INTERVAL_MS = 160L
-    private const val STREAM_TIMEOUT_MS = 6 * 60 * 1000L
+/** First chunk arrived, then the stream went completely silent (no EOF,
+     * no keep-alive, no new bytes) for this long — the classic "provider sent
+     * the first chunk then the connection half-opened" hang. After the first
+     * chunk, the worker-death liveness beat only detects worker PROCESS crash;
+     * it does NOT cover a worker that is alive but stuck waiting on a silent
+     * upstream socket. This dedicated line-idle watchdog bounds that case so a
+     * half-open post-first-chunk stream doesn't hang the UI for the whole
+     * 30-minute generation backstop. */
+    private const val STREAM_IDLE_STALL_MS = 5 * 60 * 1000L
     private const val CANCEL_ACK_TIMEOUT_MS = 5_000L
     private const val CANCEL_ACK_POLL_MS = 100L
     /**
@@ -184,6 +192,23 @@ object ChatStreamOffloadHandler {
                             }
                         }
                     }
+                    // [P1-1 stream-idle-stall] First chunk arrived, then the
+                    // stream went completely silent. The worker-death check
+                    // below only fires on a stale liveness BEAT (worker process
+                    // crash); it does NOT cover a worker that is alive but
+                    // stuck waiting on a silent upstream socket. Bound that
+                    // case with a dedicated line-idle watchdog.
+                    // hadChunks=true → fatal path, no auto-resend.
+                    if (emittedChunks &&
+                        !terminalSeen &&
+                        newLen == lastRead &&
+                        System.currentTimeMillis() - lastGrowAtMs > STREAM_IDLE_STALL_MS
+                    ) {
+                        throw ModelStreamErrorException(
+                            "stream stalled after first chunk: no data for ${STREAM_IDLE_STALL_MS}ms",
+                            hadChunks = true,
+                        )
+                    }
                     // [TF-F crash recovery] Detect worker death THREE-STATE:
                     // only a CONFIRMED dead pid (probe returns DEAD for THIS
                     // run's pid ref) after a no-growth grace is worker_died.
@@ -211,7 +236,8 @@ object ChatStreamOffloadHandler {
                     //    was alive then stopped beating with no output ⇒ real death.
                     //  - no beat yet ⇒ worker is still starting up (service spin-up,
                     //    provider build, first chunk wait) → keep polling; bounded
-                    //    by STREAM_TIMEOUT_MS. Not death.
+                    //    by streamTimeoutMs (= GENERATION_TIMEOUT_SEC, the 30-min
+                    //    generation backstop). Not death.
                     // This matches the old semantics (only a worker that was provably
                     // alive and THEN stopped is dead) without touching /proc.
                     if (newLen == lastRead &&
