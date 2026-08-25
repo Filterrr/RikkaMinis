@@ -873,12 +873,20 @@ class ModelExecutionService : Service() {
                 // Cancellation is ALSO checked at this boundary: the old in-collect
                 // check alone left a pre-first-chunk stall UNcancellable (loop body
                 // never ran).
-                // 2026-08-24 (diag/first-chunk-timeout): the budget is now route-aware.
-                // Proxy/gateway routes (custom base URL on a non-official host) get
-                // PROXY_TIMEOUT_SEC (aligned with the inner first-data watchdog),
-                // direct endpoints keep the conservative DIRECT_TIMEOUT_SEC.
+                // 2026-08-25: reasoning/thinking runs get a 30-minute absolute
+                // first-chunk ceiling. A thinking model legitimately stays
+                // silent for many minutes before its first visible text (Codex
+                // Responses sits 2:50–3:10 dead-air between reasoning and text
+                // deltas; users report 10–20 min). The old 30/45s route budget
+                // force-killed those at a repeatable wall-clock boundary
+                // ("provider produced no first chunk within 45000ms"). The 30-min
+                // budget stays finite to bound a truly wedged upstream; worker
+                // liveness in the interim is proven by the liveness.beat heartbeat.
                 val firstChunkTimeoutMs =
-                    FirstChunkTimeoutPolicy.decideTimeoutSec(instance.customBaseURL) * 1000L
+                    FirstChunkTimeoutPolicy.decideTimeoutSec(
+                        customBaseURL = instance.customBaseURL,
+                        thinkingEnabled = thinkingLevel.isEnabled,
+                    ) * 1000L
                 val first = withTimeoutOrNull(firstChunkTimeoutMs) {
                     // Pre-check cancel before starting the cold flow: the main
                     // process may have cancelled while we built the provider.

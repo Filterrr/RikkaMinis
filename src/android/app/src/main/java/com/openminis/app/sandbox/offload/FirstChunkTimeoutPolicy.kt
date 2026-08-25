@@ -35,9 +35,23 @@ object FirstChunkTimeoutPolicy {
     /** Default budget for direct public endpoints (seconds). */
     const val DIRECT_TIMEOUT_SEC = 30
 
-    /** Budget for proxy/gateway routes (seconds) — aligned with the inner
-     *  first-data watchdog so the outer guard doesn't preempt it. */
+    /** Budget for proxy/gateway routes (seconds). */
     const val PROXY_TIMEOUT_SEC = 45
+
+    /**
+     * Budget for a model with reasoning/thinking enabled (seconds). Reasoning
+     * models can sit silent for many minutes before the first visible chunk —
+     * Codex Responses observed 2:50–3:10 of dead air between the reasoning
+     * marker and the text-delta burst, and users report 10–20 min extreme
+     * cases. This is the ABSOLUTE ceiling for the first-chunk phase only; once
+     * the first chunk lands the guard disarms and a flowing stream has no total
+     * duration limit. Chosen generously (30 min) to cover long reasoning while
+     * still bounding a truly wedged upstream so a worker is never held forever.
+     * Worker liveness between the start and the first chunk is separately proven
+     * by the liveness.beat heartbeat (ModelExecutionRunDir), so this ceiling is
+     * a final backstop, not the primary liveness signal.
+     */
+    const val THINKING_TIMEOUT_SEC = 30 * 60
 
     /** Hosts that are "official" direct endpoints (no proxy detour). */
     private val OFFICIAL_HOST_SUFFIXES = listOf(
@@ -84,6 +98,7 @@ object FirstChunkTimeoutPolicy {
      * Decide the first-chunk timeout budget in seconds for a route.
      * Deterministic, side-effect free.
      */
-    fun decideTimeoutSec(customBaseURL: String?): Int =
-        if (isProxyRoute(customBaseURL)) PROXY_TIMEOUT_SEC else DIRECT_TIMEOUT_SEC
+    fun decideTimeoutSec(customBaseURL: String?, thinkingEnabled: Boolean = false): Int =
+        if (thinkingEnabled) THINKING_TIMEOUT_SEC
+        else if (isProxyRoute(customBaseURL)) PROXY_TIMEOUT_SEC else DIRECT_TIMEOUT_SEC
 }

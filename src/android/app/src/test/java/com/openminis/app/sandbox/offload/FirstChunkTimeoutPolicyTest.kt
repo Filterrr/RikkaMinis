@@ -121,6 +121,37 @@ class FirstChunkTimeoutPolicyTest {
         assertEquals(45, FirstChunkTimeoutPolicy.decideTimeoutSec("https://gateway.myrelay.net/v1"))
     }
 
+    // ── thinking budget (2026-08-25: long-reasoning force-kill fix) ──
+
+    @Test
+    fun `thinking runs get the extended ceiling regardless of route`() {
+        // A reasoning run that stays silent for many minutes must not be cut at
+        // the 30/45s route budget. Thinking overrides the route split entirely.
+        assertEquals(
+            FirstChunkTimeoutPolicy.THINKING_TIMEOUT_SEC,
+            FirstChunkTimeoutPolicy.decideTimeoutSec(null, thinkingEnabled = true),
+        )
+        assertEquals(
+            FirstChunkTimeoutPolicy.THINKING_TIMEOUT_SEC,
+            FirstChunkTimeoutPolicy.decideTimeoutSec("https://api.openai.com", thinkingEnabled = true),
+        )
+        assertEquals(
+            FirstChunkTimeoutPolicy.THINKING_TIMEOUT_SEC,
+            FirstChunkTimeoutPolicy.decideTimeoutSec("http://127.0.0.1:7890", thinkingEnabled = true),
+        )
+    }
+
+    @Test
+    fun `thinking disabled keeps the route split`() {
+        assertEquals(30, FirstChunkTimeoutPolicy.decideTimeoutSec(null, thinkingEnabled = false))
+        assertEquals(45, FirstChunkTimeoutPolicy.decideTimeoutSec("http://127.0.0.1:7890", thinkingEnabled = false))
+    }
+
+    @Test
+    fun `thinking ceiling is the absolute 30-minute backstop`() {
+        assertEquals(30 * 60, FirstChunkTimeoutPolicy.THINKING_TIMEOUT_SEC)
+    }
+
     // ── retry contract (mirror of ChatViewModel.workerDiedZeroChunk) ──
 
     @Test
