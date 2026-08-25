@@ -332,6 +332,11 @@ class ChatRepository(
         partsJson: String,
         tokenUsage: String? = null,
         reasoningContent: String? = null,
+        // [T-usage-attribution] Identity of the provider/model that actually
+        // produced this message's token usage (after fallback resolution).
+        // Optional with defaults so legacy call sites are untouched.
+        usageModelId: String? = null,
+        usageEntryId: String? = null,
     ): MessageEntity {
         // [Diag-appendMessage] Step markers so a hang between tool-END and the
         // next LLM round can be pinned to the exact DAO call that never returns
@@ -363,6 +368,8 @@ class ChatRepository(
             tokenUsage = tokenUsage,
             sortOrder = sortOrder,
             reasoningContent = reasoningContent,
+            usageModelId = usageModelId,
+            usageEntryId = usageEntryId,
         )
         val persisted: MessageEntity = try {
             android.util.Log.i("ChatRepository", "appendMessage: insertMessage enter id=${message.id}")

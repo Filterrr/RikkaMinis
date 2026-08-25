@@ -7932,7 +7932,11 @@ class ChatViewModel(
                 }
                 val turnParts = buildTurnParts(allToolBlocks, turnStartBlockIndex, toolInputMap)
                 val blockMeta = allToolBlocks.filter { it.kind == "tool_use" }.associateBy { it.id }
-                persistAssistantTurn(turnParts, lastUsage, turnReasoningContent, blockMeta)
+                persistAssistantTurn(
+                    turnParts, lastUsage, turnReasoningContent, blockMeta,
+                    modelId = currentProvider?.model?.id,
+                    entryId = _activeEntryId.value,
+                )
                 // [T-error-persist-android] Empty-response hint: the model ended a
                 // turn (finish=stop/end_turn) with no visible text anywhere in the
                 // reply and no tool blocks — the user just sees a blank bubble.
@@ -8418,7 +8422,11 @@ class ChatViewModel(
             android.util.Log.i("ChatVMStream", "runAgentLoop turn=$turn persist-begin blocks=${allToolBlocks.size}")
             val turnParts = buildTurnParts(allToolBlocks, turnStartBlockIndex, toolInputMap)
             val blockMeta = allToolBlocks.filter { it.kind == "tool_use" }.associateBy { it.id }
-            val assistantDbId = persistAssistantTurn(turnParts, lastUsage, turnReasoningContent, blockMeta)
+            val assistantDbId = persistAssistantTurn(
+                turnParts, lastUsage, turnReasoningContent, blockMeta,
+                modelId = currentProvider?.model?.id,
+                entryId = _activeEntryId.value,
+            )
             if (assistantDbId != null) {
                 val lastIdx = agentHistory.indexOfLast { it.role == LLMMessage.Role.ASSISTANT && it.dbMessageId == null }
                 if (lastIdx >= 0) {
@@ -9971,6 +9979,11 @@ class ChatViewModel(
         usage: LLMUsage?,
         reasoningContent: String? = null,
         toolBlockMeta: Map<String, AssistantBlock> = emptyMap(),
+        // [T-usage-attribution] Actual provider/model identity that produced
+        // this turn (fallback-resolved). Optional so legacy call sites are
+        // untouched; recorded into the message row for correct usage grouping.
+        modelId: String? = null,
+        entryId: String? = null,
     ): String? {
         if (parts.isEmpty()) return null
         val partsJson = buildAssistantPartsJson(parts, toolBlockMeta)
@@ -9980,6 +9993,8 @@ class ChatViewModel(
         val entity = chatRepository.appendMessage(
             realSessionId.ifEmpty { sessionId }, "assistant", partsJson, tokenJson,
             reasoningContent = reasoningContent,
+            usageModelId = modelId,
+            usageEntryId = entryId,
         )
         return entity.id
     }

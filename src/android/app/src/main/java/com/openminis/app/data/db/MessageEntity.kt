@@ -34,4 +34,10 @@ data class MessageEntity(
     // (mirrors iOS messages.error_info / ChatMessage.error). Null for normal
     // rows; device-local, never synced to iCloud.
     @ColumnInfo(name = "error_info") val errorInfo: String? = null,
+    // [T-usage-attribution] Identity of the provider/model that actually
+    // produced this turn's token usage (set at persist time, after fallback
+    // resolution). Null for legacy rows → allUsageRecords falls back to the
+    // session's current model_id.
+    @ColumnInfo(name = "usage_model_id") val usageModelId: String? = null,
+    @ColumnInfo(name = "usage_entry_id") val usageEntryId: String? = null,
 )
