@@ -6,4 +6,8 @@ data class UsageRecord(
     val tokenUsage: String,
     val createdAt: Long,
     val sessionId: String,
+    // [T-usage-attribution] Actual provider/model identity recorded at persist
+    // time (null for legacy rows; aggregator falls back to sessions.model_id).
+    val usageModelId: String? = null,
+    val usageEntryId: String? = null,
 )

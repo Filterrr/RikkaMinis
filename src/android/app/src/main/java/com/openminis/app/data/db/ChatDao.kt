@@ -147,9 +147,21 @@ interface ChatDao {
     @Query("SELECT token_usage FROM messages WHERE session_id = :sessionId AND token_usage IS NOT NULL")
     suspend fun tokenUsages(sessionId: String): List<String>
 
-    /** Fetch all token usage records joined with session model_id for aggregation. */
+    /**
+     * Fetch all token usage records joined with session model_id for aggregation.
+     * [T-usage-attribution] COALESCE(m.usage_model_id, s.model_id): rows written
+     * after the attribution fix carry the actual provider/model identity recorded
+     * at persist time; legacy rows fall back to the session's current model_id
+     * (old behavior).
+     */
     @Query("""
-        SELECT s.model_id AS modelId, m.token_usage AS tokenUsage, m.created_at AS createdAt, m.session_id AS sessionId
+        SELECT
+            COALESCE(m.usage_model_id, s.model_id) AS modelId,
+            m.token_usage AS tokenUsage,
+            m.created_at AS createdAt,
+            m.session_id AS sessionId,
+            m.usage_model_id AS usageModelId,
+            m.usage_entry_id AS usageEntryId
         FROM messages m JOIN sessions s ON m.session_id = s.id
         WHERE m.token_usage IS NOT NULL
     """)
