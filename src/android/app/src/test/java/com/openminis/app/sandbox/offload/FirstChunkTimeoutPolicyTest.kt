@@ -136,6 +136,7 @@ class FirstChunkTimeoutPolicyTest {
     }
 
     @Test
+    @Suppress("DEPRECATION") // 仅验证 legacy 语义，生产已切 decideGenerationTimeoutSec
     fun `generation ceiling is the absolute 30-minute backstop`() {
         // Bounds the worst case so a worker is never held forever, even for a
         // genuinely wedged upstream — but long (30 min) enough to cover the
@@ -149,12 +150,14 @@ class FirstChunkTimeoutPolicyTest {
     // generation stream path, which always picks decideGenerationTimeoutSec) ──
 
     @Test
+    @Suppress("DEPRECATION") // 仅验证 legacy 语义，生产已切 decideGenerationTimeoutSec
     fun `legacy direct routes get 30s`() {
         assertEquals(30, FirstChunkTimeoutPolicy.decideTimeoutSec(null))
         assertEquals(30, FirstChunkTimeoutPolicy.decideTimeoutSec("https://api.openai.com"))
     }
 
     @Test
+    @Suppress("DEPRECATION") // 仅验证 legacy 语义，生产已切 decideGenerationTimeoutSec
     fun `legacy thinking override still grants the ceiling`() {
         assertEquals(
             FirstChunkTimeoutPolicy.GENERATION_TIMEOUT_SEC,
