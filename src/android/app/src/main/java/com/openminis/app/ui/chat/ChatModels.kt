@@ -235,6 +235,7 @@ enum class ToolBlockStatus {
 }
 
 /** Slash command descriptor shown in the "/" popup. Mirrors iOS SlashCommand. */
+@Immutable
 data class SlashCommand(
     val id: String,
     val icon: androidx.compose.ui.graphics.vector.ImageVector,
