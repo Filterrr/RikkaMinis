@@ -83,6 +83,14 @@ object ChatStreamOffloadHandler {
      * Execute a streaming request and expose decoded chunks as a [Flow].
      * The flow completes when the service writes the done marker; throws when it writes an error line.
      * Cancelling the flow writes the cancel marker so the service aborts promptly.
+     *
+     * @param thinkingEnabled historically widened the total-stream ceiling for
+     *   reasoning runs. 2026-08-26 (fix/long-generation-timeouts): the ceiling
+     *   is now the generous generation backstop for ALL streams, because a long
+     *   non-thinking generation (a large deliverable, a big-context late turn)
+     *   legitimately streams for many minutes and must not be cut at the old
+     *   6-minute wall. The parameter is retained for caller compatibility but
+     *   no longer changes the ceiling.
      */
     fun stream(
         context: Context,
@@ -109,17 +117,18 @@ object ChatStreamOffloadHandler {
         var terminalSeen = false
         val runId = ModelExecutionDispatcher.runIdOf(dir)
         var lastGrowAtMs = System.currentTimeMillis()
-        // [thinking-total-timeout] The client-side total-stream ceiling must
-        // not pre-empt the worker's 30-min first-chunk budget on a long
-        // reasoning run: a thinking model that emits nothing for 6+ min would
-        // be cut here before the worker ever sees a chunk. Extend the ceiling
-        // to match the worker's thinking ceiling; non-thinking streams keep the
-        // conservative 6 min so a wedged upstream is still surfaced promptly.
-        val streamTimeoutMs = if (thinkingEnabled) {
-            com.openminis.app.sandbox.offload.FirstChunkTimeoutPolicy.THINKING_TIMEOUT_SEC * 1000L
-        } else {
-            STREAM_TIMEOUT_MS
-        }
+        // [generation-total-timeout] The client-side total-stream ceiling is the
+        // generous generation backstop for EVERY stream (2026-08-26,
+        // fix/long-generation-timeouts): a long NON-thinking generation — a
+        // large deliverable, a big-context late turn — legitimately streams for
+        // many minutes and must not be cut at the old 6-minute wall. The former
+        // split (6-min for non-thinking, 30-min for thinking) exposed every
+        // non-thinking long generation to a hard wall. A genuinely wedged
+        // upstream is still surfaced promptly by the provider's TTFB / first-data
+        // watchdogs and the worker-liveness beat, so this ceiling is a final
+        // backstop that bounds the worst case, not the primary liveness signal.
+        val streamTimeoutMs =
+            com.openminis.app.sandbox.offload.FirstChunkTimeoutPolicy.GENERATION_TIMEOUT_SEC * 1000L
         // (TF-J2: death is now driven by the worker liveness beat file; see the
         // poll-loop decision. No /proc identity-mismatch window is needed.)
         try {
