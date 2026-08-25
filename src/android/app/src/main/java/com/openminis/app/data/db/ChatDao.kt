@@ -172,7 +172,12 @@ interface ChatDao {
      *  — deliberately a NEW query so the allUsageRecords() SELECT shape is
      *  untouched (parallel branch owns its attribution logic). */
     @Query("""
-        SELECT s.model_id AS modelId, m.token_usage AS tokenUsage, m.created_at AS createdAt, m.session_id AS sessionId
+        SELECT COALESCE(m.usage_model_id, s.model_id) AS modelId,
+               m.token_usage AS tokenUsage,
+               m.created_at AS createdAt,
+               m.session_id AS sessionId,
+               m.usage_model_id AS usageModelId,
+               m.usage_entry_id AS usageEntryId
         FROM messages m JOIN sessions s ON m.session_id = s.id
         WHERE m.token_usage IS NOT NULL AND m.created_at >= :sinceMs AND m.created_at < :untilMs
     """)
