@@ -105,51 +105,65 @@ class FirstChunkTimeoutPolicyTest {
         assertTrue(FirstChunkTimeoutPolicy.isProxyRoute("HTTP://127.0.0.1:7890/"))
     }
 
-    // ── time budget ──
+    // ── generation budget (2026-08-26, fix/long-generation-timeouts) ──
+    // The generous ceiling is now the FIRST-CHUNK + TOTAL-STREAM budget for
+    // EVERY generation stream, thinking or not. A long NON-thinking generation
+    // (a large deliverable, a big-context late turn) legitimately sits silent
+    // before its first chunk for the same reason a reasoning model does, and
+    // provider silence is not a reliable dead-signal.
 
     @Test
-    fun `direct routes get 30s`() {
+    fun `generation streams always get the generous ceiling regardless of route`() {
+        // The regression this fixes: a non-thinking long generation was cut at
+        // the 45s proxy first-chunk wall ("provider produced no first chunk
+        // within 45000ms"). Generation must ignore the route split entirely.
+        assertEquals(
+            FirstChunkTimeoutPolicy.GENERATION_TIMEOUT_SEC,
+            FirstChunkTimeoutPolicy.decideGenerationTimeoutSec(null),
+        )
+        assertEquals(
+            FirstChunkTimeoutPolicy.GENERATION_TIMEOUT_SEC,
+            FirstChunkTimeoutPolicy.decideGenerationTimeoutSec("https://api.openai.com"),
+        )
+        assertEquals(
+            FirstChunkTimeoutPolicy.GENERATION_TIMEOUT_SEC,
+            FirstChunkTimeoutPolicy.decideGenerationTimeoutSec("https://gateway.myrelay.net/v1"),
+        )
+        assertEquals(
+            FirstChunkTimeoutPolicy.GENERATION_TIMEOUT_SEC,
+            FirstChunkTimeoutPolicy.decideGenerationTimeoutSec("http://127.0.0.1:7890"),
+        )
+    }
+
+    @Test
+    fun `generation ceiling is the absolute 30-minute backstop`() {
+        // Bounds the worst case so a worker is never held forever, even for a
+        // genuinely wedged upstream — but long (30 min) enough to cover the
+        // realistic 2:50–3:10 silences and 10–20 min extreme generations.
+        assertEquals(30 * 60, FirstChunkTimeoutPolicy.GENERATION_TIMEOUT_SEC)
+        // Historical alias is identical (semantics de-scoped, not value-changed).
+        assertEquals(FirstChunkTimeoutPolicy.GENERATION_TIMEOUT_SEC, FirstChunkTimeoutPolicy.THINKING_TIMEOUT_SEC)
+    }
+
+    // ── legacy route-split (kept for route classification; NOT used by the
+    // generation stream path, which always picks decideGenerationTimeoutSec) ──
+
+    @Test
+    fun `legacy direct routes get 30s`() {
         assertEquals(30, FirstChunkTimeoutPolicy.decideTimeoutSec(null))
         assertEquals(30, FirstChunkTimeoutPolicy.decideTimeoutSec("https://api.openai.com"))
-        assertEquals(30, FirstChunkTimeoutPolicy.decideTimeoutSec("https://api.deepseek.com"))
     }
 
     @Test
-    fun `proxy routes get 45s`() {
-        assertEquals(45, FirstChunkTimeoutPolicy.decideTimeoutSec("http://127.0.0.1:7890"))
-        assertEquals(45, FirstChunkTimeoutPolicy.decideTimeoutSec("https://hub.oaifree.com"))
-        assertEquals(45, FirstChunkTimeoutPolicy.decideTimeoutSec("https://gateway.myrelay.net/v1"))
-    }
-
-    // ── thinking budget (2026-08-25: long-reasoning force-kill fix) ──
-
-    @Test
-    fun `thinking runs get the extended ceiling regardless of route`() {
-        // A reasoning run that stays silent for many minutes must not be cut at
-        // the 30/45s route budget. Thinking overrides the route split entirely.
+    fun `legacy thinking override still grants the ceiling`() {
         assertEquals(
-            FirstChunkTimeoutPolicy.THINKING_TIMEOUT_SEC,
+            FirstChunkTimeoutPolicy.GENERATION_TIMEOUT_SEC,
             FirstChunkTimeoutPolicy.decideTimeoutSec(null, thinkingEnabled = true),
         )
         assertEquals(
-            FirstChunkTimeoutPolicy.THINKING_TIMEOUT_SEC,
-            FirstChunkTimeoutPolicy.decideTimeoutSec("https://api.openai.com", thinkingEnabled = true),
-        )
-        assertEquals(
-            FirstChunkTimeoutPolicy.THINKING_TIMEOUT_SEC,
+            FirstChunkTimeoutPolicy.GENERATION_TIMEOUT_SEC,
             FirstChunkTimeoutPolicy.decideTimeoutSec("http://127.0.0.1:7890", thinkingEnabled = true),
         )
-    }
-
-    @Test
-    fun `thinking disabled keeps the route split`() {
-        assertEquals(30, FirstChunkTimeoutPolicy.decideTimeoutSec(null, thinkingEnabled = false))
-        assertEquals(45, FirstChunkTimeoutPolicy.decideTimeoutSec("http://127.0.0.1:7890", thinkingEnabled = false))
-    }
-
-    @Test
-    fun `thinking ceiling is the absolute 30-minute backstop`() {
-        assertEquals(30 * 60, FirstChunkTimeoutPolicy.THINKING_TIMEOUT_SEC)
     }
 
     // ── retry contract (mirror of ChatViewModel.workerDiedZeroChunk) ──

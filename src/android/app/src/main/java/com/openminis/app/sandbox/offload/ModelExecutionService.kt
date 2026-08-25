@@ -882,10 +882,19 @@ class ModelExecutionService : Service() {
                 // ("provider produced no first chunk within 45000ms"). The 30-min
                 // budget stays finite to bound a truly wedged upstream; worker
                 // liveness in the interim is proven by the liveness.beat heartbeat.
+                //
+                // 2026-08-26 (fix/long-generation-timeouts): the generous ceiling
+                // is now the budget for ALL generation streams, thinking or not.
+                // A long non-thinking generation (assembling a large deliverable,
+                // a big-context late-turn call) legitimately sits silent before
+                // its first chunk for the same reason a reasoning model does, and
+                // provider silence is not a reliable dead-signal anywhere on the
+                // generation path (Codex is silent 2:50–3:10 WITHOUT reasoning and
+                // with NO keep-alive bytes). Keying the budget on the thinking
+                // feature flag re-exposed non-thinking long writes to 45s kills.
                 val firstChunkTimeoutMs =
-                    FirstChunkTimeoutPolicy.decideTimeoutSec(
+                    FirstChunkTimeoutPolicy.decideGenerationTimeoutSec(
                         customBaseURL = instance.customBaseURL,
-                        thinkingEnabled = thinkingLevel.isEnabled,
                     ) * 1000L
                 val first = withTimeoutOrNull(firstChunkTimeoutMs) {
                     // Pre-check cancel before starting the cold flow: the main

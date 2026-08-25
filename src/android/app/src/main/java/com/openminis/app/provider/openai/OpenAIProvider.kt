@@ -272,26 +272,25 @@ class OpenAIProvider constructor(
         /**
          * [T-android-stale-conn-retry-hang] Streaming time-to-first-byte
          * budget: response HEADERS must arrive within this window. Does NOT
-         * bound the SSE body — a flowing stream stays unlimited.
+         * bound the SSE body — a flowing stream stays unlimited. This is a REAL
+         * dead-upstream signal: a wedged tunnel never reaches headers at all,
+         * so 30s here is safe (headers arrive fast even for slow generations).
          */
         private const val STREAM_TTFB_TIMEOUT_MS = 30_000L
 
         /**
-         * [first-data-row-watchdog] Time-to-FIRST-DATA-event budget for the SSE
-         * body. A response whose headers arrived but whose first `data:` event
-         * never does is considered wedged after this window.
+         * First-data-row watchdog budget. A response whose headers arrived but
+         * whose first `data:` event never does is considered wedged after this
+         * window. 2026-08-26 (fix/long-generation-timeouts): this is now the
+         * generous generation backstop for EVERY stream — a long NON-thinking
+         * generation can sit silent on the SSE body for many minutes (long
+         * deliverables, big-context late turns), and provider silence is not a
+         * reliable dead-signal. The former 45s/thinking-split re-exposed
+         * non-thinking long generations to a false kill; a genuinely hung
+         * upstream still surfaces at this 30-min ceiling.
          */
-        private const val STREAM_FIRST_DATA_TIMEOUT_MS = 45_000L
-
-        /**
-         * Extended first-data budget for reasoning/thinking runs. Matches
-         * [com.openminis.app.sandbox.offload.FirstChunkTimeoutPolicy.THINKING_TIMEOUT_SEC]
-         * (30 min): thinking models can sit silent on the SSE stream for
-         * several minutes between the reasoning marker and the first text delta
-         * (Codex Responses 2:50–3:10 observed), so the 45s dead-upstream guard
-         * must not cancel a healthy long-reasoning call.
-         */
-        private const val STREAM_FIRST_DATA_TIMEOUT_THINKING_MS = 30 * 60_000L
+        private const val STREAM_FIRST_DATA_TIMEOUT_MS =
+            com.openminis.app.sandbox.offload.FirstChunkTimeoutPolicy.GENERATION_TIMEOUT_SEC * 1000L
     }
 
     // MARK: - Image passthrough [T-android-model-use-image-passthrough GH#62]
@@ -657,19 +656,19 @@ class OpenAIProvider constructor(
             )
         }
 
-        val call = if (thinkingLevel.isEnabled) {
-            // [thinking-read-timeout] The default OkHttp readTimeout (600s)
-            // trips on long reasoning silences (Codex Responses sits silent
-            // 2:50–3:10 between reasoning and text deltas). For thinking runs
-            // extend the idle-read budget to the 30-min absolute ceiling so the
-            // first-data watchdog (not the socket) owns the dead-upstream guard.
-            client.newBuilder()
-                .readTimeout(FirstChunkTimeoutPolicy.THINKING_TIMEOUT_SEC.toLong(), TimeUnit.SECONDS)
-                .build()
-                .newCall(request)
-        } else {
-            client.newCall(request)
-        }
+        // [generation-read-timeout] The OkHttp readTimeout is the idle-read
+        // budget for the whole SSE body. A long generation — thinking or not —
+        // can sit silent for minutes between rows (Codex Responses is silent
+        // 2:50–3:10 with NO keep-alive bytes; long deliverables and big-context
+        // late turns do the same). 2026-08-26
+        // (fix/long-generation-timeouts): widen the idle-read budget to the
+        // generous generation ceiling for EVERY generation stream so the socket
+        // never pre-empts a healthy slow generation; a genuinely wedged upstream
+        // is owned by the TTFB / first-data watchdogs, not the socket.
+        val call = client.newBuilder()
+            .readTimeout(FirstChunkTimeoutPolicy.GENERATION_TIMEOUT_SEC.toLong(), TimeUnit.SECONDS)
+            .build()
+            .newCall(request)
         // [T-android-stale-conn-retry-hang] Time-to-first-byte watchdog. A
         // request written into a dead pooled h2 tunnel (local proxy socket
         // survives a network flap) produces NO further events — no headers,
@@ -821,16 +820,18 @@ class OpenAIProvider constructor(
             // readLine (IOException→retryable error) instead of hanging.
             val firstDataArrived = java.util.concurrent.atomic.AtomicBoolean(false)
             val firstDataWatchdog = launch {
-                // [thinking-first-data] A reasoning run may not emit a `data:`
-                // row for minutes. The watchdog only races the first payload
-                // row to detect a wedged (headers-ok-but-no-body) stream, so
-                // give thinking models the same bounded-extended budget as the
-                // outer first-chunk guard instead of force-cancelling a healthy
-                // long-reasoning call at 45s.
-                val firstDataBudgetMs =
-                    if (thinkingLevel.isEnabled)
-                        STREAM_FIRST_DATA_TIMEOUT_THINKING_MS
-                    else STREAM_FIRST_DATA_TIMEOUT_MS
+                // [generation-first-data] A generation may not emit a `data:`
+                // row for minutes — not only when reasoning: long deliverables
+                // and big-context late-turn calls do so too, and provider silence
+                // is not a reliable dead-signal (2026-08-26,
+                // fix/long-generation-timeouts). The watchdog only races the
+                // first payload row to detect a wedged (headers-ok-but-no-body)
+                // stream, so use the same generous generation backstop as the
+                // outer first-chunk guard for EVERY stream instead of
+                // force-cancelling a healthy slow generation at 45s. A genuinely
+                // hung upstream still surfaces at this 30-min ceiling, which
+                // bounds the worst case without false-killing long work.
+                val firstDataBudgetMs = STREAM_FIRST_DATA_TIMEOUT_MS
                 delay(firstDataBudgetMs)
                 if (!firstDataArrived.get()) {
                     com.openminis.app.logging.AppLogger.warning(

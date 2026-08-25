@@ -129,3 +129,20 @@ fun followReducer(state: FollowState, event: FollowEvent): FollowState = when (e
  */
 fun consumeBottomRequest(state: FollowState): FollowState =
     state.copy(pendingBottomRequest = null)
+
+/**
+ * [fix/history-open-at-bottom] Whether an explicit "open at the bottom"
+ * request must survive an empty/recomposed-away layout instead of being
+ * consumed. A cold-open of a history session can hit the bottom-request
+ * consumer before the LazyColumn has measured any row (layoutInfo
+ * totalItemsCount == 0). Under AGGREGATE_MESSAGE_ITEMS the old promise of "the
+ * next StreamRowsChanged revision will re-scroll" never runs (that dispatch is
+ * unreachable), so if we consumed the request here the viewport would stay at
+ * the top. The consumer keeps the request pending and re-driving on layout
+ * changes until `totalItemsCount > 0`, then scrolls to bottom exactly once.
+ *
+ * Non-empty-total layouts and every non-open reason (Send / FabDown / Resume /
+ * Retry) always consume in the same run — no behaviour change for them.
+ */
+internal fun retainInitialOpenOnEmptyLayout(reason: BottomRequestReason?, totalItems: Int): Boolean =
+    reason == BottomRequestReason.INITIAL_OPEN && totalItems == 0

@@ -163,4 +163,55 @@ class ChatFollowControllerTest {
             prev = s.rowRevision
         }
     }
+
+    // ── fix/history-open-at-bottom: empty-layout retention ──────────────────
+
+    @Test fun `initial open retains pending request on an empty layout`() {
+        assertTrue(retainInitialOpenOnEmptyLayout(BottomRequestReason.INITIAL_OPEN, 0))
+    }
+
+    @Test fun `initial open consumes once rows exist`() {
+        assertFalse(retainInitialOpenOnEmptyLayout(BottomRequestReason.INITIAL_OPEN, 5))
+    }
+
+    @Test fun `non-open reasons never retain even on empty layout`() {
+        for (reason in listOf(
+            BottomRequestReason.SEND,
+            BottomRequestReason.RESUME,
+            BottomRequestReason.RETRY,
+            BottomRequestReason.FAB_DOWN,
+            BottomRequestReason.STREAM_PROGRESS,
+        )) {
+            assertFalse("$reason must not retain on empty layout", retainInitialOpenOnEmptyLayout(reason, 0))
+        }
+    }
+
+    @Test fun `no pending request is never retained`() {
+        assertFalse(retainInitialOpenOnEmptyLayout(null, 0))
+    }
+
+    /**
+     * Mirrors the ChatScreen consumer's cold-open flow: raise INITIAL_OPEN,
+     * the layout reports empty (so the request survives), then once rows land
+     * the request scrolls and is consumed exactly once. This is the pure
+     * contract that makes the empty-layout window not lose the bottom scroll.
+     */
+    @Test fun `cold open keeps initial request pending until rows land then consumes once`() {
+        var s = apply(FollowState(), FollowEvent.InitialOpen)
+        assertEquals(BottomRequestReason.INITIAL_OPEN, s.pendingBottomRequest)
+
+        // Consumer run 1: layout empty → must NOT consume (retain).
+        if (retainInitialOpenOnEmptyLayout(s.pendingBottomRequest, 0)) {
+            // retained — mimic the consumer, leave s unchanged
+        } else {
+            s = consumeBottomRequest(s)
+        }
+        assertEquals(BottomRequestReason.INITIAL_OPEN, s.pendingBottomRequest)
+
+        // Consumer run 2: rows have landed → scroll fired → consume exactly once.
+        assertFalse(retainInitialOpenOnEmptyLayout(s.pendingBottomRequest, 10))
+        s = consumeBottomRequest(s)
+        assertNull(s.pendingBottomRequest)
+        assertFalse(s.hasPendingBottomRequest)
+    }
 }
