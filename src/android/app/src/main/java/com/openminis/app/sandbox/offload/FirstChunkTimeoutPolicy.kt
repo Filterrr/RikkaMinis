@@ -29,6 +29,38 @@ package com.openminis.app.sandbox.offload
  *   - Deterministic, no Android dependencies → JVM-testable. The decision is
  *     purely string-based (customBaseURL) so the pure function can be tested
  *     without dragging in the provider model layer.
+ *
+ * Generation-vs-route budgets (2026-08-26, fix/long-generation-timeouts):
+ *   A **model generation stream** (an assistant turn that produces text /
+ *   tool calls over SSE) is treated fundamentally differently from a short
+ *   request-response probe. Long generations legitimately sit silent before
+ *   the first chunk for reasons UNRELATED to reasoning/thinking:
+ *
+ *     - assembling a large structured deliverable (a construction plan, a
+ *       spec, a long file) where the model plans internally before emitting
+ *       the first token;
+ *     - a late-turn call in a long multi-turn task where the accumulated
+ *       context has grown large and the provider needs >45s to produce its
+ *       first delta (context-size-dependent, not thinking-dependent);
+ *     - a proxy/gateway that queues upstream before the first SSE row.
+ *
+ *   Thinking was historically used as the only "this may be legitimately
+ *   silent" signal (8-25). That conflated a *user-facing feature flag* with a
+ *   *resource-production budget* and left every non-thinking long generation
+ *   exposed to the 45s/6-minute walls. The 8-25 Codex evidence (2:50–3:10 of
+ *   dead air between reasoning and text deltas with NO keep-alive bytes)
+ *   proves provider silence is not a reliable dead-signal anywhere on the
+ *   generation path.
+ *
+ *   Therefore: **generation streams always use the generous 30-minute
+ *   backstop**, thinking OR not. The per-route 30/45s budgets remain ONLY as
+ *   the budget for non-generation calls (none in production today besides
+ *   this stream path) and as a documented fast-hint. Genuine dead-upstream
+ *   protection is NOT removed: the provider's TTFB watchdog (30s, no
+ *   response *headers*) and the client's worker-liveness beat + death-grace
+ *   still surface a genuinely wedged upstream promptly with a *real* signal.
+ *   The 30-min ceiling is the final backstop that bounds the worst case so a
+ *   worker is never held forever.
  */
 object FirstChunkTimeoutPolicy {
 
@@ -39,19 +71,34 @@ object FirstChunkTimeoutPolicy {
     const val PROXY_TIMEOUT_SEC = 45
 
     /**
-     * Budget for a model with reasoning/thinking enabled (seconds). Reasoning
-     * models can sit silent for many minutes before the first visible chunk —
-     * Codex Responses observed 2:50–3:10 of dead air between the reasoning
-     * marker and the text-delta burst, and users report 10–20 min extreme
-     * cases. This is the ABSOLUTE ceiling for the first-chunk phase only; once
-     * the first chunk lands the guard disarms and a flowing stream has no total
-     * duration limit. Chosen generously (30 min) to cover long reasoning while
-     * still bounding a truly wedged upstream so a worker is never held forever.
-     * Worker liveness between the start and the first chunk is separately proven
-     * by the liveness.beat heartbeat (ModelExecutionRunDir), so this ceiling is
-     * a final backstop, not the primary liveness signal.
+     * Budget for a long-running model generation before its first chunk and
+     * its total stream duration (seconds). Generation models can sit silent
+     * for many minutes before the first visible chunk for reasons that are NOT
+     * reasoning-specific: assembling a large deliverable, a large-context
+     * late-turn call, or proxy queueing. Codex Responses observed 2:50–3:10 of
+     * dead air between the reasoning marker and the text-delta burst, and users
+     * report 10–20 min extreme full-generation cases.
+     *
+     * This is the ABSOLUTE ceiling for the first-chunk phase AND the total
+     * stream; it applies to ALL generation streams, reasoning or not. Chosen
+     * generously (30 min) to cover long generation while still bounding a truly
+     * wedged upstream so a worker is never held forever. Worker liveness during
+     * the wait is separately proven by the liveness.beat heartbeat
+     * (ModelExecutionRunDir), and a genuinely dead upstream (no response
+     * headers, or headers-but-no-body) is surfaced earlier by the provider's
+     * TTFB / first-data watchdogs — so this ceiling is a final backstop, not
+     * the primary liveness signal.
      */
-    const val THINKING_TIMEOUT_SEC = 30 * 60
+    const val GENERATION_TIMEOUT_SEC = 30 * 60
+
+    /**
+     * Historical alias kept for callers that referenced the thinking-scoped
+     * constant. The value is identical to [GENERATION_TIMEOUT_SEC]; the
+     * semantic is now "any long generation, thinking or not". Prefer
+     * [GENERATION_TIMEOUT_SEC] in new code.
+     */
+    @Deprecated("Renamed and de-scoped: applies to ALL generation streams, not just thinking — use GENERATION_TIMEOUT_SEC", level = DeprecationLevel.WARNING)
+    const val THINKING_TIMEOUT_SEC = GENERATION_TIMEOUT_SEC
 
     /** Hosts that are "official" direct endpoints (no proxy detour). */
     private val OFFICIAL_HOST_SUFFIXES = listOf(
@@ -95,10 +142,31 @@ object FirstChunkTimeoutPolicy {
     }
 
     /**
-     * Decide the first-chunk timeout budget in seconds for a route.
-     * Deterministic, side-effect free.
+     * The first-chunk / total-stream budget in seconds for a **model
+     * generation stream** (an assistant SSE response). Applies the generous
+     * 30-minute backstop regardless of route or thinking flag: long
+     * generations legitimately stay silent for minutes before the first chunk,
+     * and that silence is not a reliable dead-signal (see KDoc).
+     *
+     * Non-generation callers (none in production today) with a hard real-time
+     * requirement should use [decideTimeoutSec] instead.
      */
+    fun decideGenerationTimeoutSec(@Suppress("UNUSED_PARAMETER") customBaseURL: String?): Int =
+        GENERATION_TIMEOUT_SEC
+
+    /**
+     * Decide a strict route-aware first-chunk budget for a call that is NOT a
+     * long generation (rare; today unused in the stream path). Reasoning has
+     * been folded into the universal generation budget — see
+     * [decideGenerationTimeoutSec]. Retained for backward compatibility; the
+     * producer path should prefer [decideGenerationTimeoutSec].
+     *
+     * @deprecated Prefer [decideGenerationTimeoutSec] for any streamed model
+     *   request. The route split here (30/45s) historically hard-killed
+     *   healthy long generations and must not be applied to generation flows.
+     */
+    @Deprecated("Use decideGenerationTimeoutSec for generation streams", level = DeprecationLevel.WARNING)
     fun decideTimeoutSec(customBaseURL: String?, thinkingEnabled: Boolean = false): Int =
-        if (thinkingEnabled) THINKING_TIMEOUT_SEC
+        if (thinkingEnabled) GENERATION_TIMEOUT_SEC
         else if (isProxyRoute(customBaseURL)) PROXY_TIMEOUT_SEC else DIRECT_TIMEOUT_SEC
 }
