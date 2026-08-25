@@ -533,6 +533,16 @@ class MinisApp : Application(), ImageLoaderFactory {
                 (if (level == MemoryPressureLevel.CRITICAL) "admission throttled (reclaim + 2s wait)" else "admission delayed 500ms"))
         }
 
+        // [offload-rss-governance] 把 OffloadRssProbe 的「观测」接到「治理」：
+        // 当 offload handler 的累计/单次 VmRSS 增量越过阈值时，回收 idle 的
+        // PRoot tracer（释放其 native 足迹）+ 触发 GC 善后。补上之前「只打点
+        // 不回收」的口径漏洞——泄漏涨在 app 主进程（offload server / native
+        // 映射），而非 PRoot child，之前的 child-RSS 高水位读不到它。
+        com.openminis.app.sandbox.OffloadRssProbe.governanceHook = {
+            runCatching { ExecutionCoordinator.recycleIdleShells() }
+            runCatching { sharedBrowserTabPool.evictIdleTabs() }
+        }
+
         // [T-android-session-paused-badge] Per-session badge-state queue
         // displayed in the session-list cell corner. Init early so the
         // session list can read persisted PAUSED badges on first compose.
