@@ -13,6 +13,7 @@ import com.openminis.app.data.model.LLMStreamChunk
 import com.openminis.app.data.model.LLMUsage
 import com.openminis.app.data.model.ThinkingLevel
 import com.openminis.app.provider.LLMProvider
+import com.openminis.app.sandbox.offload.FirstChunkTimeoutPolicy
 import com.openminis.app.provider.applyUserAgentOverride
 import com.openminis.app.provider.safeOptString
 import com.openminis.app.provider.sanitizeToolPairing
@@ -277,22 +278,20 @@ class OpenAIProvider constructor(
 
         /**
          * [first-data-row-watchdog] Time-to-FIRST-DATA-event budget for the SSE
-         * body, following the TTFB watchdog's pattern. OkHttp's readTimeout is
-         * 600s, so a response whose headers arrived quickly but whose first
-         * `data:` event never does (idle gateway, model queue stall, IP throttle,
-         * proxy swallowing body bytes) lets `reader.readLine()` block the worker
-         * for up to 10 minutes — well past the client's 5s death grace, which
-         * then misclassifies the live-but-wedged worker as DEAD and retries.
-         *
-         * Unlike the TTFB watchdog (only races the header phase), this one races
-         * the first SSE payload row: once the first `data:` line lands, the flow
-         * is provably live (streaming works) and the watchdog is disarmed. A
-         * stalled first row cancels the OkHttp call, which interrupts the
-         * synchronous `readLine()` (IOException) so the worker surfaces a
-         * retryable error instead of hanging. Deliberately coarser than the
-         * client's grace so legitimately slow first chunks aren't force-killed.
+         * body. A response whose headers arrived but whose first `data:` event
+         * never does is considered wedged after this window.
          */
         private const val STREAM_FIRST_DATA_TIMEOUT_MS = 45_000L
+
+        /**
+         * Extended first-data budget for reasoning/thinking runs. Matches
+         * [com.openminis.app.sandbox.offload.FirstChunkTimeoutPolicy.THINKING_TIMEOUT_SEC]
+         * (30 min): thinking models can sit silent on the SSE stream for
+         * several minutes between the reasoning marker and the first text delta
+         * (Codex Responses 2:50–3:10 observed), so the 45s dead-upstream guard
+         * must not cancel a healthy long-reasoning call.
+         */
+        private const val STREAM_FIRST_DATA_TIMEOUT_THINKING_MS = 30 * 60_000L
     }
 
     // MARK: - Image passthrough [T-android-model-use-image-passthrough GH#62]
@@ -658,7 +657,19 @@ class OpenAIProvider constructor(
             )
         }
 
-        val call = client.newCall(request)
+        val call = if (thinkingLevel.isEnabled) {
+            // [thinking-read-timeout] The default OkHttp readTimeout (600s)
+            // trips on long reasoning silences (Codex Responses sits silent
+            // 2:50–3:10 between reasoning and text deltas). For thinking runs
+            // extend the idle-read budget to the 30-min absolute ceiling so the
+            // first-data watchdog (not the socket) owns the dead-upstream guard.
+            client.newBuilder()
+                .readTimeout(FirstChunkTimeoutPolicy.THINKING_TIMEOUT_SEC.toLong(), TimeUnit.SECONDS)
+                .build()
+                .newCall(request)
+        } else {
+            client.newCall(request)
+        }
         // [T-android-stale-conn-retry-hang] Time-to-first-byte watchdog. A
         // request written into a dead pooled h2 tunnel (local proxy socket
         // survives a network flap) produces NO further events — no headers,
@@ -810,11 +821,21 @@ class OpenAIProvider constructor(
             // readLine (IOException→retryable error) instead of hanging.
             val firstDataArrived = java.util.concurrent.atomic.AtomicBoolean(false)
             val firstDataWatchdog = launch {
-                delay(STREAM_FIRST_DATA_TIMEOUT_MS)
+                // [thinking-first-data] A reasoning run may not emit a `data:`
+                // row for minutes. The watchdog only races the first payload
+                // row to detect a wedged (headers-ok-but-no-body) stream, so
+                // give thinking models the same bounded-extended budget as the
+                // outer first-chunk guard instead of force-cancelling a healthy
+                // long-reasoning call at 45s.
+                val firstDataBudgetMs =
+                    if (thinkingLevel.isEnabled)
+                        STREAM_FIRST_DATA_TIMEOUT_THINKING_MS
+                    else STREAM_FIRST_DATA_TIMEOUT_MS
+                delay(firstDataBudgetMs)
                 if (!firstDataArrived.get()) {
                     com.openminis.app.logging.AppLogger.warning(
                         "OpenAIProvider",
-                        "[first-data-row] no SSE data row after ${STREAM_FIRST_DATA_TIMEOUT_MS / 1000}s (headers ok) — cancelling call",
+                        "[first-data-row] no SSE data row after ${firstDataBudgetMs / 1000}s (headers ok) — cancelling call",
                     )
                     call.cancel()
                 }
