@@ -33,6 +33,15 @@ object ChatStreamOffloadHandler {
     private const val TAG = "ChatStreamOffload"
     private const val STAGING_ROOT = "model-exec"
     private const val POLL_INTERVAL_MS = 160L
+/** First chunk arrived, then the stream went completely silent (no EOF,
+     * no keep-alive, no new bytes) for this long — the classic "provider sent
+     * the first chunk then the connection half-opened" hang. After the first
+     * chunk, the worker-death liveness beat only detects worker PROCESS crash;
+     * it does NOT cover a worker that is alive but stuck waiting on a silent
+     * upstream socket. This dedicated line-idle watchdog bounds that case so a
+     * half-open post-first-chunk stream doesn't hang the UI for the whole
+     * 30-minute generation backstop. */
+    private const val STREAM_IDLE_STALL_MS = 5 * 60 * 1000L
     private const val CANCEL_ACK_TIMEOUT_MS = 5_000L
     private const val CANCEL_ACK_POLL_MS = 100L
     /**
@@ -182,6 +191,23 @@ object ChatStreamOffloadHandler {
                                 emit(it)
                             }
                         }
+                    }
+                    // [P1-1 stream-idle-stall] First chunk arrived, then the
+                    // stream went completely silent. The worker-death check
+                    // below only fires on a stale liveness BEAT (worker process
+                    // crash); it does NOT cover a worker that is alive but
+                    // stuck waiting on a silent upstream socket. Bound that
+                    // case with a dedicated line-idle watchdog.
+                    // hadChunks=true → fatal path, no auto-resend.
+                    if (emittedChunks &&
+                        !terminalSeen &&
+                        newLen == lastRead &&
+                        System.currentTimeMillis() - lastGrowAtMs > STREAM_IDLE_STALL_MS
+                    ) {
+                        throw ModelStreamErrorException(
+                            "stream stalled after first chunk: no data for ${STREAM_IDLE_STALL_MS}ms",
+                            hadChunks = true,
+                        )
                     }
                     // [TF-F crash recovery] Detect worker death THREE-STATE:
                     // only a CONFIRMED dead pid (probe returns DEAD for THIS
