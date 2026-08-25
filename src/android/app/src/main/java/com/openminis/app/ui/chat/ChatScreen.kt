@@ -1338,10 +1338,8 @@ fun ChatScreen(
     // below. DETACHED: tokens/tools/stream end/auto-retry/IME never scroll.
     // Replaces the reverseLayout-era stickToBottom flag + anchor-guard.
     var followState by remember(sessionId) { mutableStateOf(FollowState()) }
-    // [forward-stable] Row keys of the previous published snapshot — used to
-    // verify the append-only prefix invariant (published keys must never be
-    // deleted or reordered while a turn is active).
-    var prevRowKeys: List<String>? = null
+    // [fix/scroll-follow-simplify] `prevRowKeys` prefix telemetry removed with
+    // the flatten-collector follow dispatch (aggregate early-return + SIMPLE_FOLLOW).
 
     // [forward-stable] Session open: one initial bottom request, unless the
     // open targets a specific message (focus-message owns the scroll then).
@@ -1358,6 +1356,14 @@ fun ChatScreen(
     // observation is only ever read here to DECIDE — never triggers a scroll
     // from inside a listener, so no feedback loop.
     LaunchedEffect(followState.pendingBottomRequest, followState.rowRevision, listState) {
+        // [fix/scroll-follow-simplify] This consumer handles EXPLICIT user
+        // intents (InitialOpen / Send / FabDown / Resume / Retry) and the
+        // forceScroll edge — all of which must scroll regardless of the
+        // streaming state. SIMPLE_FOLLOW's dedicated effect handles the
+        // streaming auto-follow. The data-collector StreamRowsChanged that
+        // previously raised STREAM_PROGRESS here is removed (it was
+        // unreachable under AGGREGATE_MESSAGE_ITEMS anyway), so this consumer
+        // never double-drives with SIMPLE_FOLLOW.
         val reason = followState.pendingBottomRequest ?: return@LaunchedEffect
         if (followState.isFollowing &&
             !listState.isScrollInProgress &&
@@ -1429,6 +1435,11 @@ fun ChatScreen(
         // pending bottom request (no initial+settle double scroll); a history
         // reader stays detached and is never yanked.
         if (!wasScrolledIntoHistory) {
+            // [P2-scroll-user-send] Re-engage follow (a bottom-anchored sender
+            // wants the new turn followed). SIMPLE_FOLLOW's dedicated effect
+            // also covers this (streaming just started + sender at bottom), and
+            // this reducer request is a harmless duplicate targeting the same
+            // sentinel — kept for the explicit-intent path.
             followState = followReducer(followState, FollowEvent.Send)
         } else {
             AppLogger.debug("USER-SEND", "reader-in-history, skip yank (firstIdx drift scene)")
@@ -1462,6 +1473,8 @@ fun ChatScreen(
                     isUserDragging = true
                     // [forward-stable] A real pointer drag begins — drop any
                     // in-flight bottom request so nothing scrolls mid-gesture.
+                    // This also maintains DETACHED/FOLLOWING for the explicit
+                    // intent consumer above.
                     followState = followReducer(followState, FollowEvent.UserDragStart)
                 }
                 is androidx.compose.foundation.interaction.DragInteraction.Stop -> {
@@ -1487,6 +1500,7 @@ fun ChatScreen(
                         listState.firstVisibleItemScrollOffset <= nearBottomThresholdPx.toInt()
                     // [forward-stable] Drag end flips the mode: sentinel in
                     // view → follow; scrolled away → detach (nothing may yank).
+                    // Maintains the mode for the explicit-intent consumer above.
                     followState = followReducer(followState, FollowEvent.UserDragEnd(atBottom = stoppedAtBottom))
                 }
                 is androidx.compose.foundation.interaction.DragInteraction.Cancel -> {
@@ -1533,6 +1547,43 @@ fun ChatScreen(
             if (followState.isFollowing) {
                 followState = followReducer(followState, FollowEvent.StreamRowsChanged)
             }
+        }
+    }
+
+    // [fix/scroll-follow-simplify] RikkaHub-style simple explicit follow.
+    // Item granularity is message-level under AGGREGATE_MESSAGE_ITEMS, so the
+    // fragment-churn the old guard stack fought is gone. Streaming auto-follow
+    // = the exact rikkahub ChatList contract: `isAtBottom() && streaming` →
+    // requestScrollToItem at the bottom sentinel, driven directly off the
+    // rendered viewport (no state machine, no defensive guard).
+    //   - isStreaming: the user is getting something — follow the growing tail.
+    //   - listState.isScrollInProgress: never fight a live gesture / fling.
+    //   - isAtBottom (isBottomSentinelVisible): only nudge when the sentinel
+    //     is already on screen — a history reader is never yanked.
+    // When the sentinel is in view, forward-layout anchoring already holds the
+    // bottom and requestScrollToItem(sentinel) is a harmless no-op scrolling to
+    // the current position, so the effect simply keeps a bottom-anchored viewer
+    // pinned as the tail grows. Explicit user intents (Send / FabDown /
+    // Resume / Retry / InitialOpen) keep flowing through the follow reducer +
+    // consumer above, which still scroll when the sentinel has scrolled out.
+    // The old data-collector StreamRowsChanged dispatch (which neither ran
+    // under AGGREGATE_MESSAGE_ITEMS nor is needed with this effect) was removed.
+    if (SIMPLE_FOLLOW) {
+        val bottomScrollTarget: (Int) -> Int? = { total -> safeBottomScrollIndex(total) }
+        LaunchedEffect(listState, isStreaming) {
+            snapshotFlow { listState.layoutInfo.visibleItemsInfo }
+                .collect { vis ->
+                    if (listState.isScrollInProgress) return@collect
+                    if (!isStreaming) return@collect
+                    val total = listState.layoutInfo.totalItemsCount
+                    if (total == 0) return@collect
+                    val atBottom = isBottomSentinelVisible(listState.layoutInfo)
+                    if (!atBottom) return@collect
+                    val scrollIdx = bottomScrollTarget(total)
+                    if (scrollIdx != null) {
+                        listState.requestScrollToItem(scrollIdx)
+                    }
+                }
         }
     }
 
@@ -3156,25 +3207,15 @@ fun ChatScreen(
                                 lastMergedFingerprint = lightFingerprint(merged)
                             }
                             flatItems = rowLedger.snapshot()
-                            // [forward-stable] Verify the append-only prefix
-                            // invariant: published keys must never regress
-                            // while a turn is active. Telemetry only — any
-                            // violation is logged as ScrollInvariant.
-                            val newRowKeys = flatItems.map { it.key }
-                            val prevKeys = prevRowKeys
-                            val prefixOk = prevKeys == null ||
-                                (newRowKeys.size >= prevKeys.size && newRowKeys.take(prevKeys.size) == prevKeys)
-                            if (!prefixOk) {
-                                AppLogger.debug(
-                                    "ScrollInvariant",
-                                    "row_revision=${followState.rowRevision} old_keys=${prevKeys?.size} new_keys=${newRowKeys.size} prefix_ok=false",
-                                )
-                            }
-                            prevRowKeys = newRowKeys
-                            // [forward-stable] A data revision was committed —
-                            // the follow reducer may raise a bottom request
-                            // (FOLLOWING only; DETACHED ignores revisions).
-                            followState = followReducer(followState, FollowEvent.StreamRowsChanged)
+                            // [fix/scroll-follow-simplify] Removed the
+                            // prevRowKeys append-only prefix telemetry and the
+                            // followReducer(StreamRowsChanged) dispatch. Under
+                            // AGGREGATE_MESSAGE_ITEMS this code is unreachable
+                            // (the aggregate branch early-returns above), and
+                            // under SIMPLE_FOLLOW the dedicated
+                            // `isStreaming && isAtBottom → requestScrollToItem`
+                            // effect is the single follow driver — the reducer
+                            // neither scrolls nor needs a data-revision poke.
                             com.openminis.app.diagnostics.StreamPerfMonitor.tick(
                                 flattenNanos = System.nanoTime() - tickStartNs,
                                 frozenReused = true,
@@ -6133,3 +6174,18 @@ fun ChatScreen(
 // AssistantToolUse / AssistantToolRunGroup branches.
 internal const val AGGREGATE_MESSAGE_ITEMS: Boolean = true
 
+// [fix/scroll-follow-simplify] RikkaHub-style simple explicit follow.
+// Stage E: with AGGREGATE_MESSAGE_ITEMS=true the flatten collect emits one
+// item per ChatMessage (buildAggregateChatItems) and early-returns BEFORE the
+// prevRowKeys prefix check and the followReducer(StreamRowsChanged) dispatch —
+// so the fragment-churn the old guard stack was built to damp is GONE, and the
+// old reducer's STREAM_PROGRESS revisions are effectively never raised from
+// the data collector anyway. When SIMPLE_FOLLOW=true, streaming auto-follow is
+// driven by a direct `isAtBottom() && isStreaming → requestScrollToItem(sentinel)`
+// effect (rikkahub ChatList's `isAtBottom && loading` contract); the follow
+// reducer/consumer remain, but only for EXPLICIT user intents (Send / FabDown /
+// Resume / Retry / InitialOpen), which the effect does not replace.
+//
+// FLIPPED TO TRUE — the SIMPLE_FOLLOW effect is now the streaming auto-follow
+// driver (see docs/scroll-follow-simplification.md).
+internal const val SIMPLE_FOLLOW: Boolean = true
