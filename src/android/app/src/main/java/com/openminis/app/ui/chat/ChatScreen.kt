@@ -3916,16 +3916,74 @@ fun ChatScreen(
                                 }
                             }
                             is FlatChatItem.AssistantMessageItem -> {
-                                // [fix/message-node-item-generator] Aggregate
-                                // message row — dead while AGGREGATE_MESSAGE_ITEMS
-                                // is false (the ledger/legacy path never emits
-                                // this item). Rendered via the reused
-                                // AssistantMessageView so stage D needs no new
-                                // renderer — just flip the switch.
-                                SideEffect {
-                                    selectionController.rememberMessageMarkdown(item.messageId, item.messageMarkdown)
+                                // [fix/message-node-item-renderer] Stage D —
+                                // aggregate message row, now the MAIN path
+                                // (AGGREGATE_MESSAGE_ITEMS=true). A whole
+                                // assistant message is ONE LazyColumn item,
+                                // rendered by the reused AssistantMessageView
+                                // (thinking / text / tool_use in original
+                                // stream order). Per-tool pill actions mirror
+                                // the flat AssistantToolUse branch's behavior:
+                                // stop routes to cancelStream, detail hoists to
+                                // the ViewModel sheet, rerun-from-here cuts at
+                                // THIS tool_use block. Toolcalls of one turn all
+                                // live inside this single row, so each pill gets
+                                // its own actions keyed off the current block.
+                                BoundsTrackedBlock(
+                                    messageId = item.messageId,
+                                    slotKey = "msg",
+                                    markdown = item.messageMarkdown,
+                                ) {
+                                    SideEffect {
+                                        selectionController.rememberMessageMarkdown(item.messageId, item.messageMarkdown)
+                                    }
+                                    AssistantMessageView(
+                                        message = item.message,
+                                        onRetry = { safeMutate { viewModel.retryLast() } },
+                                        // "Revert Compact" only surfaces on the
+                                        // compact-divider info row (mirrors the
+                                        // flat AssistantInfo branch).
+                                        onRevert = if (item.message.toolBlocks.any { it.kind == "info" && it.toolName == "compact" }) {
+                                            { viewModel.revertCompact() }
+                                        } else null,
+                                        toolPillActions = { block ->
+                                            if (block.kind != "tool_use") {
+                                                null
+                                            } else {
+                                                val isCancelled = block.toolStatus == ToolBlockStatus.CANCELLED
+                                                ToolPillActions(
+                                                    // re-run only surfaces on a cancelled trailing tool (mirrors
+                                                    // flat `isLastCancelled && !isStreaming && !canResume` — here
+                                                    // derived per-block from this message's own tool status).
+                                                    onRetry = if (isCancelled && !isStreaming && !canResume) {
+                                                        { safeMutate { viewModel.retryLast() } }
+                                                    } else null,
+                                                    onStop = { viewModel.cancelStream() },
+                                                    onOpenTerminalWithCommand = onOpenTerminalWithCommand,
+                                                    onOpenDetail = { viewModel.openToolDetail(it) },
+                                                    onRerunFromHere = if (!isStreaming) ({
+                                                        val messageId = item.messageId
+                                                        val blockId = block.id
+                                                        coroutineScope.launch {
+                                                            tracedScrollToItem("RERUN-FROM-AGG-TOOL", (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0), 0)
+                                                        }
+                                                        safeMutate { viewModel.rerunFromToolBlock(messageId, blockId) }
+                                                    }) else null,
+                                                    onCopyDetails = {
+                                                        val text = formatToolDetailsForClipboard(block)
+                                                        val cb = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                                        cb.setPrimaryClip(android.content.ClipData.newPlainText("tool", text))
+                                                        android.widget.Toast.makeText(
+                                                            context,
+                                                            context.getString(R.string.tool_longpress_copied_toast),
+                                                            android.widget.Toast.LENGTH_SHORT,
+                                                        ).show()
+                                                    },
+                                                )
+                                            }
+                                        },
+                                    )
                                 }
-                                AssistantMessageView(message = item.message)
                             }
                         }
                         } // Box (alpha wrapper)
@@ -6065,11 +6123,13 @@ fun ChatScreen(
 // ResumeBanner / SwipeToSendHint moved verbatim to ChatMiscViews.kt.
 // Sun May 24 11:01:25 CST 2026
 
-// [fix/message-node-item-generator] Message-level aggregate pipeline switch.
-// DEFAULT OFF: the existing ledger / flatten path runs byte-for-byte as
-// before. When flipped true, the flatten collect emits one aggregated item
-// per ChatMessage (buildAggregateChatItems) — no ledger, no segmenter. Stage
-// D repurposes ChatAssistantMessageUI.AssistantMessageView to render the
-// resulting AssistantMessageItem and flips this on.
-internal const val AGGREGATE_MESSAGE_ITEMS: Boolean = false
+// [fix/message-node-item-renderer] Message-level aggregate pipeline switch.
+// STAGE D FLIPPED TO TRUE — the aggregate path is now the MAIN path: the
+// flatten collect emits one aggregated item per ChatMessage
+// (buildAggregateChatItems) — no ledger, no segmenter. ChatScreen renders the
+// resulting AssistantMessageItem via the reused
+// ChatAssistantMessageUI.AssistantMessageView, with per-tool pill actions
+// (stop/detail/rerun/copy/open-terminal) wired for parity with the old flat
+// AssistantToolUse / AssistantToolRunGroup branches.
+internal const val AGGREGATE_MESSAGE_ITEMS: Boolean = true
 
