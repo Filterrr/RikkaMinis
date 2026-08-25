@@ -3040,6 +3040,19 @@ fun ChatScreen(
                             // invalidate the append-only contract and force a
                             // full re-seed via isIncrementallyCompatible().
                             val merged = mergeStreamingOverlay(msgs, stream, viewModel.currentStreamEpoch())
+                            // [fix/message-node-item-generator] Message-level
+                            // aggregate path (default OFF). When enabled, the
+                            // whole merged list is built once into one item
+                            // per message — no ledger / segmenter. Stage D
+                            // flips this on once the shared AssistantMessageView
+                            // renders AssistantMessageItem. Early-return keeps
+                            // the ledger path below exactly as it was.
+                            if (AGGREGATE_MESSAGE_ITEMS) {
+                                flatItems = withContext(Dispatchers.Default) {
+                                    buildAggregateChatItems(merged)
+                                }
+                                return@collect
+                            }
                             if (flatItems.isEmpty()) {
                                 val tBuildStart = System.nanoTime()
                                 com.openminis.app.diagnostics.PerfLongCtx.step(
@@ -3901,6 +3914,18 @@ fun ChatScreen(
                                         ),
                                     )
                                 }
+                            }
+                            is FlatChatItem.AssistantMessageItem -> {
+                                // [fix/message-node-item-generator] Aggregate
+                                // message row — dead while AGGREGATE_MESSAGE_ITEMS
+                                // is false (the ledger/legacy path never emits
+                                // this item). Rendered via the reused
+                                // AssistantMessageView so stage D needs no new
+                                // renderer — just flip the switch.
+                                SideEffect {
+                                    selectionController.rememberMessageMarkdown(item.messageId, item.messageMarkdown)
+                                }
+                                AssistantMessageView(message = item.message)
                             }
                         }
                         } // Box (alpha wrapper)
@@ -6039,3 +6064,12 @@ fun ChatScreen(
 // CompactSummarySheet / parseInlineMarkdown / rememberBrowserLiveSnapshot /
 // ResumeBanner / SwipeToSendHint moved verbatim to ChatMiscViews.kt.
 // Sun May 24 11:01:25 CST 2026
+
+// [fix/message-node-item-generator] Message-level aggregate pipeline switch.
+// DEFAULT OFF: the existing ledger / flatten path runs byte-for-byte as
+// before. When flipped true, the flatten collect emits one aggregated item
+// per ChatMessage (buildAggregateChatItems) — no ledger, no segmenter. Stage
+// D repurposes ChatAssistantMessageUI.AssistantMessageView to render the
+// resulting AssistantMessageItem and flips this on.
+internal const val AGGREGATE_MESSAGE_ITEMS: Boolean = false
+

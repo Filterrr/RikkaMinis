@@ -36,6 +36,7 @@ internal fun isCompactedItem(item: FlatChatItem, grayedMap: Map<String, Boolean>
     is FlatChatItem.AssistantTyping -> false
     is FlatChatItem.AssistantError -> grayedMap[originalMessageId(item.messageId)] == true
     is FlatChatItem.AssistantLegacyContent -> grayedMap[originalMessageId(item.messageId)] == true
+    is FlatChatItem.AssistantMessageItem -> grayedMap[originalMessageId(item.messageId)] == true
 }
 
 // ── Forward-list index mapping (post-reverseLayout migration) ──────────────
