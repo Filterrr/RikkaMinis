@@ -27,6 +27,17 @@ interface ModelListProvider {
      * @param thirdParty true when the instance points at a custom base
      *   URL that is not one of the known first-party hosts. Kept for
      *   parity with the old dispatch logic (some providers gate on it).
+     * @param forceRefresh when true, bypass any underlying disk/cache and
+     *   hit the live endpoint. Implementations that have no cache (e.g.
+     *   Anthropic / Gemini / OpenRouter / xAI) must accept the parameter
+     *   to satisfy the interface yet simply ignore it. Only the provider
+     *   with a real cache (OpenAI / Kimi → ProviderModelsCache) threads it
+     *   through to its fetch.
      */
-    suspend fun fetchModels(apiKey: String?, instance: ProviderInstance, thirdParty: Boolean): List<LLMModel>
+    suspend fun fetchModels(
+        apiKey: String?,
+        instance: ProviderInstance,
+        thirdParty: Boolean,
+        forceRefresh: Boolean = false,
+    ): List<LLMModel>
 }
