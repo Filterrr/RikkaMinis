@@ -423,6 +423,14 @@ internal fun AssistantMessageView(
                                 // Only the trailing text block is "still streaming"; earlier
                                 // text blocks (before a tool call) are frozen.
                                 isStreaming = streaming,
+                                // Stage G: register a stable TextShard so MinisTextKit can
+                                // hit-test and select this text (long-press + copy).
+                                // `block.id` is the stable pre-stream-rebuild block key —
+                                // do NOT use index (streaming inserts shift indices).
+                                shardId = TextShardId(
+                                    messageId = message.id,
+                                    shardId = block.id,
+                                ),
                             )
                         }
                     }
@@ -467,6 +475,12 @@ internal fun AssistantMessageView(
                 StreamingMarkdownText(
                     content = message.content,
                     isStreaming = message.isStreaming,
+                    // Stage G: same shard registration for the legacy fallback path
+                    // (fixes select/copy on pre-text-block sessions).
+                    shardId = TextShardId(
+                        messageId = message.id,
+                        shardId = "legacy-text",
+                    ),
                 )
             }
         }
