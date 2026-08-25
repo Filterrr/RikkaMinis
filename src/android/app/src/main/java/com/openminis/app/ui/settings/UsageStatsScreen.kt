@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -33,7 +35,8 @@ import androidx.compose.ui.res.stringResource
 import com.openminis.app.data.db.ChatDao
 import com.openminis.app.data.model.LLMModel
 import com.openminis.app.data.model.ProviderConfig
-import org.json.JSONObject
+import com.openminis.app.data.usage.UsageAggregator
+import com.openminis.app.data.usage.UsageRow
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -53,6 +56,9 @@ private data class ModelStats(
 }
 
 private data class ProviderGroup(val name: String, val models: List<ModelStats>)
+
+/** Time-range filter for the usage page. ALL keeps the legacy full scan. */
+private enum class UsageRange { ALL, DAYS_7, DAYS_30 }
 
 private data class GrandTotal(
     val totalInput: Long = 0,
@@ -74,10 +80,27 @@ fun UsageStatsScreen(
     var grandTotal by remember { mutableStateOf(GrandTotal()) }
     var providerGroups by remember { mutableStateOf<List<ProviderGroup>>(emptyList()) }
     var isLoaded by remember { mutableStateOf(false) }
+    var range by remember { mutableStateOf(UsageRange.ALL) }
 
-    LaunchedEffect(Unit) {
-        val records = chatDao.allUsageRecords()
+    LaunchedEffect(range) {
+        // Loading skeleton only on the first load; subsequent range flips keep
+        // showing stale data instead of flashing blank.
+        if (!isLoaded) isLoaded = false
+        val records = when (range) {
+            UsageRange.ALL -> chatDao.allUsageRecords()
+            else -> {
+                val now = System.currentTimeMillis()
+                val since = when (range) {
+                    UsageRange.DAYS_7 -> now - 7L * 24 * 60 * 60 * 1000
+                    UsageRange.DAYS_30 -> now - 30L * 24 * 60 * 60 * 1000
+                    UsageRange.ALL -> 0L
+                }
+                chatDao.usageRecordsBetween(since, now + 1)
+            }
+        }
 
+        // modelId → (displayName, provider), builtin models first then custom
+        // entries from the live config.
         val modelLookup = mutableMapOf<String, Pair<String, String>>()
         for (m in LLMModel.allModels) modelLookup[m.id] = m.displayName to m.provider
         providerConfig?.let { config ->
@@ -90,28 +113,30 @@ fun UsageStatsScreen(
             }
         }
 
-        val statsMap = mutableMapOf<String, ModelStats>()
+        // Device-local timezone day formatter for distinct-day bucketing
+        // (matches the pre-refactor behavior). Created per-load — cheap.
         val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
 
-        for (record in records) {
-            val usage = try { JSONObject(record.tokenUsage) } catch (_: Exception) { continue }
-            val input = usage.optLong("inputTokens", 0)
-            val output = usage.optLong("outputTokens", 0)
-            val cacheCr = usage.optLong("cacheCreationTokens", usage.optLong("cacheCreationInputTokens", 0))
-            val cacheRd = usage.optLong("cacheReadTokens", usage.optLong("cacheReadInputTokens", 0))
+        val aggregated = UsageAggregator.aggregate(
+            rows = records.map {
+                UsageRow(it.modelId, it.tokenUsage, it.createdAt, it.sessionId)
+            },
+            dayFormat = { ms -> dateFormat.format(Date(ms)) },
+        )
 
-            val (displayName, provider) = modelLookup[record.modelId]
-                ?: (record.modelId to "Unknown")
-
-            val stats = statsMap.getOrPut(record.modelId) {
-                ModelStats(record.modelId, displayName, provider)
-            }
-            stats.inputTokens += input
-            stats.outputTokens += output
-            stats.cacheCreationTokens += cacheCr
-            stats.cacheReadTokens += cacheRd
-            stats.distinctDays.add(dateFormat.format(Date(record.createdAt)))
-            stats.distinctSessions.add(record.sessionId)
+        val statsMap = aggregated.mapValues { (modelId, stats) ->
+            val (displayName, provider) = modelLookup[modelId] ?: (modelId to "Unknown")
+            ModelStats(
+                modelId = modelId,
+                displayName = displayName,
+                provider = provider,
+                inputTokens = stats.inputTokens,
+                outputTokens = stats.outputTokens,
+                cacheCreationTokens = stats.cacheCreationTokens,
+                cacheReadTokens = stats.cacheReadTokens,
+                distinctDays = stats.distinctDays.toMutableSet(),
+                distinctSessions = stats.distinctSessions.toMutableSet(),
+            )
         }
 
         val providerOrder = listOf("OpenAI", "Anthropic", "Google Gemini", "Google", "Antigravity", "Unknown")
@@ -137,7 +162,41 @@ fun UsageStatsScreen(
 
     // top-level page: rely on system back gesture / bottom nav (no back arrow)
     SettingsScaffold(title = stringResource(R.string.usage_title), onBack = null) {
-        if (!isLoaded) return@SettingsScaffold
+        if (!isLoaded) {
+            Box(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                CircularProgressIndicator()
+            }
+            return@SettingsScaffold
+        }
+
+        // Time range selector — All / 7d / 30d. Switching re-runs the
+        // LaunchedEffect(range) query above.
+        SettingsSection {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                UsageRange.entries.forEach { r ->
+                    FilterChip(
+                        selected = range == r,
+                        onClick = { if (range != r) range = r },
+                        label = {
+                            Text(
+                                when (r) {
+                                    UsageRange.ALL -> stringResource(R.string.usage_filter_all)
+                                    UsageRange.DAYS_7 -> stringResource(R.string.usage_filter_7d)
+                                    UsageRange.DAYS_30 -> stringResource(R.string.usage_filter_30d)
+                                },
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        },
+                    )
+                }
+            }
+        }
 
         SettingsSection(header = stringResource(R.string.usage_section_total)) {
             val stats = listOfNotNull(
