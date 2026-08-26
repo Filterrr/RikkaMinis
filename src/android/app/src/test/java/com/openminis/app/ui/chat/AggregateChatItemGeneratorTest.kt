@@ -185,4 +185,113 @@ class AggregateChatItemGeneratorTest {
         assertEquals("msg:a1", item.key)
         assertEquals("assistantMessage", item.contentType)
     }
+
+    // ── incremental rebuild (fix/long-session-aggregate-storm) ────────────
+
+    @Test
+    fun `incremental cold start equals full build`() {
+        val messages = listOf(
+            userMessage("u1"),
+            assistantMessage("a1", textBlocks = listOf("one"), withTool = true),
+            assistantMessage("a2", textBlocks = listOf("two"), withThinking = true),
+        )
+        val full = buildAggregateChatItems(messages)
+        val incr = buildAggregateChatItemsIncremental(emptyList(), emptyList(), messages)
+        assertEquals(full.map { it.key }, incr.map { it.key })
+    }
+
+    @Test
+    fun `incremental identical list returns same reference`() {
+        val messages = listOf(
+            userMessage("u1"),
+            assistantMessage("a1", textBlocks = listOf("one")),
+        )
+        val first = buildAggregateChatItems(messages)
+        val second = buildAggregateChatItemsIncremental(first, messages, messages)
+        assertTrue(first === second) // reused by reference, zero rebuild
+    }
+
+    @Test
+    fun `incremental tail append reuses prefix items by reference`() {
+        val base = listOf(
+            userMessage("u1"),
+            assistantMessage("a1", textBlocks = listOf("one")),
+        )
+        val appended = base + assistantMessage("a2", textBlocks = listOf("two"))
+        val prev = buildAggregateChatItems(base)
+        val next = buildAggregateChatItemsIncremental(prev, base, appended)
+
+        // Contract: one message → one item, so appended adds exactly one item.
+        assertEquals(prev.size + 1, next.size)
+        // Prefix items are the SAME instances (identity reuse).
+        for (i in prev.indices) assertTrue(prev[i] === next[i])
+        // The new tail is a fresh AssistantMessageItem for a2.
+        val tail = next.last() as FlatChatItem.AssistantMessageItem
+        assertEquals("a2", tail.messageId)
+        // Keys match a full build of the appended list exactly.
+        assertEquals(
+            buildAggregateChatItems(appended).map { it.key },
+            next.map { it.key },
+        )
+    }
+
+    @Test
+    fun `incremental tail mutate rebuilds only the changed message`() {
+        val base = listOf(
+            userMessage("u1"),
+            assistantMessage("a1", textBlocks = listOf("one")),
+        )
+        // The live tail message is a NEW instance (streaming `copy`), prefix
+        // messages are the SAME instances — mirrors mergeStreamingOverlay.
+        val mutated = assistantMessage("a1", textBlocks = listOf("one two three"))
+        val nextMessages = listOf(base[0], mutated)
+        val prev = buildAggregateChatItems(base)
+        val next = buildAggregateChatItemsIncremental(prev, base, nextMessages)
+
+        assertEquals(prev.size, next.size)
+        // head (user bubble) reused by reference; tail rebuilt.
+        assertTrue(prev[0] === next[0])
+        assertTrue(prev[1] !== next[1])
+        assertEquals(
+            buildAggregateChatItems(nextMessages).map { it.key },
+            next.map { it.key },
+        )
+    }
+
+    @Test
+    fun `incremental mid-list change falls back to full rebuild semantics`() {
+        val base = listOf(
+            userMessage("u1"),
+            assistantMessage("a1", textBlocks = listOf("one")),
+            assistantMessage("a2", textBlocks = listOf("two")),
+        )
+        // Middle message replaced (compact / edit) — identity breaks at idx 1.
+        val edited = assistantMessage("a1", textBlocks = listOf("one REVISED"))
+        val nextMessages = listOf(base[0], edited, base[2])
+        val prev = buildAggregateChatItems(base)
+        val next = buildAggregateChatItemsIncremental(prev, base, nextMessages)
+
+        // Keys equal a full build — correctness preserved even though the
+        // prefix reuse stops early.
+        assertEquals(
+            buildAggregateChatItems(nextMessages).map { it.key },
+            next.map { it.key },
+        )
+    }
+
+    @Test
+    fun `incremental preserves precededByUser lookback across boundary`() {
+        // End of prefix is a user; the first appended message is also a user
+        // → the appended UserBubble must carry precededByUser=true.
+        val base = listOf(userMessage("u1"), userMessage("u2"))
+        val appended = base + userMessage("u3")
+        val prev = buildAggregateChatItems(base)
+        val next = buildAggregateChatItemsIncremental(prev, base, appended)
+        val tail = next.last() as FlatChatItem.UserBubble
+        assertTrue(tail.precededByUser)
+
+        // Full build agrees.
+        val fullTail = buildAggregateChatItems(appended).last() as FlatChatItem.UserBubble
+        assertEquals(fullTail.precededByUser, tail.precededByUser)
+    }
 }
