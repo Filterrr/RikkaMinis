@@ -1035,6 +1035,8 @@
     <string name="mcp_form_oauth_token_endpoint_placeholder">https://…/token</string>
     <string name="mcp_form_oauth_scopes">범위</string>
     <string name="mcp_form_oauth_scopes_placeholder">공백으로 구분, 예: openid email</string>
+    <string name="mcp_form_oauth_redirect_uri">리디렉션 URI</string>
+    <string name="mcp_form_oauth_redirect_uri_placeholder">선택 사항. 기본 루프백 http://localhost:54546/callback</string>
     <string name="mcp_form_oauth_authorize">인증</string>
     <string name="mcp_form_oauth_reauthorize">재인증</string>
     <string name="mcp_form_oauth_sign_out">로그아웃</string>

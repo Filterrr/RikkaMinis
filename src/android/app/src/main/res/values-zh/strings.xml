@@ -1364,6 +1364,8 @@
     <string name="mcp_form_oauth_token_endpoint_placeholder">https://…/token</string>
     <string name="mcp_form_oauth_scopes">授权范围</string>
     <string name="mcp_form_oauth_scopes_placeholder">空格分隔，如 openid email</string>
+    <string name="mcp_form_oauth_redirect_uri">重定向 URI</string>
+    <string name="mcp_form_oauth_redirect_uri_placeholder">可选；默认回环地址 http://localhost:54546/callback</string>
     <string name="mcp_form_oauth_authorize">授权</string>
     <string name="mcp_form_oauth_reauthorize">重新授权</string>
     <string name="mcp_form_oauth_sign_out">退出登录</string>
