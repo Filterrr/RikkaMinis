@@ -467,8 +467,12 @@ private fun PlatformIntegrationCard(
             val existingEntry = platformEntries.find {
                 it.key.equals(varKey, ignoreCase = true)
             }
+            // Resolve the configured check through the stored entry's key (which
+            // is always the normalized uppercase form), not the raw requirement
+            // key — a lowercase `varKey` would otherwise miss an uppercase entry
+            // and misreport a configured var as missing here.
             val isConfigured = existingEntry != null &&
-                envVarRepository.getValue(varKey) != null
+                envVarRepository.getValue(existingEntry.key) != null
 
             val rowColor = if (isConfigured)
                 MaterialTheme.colorScheme.primary.copy(alpha = 0.06f)
@@ -560,7 +564,11 @@ private fun computePlatformTier(
 ): Int {
     val keys = req.env.keys.toList()
     if (keys.isEmpty()) return 2 // zero-config capability = complete
-    val configured = keys.count { envVarRepository.getValue(it) != null }
+    // Match by normalized (uppercased) key so tier agrees with
+    // PlatformIntegrationCard, which resolves existing entries case-
+    // insensitively. Without this, a lowercase key in requirements.json
+    // would show "Configured" in the card but "Needs config" tier badge.
+    val configured = keys.count { envVarRepository.getValue(it.uppercase()) != null }
     return when {
         configured == keys.size -> 2
         configured > 0 -> 1

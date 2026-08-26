@@ -10129,7 +10129,17 @@ class ChatViewModel(
      */
     private fun envVarsSnapshot(): Map<String, String> =
         try {
-            com.openminis.app.data.repository.EnvVarRepository(context).allAsDict()
+            // Reuse the app-wide singleton (wired in MinisApp.onCreate via
+            // EnvVarRedactor.envVarRepository) instead of constructing a fresh
+            // EnvVarRepository per call. A fresh instance re-runs loadMetadata()
+            // (JSON parse + StateFlow rebuild) on every snapshot, which is pure
+            // duplicated IO; the singleton caches metadata in its StateFlow and
+            // reads the same encrypted prefs. Fallback keeps headless/debug
+            // callers (ChatMutationMethods / HeadlessChatRunner) working even
+            // before the singleton is wired.
+            val repo = com.openminis.app.data.EnvVarRedactor.envVarRepository
+                ?: com.openminis.app.data.repository.EnvVarRepository(context)
+            repo.allAsDict()
         } catch (e: Exception) {
             Log.w(TAG, "envVarsSnapshot: ${e.message}")
             emptyMap()
