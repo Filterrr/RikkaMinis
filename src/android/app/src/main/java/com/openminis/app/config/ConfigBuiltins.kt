@@ -455,7 +455,7 @@ internal object ConfigBuiltins {
                 description = "When ON, a model's reasoning block starts expanded instead of collapsed.",
                 prefs = appearancePrefs,
                 key = com.openminis.app.ui.settings.KEY_AUTO_EXPAND_THINKING,
-                defaultValue = true,
+                defaultValue = false,
             )
         )
         // Chat action customization (Settings → Appearance → Chat Menu).
@@ -1000,8 +1000,8 @@ internal object ConfigBuiltins {
     // for round-trip) are preserved when one field changes.
 
     private fun registerSoul(r: ConfigRegistry, context: Context) {
-        // Length cap is language-aware now (Chinese ≤ 800 chars OR
-        // English ≤ 500 words); see [com.openminis.app.agent.SoulStore.isOverLimit].
+        // Length cap is language-aware now (Chinese ≤ 1600 chars OR
+        // English ≤ 1000 words); see [com.openminis.app.agent.SoulStore.isOverLimit].
         // No schema-level maxLength — a fixed char count would be wrong
         // for either language. The writer below rejects over-limit with a
         // precise [ConfigError.InvalidValue].

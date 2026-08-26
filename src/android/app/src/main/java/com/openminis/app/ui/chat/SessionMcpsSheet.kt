@@ -32,8 +32,6 @@ import com.openminis.app.data.repository.MCPRepository
 import com.openminis.app.ui.settings.SettingsRow
 import com.openminis.app.ui.settings.SettingsSection
 
-private const val MCP_NOTE_TRUNC = 200
-
 /**
  * Bottom sheet showing all configured MCP servers with per-session
  * enable/disable toggles. Mirrors [SessionSkillsSheet]: [StandardChatSheet]
@@ -80,7 +78,7 @@ fun SessionMcpsSheet(
                         val note = server.note?.trim().orEmpty()
                         val sub = note
                             .ifEmpty { server.transportSummary }
-                            .let { if (it.length > MCP_NOTE_TRUNC) it.substring(0, MCP_NOTE_TRUNC) + "…" else it }
+                            .let { if (it.length > mcpRepository.noteTruncationCap) it.substring(0, mcpRepository.noteTruncationCap) + "…" else it }
                         SettingsRow(
                             title = server.id,
                             subtitle = sub.takeIf { it.isNotBlank() },

@@ -798,10 +798,6 @@ class SkillRepository(private val context: Context) {
         ))
     }
 
-    /** Absolute host path for a file inside a skill's directory. */
-    fun skillFileHostPath(skillId: String, relativePath: String): String =
-        File(File(skillsDir, skillId), relativePath).absolutePath
-
     /**
      * Re-read SKILL.md from disk and push any frontmatter changes back into the
      * DB + in-memory state. Call after the agent (or user) edits SKILL.md on
@@ -854,16 +850,14 @@ class SkillRepository(private val context: Context) {
 
     /** Read an arbitrary file inside a skill's directory (e.g. scripts/foo.py). */
     fun readSkillFile(skillId: String, relativePath: String): String? {
-        if (relativePath.contains("..")) return null
-        val file = File(File(skillsDir, skillId), relativePath)
+        val file = resolveSkillFile(skillId, relativePath) ?: return null
         if (!file.isFile) return null
         return try { file.readText() } catch (_: Exception) { null }
     }
 
     /** Write an arbitrary file inside a skill's directory. Creates parents. */
     fun writeSkillFile(skillId: String, relativePath: String, content: String): Boolean {
-        if (relativePath.contains("..")) return false
-        val file = File(File(skillsDir, skillId), relativePath)
+        val file = resolveSkillFile(skillId, relativePath) ?: return false
         file.parentFile?.mkdirs()
         return try {
             file.writeText(content)
@@ -871,6 +865,25 @@ class SkillRepository(private val context: Context) {
             if (relativePath.equals("SKILL.md", ignoreCase = true)) rescanFromDisk(skillId)
             true
         } catch (_: Exception) { false }
+    }
+
+    /**
+     * Resolve a relative path against `skillsDir/<skillId>/` and reject any
+     * escape via `..`, absolute paths (`/abs/...`), or symlink tricks — the
+     * same canonical-path containment guard used by [importFromArchive]'s
+     * zip-slip check. Returns null when the result would land outside the
+     * skill directory (or when canonicalization fails).
+     */
+    private fun resolveSkillFile(skillId: String, relativePath: String): File? {
+        val root = File(skillsDir, skillId)
+        val rootCanonical = try { root.canonicalPath } catch (_: Exception) { return null }
+        val rootPrefix = rootCanonical + File.separator
+        val candidate = File(root, relativePath)
+        val canonical = try { candidate.canonicalPath } catch (_: Exception) { return null }
+        // Allow the skill root itself only for the record path; file callers
+        // never legitimately target the directory, but keep the check precise.
+        if (canonical != rootCanonical && !canonical.startsWith(rootPrefix)) return null
+        return candidate
     }
 
     private suspend fun downloadSiblingFiles(ghInfo: GitHubInfo, destDir: File, skill: Skill): SiblingDownloadOutcome {
@@ -1198,8 +1211,10 @@ class SkillRepository(private val context: Context) {
         val bundledVersion = parsed.version.ifBlank { "1.0.0" }
         val existing = _skills.value.find { it.id == dirName }
 
-        // Skip if local version is same or newer
-        if (existing != null && existing.version >= bundledVersion) return
+        // Skip if local version is same or newer. Semantic comparison, not
+        // lexical — a lexical `">="` would treat "1.10.0" as older than
+        // "1.9.0" and re-downgrade a newer install on every launch.
+        if (existing != null && compareVersions(existing.version, bundledVersion) >= 0) return
 
         if (existing != null) {
             val updated = existing.copy(
@@ -1585,6 +1600,29 @@ class SkillRepository(private val context: Context) {
         text.replace("&", "&amp;")
             .replace("<", "&lt;")
             .replace(">", "&gt;")
+
+    /**
+     * Semantic (numeric) comparison of dotted version strings, e.g. `1.10.0`
+     * vs `1.9.0`. Returns negative / zero / positive like [Comparable.compareTo].
+     * Non-numeric / missing segments parse as 0 so `"1"` == `"1.0"` and
+     * malformed versions don't crash the comparison; also strips a leading
+     * `v` that sometimes prefixes bundled versions.
+     */
+    private fun compareVersions(a: String, b: String): Int {
+        fun parts(raw: String): List<Int> =
+            raw.trim().removePrefix("v").removePrefix("V")
+                .split('.')
+                .map { it.trim().toIntOrNull() ?: 0 }
+        val ap = parts(a)
+        val bp = parts(b)
+        val n = maxOf(ap.size, bp.size)
+        for (i in 0 until n) {
+            val av = ap.getOrElse(i) { 0 }
+            val bv = bp.getOrElse(i) { 0 }
+            if (av != bv) return av.compareTo(bv)
+        }
+        return 0
+    }
 
     // -- Database Helper --
 

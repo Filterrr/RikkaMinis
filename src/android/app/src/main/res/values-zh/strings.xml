@@ -131,6 +131,7 @@
     <string name="soul_restore_confirm_title">恢复默认 SOUL.md？</string>
     <string name="soul_restore_confirm_body">当前修改将被覆盖为默认人格文件。该模板可作为出发点，随时可再次修改。</string>
     <string name="soul_save_error_title">保存失败</string>
+    <string name="soul_injection_error">这看起来像是对模型的指令而不是人格引导。SOUL.md 中不允许出现「忽略之前的指令」之类的内容——请只写真正的性格、语气和行为描述。</string>
     <string name="settings_env_vars">环境变量</string>
     <string name="settings_env_vars_subtitle">注入到沙箱内的变量</string>
 
@@ -342,7 +343,7 @@
     <string name="perm_a11y_system_ready">已启用</string>
     <string name="perm_a11y_system_disabled">未启用</string>
     <string name="perm_allow_minis_config">允许配置工具</string>
-    <string name="perm_minis_config_desc">禁用后，智能体将无法通过 minis-config 读取或修改任何设置。日志 → 配置变更 中的变更历史仍可查看。智能体会收到 permission_denied 错误，并通过深度链接引导你操作。</string>
+    <string name="perm_minis_config_desc">关闭后，智能体将无法主动读取或修改你的设置。你仍可在 日志 → 配置变更 中查看过往的变更记录。</string>
     <string name="perm_section_privacy">隐私</string>
     <string name="perm_section_media">媒体</string>
     <string name="perm_section_system">系统</string>
@@ -729,6 +730,9 @@
     <string name="provider_set_favorite">设为常用</string>
     <string name="provider_unset_favorite">取消常用</string>
     <string name="provider_detail_export">导出</string>
+    <string name="provider_detail_export_confirm_title">导出供应商</string>
+    <string name="provider_detail_export_confirm_text">导出文件会包含明文（Base64 编码）的 API Key，以便重新导入后可直接使用。请仅分享给你信任的人。</string>
+    <string name="provider_detail_export_confirm_action">导出</string>
     <string name="provider_detail_label">标签</string>
     <string name="provider_detail_custom_api_base">自定义 API 地址</string>
     <string name="provider_detail_http_endpoint_warning">⚠ 该端点使用未加密的 HTTP。发往其中的 API 密钥、消息和工具结果可被网络中的任何人读取。仅对可信的本地服务器使用 HTTP。</string>
@@ -1360,6 +1364,8 @@
     <string name="mcp_form_oauth_token_endpoint_placeholder">https://…/token</string>
     <string name="mcp_form_oauth_scopes">授权范围</string>
     <string name="mcp_form_oauth_scopes_placeholder">空格分隔，如 openid email</string>
+    <string name="mcp_form_oauth_redirect_uri">重定向 URI</string>
+    <string name="mcp_form_oauth_redirect_uri_placeholder">可选；默认回环地址 http://localhost:54546/callback</string>
     <string name="mcp_form_oauth_authorize">授权</string>
     <string name="mcp_form_oauth_reauthorize">重新授权</string>
     <string name="mcp_form_oauth_sign_out">退出登录</string>

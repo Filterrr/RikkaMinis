@@ -323,13 +323,23 @@ private fun MCPFormTab(
     var oauthClientSecret by remember {
         mutableStateOf(
             editServer?.id?.let {
-                com.openminis.app.mcp.oauth.MCPOAuthStore.clientSecret(context, it)
+                // [T-mcp-secret-handoff-import] If the in-guest CLI seeded a
+                // client secret via the .secret handoff file, import it first
+                // (into the encrypted store) so it pre-fills; otherwise read the
+                // already-stored secret.
+                com.openminis.app.mcp.oauth.MCPOAuthStore.importPendingClientSecret(context, it)
+                    ?: com.openminis.app.mcp.oauth.MCPOAuthStore.clientSecret(context, it)
             } ?: "",
         )
     }
     var oauthAuthEndpoint by remember { mutableStateOf(editServer?.oauth?.authorizationEndpoint ?: "") }
     var oauthTokenEndpoint by remember { mutableStateOf(editServer?.oauth?.tokenEndpoint ?: "") }
     var oauthScopes by remember { mutableStateOf(editServer?.oauth?.scopes ?: "") }
+    // [T-mcp-redirect-uri-preserve] Custom redirect URI. Optional — blank means
+    // the loopback default. Previously dropped on edit (the form neither read
+    // nor rewrote it), so a JSON/CLI-supplied redirect_uri silently evaporated
+    // on Save. Now round-tripped like the other OAuth fields.
+    var oauthRedirectUri by remember { mutableStateOf(editServer?.oauth?.redirectUri ?: "") }
     var oauthAuthorized by remember {
         mutableStateOf(
             editServer?.id?.let {
@@ -345,6 +355,7 @@ private fun MCPFormTab(
             authorizationEndpoint = oauthAuthEndpoint.trim(),
             tokenEndpoint = oauthTokenEndpoint.trim(),
             scopes = oauthScopes.trim().ifBlank { null },
+            redirectUri = oauthRedirectUri.trim().ifBlank { null },
         )
         return cfg.takeIf { it.isConfigured }
     }
@@ -493,6 +504,13 @@ private fun MCPFormTab(
                     value = oauthScopes,
                     onValueChange = { oauthScopes = it },
                     placeholder = stringResource(R.string.mcp_form_oauth_scopes_placeholder),
+                    singleLine = true,
+                )
+                FieldLabel(stringResource(R.string.mcp_form_oauth_redirect_uri))
+                DialogTextField(
+                    value = oauthRedirectUri,
+                    onValueChange = { oauthRedirectUri = it },
+                    placeholder = stringResource(R.string.mcp_form_oauth_redirect_uri_placeholder),
                     singleLine = true,
                 )
                 Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {

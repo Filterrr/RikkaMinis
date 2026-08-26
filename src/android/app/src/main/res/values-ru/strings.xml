@@ -135,6 +135,7 @@
     <string name="soul_restore_confirm_title">Восстановить стандартный SOUL.md?</string>
     <string name="soul_restore_confirm_body">Ваши текущие изменения будут перезаписаны стандартным файлом личности. Оригинал служит отправной точкой, и его можно отредактировать заново в любой момент.</string>
     <string name="soul_save_error_title">Не удалось сохранить</string>
+    <string name="soul_injection_error">Похоже, это инструкция для модели, а не описание личности. Фразы вроде «ignore previous instructions» недопустимы в SOUL.md — описывайте только характер, тон и поведение.</string>
     <string name="settings_env_vars">Переменные окружения</string>
     <string name="settings_env_vars_subtitle">Переменные, добавляемые в Песочницу</string>
 
@@ -501,7 +502,7 @@
     <string name="perm_a11y_system_ready">Служба включена</string>
     <string name="perm_a11y_system_disabled">Служба не включена</string>
     <string name="perm_allow_minis_config">Разрешить инструмент настройки</string>
-    <string name="perm_minis_config_desc">Когда отключено, агент не может считывать или изменять какие-либо настройки через minis-config. История изменений в Журналы → Изменения настроек остаётся доступной. Агент получит ошибку permission_denied и сможет вместо этого направить вас через глубокие ссылки.</string>
+    <string name="perm_minis_config_desc">Когда выключено, агент не может самостоятельно читать или изменять ваши настройки. Прошлые изменения по-прежнему можно посмотреть в Журналы → Изменения настроек.</string>
     <string name="perm_section_privacy">Конфиденциальность</string>
     <string name="perm_section_media">Медиа</string>
     <string name="perm_section_system">Система</string>
@@ -1190,6 +1191,8 @@
     <string name="mcp_form_oauth_token_endpoint_placeholder">https://…/token</string>
     <string name="mcp_form_oauth_scopes">Области (scopes)</string>
     <string name="mcp_form_oauth_scopes_placeholder">Через пробел, напр. openid email</string>
+    <string name="mcp_form_oauth_redirect_uri">URI перенаправления</string>
+    <string name="mcp_form_oauth_redirect_uri_placeholder">Необязательно; по умолчанию loopback http://localhost:54546/callback</string>
     <string name="mcp_form_oauth_authorize">Авторизовать</string>
     <string name="mcp_form_oauth_reauthorize">Повторная авторизация</string>
     <string name="mcp_form_oauth_sign_out">Выйти</string>

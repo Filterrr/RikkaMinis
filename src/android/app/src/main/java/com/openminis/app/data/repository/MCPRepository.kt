@@ -41,7 +41,30 @@ class MCPRepository(private val context: Context) {
         private const val MAX_MCPS_IN_PROMPT = 20
         // Reuse the skill description cap so MCP notes truncate identically.
         private const val MAX_NOTE_LENGTH = 200
+
+        /**
+         * [T-mcp-import-unique-fallback] Deterministic fallback id for a bare
+         * entry with no explicit `name`. Tries the STDIO command basename else
+         * the URL host else "imported-mcp". Pure (no Android deps) so it is
+         * JVM-unit-testable.
+         */
+        internal fun deriveFallbackName(entry: JSONObject): String {
+            entry.optString("command", "").trim().ifBlank { null }?.let { cmd ->
+                val basename = cmd.substringAfterLast('/').substringAfterLast('\\').trim()
+                if (basename.isNotEmpty()) return "mcp-$basename"
+            }
+            entry.optString("url", "").trim().ifBlank { null }?.let { url ->
+                val host = runCatching { java.net.URI(url).host }
+                    .getOrNull()?.replace(Regex("[^A-Za-z0-9._-]"), "_")
+                if (!host.isNullOrBlank()) return "mcp-$host"
+            }
+            return "imported-mcp"
+        }
     }
+
+    /** Truncation cap for MCP notes shown in list rows / prompt fragments.
+     *  Exposed so UI rows (SessionMcpsSheet) share one source of truth. */
+    val noteTruncationCap: Int get() = MAX_NOTE_LENGTH
 
     // -- Data Types --
 
@@ -294,6 +317,13 @@ class MCPRepository(private val context: Context) {
         db.execSQL("DELETE FROM mcp_session_overrides WHERE mcp_id=?", arrayOf(id))
         _servers.value = _servers.value.filter { it.id != id }
         save()
+        // [T-mcp-oauth-purge-on-delete] Forgetting a server must also forget any
+        // OAuth secret/tokens/bridge-file it left behind — otherwise the
+        // client_secret and issued tokens orphan in EncryptedSharedPreferences
+        // and the in-guest bridge, a storage + credential-hygiene leak.
+        runCatching {
+            com.openminis.app.mcp.oauth.MCPOAuthStore.purge(context, id)
+        }
         Log.i(TAG, "Deleted MCP server: $id")
     }
 
@@ -370,6 +400,27 @@ class MCPRepository(private val context: Context) {
     // -- JSON Import (4 format variants, last-write-wins on name) --
 
     /**
+     * [T-mcp-import-unique-fallback] Build a deterministic fallback id for a
+     * bare entry that has no explicit `name`. Tries the STDIO command basename
+     * (e.g. "npx" → "mcp-npx"), else the URL host (e.g. "https://x/y" →
+     * "mcp-x"), else the generic "imported-mcp". Deterministic so re-importing
+     * the same bare entry round-trips to a stable id, but varied enough that
+     * two *different* bare entries no longer collapse onto one id.
+     */
+    internal fun deriveFallbackName(entry: JSONObject): String {
+        entry.optString("command", "").trim().ifBlank { null }?.let { cmd ->
+            val basename = cmd.substringAfterLast('/').substringAfterLast('\\').trim()
+            if (basename.isNotEmpty()) return "mcp-$basename"
+        }
+        entry.optString("url", "").trim().ifBlank { null }?.let { url ->
+            val host = runCatching { java.net.URI(url).host }
+                .getOrNull()?.replace(Regex("[^A-Za-z0-9._-]"), "_")
+            if (!host.isNullOrBlank()) return "mcp-$host"
+        }
+        return "imported-mcp"
+    }
+
+    /**
      * Parse pasted JSON and import any server entries. Returns the imported
      * configs (already merged into state + written to disk), empty on no-op.
      *
@@ -415,7 +466,14 @@ class MCPRepository(private val context: Context) {
         }
         // Variant 3: single bare entry { "command"|"url": … }
         if (root.has("command") || root.has("url")) {
-            val name = root.optString("name", "").ifBlank { "imported-mcp" }
+            // [T-mcp-import-unique-fallback] Derive a fallback name from the
+            // entry's identifying transport detail rather than a single generic
+            // "imported-mcp", so two distinct bare entries (pasted in separate
+            // imports) don't silently collapse onto the same id and overwrite
+            // each other. Explicit `name` still wins.
+            val name = root.optString("name", "").ifBlank {
+                deriveFallbackName(root)
+            }
             return listOf(parseEntry(name, root))
         }
         // Variant 2: name-keyed object { "name": { "command"|"url": … } }

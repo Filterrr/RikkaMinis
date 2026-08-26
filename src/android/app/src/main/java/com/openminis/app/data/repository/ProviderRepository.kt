@@ -780,6 +780,15 @@ class ProviderRepository(private val context: Context) {
             config.modelGroups.removeAll { it.id in emptyGroupIds }
             if (config.defaultPrimaryGroupId in emptyGroupIds) config.defaultPrimaryGroupId = null
             if (config.defaultSubGroupId in emptyGroupIds) config.defaultSubGroupId = null
+            // [T-provider-remove-group-refs] Removing an instance can empty a
+            // group and delete it here (direct removeAll, NOT via removeGroup),
+            // so mirror removeGroup's full reference cascade: drop the group
+            // from agent-loop pins and voice input/output bindings — otherwise
+            // those lists keep dangling ids for a group that no longer exists
+            // (the group-side twin of T171's entry-side stale-pin bug).
+            if (config.voiceInputGroupId in emptyGroupIds) config.voiceInputGroupId = null
+            if (config.voiceOutputGroupId in emptyGroupIds) config.voiceOutputGroupId = null
+            config.agentLoopGroupIds.removeAll { it in emptyGroupIds }
         }
 
         saveConfig(config)
@@ -1883,8 +1892,12 @@ class ProviderRepository(private val context: Context) {
     fun exportInstanceJSON(instanceId: String): String? {
         ensureConfigLoaded()
         val instance = instance(instanceId) ?: return null
-        val entries = visibleEntries(instanceId) + _config.value.modelEntries.filter {
-            it.providerInstanceId == instanceId && it.isHidden
+        // Export the FULL catalog for this instance (visible + hidden).
+        // Previously assembled as `visibleEntries + filter(isHidden)` — two
+        // disjoint slices that sum to "everything" but read as if they might
+        // overlap or drop entries. Single filter is the same set, clearer.
+        val entries = _config.value.modelEntries.filter {
+            it.providerInstanceId == instanceId
         }
 
         val obj = JSONObject().apply {

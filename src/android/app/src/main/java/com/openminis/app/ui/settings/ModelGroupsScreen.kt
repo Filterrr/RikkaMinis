@@ -309,8 +309,16 @@ fun ModelGroupsScreen(
                                 contextLimitTokens = DEFAULT_GROUP_CONTEXT_LIMIT_TOKENS,
                             )
                             providerRepository.addGroup(newGroup)
-                            // Auto-set as primary default if it's the first group
-                            if (config.modelGroups.size == 1 && config.defaultPrimaryGroupId == null) {
+                            // Auto-set as primary default if it's the first group.
+                            // `config` here is the collectAsState snapshot captured
+                            // BEFORE this click — addGroup already updated
+                            // _config.value, so `config.modelGroups` still reflects
+                            // the pre-add list. "First group" therefore means the
+                            // pre-add list is EMPTY, not size == 1 (the old check
+                            // off-by-one'd: it never promoted the true first group,
+                            // and wrongly promoted the SECOND group when a prior
+                            // primary had been cleared).
+                            if (config.modelGroups.isEmpty() && config.defaultPrimaryGroupId == null) {
                                 providerRepository.defaultPrimaryGroupId = newGroup.id
                             }
                             newGroupName = ""

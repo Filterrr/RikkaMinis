@@ -296,7 +296,7 @@
     <string name="perm_a11y_system_ready">서비스 활성화됨</string>
     <string name="perm_a11y_system_disabled">서비스 비활성화됨</string>
     <string name="perm_allow_minis_config">설정 도구 허용</string>
-    <string name="perm_minis_config_desc">비활성화하면 에이전트는 minis-config로 설정을 읽거나 수정할 수 없습니다. 로그 → 설정 변경에서 변경 이력은 계속 확인할 수 있습니다. 에이전트는 permission_denied 오류를 받고 딥 링크로 안내합니다.</string>
+    <string name="perm_minis_config_desc">끄면 에이전트가 스스로 설정을 읽거나 수정할 수 없습니다. 이전 변경 내용은 로그 → 설정 변경에서 계속 확인할 수 있습니다.</string>
     <string name="perm_section_privacy">개인정보</string>
     <string name="perm_section_media">미디어</string>
     <string name="perm_section_system">시스템</string>
@@ -1035,6 +1035,8 @@
     <string name="mcp_form_oauth_token_endpoint_placeholder">https://…/token</string>
     <string name="mcp_form_oauth_scopes">범위</string>
     <string name="mcp_form_oauth_scopes_placeholder">공백으로 구분, 예: openid email</string>
+    <string name="mcp_form_oauth_redirect_uri">리디렉션 URI</string>
+    <string name="mcp_form_oauth_redirect_uri_placeholder">선택 사항. 기본 루프백 http://localhost:54546/callback</string>
     <string name="mcp_form_oauth_authorize">인증</string>
     <string name="mcp_form_oauth_reauthorize">재인증</string>
     <string name="mcp_form_oauth_sign_out">로그아웃</string>

@@ -188,6 +188,8 @@
     <string name="mcp_form_oauth_token_endpoint_placeholder">https://…/token</string>
     <string name="mcp_form_oauth_scopes">Scopes</string>
     <string name="mcp_form_oauth_scopes_placeholder">Space-separated, e.g. openid email</string>
+    <string name="mcp_form_oauth_redirect_uri">Redirect URI</string>
+    <string name="mcp_form_oauth_redirect_uri_placeholder">Optional; default loopback http://localhost:54546/callback</string>
     <string name="mcp_form_oauth_authorize">Authorize</string>
     <string name="mcp_form_oauth_reauthorize">Re-authorize</string>
     <string name="mcp_form_oauth_sign_out">Sign Out</string>
@@ -233,6 +235,7 @@
     <string name="soul_restore_confirm_title">Restore default SOUL.md?</string>
     <string name="soul_restore_confirm_body">Your current changes will be overwritten with the default personality file. The original is provided as a starting point and can be re-edited at any time.</string>
     <string name="soul_save_error_title">Couldn\'t save</string>
+    <string name="soul_injection_error">This looks like an instruction to the model rather than personality guidance. Phrases like \"ignore previous instructions\" aren\'t allowed in SOUL.md — keep it to genuine character, tone, and behavior.</string>
     <string name="settings_env_vars">Environment Variables</string>
     <string name="settings_env_vars_subtitle">Variables injected into the sandbox</string>
     <string name="settings_max_concurrent">Concurrent Sessions</string>
@@ -643,7 +646,7 @@
     <string name="perm_a11y_system_ready">Service enabled</string>
     <string name="perm_a11y_system_disabled">Service not enabled</string>
     <string name="perm_allow_minis_config">Allow Configuration Tool</string>
-    <string name="perm_minis_config_desc">When disabled, the agent cannot read or modify any settings via minis-config. The change history at Logs → Config Changes remains accessible. The agent will receive a permission_denied error and can guide you via deep links instead.</string>
+    <string name="perm_minis_config_desc">When turned off, the agent can no longer read or modify your settings on its own. You can still review any past changes under Logs → Config Changes.</string>
     <string name="perm_section_privacy">Privacy</string>
     <string name="perm_section_media">Media</string>
     <string name="perm_section_system">System</string>
@@ -868,6 +871,9 @@
     <string name="provider_set_favorite">Set as favorite</string>
     <string name="provider_unset_favorite">Remove from favorites</string>
     <string name="provider_detail_export">Export</string>
+    <string name="provider_detail_export_confirm_title">Export provider</string>
+    <string name="provider_detail_export_confirm_text">The exported file includes your API key in plain (Base64-encoded) text so it can be re-imported ready-to-use. Only share it with people you trust.</string>
+    <string name="provider_detail_export_confirm_action">Export</string>
     <string name="provider_detail_label">Label</string>
     <string name="provider_detail_custom_api_base">Custom API Base</string>
     <string name="provider_detail_http_endpoint_warning">⚠ This endpoint uses unencrypted HTTP. API keys, messages, and tool results sent to it can be read by anyone on the network. Only use HTTP for trusted local servers.</string>

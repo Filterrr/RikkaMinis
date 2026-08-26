@@ -131,18 +131,27 @@ fun consumeBottomRequest(state: FollowState): FollowState =
     state.copy(pendingBottomRequest = null)
 
 /**
- * [fix/history-open-at-bottom] Whether an explicit "open at the bottom"
- * request must survive an empty/recomposed-away layout instead of being
- * consumed. A cold-open of a history session can hit the bottom-request
- * consumer before the LazyColumn has measured any row (layoutInfo
- * totalItemsCount == 0). Under AGGREGATE_MESSAGE_ITEMS the old promise of "the
- * next StreamRowsChanged revision will re-scroll" never runs (that dispatch is
- * unreachable), so if we consumed the request here the viewport would stay at
- * the top. The consumer keeps the request pending and re-driving on layout
- * changes until `totalItemsCount > 0`, then scrolls to bottom exactly once.
+ * [fix/history-open-at-bottom-verify] Whether an explicit "open at the
+ * bottom" request must survive the consumer run instead of being consumed.
+ * The consumer re-runs on every layout change (listState.layoutInfo is part
+ * of its key set), so the request stays pending — and keeps re-driving the
+ * bottom scroll — until the bottom sentinel is PROVABLY visible in the
+ * viewport. This closes both cold-open failure modes of the original fix:
  *
- * Non-empty-total layouts and every non-open reason (Send / FabDown / Resume /
- * Retry) always consume in the same run — no behaviour change for them.
+ *  - the empty-layout window (layoutInfo totalItemsCount == 0: the sentinel
+ *    can never be visible, so the request is retained); and
+ *  - the "scroll requested but not landed" race (the non-suspending
+ *    requestScrollToItem only writes a target for the NEXT remeasure, which
+ *    a cold-open measure/pass interleaving can drop — with the sentinel
+ *    still off-screen the request is retained and the layout re-drive
+ *    retries instead of consuming into a viewport stuck at the top).
+ *
+ * Consumed exactly once, on the first run where the sentinel is visible.
+ * Non-open reasons (Send / FabDown / Resume / Retry) always consume in the
+ * same run — no behaviour change for them.
  */
-internal fun retainInitialOpenOnEmptyLayout(reason: BottomRequestReason?, totalItems: Int): Boolean =
-    reason == BottomRequestReason.INITIAL_OPEN && totalItems == 0
+internal fun retainInitialOpenUntilSentinelVisible(
+    reason: BottomRequestReason?,
+    sentinelVisible: Boolean,
+): Boolean =
+    reason == BottomRequestReason.INITIAL_OPEN && !sentinelVisible

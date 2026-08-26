@@ -245,6 +245,9 @@
     <string name="provider_set_favorite">設為常用</string>
     <string name="provider_unset_favorite">取消常用</string>
     <string name="provider_detail_export">導出</string>
+    <string name="provider_detail_export_confirm_title">導出供應商</string>
+    <string name="provider_detail_export_confirm_text">導出檔案會包含明文（Base64 編碼）的 API Key，以便重新匯入後可直接使用。請僅分享給你信任的人。</string>
+    <string name="provider_detail_export_confirm_action">導出</string>
     <string name="provider_detail_label">標籤</string>
     <string name="common_save">保存</string>
     <string name="provider_detail_custom_api_base">自定義 API 地址</string>
@@ -798,6 +801,8 @@
     <string name="mcp_form_oauth_token_endpoint_placeholder">https://…/token</string>
     <string name="mcp_form_oauth_scopes">授權範圍</string>
     <string name="mcp_form_oauth_scopes_placeholder">空格分隔，如 openid email</string>
+    <string name="mcp_form_oauth_redirect_uri">重新導向 URI</string>
+    <string name="mcp_form_oauth_redirect_uri_placeholder">選用；預設回環位址 http://localhost:54546/callback</string>
     <string name="mcp_form_oauth_authorize">授權</string>
     <string name="mcp_form_oauth_reauthorize">重新授權</string>
     <string name="mcp_form_oauth_sign_out">登出</string>
