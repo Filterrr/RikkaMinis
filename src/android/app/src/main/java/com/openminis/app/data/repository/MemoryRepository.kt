@@ -20,6 +20,11 @@ class MemoryRepository(private val memoryDir: File) {
     companion object {
         private const val TAG = "MemoryRepository"
         private const val GLOBAL_FILE = "GLOBAL.md"
+        // Rollup product file, living next to GLOBAL.md. Never treated as a
+        // user-editable daily log; it is a distilled index owned by the
+        // memory_rollup tool (see MemoryRollupEngine.ROLLUP_FILE).
+        private const val ROLLUP_FILE =
+            com.openminis.app.workspace.MemoryRollupEngine.ROLLUP_FILE
         private const val MAX_INJECT_LINES = 200
         // memory_get full-dump (no keywords): cap at 500 lines — matches iOS
         // `maxTotalLines = 500` in AIChatViewModel+MemoryTools.swift.
@@ -75,7 +80,7 @@ class MemoryRepository(private val memoryDir: File) {
             ?.filter {
                 it.extension == "md" &&
                     it.name != GLOBAL_FILE &&
-                    it.name != com.openminis.app.workspace.MemoryRollupEngine.ROLLUP_FILE
+                    it.name != ROLLUP_FILE
             }
             ?.map { it.name to it.length() }
             ?.sortedByDescending { it.second }
@@ -138,9 +143,11 @@ class MemoryRepository(private val memoryDir: File) {
             }
         }
 
-        // Daily logs sorted descending
+        // Daily logs sorted descending. Exclude the rollup product file — its
+        // content is a distillation of the daily logs, so searching it would
+        // duplicate every entry and waste the search line/byte budget.
         val dailyFiles = memoryDir.listFiles()
-            ?.filter { it.extension == "md" && it.name != GLOBAL_FILE }
+            ?.filter { it.extension == "md" && it.name != GLOBAL_FILE && it.name != ROLLUP_FILE }
             ?.sortedByDescending { it.name }
             ?: emptyList()
 
@@ -369,9 +376,12 @@ class MemoryRepository(private val memoryDir: File) {
             preview = if (globalFile.exists()) firstContentLineFromFile(globalFile) else "",
         ))
 
-        // Daily logs sorted descending
+        // Daily logs sorted descending. Exclude the rollup product file —
+        // it's an auto-generated distilled index owned by memory_rollup, not a
+        // user-editable log; listing it here would let the user delete/edit it
+        // and break the rollup idempotency anchor.
         val dailyFiles = memoryDir.listFiles()
-            ?.filter { it.extension == "md" && it.name != GLOBAL_FILE }
+            ?.filter { it.extension == "md" && it.name != GLOBAL_FILE && it.name != ROLLUP_FILE }
             ?.sortedByDescending { it.name }
             ?: emptyList()
 
