@@ -102,7 +102,14 @@ object SoulMDParser {
         val absCloseIdx = closeIdx + 1
         val frontmatter = lines.subList(1, absCloseIdx)
         val bodyLines = if (absCloseIdx + 1 <= lines.size) lines.subList(absCloseIdx + 1, lines.size) else emptyList()
-        val body = bodyLines.joinToString("\n").dropWhile { it == '\n' || it == '\r' }
+        // Strip leading AND trailing blank lines so parse(serialize(x)).body
+        // round-trips — serialize guarantees a trailing "\n", and without the
+        // trailing strip the body would gain a newline on every save/load
+        // cycle. (Consumers re-trim anyway, but the parser should be lossless
+        // both directions, not just serialize(parse(s)) == s.)
+        val body = bodyLines.joinToString("\n")
+            .dropWhile { it == '\n' || it == '\r' }
+            .trimEnd('\n', '\r')
 
         var name = SoulMetadata.DEFAULT.name
         var emoji = SoulMetadata.DEFAULT.emoji
@@ -116,6 +123,7 @@ object SoulMDParser {
             var value = line.substring(colon + 1).trim()
             if (value.length >= 2 && value.startsWith("\"") && value.endsWith("\"")) {
                 value = value.substring(1, value.length - 1)
+                value = unescape(value)
             }
             when (key) {
                 "name" -> if (value.isNotEmpty()) name = value
@@ -153,6 +161,16 @@ object SoulMDParser {
 
     private fun escape(s: String): String =
         s.replace("\\", "\\\\").replace("\"", "\\\"")
+
+    /**
+     * Reverse of [escape]: `\"` → `"` and `\\` → `\`. Applied to quoted
+     * frontmatter values so a save/load cycle is lossless for metadata that
+     * contains quotes or backslashes. Without this, each cycle would bake in
+     * one more layer of backslash escaping (`a"b` → `a\"b` → `a\\\"b` …).
+     * Order matters: unescape escaped-quote before doubled-backslash.
+     */
+    private fun unescape(s: String): String =
+        s.replace("\\\"", "\"").replace("\\\\", "\\")
 }
 
 /**
@@ -172,6 +190,21 @@ sealed class SoulBodyLimitCheck {
 
     val isOverLimit: Boolean get() = this !is Ok
 }
+
+/**
+ * The unit a SOUL.md body is counted in, decided by the same CJK-ratio
+ * rule that picks the cap (see [SoulStore.isOverLimit]). [magnitude] is the
+ * observed count and [cap] the matching limit. Single source of truth for
+ * "how much did the user write, and against which cap" so the Settings
+ * editor counter and the over-limit gate can never drift apart.
+ */
+enum class SoulBodyUnit { CHARS, WORDS }
+
+data class SoulBodyCount(
+    val unit: SoulBodyUnit,
+    val magnitude: Int,
+    val cap: Int,
+)
 
 /**
  * File-system helpers + cached metadata. Methods are intentionally
@@ -215,8 +248,34 @@ object SoulStore {
      * / whitespace-only bodies always return [SoulBodyLimitCheck.Ok].
      */
     fun isOverLimit(body: String): SoulBodyLimitCheck {
+        val count = countBody(body)
+        if (count.magnitude == 0) return SoulBodyLimitCheck.Ok
+        return when (count.unit) {
+            SoulBodyUnit.CHARS ->
+                if (count.magnitude > CHINESE_CHAR_LIMIT)
+                    SoulBodyLimitCheck.OverLimitChinese(count.magnitude, CHINESE_CHAR_LIMIT)
+                else SoulBodyLimitCheck.Ok
+            SoulBodyUnit.WORDS ->
+                if (count.magnitude > ENGLISH_WORD_LIMIT)
+                    SoulBodyLimitCheck.OverLimitEnglish(count.magnitude, ENGLISH_WORD_LIMIT)
+                else SoulBodyLimitCheck.Ok
+        }
+    }
+
+    /**
+     * Count [body] under the language-aware rules without deciding the
+     * over-limit verdict. Returns the counted unit plus magnitude and the
+     * matching cap; an empty/whitespace-only body is `(CHARS, 0, cap)`.
+     * This is the single source of truth shared by [isOverLimit] and the
+     * Settings editor's live counter so the two can never disagree about
+     * which rule applies (previously the UI re-implemented the CJK
+     * classifier with a narrower range and could drift from the gate).
+     */
+    fun countBody(body: String): SoulBodyCount {
         val trimmed = body.trim()
-        if (trimmed.isEmpty()) return SoulBodyLimitCheck.Ok
+        if (trimmed.isEmpty()) {
+            return SoulBodyCount(SoulBodyUnit.CHARS, 0, CHINESE_CHAR_LIMIT)
+        }
 
         var cjk = 0
         var total = 0
@@ -234,15 +293,13 @@ object SoulStore {
             // / no flag emojis in Han/Kana/Hangul). Bytes / UTF-16 code
             // units would over-count surrogate-pair CJK extensions.
             val chars = trimmed.codePointCount(0, trimmed.length)
-            if (chars > CHINESE_CHAR_LIMIT) SoulBodyLimitCheck.OverLimitChinese(chars, CHINESE_CHAR_LIMIT)
-            else SoulBodyLimitCheck.Ok
+            SoulBodyCount(SoulBodyUnit.CHARS, chars, CHINESE_CHAR_LIMIT)
         } else {
             // Whitespace-delimited word count. `split(Regex("\\s+"))` on
             // a trimmed string collapses consecutive whitespace into a
             // single delimiter.
             val words = trimmed.split(Regex("\\s+")).count { it.isNotEmpty() }
-            if (words > ENGLISH_WORD_LIMIT) SoulBodyLimitCheck.OverLimitEnglish(words, ENGLISH_WORD_LIMIT)
-            else SoulBodyLimitCheck.Ok
+            SoulBodyCount(SoulBodyUnit.WORDS, words, ENGLISH_WORD_LIMIT)
         }
     }
 
