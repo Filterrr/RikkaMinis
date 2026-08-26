@@ -343,7 +343,7 @@
     <string name="perm_a11y_system_ready">已启用</string>
     <string name="perm_a11y_system_disabled">未启用</string>
     <string name="perm_allow_minis_config">允许配置工具</string>
-    <string name="perm_minis_config_desc">禁用后，智能体将无法通过 minis-config 读取或修改任何设置。日志 → 配置变更 中的变更历史仍可查看。智能体会收到 permission_denied 错误，并通过深度链接引导你操作。</string>
+    <string name="perm_minis_config_desc">关闭后，智能体将无法主动读取或修改你的设置。你仍可在 日志 → 配置变更 中查看过往的变更记录。</string>
     <string name="perm_section_privacy">隐私</string>
     <string name="perm_section_media">媒体</string>
     <string name="perm_section_system">系统</string>

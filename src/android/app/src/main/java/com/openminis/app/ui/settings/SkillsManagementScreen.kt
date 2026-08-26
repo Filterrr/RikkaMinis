@@ -550,21 +550,6 @@ private fun SkillImportSheet(
     }
 }
 
-private fun downloadSkillFromUrl(url: String): String? {
-    val rawUrl = if (url.contains("github.com") && url.contains("/blob/")) {
-        url.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/")
-    } else if (url.contains("github.com") && !url.contains("raw.githubusercontent.com")) {
-        val withFile = if (!url.endsWith("SKILL.md")) "$url/SKILL.md" else url
-        withFile.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/").replace("/tree/", "/")
-    } else url
-
-    val connection = java.net.URL(rawUrl).openConnection() as java.net.HttpURLConnection
-    connection.connectTimeout = 15_000
-    connection.readTimeout = 15_000
-    return try { if (connection.responseCode == 200) connection.inputStream.bufferedReader().readText() else null }
-    finally { connection.disconnect() }
-}
-
 // ─── Skill Detail Sheet ─────────────────────────────────────────────────────
 
 // ─── Skill Detail Screen (full page, matching iOS) ──────────────────────────

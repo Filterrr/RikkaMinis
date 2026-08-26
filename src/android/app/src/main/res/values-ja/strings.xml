@@ -296,7 +296,7 @@
     <string name="perm_a11y_system_ready">サービス有効</string>
     <string name="perm_a11y_system_disabled">サービス無効</string>
     <string name="perm_allow_minis_config">設定ツールを許可</string>
-    <string name="perm_minis_config_desc">無効にすると、エージェントは minis-config 経由で設定を読み取ったり変更したりできなくなります。ログ → 設定変更 の履歴は引き続き閲覧できます。エージェントは permission_denied エラーを受け取り、ディープリンクで操作を案内します。</string>
+    <string name="perm_minis_config_desc">オフにすると、エージェントは自ら設定を読み取ったり変更したりできなくなります。過去の変更は ログ → 設定変更 で引き続き確認できます。</string>
     <string name="perm_section_privacy">プライバシー</string>
     <string name="perm_section_media">メディア</string>
     <string name="perm_section_system">システム</string>

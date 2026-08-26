@@ -646,7 +646,7 @@
     <string name="perm_a11y_system_ready">Service enabled</string>
     <string name="perm_a11y_system_disabled">Service not enabled</string>
     <string name="perm_allow_minis_config">Allow Configuration Tool</string>
-    <string name="perm_minis_config_desc">When disabled, the agent cannot read or modify any settings via minis-config. The change history at Logs → Config Changes remains accessible. The agent will receive a permission_denied error and can guide you via deep links instead.</string>
+    <string name="perm_minis_config_desc">When turned off, the agent can no longer read or modify your settings on its own. You can still review any past changes under Logs → Config Changes.</string>
     <string name="perm_section_privacy">Privacy</string>
     <string name="perm_section_media">Media</string>
     <string name="perm_section_system">System</string>
