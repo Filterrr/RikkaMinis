@@ -455,7 +455,7 @@ internal object ConfigBuiltins {
                 description = "When ON, a model's reasoning block starts expanded instead of collapsed.",
                 prefs = appearancePrefs,
                 key = com.openminis.app.ui.settings.KEY_AUTO_EXPAND_THINKING,
-                defaultValue = true,
+                defaultValue = false,
             )
         )
         // Chat action customization (Settings → Appearance → Chat Menu).

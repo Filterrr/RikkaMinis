@@ -8,7 +8,6 @@ import android.content.SharedPreferences
 import android.app.LocaleManager
 import android.os.Build
 import android.os.LocaleList
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -17,15 +16,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.KeyboardReturn
 import androidx.compose.material.icons.automirrored.outlined.Send
@@ -60,16 +56,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.painter.BitmapPainter
-import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.core.content.res.ResourcesCompat
-import androidx.core.graphics.drawable.toBitmap
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.res.stringResource
 import kotlin.math.roundToInt
@@ -97,11 +87,12 @@ const val KEY_TOOL_STATUS_BAR = "appearance.show_tool_status_bar"  // Boolean, d
 // (matches iOS @AppStorage("appearance.show_chat_title")) so future config
 // sync reads the same value.
 const val KEY_SHOW_CHAT_TITLE = "appearance.show_chat_title"  // Boolean, default true
-// [T-thinking-auto-expand-toggle] When true (default, historical behavior) a
-// NEW streaming thinking block auto-expands while the model reasons; when false
-// it stays collapsed until tapped. Key name mirrors iOS
-// `@AppStorage("chat.autoExpandThinking")` so future config sync reads the same
-// value. Read at block-mount time in ThinkingBlock.
+// [T-thinking-auto-expand-toggle] When true a NEW streaming thinking block
+// auto-expands while the model reasons; when false (default) it stays
+// collapsed until tapped. Default is collapsed — the historical auto-expand
+// behavior was flipped to collapsed-by-default (commit c2666e72). Key name
+// mirrors iOS `@AppStorage("chat.autoExpandThinking")` so future config sync
+// reads the same value. Read at block-mount time in ThinkingBlock.
 const val KEY_AUTO_EXPAND_THINKING = "chat.autoExpandThinking"  // Boolean, default false (thinking starts collapsed)
 const val KEY_FONT_CHAT_INPUT = "font_chat_input"  // Int scale level -2..3
 const val KEY_FONT_MESSAGE = "font_message"        // Int scale level -2..3
@@ -121,9 +112,9 @@ fun keepScreenAwakeEnabled(context: Context): Boolean =
 fun showChatTitleEnabled(context: Context): Boolean =
     getAppearancePrefs(context).getBoolean(KEY_SHOW_CHAT_TITLE, true)
 
-/** [T-thinking-auto-expand-toggle] Default ON = historical behavior: a new
- *  streaming thinking block opens expanded. Off = it stays collapsed until the
- *  user taps it. */
+/** [T-thinking-auto-expand-toggle] Default OFF = collapsed by default: a new
+ *  streaming thinking block starts collapsed. ON = it opens expanded while the
+ *  model reasons, then collapses when it ends. The user taps to expand either way. */
 fun autoExpandThinkingEnabled(context: Context): Boolean =
     getAppearancePrefs(context).getBoolean(KEY_AUTO_EXPAND_THINKING, false)
 
@@ -389,9 +380,9 @@ fun AppearanceScreen(
         }
 
         // [T-thinking-auto-expand-toggle] -- Deep Thinking --
-        // Whether a NEW streaming thinking block opens expanded (historical
-        // behavior, default ON) or stays collapsed. Only affects the streaming
-        // auto-expand; manual taps always work either way. Mirrors iOS
+        // Whether a NEW streaming thinking block opens expanded while the model
+        // reasons (ON) or stays collapsed (OFF, default). Only affects the
+        // streaming auto-expand; manual taps always work either way. Mirrors iOS
         // AppearanceSettingsView "Deep Thinking" section.
         SettingsSection(
             header = stringResource(R.string.appearance_section_deep_thinking),
@@ -514,15 +505,7 @@ fun AppearanceScreen(
             }
         }
 
-        // -- App Icon (T-android-dynamic-app-icon) --
-        // Grid picker mirrors the iOS Settings → Appearance → App Icon
-        // section but uses a 3-column grid layout per spec. Each tile is
-        // an adaptive-icon preview (loaded as Bitmap via ResourcesCompat
-        // since painterResource can't decode mipmap-anydpi-v26 XMLs);
-        // the currently-selected tile gets a checkmark badge in the
-        // top-right corner. Tapping a tile flips the corresponding
-        // activity-alias enabled state via PackageManager — the launcher
-        // refreshes its icon cache within a few seconds.        // -- Language --
+        // -- Language --
         SettingsSection(
             header = stringResource(R.string.appearance_section_language),
             footer = stringResource(R.string.appearance_language_footer),
