@@ -51,6 +51,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.io.File
 import com.openminis.app.ui.theme.ChatColors
@@ -134,19 +136,26 @@ fun StorageManagementScreen(
 
                 // Size every session directory in parallel (async) instead of
                 // the previous serial map, so the whole list appears roughly
-                // as fast as the slowest single session.
+                // as fast as the slowest single session. Bound the fan-out with
+                // a Semaphore: hundreds of sessions would otherwise launch an
+                // equal number of concurrent recursive walks (one per IO thread
+                // up to the dispatcher pool), causing a sizing IO storm on
+                // entry. Capping at 8 keeps the list fast without saturating IO.
                 sessions = coroutineScope {
+                    val gate = Semaphore(8)
                     allSessions.map { session ->
                         async {
-                            val subdirs = sessionFiles.sessionSubdirSizes(session.id)
-                            val top = subdirs.maxByOrNull { it.value }?.toPair()
-                            SessionStorageInfo(
-                                id = session.id,
-                                title = session.title,
-                                sessionDirSize = subdirs.values.sum(),
-                                mediaSize = mediaSizes[session.id] ?: 0L,
-                                topSubdir = top?.takeIf { it.second > 0 },
-                            )
+                            gate.withPermit {
+                                val subdirs = sessionFiles.sessionSubdirSizes(session.id)
+                                val top = subdirs.maxByOrNull { it.value }?.toPair()
+                                SessionStorageInfo(
+                                    id = session.id,
+                                    title = session.title,
+                                    sessionDirSize = subdirs.values.sum(),
+                                    mediaSize = mediaSizes[session.id] ?: 0L,
+                                    topSubdir = top?.takeIf { it.second > 0 },
+                                )
+                            }
                         }
                     }.awaitAll()
                 }.sortedByDescending { it.totalSize }
@@ -480,11 +489,15 @@ fun SessionStorageDetailScreen(
                     showClearDialog = false
                     isClearing = true
                     scope.launch {
+                        // [Bug 4] Re-measure from disk after delete instead of
+                        // blindly zeroing — if a file was held open (or a mount
+                        // read-only) and deleteRecursively() partially failed,
+                        // the sizes stay truthful rather than showing a fake 0 B.
                         withContext(Dispatchers.IO) {
                             sessionFiles.deleteSessionFiles(sessionId)
+                            minisSize = sessionFiles.sizeOf(sessionFiles.sessionDir(sessionId))
+                            mediaSize = sessionFiles.mediaSize(sessionId)
                         }
-                        minisSize = 0L
-                        mediaSize = 0L
                         isClearing = false
                     }
                 }) {

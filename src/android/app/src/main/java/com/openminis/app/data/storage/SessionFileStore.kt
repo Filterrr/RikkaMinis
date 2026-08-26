@@ -2,6 +2,10 @@ package com.openminis.app.data.storage
 
 import android.content.Context
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.Paths
+import java.nio.file.attribute.BasicFileAttributes
 
 /**
  * Singular owner of the on-disk footprint attached to a chat session.
@@ -25,33 +29,98 @@ import java.io.File
  * storage page a single, converged notion of "empty this session / reclaim
  * orphans".
  */
-class SessionFileStore(context: Context) {
+class SessionFileStore internal constructor(
+    private val filesDirForTestingOrProd: File,
+) {
+    constructor(context: Context) : this(context.filesDir)
 
     /** Root that holds one subdir per live session: filesDir/minis-sessions/<sid>/. */
-    val sessionsRoot: File = File(context.filesDir, "minis-sessions")
+    val sessionsRoot: File = File(filesDirForTestingOrProd, "minis-sessions")
 
     /** Media root: filesDir/media/<date>/<sid>/. */
-    private val mediaRoot: File = File(context.filesDir, "media")
+    private val mediaRoot: File = File(filesDirForTestingOrProd, "media")
+
+    /** Test-only accessor for the media root (mirrors [mediaRoot]). */
+    internal fun mediaRootForTesting(): File = mediaRoot
 
     /** Per-session directory under [sessionsRoot]. */
     fun sessionDir(sessionId: String): File = File(sessionsRoot, sessionId)
 
-    /** Recursive on-disk size of [dir] in bytes (regular files only). */
+    /**
+     * Recursive on-disk size of [dir] in bytes.
+     *
+     * [Bug 3 fix] Was `dir.walkTopDown() + File.isFile + File.length()`, which
+     * FOLLOWS symlinks and counts logical size — the same over-counting the
+     * terminal rootfs once suffered from (versioned .so symlinks, symlinked
+     * dirs like default-jvm, sparse files). A session's workspace carries the
+     * same artifacts, so the "Sessions" row and per-session detail could read
+     * far larger than real disk usage.
+     *
+     * This now measures with NOFOLLOW_LINKS (never recurses into symlinked
+     * dirs, never double-counts a symlink target) and dedupes hard links by
+     * `fileKey` (inode), mirroring RootfsUsageScanner's semantics while
+     * staying pure-JVM (java.nio, no android.system.Os) so it remains testable.
+     */
     fun sizeOf(dir: File): Long {
         if (!dir.exists()) return 0L
+        val seen = HashSet<Any>()
         var total = 0L
-        dir.walkTopDown().forEach { f -> if (f.isFile) total += f.length() }
+        val stack = ArrayDeque<File>()
+        stack.addLast(dir)
+        while (stack.isNotEmpty()) {
+            val cur = stack.removeLast()
+            val children = cur.listFiles() ?: continue
+            for (child in children) {
+                val attrs = try {
+                    Files.readAttributes(
+                        Paths.get(child.path),
+                        BasicFileAttributes::class.java,
+                        LinkOption.NOFOLLOW_LINKS,
+                    )
+                } catch (e: Exception) {
+                    continue
+                }
+                if (attrs.isDirectory) {
+                    // Do not follow symlinked dirs; a real dir goes on the stack.
+                    if (!attrs.isSymbolicLink) stack.addLast(child)
+                } else if (attrs.isRegularFile) {
+                    val key = attrs.fileKey()
+                    if (key != null && !seen.add(key)) continue
+                    total += attrs.size()
+                }
+            }
+        }
         return total
     }
 
     /** Media bytes belonging to [sessionId] (files anywhere under media/<…>/<sid>/). */
     fun mediaSize(sessionId: String): Long {
-        if (!mediaRoot.exists()) return 0L
-        var total = 0L
-        mediaRoot.walkTopDown().forEach { f ->
-            if (f.isFile && f.parentFile?.name == sessionId) total += f.length()
+        return mediaSessionDirs(sessionId).sumOf { sizeOf(it) }
+    }
+
+    /**
+     * All media leaf dirs matching layout `media/<date>/<sid>/` whose name is
+     * [sessionId]. Used by both [mediaSize] (size) and [deleteSessionFiles]
+     * (delete), so the size shown and the bytes deleted always refer to the
+     * same set of dirs — no drift between "displayed footprint" and what
+     * Clear removes.
+     */
+    private fun mediaSessionDirs(sessionId: String): List<File> {
+        if (!mediaRoot.exists()) return emptyList()
+        val out = mutableListOf<File>()
+        fun walk(dir: File) {
+            val children = dir.listFiles() ?: return
+            for (child in children) {
+                if (!child.isDirectory) continue
+                if (child.name == sessionId) {
+                    out += child
+                } else {
+                    walk(child)
+                }
+            }
         }
-        return total
+        walk(mediaRoot)
+        return out
     }
 
     /**
@@ -72,17 +141,40 @@ class SessionFileStore(context: Context) {
     }
 
     /** Recursively delete a session's bind-mounted dir + its media. No-op if absent. */
-    fun deleteSessionFiles(sessionId: String) {
-        sessionDir(sessionId).takeIf { it.exists() }?.deleteRecursively()
-        deleteMedia(sessionId)
+    fun deleteSessionFiles(sessionId: String): DeleteResult {
+        val sessionDeleted = deleteRecursivelyChecked(sessionDir(sessionId))
+        val mediaDeleted = mediaSessionDirs(sessionId).fold(true) { acc, dir ->
+            deleteRecursivelyChecked(dir) && acc
+        }
+        return DeleteResult(sessionDeleted, mediaDeleted)
     }
 
-    /** Delete media dirs holding [sessionId]. Matches MediaStore layout media/<date>/<sid>/. */
-    private fun deleteMedia(sessionId: String) {
-        if (!mediaRoot.exists()) return
-        mediaRoot.walkTopDown().forEach { dir ->
-            if (dir.isDirectory && dir.name == sessionId) dir.deleteRecursively()
+    /**
+     * [Bug 4 fix] `File.deleteRecursively()` returns false (and silently) when
+     * a file is held open, a mount is read-only, or a path is unroutable — and
+     * the storage UI previously ignored that return value, zeroing the size and
+     * showing "Cleared 0 B" while the bytes were still on disk (a fake close).
+     * This wrapper reports the real outcome so callers can surface a partial-
+     * failure state instead of pretending success.
+     */
+    private fun deleteRecursivelyChecked(dir: File): Boolean {
+        if (!dir.exists()) return true // absent == nothing to delete == success
+        val ok = dir.deleteRecursively()
+        return if (!ok) {
+            // A failed recursive delete may have removed some children; try one
+            // more pass and report whatever survives.
+            !dir.exists()
+        } else {
+            true
         }
+    }
+
+    /** Outcome of a session-file delete: which parts actually went away. */
+    data class DeleteResult(
+        val sessionDeleted: Boolean,
+        val mediaDeleted: Boolean,
+    ) {
+        val fullyDeleted: Boolean get() = sessionDeleted && mediaDeleted
     }
 
     /**
@@ -121,6 +213,7 @@ class SessionFileStore(context: Context) {
      */
     fun scanOrphans(liveSessionIds: Set<String>): ReclaimReport {
         val sessionIds = mutableListOf<String>()
+        val mediaIds = mutableListOf<String>()
         var sessionBytes = 0L
         var mediaBytes = 0L
         if (sessionsRoot.exists()) {
@@ -133,11 +226,8 @@ class SessionFileStore(context: Context) {
         }
         if (mediaRoot.exists()) {
             mediaRoot.walkTopDown().forEach { dir ->
-                if (dir.isDirectory &&
-                    dir.listFiles()?.none { it.isDirectory } == true &&
-                    looksLikeSessionId(dir.name) &&
-                    dir.name !in liveSessionIds
-                ) {
+                if (isOrphanMediaLeaf(dir, liveSessionIds)) {
+                    mediaIds += dir.name
                     mediaBytes += sizeOf(dir)
                 }
             }
@@ -146,37 +236,78 @@ class SessionFileStore(context: Context) {
             sessionIds = sessionIds,
             sessionDirs = sessionIds.size,
             sessionBytes = sessionBytes,
-            mediaDirs = 0,
+            mediaDirs = mediaIds.size,
             mediaBytes = mediaBytes,
         )
+    }
+
+    /**
+     * True when [dir] is an orphaned media leaf: a directory named like a
+     * session id, with no subdirectories (so it's a terminal `<sid>/` under
+     * `media/<date>/`), whose id is not among the live sessions.
+     *
+     * [Bug 2 fix] The old check was `dir.listFiles()?.none { it.isDirectory }`.
+     * When `listFiles()` returns null (unreadable dir) the whole guard short-
+     * circuited to null and the dir was silently skipped — a permissions
+     * hiccup could hide real orphans. This now treats null (unreadable) as
+     * "assume leaf, still a candidate" so measurement doesn't silently miss
+     * reclaimable data; the fail-safe `looksLikeSessionId` shape guard remains
+     * the load-bearing safety net against deleting anything non-session-shaped.
+     */
+    private fun isOrphanMediaLeaf(dir: File, liveSessionIds: Set<String>): Boolean {
+        if (!dir.isDirectory) return false
+        if (!looksLikeSessionId(dir.name)) return false
+        if (dir.name in liveSessionIds) return false
+        val children = dir.listFiles() ?: return true
+        return children.none { it.isDirectory }
     }
 
     private fun deleteOrphanMediaLeaves(liveSessionIds: Set<String>) {
         if (!mediaRoot.exists()) return
         mediaRoot.walkTopDown().forEach { dir ->
-            if (dir.isDirectory &&
-                dir.listFiles()?.none { it.isDirectory } == true &&
-                looksLikeSessionId(dir.name) &&
-                dir.name !in liveSessionIds
-            ) {
-                dir.deleteRecursively()
-            }
+            if (isOrphanMediaLeaf(dir, liveSessionIds)) dir.deleteRecursively()
         }
     }
 
     /**
      * Batch media-size lookup for many live sessions (avoids re-walking the
      * whole media tree once per session).
+     *
+     * [Bug 3] Uses the same NOFOLLOW_LINKS + hardlink-dedupe semantics as
+     * [sizeOf], attributing each file to its parent `<sid>/` leaf dir, so the
+     * overview total and the per-session `mediaSize` agree (previously the
+     * brief used `File.length()` and could over-count symlinked media the same
+     * way `sizeOf` did).
      */
     fun mediaSizesBySessionBrief(sessionIds: Set<String>): Map<String, Long> {
         if (!mediaRoot.exists()) return emptyMap()
         val sizes = mutableMapOf<String, Long>()
-        mediaRoot.walkTopDown().forEach { f ->
-            if (f.isFile) {
-                val sid = f.parentFile?.name ?: return@forEach
-                if (sid in sessionIds) sizes[sid] = (sizes[sid] ?: 0L) + f.length()
+        val seen = HashSet<Any>()
+        fun walk(dir: File) {
+            val children = dir.listFiles() ?: return
+            for (child in children) {
+                val attrs = try {
+                    Files.readAttributes(
+                        Paths.get(child.path),
+                        BasicFileAttributes::class.java,
+                        LinkOption.NOFOLLOW_LINKS,
+                    )
+                } catch (e: Exception) {
+                    continue
+                }
+                if (attrs.isDirectory) {
+                    if (!attrs.isSymbolicLink) walk(child)
+                } else if (attrs.isRegularFile) {
+                    val sid = child.parentFile?.name ?: continue
+                    if (sid in sessionIds) {
+                        val key = attrs.fileKey()
+                        if (key != null && !seen.add(key)) continue
+                        sizes[sid] = (sizes[sid] ?: 0L) + attrs.size()
+                    }
+                }
             }
         }
+        walk(mediaRoot)
         return sizes
     }
 
