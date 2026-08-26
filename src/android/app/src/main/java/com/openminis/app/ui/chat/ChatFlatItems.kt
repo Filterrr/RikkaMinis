@@ -1114,7 +1114,7 @@ internal fun buildAggregateChatItemsIncremental(
 
     // 3) Map message-prefix → item-prefix. Each non-bridge prefix message
     //    produced exactly one item, so the item prefix count = number of
-    //    non-bridge messages in messages[0..prefix). We walk prevItems and
+    //    non-bridge messages in messages 0..<prefix. We walk prevItems and
     //    stop at the first item whose owning id is NOT in the prefix set
     //    (robust against future builder changes; ids are unique).
     val prefixIds = HashSet<String>(prefix * 2)
@@ -1126,7 +1126,7 @@ internal fun buildAggregateChatItemsIncremental(
         prefixItems++
     }
 
-    // 4) Rebuild the suffix from messages[prefix..]. Builder is pure; we only
+    // 4) Rebuild the suffix from messages prefix..size. Builder is pure; we only
     //    need `precededByUser` correct for the suffix's first user message,
     //    which looks back at the last prefix message.
     val suffix = buildAggregateChatItemsFrom(messages, fromIndex = prefix)
@@ -1137,7 +1137,7 @@ internal fun buildAggregateChatItemsIncremental(
 }
 
 /**
- * Build the aggregate items for messages[fromIndex..], used by the
+ * Build the aggregate items for messages fromIndex..size, used by the
  * incremental path's suffix rebuild. Semantics identical to
  * [buildAggregateChatItems] restricted to the suffix; `precededByUser` for
  * the suffix's first element still looks back at messages[fromIndex - 1]
