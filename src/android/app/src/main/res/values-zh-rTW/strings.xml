@@ -245,6 +245,9 @@
     <string name="provider_set_favorite">設為常用</string>
     <string name="provider_unset_favorite">取消常用</string>
     <string name="provider_detail_export">導出</string>
+    <string name="provider_detail_export_confirm_title">導出供應商</string>
+    <string name="provider_detail_export_confirm_text">導出檔案會包含明文（Base64 編碼）的 API Key，以便重新匯入後可直接使用。請僅分享給你信任的人。</string>
+    <string name="provider_detail_export_confirm_action">導出</string>
     <string name="provider_detail_label">標籤</string>
     <string name="common_save">保存</string>
     <string name="provider_detail_custom_api_base">自定義 API 地址</string>

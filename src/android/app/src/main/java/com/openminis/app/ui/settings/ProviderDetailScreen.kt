@@ -95,6 +95,10 @@ fun ProviderDetailScreen(
     val config by providerRepository.config.collectAsState()
     val instance = config.instances.find { it.id == instanceId }
     var showDeleteDialog by remember { mutableStateOf(false) }
+    // [T-provider-export-key-warning] The exported JSON carries the API key in
+    // plain Base64 (so it re-imports ready-to-use). Before opening the share
+    // sheet, confirm so the user knows the file is sensitive.
+    var showExportDialog by remember { mutableStateOf(false) }
     // T143: long-press → confirm delete on a single model entry. Every
     // visible entry supports the gesture — built-in and custom alike — because
     // [T-provider-no-static-seed] guarantees nothing is re-created from a
@@ -176,10 +180,7 @@ fun ProviderDetailScreen(
         title = label,
         onBack = onBack,
         actions = {
-            IconButton(onClick = {
-                AppLogger.info(TAG, "Export instance ${instance.id} (${instance.label})")
-                exportProviderInstance(exportContext, providerRepository, instance)
-            }) {
+            IconButton(onClick = { showExportDialog = true }) {
                 Icon(Icons.Default.IosShare, contentDescription = stringResource(R.string.provider_detail_export))
             }
         },
@@ -389,6 +390,22 @@ fun ProviderDetailScreen(
                 AppLogger.info(TAG, "Deleted provider instance ${instance.id} (${instance.label})")
                 showDeleteDialog = false
                 onBack()
+            },
+        )
+    }
+
+    // [T-provider-export-key-warning] Confirm before export: the file includes
+    // the plain API key. On confirm, hand off to the share sheet.
+    if (showExportDialog) {
+        MinisAlertDialog(
+            onDismissRequest = { showExportDialog = false },
+            title = stringResource(R.string.provider_detail_export_confirm_title),
+            text = stringResource(R.string.provider_detail_export_confirm_text),
+            confirmText = stringResource(R.string.provider_detail_export_confirm_action),
+            onConfirm = {
+                showExportDialog = false
+                AppLogger.info(TAG, "Export instance ${instance.id} (${instance.label})")
+                exportProviderInstance(exportContext, providerRepository, instance)
             },
         )
     }
