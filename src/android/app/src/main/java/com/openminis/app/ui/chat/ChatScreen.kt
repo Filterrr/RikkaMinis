@@ -4288,6 +4288,17 @@ fun ChatScreen(
                 onMoveToSession = onMoveToSession,
                 onOpenModelPicker = { showModelPicker = true },
                 onPreviewAttachment = onPreviewAttachment,
+                onPreviewImageGallery = { items, idx -> previewImageGallery = items to idx },
+                onOpenWebAppSheet = { target -> webAppSheetTarget = target },
+                chatInputFontScale = chatInputFontScale,
+                onPickMedia = { mediaPickerLauncher.launch(
+                    androidx.activity.result.PickVisualMediaRequest(
+                        ActivityResultContracts.PickVisualMedia.ImageAndVideo,
+                    ),
+                ) },
+                onPickFile = { filePickerLauncher.launch(arrayOf("*/*")) },
+                onLaunchCamera = launchCamera,
+                onLaunchCameraPermission = { cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA) },
                 keyboardController = keyboardController,
                 focusManager = focusManager,
                 coroutineScope = coroutineScope,
@@ -4829,6 +4840,13 @@ private fun ChatInputArea(
     onMoveToSession: (String) -> Unit,
     onOpenModelPicker: () -> Unit,
     onPreviewAttachment: (com.openminis.app.ui.sandbox.FileItem) -> Unit,
+    onPreviewImageGallery: (List<com.openminis.app.ui.components.ImageGalleryItem>, Int) -> Unit,
+    onOpenWebAppSheet: (InputAttachment) -> Unit,
+    chatInputFontScale: Float,
+    onPickMedia: () -> Unit,
+    onPickFile: () -> Unit,
+    onLaunchCamera: () -> Unit,
+    onLaunchCameraPermission: () -> Unit,
     keyboardController: androidx.compose.ui.platform.SoftwareKeyboardController?,
     focusManager: androidx.compose.ui.focus.FocusManager,
     coroutineScope: kotlinx.coroutines.CoroutineScope,
@@ -5631,12 +5649,15 @@ private fun ChatInputArea(
                                         val imageChips = attachments.filter { it.isImage }
                                         val startIdx = imageChips.indexOfFirst { it.id == attachment.id }
                                             .coerceAtLeast(0)
-                                        previewImageGallery = imageChips.map { ic ->
-                                            com.openminis.app.ui.components.ImageGalleryItem(
-                                                model = ic.uri,
-                                                caption = ic.fileName,
-                                            )
-                                        } to startIdx
+                                        onPreviewImageGallery(
+                                            imageChips.map { ic ->
+                                                com.openminis.app.ui.components.ImageGalleryItem(
+                                                    model = ic.uri,
+                                                    caption = ic.fileName,
+                                                )
+                                            },
+                                            startIdx,
+                                        )
                                     } else {
                                         // T162: shares funnel through
                                         // addAttachmentFromStagedShare,
@@ -5711,7 +5732,7 @@ private fun ChatInputArea(
                                         },
                                         onClick = {
                                             webAppMenuExpanded = false
-                                            webAppSheetTarget = attachment
+                                            onOpenWebAppSheet(attachment)
                                         },
                                     )
                                 }
@@ -6107,24 +6128,20 @@ private fun ChatInputArea(
                     fun launchAttach(key: String) {
                         when (key) {
                             AttachActionCatalog.CHOOSE_PHOTOS ->
-                                mediaPickerLauncher.launch(
-                                    androidx.activity.result.PickVisualMediaRequest(
-                                        ActivityResultContracts.PickVisualMedia.ImageAndVideo,
-                                    ),
-                                )
+                                onPickMedia()
                             AttachActionCatalog.ADD_FILE ->
                                 // OpenMultipleDocuments takes a mime-
                                 // type array; "*/*" stays the wildcard.
-                                filePickerLauncher.launch(arrayOf("*/*"))
+                                onPickFile()
                             AttachActionCatalog.TAKE_PHOTO -> {
                                 val granted = ContextCompat.checkSelfPermission(
                                     context,
                                     android.Manifest.permission.CAMERA,
                                 ) == PackageManager.PERMISSION_GRANTED
                                 if (granted) {
-                                    launchCamera()
+                                    onLaunchCamera()
                                 } else {
-                                    cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA)
+                                    onLaunchCameraPermission()
                                 }
                             }
                         }
