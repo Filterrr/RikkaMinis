@@ -188,6 +188,8 @@
     <string name="mcp_form_oauth_token_endpoint_placeholder">https://…/token</string>
     <string name="mcp_form_oauth_scopes">Scopes</string>
     <string name="mcp_form_oauth_scopes_placeholder">Space-separated, e.g. openid email</string>
+    <string name="mcp_form_oauth_redirect_uri">Redirect URI</string>
+    <string name="mcp_form_oauth_redirect_uri_placeholder">Optional; default loopback http://localhost:54546/callback</string>
     <string name="mcp_form_oauth_authorize">Authorize</string>
     <string name="mcp_form_oauth_reauthorize">Re-authorize</string>
     <string name="mcp_form_oauth_sign_out">Sign Out</string>

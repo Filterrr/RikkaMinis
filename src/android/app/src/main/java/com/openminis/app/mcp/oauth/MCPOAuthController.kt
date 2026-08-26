@@ -160,6 +160,21 @@ class MCPOAuthController(private val context: Context) {
                         expiresAtMs = expiresAt,
                     ),
                 )
+                // [T-mcp-oauth-bridge-materialize] Materialize the in-guest token
+                // bridge so minis-mcp-cli can actually use the issued token. The
+                // bridge expects expires_at in SECONDS (StoredTokens keeps ms).
+                MCPOAuthStore.materializeBridgeFile(
+                    context, server,
+                    MCPOAuthStore.BridgePayload(
+                        accessToken = access,
+                        refreshToken = json.optString("refresh_token", "").ifBlank { null },
+                        expiresAtSeconds = if (expiresAt > 0) expiresAt / 1000 else 0L,
+                        tokenEndpoint = oauth.tokenEndpoint,
+                        clientId = oauth.clientId,
+                        clientSecret = MCPOAuthStore.clientSecret(context, server),
+                        resource = resource,
+                    ),
+                )
                 AppLogger.info(
                     TAG,
                     "[Authorize] '$server' OK (hasRefresh=${json.has("refresh_token")}, expiresIn=${expiresIn}s)",

@@ -1191,6 +1191,8 @@
     <string name="mcp_form_oauth_token_endpoint_placeholder">https://…/token</string>
     <string name="mcp_form_oauth_scopes">Области (scopes)</string>
     <string name="mcp_form_oauth_scopes_placeholder">Через пробел, напр. openid email</string>
+    <string name="mcp_form_oauth_redirect_uri">URI перенаправления</string>
+    <string name="mcp_form_oauth_redirect_uri_placeholder">Необязательно; по умолчанию loopback http://localhost:54546/callback</string>
     <string name="mcp_form_oauth_authorize">Авторизовать</string>
     <string name="mcp_form_oauth_reauthorize">Повторная авторизация</string>
     <string name="mcp_form_oauth_sign_out">Выйти</string>

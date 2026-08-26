@@ -1043,6 +1043,8 @@
     <string name="mcp_form_oauth_token_endpoint_placeholder">https://…/token</string>
     <string name="mcp_form_oauth_scopes">スコープ</string>
     <string name="mcp_form_oauth_scopes_placeholder">スペース区切り、例：openid email</string>
+    <string name="mcp_form_oauth_redirect_uri">リダイレクトURI</string>
+    <string name="mcp_form_oauth_redirect_uri_placeholder">省略可。既定はループバック http://localhost:54546/callback</string>
     <string name="mcp_form_oauth_authorize">認証</string>
     <string name="mcp_form_oauth_reauthorize">再認証</string>
     <string name="mcp_form_oauth_sign_out">サインアウト</string>
