@@ -296,7 +296,7 @@
     <string name="perm_a11y_system_ready">Dienst aktiviert</string>
     <string name="perm_a11y_system_disabled">Dienst nicht aktiviert</string>
     <string name="perm_allow_minis_config">Konfigurationstool zulassen</string>
-    <string name="perm_minis_config_desc">Wenn deaktiviert, kann der Agent über minis-config keine Einstellungen lesen oder ändern. Der Verlauf unter Logs → Konfigurationsänderungen bleibt weiterhin zugänglich. Der Agent erhält einen permission_denied-Fehler und kann dich stattdessen über Deep Links anleiten.</string>
+    <string name="perm_minis_config_desc">Wenn deaktiviert, kann der Agent deine Einstellungen nicht mehr selbstständig lesen oder ändern. Frühere Änderungen kannst du weiterhin unter Logs → Konfigurationsänderungen einsehen.</string>
     <string name="perm_section_privacy">Datenschutz</string>
     <string name="perm_section_media">Medien</string>
     <string name="perm_section_system">System</string>
