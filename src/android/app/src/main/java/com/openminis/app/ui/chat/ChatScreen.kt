@@ -4828,6 +4828,7 @@ internal const val AGGREGATE_MESSAGE_ITEMS: Boolean = true
 // driver (see docs/scroll-follow-simplification.md).
 internal const val SIMPLE_FOLLOW: Boolean = true
 
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, kotlinx.coroutines.FlowPreview::class)
 @Composable
 private fun ChatInputArea(
     viewModel: ChatViewModel,
