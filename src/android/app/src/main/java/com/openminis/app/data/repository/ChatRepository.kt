@@ -176,7 +176,19 @@ class ChatRepository(
         // disk invisibly — the exact runaway-accumulation that also feeds the
         // backup-OOM (ConfigBackup.export bundles live session content).
         // Deleting a session means deleting the whole session, not just its text.
-        sessionFiles?.deleteSessionFiles(id)
+        val store = sessionFiles
+        if (store == null) {
+            // [Bug 4 / opt-2] Only unit-test construction reaches here; a null
+            // store means on-disk files are NOT reclaimed and would leak
+            // silently. Surface it loudly so a missing injection is caught in
+            // CI/logs rather than masquerading as a successful delete.
+            android.util.Log.w(
+                "ChatRepository",
+                "deleteSession: sessionFiles is null, skipping on-disk reclamation for $id",
+            )
+            return
+        }
+        store.deleteSessionFiles(id)
     }
 
     /**
