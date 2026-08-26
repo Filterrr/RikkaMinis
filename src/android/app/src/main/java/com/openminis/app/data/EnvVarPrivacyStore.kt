@@ -15,8 +15,9 @@ import kotlinx.coroutines.flow.asStateFlow
  * output in chat; only the bytes flowing into the agent's context are
  * rewritten.
  *
- * Default OFF — opt-in to avoid surprising users who rely on echoing
- * values back during debugging.
+ * Default ON — secrets stay out of the model's context unless the user
+ * opts out (opt-out via the Privacy Mode toggle in Settings). Users who
+ * rely on echoing values back during debugging can disable it there.
  *
  * Mirrors iOS `EnvVarPrivacyStore`.
  */
