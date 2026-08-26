@@ -39,10 +39,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.openminis.app.R
 import com.openminis.app.agent.SoulBodyLimitCheck
+import com.openminis.app.agent.SoulBodyUnit
 import com.openminis.app.agent.SoulFile
 import com.openminis.app.agent.SoulMDParser
 import com.openminis.app.agent.SoulMetadata
 import com.openminis.app.agent.SoulStore
+import com.openminis.app.agent.SystemPromptBuilder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.rememberCoroutineScope
@@ -223,11 +225,24 @@ fun SoulSettingsScreen(onBack: () -> Unit) {
                 ) { Text(stringResource(R.string.soul_restore_default)) }
                 Button(
                     onClick = {
+                        // [T-soul-settings-injection] Align the Settings save path
+                        // with minis-config `soul.body`: reject prompt-injection
+                        // patterns with a clear error instead of letting the body
+                        // hit disk only to be silently scrubbed at prompt-build
+                        // time. Trim name/style so the on-disk frontmatter never
+                        // carries stray leading/trailing whitespace (minis-config
+                        // writers already trim).
+                        val trimmedName = name.trim()
+                        val trimmedStyle = style.trim()
+                        if (SystemPromptBuilder.containsInjectionPattern(body)) {
+                            saveError = context.getString(R.string.soul_injection_error)
+                            return@Button
+                        }
                         scope.launch {
                             try {
                                 val file = SoulFile(
                                     metadata = SoulMetadata(
-                                        name = name.ifBlank { SoulMetadata.DEFAULT.name },
+                                        name = trimmedName.ifBlank { SoulMetadata.DEFAULT.name },
                                         // Round-trip the on-disk emoji
                                         // value unchanged so a user who
                                         // set a custom emoji on another
@@ -235,7 +250,7 @@ fun SoulSettingsScreen(onBack: () -> Unit) {
                                         // see it silently rewritten when
                                         // they hit Save here.
                                         emoji = preservedEmoji.ifBlank { SoulMetadata.DEFAULT.emoji },
-                                        style = style,
+                                        style = trimmedStyle,
                                         lang = lang.ifBlank { SoulMetadata.DEFAULT.lang },
                                     ),
                                     body = body,
@@ -290,35 +305,19 @@ fun SoulSettingsScreen(onBack: () -> Unit) {
     }
 }
 
-/// Render the within-budget counter — picks the CJK character unit vs "words" depending on
-/// the same CJK ratio rule that decides which cap applies. Standalone
+/// Render the within-budget counter — delegates to [SoulStore.countBody] so
+/// the unit (CJK chars vs words) and magnitude are always in lock-step with
+/// the over-limit gate that decides whether Save is enabled. Standalone
 /// helper so it stays out of the Composable hot-path's expression budget.
 @Composable
 private fun soulBodyCountTextAndroid(body: String): String {
-    val trimmed = body.trim()
-    if (trimmed.isEmpty()) return stringResource(R.string.soul_count_zero)
-    var cjk = 0
-    var total = 0
-    var i = 0
-    while (i < trimmed.length) {
-        val cp = trimmed.codePointAt(i)
-        total += 1
-        val isCJK =
-            cp in 0x4E00..0x9FFF ||
-                cp in 0x3400..0x4DBF ||
-                cp in 0x3040..0x309F ||
-                cp in 0x30A0..0x30FF ||
-                cp in 0xAC00..0xD7AF
-        if (isCJK) cjk += 1
-        i += Character.charCount(cp)
-    }
-    val ratio = if (total > 0) cjk.toDouble() / total else 0.0
-    return if (ratio > SoulStore.CJK_RATIO_THRESHOLD) {
-        val chars = trimmed.codePointCount(0, trimmed.length)
-        stringResource(R.string.soul_count_chars, chars, SoulStore.CHINESE_CHAR_LIMIT)
-    } else {
-        val words = trimmed.split(Regex("\\s+")).count { it.isNotEmpty() }
-        stringResource(R.string.soul_count_words, words, SoulStore.ENGLISH_WORD_LIMIT)
+    val count = SoulStore.countBody(body)
+    if (count.magnitude == 0) return stringResource(R.string.soul_count_zero)
+    return when (count.unit) {
+        SoulBodyUnit.CHARS ->
+            stringResource(R.string.soul_count_chars, count.magnitude, count.cap)
+        SoulBodyUnit.WORDS ->
+            stringResource(R.string.soul_count_words, count.magnitude, count.cap)
     }
 }
 
@@ -331,7 +330,6 @@ private fun LangPicker(lang: String, onLangChange: (String) -> Unit) {
         "en" to stringResource(R.string.soul_lang_en),
     )
     val current = options.firstOrNull { it.first == lang } ?: options.first()
-    var expanded by remember { mutableStateOf(false) }
     // Render the picker as a simple labeled row of buttons. Three options
     // (auto / Chinese / English) fit comfortably without a dropdown — avoids
     // depending on material3 ExposedDropdownMenu, which has a fragile
@@ -359,5 +357,4 @@ private fun LangPicker(lang: String, onLangChange: (String) -> Unit) {
             }
         }
     }
-    expanded // suppress unused-var warning
 }
