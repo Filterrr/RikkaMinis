@@ -33,10 +33,10 @@ class EnvVarRedactorTest {
 
     @Test
     fun `long value masks only the middle`() {
-        val value = "sk-abcdefghijklmnop"
+        val value = "sk-abcdefghijklmnop" // 19 chars
         val masked = EnvVarRedactor.mask(value)
         assertEquals(value.length, masked.length)
-        assertTrue(masked.startsWith("sk-"))
+        assertTrue(masked.startsWith("sk"))   // first 2 chars kept verbatim
         assertTrue(masked.endsWith("op"))
         // entire middle span (after the leading 2, before the trailing 2) is stars
         assertTrue(masked.substring(2, masked.length - 2).all { it == '*' })
