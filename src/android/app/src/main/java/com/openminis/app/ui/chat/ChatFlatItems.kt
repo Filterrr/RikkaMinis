@@ -1068,3 +1068,110 @@ internal fun buildAggregateChatItems(messages: List<ChatMessage>): List<FlatChat
     }
     return out
 }
+
+/**
+ * [fix/long-session-aggregate-storm] Incremental aggregate rebuild — the
+ * AGGREGATE_MESSAGE_ITEMS counterpart of the ledger's frozen/live split.
+ *
+ * The aggregate path had NO increment: every collect tick (and every
+ * pause/cancel that drains the side-channel and restarts the messages-keyed
+ * effect) rebuilt the WHOLE list via [buildAggregateChatItems], O(N) per
+ * tick. In a long session that is the same flatten storm the ledger path
+ * already fixed — but the aggregate branch short-circuited around it.
+ *
+ * Because one message maps to exactly one item (bridge messages skipped),
+ * the increment is simple and prefix-stable:
+ *  1. Identity-prefix scan: frozen messages are the SAME instance across
+ *     ticks ([mergeStreamingOverlay] only `copy()`s the streamed tail), so
+ *     we find the first `===` mismatch and reuse the matching item prefix
+ *     by reference.
+ *  2. Full match → return `prevItems` as-is (zero allocation, zero rebuild).
+ *  3. Tail mismatch → rebuild only the suffix from the first changed
+ *     message, keeping every earlier item's identity so LazyColumn's
+ *     key+equals skip path sees no change for already-composed rows.
+ *
+ * `precededByUser` lookback reads the previous RAW message (even a bridge),
+ * so the suffix rebuild must know the role of the last prefix message; a
+ * full `[]`/`null` prev degenerates to a plain [buildAggregateChatItems].
+ */
+internal fun buildAggregateChatItemsIncremental(
+    prevItems: List<FlatChatItem>,
+    prevMessages: List<ChatMessage>,
+    messages: List<ChatMessage>,
+): List<FlatChatItem> {
+    // Cold start / first publish → full build.
+    if (prevItems.isEmpty() || prevMessages.isEmpty()) return buildAggregateChatItems(messages)
+
+    // 1) Identity prefix length (in MESSAGES). Frozen messages are the same
+    //    instance; only the streamed/live tail (and any structural change)
+    //    breaks identity.
+    var prefix = 0
+    val n = minOf(prevMessages.size, messages.size)
+    while (prefix < n && prevMessages[prefix] === messages[prefix]) prefix++
+
+    // 2) Everything identical → reuse by reference.
+    if (prefix == prevMessages.size && prefix == messages.size) return prevItems
+
+    // 3) Map message-prefix → item-prefix. Each non-bridge prefix message
+    //    produced exactly one item, so the item prefix count = number of
+    //    non-bridge messages in messages[0..prefix). We walk prevItems and
+    //    stop at the first item whose owning id is NOT in the prefix set
+    //    (robust against future builder changes; ids are unique).
+    val prefixIds = HashSet<String>(prefix * 2)
+    for (i in 0 until prefix) prefixIds.add(prevMessages[i].id)
+    var prefixItems = 0
+    while (prefixItems < prevItems.size &&
+        prefixIds.contains(prevItems[prefixItems].owningMessageId())
+    ) {
+        prefixItems++
+    }
+
+    // 4) Rebuild the suffix from messages[prefix..]. Builder is pure; we only
+    //    need `precededByUser` correct for the suffix's first user message,
+    //    which looks back at the last prefix message.
+    val suffix = buildAggregateChatItemsFrom(messages, fromIndex = prefix)
+    val out = ArrayList<FlatChatItem>(prefixItems + suffix.size)
+    for (i in 0 until prefixItems) out.add(prevItems[i])
+    out.addAll(suffix)
+    return out
+}
+
+/**
+ * Build the aggregate items for messages[fromIndex..], used by the
+ * incremental path's suffix rebuild. Semantics identical to
+ * [buildAggregateChatItems] restricted to the suffix; `precededByUser` for
+ * the suffix's first element still looks back at messages[fromIndex - 1]
+ * (the caller guarantees fromIndex ≤ size; a fromIndex of 0 yields the full
+ * build).
+ */
+private fun buildAggregateChatItemsFrom(
+    messages: List<ChatMessage>,
+    fromIndex: Int,
+): List<FlatChatItem> {
+    val out = mutableListOf<FlatChatItem>()
+    val usedKeys = mutableSetOf<String>()
+    for (idx in fromIndex until messages.size) {
+        val message = messages[idx]
+        if (message.isInternalBridge) continue
+        if (message.role == "user") {
+            val prevIsUser = idx > 0 && messages[idx - 1].role == "user"
+            val key = "user:${message.id}"
+            if (usedKeys.add(key)) {
+                out.add(FlatChatItem.UserBubble(message, precededByUser = prevIsUser))
+            }
+            continue
+        }
+        val messageMarkdown = run {
+            val parts = message.toolBlocks
+                .filter { it.kind == "text" && it.content.isNotEmpty() }
+                .joinToString("\n\n") { it.content }
+            if (parts.isNotEmpty()) parts else message.content
+        }
+        out.add(FlatChatItem.AssistantMessageItem(
+            messageId = message.id,
+            message = message,
+            messageMarkdown = messageMarkdown,
+        ))
+    }
+    return out
+}

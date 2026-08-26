@@ -3021,6 +3021,24 @@ fun ChatScreen(
                 var flatItems by remember(sessionId) {
                     mutableStateOf<List<FlatChatItem>>(emptyList())
                 }
+                // [fix/long-session-aggregate-storm] Aggregate-path reuse pair
+                // stored at `remember(sessionId)` scope so it SURVIVES the
+                // messages-keyed effect restart. This is what lets a pause /
+                // cancel (side-channel drained into `_messages` → `messages`
+                // key changes → effect restarts) reuse the frozen prefix via
+                // buildAggregateChatItemsIncremental instead of a cold O(N)
+                // rebuild. Reset on session switch (keyed on sessionId).
+                //
+                // Plain holder (NOT snapshot state): these are read/written
+                // only inside the flatten effect's coroutine, never in a
+                // composition body, so making them observable would add
+                // needless invalidation overhead with no reader.
+                val aggregateReuse = remember(sessionId) {
+                    object {
+                        var messages: List<ChatMessage>? = null
+                        var items: List<FlatChatItem>? = null
+                    }
+                }
                 // [forward-stable] Session-lifetime stable row ledger. Owns the
                 // row list once seeded: cold open builds canonically, then every
                 // tick is an incremental reconcile with prefix-stable keys.
@@ -3140,9 +3158,36 @@ fun ChatScreen(
                             // renders AssistantMessageItem. Early-return keeps
                             // the ledger path below exactly as it was.
                             if (AGGREGATE_MESSAGE_ITEMS) {
-                                flatItems = withContext(Dispatchers.Default) {
-                                    buildAggregateChatItems(merged)
+                                // [fix/long-session-aggregate-storm] Incremental
+                                // rebuild. A pause/cancel drains the side-channel
+                                // into `_messages` (ONLY the live tail message
+                                // changes) and restarts this effect; without the
+                                // incremental path every such restart re-ran
+                                // buildAggregateChatItems over the WHOLE session
+                                // (O(N) on the default dispatcher + a fresh list
+                                // reference → LazyColumn full diff). Now: frozen
+                                // prefix items are reused by reference, only the
+                                // changed tail is rebuilt, and an identical
+                                // merged list reuses the previous items as-is.
+                                //
+                                // Cold start (no previous publish) still runs the
+                                // full build OFF-MAIN — the incremental path only
+                                // takes over once we have a prior items+merge
+                                // pair to diff against.
+                                val prevMsgs = aggregateReuse.messages
+                                val prevItems = aggregateReuse.items
+                                val nextItems = if (prevMsgs == null || prevMsgs.isEmpty() ||
+                                    prevItems == null || prevItems.isEmpty()
+                                ) {
+                                    withContext(Dispatchers.Default) {
+                                        buildAggregateChatItems(merged)
+                                    }
+                                } else {
+                                    buildAggregateChatItemsIncremental(prevItems, prevMsgs, merged)
                                 }
+                                flatItems = nextItems
+                                aggregateReuse.messages = merged
+                                aggregateReuse.items = nextItems
                                 return@collect
                             }
                             if (flatItems.isEmpty()) {
