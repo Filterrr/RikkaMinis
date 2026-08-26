@@ -868,6 +868,9 @@
     <string name="provider_set_favorite">Set as favorite</string>
     <string name="provider_unset_favorite">Remove from favorites</string>
     <string name="provider_detail_export">Export</string>
+    <string name="provider_detail_export_confirm_title">Export provider</string>
+    <string name="provider_detail_export_confirm_text">The exported file includes your API key in plain (Base64-encoded) text so it can be re-imported ready-to-use. Only share it with people you trust.</string>
+    <string name="provider_detail_export_confirm_action">Export</string>
     <string name="provider_detail_label">Label</string>
     <string name="provider_detail_custom_api_base">Custom API Base</string>
     <string name="provider_detail_http_endpoint_warning">⚠ This endpoint uses unencrypted HTTP. API keys, messages, and tool results sent to it can be read by anyone on the network. Only use HTTP for trusted local servers.</string>

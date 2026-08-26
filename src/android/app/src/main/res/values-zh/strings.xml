@@ -729,6 +729,9 @@
     <string name="provider_set_favorite">设为常用</string>
     <string name="provider_unset_favorite">取消常用</string>
     <string name="provider_detail_export">导出</string>
+    <string name="provider_detail_export_confirm_title">导出供应商</string>
+    <string name="provider_detail_export_confirm_text">导出文件会包含明文（Base64 编码）的 API Key，以便重新导入后可直接使用。请仅分享给你信任的人。</string>
+    <string name="provider_detail_export_confirm_action">导出</string>
     <string name="provider_detail_label">标签</string>
     <string name="provider_detail_custom_api_base">自定义 API 地址</string>
     <string name="provider_detail_http_endpoint_warning">⚠ 该端点使用未加密的 HTTP。发往其中的 API 密钥、消息和工具结果可被网络中的任何人读取。仅对可信的本地服务器使用 HTTP。</string>
