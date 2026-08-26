@@ -1350,11 +1350,9 @@ fun ChatScreen(
     }
 
     // [forward-stable] Single bottom-request consumer. FOLLOWING + committed
-    // revision + no in-flight gesture + sentinel not yet visible → one
-    // requestScrollToItem at the sentinel. Exactly one request per event; the
-    // pending flag is consumed whether or not the scroll fired. Position
-    // observation is only ever read here to DECIDE — never triggers a scroll
-    // from inside a listener, so no feedback loop.
+    // revision + no in-flight gesture + sentinel not yet visible → scroll to
+    // the sentinel. Exactly one consumed request; the consumption is now
+    // PROOF-BASED (sentinel visible), not "the scroll call happened".
     LaunchedEffect(followState.pendingBottomRequest, followState.rowRevision, listState, listState.layoutInfo) {
         // [fix/scroll-follow-simplify] This consumer handles EXPLICIT user
         // intents (InitialOpen / Send / FabDown / Resume / Retry) and the
@@ -1368,20 +1366,23 @@ fun ChatScreen(
         // [fix/history-open-at-bottom] `listState.layoutInfo` is part of the
         // key set so the effect re-runs when rows actually land (cold-open of
         // a history session has no StreamRowsChanged revision to nudge it —
-        // that dispatch is unreachable under AGGREGATE_MESSAGE_ITEMS). The
-        // INITIAL_OPEN request stays pending across the empty-layout window
-        // below and fires the real bottom scroll once content exists.
+        // that dispatch is unreachable under AGGREGATE_MESSAGE_ITEMS).
+        // [fix/history-open-at-bottom-verify] Re-running on every layout
+        // change is also what makes the consume condition provable: an
+        // INITIAL_OPEN request stays pending until the bottom sentinel is
+        // actually visible, and each layoutInfo tick that finds it still
+        // off-screen re-fires the bottom scroll.
         val reason = followState.pendingBottomRequest ?: return@LaunchedEffect
-        val totalItems = listState.layoutInfo.totalItemsCount
-        // [fix/history-open-at-bottom] For the explicit "open the session at
-        // the bottom" intent, an empty/recomposed-away layout must NOT consume
-        // the pending request: the old comment promised "next StreamRowsChanged
-        // will re-scroll", but that dispatch no longer runs. Retain the request
-        // and let the layoutInfo key re-trigger this effect once rows land.
-        val isEmptyLayout = retainInitialOpenOnEmptyLayout(reason, totalItems)
+        val sentinelVisible = isBottomSentinelVisible(listState.layoutInfo)
+        // [fix/history-open-at-bottom-verify] The empty-layout window AND the
+        // "scroll requested but not landed" race both manifest as "sentinel
+        // not visible"; both must retain the pending INITIAL_OPEN request so
+        // the next layout re-drive re-attempts (and eventually consumes once
+        // the sentinel is provably on screen).
+        val retainPending = retainInitialOpenUntilSentinelVisible(reason, sentinelVisible)
         if (followState.isFollowing &&
             !listState.isScrollInProgress &&
-            !isBottomSentinelVisible(listState.layoutInfo)
+            !sentinelVisible
         ) {
             // [fix/chat-sentinel-crash-on-import] Guard against a stale/empty
             // layoutInfo. On an imported long session the first flatten publish
@@ -1390,12 +1391,28 @@ fun ChatScreen(
             // -1, and requestScrollToItem(-1) throws
             // IllegalArgumentException("Index should be non-negative (-1)").
             // The cold-open InitialOpen request must not crash the app — skip
-            // it and let the next StreamRowsChanged revision (raised once rows
-            // actually land) issue the real bottom scroll.
-            val scrollIdx = safeBottomScrollIndex(totalItems)
+            // it and let the next layoutInfo-keyed run of this effect issue
+            // the real bottom scroll.
+            val scrollIdx = safeBottomScrollIndex(listState.layoutInfo.totalItemsCount)
             if (scrollIdx != null) {
-                AppLogger.debug("ScrollSrc", "request-bottom reason=$reason revision=${followState.rowRevision}")
-                listState.requestScrollToItem(scrollIdx)
+                // [fix/history-open-at-bottom-verify] Use the SUSPENDING
+                // scrollToItem for the explicit open-at-bottom intent:
+                //  - it awaits the first layout (waitForFirstLayout) if the
+                //    list hasn't measured yet, instead of racing it;
+                //  - it calls snapToItemIndexInternal(forceRemeasure = true),
+                //    which resolves the target index against the LIVE item
+                //    provider during a synchronous remeasure — so the pending
+                //    request cannot be swallowed by a measure/pass
+                //    interleaving (the non-suspending requestScrollToItem
+                //    only writes a target for the NEXT remeasure, which is
+                //    exactly the race that left the viewport at the top).
+                //    It also cancels any in-flight scroll before snapping, so
+                //    a cold-open leftover gesture cannot fight the target.
+                // Exactly-once is preserved by the sentinel-visible consume
+                // below: this block re-runs (layoutInfo key) until the
+                // sentinel is provably on screen, then consumes.
+                AppLogger.debug("ScrollSrc", "scroll-bottom suspend reason=$reason revision=${followState.rowRevision}")
+                listState.scrollToItem(scrollIdx)
             } else {
                 AppLogger.debug("ScrollSrc", "request-bottom skipped (empty layoutInfo) reason=$reason revision=${followState.rowRevision}")
             }
@@ -1406,7 +1423,11 @@ fun ChatScreen(
         // while the layout is still empty (cold-open window) — otherwise the
         // "scroll to bottom on open" never fires once content arrives. Keep it
         // pending for the next layoutInfo-keyed run of this effect.
-        if (!isEmptyLayout) {
+        // [fix/history-open-at-bottom-verify] Strengthened: consume only once
+        // the sentinel is PROVABLY visible. For INITIAL_OPEN this is the
+        // successful-landing proof; every other reason consumes in this run
+        // exactly as before.
+        if (!retainPending) {
             followState = consumeBottomRequest(followState)
         }
     }
