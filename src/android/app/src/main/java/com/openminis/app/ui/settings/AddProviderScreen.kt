@@ -73,7 +73,9 @@ import com.openminis.app.data.repository.ProviderRepository
 import com.openminis.app.data.repository.ModelRefreshResult
 import com.openminis.app.MinisApp
 import com.openminis.app.R
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.UUID
 import com.openminis.app.ui.components.MinisButton
 import com.openminis.app.ui.components.RowLabel
@@ -438,7 +440,16 @@ private fun ColumnScope.ApiKeyConfigSection(
                         ModelRefreshResult.PRESERVED -> "已保存，但无法从该地址拉取模型，请检查 URL"
                         else -> null
                     }
-                    msg?.let { Toast.makeText(appContext, it, Toast.LENGTH_LONG).show() }
+                    // [fix/addprovider-toast-looper] Toast 必须回主线程弹，
+                    // applicationScope 跑在 Dispatchers.IO，无 Looper，直接
+                    // Toast 会抛 "Can't toast on a thread that has not called
+                    // Looper.prepare()" NPE 闪退（密钥填错/模型列表拉取失败
+                    // 时必现）。
+                    msg?.let {
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(appContext, it, Toast.LENGTH_LONG).show()
+                        }
+                    }
                 }
             }
             onSaved()
