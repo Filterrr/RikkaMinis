@@ -268,16 +268,13 @@ fun RootfsManagementScreen(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "The rootfs contains the Alpine Linux filesystem used by " +
-                            "the sandbox. Resetting will delete all data and restore to " +
-                            "factory state.",
+                        text = stringResource(R.string.rootfs_explain_body),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Reset: Delete everything\n" +
-                            "Note: persistent data lives in the shared area outside the rootfs and is kept across resets.",
+                        text = stringResource(R.string.rootfs_reset_body),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

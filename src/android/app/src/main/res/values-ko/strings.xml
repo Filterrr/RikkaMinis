@@ -1245,4 +1245,15 @@
     <string name="chat_math_content_desc">수식: %1$s</string>
     <string name="chat_play_video">동영상 재생</string>
 
+
+    <!-- i18n-hardening-C -->
+    <string name="filepreview_truncated_kb">%2$s 중 처음 %1$d KB 표시</string>
+    <string name="filepreview_truncated_rows">%2$s 중 처음 %1$d행 표시</string>
+    <string name="filepreview_no_app">이 파일을 열 수 있는 앱이 없습니다.</string>
+    <string name="rootfs_explain_body">rootfs에는 샌드박스가 사용하는 Alpine Linux 파일 시스템이 포함되어 있습니다. 초기화하면 모든 데이터가 삭제되고 공장 상태로 복원됩니다.</string>
+    <string name="rootfs_reset_body">초기화: 모든 항목 삭제\n참고: 영구 데이터는 rootfs 외부의 공유 영역에 저장되며 초기화 후에도 유지됩니다.</string>
+    <string name="config_confirm_effect_warning">이후 도구 호출에 영향을 줄 수 있습니다.</string>
+    <string name="config_confirm_effect_info">되돌릴 수 있지만 빠르게 확인할 가치가 있습니다.</string>
+    <string name="chat_copy_code">코드 복사</string>
+    <string name="rootfs_insufficient_space">공간 부족: 약 %1$d MB 필요, 사용 가능 %2$d MB뿐입니다. 저장 공간을 확보한 후 다시 시도하세요.</string>
 </resources>

@@ -123,6 +123,34 @@ class RootfsManager private constructor(private val context: Context) {
         }
 
         try {
+            // --- Disk-space gate (P4) -----------------------------------------
+            // Refuse to start extraction when the device can't plausibly hold
+            // the extracted rootfs. Checking up front avoids a half-written,
+            // corrupt rootfs when storage runs out mid-extract (a silent_kill
+            // situation that otherwise only surfaces on the next boot as
+            // "installed but broken"). Conservative estimate: compressed asset
+            // × 4 (observed Alpine minirootfs expansion) + 64 MiB margin.
+            val spaceGateAssetName = try {
+                context.assets.open(ROOTFS_ASSET).close()
+                ROOTFS_ASSET
+            } catch (_: java.io.FileNotFoundException) {
+                ROOTFS_ASSET_TAR
+            }
+            val compressedBytes: Long = try {
+                context.assets.openFd(spaceGateAssetName).use { it.length }
+            } catch (_: Exception) { 0L }
+
+            val usableBytes = File(context.filesDir).usableSpace
+            if (compressedBytes > 0 && !hasEnoughSpaceForRootfs(usableBytes, compressedBytes)) {
+                val neededMB = (compressedBytes * ROOTFS_EXPANSION_FACTOR + ROOTFS_SPACE_MARGIN_MB * 1024L * 1024L) / (1024L * 1024L)
+                val freeMB = usableBytes / (1024L * 1024L)
+                Log.w(TAG, "Rootfs install aborted: need ~${neededMB} MiB free but only ${freeMB} MiB available")
+                _installState.value = RootfsInstallState.Failed(
+                    context.getString(R.string.rootfs_insufficient_space, neededMB, freeMB)
+                )
+                return@withContext
+            }
+
             _installState.value = RootfsInstallState.Preparing
             Log.i(TAG, "Installing Alpine rootfs...")
 
@@ -1057,6 +1085,33 @@ class RootfsManager private constructor(private val context: Context) {
         private const val ARCH = "aarch64"
         private const val ROOTFS_ASSET = "alpine-minirootfs.tar.gz"
         private const val ROOTFS_ASSET_TAR = "alpine-minirootfs.tar"
+        /**
+         * Worst-case expansion factor for the compressed rootfs asset.
+         * Alpine minirootfs compresses to roughly 1/3–1/4 of its extracted
+         * size, so `compressed × ROOTFS_EXPANSION_FACTOR` is a conservative
+         * estimate of the space extraction will actually need.
+         */
+        private const val ROOTFS_EXPANSION_FACTOR = 4L
+        /**
+         * Extra margin (MiB) kept above the estimated extracted size so a
+         * half-full disk still has room for the apk world snapshot, integrity
+         * manifest and the first boot's package operations.
+         */
+        private const val ROOTFS_SPACE_MARGIN_MB = 64L
+
+        /**
+         * Conservative disk-space gate for rootfs installation.
+         *
+         * Returns true when `usableBytes` can hold the estimated extracted
+         * rootfs (compressed asset size × [ROOTFS_EXPANSION_FACTOR]) plus a
+         * fixed [ROOTFS_SPACE_MARGIN_MB] margin. Pure so the threshold can be
+         * JVM-tested without an Android Context ([RootfsDiskGuardTest]).
+         */
+        internal fun hasEnoughSpaceForRootfs(usableBytes: Long, compressedAssetBytes: Long): Boolean {
+            if (compressedAssetBytes < 0 || usableBytes < 0) return false
+            val needed = compressedAssetBytes * ROOTFS_EXPANSION_FACTOR + ROOTFS_SPACE_MARGIN_MB * 1024L * 1024L
+            return usableBytes >= needed
+        }
         private const val PROOT_ASSET = "proot-aarch64"
         private const val DEFAULT_MOUNT_ASSET = "default_mount"
         private val OFFLINE_PACKAGES = listOf(

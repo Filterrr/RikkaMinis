@@ -1253,4 +1253,15 @@
     <string name="chat_math_content_desc">数式: %1$s</string>
     <string name="chat_play_video">動画を再生</string>
 
+
+    <!-- i18n-hardening-C -->
+    <string name="filepreview_truncated_kb">%2$s の最初の %1$d KB を表示中</string>
+    <string name="filepreview_truncated_rows">%2$s の最初の %1$d 行を表示中</string>
+    <string name="filepreview_no_app">このファイルを開けるアプリがありません。</string>
+    <string name="rootfs_explain_body">rootfs にはサンドボックスが使用する Alpine Linux ファイルシステムが含まれています。リセットするとすべてのデータが削除され、工場出荷時の状態に戻ります。</string>
+    <string name="rootfs_reset_body">リセット: すべて削除\n注: 永続データは rootfs 外の共有領域に保存され、リセット後も保持されます。</string>
+    <string name="config_confirm_effect_warning">これは後続のツール呼び出しに影響する可能性があります。</string>
+    <string name="config_confirm_effect_info">元に戻せますが、ひと目確認する価値があります。</string>
+    <string name="chat_copy_code">コードをコピー</string>
+    <string name="rootfs_insufficient_space">容量不足: 約 %1$d MB 必要ですが、利用可能なのは %2$d MB のみです。ストレージを空けて再試行してください。</string>
 </resources>

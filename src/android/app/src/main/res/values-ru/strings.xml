@@ -1401,4 +1401,15 @@
     <string name="chat_math_content_desc">Математическая формула: %1$s</string>
     <string name="chat_play_video">Воспроизвести видео</string>
 
+
+    <!-- i18n-hardening-C -->
+    <string name="filepreview_truncated_kb">Показаны первые %1$d КБ из %2$s</string>
+    <string name="filepreview_truncated_rows">Показаны первые %1$d строк из %2$s</string>
+    <string name="filepreview_no_app">Нет приложения для открытия этого файла.</string>
+    <string name="rootfs_explain_body">Rootfs содержит файловую систему Alpine Linux, используемую песочницей. Сброс удалит все данные и вернёт заводское состояние.</string>
+    <string name="rootfs_reset_body">Сброс: удалить всё\nПримечание: постоянные данные хранятся в общей области вне rootfs и сохраняются после сброса.</string>
+    <string name="config_confirm_effect_warning">Это может повлиять на последующие вызовы инструментов.</string>
+    <string name="config_confirm_effect_info">Обратимо, но стоит быстро проверить.</string>
+    <string name="chat_copy_code">Копировать код</string>
+    <string name="rootfs_insufficient_space">Недостаточно места: нужно около %1$d МБ, доступно только %2$d МБ. Освободите хранилище и повторите попытку.</string>
 </resources>

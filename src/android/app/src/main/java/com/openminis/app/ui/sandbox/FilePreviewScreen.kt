@@ -367,7 +367,7 @@ private fun TextPreview(item: FileItem) {
             ) {
                 if (truncated) {
                     Text(
-                        text = "Showing first ${MAX_TEXT_PREVIEW_BYTES / 1000} KB of ${item.formattedSize}",
+                        text = stringResource(R.string.filepreview_truncated_kb, MAX_TEXT_PREVIEW_BYTES / 1000, item.formattedSize),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
@@ -665,7 +665,7 @@ private fun CsvPreview(item: FileItem) {
             Column(Modifier.fillMaxSize()) {
                 if (truncated) {
                     Text(
-                        text = "Showing first 200 rows of ${item.formattedSize}",
+                        text = stringResource(R.string.filepreview_truncated_rows, 200, item.formattedSize),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
@@ -757,7 +757,7 @@ private fun JsonPreview(item: FileItem) {
         else -> Column(Modifier.fillMaxSize()) {
             if (truncated) {
                 Text(
-                    text = "Showing first ${MAX_TEXT_PREVIEW_BYTES / 1000} KB of ${item.formattedSize}",
+                    text = stringResource(R.string.filepreview_truncated_kb, MAX_TEXT_PREVIEW_BYTES / 1000, item.formattedSize),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
@@ -934,7 +934,7 @@ private fun openExternally(context: Context, item: FileItem, mime: String) {
         context.startActivity(Intent.createChooser(intent, "Open with…"))
     } catch (e: Exception) {
         AppLogger.warning("FilePreview", "openExternally failed: ${e.message}")
-        Toast.makeText(context, "No app available to open this file.", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, context.getString(R.string.filepreview_no_app), Toast.LENGTH_SHORT).show()
     }
 }
 

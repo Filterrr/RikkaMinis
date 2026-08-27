@@ -1631,4 +1631,16 @@
     <string name="chat_math_content_desc">Math: %1$s</string>
     <string name="chat_play_video">Play video</string>
 
+
+    <!-- i18n-hardening-C -->
+    <string name="filepreview_truncated_kb">Showing first %1$d KB of %2$s</string>
+    <string name="filepreview_truncated_rows">Showing first %1$d rows of %2$s</string>
+    <string name="filepreview_no_app">No app available to open this file.</string>
+    <string name="rootfs_explain_body">The rootfs contains the Alpine Linux filesystem used by the sandbox. Resetting will delete all data and restore to factory state.</string>
+    <string name="rootfs_reset_body">Reset: Delete everything\nNote: persistent data lives in the shared area outside the rootfs and is kept across resets.</string>
+    <string name="config_confirm_effect_warning">This may affect later tool calls.</string>
+    <string name="config_confirm_effect_info">Reversible, but worth a quick look.</string>
+    <string name="chat_copy_code">Copy code</string>
+    <string name="rootfs_insufficient_space">Not enough space: need about %1$d MB, only %2$d MB available. Please free up storage and retry.</string>
+    <!-- i18n-hardening-C-temp: shared with B (B defines all 8 locales); values-only fallback until merge de-dup -->
 </resources>
