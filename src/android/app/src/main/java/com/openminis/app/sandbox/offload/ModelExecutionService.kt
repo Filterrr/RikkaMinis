@@ -1,9 +1,16 @@
 package com.openminis.app.sandbox.offload
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.Service
+import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.util.Log
+import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
@@ -106,6 +113,33 @@ class ModelExecutionService : Service() {
         private const val NON_STREAMING_EXEC_TIMEOUT_MS = 4 * 60_000L
 
         /**
+         * [worker-died-mid-stream fix 2026-08-27] Promotion of the worker to a
+         * FOREGROUND service for the duration of a request. The worker used to
+         * be a plain started (non-foreground) service in `:modelservice`, so
+         * once the app task went to background / was swiped from recents, the
+         * process was a prime freezer (Android 11+ cgroup v2) / LMK /
+         * task-removal target. A frozen or killed worker stops writing run-log
+         * lines, stops refreshing liveness.beat and stops appending to
+         * stream.jsonl — the client then classifies DIED_MID_STREAM after its
+         * 5s no-growth + 4s stale-beat grace (evidence: run log ends cleanly
+         * at FIRST_CHUNK with no STREAM_ERROR / SELF_REAP entry). Type is
+         * mediaPlayback for the same reason as AgentForegroundService (no
+         * runtime cap; dataSync's 6h ceiling force-kills long sessions — see
+         * the FOREGROUND_SERVICE_MEDIA_PLAYBACK comment in the manifest).
+         */
+        private const val WORKER_CHANNEL_ID = "model_exec_worker"
+        private const val WORKER_NOTIFICATION_ID = 0x4D45 // "ME"
+
+        /**
+         * [worker-died-mid-stream fix] Leak-bound for the per-request CPU wake
+         * lock: strictly larger than the worst legitimate request lifetime
+         * (QUEUE_WAIT_TIMEOUT_MS 35min + GENERATION_TIMEOUT_SEC 30min stream +
+         * ack/drain grace), so a running request is never starved of the CPU
+         * while a wedged thread cannot pin the lock forever.
+         */
+        private const val WORKER_WAKE_LOCK_TIMEOUT_MS = 66 * 60_000L
+
+        /**
          * [worker-first-chunk-guard] Upper bound on how long a streaming worker
          * may wait for the provider's FIRST chunk after HTTP_STARTED. If the
          * upstream takes longer (slow connect, idle relay, silent SSE hang), the
@@ -193,6 +227,14 @@ class ModelExecutionService : Service() {
         }
 
         val runId = runIdOf(dir) ?: ""
+        // [worker-died-mid-stream fix] Pin the process out of the
+        // cached/freezable bucket + keep the CPU awake for the duration of
+        // this request, BEFORE any counter mutation: a request registered in
+        // activeRequests must never run in a process Android may freeze.
+        // Best-effort — if promotion fails (e.g. OEM FGS restrictions) we
+        // still run the request as a plain service, exactly like before.
+        promoteToForeground()
+        acquireWorkerWakeLock()
         // TF-H: register before enqueue so the completion thread always sees
         // this request when it re-checks under the lifecycle lock.
         synchronized(lifecycleLock) {
@@ -228,7 +270,8 @@ class ModelExecutionService : Service() {
             // /proc (hidepid=invisible) is not.
             val heartbeat = LivenessHeartbeat(dir)
             heartbeat.start()
-            kotlinx.coroutines.runBlocking {
+            try {
+                kotlinx.coroutines.runBlocking {
                 // ── TF-I: identity registration, OUTSIDE the mutex ──
                 ModelExecutionRunLog.log(dir, android.os.Process.myPid(), ModelExecutionRunLog.Phase.REQUEST_THREAD_START, runId = runId)
                 val processName = runCatching { android.app.Application.getProcessName() }
@@ -391,6 +434,12 @@ class ModelExecutionService : Service() {
                     // durable "worker finished" evidence.
                     heartbeat.stop()
                 }
+                }
+            } finally {
+                // [worker-died-mid-stream fix] symmetric release for
+                // acquireWorkerWakeLock() in onStartCommand — runs on every
+                // exit path of this request thread.
+                releaseWorkerWakeLock()
             }
         }.apply { isDaemon = false }.start()
 
@@ -530,6 +579,10 @@ class ModelExecutionService : Service() {
                         "pid=${android.os.Process.myPid()} active=${activeRequests.get()} " +
                         "queued=${queuedRequests.get()} pendingAck=${pendingAckTokens.size}",
                 )
+                // [worker-died-mid-stream fix] alive with no remaining work —
+                // drop the foreground pin instead of showing a dangling FGS
+                // notification for an idle worker.
+                stopForegroundQuietly()
                 return
             }
             Log.i(TAG, "terminal written, quiescent self-reap, pid=${android.os.Process.myPid()}")
@@ -596,6 +649,117 @@ class ModelExecutionService : Service() {
     /** Kill our own process — only ever called after quiescence confirmation. */
     private fun selfReap() {
         runCatching { android.os.Process.killProcess(android.os.Process.myPid()) }
+    }
+
+    // ── [worker-died-mid-stream fix] process-pinning machinery ────────
+
+    /** Worker CPU wake lock (refcounted by request count; see class KDoc). */
+    private val wakeLockGuard = Any()
+    private var cpuWakeLock: PowerManager.WakeLock? = null
+    private var wakeLockHolds = 0
+
+    /**
+     * Promote this worker process to a foreground service for the duration of
+     * the request. Without this, `:modelservice` is a plain started service:
+     * when the app task is backgrounded / swiped away, the process lands in
+     * the cached bucket where Android's cgroup freezer, LMK or OEM
+     * task-removal kills it mid-stream — the client then sees the run log end
+     * abruptly (no STREAM_ERROR / SELF_REAP) and classifies DIED_MID_STREAM.
+     * Best-effort: a failure here logs and continues as before (the request
+     * still runs; we only lose the pinning, which was also the pre-fix state).
+     */
+    private fun promoteToForeground() {
+        runCatching {
+            createWorkerNotificationChannel()
+            val notification = NotificationCompat.Builder(this, WORKER_CHANNEL_ID)
+                .setContentTitle("RikkaMinis")
+                .setContentText("Model request in progress")
+                .setSmallIcon(android.R.drawable.stat_sys_download)
+                .setOngoing(true)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setSilent(true)
+                .build()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(WORKER_NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+            } else {
+                startForeground(WORKER_NOTIFICATION_ID, notification)
+            }
+        }.onFailure {
+            Log.w(TAG, "startForeground failed (continuing as plain service): ${it.message}")
+        }
+    }
+
+    private fun createWorkerNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                WORKER_CHANNEL_ID,
+                "Model execution",
+                NotificationManager.IMPORTANCE_LOW,
+            ).apply {
+                description = "Keeps an in-flight model request alive while the app is backgrounded"
+                setShowBadge(false)
+            }
+            getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
+        }
+    }
+
+    /**
+     * Drop the foreground pin when the worker stays alive with NO remaining
+     * work (reap aborted / drain aborted with nothing durable). The normal
+     * completion paths do not need this: self-reap kills the process, which
+     * removes the FGS notification system-side.
+     */
+    private fun stopForegroundQuietly() {
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            } else {
+                @Suppress("DEPRECATION")
+                stopForeground(true)
+            }
+        }.onFailure { Log.w(TAG, "stopForeground failed: ${it.message}") }
+    }
+
+    /**
+     * Hold the CPU awake (PARTIAL_WAKE_LOCK) while requests are in flight so
+     * Doze / OEM CPU throttling cannot stall a live SSE socket mid-stream
+     * (mirrors AgentForegroundService's stream wakelock policy). Refcounted
+     * per request; bounded by [WORKER_WAKE_LOCK_TIMEOUT_MS] so a wedged
+     * thread can never pin it forever.
+     */
+    private fun acquireWorkerWakeLock() {
+        synchronized(wakeLockGuard) {
+            wakeLockHolds++
+            if (wakeLockHolds > 1) return
+            cpuWakeLock = runCatching {
+                val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+                pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "minis:model-exec-worker").apply {
+                    setReferenceCounted(false)
+                    acquire(WORKER_WAKE_LOCK_TIMEOUT_MS)
+                }
+            }.getOrNull()
+        }
+    }
+
+    private fun releaseWorkerWakeLock() {
+        synchronized(wakeLockGuard) {
+            if (wakeLockHolds > 0) wakeLockHolds--
+            if (wakeLockHolds > 0) return
+            runCatching { cpuWakeLock?.takeIf { it.isHeld }?.release() }
+            cpuWakeLock = null
+        }
+    }
+
+    override fun onDestroy() {
+        // [worker-died-mid-stream fix] defensive: a stopped service instance
+        // must never leave a wakelock held (the FGS notification is removed
+        // by the system on destroy).
+        synchronized(wakeLockGuard) {
+            wakeLockHolds = 0
+            runCatching { cpuWakeLock?.takeIf { it.isHeld }?.release() }
+            cpuWakeLock = null
+        }
+        super.onDestroy()
     }
 
     /**
@@ -1214,7 +1378,12 @@ class ModelExecutionService : Service() {
                     runId?.let { releaseAckToken(it) }
                     // If the run dir is gone, nothing more to write; only the
                     // general sweep may reap it.
-                    if (!dir.isDirectory) return@synchronized
+                    if (!dir.isDirectory) {
+                        // [worker-died-mid-stream fix] alive, dir gone, no
+                        // remaining work — drop the foreground pin.
+                        stopForegroundQuietly()
+                        return@synchronized
+                    }
                     if (!ModelExecutionRunDir.terminalPresent(dir)) {
                         // Data is durable only once result.json exists. The
                         // client may still be waiting on terminal to delete; if
@@ -1225,6 +1394,9 @@ class ModelExecutionService : Service() {
                             ModelExecutionRunDir.writeTerminal(dir)
                         } else {
                             Log.w(TAG, "controlled drain aborted: terminal absent and no result — worker kept alive")
+                            // [worker-died-mid-stream fix] alive with nothing
+                            // durable left to do — drop the foreground pin.
+                            stopForegroundQuietly()
                             return@synchronized
                         }
                     }

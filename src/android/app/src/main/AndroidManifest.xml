@@ -321,9 +321,24 @@
              bodies, JSON parsing, image/audio decoding) die when the process
              is killed after completing the request — the only reliable leak
              containment for native heap that GC cannot reclaim. -->
+        <!-- [worker-died-mid-stream fix 2026-08-27] foregroundServiceType:
+             the worker used to be a plain started (non-foreground) service, so
+             once the app task went to background / was swiped from recents,
+             the `:modelservice` process was a prime freezer (Android 11+
+             cgroup v2) / LMK / task-removal target. A frozen or killed worker
+             stops writing run-log lines, stops refreshing liveness.beat and
+             stops appending to stream.jsonl — the client then classifies
+             DIED_MID_STREAM after its 5s no-growth + 4s stale-beat grace.
+             Promoting to a foreground service for the duration of a request
+             pins the process out of the cached/freezable bucket. Type is
+             mediaPlayback for the same reason as AgentForegroundService
+             (see the FOREGROUND_SERVICE_MEDIA_PLAYBACK permission comment:
+             dataSync's 6h cap force-kills long sessions; mediaPlayback has
+             no runtime cap, permission already declared, sideload-only). -->
         <service
             android:name=".sandbox.offload.ModelExecutionService"
             android:process=":modelservice"
+            android:foregroundServiceType="mediaPlayback"
             android:exported="false" />
 
         <!-- [native-oom Phase 1] Isolated process for native_offload socket
