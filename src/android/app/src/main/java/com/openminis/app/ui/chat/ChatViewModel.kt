@@ -799,9 +799,11 @@ class ChatViewModel(
      * [fix/history-open-at-bottom-04] Public read-only "data is ready" signal.
      * Flipped to true in [loadSession]'s `finally` (covers every path: normal
      * completion, early `return@launch` for draft/missing session, and
-     * exception). The UI's bottom-scroll consumer keys off this instead of
-     * `listState.layoutInfo`, so the INITIAL_OPEN scroll-to-bottom fires once
-     * messages have actually loaded (not on the first empty-list frame).
+     * exception). Exposed for the init-time config re-resolver gate (below)
+     * and any future data-ready consumers. NOTE: the INITIAL_OPEN scroll no
+     * longer keys off this — that scroll is owned by the flatten collector's
+     * first non-empty flatItems publish, because this signal flips BEFORE the
+     * async flatten chain actually builds the rows.
      */
     val sessionLoaded: StateFlow<Boolean> = _sessionLoaded.asStateFlow()
 

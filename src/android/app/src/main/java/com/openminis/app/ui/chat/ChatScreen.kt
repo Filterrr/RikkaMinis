@@ -497,11 +497,6 @@ fun ChatScreen(
     // Callers needing the full history (compact / fork / regenerate / send)
     // continue to read viewModel.messages directly inside the VM.
     val messages by viewModel.uiMessages.collectAsState()
-    // [fix/history-open-at-bottom-04] "data is ready" signal — flipped true in
-    // loadSession's finally (after _messages is populated). The bottom-scroll
-    // consumer keys off this instead of listState.layoutInfo so the cold-open
-    // scroll-to-bottom fires once data is loaded, not on the first empty frame.
-    val sessionLoaded by viewModel.sessionLoaded.collectAsState()
     val hasOlderMessages by viewModel.hasOlderMessages.collectAsState()
     val isStreaming by viewModel.isStreaming.collectAsState()
     val canResume by viewModel.canResume.collectAsState()
@@ -1284,15 +1279,24 @@ fun ChatScreen(
     //    frames for stability") was a band-aid over this same key and
     //    introduced the "scrolled up → suddenly jumped to a far earlier
     //    message" regression.
-    //  - The data-ready gate is [sessionLoaded] (flipped in loadSession's
-    //    finally AFTER _messages is populated), not layoutInfo. INITIAL_OPEN
-    //    waits for it, then scrolls exactly once — so the count the suspend
-    //    scrollToItem resolves against the LIVE provider is the loaded count,
-    //    not the empty pre-load count.
+    //  - INITIAL_OPEN is no longer consumed HERE: the async flatten chain
+    //    (sessionLoaded flips before flatItems is non-empty) means this effect
+    //    would see an empty list and consume the opening scroll — the round-4
+    //    "open then jump away" bug. That scroll is owned by the flatten
+    //    collector (see shouldScrollToBottomOnFirstRows) at the exact point
+    //    the real rows first appear. This effect only handles the remaining
+    //    explicit intents (Send / Resume / Retry / FabDown / StreamRowsChanged),
+    //    whose data is already in flight.
     //  - The scroll itself is exactly-once and skipped outright while the user
     //    is dragging, so a reading user is never yanked.
-    LaunchedEffect(followState.pendingBottomRequest, followState.rowRevision, sessionLoaded) {
+    LaunchedEffect(followState.pendingBottomRequest, followState.rowRevision) {
         val reason = followState.pendingBottomRequest ?: return@LaunchedEffect
+
+        // The INITIAL_OPEN scroll is owned by the flatten collector. Here we
+        // must NOT consume it either — the collector consumes it once it has
+        // fired. (Consuming here would strand the request on a reload where
+        // the collector already passed the first-publish point.)
+        if (reason == BottomRequestReason.INITIAL_OPEN) return@LaunchedEffect
 
         // Delegate the decision to the pure gate (ChatFollowController) so the
         // exact contract is JVM-tested; here we only map its verdict to
@@ -1301,8 +1305,6 @@ fun ChatScreen(
         val hasRows = listState.layoutInfo.totalItemsCount > 0
         when (
             decideBottomScroll(
-                reason = reason,
-                sessionLoaded = sessionLoaded,
                 sentinelVisible = sentinelVisible,
                 hasRows = hasRows,
                 isFollowing = followState.isFollowing,
@@ -1311,22 +1313,11 @@ fun ChatScreen(
                 focusTarget = pendingFocusId != null,
             )
         ) {
-            BottomScrollAction.WAIT_FOR_DATA -> {
-                // INITIAL_OPEN before data is ready — keep pending. The effect
-                // re-runs when [sessionLoaded] flips true (it is a key).
-                return@LaunchedEffect
-            }
-
             BottomScrollAction.SCROLL_TO_BOTTOM -> {
                 // Scroll to the bottom sentinel (always the LAST item). The
-                // index is resolved AFTER the data-ready gate has passed and
-                // the suspend overload snapToItemIndexInternal(forceRemeasure =
-                // true) re-measures against the LIVE item provider, so a stale
-                // pre-load totalItemsCount cannot drift the target the way it
-                // did in rounds 1–3 (where the effect re-ran on every layout
-                // change with a stale count). The drift-eliminating properties
-                // are the data-ready gate + exactly-once consume + no
-                // layoutInfo re-fire key — not an index-vs-key distinction.
+                // suspend overload snapToItemIndexInternal(forceRemeasure =
+                // true) re-measures against the LIVE item provider, so the
+                // index clamp in LazyListMeasure lands on the true last item.
                 AppLogger.debug("ScrollSrc", "scroll-bottom reason=$reason revision=${followState.rowRevision}")
                 listState.scrollToItem(listState.layoutInfo.totalItemsCount - 1)
             }
@@ -1337,11 +1328,9 @@ fun ChatScreen(
         }
 
         // Exactly-once: consume the request after this single run. No retained
-        // INITIAL_OPEN, no layout-re-fire — the key-anchored suspend scroll
-        // either landed or was legitimately skipped (draft / focus / dragging /
-        // not-following). This is what eliminates the "already at bottom then
-        // jumps away again" loop and the third-round "scrolled up then jumped
-        // to an earlier message" regression.
+        // INITIAL_OPEN, no layout-re-fire. This is what eliminates the
+        // "already at bottom then jumps away again" loop and the third-round
+        // "scrolled up then jumped to an earlier message" regression.
         followState = consumeBottomRequest(followState)
     }
 
@@ -2976,6 +2965,18 @@ fun ChatScreen(
                     // long tool execution. Resets to null on each effect
                     // restart (session switch / messages key change).
                     var lastMergedFingerprint: List<Any?>? = null
+                    // [fix/history-open-at-bottom-04] The INITIAL_OPEN
+                    // scroll-to-bottom is owned by THIS collector, not the
+                    // bottom-scroll consumer effect. Rationale: the consumer
+                    // keys off sessionLoaded / pending requests and can run
+                    // against an EMPTY flatItems (sessionLoaded flips before
+                    // this async flatten chain publishes), consuming the
+                    // opening scroll and stranding the list at the oldest
+                    // message — the round-4 "open then jump away" bug. The
+                    // first non-empty publish below is the single point where
+                    // the real rows actually exist, so the scroll (and its
+                    // consume) happens here, exactly once per effect lifetime.
+                    var initialBottomScrollFired = false
                     // [T-android-stream-pipeline-incremental] Flush the perf
                     // turn when this effect is CANCELLED mid-turn: the
                     // turn-end drain emits `_messages` FIRST (restarting this
@@ -3047,6 +3048,31 @@ fun ChatScreen(
                                 flatItems = nextItems
                                 aggregateReuse.messages = merged
                                 aggregateReuse.items = nextItems
+                                if (!initialBottomScrollFired) {
+                                    initialBottomScrollFired = true
+                                    if (nextItems.isNotEmpty() &&
+                                        shouldScrollToBottomOnFirstRows(
+                                            pendingBottomRequest = followState.pendingBottomRequest,
+                                            isFollowing = followState.isFollowing,
+                                        )
+                                    ) {
+                                        // Land on the bottom sentinel with an
+                                        // oversized index: LazyListMeasure clamps
+                                        // index >= itemsCount to itemsCount-1, so
+                                        // this resolves against the LIVE providers
+                                        // (real rows + resume banner + sentinel)
+                                        // without ever trusting a stale
+                                        // totalItemsCount. The ROWS were just
+                                        // published into the same snapshot state,
+                                        // so the next measure sees them. Use a
+                                        // finite-but-huge index (not Int.MAX_VALUE)
+                                        // so NearestRangeState's window math cannot
+                                        // overflow its sliding-window arithmetic.
+                                        AppLogger.debug("ScrollSrc", "scroll-bottom reason=INITIAL_OPEN(first-rows) rows=${nextItems.size}")
+                                        listState.scrollToItem(index = 1_000_000, scrollOffset = 0)
+                                    }
+                                    followState = consumeBottomRequest(followState)
+                                }
                                 return@collect
                             }
                             if (flatItems.isEmpty()) {
