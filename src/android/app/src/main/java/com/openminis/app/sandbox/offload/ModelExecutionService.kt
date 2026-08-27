@@ -4,8 +4,10 @@ import android.app.Service
 import android.content.Intent
 import android.os.IBinder
 import android.util.Log
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
@@ -78,6 +80,32 @@ class ModelExecutionService : Service() {
         private const val STREAM_DRAIN_GRACE_MS = 30_000L
 
         /**
+         * [head-of-line-blocking fix 2026-08-27] Absolute bound on how long a
+         * request may WAIT for the execution mutex. Must exceed the longest
+         * legitimate single mutex hold — a full generation stream is bounded
+         * by GENERATION_TIMEOUT_SEC (30 min) — plus margin, so a healthy
+         * queued request is never failed while the head works. Beyond this
+         * bound the worker writes a definitive `queue_timeout` result instead
+         * of waiting forever: previously a wedged head starved EVERY new
+         * request (streaming and non-streaming) until the app was restarted
+         * (restart kills `:modelservice`, the only thing that frees the mutex).
+         */
+        private const val QUEUE_WAIT_TIMEOUT_MS = 35 * 60_000L
+        private const val QUEUE_POLL_MS = 200L
+
+        /**
+         * [head-of-line-blocking fix 2026-08-27] Hard ceiling on ONE
+         * non-streaming provider call inside the worker. The old path had NO
+         * bound: OkHttp's readTimeout resets on every read, so a trickling
+         * (half-dead keep-alive / proxy) socket could hold the execution
+         * mutex indefinitely and head-block all subsequent requests. The
+         * dispatcher client gives up at 3 min (REQUEST_TIMEOUT_MS) and falls
+         * back in-process, so 4 min bounds the worker without ever cutting
+         * off a client that is still legitimately waiting.
+         */
+        private const val NON_STREAMING_EXEC_TIMEOUT_MS = 4 * 60_000L
+
+        /**
          * [worker-first-chunk-guard] Upper bound on how long a streaming worker
          * may wait for the provider's FIRST chunk after HTTP_STARTED. If the
          * upstream takes longer (slow connect, idle relay, silent SSE hang), the
@@ -113,7 +141,7 @@ class ModelExecutionService : Service() {
          * dispatching to the provider. This keeps `activeRequests` (in-flight, in
          * the provider) and the lifecycle transition honest.
          */
-        private val executionMutex = kotlinx.coroutines.sync.Mutex()
+        private val executionMutex = Mutex()
     }
 
     /** Worker-side registry: number of requests currently being executed. */
@@ -236,30 +264,58 @@ class ModelExecutionService : Service() {
                         "uid=${procState.identity?.uid} startTicks=${procState.identity?.procStartTicks}",
                 )
 
-                executionMutex.withLock {
+                // [head-of-line-blocking fix 2026-08-27] The old
+                // `executionMutex.withLock` waited unconditionally and
+                // un-cancellably. Two consequences produced the "all new LLM
+                // requests unresponsive until app restart" failure:
+                //   1. a request cancelled while queued still executed in full
+                //      once the head released the mutex — wasted head time for
+                //      a client that had already given up (and re-dispatched
+                //      in-process);
+                //   2. a queue behind a wedged head had NO exit — the mutex
+                //      only frees when `:modelservice` dies (restart).
+                // The gate below is cancel-aware and bounded; on bail we
+                // write a definitive result so the client stops polling.
+                val gateResult = ExecutionQueueGate.await(
+                    timeoutMs = QUEUE_WAIT_TIMEOUT_MS,
+                    pollMs = QUEUE_POLL_MS,
+                    isCancelled = { File(dir, CANCEL_FILE).exists() },
+                    tryLock = { executionMutex.tryLock() },
+                    sleep = { runCatching { Thread.sleep(it) } },
+                )
+                if (gateResult == ExecutionQueueGate.Result.ACQUIRED) {
                     synchronized(lifecycleLock) { queuedRequests.decrementAndGet() }
                     try {
-                        val requestText = requestFile.readText()
-                        val isStreaming = JSONObject(requestText).optBoolean("streaming", false)
-                        if (isStreaming) {
-                            // TF-I: streaming exec writes the result and closes
-                            // the stream INSIDE the lock (serialized provider
-                            // network), but does NOT wait for the client ack —
-                            // that barrier runs outside below.
-                            executeStreamingRun(requestText, dir)
+                        // Pre-execution cancel: the client may have given up
+                        // while this request sat queued (dispatcher writes
+                        // `cancel` on its 3-min result timeout; the streaming
+                        // client writes it in its finally). Executing a dead
+                        // request would only burn head time on the mutex.
+                        if (File(dir, CANCEL_FILE).exists()) {
+                            writeCancelledRunResult(dir, "cancelled before execution (queued in :modelservice)")
                         } else {
-                            // TF-J2: non-streaming worker beats liveness too.
-                            // start() is idempotent; the beat is stopped in the
-                            // OUTER finally (after finishRequestLocked writes the
-                            // terminal marker), so the main process — which cannot
-                            // read our /proc on a hidepid=invisible device — can
-                            // both see we are alive AND know we finished writing
-                            // only once the beat goes silent after terminal.
-                            heartbeat.start()
-                            ModelExecutionRunDir.writeReady(dir)
-                            val result = executeRun(requestText)
-                            writeResultAtomically(dir, result)
-                            Log.i(TAG, "result written ($result.length bytes), pid=${android.os.Process.myPid()}")
+                            val requestText = requestFile.readText()
+                            val isStreaming = JSONObject(requestText).optBoolean("streaming", false)
+                            if (isStreaming) {
+                                // TF-I: streaming exec writes the result and closes
+                                // the stream INSIDE the lock (serialized provider
+                                // network), but does NOT wait for the client ack —
+                                // that barrier runs outside below.
+                                executeStreamingRun(requestText, dir)
+                            } else {
+                                // TF-J2: non-streaming worker beats liveness too.
+                                // start() is idempotent; the beat is stopped in the
+                                // OUTER finally (after finishRequestLocked writes the
+                                // terminal marker), so the main process — which cannot
+                                // read our /proc on a hidepid=invisible device — can
+                                // both see we are alive AND know we finished writing
+                                // only once the beat goes silent after terminal.
+                                heartbeat.start()
+                                ModelExecutionRunDir.writeReady(dir)
+                                val result = executeRun(requestText)
+                                writeResultAtomically(dir, result)
+                                Log.i(TAG, "result written ($result.length bytes), pid=${android.os.Process.myPid()}")
+                            }
                         }
                     } catch (t: Throwable) {
                         Log.w(TAG, "execution failed: ${t.message}", t)
@@ -270,6 +326,32 @@ class ModelExecutionService : Service() {
                                 put("exit_code", 1)
                             }.toString())
                         } catch (_: Throwable) {}
+                    } finally {
+                        // The gate acquired via tryLock on THIS thread, so it
+                        // must release here in all cases — the mutex is the
+                        // serialization point every other request waits on.
+                        executionMutex.unlock()
+                    }
+                } else {
+                    synchronized(lifecycleLock) { queuedRequests.decrementAndGet() }
+                    // Bailed while queued (client cancel, or bounded queue
+                    // wait expired): write a definitive terminal result so the
+                    // client stops polling instead of hanging; the ack barrier
+                    // + locked finalizer below still run so activeRequests
+                    // drops and the worker can self-reap.
+                    try {
+                        if (gateResult == ExecutionQueueGate.Result.CANCELLED) {
+                            writeCancelledRunResult(dir, "cancelled while queued in :modelservice")
+                        } else {
+                            writeResultAtomically(dir, JSONObject().apply {
+                                put("error", "queue_timeout")
+                                put("message", "request waited > ${QUEUE_WAIT_TIMEOUT_MS}ms for the :modelservice execution mutex (head-of-line blocking backstop)")
+                                put("exit_code", 1)
+                            }.toString())
+                        }
+                        Log.w(TAG, "queued request bailed (${gateResult.name}), runId=$runId")
+                    } catch (t: Throwable) {
+                        Log.w(TAG, "queued-bail result write failed: ${t.message}", t)
                     }
                 }
 
@@ -517,6 +599,25 @@ class ModelExecutionService : Service() {
     }
 
     /**
+     * [head-of-line-blocking fix 2026-08-27] Terminal result for a run that is
+     * cancelled before/while queued: cancel.ack FIRST (the client may delete
+     * the dir on seeing it), then a definitive cancelled result so any
+     * remaining poller stops waiting. Defensive — a dir already reclaimed by
+     * the client must not crash the request thread.
+     */
+    private fun writeCancelledRunResult(dir: File, message: String) {
+        runCatching { ModelExecutionMailbox.writeCancelAck(dir) }
+        try {
+            writeResultAtomically(dir, JSONObject().apply {
+                put("cancelled", true)
+                put("error", "cancelled")
+                put("message", message)
+                put("exit_code", 1)
+            }.toString())
+        } catch (_: Throwable) {}
+    }
+
+    /**
      * TF-H: non-streaming runs ack like streaming ones once the client wrote
      * client.ack. Kept here so callers can release the per-run token.
      */
@@ -662,7 +763,9 @@ class ModelExecutionService : Service() {
                 applyImagePassthrough(openAI, inputJson)
                 try {
                     val imgResult = runBlocking {
-                        openAI.generateImage(prompt, genConfig.n, genConfig.size, genConfig.quality)
+                        withTimeout(NON_STREAMING_EXEC_TIMEOUT_MS) {
+                            openAI.generateImage(prompt, genConfig.n, genConfig.size, genConfig.quality)
+                        }
                     }
                     return JSONObject().apply {
                         put("model", model.id)
@@ -697,14 +800,28 @@ class ModelExecutionService : Service() {
         // 2) Standard sendMessage path
         val response = try {
             runBlocking {
-                provider.sendMessage(
-                    messages = messages,
-                    systemPrompt = systemPrompt,
-                    maxTokens = maxTokens,
-                    temperature = temperature,
-                    imageParts = imageParts,
-                )
+                // [head-of-line-blocking fix 2026-08-27] A non-streaming call
+                // with no bound holds the execution mutex forever once the
+                // socket trickles (each OkHttp read resets its readTimeout) —
+                // the compounding head-of-line block behind which every new
+                // request starves until the app is restarted.
+                withTimeout(NON_STREAMING_EXEC_TIMEOUT_MS) {
+                    provider.sendMessage(
+                        messages = messages,
+                        systemPrompt = systemPrompt,
+                        maxTokens = maxTokens,
+                        temperature = temperature,
+                        imageParts = imageParts,
+                    )
+                }
             }
+        } catch (e: TimeoutCancellationException) {
+            Log.w(TAG, "sendMessage exceeded ${NON_STREAMING_EXEC_TIMEOUT_MS}ms — bounded to free the execution mutex")
+            return JSONObject().apply {
+                put("error", "model_use_timeout")
+                put("message", "provider call exceeded ${NON_STREAMING_EXEC_TIMEOUT_MS}ms in :modelservice")
+                put("exit_code", 1)
+            }.toString()
         } catch (e: Throwable) {
             Log.w(TAG, "sendMessage failed: ${e.message}", e)
             return JSONObject().apply {
@@ -1070,7 +1187,28 @@ class ModelExecutionService : Service() {
                 synchronized(lifecycleLock) {
                     // A newer request may have arrived; our drain window is stale.
                     if (requestGeneration.get() != genAtSchedule) {
-                        Log.w(TAG, "controlled drain stale (gen ${requestGeneration.get()} != $genAtSchedule) — leaving to new request")
+                        // [ack-token-leak fix 2026-08-27] THIS run is finished
+                        // and its data is durable — its ACK token must STILL be
+                        // released. The old early-return left it in
+                        // pendingAckTokens forever, so no later
+                        // finishRequestLocked ever saw quiescence and the
+                        // worker could never self-reap (leaked :modelservice
+                        // process). Releasing is safe: the token's only job is
+                        // to block reap while the client consumes, and a newer
+                        // request has revived the process anyway; the actual
+                        // reap decision below still requires zero
+                        // active/queued/pending work under this lock.
+                        runId?.let { releaseAckToken(it) }
+                        // Data barrier for the OLD client: result.json is
+                        // durable, so commit terminal so it can delete the dir
+                        // (safe — the newer request runs in a different dir).
+                        if (dir.isDirectory &&
+                            !ModelExecutionRunDir.terminalPresent(dir) &&
+                            File(dir, ModelExecutionMailbox.FILE_RESULT).exists()
+                        ) {
+                            runCatching { ModelExecutionRunDir.writeTerminal(dir) }
+                        }
+                        Log.w(TAG, "controlled drain stale (gen ${requestGeneration.get()} != $genAtSchedule) — token released, leaving to new request")
                         return@synchronized
                     }
                     runId?.let { releaseAckToken(it) }
