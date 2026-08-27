@@ -2912,8 +2912,21 @@ class ChatViewModel(
      */
     private fun maybeTriggerAutoCompact() {
         val tokens = _lastTurnContextTokens.value
+        // [fix/send-prompt-bloat] Cheap O(1) gates BEFORE the O(history) tail
+        // walk. This function runs synchronously on the main thread for every
+        // send; `estimateTailTokens` walks the WHOLE agentHistory (summing
+        // every contentPart, incl. ToolUse.input.toString()) so it must only
+        // run when a compact is genuinely on the table. All the short-circuits
+        // below resolve to the same non-AUTO_COMPACT outcome decide() would
+        // return — they just avoid paying the O(N) walk on the common OK path.
+        if (_isCompacting.value) return // == Decision.COMPACT_IN_FLIGHT
         val window = effectiveContextWindowTokens() ?: return
+        if (tokens <= 0 || window <= 0) return // == Decision.OK (no estimate/window)
         val policy = ContextPolicy.forContextWindow(window)
+        // EXHAUSTED is already handled by checkContextBeforeSend (send blocked);
+        // OK means no pressure. Both are non-AUTO_COMPACT. Only NEEDS_COMPACT
+        // can possibly trigger an auto-compact, so only that path walks tail.
+        if (policy.check(tokens, window) != ContextPolicy.CheckResult.NEEDS_COMPACT) return
         val anchorId = _cachedLatestMarker?.lastCompactedMessageId
         val tail = ContextCompactor.estimateTailTokens(agentHistory, anchorId)
         val decision = ContextCompactor.decide(
@@ -2921,7 +2934,7 @@ class ChatViewModel(
             contextWindow = window,
             policy = policy,
             tailTokens = tail,
-            isCompacting = _isCompacting.value,
+            isCompacting = false, // already gated above
             lastAutoCompactAtMs = lastAutoCompactAtMs,
         )
         if (decision != ContextCompactor.Decision.AUTO_COMPACT) {
@@ -10352,14 +10365,13 @@ Environment variables:
         // When the largest daily log is large, suggest the agent run
         // memory_rollup to distill stable rules. MEMORY-ROLLUP.md (if it
         // exists) is injected as a compact alternative to raw logs.
+        // [fix/send-prompt-bloat] Injection now goes through
+        // MemoryRepository.loadRollupFragment() (tail-preferring byte cap)
+        // instead of a verbatim readText() — the rollup grows monotonically
+        // and previously inflated the send/retry prompt prefix unboundedly.
         val rollupSizeHint = if (memoryOn) memoryRepository?.dailyLogSizeSummary() else null
         val rollupBytes = if (memoryOn) memoryRepository?.largestDailyLogBytes() ?: 0L else 0L
-        val rollupFragment = if (memoryOn) {
-            val rollupFile = java.io.File(memoryRepository?.memoryDirectory(), "MEMORY-ROLLUP.md")
-            if (rollupFile.exists() && rollupFile.length() > 0) {
-                try { rollupFile.readText() } catch (_: Exception) { null }
-            } else null
-        } else null
+        val rollupFragment = if (memoryOn) memoryRepository?.loadRollupFragment() else null
 
         return buildString {
             append(base)

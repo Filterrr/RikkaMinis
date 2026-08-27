@@ -4,6 +4,8 @@ import com.openminis.app.workspace.MemoryRollupEngine
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -91,5 +93,59 @@ class MemoryRepositoryTest {
 
         val names = MemoryRepository(memoryDir).listAllFiles().map { it.name }
         assertEquals(listOf("GLOBAL.md", "2026-08-25.md", "2026-08-24.md"), names)
+    }
+
+    // ── [fix/send-prompt-bloat] loadRollupFragment byte-cap behaviour ──────
+
+    @Test
+    fun loadRollupFragment_missingFile_returnsNull() {
+        val repo = MemoryRepository(memoryDir)
+        assertNull(repo.loadRollupFragment())
+    }
+
+    @Test
+    fun loadRollupFragment_emptyFile_returnsNull() {
+        memoryDir.mkdirs()
+        File(memoryDir, MemoryRollupEngine.ROLLUP_FILE).writeText("")
+        val repo = MemoryRepository(memoryDir)
+        assertNull(repo.loadRollupFragment())
+    }
+
+    @Test
+    fun loadRollupFragment_smallFile_passesThroughVerbatim() {
+        memoryDir.mkdirs()
+        val small = "## Rollup 2026-08-12\n- rule A\n"
+        File(memoryDir, MemoryRollupEngine.ROLLUP_FILE).writeText(small)
+        val repo = MemoryRepository(memoryDir)
+        assertEquals(small, repo.loadRollupFragment())
+    }
+
+    @Test
+    fun loadRollupFragment_oversize_keepsTailAndMarksTruncation() {
+        memoryDir.mkdirs()
+        val big = StringBuilder("## Rollup OLD\n")
+            .append("x".repeat(20_000))
+            .append("\n## Rollup NEW\n- newest rule Y\n")
+        File(memoryDir, MemoryRollupEngine.ROLLUP_FILE).writeText(big.toString())
+        val repo = MemoryRepository(memoryDir)
+        val capped = repo.loadRollupFragment()
+        assertNotNull(capped)
+        assertTrue(capped!!.length < big.length)
+        assertTrue(capped.contains("older rollup rules truncated"))
+        assertTrue("tail (newest rules) must be kept", capped.contains("newest rule Y"))
+        assertFalse("oldest head should be dropped", capped.contains("## Rollup OLD"))
+    }
+
+    @Test
+    fun loadRollupFragment_oversizeCjk_noReplacementChar() {
+        memoryDir.mkdirs()
+        // "房" is 3 bytes; a trailing ASCII byte forces the cut point to land
+        // mid-code-point, which a naive byte-array slice would decode as U+FFFD.
+        val misaligned = ("房".repeat(20_000)) + "X"
+        File(memoryDir, MemoryRollupEngine.ROLLUP_FILE).writeText(misaligned)
+        val repo = MemoryRepository(memoryDir)
+        val capped = repo.loadRollupFragment()
+        assertNotNull(capped)
+        assertFalse("UTF-8 boundary must not produce U+FFFD", capped!!.contains('\uFFFD'))
     }
 }
