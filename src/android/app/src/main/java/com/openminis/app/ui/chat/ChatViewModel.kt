@@ -3136,6 +3136,40 @@ class ChatViewModel(
                         currentProvider = null
                     }
                 }
+                // [T-provider-live-route-edit] Route-field drift detection. Editing
+                // a provider's route fields (custom base URL / v1 suffix / Responses
+                // API / Azure / custom UA / image endpoint) in Settings updates the
+                // repo config, but the cached [currentProvider] still holds the OLD
+                // [ProviderInstance] snapshot that [ProviderFactory.create] captured
+                // into instanceContext at creation time. Detect that drift and rebuild
+                // the provider IN PLACE for the same entry (model + group binding
+                // unchanged — we only refresh the route snapshot), so route edits take
+                // effect without a process restart. Distinct from the disabled-provider
+                // re-resolution above, which legitimately re-selects a member.
+                val cachedProvider = currentProvider
+                val cachedInstance = cachedProvider?.instanceContext
+                if (cachedProvider != null && cachedInstance != null) {
+                    val freshInstance = providerRepository.instance(cachedInstance.id)
+                    if (freshInstance != null && providerRouteChanged(cachedInstance, freshInstance)) {
+                        val freshKey = providerRepository.loadApiKey(freshInstance.id)
+                        if (freshKey != null) {
+                            currentProvider = ProviderFactory.create(
+                                freshInstance,
+                                freshKey,
+                                cachedProvider.model,
+                                context,
+                            )
+                            AppLogger.info(
+                                TAG,
+                                "🔀RESOLVE route fields changed for provider=${freshInstance.label} — rebuilt cached provider in place",
+                            )
+                        } else {
+                            // Credential removed mid-session: drop the cached provider so
+                            // the standard resolution/fallback chain decides what's next.
+                            currentProvider = null
+                        }
+                    }
+                }
                 if (currentProvider == null && config.modelEntries.isNotEmpty()) {
                     // T306: re-attempt the persisted binding now that config
                     // has entries. For an existing session whose loadSession
