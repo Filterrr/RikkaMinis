@@ -520,6 +520,22 @@ class OpenAIProvider constructor(
         isAzure || basePath.lowercase().let { it.contains("volces") || it.contains("ark.") }
 
     /**
+     * [T-deepseek-v4-official-only] Whether this instance is the official
+     * DeepSeek gateway. Only the official `api.deepseek.com` backend
+     * understands the vendor-native `thinking:{}` object
+     * (`thinking:{type:enabled,reasoning_effort}`). Third-party OpenAI-compatible
+     * relays that re-host `deepseek-v4-*` (e.g. tokenrhythm) reject that
+     * vendor-internal field with `UNKNOWN_FIELD: thinking.reasoning_effort` and
+     * instead control thinking via the standard top-level `reasoning_effort`.
+     * Mirrors how [isOpenRouter]/[usesUnifiedReasoningEffort] already special-case
+     * relay surfaces: here the official gateway keeps the native `thinking:{}`
+     * object while any other basePath routes through the generic reasoning_effort
+     * path. (2026-08-27, tokenrhythm deepseek-v4 thinking-toggle fix.)
+     */
+    private val isOfficialDeepSeek: Boolean =
+        basePath.lowercase().contains("api.deepseek.com")
+
+    /**
      * [T-thinking-off-explicit] The wire value for "thinking OFF", or null to
      * keep the historical omit-the-field behavior. ALLOWLIST, not blanket
      * (mirrors iOS OpenAIAgentProvider.explicitOffEffort): only vendors whose
@@ -2114,24 +2130,48 @@ class OpenAIProvider constructor(
         // the vendor-native `thinking:{}` object — sending the latter leaves
         // thinking uncontrolled. Skip this branch there and fall through to the
         // generic reasoning_effort path below (mirrors iOS ba055121).
+        // [T-deepseek-v4-official-only] Only the OFFICIAL api.deepseek.com
+        // backend understands the vendor-native `thinking:{}` object (deepseek-v4
+        // family). Third-party OpenAI-compatible relays re-hosting deepseek-v4
+        // (e.g. tokenrhythm.studio) reject `thinking.reasoning_effort` with
+        // UNKNOWN_FIELD and control thinking via the standard top-level
+        // `reasoning_effort` instead. So:
+        //   • official basePath → `thinking:{type:enabled, reasoning_effort}` (native, unchanged)
+        //   • any other basePath → top-level `reasoning_effort` (standard OpenAI-compat)
+        // In both cases OFF must go through the explicit `thinking:{type:disabled}`
+        // object: deepseek-v4 thinks BY DEFAULT, and omitting the toggle on a
+        // reasoning-capable turn would silently leave thinking ON.
         if (lid.contains("deepseek-v4") && !usesUnifiedReasoningEffort) {
+            val effort = when (level) {
+                // [T-android-thinking-level-arch] DeepSeek V4 tops out at
+                // "max"; every high-and-above tier collapses onto it.
+                ThinkingLevel.HIGH, ThinkingLevel.XHIGH,
+                ThinkingLevel.MAX, ThinkingLevel.ULTRA -> "max"
+                else -> "high"
+            }
             if (level.isEnabled) {
-                val effort = when (level) {
-                    // [T-android-thinking-level-arch] DeepSeek V4 tops out at
-                    // "max"; every high-and-above tier collapses onto it.
-                    ThinkingLevel.HIGH, ThinkingLevel.XHIGH,
-                    ThinkingLevel.MAX, ThinkingLevel.ULTRA -> "max"
-                    else -> "high"
+                if (isOfficialDeepSeek) {
+                    // Official backend: vendor-native thinking object.
+                    body.put("thinking", JSONObject().apply {
+                        put("type", "enabled")
+                        put("reasoning_effort", effort)
+                    })
+                    com.openminis.app.logging.AppLogger.info(
+                        "OpenAIProvider",
+                        "DeepSeek V4 thinking enabled (level=${level.name} → effort=$effort) on $lid (official deepseek.com)"
+                    )
+                } else {
+                    // Third-party OpenAI-compatible relay: standard top-level
+                    // reasoning_effort is the accepted control surface.
+                    body.put("reasoning_effort", effort)
+                    com.openminis.app.logging.AppLogger.info(
+                        "OpenAIProvider",
+                        "DeepSeek V4 thinking enabled via standard reasoning_effort (level=${level.name} → effort=$effort) on $lid via $basePath"
+                    )
                 }
-                body.put("thinking", JSONObject().apply {
-                    put("type", "enabled")
-                    put("reasoning_effort", effort)
-                })
-                com.openminis.app.logging.AppLogger.info(
-                    "OpenAIProvider",
-                    "DeepSeek V4 thinking enabled (level=${level.name} → effort=$effort) on $lid"
-                )
             } else {
+                // OFF is explicit everywhere: deepseek-v4 defaults to thinking ON
+                // and omitting the toggle would leave it running.
                 body.put("thinking", JSONObject().put("type", "disabled"))
                 com.openminis.app.logging.AppLogger.info(
                     "OpenAIProvider",
