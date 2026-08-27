@@ -164,17 +164,43 @@ class ChatFollowControllerTest {
         }
     }
 
-    // ── fix/history-open-at-bottom-verify: sentinel-visible consumption ─────
+    // ── fix/history-open-at-bottom-04: data-ready exactly-once consumer ──────
 
-    @Test fun `initial open retains pending request while sentinel is off-screen`() {
-        assertTrue(retainInitialOpenUntilSentinelVisible(BottomRequestReason.INITIAL_OPEN, sentinelVisible = false))
+    // The bottom scroll is now a single data-ready `scrollToItem` driven by
+    // [decideBottomScroll]; below we pin the pure decision gate.
+
+    private fun decide(
+        reason: BottomRequestReason? = BottomRequestReason.INITIAL_OPEN,
+        sessionLoaded: Boolean = true,
+        sentinelVisible: Boolean = false,
+        hasRows: Boolean = true,
+        isFollowing: Boolean = true,
+        isScrollInProgress: Boolean = false,
+        isUserDragging: Boolean = false,
+        focusTarget: Boolean = false,
+    ) = decideBottomScroll(
+        reason = reason,
+        sessionLoaded = sessionLoaded,
+        sentinelVisible = sentinelVisible,
+        hasRows = hasRows,
+        isFollowing = isFollowing,
+        isScrollInProgress = isScrollInProgress,
+        isUserDragging = isUserDragging,
+        focusTarget = focusTarget,
+    )
+
+    @Test fun `data ready and following and not dragging scrolls to bottom`() {
+        assertEquals(BottomScrollAction.SCROLL_TO_BOTTOM, decide())
     }
 
-    @Test fun `initial open consumes once the sentinel is visible`() {
-        assertFalse(retainInitialOpenUntilSentinelVisible(BottomRequestReason.INITIAL_OPEN, sentinelVisible = true))
+    @Test fun `initial open before data ready waits for data`() {
+        assertEquals(
+            BottomScrollAction.WAIT_FOR_DATA,
+            decide(reason = BottomRequestReason.INITIAL_OPEN, sessionLoaded = false),
+        )
     }
 
-    @Test fun `non-open reasons never retain even with sentinel off-screen`() {
+    @Test fun `non-open reasons never wait for data even if not loaded`() {
         for (reason in listOf(
             BottomRequestReason.SEND,
             BottomRequestReason.RESUME,
@@ -182,66 +208,31 @@ class ChatFollowControllerTest {
             BottomRequestReason.FAB_DOWN,
             BottomRequestReason.STREAM_PROGRESS,
         )) {
-            assertFalse("$reason must not retain on sentinel off-screen", retainInitialOpenUntilSentinelVisible(reason, sentinelVisible = false))
+            assertEquals("$reason must not gate on sessionLoaded", BottomScrollAction.SCROLL_TO_BOTTOM, decide(reason = reason, sessionLoaded = false))
         }
     }
 
-    @Test fun `no pending request is never retained`() {
-        assertFalse(retainInitialOpenUntilSentinelVisible(null, sentinelVisible = false))
+    @Test fun `user dragging abandons the scroll and consumes`() {
+        assertEquals(BottomScrollAction.SKIP_AND_CONSUME, decide(isUserDragging = true))
     }
 
-    /**
-     * Mirrors the ChatScreen consumer's cold-open flow: raise INITIAL_OPEN,
-     * the layout is empty (sentinel off-screen → request survives), then rows
-     * land but the sentinel is NOT yet visible (the scroll hasn't landed) →
-     * the request STILL survives and re-drives; only when the sentinel is
-     * provably on screen is the request consumed exactly once. This is the
-     * pure contract that makes cold-open never end up stuck at the top:
-     * the request cannot be consumed before the bottom is actually reached.
-     */
-    @Test fun `cold open keeps initial request pending until the sentinel is visible then consumes once`() {
-        var s = apply(FollowState(), FollowEvent.InitialOpen)
-        assertEquals(BottomRequestReason.INITIAL_OPEN, s.pendingBottomRequest)
-
-        // Consumer run 1: empty layout — sentinel off-screen → retain.
-        if (retainInitialOpenUntilSentinelVisible(s.pendingBottomRequest, sentinelVisible = false)) {
-            // retained — mimic the consumer, leave s unchanged
-        } else {
-            s = consumeBottomRequest(s)
-        }
-        assertEquals(BottomRequestReason.INITIAL_OPEN, s.pendingBottomRequest)
-
-        // Consumer run 2: rows have landed but the pending scroll has NOT
-        // landed yet (sentinel still off-screen) → must STILL retain, so the
-        // layoutInfo re-drive re-scrolls instead of consuming into the top.
-        if (retainInitialOpenUntilSentinelVisible(s.pendingBottomRequest, sentinelVisible = false)) {
-            // retained — re-drive re-fires the bottom scroll
-        } else {
-            s = consumeBottomRequest(s)
-        }
-        assertEquals(BottomRequestReason.INITIAL_OPEN, s.pendingBottomRequest)
-
-        // Consumer run 3: the scroll has landed — sentinel visible → consume.
-        assertFalse(retainInitialOpenUntilSentinelVisible(s.pendingBottomRequest, sentinelVisible = true))
-        s = consumeBottomRequest(s)
-        assertNull(s.pendingBottomRequest)
-        assertFalse(s.hasPendingBottomRequest)
+    @Test fun `in-flight programmatic scroll consumes without a second scroll`() {
+        assertEquals(BottomScrollAction.SKIP_AND_CONSUME, decide(isScrollInProgress = true))
     }
 
-    /**
-     * The failure mode the original fix left open: the viewport IS at the
-     * bottom (sentinel visible) BEFORE the consumer runs — e.g. a short
-     * session whose rows fit the viewport, or a previous scroll already
-     * landed. The consumer must still consume in that run (no fake retain),
-     * and must NOT scroll again (no double-scroll yank).
-     */
-    @Test fun `cold open consumes immediately when sentinel already visible`() {
-        var s = apply(FollowState(), FollowEvent.InitialOpen)
-        // First run: sentinel already visible (short session / scroll landed).
-        assertFalse(retainInitialOpenUntilSentinelVisible(s.pendingBottomRequest, sentinelVisible = true))
-        s = consumeBottomRequest(s)
-        assertNull(s.pendingBottomRequest)
-        // A second run must find nothing pending — the request is gone.
-        assertFalse(retainInitialOpenUntilSentinelVisible(s.pendingBottomRequest, sentinelVisible = true))
+    @Test fun `focus target never scrolls to bottom`() {
+        assertEquals(BottomScrollAction.SKIP_AND_CONSUME, decide(focusTarget = true))
+    }
+
+    @Test fun `sentinel already visible consumes without a scroll`() {
+        assertEquals(BottomScrollAction.SKIP_AND_CONSUME, decide(sentinelVisible = true))
+    }
+
+    @Test fun `detached consumes without a scroll`() {
+        assertEquals(BottomScrollAction.SKIP_AND_CONSUME, decide(isFollowing = false))
+    }
+
+    @Test fun `empty layout safely consumes instead of scrolling`() {
+        assertEquals(BottomScrollAction.SKIP_AND_CONSUME, decide(hasRows = false))
     }
 }

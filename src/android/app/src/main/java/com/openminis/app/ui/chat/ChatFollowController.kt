@@ -131,27 +131,53 @@ fun consumeBottomRequest(state: FollowState): FollowState =
     state.copy(pendingBottomRequest = null)
 
 /**
- * [fix/history-open-at-bottom-verify] Whether an explicit "open at the
- * bottom" request must survive the consumer run instead of being consumed.
- * The consumer re-runs on every layout change (listState.layoutInfo is part
- * of its key set), so the request stays pending — and keeps re-driving the
- * bottom scroll — until the bottom sentinel is PROVABLY visible in the
- * viewport. This closes both cold-open failure modes of the original fix:
- *
- *  - the empty-layout window (layoutInfo totalItemsCount == 0: the sentinel
- *    can never be visible, so the request is retained); and
- *  - the "scroll requested but not landed" race (the non-suspending
- *    requestScrollToItem only writes a target for the NEXT remeasure, which
- *    a cold-open measure/pass interleaving can drop — with the sentinel
- *    still off-screen the request is retained and the layout re-drive
- *    retries instead of consuming into a viewport stuck at the top).
- *
- * Consumed exactly once, on the first run where the sentinel is visible.
- * Non-open reasons (Send / FabDown / Resume / Retry) always consume in the
- * same run — no behaviour change for them.
+ * [fix/history-open-at-bottom-04] What the bottom-scroll consumer should do
+ * for the current request, as a pure decision (no Compose / Android deps).
+ * This is the single gate the ChatScreen effect delegates to; keeping it pure
+ * makes the "scroll exactly once / never yank a dragging reader / never
+ * scroll when a focus target owns position" contract JVM-testable.
  */
-internal fun retainInitialOpenUntilSentinelVisible(
+enum class BottomScrollAction {
+    /** Scroll-to-bottom (sentinel = last item), then consume the request exactly once. */
+    SCROLL_TO_BOTTOM,
+
+    /** No scroll this run; consume the request (draft / focus / not-following / forbidden). */
+    SKIP_AND_CONSUME,
+
+    /** Keep the INITIAL_OPEN request pending — session data not loaded yet. */
+    WAIT_FOR_DATA,
+}
+
+/**
+ * Decision rules (mirror the consumer effect exactly):
+ *  1. A focus target owns position → never scroll to bottom (consume).
+ *  2. INITIAL_OPEN before data is ready → wait (keep pending).
+ *  3. FOLLOWING + no in-flight scroll + no user drag + sentinel off-screen:
+ *       rows present → scroll (data-ready); rows absent → safe consume.
+ *  4. Anything else (not following, mid-scroll, dragging, sentinel already
+ *     visible) → consume without scrolling (no re-fire, no yank).
+ */
+internal fun decideBottomScroll(
     reason: BottomRequestReason?,
+    sessionLoaded: Boolean,
     sentinelVisible: Boolean,
-): Boolean =
-    reason == BottomRequestReason.INITIAL_OPEN && !sentinelVisible
+    hasRows: Boolean,
+    isFollowing: Boolean,
+    isScrollInProgress: Boolean,
+    isUserDragging: Boolean,
+    focusTarget: Boolean,
+): BottomScrollAction {
+    if (focusTarget) return BottomScrollAction.SKIP_AND_CONSUME
+    if (reason == BottomRequestReason.INITIAL_OPEN && !sessionLoaded) {
+        return BottomScrollAction.WAIT_FOR_DATA
+    }
+    val shouldScroll = isFollowing &&
+        !isScrollInProgress &&
+        !isUserDragging &&
+        !sentinelVisible
+    if (shouldScroll) {
+        return if (hasRows) BottomScrollAction.SCROLL_TO_BOTTOM
+        else BottomScrollAction.SKIP_AND_CONSUME
+    }
+    return BottomScrollAction.SKIP_AND_CONSUME
+}
