@@ -78,7 +78,9 @@ object WebAppPathResolver {
             return PRootKernel.resolveSessionHostPath(sessionId, shortcut.htmlPath, context)
         }
         // Relative path — under the session's attachments dir.
+        // Canonicalize + prefix-guard: the stored htmlPath is user-influenced,
+        // so reject `/`, `..`, and symlink escapes out of the attachments dir.
         val attachmentsDir = File(context.filesDir, "sessions/$sessionId/attachments")
-        return File(attachmentsDir, shortcut.htmlPath)
+        return PRootKernel.safeResolveWithin(attachmentsDir, shortcut.htmlPath)
     }
 }

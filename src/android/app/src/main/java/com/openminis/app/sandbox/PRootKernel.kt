@@ -713,7 +713,7 @@ object PRootKernel {
      * pop the stack on `..`; a `..` that would pop an already-empty stack means
      * the path climbs above [base] and is rejected.
      */
-    private fun safeResolveWithin(base: File, tail: String): File? {
+    internal fun safeResolveWithin(base: File, tail: String): File? {
         if (tail.isEmpty()) return base
         val segments = normalizeDotSegments(tail) ?: return null
         if (segments.isEmpty()) return base

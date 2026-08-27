@@ -150,7 +150,11 @@ fun AddToHomeSheet(
                         "sessions/${source.sessionId}/attachments/$shortcutId",
                     )
                     attachmentsDir.mkdirs()
-                    val safeName = source.fileName.ifBlank { "page.html" }
+                    // Sanitize the ContentResolver DISPLAY_NAME: strip any
+                    // directory components so a hostile `../../x.html` (or an
+                    // absolute path) can't escape the shortcut subdir, and fall
+                    // back to "page.html" when nothing usable remains.
+                    val safeName = sanitizeFileName(source.fileName) ?: "page.html"
                     val target = File(attachmentsDir, safeName)
                     runCatching {
                         context.contentResolver.openInputStream(source.uri)?.use { input ->
@@ -538,4 +542,22 @@ private fun drawTitleGlyph(canvas: Canvas, title: String, size: Int) {
     }
     val baseline = size / 2f - (paint.descent() + paint.ascent()) / 2f
     canvas.drawText(glyph, size / 2f, baseline, paint)
+}
+
+/**
+ * Strip directory components from a user-influenced file name (the
+ * ContentResolver DISPLAY_NAME) so it can be safely joined under a shortcut
+ * subdir. `File(fileName).name` keeps only the last path segment, which turns
+ * `../../evil.html`, `/abs/evil.html`, and `..\\evil.html` into `evil.html`.
+ * Returns null when the name is blank or degenerates to `.` / `..` (nothing
+ * usable), letting the caller fall back to its default.
+ *
+ * Top-level (not a member) so it can be unit-tested with zero Android deps.
+ */
+internal fun sanitizeFileName(fileName: String): String? {
+    val last = fileName.trim().let { if (it.isEmpty()) "" else File(it).name }
+    return when (last) {
+        "", ".", ".." -> null
+        else -> last
+    }
 }
