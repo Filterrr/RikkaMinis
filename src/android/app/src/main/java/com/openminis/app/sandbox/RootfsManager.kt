@@ -1,5 +1,6 @@
 package com.openminis.app.sandbox
 
+import com.openminis.app.R
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.LinkProperties
@@ -140,7 +141,7 @@ class RootfsManager private constructor(private val context: Context) {
                 context.assets.openFd(spaceGateAssetName).use { it.length }
             } catch (_: Exception) { 0L }
 
-            val usableBytes = File(context.filesDir).usableSpace
+            val usableBytes = context.filesDir.usableSpace
             if (compressedBytes > 0 && !hasEnoughSpaceForRootfs(usableBytes, compressedBytes)) {
                 val neededMB = (compressedBytes * ROOTFS_EXPANSION_FACTOR + ROOTFS_SPACE_MARGIN_MB * 1024L * 1024L) / (1024L * 1024L)
                 val freeMB = usableBytes / (1024L * 1024L)
