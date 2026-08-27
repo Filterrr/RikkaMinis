@@ -59,6 +59,33 @@ object ChatStreamOffloadHandler {
      * genuinely crashed worker promptly.
      */
     private const val WORKER_DIED_GRACE_MS = 5_000L
+
+    /**
+     * [worker-startup watchdog 2026-08-27] Bound on the "worker still starting"
+     * state. The death probe above only fires when a liveness beat file EXISTS
+     * and went stale — it covers a worker that started processing this run and
+     * then froze/died. It has NO exit for a worker that never processed the
+     * intent at all (process frozen before intent delivery, LMK kill loop,
+     * crash in Application.onCreate): no beat file, no run log, no output —
+     * "still starting" was polled until the 30-minute streamTimeout backstop.
+     * Incident 2026-08-27 21:51:58: after a DIED_MID_STREAM detection, the
+     * auto-retry re-dispatched into a frozen `:modelservice`; the client sat
+     * silent for the rest of the log (~110s+, no chunks / no streamJob
+     * FINALLY/EXIT) because "no beat yet" read as "worker still starting".
+     * Observed healthy cold start (dispatch → REQUEST_PARSED) is ~4s, so 45s
+     * is a 10x margin — beyond it the request is classified
+     * [WorkerDeathReason.NEVER_STARTED] (0-chunk → transient → bounded
+     * auto-retry/fallback) instead of hanging silently.
+     */
+    private const val WORKER_STARTUP_TIMEOUT_MS = 45_000L
+
+    /**
+     * [worker-startup watchdog] Bound for the sub-state "onStartCommand ran
+     * (run log written) but the request thread never started beating". The
+     * thread-spawn → first-beat gap is milliseconds; 15s means the thread
+     * never ran at all (process froze between the two).
+     */
+    private const val WORKER_THREAD_START_TIMEOUT_MS = 15_000L
     /**
      * TF-I P0-B: how long an identity-mismatch must persist before the client
      * treats it as a confirmed death. This MUST exceed the executionMutex
@@ -125,6 +152,9 @@ object ChatStreamOffloadHandler {
         var terminalSeen = false
         val runId = ModelExecutionDispatcher.runIdOf(dir)
         var lastGrowAtMs = System.currentTimeMillis()
+        // [worker-startup watchdog] fixed dispatch timestamp (lastGrowAtMs
+        // updates on stream growth and cannot measure "no evidence at all").
+        val dispatchedAtMs = System.currentTimeMillis()
         // [generation-total-timeout] The client-side total-stream ceiling is the
         // generous generation backstop for EVERY stream (2026-08-26,
         // fix/long-generation-timeouts): a long NON-thinking generation — a
@@ -275,6 +305,52 @@ object ChatStreamOffloadHandler {
                             )
                             throw ModelWorkerDiedException(
                                 hadChunks = emittedChunks,
+                                reason = reason,
+                                runId = runId,
+                                phaseSummary = phase,
+                            )
+                        }
+                    }
+                    // [worker-startup watchdog 2026-08-27] The death probe above
+                    // requires a beat file that EXISTS and went stale. It has no
+                    // exit for a worker that never processed this intent at all
+                    // — a frozen (cgroup freezer) / crash-looping :modelservice
+                    // produces NO beat, NO run log and NO output, and the probe
+                    // above reads that as "worker still starting" all the way to
+                    // the 30-min streamTimeout backstop. Bound both never-started
+                    // sub-states (see the constants' KDoc for the incident):
+                    //   (a) no evidence of intent processing at all (no beat AND
+                    //       no run log) 45s after dispatch;
+                    //   (b) run log written (onStartCommand ran) but the request
+                    //       thread never started beating within 15s of dispatch.
+                    // A queued request is never falsely killed: the worker logs
+                    // REQUEST_ACCEPTED and starts beating BEFORE waiting on the
+                    // execution mutex, so evidence exists within ~ms of accept.
+                    // Both are 0-chunk by construction → transient → bounded
+                    // auto-retry/fallback, never a silent multi-minute hang.
+                    if (!terminalSeen && newLen == lastRead && !emittedChunks) {
+                        val hasBeat = File(dir, ModelExecutionRunDir.FILE_LIVENESS_BEAT).isFile
+                        val hasRunLog = File(dir, ModelExecutionRunLog.FILE_NAME).isFile
+                        val sinceDispatchMs = System.currentTimeMillis() - dispatchedAtMs
+                        val neverStarted = !hasBeat && !hasRunLog &&
+                            sinceDispatchMs > WORKER_STARTUP_TIMEOUT_MS
+                        val threadNeverRan = !hasBeat && hasRunLog &&
+                            sinceDispatchMs > WORKER_THREAD_START_TIMEOUT_MS
+                        if (neverStarted || threadNeverRan) {
+                            val reason = if (neverStarted) {
+                                WorkerDeathReason.NEVER_STARTED
+                            } else {
+                                classifyWorkerDeath(dir, emittedChunks)
+                            }
+                            val phase = ModelExecutionRunLog.tailSummary(dir)
+                            Log.w(
+                                TAG,
+                                "worker startup watchdog fired " +
+                                    "(${if (neverStarted) "no evidence of intent processing" else "request thread never started beating"}) " +
+                                    "runId=$runId dispatched+${sinceDispatchMs}ms dir=${dir.name} phase=$phase",
+                            )
+                            throw ModelWorkerDiedException(
+                                hadChunks = false,
                                 reason = reason,
                                 runId = runId,
                                 phaseSummary = phase,

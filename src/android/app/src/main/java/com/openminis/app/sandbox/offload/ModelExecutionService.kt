@@ -383,14 +383,38 @@ class ModelExecutionService : Service() {
                     // + locked finalizer below still run so activeRequests
                     // drops and the worker can self-reap.
                     try {
+                        val bailMessage = if (gateResult == ExecutionQueueGate.Result.CANCELLED) {
+                            "cancelled while queued in :modelservice"
+                        } else {
+                            "request waited > ${QUEUE_WAIT_TIMEOUT_MS}ms for the :modelservice execution mutex (head-of-line blocking backstop)"
+                        }
                         if (gateResult == ExecutionQueueGate.Result.CANCELLED) {
-                            writeCancelledRunResult(dir, "cancelled while queued in :modelservice")
+                            writeCancelledRunResult(dir, bailMessage)
                         } else {
                             writeResultAtomically(dir, JSONObject().apply {
                                 put("error", "queue_timeout")
-                                put("message", "request waited > ${QUEUE_WAIT_TIMEOUT_MS}ms for the :modelservice execution mutex (head-of-line blocking backstop)")
+                                put("message", bailMessage)
                                 put("exit_code", 1)
                             }.toString())
+                        }
+                        // [stream-bail-line fix 2026-08-27] A STREAMING client
+                        // terminates on done/error LINES in stream.jsonl — it
+                        // does not poll result.json. Without this line, a
+                        // streaming request that bailed in the queue left the
+                        // client polling until its 30-min stream backstop.
+                        // (result.json above still covers the non-streaming
+                        // dispatcher path.) Defensive — the dir may already be
+                        // reclaimed by a cancelled client.
+                        val bailIsStreaming = runCatching {
+                            JSONObject(requestFile.readText()).optBoolean("streaming", false)
+                        }.getOrDefault(false)
+                        if (bailIsStreaming) {
+                            runCatching {
+                                FileOutputStream(File(dir, STREAM_FILE), true).use { out ->
+                                    out.write((ChatStreamJsonl.errorLine(bailMessage) + "\n").toByteArray(Charsets.UTF_8))
+                                    out.flush()
+                                }
+                            }
                         }
                         Log.w(TAG, "queued request bailed (${gateResult.name}), runId=$runId")
                     } catch (t: Throwable) {
