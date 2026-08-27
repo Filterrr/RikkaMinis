@@ -257,4 +257,15 @@ object SpeechRecognitionManager {
         _state.value = RecognitionState.IDLE
         _recognizedText.value = ""
     }
+
+    /**
+     * [T-android-asr-provider-shutdown] Process-scope teardown entry point.
+     * The manager is an app-scoped singleton with no lifecycle callback in
+     * [MinisApp] today, so this is currently unreferenced — it exists so a
+     * future teardown hook can release provider-engine resources (coroutine
+     * scope / job handles) in one place. Safe to call regardless.
+     */
+    fun shutdown() {
+        engines.forEach { it.shutdown() }
+    }
 }

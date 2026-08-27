@@ -65,6 +65,15 @@ interface SpeechRecognitionEngine {
      */
     fun markDegraded() {}
 
+    /**
+     * Optional: release any engine-owned long-lived resources (coroutine scopes,
+     * retained job handles). Engines with no such resources (e.g. the System
+     * engine, whose [SpeechRecognizer] is torn down per session) use the empty
+     * default. Called on process-scope teardown if the manager exposes one;
+     * absent that, implementations must still be safe to leave running.
+     */
+    fun shutdown() {}
+
     interface Listener {
         /** Incremental interim result. Only fires if [supportsPartialResults]. */
         fun onPartial(text: String)
