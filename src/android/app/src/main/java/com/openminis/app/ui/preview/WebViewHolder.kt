@@ -127,6 +127,14 @@ class WebViewHolder(
                 request: WebResourceRequest,
             ): android.webkit.WebResourceResponse? {
                 val url = request.url ?: return null
+                // minis:// URLs resolve to sandbox files — the app's own
+                // internal resource scheme (docs/specs/minis-url-scheme.md).
+                // Mirrors BrowserUseManager.interceptMinisURL so chat-link
+                // previews (UrlPreviewSheet → this holder) can open
+                // minis:// resources exactly like the agent browser does.
+                if (url.scheme == "minis") {
+                    return interceptMinisUrl(request, url)
+                }
                 // For file:// URLs, serve via the asset loader which only
                 // exposes the file's parent directory under the secure
                 // appassets origin. For https://appassets.androidplatform.net/
@@ -218,6 +226,52 @@ class WebViewHolder(
     }
 
     private var hasLoaded = false
+
+    /**
+     * Serve a `minis://<namespace>/<path>` request from the sandbox file it
+     * maps to (`/var/minis/<namespace>/<path>` → host file via PRoot bind
+     * mounts). Mirrors BrowserUseManager.interceptMinisURL, including the
+     * [audit-RC13] guard: non-main-frame requests must be same-origin
+     * (minis:// or the bundled appassets origin) so a cross-origin frame
+     * can't pull local files through this handler. Missing/unresolvable
+     * files get an explicit 404 instead of a scheme error.
+     */
+    private fun interceptMinisUrl(
+        request: WebResourceRequest,
+        uri: android.net.Uri,
+    ): android.webkit.WebResourceResponse? {
+        if (!request.isForMainFrame) {
+            val origin = request.requestHeaders?.get("Origin")
+            if (!origin.isNullOrEmpty() &&
+                !origin.startsWith("minis://") &&
+                !origin.startsWith("https://$ASSET_LOADER_HOST")
+            ) {
+                return null
+            }
+        }
+        return try {
+            val host = uri.host ?: return null
+            val path = uri.path ?: ""
+            // Spec §10: reject `..` traversal before resolving.
+            if (path.contains("..")) return null
+            val linuxPath = "/var/minis/$host$path"
+            val localFile = com.openminis.app.sandbox.PRootKernel.resolveHostPath(linuxPath)
+            if (localFile == null || !localFile.exists() || !localFile.isFile) {
+                android.webkit.WebResourceResponse(
+                    "text/plain", "UTF-8", 404, "Not Found", emptyMap(),
+                    "File not found: $host$path".byteInputStream(),
+                )
+            } else {
+                android.webkit.WebResourceResponse(
+                    guessMimeType(localFile.name), "UTF-8", 200, "OK", emptyMap(),
+                    localFile.inputStream(),
+                )
+            }
+        } catch (e: Exception) {
+            AppLogger.warning(TAG, "minis:// intercept error: ${e.message}")
+            null
+        }
+    }
 
     /**
      * Trigger the initial load on first use. Calling repeatedly is a no-op
@@ -368,6 +422,28 @@ class WebViewHolder(
             if (!url.startsWith("file://")) return null
             val file = File(url.removePrefix("file://"))
             return "https://$ASSET_LOADER_HOST/${file.name}"
+        }
+
+        /** Same table as BrowserUseManager.guessMimeType. */
+        private fun guessMimeType(filename: String): String {
+            val ext = filename.substringAfterLast('.', "").lowercase()
+            return when (ext) {
+                "html", "htm" -> "text/html"
+                "css" -> "text/css"
+                "js" -> "application/javascript"
+                "json" -> "application/json"
+                "png" -> "image/png"
+                "jpg", "jpeg" -> "image/jpeg"
+                "gif" -> "image/gif"
+                "svg" -> "image/svg+xml"
+                "webp" -> "image/webp"
+                "mp4" -> "video/mp4"
+                "mp3" -> "audio/mpeg"
+                "pdf" -> "application/pdf"
+                "txt", "md" -> "text/plain"
+                "xml" -> "text/xml"
+                else -> "application/octet-stream"
+            }
         }
     }
 }

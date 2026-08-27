@@ -25,7 +25,11 @@ import com.openminis.app.logging.AppLogger
  *   * Other "open in app" schemes — fired as a plain `ACTION_VIEW`
  *     against the URI. ActivityNotFoundException → Toast.
  *   * `http`, `https`, `about`, `file` — return `false` so the WebView
- *     loads them normally.
+     *     loads them normally.
+     *   * `minis` — this app's OWN internal resource/deep-link scheme
+     *     (docs/specs/minis-url-scheme.md), not an external app. Return
+     *     `false` so the WebView (and the chat-link resolver) handles it
+     *     in-app instead of dead-ending in the T318 unknown-scheme block.
  *
  * Returns `true` when the URL has been (or should have been) routed
  * away from the WebView; the caller should also return `true` from
@@ -34,7 +38,10 @@ import com.openminis.app.logging.AppLogger
 object BrowserExternalSchemeHandler {
     private const val TAG = "BrowserExternalScheme"
 
-    private val INTERNAL_SCHEMES = setOf("http", "https", "about", "file")
+    // `minis` is internal (this app's resource/deep-link scheme): routing it
+    // through T318's unknown-scheme block produced "Blocked link to external
+    // app (minis)" and made in-app preview of minis:// links impossible.
+    private val INTERNAL_SCHEMES = setOf("http", "https", "about", "file", "minis")
 
     /**
      * `intent://` schemes that require Intent.parseUri (NOT plain
