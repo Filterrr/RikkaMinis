@@ -1744,7 +1744,11 @@ class ChatViewModel(
             }
         }
         appendSystemInfo(
-            text = "Memory writes ${if (newValue) "enabled" else "disabled"}. Reads are unaffected.",
+            text = if (newValue) {
+                context.getString(R.string.sysmsg_memory_writes_on)
+            } else {
+                context.getString(R.string.sysmsg_memory_writes_off)
+            },
             iconKind = "memory",
         )
     }
@@ -1755,7 +1759,7 @@ class ChatViewModel(
     internal fun toggleThinking() {
         if (!currentModelSupportsReasoning) {
             appendSystemInfo(
-                text = "The current model does not support deep thinking.",
+                text = context.getString(R.string.sysmsg_thinking_unsupported),
                 iconKind = "thinking",
             )
             return
@@ -1764,7 +1768,7 @@ class ChatViewModel(
         _thinkingLevel.value = newLevel
         persistThinkingOverride(newLevel)
         appendSystemInfo(
-            text = "Thinking set to ${newLevel.displayName.lowercase()}.",
+            text = context.getString(R.string.sysmsg_thinking_set, newLevel.localizedName(context)),
             iconKind = "thinking",
         )
     }
@@ -1940,7 +1944,7 @@ class ChatViewModel(
         if (_isStreaming.value) {
             AppLogger.info(TAG, "[Compact] aborted: stream in progress")
             appendSystemInfo(
-                text = "Cannot compact while a turn is in progress. Stop the current response first.",
+                text = context.getString(R.string.sysmsg_compact_busy_turn),
                 iconKind = "compact",
             )
             return
@@ -1948,18 +1952,18 @@ class ChatViewModel(
         if (_isCompacting.value) {
             AppLogger.info(TAG, "[Compact] aborted: another compact already in flight")
             appendSystemInfo(
-                text = "A compact is already in progress. Please wait for it to finish.",
+                text = context.getString(R.string.sysmsg_compact_busy),
                 iconKind = "compact",
             )
             return
         }
         val provider = currentProvider ?: run {
-            appendSystemInfo("No provider configured. Cannot compact.", "compact")
+            appendSystemInfo(context.getString(R.string.sysmsg_compact_no_provider), "compact")
             return
         }
         val history = agentHistory.toList()
         if (history.isEmpty()) {
-            appendSystemInfo("Nothing to compact — the session is empty.", "compact")
+            appendSystemInfo(context.getString(R.string.sysmsg_compact_empty_session), "compact")
             return
         }
         // ─── v2 unified anchor model ───────────────────────────────────
@@ -1987,7 +1991,7 @@ class ChatViewModel(
         // boundaries.
         val anchorIdx: Int = resolveCompactAnchorIdx(history, anchorIdxOverride)
         if (anchorIdx < 0) {
-            appendSystemInfo("Cannot compact: no persisted messages yet.", "compact")
+            appendSystemInfo(context.getString(R.string.sysmsg_compact_no_persisted), "compact")
             return
         }
 
@@ -1995,12 +1999,12 @@ class ChatViewModel(
         // (v2/v1 boundary resolution delegated to resolveCompactStartIdx).
         val effectiveStartIdx: Int = resolveCompactStartIdx(history, _cachedLatestMarker)
         if (effectiveStartIdx > anchorIdx) {
-            appendSystemInfo("Already compacted up to this point.", "compact")
+            appendSystemInfo(context.getString(R.string.sysmsg_compact_already_done), "compact")
             return
         }
         val toCompact = history.subList(effectiveStartIdx, anchorIdx + 1)
         if (toCompact.isEmpty()) {
-            appendSystemInfo("Nothing to compact.", "compact")
+            appendSystemInfo(context.getString(R.string.sysmsg_compact_nothing), "compact")
             return
         }
         _isCompacting.value = true
@@ -2008,7 +2012,7 @@ class ChatViewModel(
         // T7-C: compaction 预算耗尽 → 跳过 compact，不改变历史
         if (!t7ConsumeAndTrace(AgentTraceRecorder.DIMENSION_COMPACTION_CALLS) { it.consumeCompaction() }) {
             _isCompacting.value = false
-            appendSystemInfo("Compact skipped: budget exhausted.", "compact")
+            appendSystemInfo(context.getString(R.string.sysmsg_compact_budget_exhausted), "compact")
             return
         }
         t7State(
@@ -2036,7 +2040,7 @@ class ChatViewModel(
                 ).trim()
                 if (summary.isEmpty()) {
                     withContext(Dispatchers.Main) {
-                        appendSystemInfo("Compaction produced no output — try again later.", "compact")
+                        appendSystemInfo(context.getString(R.string.sysmsg_compact_empty_summary), "compact")
                     }
                     return@launch
                 }
@@ -2076,7 +2080,7 @@ class ChatViewModel(
                 if (verifiedAnchorIdx < 0) {
                     Log.w(TAG, "[Compact] No agentHistory entry has a DB-persisted dbMessageId; aborting")
                     withContext(Dispatchers.Main) {
-                        appendSystemInfo("Compact failed: could not anchor to a persisted message.", "compact")
+                        appendSystemInfo(context.getString(R.string.sysmsg_compact_anchor_failed), "compact")
                     }
                     return@launch
                 }
@@ -2091,7 +2095,7 @@ class ChatViewModel(
                     ?: run {
                         Log.w(TAG, "[Compact] verified anchor at idx=$verifiedAnchorIdx lost dbMessageId; aborting")
                         withContext(Dispatchers.Main) {
-                            appendSystemInfo("Compact failed: anchor message id unavailable.", "compact")
+                            appendSystemInfo(context.getString(R.string.sysmsg_compact_anchor_id_missing), "compact")
                         }
                         return@launch
                     }
@@ -2170,7 +2174,7 @@ class ChatViewModel(
                     _messages.value = cleaned
                     AppLogger.info(TAG, "[Compact] divider: $compactedUICount UI bubbles compacted (history entries: ${toCompact.size})")
                     appendSystemInfo(
-                        text = "$compactedUICount messages compacted",
+                        text = context.getString(R.string.sysmsg_compacted_count, compactedUICount),
                         iconKind = "compact",
                         payload = summary,
                     )
@@ -2182,7 +2186,7 @@ class ChatViewModel(
                 Log.w(TAG, "Compact failed", e)
                 withContext(Dispatchers.Main) {
                     appendSystemInfo(
-                        text = "Compaction failed: ${e.message ?: e.javaClass.simpleName}",
+                        text = context.getString(R.string.sysmsg_compact_failed, e.message ?: e.javaClass.simpleName),
                         iconKind = "compact",
                     )
                 }
@@ -2231,15 +2235,15 @@ class ChatViewModel(
      */
     fun revertCompact() {
         if (_isStreaming.value) {
-            appendSystemInfo("Cannot revert compact while a response is in progress.", "compact")
+            appendSystemInfo(context.getString(R.string.sysmsg_revert_busy_stream), "compact")
             return
         }
         if (_isCompacting.value) {
-            appendSystemInfo("Cannot revert compact while compaction is in progress.", "compact")
+            appendSystemInfo(context.getString(R.string.sysmsg_revert_busy_compacting), "compact")
             return
         }
         val current = _cachedLatestMarker ?: run {
-            appendSystemInfo("Nothing to revert — no compact marker on this session.", "compact")
+            appendSystemInfo(context.getString(R.string.sysmsg_revert_nothing), "compact")
             return
         }
         val sid = realSessionId.ifEmpty { sessionId }
@@ -2251,7 +2255,7 @@ class ChatViewModel(
             if (removed <= 0) {
                 Log.w(TAG, "[Compact] revert: deleteCompactMarker returned 0 rows for id=${current.id.take(8)}")
                 withContext(Dispatchers.Main) {
-                    appendSystemInfo("Revert failed: marker not found in DB.", "compact")
+                    appendSystemInfo(context.getString(R.string.sysmsg_revert_failed_db), "compact")
                 }
                 return@launch
             }
@@ -2877,7 +2881,7 @@ class ChatViewModel(
             ContextPolicy.CheckResult.OK -> true
             ContextPolicy.CheckResult.NEEDS_COMPACT -> {
                 appendSystemInfo(
-                    text = "Context is getting full ($tokens / $window tokens). Consider running /compact to fold older turns into a summary.",
+                    text = context.getString(R.string.sysmsg_context_full_hint, tokens, window),
                     iconKind = "compact",
                 )
                 true
@@ -2947,7 +2951,7 @@ class ChatViewModel(
         }
         lastAutoCompactAtMs = System.currentTimeMillis()
         appendSystemInfo(
-            text = "Context is getting full ($tokens / $window tokens) — auto-compacting older turns into a summary.",
+            text = context.getString(R.string.sysmsg_context_full_auto, tokens, window),
             iconKind = "compact",
         )
         AppLogger.info(TAG, "[AutoCompact] triggering (tokens=$tokens window=$window tail=$tail)")
@@ -5571,7 +5575,7 @@ class ChatViewModel(
         if (trimmed.isBlank() && _attachments.value.isEmpty()) return
         if (_isCompacting.value) {
             appendSystemInfo(
-                text = "Wait for the current compact to finish before sending.",
+                text = context.getString(R.string.sysmsg_wait_compact),
                 iconKind = "compact",
             )
             return
@@ -6601,7 +6605,7 @@ class ChatViewModel(
             "history ${kept.size + droppedCount}→${kept.size} msgs, kept $keepTurns newest turn(s)"
         )
         appendSystemInfo(
-            text = "上下文已达 $contextWindow 限制，已自动裁剪 $droppedCount 条最老的对话以继续任务。",
+            text = context.getString(R.string.sysmsg_context_trimmed, contextWindow, droppedCount),
             iconKind = "compact",
         )
     }

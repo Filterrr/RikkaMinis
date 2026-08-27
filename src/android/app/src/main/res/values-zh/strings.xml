@@ -1514,4 +1514,30 @@
     <string name="model_group_cost_tier_cheap">便宜</string>
     <string name="model_group_cost_tier_normal">普通</string>
     <string name="model_group_cost_tier_expensive">昂贵</string>
+    <!-- i18n-hardening-A -->
+    <string name="sysmsg_memory_writes_on">内存写入已开启（读取不受影响）。</string>
+    <string name="sysmsg_memory_writes_off">内存写入已关闭（读取不受影响）。</string>
+    <string name="sysmsg_thinking_unsupported">当前模型不支持深度思考。</string>
+    <string name="sysmsg_thinking_set">思考强度已设为 %1$s。</string>
+    <string name="sysmsg_compact_busy_turn">回复进行中无法压缩，请先停止当前回复。</string>
+    <string name="sysmsg_compact_busy">压缩正在进行，请等待完成。</string>
+    <string name="sysmsg_compacted_count">已压缩 %1$d 条消息</string>
+    <string name="sysmsg_compact_failed">压缩失败：%1$s</string>
+    <string name="sysmsg_context_full_hint">上下文即将占满（%1$d / %2$d tokens），可运行 /compact 将较早的对话折叠为摘要。</string>
+    <string name="sysmsg_context_full_auto">上下文即将占满（%1$d / %2$d tokens），正在自动压缩较早的对话。</string>
+    <string name="sysmsg_wait_compact">请等待当前压缩完成后再发送。</string>
+    <string name="sysmsg_context_trimmed">上下文已达 %1$d 限制，已自动裁剪 %2$d 条最老的对话以继续任务。</string>
+    <string name="sysmsg_compact_no_provider">未配置模型提供商，无法压缩。</string>
+    <string name="sysmsg_compact_empty_session">没有可压缩的内容——会话为空。</string>
+    <string name="sysmsg_compact_no_persisted">无法压缩：还没有已保存的消息。</string>
+    <string name="sysmsg_compact_already_done">已压缩到当前这一点。</string>
+    <string name="sysmsg_compact_nothing">没有可压缩的内容。</string>
+    <string name="sysmsg_compact_budget_exhausted">已跳过压缩：预算已耗尽。</string>
+    <string name="sysmsg_compact_empty_summary">压缩未产生任何输出——请稍后重试。</string>
+    <string name="sysmsg_compact_anchor_failed">压缩失败：无法锚定到已保存的消息。</string>
+    <string name="sysmsg_compact_anchor_id_missing">压缩失败：锚点消息 ID 不可用。</string>
+    <string name="sysmsg_revert_busy_stream">回复进行中无法撤销压缩。</string>
+    <string name="sysmsg_revert_busy_compacting">压缩进行中无法撤销压缩。</string>
+    <string name="sysmsg_revert_nothing">没有可撤销的内容——此会话上没有压缩标记。</string>
+    <string name="sysmsg_revert_failed_db">撤销失败：数据库中找不到标记。</string>
 </resources>

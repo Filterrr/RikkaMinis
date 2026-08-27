@@ -1204,4 +1204,30 @@
     <string name="model_group_cost_tier_cheap">Cheap</string>
     <string name="model_group_cost_tier_normal">Normal</string>
     <string name="model_group_cost_tier_expensive">Expensive</string>
+    <!-- i18n-hardening-A -->
+    <string name="sysmsg_memory_writes_on">メモリ書き込みが有効になりました（読み取りは影響を受けません）。</string>
+    <string name="sysmsg_memory_writes_off">メモリ書き込みが無効になりました（読み取りは影響を受けません）。</string>
+    <string name="sysmsg_thinking_unsupported">現在のモデルはディープシンキングに対応していません。</string>
+    <string name="sysmsg_thinking_set">思考レベルを %1$s に設定しました。</string>
+    <string name="sysmsg_compact_busy_turn">応答中は圧縮できません。先に現在の応答を停止してください。</string>
+    <string name="sysmsg_compact_busy">圧縮が進行中です。完了までお待ちください。</string>
+    <string name="sysmsg_compacted_count">%1$d 件のメッセージを圧縮しました</string>
+    <string name="sysmsg_compact_failed">圧縮に失敗しました：%1$s</string>
+    <string name="sysmsg_context_full_hint">コンテキストが間もなく満杯になります（%1$d / %2$d tokens）。/compact を実行して古い会話を要約に畳み込めます。</string>
+    <string name="sysmsg_context_full_auto">コンテキストが間もなく満杯になります（%1$d / %2$d tokens）。古い会話を自動的に圧縮します。</string>
+    <string name="sysmsg_wait_compact">送信前に現在の圧縮が完了するまでお待ちください。</string>
+    <string name="sysmsg_context_trimmed">コンテキストが %1$d の制限に達したため、最も古い %2$d 件のメッセージを切り捨ててタスクを続行しました。</string>
+    <string name="sysmsg_compact_no_provider">プロバイダーが設定されていません。圧縮できません。</string>
+    <string name="sysmsg_compact_empty_session">圧縮するものはありません — セッションは空です。</string>
+    <string name="sysmsg_compact_no_persisted">圧縮できません：保存済みメッセージがまだありません。</string>
+    <string name="sysmsg_compact_already_done">この時点まで既に圧縮済みです。</string>
+    <string name="sysmsg_compact_nothing">圧縮するものはありません。</string>
+    <string name="sysmsg_compact_budget_exhausted">圧縮をスキップしました：予算を使い切りました。</string>
+    <string name="sysmsg_compact_empty_summary">圧縮の出力がありませんでした — 後でもう一度お試しください。</string>
+    <string name="sysmsg_compact_anchor_failed">圧縮に失敗しました：保存済みメッセージにアンカーできませんでした。</string>
+    <string name="sysmsg_compact_anchor_id_missing">圧縮に失敗しました：アンカーメッセージ ID が利用できません。</string>
+    <string name="sysmsg_revert_busy_stream">応答中は圧縮を元に戻せません。</string>
+    <string name="sysmsg_revert_busy_compacting">圧縮中は圧縮を元に戻せません。</string>
+    <string name="sysmsg_revert_nothing">元に戻すものはありません — このセッションに圧縮マーカーはありません。</string>
+    <string name="sysmsg_revert_failed_db">元に戻すのに失敗しました：データベースにマーカーが見つかりません。</string>
 </resources>

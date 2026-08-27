@@ -1196,4 +1196,30 @@
     <string name="model_group_cost_tier_cheap">Cheap</string>
     <string name="model_group_cost_tier_normal">Normal</string>
     <string name="model_group_cost_tier_expensive">Expensive</string>
+    <!-- i18n-hardening-A -->
+    <string name="sysmsg_memory_writes_on">메모리 쓰기가 활성화되었습니다(읽기는 영향을 받지 않습니다).</string>
+    <string name="sysmsg_memory_writes_off">메모리 쓰기가 비활성화되었습니다(읽기는 영향을 받지 않습니다).</string>
+    <string name="sysmsg_thinking_unsupported">현재 모델은 딥 씽킹을 지원하지 않습니다.</string>
+    <string name="sysmsg_thinking_set">사고 강도가 %1$s(으)로 설정되었습니다.</string>
+    <string name="sysmsg_compact_busy_turn">응답 진행 중에는 압축할 수 없습니다. 현재 응답을 먼저 중지하세요.</string>
+    <string name="sysmsg_compact_busy">압축이 이미 진행 중입니다. 완료될 때까지 기다려 주세요.</string>
+    <string name="sysmsg_compacted_count">메시지 %1$d개 압축됨</string>
+    <string name="sysmsg_compact_failed">압축 실패: %1$s</string>
+    <string name="sysmsg_context_full_hint">컨텍스트가 곧 가득 찹니다(%1$d / %2$d tokens). /compact를 실행하여 이전 대화를 요약으로 접을 수 있습니다.</string>
+    <string name="sysmsg_context_full_auto">컨텍스트가 곧 가득 찹니다(%1$d / %2$d tokens). 이전 대화를 자동으로 압축합니다.</string>
+    <string name="sysmsg_wait_compact">보내기 전에 현재 압축이 완료될 때까지 기다려 주세요.</string>
+    <string name="sysmsg_context_trimmed">컨텍스트가 %1$d 한도에 도달하여 가장 오래된 메시지 %2$d개를 잘라내고 작업을 계속했습니다.</string>
+    <string name="sysmsg_compact_no_provider">공급자가 구성되지 않았습니다. 압축할 수 없습니다.</string>
+    <string name="sysmsg_compact_empty_session">압축할 내용이 없습니다 — 세션이 비어 있습니다.</string>
+    <string name="sysmsg_compact_no_persisted">압축할 수 없습니다: 저장된 메시지가 아직 없습니다.</string>
+    <string name="sysmsg_compact_already_done">이 시점까지 이미 압축되었습니다.</string>
+    <string name="sysmsg_compact_nothing">압축할 내용이 없습니다.</string>
+    <string name="sysmsg_compact_budget_exhausted">압축 건너뜀: 예산이 소진되었습니다.</string>
+    <string name="sysmsg_compact_empty_summary">압축 결과가 없습니다 — 나중에 다시 시도하세요.</string>
+    <string name="sysmsg_compact_anchor_failed">압축 실패: 저장된 메시지에 앵커할 수 없습니다.</string>
+    <string name="sysmsg_compact_anchor_id_missing">압축 실패: 앵커 메시지 ID를 사용할 수 없습니다.</string>
+    <string name="sysmsg_revert_busy_stream">응답 진행 중에는 압축을 되돌릴 수 없습니다.</string>
+    <string name="sysmsg_revert_busy_compacting">압축 진행 중에는 압축을 되돌릴 수 없습니다.</string>
+    <string name="sysmsg_revert_nothing">되돌릴 내용이 없습니다 — 이 세션에 압축 표시가 없습니다.</string>
+    <string name="sysmsg_revert_failed_db">되돌리기 실패: 데이터베이스에 표시를 찾을 수 없습니다.</string>
 </resources>

@@ -1352,4 +1352,30 @@
     <string name="model_group_cost_tier_cheap">Cheap</string>
     <string name="model_group_cost_tier_normal">Normal</string>
     <string name="model_group_cost_tier_expensive">Expensive</string>
+    <!-- i18n-hardening-A -->
+    <string name="sysmsg_memory_writes_on">Запись в память включена (чтение не затронуто).</string>
+    <string name="sysmsg_memory_writes_off">Запись в память отключена (чтение не затронуто).</string>
+    <string name="sysmsg_thinking_unsupported">Текущая модель не поддерживает глубокое мышление.</string>
+    <string name="sysmsg_thinking_set">Интенсивность мышления установлена: %1$s.</string>
+    <string name="sysmsg_compact_busy_turn">Нельзя сжать, пока идёт ответ. Сначала остановите текущий ответ.</string>
+    <string name="sysmsg_compact_busy">Сжатие уже выполняется. Подождите завершения.</string>
+    <string name="sysmsg_compacted_count">Сжато сообщений: %1$d</string>
+    <string name="sysmsg_compact_failed">Ошибка сжатия: %1$s</string>
+    <string name="sysmsg_context_full_hint">Контекст почти заполнен (%1$d / %2$d токенов). Выполните /compact, чтобы свернуть ранние витки в сводку.</string>
+    <string name="sysmsg_context_full_auto">Контекст почти заполнен (%1$d / %2$d токенов) — автоматически сжимаем ранние витки в сводку.</string>
+    <string name="sysmsg_wait_compact">Подождите завершения текущего сжатия перед отправкой.</string>
+    <string name="sysmsg_context_trimmed">Контекст достиг лимита %1$d; обрезаны самые старые %2$d сообщений для продолжения задачи.</string>
+    <string name="sysmsg_compact_no_provider">Провайдер не настроен. Невозможно сжать.</string>
+    <string name="sysmsg_compact_empty_session">Нечего сжимать — сессия пуста.</string>
+    <string name="sysmsg_compact_no_persisted">Невозможно сжать: ещё нет сохранённых сообщений.</string>
+    <string name="sysmsg_compact_already_done">Уже сжато до этого момента.</string>
+    <string name="sysmsg_compact_nothing">Нечего сжимать.</string>
+    <string name="sysmsg_compact_budget_exhausted">Сжатие пропущено: бюджет исчерпан.</string>
+    <string name="sysmsg_compact_empty_summary">Сжатие не дало результата — попробуйте позже.</string>
+    <string name="sysmsg_compact_anchor_failed">Ошибка сжатия: не удалось закрепиться на сохранённом сообщении.</string>
+    <string name="sysmsg_compact_anchor_id_missing">Ошибка сжатия: идентификатор якорного сообщения недоступен.</string>
+    <string name="sysmsg_revert_busy_stream">Нельзя отменить сжатие, пока идёт ответ.</string>
+    <string name="sysmsg_revert_busy_compacting">Нельзя отменить сжатие, пока идёт сжатие.</string>
+    <string name="sysmsg_revert_nothing">Нечего отменять — на этой сессии нет метки сжатия.</string>
+    <string name="sysmsg_revert_failed_db">Ошибка отмены: метка не найдена в БД.</string>
 </resources>
