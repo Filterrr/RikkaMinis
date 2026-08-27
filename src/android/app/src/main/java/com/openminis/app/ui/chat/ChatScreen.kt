@@ -4910,6 +4910,12 @@ private fun ChatInputArea(
     // nothing pending; the job is cancelled+replaced on every new burst.
     var imeBurstBuffer by remember { mutableStateOf<String?>(null) }
     var imeBurstJob by remember { mutableStateOf<Job?>(null) }
+    // Paired with imeBurstBuffer: the caret that must be scanned against the
+    // FLUSHED text when a debounced burst finally commits. Stored alongside
+    // the buffer (not read late from inputFieldValue) so the mention scan in
+    // the flush sees the caret that belonged to that exact burst, not a
+    // later-arrived one.
+    var imeBurstCaret by remember { mutableStateOf(0) }
     // Commit the composer input-mode pref on send. Voice input was removed, so
     // every composition is now "text"; the old voiceUsedSinceClear tracker and
     // the VoiceCorrection vocabulary miner went with it.
@@ -5917,6 +5923,7 @@ private fun ChatInputArea(
                                 // is preserved.
                                 if (shouldDebounceImeBurst(inputText, tfv.text)) {
                                     imeBurstBuffer = tfv.text
+                                    imeBurstCaret = tfv.selection.end
                                     imeBurstJob?.cancel()
                                     imeBurstJob = coroutineScope.launch {
                                         delay(150)
@@ -5924,23 +5931,38 @@ private fun ChatInputArea(
                                         if (flushed != null && flushed != inputText) {
                                             viewModel.setInputText(flushed)
                                             viewModel.updateSlashMenuState(flushed)
+                                            // [fix/voice-ime-mention-scan] Sweep the
+                                            // @-mention scan into the same flush as the
+                                            // slash state. A voice/Pinyin burst arrives as
+                                            // dozens of large, space-less CJK edits; the old
+                                            // unconditional mention scan below was walking back
+                                            // from the caret to the text head (O(n)) on EVERY
+                                            // one of them, re-typing unchanged menu state.
+                                            // Folding it into the 150 ms flush keeps the scan
+                                            // semantics identical while collapsing N scans to 1.
+                                            viewModel.updateMentionMenuState(
+                                                text = flushed,
+                                                caret = imeBurstCaret.coerceIn(0, flushed.length),
+                                            )
                                         }
                                     }
                                 } else {
                                     viewModel.setInputText(tfv.text)
                                     viewModel.updateSlashMenuState(tfv.text)
+                                    viewModel.updateMentionMenuState(
+                                        text = tfv.text,
+                                        caret = tfv.selection.end,
+                                    )
                                 }
+                            } else {
+                                // Text unchanged, caret may have moved: the @-mention
+                                // token/filter must still re-scan on a pure selection change
+                                // (the only case that doesn't go through the branches above).
+                                viewModel.updateMentionMenuState(
+                                    text = tfv.text,
+                                    caret = tfv.selection.end,
+                                )
                             }
-                            // Drive the @ mention picker on every keystroke
-                            // and selection change — caret position alone
-                            // can flip the active token's filter (e.g. user
-                            // moves cursor without typing). VM filters out
-                            // the slash-menu-priority case and any
-                            // non-mention caret state.
-                            viewModel.updateMentionMenuState(
-                                text = tfv.text,
-                                caret = tfv.selection.end,
-                            )
                         },
                         modifier = Modifier
                             .fillMaxWidth()
