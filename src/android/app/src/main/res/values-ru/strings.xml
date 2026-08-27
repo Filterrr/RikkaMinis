@@ -1378,4 +1378,27 @@
     <string name="sysmsg_revert_busy_compacting">Нельзя отменить сжатие, пока идёт сжатие.</string>
     <string name="sysmsg_revert_nothing">Нечего отменять — на этой сессии нет метки сжатия.</string>
     <string name="sysmsg_revert_failed_db">Ошибка отмены: метка не найдена в БД.</string>
+    <!-- i18n-hardening-B -->
+    <string name="chat_deep_thinking">Глубокое мышление</string>
+    <string name="chat_show_full_summary">Показать полную сводку</string>
+    <string name="chat_compact_summary">Сводка сжатия</string>
+    <string name="chat_revert_compact">Отменить сжатие</string>
+    <string name="chat_revert_compact_title">Отменить это сжатие?</string>
+    <string name="chat_revert_compact_confirm">Сводка будет отброшена, а исходные сообщения, которые она покрывала, снова станут активными. Это может вывести разговор за пределы окна контекста модели — если это произойдёт, удерживайте сообщение, чтобы повторно сжать с этого момента.</string>
+    <string name="chat_tool_edited">Изменено</string>
+    <string name="chat_tool_result">Результат</string>
+    <string name="chat_tool_load_more">Загрузить ещё (%1$d строк)</string>
+    <string name="chat_tool_load_all">Загрузить всё (около %1$d строк)</string>
+    <string name="chat_browser_screenshot">Скриншот браузера</string>
+    <string name="chat_nav_previous">Назад</string>
+    <string name="chat_nav_next">Вперёд</string>
+    <string name="chat_withdraw_queued">Отозвать сообщение из очереди</string>
+    <string name="chat_image_attachment">Вложение изображения</string>
+    <string name="chat_read_image">Читать изображение</string>
+    <string name="chat_copied_as_markdown">Скопировано как Markdown</string>
+    <string name="chat_copied_as_rich">Скопировано как форматированный текст</string>
+    <string name="chat_copied_preview">Скопировано: %1$s</string>
+    <string name="chat_math_content_desc">Математическая формула: %1$s</string>
+    <string name="chat_play_video">Воспроизвести видео</string>
+
 </resources>

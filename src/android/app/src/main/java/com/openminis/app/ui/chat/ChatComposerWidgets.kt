@@ -359,7 +359,7 @@ internal fun AttachmentChip(
         ) {
             Icon(
                 Icons.Default.Close,
-                contentDescription = "Remove",
+                contentDescription = stringResource(R.string.common_remove),
                 tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                 modifier = Modifier.size(13.dp),
             )
@@ -610,7 +610,7 @@ private fun ToolPreviewThumbnail(
                 if (bmp != null) {
                     Image(
                         bitmap = bmp.asImageBitmap(),
-                        contentDescription = "Read image",
+                        contentDescription = stringResource(R.string.chat_read_image),
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize(),
                     )
@@ -653,7 +653,7 @@ private fun ToolPreviewThumbnail(
                 if (bitmap != null) {
                     Image(
                         bitmap = bitmap.asImageBitmap(),
-                        contentDescription = "Browser screenshot",
+                        contentDescription = stringResource(R.string.chat_browser_screenshot),
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize(),
                     )
@@ -834,7 +834,7 @@ internal fun FloatingToolStatusBar(
                 ) {
                     Icon(
                         Icons.Default.ChevronLeft,
-                        contentDescription = "Previous",
+                        contentDescription = stringResource(R.string.chat_nav_previous),
                         tint = if (currentIndex > 0) MaterialTheme.colorScheme.onSurface
                                else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f),
                         modifier = Modifier
@@ -854,7 +854,7 @@ internal fun FloatingToolStatusBar(
                     )
                     Icon(
                         Icons.Default.ChevronRight,
-                        contentDescription = "Next",
+                        contentDescription = stringResource(R.string.chat_nav_next),
                         tint = if (currentIndex < toolBlocks.lastIndex) MaterialTheme.colorScheme.onSurface
                                else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f),
                         modifier = Modifier

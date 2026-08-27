@@ -1223,4 +1223,27 @@
     <string name="sysmsg_revert_busy_compacting">Komprimierung kann während einer laufenden Komprimierung nicht rückgängig gemacht werden.</string>
     <string name="sysmsg_revert_nothing">Nichts rückgängig zu machen — keine Komprimierungsmarkierung in dieser Sitzung.</string>
     <string name="sysmsg_revert_failed_db">Rückgängig fehlgeschlagen: Markierung in der Datenbank nicht gefunden.</string>
+    <!-- i18n-hardening-B -->
+    <string name="chat_deep_thinking">Tiefes Denken</string>
+    <string name="chat_show_full_summary">Vollständige Zusammenfassung anzeigen</string>
+    <string name="chat_compact_summary">Zusammenfassung komprimieren</string>
+    <string name="chat_revert_compact">Komprimierung rückgängig machen</string>
+    <string name="chat_revert_compact_title">Diese Komprimierung rückgängig machen?</string>
+    <string name="chat_revert_compact_confirm">Die Zusammenfassung wird verworfen und die ursprünglichen Nachrichten, die sie abgedeckt hat, werden wieder aktiv. Dadurch kann das Gespräch das Kontextfenster des Modells überschreiten — falls das passiert, drücken Sie lange auf eine Nachricht, um von dort aus erneut zu komprimieren.</string>
+    <string name="chat_tool_edited">Bearbeitet</string>
+    <string name="chat_tool_result">Ergebnis</string>
+    <string name="chat_tool_load_more">Mehr laden (%1$d Zeilen)</string>
+    <string name="chat_tool_load_all">Alle laden (~%1$d Zeilen)</string>
+    <string name="chat_browser_screenshot">Browser-Screenshot</string>
+    <string name="chat_nav_previous">Zurück</string>
+    <string name="chat_nav_next">Weiter</string>
+    <string name="chat_withdraw_queued">In Warteschlange befindliche Nachricht zurückziehen</string>
+    <string name="chat_image_attachment">Bildanhang</string>
+    <string name="chat_read_image">Bild lesen</string>
+    <string name="chat_copied_as_markdown">Als Markdown kopiert</string>
+    <string name="chat_copied_as_rich">Als Rich Text kopiert</string>
+    <string name="chat_copied_preview">Kopiert: %1$s</string>
+    <string name="chat_math_content_desc">Mathematische Formel: %1$s</string>
+    <string name="chat_play_video">Video abspielen</string>
+
 </resources>

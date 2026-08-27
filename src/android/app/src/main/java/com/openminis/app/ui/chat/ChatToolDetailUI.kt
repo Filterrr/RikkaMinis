@@ -742,7 +742,7 @@ internal fun ToolDetailSheet(
                                     ) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             Text(
-                                                text = "Edited",
+                                                text = stringResource(R.string.chat_tool_edited),
                                                 fontSize = 13.sp,
                                                 fontWeight = FontWeight.SemiBold,
                                                 color = ChatColors.primaryText,
@@ -918,7 +918,7 @@ internal fun ToolDetailSheet(
                                     screenshotBitmap.height.coerceAtLeast(1)
                                 Image(
                                     bitmap = screenshotBitmap.asImageBitmap(),
-                                    contentDescription = "Browser screenshot",
+                                    contentDescription = stringResource(R.string.chat_browser_screenshot),
                                     contentScale = ContentScale.Fit,
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -977,7 +977,7 @@ internal fun ToolDetailSheet(
                                         )
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Text(
-                                            text = "Result",
+                                            text = stringResource(R.string.chat_tool_result),
                                             fontSize = 13.sp,
                                             fontWeight = FontWeight.Medium,
                                             color = ChatColors.secondaryText,
@@ -1248,7 +1248,7 @@ internal fun ToolDetailSheet(
                     ) {
                         Icon(
                             Icons.Default.SkipPrevious,
-                            contentDescription = "Previous",
+                            contentDescription = stringResource(R.string.chat_nav_previous),
                             tint = if (currentIdx > 0) ChatColors.primaryText else ChatColors.disabledText,
                             modifier = Modifier.size(22.dp),
                         )
@@ -1294,7 +1294,7 @@ internal fun ToolDetailSheet(
                     ) {
                         Icon(
                             Icons.Default.SkipNext,
-                            contentDescription = "Next",
+                            contentDescription = stringResource(R.string.chat_nav_next),
                             tint = if (currentIdx < toolBlocks.lastIndex) ChatColors.primaryText else ChatColors.disabledText,
                             modifier = Modifier.size(22.dp),
                         )
@@ -1499,7 +1499,7 @@ private fun LazyRevealToolText(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = "Load more ($nextLines lines)",
+                    text = stringResource(R.string.chat_tool_load_more, nextLines),
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
                     color = color.copy(alpha = 0.9f),
@@ -1508,7 +1508,7 @@ private fun LazyRevealToolText(
                     },
                 )
                 Text(
-                    text = "Load all (~$remainingLines)",
+                    text = stringResource(R.string.chat_tool_load_all, remainingLines),
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
                     color = color.copy(alpha = 0.9f),

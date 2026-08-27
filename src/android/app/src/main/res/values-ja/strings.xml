@@ -1230,4 +1230,27 @@
     <string name="sysmsg_revert_busy_compacting">圧縮中は圧縮を元に戻せません。</string>
     <string name="sysmsg_revert_nothing">元に戻すものはありません — このセッションに圧縮マーカーはありません。</string>
     <string name="sysmsg_revert_failed_db">元に戻すのに失敗しました：データベースにマーカーが見つかりません。</string>
+    <!-- i18n-hardening-B -->
+    <string name="chat_deep_thinking">深い思考</string>
+    <string name="chat_show_full_summary">完全な要約を表示</string>
+    <string name="chat_compact_summary">要約の圧縮</string>
+    <string name="chat_revert_compact">圧縮を元に戻す</string>
+    <string name="chat_revert_compact_title">この圧縮を元に戻しますか？</string>
+    <string name="chat_revert_compact_confirm">要約は破棄され、カバーされていた元のメッセージが再びアクティブになります。これにより会話がモデルのコンテキストウィンドウを超える可能性があります。その場合は、メッセージを長押ししてその時点から再圧縮してください。</string>
+    <string name="chat_tool_edited">編集済み</string>
+    <string name="chat_tool_result">結果</string>
+    <string name="chat_tool_load_more">さらに読み込む（%1$d 行）</string>
+    <string name="chat_tool_load_all">すべて読み込む（約 %1$d 行）</string>
+    <string name="chat_browser_screenshot">ブラウザのスクリーンショット</string>
+    <string name="chat_nav_previous">前へ</string>
+    <string name="chat_nav_next">次へ</string>
+    <string name="chat_withdraw_queued">キューされたメッセージを取り消す</string>
+    <string name="chat_image_attachment">画像添付</string>
+    <string name="chat_read_image">画像を読み取る</string>
+    <string name="chat_copied_as_markdown">Markdown としてコピーしました</string>
+    <string name="chat_copied_as_rich">リッチテキストとしてコピーしました</string>
+    <string name="chat_copied_preview">コピーしました: %1$s</string>
+    <string name="chat_math_content_desc">数式: %1$s</string>
+    <string name="chat_play_video">動画を再生</string>
+
 </resources>

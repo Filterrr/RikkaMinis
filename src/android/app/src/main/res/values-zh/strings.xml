@@ -1540,4 +1540,27 @@
     <string name="sysmsg_revert_busy_compacting">压缩进行中无法撤销压缩。</string>
     <string name="sysmsg_revert_nothing">没有可撤销的内容——此会话上没有压缩标记。</string>
     <string name="sysmsg_revert_failed_db">撤销失败：数据库中找不到标记。</string>
+    <!-- i18n-hardening-B -->
+    <string name="chat_deep_thinking">深度思考</string>
+    <string name="chat_show_full_summary">显示完整摘要</string>
+    <string name="chat_compact_summary">压缩摘要</string>
+    <string name="chat_revert_compact">撤销压缩</string>
+    <string name="chat_revert_compact_title">撤销此压缩？</string>
+    <string name="chat_revert_compact_confirm">将丢弃摘要并恢复其覆盖的原始消息。这可能使对话超出模型的上下文窗口——如果发生这种情况，长按消息可从此处重新压缩。</string>
+    <string name="chat_tool_edited">已编辑</string>
+    <string name="chat_tool_result">结果</string>
+    <string name="chat_tool_load_more">加载更多（%1$d 行）</string>
+    <string name="chat_tool_load_all">全部加载（约 %1$d 行）</string>
+    <string name="chat_browser_screenshot">浏览器截图</string>
+    <string name="chat_nav_previous">上一个</string>
+    <string name="chat_nav_next">下一个</string>
+    <string name="chat_withdraw_queued">撤回排队消息</string>
+    <string name="chat_image_attachment">图片附件</string>
+    <string name="chat_read_image">读取图片</string>
+    <string name="chat_copied_as_markdown">已复制为 Markdown</string>
+    <string name="chat_copied_as_rich">已复制为富文本</string>
+    <string name="chat_copied_preview">已复制：%1$s</string>
+    <string name="chat_math_content_desc">数学公式：%1$s</string>
+    <string name="chat_play_video">播放视频</string>
+
 </resources>

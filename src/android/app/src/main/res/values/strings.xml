@@ -1608,4 +1608,27 @@
     <string name="sysmsg_revert_busy_compacting">Cannot revert compact while compaction is in progress.</string>
     <string name="sysmsg_revert_nothing">Nothing to revert — no compact marker on this session.</string>
     <string name="sysmsg_revert_failed_db">Revert failed: marker not found in DB.</string>
+    <!-- i18n-hardening-B -->
+    <string name="chat_deep_thinking">Deep Thinking</string>
+    <string name="chat_show_full_summary">Show full summary</string>
+    <string name="chat_compact_summary">Compact Summary</string>
+    <string name="chat_revert_compact">Revert Compact</string>
+    <string name="chat_revert_compact_title">Revert this compact?</string>
+    <string name="chat_revert_compact_confirm">The summary will be discarded and the messages it covered will become active again. This may push the conversation past the model's context window — if that happens, long-press a message to re-compact from that point.</string>
+    <string name="chat_tool_edited">Edited</string>
+    <string name="chat_tool_result">Result</string>
+    <string name="chat_tool_load_more">Load more (%1$d lines)</string>
+    <string name="chat_tool_load_all">Load all (~%1$d lines)</string>
+    <string name="chat_browser_screenshot">Browser screenshot</string>
+    <string name="chat_nav_previous">Previous</string>
+    <string name="chat_nav_next">Next</string>
+    <string name="chat_withdraw_queued">Withdraw queued message</string>
+    <string name="chat_image_attachment">Image attachment</string>
+    <string name="chat_read_image">Read image</string>
+    <string name="chat_copied_as_markdown">Copied as Markdown</string>
+    <string name="chat_copied_as_rich">Copied as Rich Text</string>
+    <string name="chat_copied_preview">Copied: %1$s</string>
+    <string name="chat_math_content_desc">Math: %1$s</string>
+    <string name="chat_play_video">Play video</string>
+
 </resources>
