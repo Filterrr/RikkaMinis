@@ -534,16 +534,28 @@ class PersistentShell(
         generation++
         try { stdinWriter?.close() } catch (_: Exception) {}
         stdinWriter = null
-        process?.let { proc ->
+        val proc = process
+        process = null
+        if (proc != null) {
             // [P2-pipe-leak] 关闭所有流防止管道泄漏
             try { proc.inputStream.close() } catch (_: Exception) {}
             try { proc.outputStream.close() } catch (_: Exception) {}
             try { proc.errorStream.close() } catch (_: Exception) {}
+            // [fix/stop-lag] `destroyForcibly()` only sends SIGKILL — the PRoot
+            // tracer's process-tree teardown takes 1–2 s on long tasks. The old
+            // code synchronously `waitFor(3s)` here, and this path runs on the
+            // UI main thread (cancelStream → stopCurrentCommand → stop), so a
+            // user tapping Stop froze for 1–2 s. Now: SIGKILL then return
+            // immediately; a daemon reaper does a bounded waitFor to reap the
+            // zombie, and readLoop() also clears `process`/`pendingCallback` at
+            // EOF, so nothing depends on this wait having happened here.
             proc.destroyForcibly()
-            // [P2-process-leak] 等待进程结束防止僵尸
-            try { proc.waitFor(3, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) {}
+            val reaper = Thread({
+                try { proc.waitFor(2, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) {}
+            }, "PersistentShell-reaper")
+            reaper.isDaemon = true
+            reaper.start()
         }
-        process = null
         pendingCallback?.let {
             it.finishOnce(it.output.toString(), -1, it.truncated)
         }
