@@ -45,6 +45,17 @@ class SystemSpeechRecognitionEngine(private val appContext: Context) : SpeechRec
     private var listener: SpeechRecognitionEngine.Listener? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    /**
+     * [T-android-asr-locale-race] Monotonic per-session token. Every [start]
+     * bumps it; a callback honours it only if it still matches the live
+     * session. [cancel]/[tearDown] never bump it (a cancelled session just
+     * stops receiving callbacks) — bumped only on a fresh [start], so a
+     * late-dispatch `onResults`/`onError` from a recognizer that was cancelled
+     * right before [selectLocale] restarted the session (a new locale) is
+     * ignored instead of landing on the new session's listener.
+     */
+    private var sessionToken: Int = 0
+
     override val isAvailable: Boolean
         get() {
             if (degraded) return false
@@ -144,6 +155,9 @@ class SystemSpeechRecognitionEngine(private val appContext: Context) : SpeechRec
     }
 
     override fun start(locale: Locale, listener: SpeechRecognitionEngine.Listener) {
+        // Invalidate any in-flight session first: a prior start's late
+        // callbacks must not surface through this new listener.
+        sessionToken++
         this.listener = listener
 
         if (ContextCompat.checkSelfPermission(appContext, Manifest.permission.RECORD_AUDIO)
@@ -185,7 +199,7 @@ class SystemSpeechRecognitionEngine(private val appContext: Context) : SpeechRec
                 usingOnDevice = wantOnDevice
                 pendingLocale = locale
                 recognizer = r
-                r.setRecognitionListener(callbacks)
+                r.setRecognitionListener(recognitionCallbacks(sessionToken))
                 r.startListening(buildIntent(locale))
             } catch (e: Throwable) {
                 Log.w(TAG, "startListening threw: ${e.message}")
@@ -282,15 +296,26 @@ class SystemSpeechRecognitionEngine(private val appContext: Context) : SpeechRec
         }
     }
 
-    private val callbacks = object : RecognitionListener {
-        override fun onReadyForSpeech(params: Bundle?) { listener?.onReadyForSpeech() }
+    /**
+     * [T-android-asr-locale-race] Per-session callback listener bound to the
+     * [token] of the session that created it. Every meaningful callback
+     * short-circuits when the token no longer matches [sessionToken] — i.e. a
+     * newer [start] superseded this session — so a late `onResults`/`onError`
+     * from a cancelled recognizer is dropped instead of being delivered to the
+     * new session's listener.
+     */
+    private fun recognitionCallbacks(token: Int): RecognitionListener = object : RecognitionListener {
+        private fun active(): Boolean = token == sessionToken
+
+        override fun onReadyForSpeech(params: Bundle?) { if (active()) listener?.onReadyForSpeech() }
         override fun onBeginningOfSpeech() {}
         override fun onBufferReceived(buffer: ByteArray?) {}
         override fun onEndOfSpeech() {}
         override fun onEvent(eventType: Int, params: Bundle?) {}
-        override fun onRmsChanged(rms: Float) { listener?.onRmsDb(rms) }
+        override fun onRmsChanged(rms: Float) { if (active()) listener?.onRmsDb(rms) }
 
         override fun onPartialResults(partialResults: Bundle?) {
+            if (!active()) return
             val text = partialResults
                 ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 ?.firstOrNull()
@@ -299,6 +324,7 @@ class SystemSpeechRecognitionEngine(private val appContext: Context) : SpeechRec
         }
 
         override fun onResults(results: Bundle?) {
+            if (!active()) return
             val text = results
                 ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 ?.firstOrNull()
@@ -308,6 +334,7 @@ class SystemSpeechRecognitionEngine(private val appContext: Context) : SpeechRec
         }
 
         override fun onError(errorCode: Int) {
+            if (!active()) return
             val err = mapError(errorCode)
             val msg = errorMessage(errorCode)
             // [T-android-asr-ondevice-fallback] The on-device recognizer has no

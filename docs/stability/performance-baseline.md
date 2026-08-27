@@ -3,7 +3,8 @@
 > T0 交付物之三。基线：`9672e09e`（origin/main，2026-08-15）。
 > T9 负责：采集真实基线 → 设定 P95/P99 阈值 → report-only 门禁 →（Harness 与基线通过后）enforced 门禁。
 > T0 只定义指标口径，**不选择最终数字**。
-> T9 交付物：`PerfBaselineCollector` / `PerfBaselineReport` / `MemoryPressureTracker` / `SyntheticWorkload`（2026-08-15）。
+> T9 交付物：`PerfBaselineCollector` / `PerfBaselineReport`（2026-08-15）。
+> 注：`MemoryPressureTracker` / `SyntheticWorkload` 已在 2026-08-27 死代码清理中移除——内存压力口径统一到 `service/MemoryPressureGate`（ELEVATED=600 / CRITICAL=800），合成采样场景并入 `docs/stability/perf-baseline/README.md`。
 
 ---
 
@@ -45,8 +46,8 @@
 | `shell_rss_mb` | PRoot 子进程 RSS（`PersistentShell.nativeRssMB`，高水位 256MB 触发回收） |
 | `app_native_heap_mb` | app 进程 native heap（`Debug.getNativeHeapAllocatedSize`，高水位 120MB） |
 | `heap_java_mb` | Java 堆占用（512MB 上限内） |
-| `process_rss_mb` | 进程 RSS（`/proc/self/status VmRSS`，08-15 OOM 分析：NORMAL<280 / ELEVATED 280-319 / CRITICAL≥320） | `MemoryPressureTracker.check()`（T9 新增，带 Level 分类 + 监听器） |
-| `thread_count` | 进程线程数（`/proc/self/status Threads`） | `MemoryPressureTracker.Snapshot.threadCount` |
+| `process_rss_mb` | 进程 RSS（`/proc/self/status VmRSS`，口径统一到 `MemoryPressureGate`：ELEVATED=600 / CRITICAL=800） | `MemoryPressureGate`（service 包，2026-08-18 起为唯一内存压力口径源） |
+| `thread_count` | 进程线程数（`/proc/self/status Threads`） | 待重新挂接（原 `MemoryPressureTracker.Snapshot.threadCount` 已随死代码清理移除） |
 | `leases_held_at_finalize` | 终态时仍持有的 lease 数（必须为 0） |
 
 ### 2.4 可靠性类
@@ -75,8 +76,8 @@ T9 新增：
 
 - `PerfBaselineCollector`（`diagnostics/PerfBaselineCollector.kt`）：统一基线 JSONL 收集器，从现有插桩补缺 first-token latency、RSS、thread count、工具耗时、资源 lease 等指标；输出到 `filesDir/perf-baseline/` 目录；
 - `PerfBaselineReport`（`diagnostics/PerfBaselineReport.kt`）：纯 JVM 聚合器，从 JSONL 基线文件计算 P50/P95/P99/mean/max，支持 delta 对比和 Markdown 报告；
-- `MemoryPressureTracker`（`diagnostics/MemoryPressureTracker.kt`）：进程级 RSS 监控，NORMAL/ELEVATED/CRITICAL 三级分类，带 level-change 监听器（供 `MemoryPressureGate` 消费）；
-- `SyntheticWorkload`（`diagnostics/SyntheticWorkload.kt`）：6 种可重复 workload 场景定义（COLD_START / SIMPLE_QA / TOOL_CHAIN / MULTI_SESSION / COMPACT_TRIGGER / MEMORY_PRESSURE），含采集脚本生成器。
+
+> 已移除（2026-08-27 死代码清理）：`MemoryPressureTracker`（阈值与 `MemoryPressureGate` 口径漂移，零生产入口）、`SyntheticWorkload`（零生产入口）。内存压力口径统一到 `service/MemoryPressureGate`。
 
 缺失（T9 后续依赖 T7 的）：
 
@@ -86,7 +87,7 @@ T9 新增：
 ## 4. 基线采样协议（T9 执行，T0 只定义）
 
 1. **设备**：Redmi Note 12 Turbo (marble)，Android 15 + HyperOS 3.0，用户环境（有代理变量，大传输可能被截断——采集时注意网络一致性）。
-2. **场景集**（T9 定稿，`SyntheticWorkload.Scenario` 枚举，6 个场景）：
+2. **场景集**（T9 定稿，6 个场景，见 `docs/stability/perf-baseline/README.md`）：
    - 冷启动 ×5（`COLD_START`）；
    - 简单问答（无工具）run ×20（`SIMPLE_QA`）；
    - 带工具链 run（≥3 工具）×10（`TOOL_CHAIN`）；

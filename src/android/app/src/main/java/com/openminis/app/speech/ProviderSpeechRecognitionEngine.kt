@@ -15,6 +15,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
 import java.util.Locale
@@ -233,7 +234,31 @@ class ProviderSpeechRecognitionEngine(private val appContext: Context) : SpeechR
     override fun cancel() {
         cancelled.set(true)
         recording.set(false)
+        // captureJob is intentionally NOT cancelled — the capture loop exits
+        // via the recording flag because AudioRecord.read() is a blocking call
+        // that doesn't respond to job cancellation. Only drop the stale handle.
         transcribeJob?.cancel()
+        transcribeJob = null
+        captureJob = null
+    }
+
+    /**
+     * [T-android-asr-provider-shutdown] Release the engine's process-scoped
+     * coroutine scope and drop the retained job handles. The scope previously
+     * lived for the whole process (no lifecycle hook) — calling this from a
+     * teardown path stops future launches and clears the bookkeeping. Safe to
+     * call at any time; the engine may still be re-used afterwards (a fresh
+     * [start] launches new jobs on the cancelled scope, so callers should treat
+     * [shutdown] as terminal).
+     */
+    override fun shutdown() {
+        cancelled.set(true)
+        recording.set(false)
+        transcribeJob?.cancel()
+        captureJob?.cancel()
+        transcribeJob = null
+        captureJob = null
+        scope.cancel()
     }
 
     /** Rough dB estimate over the chunk for the UI waveform. */

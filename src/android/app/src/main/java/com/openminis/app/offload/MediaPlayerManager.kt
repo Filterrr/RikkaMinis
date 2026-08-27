@@ -4,6 +4,7 @@ import android.media.MediaPlayer
 import android.util.Log
 import com.openminis.app.sandbox.PRootKernel
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Manages multiple concurrent MediaPlayer sessions keyed by session ID.
@@ -23,7 +24,14 @@ object MediaPlayerManager {
 
     enum class PlayerState { IDLE, PLAYING, PAUSED, STOPPED }
 
-    private val sessions = mutableMapOf<String, Session>()
+    /**
+     * [T-android-media-sessions-thread-safe] Concurrent map so concurrent
+     * sessions (agent operating media across two sessions at once, plus the
+     * player's onCompletion/onError callbacks firing on non-main threads) don't
+     * race on the map itself. Player state transitions remain best-effort (see
+     * Session.state), but the container is now safe for concurrent access.
+     */
+    private val sessions = ConcurrentHashMap<String, Session>()
 
     private val audioExtensions = setOf(
         "mp3", "wav", "ogg", "flac", "aac", "m4a", "wma", "opus", "amr", "mid", "midi",

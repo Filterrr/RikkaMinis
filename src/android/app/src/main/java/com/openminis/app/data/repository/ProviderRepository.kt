@@ -2243,8 +2243,9 @@ class ProviderRepository(private val context: Context) {
      *     restore would be worse than a duplicate label.
      *
      * @param srcEntryIds the backup-layer `_entryIds` annotation, positionally
-     *   paired with the `models` array (same visible-then-hidden order as
-     *   [exportInstanceJSON] emits). Used only to build the returned id map.
+     *   paired with the `models` array (same append order — visible and hidden
+     *   interleaved — as [exportInstanceJSON] emits). Used only to build the
+     *   returned id map.
      * @return the resolved (existing) instance id and a map of source entry id
      *   → entry id on this install (existing or newly added); null when the
      *   JSON is unparseable or no matching instance exists — the caller then
