@@ -793,7 +793,17 @@ class ChatViewModel(
      *  replay cache can't beat [loadSession] to setting `_modelName`. Without
      *  this, opening a session that previously fell back mid-run flashes the
      *  default model name for one frame before the persisted binding settles. */
-    private val sessionLoaded = MutableStateFlow(false)
+    private val _sessionLoaded = MutableStateFlow(false)
+
+    /**
+     * [fix/history-open-at-bottom-04] Public read-only "data is ready" signal.
+     * Flipped to true in [loadSession]'s `finally` (covers every path: normal
+     * completion, early `return@launch` for draft/missing session, and
+     * exception). The UI's bottom-scroll consumer keys off this instead of
+     * `listState.layoutInfo`, so the INITIAL_OPEN scroll-to-bottom fires once
+     * messages have actually loaded (not on the first empty-list frame).
+     */
+    val sessionLoaded: StateFlow<Boolean> = _sessionLoaded.asStateFlow()
 
     private val _sessionTitle = MutableStateFlow("New Chat")
     val sessionTitle: StateFlow<String> = _sessionTitle.asStateFlow()
@@ -3056,7 +3066,7 @@ class ChatViewModel(
             // loaded yet during loadSession) AND the existing-session
             // case where binding restore failed, while leaving alone any
             // session whose binding successfully resolved to its target.
-            sessionLoaded.first { it }
+            _sessionLoaded.first { it }
             providerRepository.config.collect { config ->
                 // T278: _availableGroups feeds the model picker sheet — it must
                 // track the latest config on every emission, even after the user
@@ -3695,7 +3705,7 @@ class ChatViewModel(
                 // T201: open the gate even on early `return@launch` (draft path,
                 // missing-session path) and on exception, so the init-time
                 // config.collect can never deadlock waiting for us.
-                sessionLoaded.value = true
+                _sessionLoaded.value = true
                 // [T-HANG-DIAG] total time spent in loadSession from ENTER to
                 // either successful completion or early return. tHangDiagStart
                 // was captured just inside `try` so this covers the whole

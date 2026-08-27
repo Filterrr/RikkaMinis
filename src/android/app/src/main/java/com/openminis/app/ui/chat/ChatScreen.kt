@@ -497,6 +497,11 @@ fun ChatScreen(
     // Callers needing the full history (compact / fork / regenerate / send)
     // continue to read viewModel.messages directly inside the VM.
     val messages by viewModel.uiMessages.collectAsState()
+    // [fix/history-open-at-bottom-04] "data is ready" signal — flipped true in
+    // loadSession's finally (after _messages is populated). The bottom-scroll
+    // consumer keys off this instead of listState.layoutInfo so the cold-open
+    // scroll-to-bottom fires once data is loaded, not on the first empty frame.
+    val sessionLoaded by viewModel.sessionLoaded.collectAsState()
     val hasOlderMessages by viewModel.hasOlderMessages.collectAsState()
     val isStreaming by viewModel.isStreaming.collectAsState()
     val canResume by viewModel.canResume.collectAsState()
@@ -1246,6 +1251,16 @@ fun ChatScreen(
     // [fix/scroll-follow-simplify] `prevRowKeys` prefix telemetry removed with
     // the flatten-collector follow dispatch (aggregate early-return + SIMPLE_FOLLOW).
 
+    // T-android-use-dragging-guard: does a real pointer drag currently own the
+    // list? The bottom-scroll consumer reads this so it never fires a scroll
+    // while the user's finger is mid-gesture (racing the drag would cause
+    // visible jitter and yank the reader). Tracked by the DragInteraction
+    // collector below. Declared BEFORE the consumer effect so it is in scope.
+    var isUserDragging by remember { mutableStateOf(false) }
+    // [bottom-fix] Timestamp of the last drag-stop. Kept for the follow
+    // disengage decision below (which still reads the raw list position).
+    var lastDragStopMs by remember { mutableStateOf(0L) }
+
     // [forward-stable] Session open: one initial bottom request, unless the
     // open targets a specific message (focus-message owns the scroll then).
     LaunchedEffect(sessionId) {
@@ -1254,98 +1269,81 @@ fun ChatScreen(
         }
     }
 
-    // [forward-stable] Single bottom-request consumer. FOLLOWING + committed
-    // revision + no in-flight gesture + sentinel not yet visible → scroll to
-    // the sentinel. Exactly one consumed request; the consumption is now
-    // PROOF-BASED (sentinel visible), not "the scroll call happened".
-    LaunchedEffect(followState.pendingBottomRequest, followState.rowRevision, listState, listState.layoutInfo) {
-        // [fix/scroll-follow-simplify] This consumer handles EXPLICIT user
-        // intents (InitialOpen / Send / FabDown / Resume / Retry) and the
-        // forceScroll edge — all of which must scroll regardless of the
-        // streaming state. SIMPLE_FOLLOW's dedicated effect handles the
-        // streaming auto-follow. The data-collector StreamRowsChanged that
-        // previously raised STREAM_PROGRESS here is removed (it was
-        // unreachable under AGGREGATE_MESSAGE_ITEMS anyway), so this consumer
-        // never double-drives with SIMPLE_FOLLOW.
-        //
-        // [fix/history-open-at-bottom] `listState.layoutInfo` is part of the
-        // key set so the effect re-runs when rows actually land (cold-open of
-        // a history session has no StreamRowsChanged revision to nudge it —
-        // that dispatch is unreachable under AGGREGATE_MESSAGE_ITEMS).
-        // [fix/history-open-at-bottom-verify] Re-running on every layout
-        // change is also what makes the consume condition provable: an
-        // INITIAL_OPEN request stays pending until the bottom sentinel is
-        // actually visible, and each layoutInfo tick that finds it still
-        // off-screen re-fires the bottom scroll.
+    // [forward-stable] Single bottom-request consumer. FOLLOWING + data-ready
+    // + no in-flight gesture + sentinel not yet visible → scroll to the
+    // bottom sentinel (the last item). Exactly ONE consumed request per event;
+    // the effect never re-fires on layout change.
+    //
+    // [fix/history-open-at-bottom-04] Structural fix — the drift that broke
+    // rounds 1–3 came from scrolling a stale/half-released layout AND re-firing
+    // on every layout change, not from "index vs key":
+    //  - `listState.layoutInfo` is REMOVED from the key set. That key was the
+    //    "scroll → layout changes → re-scroll → jump away" feedback loop: every
+    //    item-height release re-ran the effect and re-issued the scroll with a
+    //    stale count, yanking a reading user. The third round's poll ("wait N
+    //    frames for stability") was a band-aid over this same key and
+    //    introduced the "scrolled up → suddenly jumped to a far earlier
+    //    message" regression.
+    //  - The data-ready gate is [sessionLoaded] (flipped in loadSession's
+    //    finally AFTER _messages is populated), not layoutInfo. INITIAL_OPEN
+    //    waits for it, then scrolls exactly once — so the count the suspend
+    //    scrollToItem resolves against the LIVE provider is the loaded count,
+    //    not the empty pre-load count.
+    //  - The scroll itself is exactly-once and skipped outright while the user
+    //    is dragging, so a reading user is never yanked.
+    LaunchedEffect(followState.pendingBottomRequest, followState.rowRevision, sessionLoaded) {
         val reason = followState.pendingBottomRequest ?: return@LaunchedEffect
-        val sentinelVisible = isBottomSentinelVisible(listState.layoutInfo)
-        // [fix/history-open-at-bottom-verify] The empty-layout window AND the
-        // "scroll requested but not landed" race both manifest as "sentinel
-        // not visible"; both must retain the pending INITIAL_OPEN request so
-        // the next layout re-drive re-attempts (and eventually consumes once
-        // the sentinel is provably on screen).
-        val retainPending = retainInitialOpenUntilSentinelVisible(reason, sentinelVisible)
-        if (followState.isFollowing &&
-            !listState.isScrollInProgress &&
-            !sentinelVisible
-        ) {
-            // [fix/chat-sentinel-crash-on-import] Guard against a stale/empty
-            // layoutInfo. On an imported long session the first flatten publish
-            // can be consumed before the LazyColumn has measured any item:
-            // layoutInfo reports totalItemsCount=0, `totalItemsCount - 1` is
-            // -1, and requestScrollToItem(-1) throws
-            // IllegalArgumentException("Index should be non-negative (-1)").
-            // The cold-open InitialOpen request must not crash the app — skip
-            // it and let the next layoutInfo-keyed run of this effect issue
-            // the real bottom scroll.
-            val scrollIdx = safeBottomScrollIndex(listState.layoutInfo.totalItemsCount)
-            if (scrollIdx != null) {
-                // [fix/history-open-at-bottom-verify] Use the SUSPENDING
-                // scrollToItem for the explicit open-at-bottom intent:
-                //  - it awaits the first layout (waitForFirstLayout) if the
-                //    list hasn't measured yet, instead of racing it;
-                //  - it calls snapToItemIndexInternal(forceRemeasure = true),
-                //    which resolves the target index against the LIVE item
-                //    provider during a synchronous remeasure — so the pending
-                //    request cannot be swallowed by a measure/pass
-                //    interleaving (the non-suspending requestScrollToItem
-                //    only writes a target for the NEXT remeasure, which is
-                //    exactly the race that left the viewport at the top).
-                //    It also cancels any in-flight scroll before snapping, so
-                //    a cold-open leftover gesture cannot fight the target.
-                // Exactly-once is preserved by the sentinel-visible consume
-                // below: this block re-runs (layoutInfo key) until the
-                // sentinel is provably on screen, then consumes.
-                AppLogger.debug("ScrollSrc", "scroll-bottom suspend reason=$reason revision=${followState.rowRevision}")
-                listState.scrollToItem(scrollIdx)
-            } else {
-                AppLogger.debug("ScrollSrc", "request-bottom skipped (empty layoutInfo) reason=$reason revision=${followState.rowRevision}")
-            }
-        } else if (!followState.isFollowing) {
-            AppLogger.debug("ScrollInvariant", "forbidden_scroll reason=$reason revision=${followState.rowRevision}")
-        }
-        // [fix/history-open-at-bottom] Do NOT consume an INITIAL_OPEN request
-        // while the layout is still empty (cold-open window) — otherwise the
-        // "scroll to bottom on open" never fires once content arrives. Keep it
-        // pending for the next layoutInfo-keyed run of this effect.
-        // [fix/history-open-at-bottom-verify] Strengthened: consume only once
-        // the sentinel is PROVABLY visible. For INITIAL_OPEN this is the
-        // successful-landing proof; every other reason consumes in this run
-        // exactly as before.
-        if (!retainPending) {
-            followState = consumeBottomRequest(followState)
-        }
-    }
 
-    // T-android-use-dragging-guard: does a real pointer drag currently own the
-    // list? The anchor-guard reads this so it never fires a compensation
-    // scroll while the user's finger is mid-gesture (racing the drag would
-    // cause visible jitter). Tracked by the DragInteraction collector below.
-    var isUserDragging by remember { mutableStateOf(false) }
-    // [bottom-fix] Timestamp of the last drag-stop. The anchor-guard skips
-    // compensation for 300ms after a drag ends, giving the state machine
-    // (stickToBottom disengage) time to settle even if isNearBottom lagged.
-    var lastDragStopMs by remember { mutableStateOf(0L) }
+        // Delegate the decision to the pure gate (ChatFollowController) so the
+        // exact contract is JVM-tested; here we only map its verdict to
+        // Compose side effects.
+        val sentinelVisible = isBottomSentinelVisible(listState.layoutInfo)
+        val hasRows = listState.layoutInfo.totalItemsCount > 0
+        when (
+            decideBottomScroll(
+                reason = reason,
+                sessionLoaded = sessionLoaded,
+                sentinelVisible = sentinelVisible,
+                hasRows = hasRows,
+                isFollowing = followState.isFollowing,
+                isScrollInProgress = listState.isScrollInProgress,
+                isUserDragging = isUserDragging,
+                focusTarget = pendingFocusId != null,
+            )
+        ) {
+            BottomScrollAction.WAIT_FOR_DATA -> {
+                // INITIAL_OPEN before data is ready — keep pending. The effect
+                // re-runs when [sessionLoaded] flips true (it is a key).
+                return@LaunchedEffect
+            }
+
+            BottomScrollAction.SCROLL_TO_BOTTOM -> {
+                // Scroll to the bottom sentinel (always the LAST item). The
+                // index is resolved AFTER the data-ready gate has passed and
+                // the suspend overload snapToItemIndexInternal(forceRemeasure =
+                // true) re-measures against the LIVE item provider, so a stale
+                // pre-load totalItemsCount cannot drift the target the way it
+                // did in rounds 1–3 (where the effect re-ran on every layout
+                // change with a stale count). The drift-eliminating properties
+                // are the data-ready gate + exactly-once consume + no
+                // layoutInfo re-fire key — not an index-vs-key distinction.
+                AppLogger.debug("ScrollSrc", "scroll-bottom reason=$reason revision=${followState.rowRevision}")
+                listState.scrollToItem(listState.layoutInfo.totalItemsCount - 1)
+            }
+
+            BottomScrollAction.SKIP_AND_CONSUME -> {
+                AppLogger.debug("ScrollSrc", "request-bottom skipped (focus/draft/drag/not-following) reason=$reason revision=${followState.rowRevision}")
+            }
+        }
+
+        // Exactly-once: consume the request after this single run. No retained
+        // INITIAL_OPEN, no layout-re-fire — the key-anchored suspend scroll
+        // either landed or was legitimately skipped (draft / focus / dragging /
+        // not-following). This is what eliminates the "already at bottom then
+        // jumps away again" loop and the third-round "scrolled up then jumped
+        // to an earlier message" regression.
+        followState = consumeBottomRequest(followState)
+    }
 
     // [forward-stable] Anchor-guard REMOVED — the reverseLayout compensation
     // loop is gone with the forward list. Content grows at the tail; the
