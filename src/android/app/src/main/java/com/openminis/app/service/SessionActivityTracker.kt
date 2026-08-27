@@ -229,9 +229,11 @@ object SessionActivityTracker {
      * The foreground service's notification "Stop" action calls
      * [cancelAllActiveStreams] which iterates this map — without it the
      * notification can only kill itself, leaving streamJobs running until
-     * the OS reclaims the process. Held under the same Map lock as the
-     * activeSessions flow so callers don't observe a transient state where
-     * the session is "active" but has no canceller.
+     * the OS reclaims the process. Guarded by its own
+     * `synchronized(streamCancellers)` block (independent of the lock-free
+     * `_activeSessions` StateFlow); the canceller is registered under that
+     * lock before [setActive] returns, so a caller never observes a session
+     * as "active" without its canceller.
      */
     private val streamCancellers = mutableMapOf<String, () -> Unit>()
 
