@@ -151,12 +151,13 @@ class BackgroundTaskNotifier(
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                     }
                 }
-                // Notification id derived from the work tag (Int; never Long —
-                // 0x80000000 would infer Long and break the Int overloads of
-                // getActivity/notify). Colliding with a session-notification id
-                // is vanishingly unlikely and only risks overwriting that one
-                // notice in the tray.
-                val id = tag.hashCode()
+                // Notification id derived from the work tag, salted with a
+                // dedicated prefix-independent bucket so it can never collide
+                // with a session-completion id on the same channel (both post
+                // with tag=null into the shared (null, Int) id space). Int;
+                // never Long — 0x80000000 would infer Long and break the Int
+                // overloads of getActivity/notify.
+                val id = notificationId(ID_SALT_WORK, tag)
                 val pendingIntent = launchIntent?.let {
                     PendingIntent.getActivity(
                         context,
@@ -280,7 +281,7 @@ class BackgroundTaskNotifier(
         }
         val pendingIntent = PendingIntent.getActivity(
             context,
-            sessionId.hashCode(),
+            notificationId(ID_SALT_SESSION, sessionId),
             launchIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
@@ -301,7 +302,7 @@ class BackgroundTaskNotifier(
             .build()
 
         try {
-            nm.notify(sessionId.hashCode(), notification)
+            nm.notify(notificationId(ID_SALT_SESSION, sessionId), notification)
         } catch (se: SecurityException) {
             // POST_NOTIFICATIONS not granted — silently no-op rather
             // than crashing the agent-completion path.
@@ -373,5 +374,21 @@ class BackgroundTaskNotifier(
     companion object {
         private const val TAG = "TaskNotifier"
         const val CHANNEL_ID = "minis_task_completed_v2"
+
+        // Distinct salts so session-completion and generic-work notifications
+        // land in disjoint id buckets — neither can post with tag=null, so a
+        // bare key.hashCode() would let a coincidental hash overlap overwrite
+        // the other notification on the shared channel.
+        private const val ID_SALT_SESSION = "completion.session."
+        private const val ID_SALT_WORK = "completion.work."
+
+        /**
+         * Derive a stable Int notification id from a purpose-specific salt and
+         * the key. The salt ensures ids for different purposes never collide
+         * (unlike a bare [String.hashCode]); the full-string hash keeps the id
+         * deterministic across process restarts so UPDATE_CURRENT reuses the
+         * same PendingIntent/notification slot.
+         */
+        private fun notificationId(salt: String, key: String): Int = (salt + key).hashCode()
     }
 }
