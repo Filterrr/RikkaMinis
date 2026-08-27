@@ -435,7 +435,7 @@ internal fun UserMessageBubble(
                             ) {
                                 Icon(
                                     imageVector = Icons.Filled.Cancel,
-                                    contentDescription = "Withdraw queued message",
+                                    contentDescription = stringResource(R.string.chat_withdraw_queued),
                                     tint = ChatColors.error,
                                     modifier = Modifier.size(24.dp),
                                 )
@@ -534,7 +534,7 @@ internal fun UserAttachmentList(
         imageUris.forEachIndexed { idx, uri ->
             AsyncImage(
                 model = uri,
-                contentDescription = "Image attachment",
+                contentDescription = stringResource(R.string.chat_image_attachment),
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .size(tileSize)
@@ -676,7 +676,7 @@ private fun ImageGalleryDialog(
             ) {
                 Icon(
                     androidx.compose.material.icons.Icons.Default.Close,
-                    contentDescription = "Close",
+                    contentDescription = stringResource(R.string.common_close),
                     tint = Color.White,
                 )
             }

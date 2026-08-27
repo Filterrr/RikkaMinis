@@ -377,7 +377,7 @@ private fun MdText(
                         clipboardManager.setText(AnnotatedString(snippet))
                         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                         val preview = if (snippet.length > 40) snippet.take(37) + "…" else snippet
-                        Toast.makeText(context, "Copied: $preview", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, context.getString(R.string.chat_copied_preview, preview), Toast.LENGTH_SHORT).show()
                     }
                 }
             }
@@ -2142,7 +2142,7 @@ private fun RenderInlineMath(latex: String, fontSize: TextUnit) {
         val naturalHeightDp = (rendered.bitmap.height / density).dp
         androidx.compose.foundation.Image(
             bitmap = rendered.bitmap.asImageBitmap(),
-            contentDescription = "math: $latex",
+            contentDescription = stringResource(R.string.chat_math_content_desc, latex),
             modifier = Modifier.size(naturalWidthDp, naturalHeightDp),
             contentScale = androidx.compose.ui.layout.ContentScale.Fit,
         )
@@ -2208,7 +2208,7 @@ private fun RenderMathDisplay(latex: String) {
             val scale = if (naturalWidthDp > maxWidth) maxWidth / naturalWidthDp else 1f
             androidx.compose.foundation.Image(
                 bitmap = rendered.bitmap.asImageBitmap(),
-                contentDescription = "math: $latex",
+                contentDescription = stringResource(R.string.chat_math_content_desc, latex),
                 modifier = Modifier.size(naturalWidthDp * scale, naturalHeightDp * scale),
                 contentScale = androidx.compose.ui.layout.ContentScale.Fit,
             )
@@ -2441,7 +2441,7 @@ private fun RenderMdVideo(block: MdBlock.Video) {
             }
             Icon(
                 imageVector = Icons.Filled.PlayCircleFilled,
-                contentDescription = "Play video",
+                contentDescription = stringResource(R.string.chat_play_video),
                 tint = Color.White.copy(alpha = 0.9f),
                 modifier = Modifier.size(56.dp),
             )

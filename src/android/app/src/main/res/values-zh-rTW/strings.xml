@@ -953,4 +953,27 @@
     <string name="sysmsg_revert_busy_compacting">壓縮進行中無法復原壓縮。</string>
     <string name="sysmsg_revert_nothing">沒有可復原的內容——此工作階段上沒有壓縮標記。</string>
     <string name="sysmsg_revert_failed_db">復原失敗：資料庫中找不到標記。</string>
+    <!-- i18n-hardening-B -->
+    <string name="chat_deep_thinking">深度思考</string>
+    <string name="chat_show_full_summary">顯示完整摘要</string>
+    <string name="chat_compact_summary">壓縮摘要</string>
+    <string name="chat_revert_compact">撤銷壓縮</string>
+    <string name="chat_revert_compact_title">撤銷此壓縮？</string>
+    <string name="chat_revert_compact_confirm">將捨棄摘要並恢復其覆蓋的原始訊息。這可能使對話超出模型的上下文視窗——若發生這種情況，長按訊息即可從該處重新壓縮。</string>
+    <string name="chat_tool_edited">已編輯</string>
+    <string name="chat_tool_result">結果</string>
+    <string name="chat_tool_load_more">載入更多（%1$d 行）</string>
+    <string name="chat_tool_load_all">全部載入（約 %1$d 行）</string>
+    <string name="chat_browser_screenshot">瀏覽器截圖</string>
+    <string name="chat_nav_previous">上一個</string>
+    <string name="chat_nav_next">下一個</string>
+    <string name="chat_withdraw_queued">撤回排隊訊息</string>
+    <string name="chat_image_attachment">圖片附件</string>
+    <string name="chat_read_image">讀取圖片</string>
+    <string name="chat_copied_as_markdown">已複製為 Markdown</string>
+    <string name="chat_copied_as_rich">已複製為富文本</string>
+    <string name="chat_copied_preview">已複製：%1$s</string>
+    <string name="chat_math_content_desc">數學公式：%1$s</string>
+    <string name="chat_play_video">播放影片</string>
+
 </resources>
