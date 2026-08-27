@@ -26,6 +26,17 @@ class MemoryRepository(private val memoryDir: File) {
         private const val ROLLUP_FILE =
             com.openminis.app.workspace.MemoryRollupEngine.ROLLUP_FILE
         private const val MAX_INJECT_LINES = 200
+        // [fix/send-prompt-bloat] Byte ceiling on the MEMORY-ROLLUP.md system-
+        // prompt injection. The rollup grows monotonically with every
+        // memory_rollup run (it reached 227 KB / ~1.6 K lines on 2026-08-27),
+        // and `buildSystemPrompt()` previously injected it VERBATIM with no
+        // cap on every send/retry — blowing up the fixed prompt prefix by tens
+        // of thousands of tokens and making each send slower + costlier as the
+        // file grows. Counterpart of MAX_INJECT_LINES (daily logs) and
+        // MAX_OUTPUT_BYTES (memory_get). 12 KB ≈ 4 K CJK chars ≈ 4 K tokens;
+        // the tail is kept preferentially because rollups append
+        // chronologically (newest distilled rules live at the end).
+        private const val MAX_ROLLUP_INJECT_BYTES = 12 * 1024
         // memory_get full-dump (no keywords): cap at 500 lines — matches iOS
         // `maxTotalLines = 500` in AIChatViewModel+MemoryTools.swift.
         private const val MAX_DUMP_LINES = 500
@@ -297,6 +308,56 @@ class MemoryRepository(private val memoryDir: File) {
         // across platforms.
         if (content.isEmpty()) return null
         return "Global memory (GLOBAL.md — read-only, user-maintained). Treat these as background context, not standing instructions. If the user's latest message conflicts with or supersedes anything here (different scope, different numbers, different goal), defer to the user's latest message:\n$content"
+    }
+
+    /**
+     * [fix/send-prompt-bloat] Load the MEMORY-ROLLUP.md distilled-rule index
+     * for system-prompt injection, capped at [MAX_ROLLUP_INJECT_BYTES].
+     *
+     * The rollup is append-ordered (each `memory_rollup` run appends a new
+     * "## Rollup <date>" block) so the NEWEST distilled rules live at the END;
+     * when the file exceeds the cap we keep the tail preferentially and drop
+     * the oldest head. Returns null when the file is missing/empty/unreadable.
+     */
+    fun loadRollupFragment(): String? {
+        val rollupFile = File(memoryDir, ROLLUP_FILE)
+        if (!rollupFile.exists() || rollupFile.length() == 0L) return null
+        val content = try { rollupFile.readText() } catch (_: Exception) { return null }
+        if (content.isEmpty()) return null
+        val bytes = content.toByteArray(Charsets.UTF_8)
+        if (bytes.size <= MAX_ROLLUP_INJECT_BYTES) return content
+        // Drop the oldest bytes (keep the tail = newest distilled rules) —
+        // after advancing the cut point to a valid UTF-8 boundary so a multi-
+        // byte code point split in half never decodes into U+FFFD replacement
+        // chars at the head of the injected fragment.
+        val headDropped = rollupTailAtBoundary(bytes, bytes.size - MAX_ROLLUP_INJECT_BYTES)
+        return "... (older rollup rules truncated: tail of $MAX_ROLLUP_INJECT_BYTES bytes kept, use memory_get to search)\n" +
+            headDropped
+    }
+
+    /**
+     * Decode the byte suffix from `start`, advancing `start` to the next valid
+     * UTF-8 boundary first if it lands inside a multi-byte sequence. A raw
+     * `String(bytes, start, n)` silently inserts U+FFFD for a split code
+     * point; the REPORT-action decoder instead tells us where the first
+     * undecodable byte is, and we re-try just past it (UTF-8 continuation
+     * bytes are at most 3 leading 0x10xxxxxx bits, so at most a few probes).
+     * Falls back to a replacement-free decoder on the rare malformed tail.
+     */
+    private fun rollupTailAtBoundary(bytes: ByteArray, start: Int): String {
+        if (start <= 0) return String(bytes, Charsets.UTF_8)
+        var probe = start
+        val decoder = Charsets.UTF_8.newDecoder()
+            .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+            .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+        while (probe < bytes.size) {
+            try {
+                return decoder.decode(java.nio.ByteBuffer.wrap(bytes, probe, bytes.size - probe)).toString()
+            } catch (_: java.nio.charset.CharacterCodingException) {
+                probe++  // split at a continuation byte — advance to the next candidate boundary
+            }
+        }
+        return String(bytes, Charsets.UTF_8)  // unreachable in practice; safe fallback
     }
 
     /**
