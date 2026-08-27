@@ -3,6 +3,7 @@ package com.openminis.app.debug
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -75,5 +76,84 @@ class LLMRequestRedactTest {
         val out = LLMRequestLog.redactHeaders(mapOf("X-Custom-Hdr" to "Bearer sk-xyz"))
         assertNull(out.keys.firstOrNull { it == "Authorization" })
         assertEquals("Bearer sk-xyz", out["X-Custom-Hdr"])
+    }
+
+    // ── URL query redaction (F-3) ───────────────────────────────────────────
+
+    @Test
+    fun `gemini-style key query param is redacted`() {
+        val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini:generateContent?key=AIzaSyD-verysecretkey123"
+        val out = LLMRequestLog.redactURL(url)
+        assertFalse(out.contains("verysecretkey123"))
+        assertTrue(out.contains("key=[redacted:"))
+    }
+
+    @Test
+    fun `benign query params pass through while-sensitive ones are redacted`() {
+        val url = "https://api.example.com/v1/chat?model=gpt-4&api_key=sekritapikey&stream=true"
+        val out = LLMRequestLog.redactURL(url)
+        assertTrue(out.contains("model=gpt-4"))
+        assertTrue(out.contains("stream=true"))
+        assertFalse(out.contains("sekritapikey"))
+        assertTrue(out.contains("api_key=[redacted:"))
+    }
+
+    @Test
+    fun `case-insensitive sensitive query key match`() {
+        val out = LLMRequestLog.redactURL("https://api.example.com/x?Token=abc12345&foo=bar")
+        assertFalse(out.contains("abc12345"))
+        assertTrue(out.contains("Token=[redacted:"))
+        assertTrue(out.contains("foo=bar"))
+    }
+
+    @Test
+    fun `url without query string passes through unchanged`() {
+        val url = "https://api.example.com/v1/models"
+        assertEquals(url, LLMRequestLog.redactURL(url))
+    }
+
+    @Test
+    fun `query param without equals sign is left alone`() {
+        val url = "https://api.example.com/x?flag"
+        assertEquals(url, LLMRequestLog.redactURL(url))
+    }
+
+    // ── requestBody secret scanning (F-4) ───────────────────────────────────
+
+    @Test
+    fun `sk-token in body is masked`() {
+        val body = """{"messages":[],"api_key":"sk-abcdefghijklmnop123456"}"""
+        val out = LLMRequestLog.redactSecrets(body)
+        assertFalse(out.contains("sk-abcdefghijklmnop"))
+        assertTrue(out.contains("sk-***"))
+    }
+
+    @Test
+    fun `ghp-github-token in body is masked`() {
+        val body = """{"token":"ghp_0123456789abcdefghijklmnop"}"""
+        val out = LLMRequestLog.redactSecrets(body)
+        assertFalse(out.contains("ghp_0123456789"))
+        assertTrue(out.contains("ghp_***"))
+    }
+
+    @Test
+    fun `bearer-token in body is masked`() {
+        val body = """{"authorization":"Bearer eyJhbGciOiJIUzI1NiJ9.abc.def"}"""
+        val out = LLMRequestLog.redactSecrets(body)
+        assertFalse(out.contains("eyJhbGciOiJIUzI1NiJ9"))
+        assertTrue(out.contains("Bearer ***"))
+    }
+
+    @Test
+    fun `api-key-value pair in body is masked`() {
+        val body = """{"api_key": "sk-abcdefghijklmnop123456"}"""
+        val out = LLMRequestLog.redactSecrets(body)
+        assertFalse(out.contains("sk-abcdefghijklmnop"))
+    }
+
+    @Test
+    fun `benign body content is not touched`() {
+        val body = """{"model":"gpt-4","messages":[{"role":"user","content":"hello"}]}"""
+        assertEquals(body, LLMRequestLog.redactSecrets(body))
     }
 }

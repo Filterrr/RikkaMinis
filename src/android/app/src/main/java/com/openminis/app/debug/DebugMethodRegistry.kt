@@ -80,6 +80,20 @@ object DebugMethodRegistry {
                 "args" to JSONArray().apply { put("messages"); put("--id"); put("<session_id>"); put("--full") },
             ),
         ),
+        MethodSpec(
+            name = "debug.minisConfig.exec",
+            description = "DEBUG-only: exercise the minis-config CLI path (ConfigBridge) directly. Re-uses the production write path but skips the in-app confirmation, so harnesses can verify config get/set end-to-end without an in-shell prompt.",
+            params = listOf(
+                ParamSpec("subcommand", "string", required = true, description = "One of \"set\" or \"get\"."),
+                ParamSpec("path", "string", required = true, description = "Config field path (e.g. \"soul.name\" or \"providers[0].baseUrl\")."),
+                ParamSpec("value_json", "string", required = false, description = "For subcommand=set: the JSON-serialized value to write into 'path'."),
+            ),
+            returns = "subcommand=get → the config field value; subcommand=set → the ConfigBridge write-batch result.",
+            example = ex(
+                "subcommand" to "get",
+                "path" to "soul.name",
+            ),
+        ),
     )
 
     private val BASE_METHODS: List<MethodSpec> = listOf(
