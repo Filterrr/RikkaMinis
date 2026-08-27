@@ -60,8 +60,15 @@ class TextToSpeechManager : TextToSpeech.OnInitListener {
 
     /**
      * Initializes the TTS engine. Must be called before speaking.
+     *
+     * [T-android-tts-init-leak] Re-init is defensive: shutdown the previous
+     * engine first so a repeated [init] doesn't leak the prior [TextToSpeech]
+     * instance (which holds native audio resources until shutdown).
      */
     fun init(context: Context) {
+        tts?.let { old -> old.shutdown() }
+        tts = null
+        isInitialized = false
         tts = TextToSpeech(context.applicationContext, this)
     }
 
@@ -261,12 +268,24 @@ class TextToSpeechManager : TextToSpeech.OnInitListener {
             @Deprecated("Deprecated in API level 21")
             override fun onError(utteranceId: String?) {
                 Log.e(TAG, "TTS error for utterance: $utteranceId")
-                _isSpeaking.value = false
+                // [T-android-tts-onerror-drift] Advance the position counter on
+                // error too, so pause/resume doesn't replay (or skip) the failed
+                // utterance: without this, pausedAtIndex lags the actually-spoken
+                // count by one after an error, and the next resume rebuilds the
+                // remaining subList from the wrong offset.
+                pausedAtIndex++
+                if (pausedAtIndex >= pendingTexts.size) {
+                    _isSpeaking.value = false
+                }
             }
 
             override fun onError(utteranceId: String?, errorCode: Int) {
                 Log.e(TAG, "TTS error for utterance $utteranceId, code: $errorCode")
-                _isSpeaking.value = false
+                // See [T-android-tts-onerror-drift] on the deprecated overload.
+                pausedAtIndex++
+                if (pausedAtIndex >= pendingTexts.size) {
+                    _isSpeaking.value = false
+                }
             }
         }
 }

@@ -86,6 +86,16 @@ class MinisDocumentsProvider : DocumentsProvider() {
         val clean = documentId.trim().trim('/')
         if (clean.isEmpty()) return root
         if (clean.contains("..")) throw FileNotFoundException("Invalid path: $documentId")
+        // [audit-P3: resolveDoc canonicalize] This refuses literal ".." but does
+        // NOT canonicalize or guard against symlink traversal. It is safe ONLY
+        // while the provider is unregistered (Manifest has no
+        // MinisDocumentsProvider entry), so a symlink in shared/memory pointing
+        // outside providerRoot cannot be read. BEFORE wiring the Manifest
+        // registration below, replace `File(root, clean)` with a
+        // canonicalize + prefix guard (canonicalPath must start with
+        // providerRoot().canonicalPath + "/", else throw FileNotFoundException) —
+        // mirror PRootKernel.safeResolveWithin. Do not ship the registration
+        // without this.
         return File(root, clean)
     }
 

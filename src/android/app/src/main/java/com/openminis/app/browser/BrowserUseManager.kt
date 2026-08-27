@@ -53,6 +53,15 @@ class BrowserUseManager(
         private const val MAX_FULL_PAGE_HEIGHT_PX = 32768
 
         /**
+         * [T-android-screenshot-cache-cap] Bucket size for [pruneScreenshotCache]:
+         * keep at most this many snapshot/screenshot jpg files in
+         * `cacheDir/browser_screenshots`. 128 files ≈ a few MB of JPEG at
+         * typical viewport sizes — bounded, and auto-snapshot-heavy sessions
+         * still leave the most recent frames intact for the agent to read.
+         */
+        private const val MAX_SCREENSHOT_CACHE_FILES = 128
+
+        /**
          * Minimal HTML used in place of `about:blank` when a fresh tab
          * needs a page refresh (e.g. `set_viewport` before any navigation).
          * `<meta name="viewport" content="width=device-width">` makes
@@ -155,6 +164,25 @@ class BrowserUseManager(
     /** Screenshots directory. */
     private val screenshotsDir: File by lazy {
         File(webView.context.cacheDir, "browser_screenshots").also { it.mkdirs() }
+    }
+
+    /**
+     * [T-android-screenshot-cache-cap] Upper bound on the number of local
+     * screenshot jpg files kept in [screenshotsDir]. `attachSnapshot` writes a
+     * snapshot for every visual action; without a cap this directory grows
+     * without bound (independently of the system-managed cache cleanup).
+     * Pruned on [saveBitmapToFile] — cheap, best-effort, and only after a
+     * successful save so a write failure never drops older artifacts.
+     */
+    private fun pruneScreenshotCache() {
+        val cap = MAX_SCREENSHOT_CACHE_FILES
+        val files = screenshotsDir.listFiles() ?: return
+        if (files.size <= cap) return
+        // Oldest first: filenames embed epoch-millis, so a plain name sort is
+        // a monotonic time sort and keeps the most recent files.
+        files.sortedBy { it.name }
+            .dropLast(cap)
+            .forEach { runCatching { it.delete() } }
     }
 
     /** Deferred used by executeJS to receive results from async scripts via JS bridge. */
@@ -849,6 +877,9 @@ class BrowserUseManager(
         file.outputStream().use { out ->
             bitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)
         }
+        // [T-android-screenshot-cache-cap] Bound the local cache after a
+        // successful save (see pruneScreenshotCache for the rationale).
+        pruneScreenshotCache()
         return file
     }
 
@@ -1569,6 +1600,13 @@ class BrowserUseManager(
             // it aren't rejected, but NOT applied yet — CookieManager.setCookie
             // honors a SameSite attribute, but wiring it needs validation against
             // the cross-site captcha flows. TODO [set-cookies-samesite].
+            //
+            // [audit-B-3] This is a deliberate deferral, not an oversight: the
+            // field is parsed and type-checked above strictly to avoid rejecting
+            // otherwise-valid cookie exports, but omitting the SameSite attribute
+            // keeps the cookie at the WebView default (Lax). If a cross-site
+            // captcha flow ever needs a precise SameSite=None + Secure pair, add
+            // "; SameSite=…" here — and keep the existing parse guard.
             @Suppress("UNUSED_VARIABLE")
             val sameSite = cookieString(raw, "sameSite", "same_site")
 
