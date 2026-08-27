@@ -298,4 +298,60 @@ class ModelExecutionRunDirTest {
         ModelExecutionMailbox.writeClientAck(d)
         assertTrue(ModelExecutionRunDir.clientAckPresent(d))
     }
+
+    // ── [worker-death early bail] liveness beat semantics ────────────
+    // Both the streaming death probe (ChatStreamOffloadHandler) and the
+    // non-streaming dispatcher's early bail depend on this three-state
+    // contract:
+    //   no beat file      → neither alive nor stale (worker still starting)
+    //   beat fresh        → alive, not stale
+    //   beat older than   → stale, not alive (worker provably stopped
+    //   LIVENESS_STALE_MS   beating — dead/frozen)
+
+    @Test
+    fun `no beat file is neither alive nor stale - worker still starting`() {
+        val d = dir()
+        assertFalse(ModelExecutionRunDir.beatAlive(d))
+        assertFalse(ModelExecutionRunDir.beatStale(d))
+    }
+
+    @Test
+    fun `fresh beat is alive and not stale`() {
+        val d = dir()
+        val now = System.currentTimeMillis()
+        assertTrue(ModelExecutionRunDir.touchLivenessBeat(d))
+        assertTrue(ModelExecutionRunDir.beatAlive(d, nowMs = now))
+        assertFalse(ModelExecutionRunDir.beatStale(d, nowMs = now))
+    }
+
+    @Test
+    fun `beat older than stale ceiling is stale and not alive`() {
+        val d = dir()
+        assertTrue(ModelExecutionRunDir.touchLivenessBeat(d))
+        val f = File(d, ModelExecutionRunDir.FILE_LIVENESS_BEAT)
+        val last = System.currentTimeMillis() - ModelExecutionRunDir.LIVENESS_STALE_MS - 1
+        assertTrue(f.setLastModified(last))
+        assertTrue(ModelExecutionRunDir.beatStale(d))
+        assertFalse(ModelExecutionRunDir.beatAlive(d))
+    }
+
+    @Test
+    fun `beat exactly at the stale boundary still counts as alive`() {
+        val d = dir()
+        assertTrue(ModelExecutionRunDir.touchLivenessBeat(d))
+        val f = File(d, ModelExecutionRunDir.FILE_LIVENESS_BEAT)
+        val boundary = System.currentTimeMillis() - ModelExecutionRunDir.LIVENESS_STALE_MS
+        assertTrue(f.setLastModified(boundary))
+        // now - last == LIVENESS_STALE_MS exactly → alive (<= comparison)
+        assertTrue(ModelExecutionRunDir.beatAlive(d))
+        assertFalse(ModelExecutionRunDir.beatStale(d))
+    }
+
+    @Test
+    fun `touchLivenessBeat leaves no torn tmp residue`() {
+        val d = dir()
+        assertTrue(ModelExecutionRunDir.touchLivenessBeat(d))
+        assertTrue(File(d, ModelExecutionRunDir.FILE_LIVENESS_BEAT).isFile)
+        assertFalse(File(d, "${ModelExecutionRunDir.FILE_LIVENESS_BEAT}.tmp").exists())
+    }
 }

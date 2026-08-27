@@ -234,6 +234,18 @@ object ModelExecutionDispatcher {
         // Poll for the result file.
         val result: String? = withTimeoutOrNull(REQUEST_TIMEOUT_MS) {
             var read: String? = null
+            // [worker-death early bail 2026-08-27] The non-streaming worker also
+            // beats liveness.beat (TF-J2). A beat that EXISTS but has gone stale
+            // (no refresh for > LIVENESS_STALE_MS) with no result means the
+            // worker process died (LMK / crash) — waiting out the full
+            // REQUEST_TIMEOUT_MS budget just delays the caller's structured
+            // error / retry by up to 3 minutes. Bail as soon as death is
+            // provable. A run still starting (no beat file yet) is never
+            // classified as dead — same three-state semantics as
+            // ChatStreamOffloadHandler's death probe. The result check stays
+            // FIRST so a completed run (whose beat legitimately stops after
+            // finishRequest) never false-bails.
+            val beatFile = File(dir, ModelExecutionRunDir.FILE_LIVENESS_BEAT)
             while (true) {
                 if (resultFile.exists()) {
                     read = try {
@@ -242,6 +254,14 @@ object ModelExecutionDispatcher {
                         Log.w(TAG, "read result failed: ${e.message}")
                         null
                     }
+                    break
+                }
+                if (beatFile.isFile && ModelExecutionRunDir.beatStale(dir)) {
+                    Log.w(
+                        TAG,
+                        "worker liveness beat stale with no result — bailing early " +
+                            "(worker died; waited ${System.currentTimeMillis() - beatFile.lastModified()}ms since last beat) dir=${dir.name}",
+                    )
                     break
                 }
                 delay(POLL_INTERVAL_MS)
