@@ -14,7 +14,7 @@
 ## 采样协议（真机，protocol 见 `docs/stability/performance-baseline.md` §4）
 
 设备：Redmi Note 12 Turbo (marble)，Android 15 + HyperOS 3.0。
-场景集（`SyntheticWorkload.Scenario`，6 组共约 48 次 run）：
+场景集（6 组共约 48 次 run，原 `SyntheticWorkload.Scenario` 已随 2026-08-27 死代码清理移除，场景表在此留档）：
 
 | 场景 | 次数 | 关键指标 |
 |---|---|---|
