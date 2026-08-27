@@ -167,11 +167,11 @@ class ChatFollowControllerTest {
     // ── fix/history-open-at-bottom-04: data-ready exactly-once consumer ──────
 
     // The bottom scroll is now a single data-ready `scrollToItem` driven by
-    // [decideBottomScroll]; below we pin the pure decision gate.
+    // [decideBottomScroll]; below we pin the pure decision gate. INITIAL_OPEN
+    // no longer flows through the gate — it is owned by the flatten collector
+    // (see shouldScrollToBottomOnFirstRows tests at the bottom).
 
     private fun decide(
-        reason: BottomRequestReason? = BottomRequestReason.INITIAL_OPEN,
-        sessionLoaded: Boolean = true,
         sentinelVisible: Boolean = false,
         hasRows: Boolean = true,
         isFollowing: Boolean = true,
@@ -179,8 +179,6 @@ class ChatFollowControllerTest {
         isUserDragging: Boolean = false,
         focusTarget: Boolean = false,
     ) = decideBottomScroll(
-        reason = reason,
-        sessionLoaded = sessionLoaded,
         sentinelVisible = sentinelVisible,
         hasRows = hasRows,
         isFollowing = isFollowing,
@@ -191,25 +189,6 @@ class ChatFollowControllerTest {
 
     @Test fun `data ready and following and not dragging scrolls to bottom`() {
         assertEquals(BottomScrollAction.SCROLL_TO_BOTTOM, decide())
-    }
-
-    @Test fun `initial open before data ready waits for data`() {
-        assertEquals(
-            BottomScrollAction.WAIT_FOR_DATA,
-            decide(reason = BottomRequestReason.INITIAL_OPEN, sessionLoaded = false),
-        )
-    }
-
-    @Test fun `non-open reasons never wait for data even if not loaded`() {
-        for (reason in listOf(
-            BottomRequestReason.SEND,
-            BottomRequestReason.RESUME,
-            BottomRequestReason.RETRY,
-            BottomRequestReason.FAB_DOWN,
-            BottomRequestReason.STREAM_PROGRESS,
-        )) {
-            assertEquals("$reason must not gate on sessionLoaded", BottomScrollAction.SCROLL_TO_BOTTOM, decide(reason = reason, sessionLoaded = false))
-        }
     }
 
     @Test fun `user dragging abandons the scroll and consumes`() {
@@ -234,5 +213,41 @@ class ChatFollowControllerTest {
 
     @Test fun `empty layout safely consumes instead of scrolling`() {
         assertEquals(BottomScrollAction.SKIP_AND_CONSUME, decide(hasRows = false))
+    }
+
+    // ── fix/history-open-at-bottom-04: collector-owned INITIAL_OPEN ──────────
+
+    @Test fun `first rows fire the opening scroll only for an init open while following`() {
+        assertTrue(
+            shouldScrollToBottomOnFirstRows(
+                pendingBottomRequest = BottomRequestReason.INITIAL_OPEN,
+                isFollowing = true,
+            ),
+        )
+    }
+
+    @Test fun `first rows do not scroll when detached even with an init open pending`() {
+        assertFalse(
+            shouldScrollToBottomOnFirstRows(
+                pendingBottomRequest = BottomRequestReason.INITIAL_OPEN,
+                isFollowing = false,
+            ),
+        )
+    }
+
+    @Test fun `first rows do not scroll for non-open reasons`() {
+        for (reason in listOf(
+            BottomRequestReason.SEND,
+            BottomRequestReason.RESUME,
+            BottomRequestReason.RETRY,
+            BottomRequestReason.FAB_DOWN,
+            BottomRequestReason.STREAM_PROGRESS,
+            null,
+        )) {
+            assertFalse(
+                "reason=$reason must not fire the first-rows scroll",
+                shouldScrollToBottomOnFirstRows(pendingBottomRequest = reason, isFollowing = true),
+            )
+        }
     }
 }

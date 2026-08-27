@@ -136,6 +136,11 @@ fun consumeBottomRequest(state: FollowState): FollowState =
  * This is the single gate the ChatScreen effect delegates to; keeping it pure
  * makes the "scroll exactly once / never yank a dragging reader / never
  * scroll when a focus target owns position" contract JVM-testable.
+ *
+ * NOTE: [BottomRequestReason.INITIAL_OPEN] no longer flows through this gate.
+ * Its scroll-to-bottom is handled by the flatten collector at the data source
+ * (the single place where the real item list first becomes non-empty — see
+ * [shouldScrollToBottomOnFirstRows]), so no "wait for data" state lives here.
  */
 enum class BottomScrollAction {
     /** Scroll-to-bottom (sentinel = last item), then consume the request exactly once. */
@@ -143,23 +148,17 @@ enum class BottomScrollAction {
 
     /** No scroll this run; consume the request (draft / focus / not-following / forbidden). */
     SKIP_AND_CONSUME,
-
-    /** Keep the INITIAL_OPEN request pending — session data not loaded yet. */
-    WAIT_FOR_DATA,
 }
 
 /**
  * Decision rules (mirror the consumer effect exactly):
  *  1. A focus target owns position → never scroll to bottom (consume).
- *  2. INITIAL_OPEN before data is ready → wait (keep pending).
- *  3. FOLLOWING + no in-flight scroll + no user drag + sentinel off-screen:
- *       rows present → scroll (data-ready); rows absent → safe consume.
- *  4. Anything else (not following, mid-scroll, dragging, sentinel already
+ *  2. FOLLOWING + no in-flight scroll + no user drag + sentinel off-screen:
+ *       rows present → scroll; rows absent → safe consume.
+ *  3. Anything else (not following, mid-scroll, dragging, sentinel already
  *     visible) → consume without scrolling (no re-fire, no yank).
  */
 internal fun decideBottomScroll(
-    reason: BottomRequestReason?,
-    sessionLoaded: Boolean,
     sentinelVisible: Boolean,
     hasRows: Boolean,
     isFollowing: Boolean,
@@ -168,9 +167,6 @@ internal fun decideBottomScroll(
     focusTarget: Boolean,
 ): BottomScrollAction {
     if (focusTarget) return BottomScrollAction.SKIP_AND_CONSUME
-    if (reason == BottomRequestReason.INITIAL_OPEN && !sessionLoaded) {
-        return BottomScrollAction.WAIT_FOR_DATA
-    }
     val shouldScroll = isFollowing &&
         !isScrollInProgress &&
         !isUserDragging &&
@@ -181,3 +177,20 @@ internal fun decideBottomScroll(
     }
     return BottomScrollAction.SKIP_AND_CONSUME
 }
+
+/**
+ * [fix/history-open-at-bottom-04] Should the flatten collector fire the
+ * original scroll-to-bottom on the FIRST non-empty item publish this session?
+ *
+ * The INITIAL_OPEN intent is deliberately NOT consumed by the bottom-scroll
+ * consumer effect (which would otherwise race the async flatten and consume
+ * the request against an empty list — the round-4 "open then jump away" bug).
+ * Instead the collector itself owns this fire: on the first non-empty
+ * [flatItems] publish it checks whether an INITIAL_OPEN is still pending while
+ * following, and if so scrolls once and consumes. Pure, JVM-testable.
+ */
+internal fun shouldScrollToBottomOnFirstRows(
+    pendingBottomRequest: BottomRequestReason?,
+    isFollowing: Boolean,
+): Boolean =
+    pendingBottomRequest == BottomRequestReason.INITIAL_OPEN && isFollowing
