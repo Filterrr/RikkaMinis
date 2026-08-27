@@ -5,6 +5,7 @@ import com.openminis.app.config.ConfigAccess
 import com.openminis.app.config.ConfigRegistry
 import com.openminis.app.config.ConfigValue
 import com.openminis.app.data.model.FallbackStrategy
+import com.openminis.app.data.model.ModelEntry
 import com.openminis.app.data.model.ModelGroup
 import com.openminis.app.data.model.RoutingStrategy
 import com.openminis.app.data.model.ThinkingLevel
@@ -165,7 +166,8 @@ object ConfigBackup {
             // id — so without a mapping those references dangle on restore and
             // every group-typed default is rejected. Carry the source entry
             // uuids here, in the SAME order exportInstanceJSON emits its `models`
-            // array (visible entries, then hidden), so import can pair old→new
+            // array (the underlying list's append order — visible and hidden
+            // interleaved, NOT visible-then-hidden), so import can pair old→new
             // uuid positionally. `_`-prefixed to signal a backup-layer annotation;
             // importInstanceJSON ignores unknown keys, so the provider wire
             // format is untouched.
@@ -179,7 +181,8 @@ object ConfigBackup {
             // visible models + custom models) + their overrides, and keeps the
             // sibling device from learning models the user never selected. The
             // `models` array and `_entryIds` MUST be filtered in lockstep — they
-            // are positional-paired (visible first, then hidden) for import's
+            // are positional-paired (in the same append-order as exportInstance
+            // JSON emits its `models` array) for import's
             // old→new uuid remap. [filterHiddenModels] handles both sides.
             val entryIds = JSONArray()
             if (includeHiddenModels) {
@@ -415,19 +418,26 @@ object ConfigBackup {
     /**
      * Entry uuids for [instanceId] in the exact order
      * [ProviderRepository.exportInstanceJSON] serializes its `models` array:
-     * visible entries first, then hidden ones. Keeping this in lock-step with
-     * that method is what makes positional old→new uuid pairing correct on
-     * import; if exportInstanceJSON's ordering ever changes, this must follow.
+     * the underlying list's append order (visible and hidden entries
+     * interleaved as inserted), NOT a visible-then-hidden split. Keeping this
+     * in lock-step with that method is what makes positional old→new uuid
+     * pairing correct on import; if exportInstanceJSON's ordering ever
+     * changes, this must follow.
+     *
+     * [fix-audit-finding-1] This previously concatenated
+     * `visibleEntries + filter(isHidden)`, which diverges from
+     * exportInstanceJSON's single `filter { providerInstanceId == instanceId }`
+     * once visible/hidden entries are interleaved (almost always after a
+     * refresh) — positional pairing then mapped model-group members onto the
+     * wrong entry. `entriesFor` is the exact same predicate + order as
+     * exportInstanceJSON, so the three paths (export, append-import,
+     * merge-import) all pair by identical positioning.
      */
     private fun orderedEntryIds(
         providerRepo: ProviderRepository,
         instanceId: String,
     ): List<String> {
-        val visible = providerRepo.visibleEntries(instanceId)
-        val hidden = providerRepo.config.value.modelEntries.filter {
-            it.providerInstanceId == instanceId && it.isHidden
-        }
-        return (visible + hidden).map { it.id }
+        return entryIdsInExportOrder(providerRepo.entriesFor(instanceId))
     }
 
     /**
@@ -1172,6 +1182,28 @@ object ConfigBackup {
  */
 internal fun isCatalogCacheModel(isHidden: Boolean, isCustom: Boolean): Boolean =
     isHidden && !isCustom
+
+/**
+ * [fix-audit-finding-1] The entry-id ordering contract.
+ *
+ * `_entryIds` MUST be emitted in the exact order [ProviderRepository.exportInstanceJSON]
+ * serializes its `models` array — the underlying list's *append* order, which
+ * interleaves visible and hidden entries exactly as they were inserted, NOT a
+ * re-sorted visible-then-hidden split. Both exportInstanceJSON and
+ * [orderedEntryIds] derive from the same `filter { providerInstanceId ==
+ * instanceId }`, so this projection is the identity over that filter and the
+ * two stay in lock-step by construction.
+ *
+ * This is a pure, JVM-testable function (no Android [ProviderRepository])
+ * precisely so the ordering contract can be pinned by [EntryIdOrderContractTest]:
+ * given any interleaved visible/hidden entry list, this projection must equal
+ * the `models`-array order (the same list's `baseModel.id` order). A future
+ * edit that re-sorts here — e.g. reintroducing a `visible + hidden` split —
+ * breaks positional old→new uuid pairing on merge-import and must fail the
+ * test.
+ */
+internal fun entryIdsInExportOrder(entries: List<ModelEntry>): List<String> =
+    entries.map { it.id }
 
 /**
  * [T-backup-chat-idempotent] Existence-guarded chat restore used by
