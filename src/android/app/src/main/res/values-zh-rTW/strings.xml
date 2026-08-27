@@ -927,4 +927,30 @@
     <string name="model_group_cost_tier_cheap">Cheap</string>
     <string name="model_group_cost_tier_normal">Normal</string>
     <string name="model_group_cost_tier_expensive">Expensive</string>
+    <!-- i18n-hardening-A -->
+    <string name="sysmsg_memory_writes_on">記憶體寫入已開啟（讀取不受影響）。</string>
+    <string name="sysmsg_memory_writes_off">記憶體寫入已關閉（讀取不受影響）。</string>
+    <string name="sysmsg_thinking_unsupported">目前模型不支援深度思考。</string>
+    <string name="sysmsg_thinking_set">思考強度已設為 %1$s。</string>
+    <string name="sysmsg_compact_busy_turn">回覆進行中無法壓縮，請先停止目前回覆。</string>
+    <string name="sysmsg_compact_busy">壓縮正在進行，請等待完成。</string>
+    <string name="sysmsg_compacted_count">已壓縮 %1$d 則訊息</string>
+    <string name="sysmsg_compact_failed">壓縮失敗：%1$s</string>
+    <string name="sysmsg_context_full_hint">上下文即將佔滿（%1$d / %2$d tokens），可執行 /compact 將較早的對話摺疊為摘要。</string>
+    <string name="sysmsg_context_full_auto">上下文即將佔滿（%1$d / %2$d tokens），正在自動壓縮較早的對話。</string>
+    <string name="sysmsg_wait_compact">請等待目前壓縮完成後再傳送。</string>
+    <string name="sysmsg_context_trimmed">上下文已達 %1$d 限制，已自動裁剪 %2$d 則最舊的對話以繼續任務。</string>
+    <string name="sysmsg_compact_no_provider">未設定模型提供者，無法壓縮。</string>
+    <string name="sysmsg_compact_empty_session">沒有可壓縮的內容——工作階段為空。</string>
+    <string name="sysmsg_compact_no_persisted">無法壓縮：尚無已儲存的訊息。</string>
+    <string name="sysmsg_compact_already_done">已壓縮到目前這一點。</string>
+    <string name="sysmsg_compact_nothing">沒有可壓縮的內容。</string>
+    <string name="sysmsg_compact_budget_exhausted">已略過壓縮：預算已耗盡。</string>
+    <string name="sysmsg_compact_empty_summary">壓縮未產生任何輸出——請稍後重試。</string>
+    <string name="sysmsg_compact_anchor_failed">壓縮失敗：無法錨定到已儲存的訊息。</string>
+    <string name="sysmsg_compact_anchor_id_missing">壓縮失敗：錨點訊息 ID 不可用。</string>
+    <string name="sysmsg_revert_busy_stream">回覆進行中無法復原壓縮。</string>
+    <string name="sysmsg_revert_busy_compacting">壓縮進行中無法復原壓縮。</string>
+    <string name="sysmsg_revert_nothing">沒有可復原的內容——此工作階段上沒有壓縮標記。</string>
+    <string name="sysmsg_revert_failed_db">復原失敗：資料庫中找不到標記。</string>
 </resources>

@@ -1582,4 +1582,30 @@
     <string name="model_group_cost_tier_cheap">Cheap</string>
     <string name="model_group_cost_tier_normal">Normal</string>
     <string name="model_group_cost_tier_expensive">Expensive</string>
+    <!-- i18n-hardening-A -->
+    <string name="sysmsg_memory_writes_on">Memory writes enabled. Reads are unaffected.</string>
+    <string name="sysmsg_memory_writes_off">Memory writes disabled. Reads are unaffected.</string>
+    <string name="sysmsg_thinking_unsupported">The current model does not support deep thinking.</string>
+    <string name="sysmsg_thinking_set">Thinking set to %1$s.</string>
+    <string name="sysmsg_compact_busy_turn">Cannot compact while a turn is in progress. Stop the current response first.</string>
+    <string name="sysmsg_compact_busy">A compact is already in progress. Please wait for it to finish.</string>
+    <string name="sysmsg_compacted_count">%1$d messages compacted</string>
+    <string name="sysmsg_compact_failed">Compaction failed: %1$s</string>
+    <string name="sysmsg_context_full_hint">Context is getting full (%1$d / %2$d tokens). Consider running /compact to fold older turns into a summary.</string>
+    <string name="sysmsg_context_full_auto">Context is getting full (%1$d / %2$d tokens) — auto-compacting older turns into a summary.</string>
+    <string name="sysmsg_wait_compact">Wait for the current compact to finish before sending.</string>
+    <string name="sysmsg_context_trimmed">Context reached the %1$d limit; trimmed the oldest %2$d messages to continue.</string>
+    <string name="sysmsg_compact_no_provider">No provider configured. Cannot compact.</string>
+    <string name="sysmsg_compact_empty_session">Nothing to compact — the session is empty.</string>
+    <string name="sysmsg_compact_no_persisted">Cannot compact: no persisted messages yet.</string>
+    <string name="sysmsg_compact_already_done">Already compacted up to this point.</string>
+    <string name="sysmsg_compact_nothing">Nothing to compact.</string>
+    <string name="sysmsg_compact_budget_exhausted">Compact skipped: budget exhausted.</string>
+    <string name="sysmsg_compact_empty_summary">Compaction produced no output — try again later.</string>
+    <string name="sysmsg_compact_anchor_failed">Compact failed: could not anchor to a persisted message.</string>
+    <string name="sysmsg_compact_anchor_id_missing">Compact failed: anchor message id unavailable.</string>
+    <string name="sysmsg_revert_busy_stream">Cannot revert compact while a response is in progress.</string>
+    <string name="sysmsg_revert_busy_compacting">Cannot revert compact while compaction is in progress.</string>
+    <string name="sysmsg_revert_nothing">Nothing to revert — no compact marker on this session.</string>
+    <string name="sysmsg_revert_failed_db">Revert failed: marker not found in DB.</string>
 </resources>
