@@ -1563,4 +1563,15 @@
     <string name="chat_math_content_desc">数学公式：%1$s</string>
     <string name="chat_play_video">播放视频</string>
 
+
+    <!-- i18n-hardening-C -->
+    <string name="filepreview_truncated_kb">已显示前 %1$d KB（共 %2$s）</string>
+    <string name="filepreview_truncated_rows">已显示前 %1$d 行（共 %2$s）</string>
+    <string name="filepreview_no_app">没有可打开此文件的应用。</string>
+    <string name="rootfs_explain_body">rootfs 包含终端环境所用的 Alpine Linux 文件系统。重置将删除所有数据并恢复出厂状态。</string>
+    <string name="rootfs_reset_body">重置：删除全部内容\n注意：持久数据保存在 rootfs 外的共享区域，重置后仍会保留。</string>
+    <string name="config_confirm_effect_warning">这可能影响后续工具调用。</string>
+    <string name="config_confirm_effect_info">可逆操作，建议快速过目。</string>
+    <string name="chat_copy_code">复制代码</string>
+    <string name="rootfs_insufficient_space">空间不足：需要约 %1$d MB，可用仅 %2$d MB。请清理存储后重试。</string>
 </resources>

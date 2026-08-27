@@ -1246,4 +1246,15 @@
     <string name="chat_math_content_desc">Mathematische Formel: %1$s</string>
     <string name="chat_play_video">Video abspielen</string>
 
+
+    <!-- i18n-hardening-C -->
+    <string name="filepreview_truncated_kb">Zeige die ersten %1$d KB von %2$s</string>
+    <string name="filepreview_truncated_rows">Zeige die ersten %1$d Zeilen von %2$s</string>
+    <string name="filepreview_no_app">Keine App verfügbar, um diese Datei zu öffnen.</string>
+    <string name="rootfs_explain_body">Das Rootfs enthält das vom Sandbox verwendete Alpine-Linux-Dateisystem. Ein Zurücksetzen löscht alle Daten und stellt den Werkszustand wieder her.</string>
+    <string name="rootfs_reset_body">Zurücksetzen: Alles löschen\nHinweis: Persistente Daten liegen im freigegebenen Bereich außerhalb des Rootfs und bleiben über Zurücksetzungen hinweg erhalten.</string>
+    <string name="config_confirm_effect_warning">Dies kann spätere Tool-Aufrufe beeinträchtigen.</string>
+    <string name="config_confirm_effect_info">Umkehrbar, aber einen kurzen Blick wert.</string>
+    <string name="chat_copy_code">Code kopieren</string>
+    <string name="rootfs_insufficient_space">Nicht genug Speicherplatz: etwa %1$d MB erforderlich, nur %2$d MB verfügbar. Bitte Speicher freigeben und erneut versuchen.</string>
 </resources>

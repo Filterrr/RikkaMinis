@@ -244,7 +244,7 @@ fun FullscreenImageViewer(
                 ) {
                     Icon(
                         Icons.Default.Close,
-                        contentDescription = "Close",
+                        contentDescription = stringResource(R.string.common_close),
                         tint = Color.White,
                         modifier = Modifier.size(28.dp),
                     )

@@ -1,5 +1,7 @@
 package com.openminis.app.ui.markdown
 
+import com.openminis.app.R
+import androidx.compose.ui.res.stringResource
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
 import android.util.LruCache
@@ -111,7 +113,7 @@ fun KaTeXRenderView(
         // and the formula renders ~density× too large).
         Image(
             bitmap = cached.bitmap.asImageBitmap(),
-            contentDescription = "Math: $latex",
+            contentDescription = stringResource(R.string.chat_math_content_desc, latex),
             modifier = modifier.size(cached.cssWidth.dp, cached.cssHeight.dp),
         )
         return
@@ -128,7 +130,7 @@ fun KaTeXRenderView(
     if (renderedBitmap != null) {
         Image(
             bitmap = renderedBitmap!!.asImageBitmap(),
-            contentDescription = "Math: $latex",
+            contentDescription = stringResource(R.string.chat_math_content_desc, latex),
             modifier = modifier.size(renderedCssWidth.dp, renderedCssHeight.dp),
         )
     } else if (renderError != null) {

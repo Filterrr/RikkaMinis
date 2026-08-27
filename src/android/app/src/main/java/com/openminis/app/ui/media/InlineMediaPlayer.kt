@@ -1,5 +1,7 @@
 package com.openminis.app.ui.media
 
+import com.openminis.app.R
+import androidx.compose.ui.res.stringResource
 import android.content.Intent
 import android.media.MediaPlayer
 import android.net.Uri
@@ -209,7 +211,7 @@ fun InlineAudioPlayer(
                         ) {
                             Icon(
                                 Icons.Default.Stop,
-                                contentDescription = "Stop",
+                                contentDescription = stringResource(R.string.browser_stop),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(18.dp),
                             )
@@ -494,7 +496,7 @@ private fun FullscreenVideoContent(file: File, onDismiss: () -> Unit) {
             ) {
                 CircleControlButton(
                     icon = Icons.Default.Close,
-                    contentDescription = "Close",
+                    contentDescription = stringResource(R.string.common_close),
                     onClick = {
                         try { videoView?.pause() } catch (_: Throwable) {}
                         onDismiss()
@@ -510,7 +512,7 @@ private fun FullscreenVideoContent(file: File, onDismiss: () -> Unit) {
                 )
                 CircleControlButton(
                     icon = Icons.Default.Share,
-                    contentDescription = "Share",
+                    contentDescription = stringResource(R.string.common_share),
                     onClick = { shareMediaFile(context, file, "video/*") },
                 )
             }

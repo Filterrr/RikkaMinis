@@ -976,4 +976,17 @@
     <string name="chat_math_content_desc">數學公式：%1$s</string>
     <string name="chat_play_video">播放影片</string>
 
+
+    <!-- i18n-hardening-C -->
+    <!-- common_share missing in zh-rTW; reuse default "Share" intent label style -->
+    <string name="common_share">分享</string>
+    <string name="filepreview_truncated_kb">已顯示前 %1$d KB（共 %2$s）</string>
+    <string name="filepreview_truncated_rows">已顯示前 %1$d 列（共 %2$s）</string>
+    <string name="filepreview_no_app">沒有可開啟此檔案的應用程式。</string>
+    <string name="rootfs_explain_body">rootfs 包含終端環境所使用的 Alpine Linux 檔案系統。重設將刪除所有資料並恢復為出廠狀態。</string>
+    <string name="rootfs_reset_body">重設：刪除全部內容\n注意：持久資料儲存在 rootfs 外的共用區域，重設後仍會保留。</string>
+    <string name="config_confirm_effect_warning">這可能影響後續工具呼叫。</string>
+    <string name="config_confirm_effect_info">可復原操作，建議快速檢視。</string>
+    <string name="chat_copy_code">複製程式碼</string>
+    <string name="rootfs_insufficient_space">空間不足：需要約 %1$d MB，可用僅 %2$d MB。請清理儲存空間後重試。</string>
 </resources>

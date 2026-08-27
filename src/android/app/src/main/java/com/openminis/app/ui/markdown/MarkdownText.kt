@@ -1,5 +1,7 @@
 package com.openminis.app.ui.markdown
 
+import com.openminis.app.R
+import androidx.compose.ui.res.stringResource
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -232,7 +234,7 @@ private fun CodeBlockView(block: MarkdownParser.Block.CodeBlock) {
             ) {
                 Icon(
                     Icons.Default.ContentCopy,
-                    contentDescription = "Copy code",
+                    contentDescription = stringResource(R.string.chat_copy_code),
                     modifier = Modifier.height(16.dp),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -812,7 +814,7 @@ private fun MinisVideoBlock(block: MarkdownParser.Block.Video) {
             }
             Icon(
                 imageVector = Icons.Filled.PlayCircleFilled,
-                contentDescription = "Play video",
+                contentDescription = stringResource(R.string.chat_play_video),
                 tint = Color.White.copy(alpha = 0.9f),
                 modifier = Modifier.width(56.dp).height(56.dp),
             )

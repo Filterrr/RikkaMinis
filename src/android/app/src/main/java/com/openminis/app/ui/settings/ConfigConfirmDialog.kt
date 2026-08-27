@@ -189,11 +189,11 @@ private fun ConfirmRow(item: PendingConfigChangeItem, onToggle: (Boolean) -> Uni
         }
         when (item.risk) {
             ConfigRisk.DESTRUCTIVE -> RiskHint(
-                text = "This may affect later tool calls.",
+                text = stringResource(R.string.config_confirm_effect_warning),
                 color = MaterialTheme.colorScheme.error,
             )
             ConfigRisk.SENSITIVE -> RiskHint(
-                text = "Reversible, but worth a quick look.",
+                text = stringResource(R.string.config_confirm_effect_info),
                 color = Color(0xFFE65100),
             )
             else -> Unit
