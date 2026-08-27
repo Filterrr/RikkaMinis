@@ -16,9 +16,10 @@ from huggingface_hub import HfApi, InferenceClient
 # ─── 配置 ───
 EMBED_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 MEMORY_DIR = Path("/var/minis/memory")
-SKILL_DIR = Path(__file__).resolve().parent  # 脚本所在目录（skills/semantic-memory）
-WORK_DIR = SKILL_DIR
-INDEX_FILE = WORK_DIR / "vector_index.pkl"
+SKILL_DIR = Path(__file__).resolve().parent  # Skill 自身目录（只读资源，禁止写入产物）
+WORK_DIR = Path("/var/minis/workspace")      # 会话工作目录 — Skill 产物写这里
+INDEX_FILE = WORK_DIR / "vector_index.pkl"   # build 生成/更新的索引
+BUNDLED_INDEX_FILE = SKILL_DIR / "vector_index.pkl"  # APK 内置索引（Tier 0 零配置回退）
 
 api = HfApi()
 whoami = api.whoami()
@@ -104,14 +105,23 @@ def upload_to_hf(entries):
     return DATASET
 
 
+def load_index():
+    """加载向量索引：优先工作目录（build 产物），回退 Skill 内置索引（Tier 0 零配置）。"""
+    if INDEX_FILE.exists():
+        return pickle.loads(INDEX_FILE.read_bytes()), INDEX_FILE
+    if BUNDLED_INDEX_FILE.exists():
+        return pickle.loads(BUNDLED_INDEX_FILE.read_bytes()), BUNDLED_INDEX_FILE
+    return None, None
+
+
 def search(query, top_k=5, client=None):
     """语义搜索"""
-    if not INDEX_FILE.exists():
+    idx, idx_file = load_index()
+    if idx is None:
         print("❌ 索引文件不存在，请先运行 build")
         return []
     if client is None:
         client = InferenceClient()
-    idx = pickle.loads(INDEX_FILE.read_bytes())
     entries = idx["entries"]
 
     vec = client.feature_extraction(text=query[:512], model=EMBED_MODEL)
@@ -150,7 +160,8 @@ def cmd_build():
     upload_to_hf(entries)
     print(f"  ✅ 已上传")
 
-    # 保存本地索引
+    # 保存本地索引（写入工作目录，不污染 Skill 自身目录）
+    WORK_DIR.mkdir(parents=True, exist_ok=True)
     idx_data = {"entries": entries, "model": EMBED_MODEL, "count": len(entries)}
     INDEX_FILE.write_bytes(pickle.dumps(idx_data))
     print(f"  📍 本地索引: {INDEX_FILE} ({INDEX_FILE.stat().st_size} bytes)")
@@ -164,11 +175,13 @@ def cmd_search(query):
 
 
 def cmd_status():
-    if INDEX_FILE.exists():
-        idx = pickle.loads(INDEX_FILE.read_bytes())
+    idx, idx_file = load_index()
+    if idx is not None:
         print(f"索引条目: {idx['count']}")
         print(f"嵌入模型: {idx['model']}")
-        print(f"索引文件: {INDEX_FILE} ({INDEX_FILE.stat().st_size} bytes)")
+        print(f"索引文件: {idx_file} ({idx_file.stat().st_size} bytes)")
+        if idx_file == BUNDLED_INDEX_FILE:
+            print(f"（使用内置索引，build 后的工作目录索引优先）")
     else:
         print("❌ 索引不存在")
     print(f"HF Dataset: https://huggingface.co/datasets/{DATASET}")
