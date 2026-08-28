@@ -248,6 +248,22 @@ object ModelExecutionRunDir {
      * Three-state liveness probe for THIS run dir only. Identity mismatch is
      * definitive evidence that the recorded worker is gone/replaced; unreadable
      * proc state is UNKNOWN and must never authorize retry or deletion.
+     *
+     * [probe-semantics] CONTRACT vs [probeDeathEvidence]: the two probes
+     * intentionally answer DIFFERENT questions and must not be swapped.
+     *   - probeLiveness ("is anything at that pid?") collapses pid-MISSING and
+     *     identity-mismatch both into DEAD. That is correct ONLY where the
+     *     worker already declared itself finished (its callers — e.g.
+     *     [safeToDelete] — gate on `terminal.json` FIRST, so the only
+     *     question left is "has the pid been recycled?").
+     *   - probeDeathEvidence ("is the worker PROVABLY dead?") keeps the two
+     *     apart: only [DeathKind.MISSING] is proof of death; IDENTITY_MISMATCH
+     *     is drift suspicion. Callers that gate a DESTRUCTIVE decision on
+     *     liveness WITHOUT a prior terminal barrier (e.g. the orphan reaper's
+     *     stale-beat path) must use probeDeathEvidence and accept MISSING
+     *     only — accepting this probe's DEAD would authorize deleting a dir
+     *     under a live-but-drifted worker.
+     * In both probes, UNKNOWN never authorizes deletion.
      */
     fun probeLiveness(
         dir: File,

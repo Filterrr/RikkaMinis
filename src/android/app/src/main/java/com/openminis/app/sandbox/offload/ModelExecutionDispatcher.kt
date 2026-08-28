@@ -210,6 +210,22 @@ object ModelExecutionDispatcher {
             d
         } catch (_: Exception) { return null }
 
+        // [startup-barrier] Register ownership BEFORE writing the request /
+        // starting the service so the orphan reaper can never touch this dir
+        // while a live client owns it. Unregistered on every exit path below.
+        ModelExecutionRunRegistry.register(dir)
+        try {
+            return dispatchRegistered(context, dir, requestJson)
+        } finally {
+            ModelExecutionRunRegistry.unregister(dir)
+        }
+    }
+
+    private suspend fun dispatchRegistered(
+        context: Context,
+        dir: File,
+        requestJson: String,
+    ): String? {
         val requestFile = File(dir, "request.json")
         val resultFile = File(dir, ModelExecutionService.RESULT_FILE)
         try {

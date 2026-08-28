@@ -17,26 +17,33 @@ import java.io.File
  *     terminal-only criteria leaked it FOREVER.
  *
  * Reaping is CONSERVATIVE — it only deletes a dir that satisfies ALL of:
- *   1. EVIDENCE of a finished or dead run, one of:
- *      a. `terminal.json` exists (the worker's LAST write: stream flushed +
- *         result committed + final state written) AND
- *         [ModelExecutionRunDir.safeToDelete] passes (worker pid confirmed
- *         DEAD for THIS run, or it never wrote a valid ref); or
- *      b. [worker-crash-cleanup] the liveness beat file exists but has gone
- *         STALE — the beat's ONLY writer is the worker's heartbeat thread,
- *         and the protocol stops the beat only AFTER the terminal marker is
- *         written, so a stale beat with no terminal means the worker died
- *         mid-run and the dir can never complete; or
+ *   1. OWNERSHIP RELEASED: no live client in THIS process owns the dir
+ *      ([ModelExecutionRunRegistry] — the [startup-barrier]; file evidence
+ *      alone can never prove "the worker will not start", only the client
+ *      that requested it can, so a registered dir is untouchable);
+ *   2. EVIDENCE of a finished or dead run, one of:
+ *      a. `terminal.json` exists (the worker's LAST write) AND
+ *         [ModelExecutionRunDir.safeToDelete] passes; or
+ *      b. [worker-crash-cleanup] the liveness beat went STALE and the
+ *         worker pid is CONFIRMED dead via [ModelExecutionRunDir.probeDeathEvidence]
+ *         ([DeathKind.MISSING] only — a stale beat alone proves the beat
+ *         protocol stalled, not that the process died: scheduler starvation,
+ *         I/O stall, GC/native stall, or process freeze can all stall the
+ *         beat while the worker lives. ALIVE / UNKNOWN / IDENTITY_MISMATCH
+ *         never authorize deletion); or
  *      c. [worker-crash-cleanup] no beat AND no worker.pid ref — the worker
- *         never registered (startService failed / process died before the
- *         request thread ran) and the client is long gone.
- *   2. the dir's mtime is older than [ORPHAN_AGE_MS] (no worker/client touch
- *      for a while — never race an active run);
- *   3. the canonical path is confirmed under `[cacheDir]/model-exec/` (never
- *      delete outside the staging root — canonicalize + prefix guard).
+ *         never registered. Safe ONLY because criterion 1 already proved no
+ *         live client owns the dir; the 10-minute age covers any plausible
+ *         startService delivery latency;
+ *   3. the dir's mtime is older than [ORPHAN_AGE_MS] (never race an active run);
+ *   4. the canonical path is confirmed under `[cacheDir]/model-exec/` (never
+ *      delete outside the staging root — canonicalize + prefix guard);
+ *   5. [toctou-recheck] ALL evidence is re-verified immediately before the
+ *      delete itself (the dir may have completed/revived between the scan's
+ *      first check and the delete).
  *
- * UNKNOWN liveness WITHOUT stale-beat/never-started evidence, an ALIVE
- * worker, or anything outside the staging root is NEVER deleted.
+ * UNKNOWN liveness, an ALIVE worker, a registered dir, or anything outside
+ * the staging root is NEVER deleted.
  */
 object ModelExecutionOrphanReaper {
 
@@ -61,7 +68,7 @@ object ModelExecutionOrphanReaper {
         for (child in children) {
             if (!child.isDirectory) continue
             if (!looksLikeRunDir(child)) continue
-            // Path guard (criterion 3): canonicalize child and confirm it is a
+            // Path guard (criterion 4): canonicalize child and confirm it is a
             // direct child of the canonical staging root. A stray symlink or
             // `..` cannot escape the root this way.
             val canonicalChild = runCatching { child.canonicalFile }.getOrElse { child }
@@ -69,10 +76,18 @@ object ModelExecutionOrphanReaper {
                 Log.w(TAG, "reaper skipped non-staging path: ${child.absolutePath}")
                 continue
             }
+            // Criterion 1: a dir owned by a live client in THIS process is
+            // untouchable regardless of file evidence.
+            if (ModelExecutionRunRegistry.isRegistered(child)) continue
             if (!hasDeadRunEvidence(child)) continue
-            // Criterion 2: mtime older than ORPHAN_AGE_MS.
+            // Criterion 3: mtime older than ORPHAN_AGE_MS.
             val mtime = child.lastModified()
             if (System.currentTimeMillis() - mtime < ORPHAN_AGE_MS) continue
+            // [toctou-recheck] Criterion 5: evidence may have changed since the
+            // checks above (worker finished, beat resumed, client re-registered).
+            // Re-verify ownership + evidence right before the destructive call.
+            if (ModelExecutionRunRegistry.isRegistered(child)) continue
+            if (!hasDeadRunEvidence(child)) continue
             val ok = runCatching { child.deleteRecursively(); true }.getOrDefault(false)
             if (ok) {
                 Log.i(TAG, "reaped orphan run dir: ${child.name} (mtime ${mtime}ms)")
@@ -85,29 +100,44 @@ object ModelExecutionOrphanReaper {
     }
 
     /**
-     * Criterion 1: evidence that this run can never produce more output —
-     * either the terminal barrier + confirmed-dead worker (the original TF-G
-     * path), or the [worker-crash-cleanup] evidence (stale beat / never
-     * registered worker) that covers dirs a crashed worker left behind
-     * without a terminal marker.
+     * Criterion 2: evidence that this run can never produce more output.
+     * One of:
+     *  - terminal barrier + confirmed-safe (worker finished and gone);
+     *  - stale beat + pid CONFIRMED dead ([DeathKind.MISSING]) — the
+     *    [worker-crash-cleanup] DIED_MID_STREAM class;
+     *  - worker never registered (no beat, no pid ref) — client already
+     *    released ownership (criterion 1, checked by the caller).
+     *
+     * Deliberately NOT sufficient on their own: a stale beat without a
+     * confirmed-dead pid (starvation / freeze / hidepid UNKNOWN), and an
+     * IDENTITY_MISMATCH (drift suspicion, not proof — see the probe
+     * semantics note in [ModelExecutionRunDir.probeDeathEvidence]).
      */
     private fun hasDeadRunEvidence(child: File): Boolean {
-        // Original path: terminal barrier present + safe to delete.
+        val runId = ModelExecutionDispatcher.runIdOf(child)
+        // Path (a): terminal barrier present + safe to delete.
         if (ModelExecutionRunDir.terminalPresent(child) &&
-            ModelExecutionRunDir.safeToDelete(child, ModelExecutionDispatcher.runIdOf(child))
+            ModelExecutionRunDir.safeToDelete(child, runId)
         ) {
             return true
         }
-        // [worker-crash-cleanup] The beat file's ONLY writer is the worker. A
-        // stale beat with no terminal means the worker started, stopped
-        // beating (crashed / killed / reaped), and never finished the run —
-        // the DIED_MID_STREAM class from the client's death classifier.
         val beatPresent = File(child, ModelExecutionRunDir.FILE_LIVENESS_BEAT).isFile
-        if (beatPresent && ModelExecutionRunDir.beatStale(child)) return true
-        // [worker-crash-cleanup] Worker never registered at all: no beat and
-        // no worker.pid ref (startService failed, or the process died before
-        // the request thread ran). Guarded by the caller's 10-min age check
-        // so a slow service start is never raced.
+        // Path (b): beat went stale AND the pid is confirmed dead. The beat
+        // alone is not proof of death (GC stall, scheduler starvation,
+        // process freeze), so the fine-grained probe arbitrates: only
+        // MISSING (the /proc entry is gone) authorizes deletion; ALIVE,
+        // UNKNOWN (e.g. hidepid devices) and IDENTITY_MISMATCH keep the dir.
+        if (beatPresent &&
+            ModelExecutionRunDir.beatStale(child) &&
+            ModelExecutionRunDir.probeDeathEvidence(child, runId).kind ==
+                ModelExecutionRunDir.DeathKind.MISSING
+        ) {
+            return true
+        }
+        // Path (c): worker never registered at all: no beat and no worker.pid
+        // ref (startService failed, or the process died before the request
+        // thread ran). Safe only in combination with criterion 1 (no live
+        // client owns the dir) + the 10-min age guard.
         if (!beatPresent && !File(child, ModelExecutionRunDir.FILE_WORKER_PID).isFile) return true
         return false
     }

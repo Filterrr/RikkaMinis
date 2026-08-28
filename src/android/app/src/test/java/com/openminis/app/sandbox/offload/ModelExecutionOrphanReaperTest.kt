@@ -1,5 +1,6 @@
 package com.openminis.app.sandbox.offload
 
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -14,6 +15,13 @@ import java.util.UUID
  * matrix, including the DIED_MID_STREAM class: a worker that crashed mid-run
  * (LMK kill / native crash) never writes `terminal.json`, so the old
  * terminal-only criteria leaked its run dir forever.
+ *
+ * Also covers the concurrency-safety matrix:
+ *  - the startup race (registered dir is never reaped, even with full dead
+ *    evidence — only the live client can prove "the worker will not start");
+ *  - stale beat + pid ALIVE / IDENTITY_MISMATCH is NOT death (starvation /
+ *    freeze / drift) → keep;
+ *  - stale beat + pid CONFIRMED missing → reap.
  */
 class ModelExecutionOrphanReaperTest {
 
@@ -23,25 +31,37 @@ class ModelExecutionOrphanReaperTest {
     private val oldMtime = System.currentTimeMillis() - 11 * 60_000L // past ORPHAN_AGE_MS
     private val freshMtime = System.currentTimeMillis() - 1_000L
 
+    @After
+    fun clearRegistry() {
+        // The registry is process-global; never leak a registration between tests.
+        stagingRootSafe().listFiles()?.forEach { ModelExecutionRunRegistry.unregister(it) }
+    }
+
+    private fun stagingRootSafe(): File =
+        File(tmp.root, "model-exec").apply { mkdirs() }
+
     private fun stagingRoot(): File = tmp.newFolder("model-exec")
 
     private fun runDir(root: File): File =
         File(root, "run-${UUID.randomUUID()}").apply { mkdirs() }
 
-    private fun writeDeadWorkerRef(run: File) {
-        // A pid guaranteed to have no /proc entry on the host → probeLiveness DEAD.
+    private fun writeWorkerRef(run: File, pid: Int, processName: String) {
         File(run, ModelExecutionRunDir.FILE_WORKER_PID).writeText(
             ModelExecutionRunDir.encodeWorkerRef(
                 ModelExecutionRunDir.WorkerProcessRef(
-                    pid = Int.MAX_VALUE,
+                    pid = pid,
                     runId = "test",
                     nonce = "nonce",
-                    processName = "modelservice",
+                    processName = processName,
                     startedAtMs = 0L,
                 ),
             ),
         )
     }
+
+    /** A pid guaranteed to have no /proc entry on the host → probe MISSING. */
+    private fun writeDeadWorkerRef(run: File) =
+        writeWorkerRef(run, pid = Int.MAX_VALUE, processName = "modelservice")
 
     @Test
     fun `reaps crashed-worker dir with stale beat and no terminal`() {
@@ -139,5 +159,80 @@ class ModelExecutionOrphanReaperTest {
         assertEquals(0, reaped)
         assertTrue(shutdownMarker.exists())
         assertTrue(randomDir.exists())
+    }
+
+    // ── [startup-barrier] worker-startup race vs reaper ──
+
+    @Test
+    fun `never reaps a dir registered by a live client even with full dead evidence`() {
+        val root = stagingRoot()
+        val run = runDir(root)
+        // Full "dead" evidence: no beat, no pid ref, old mtime — but the
+        // client that owns this dir is still alive and registered it.
+        run.setLastModified(oldMtime)
+        ModelExecutionRunRegistry.register(run)
+        try {
+            val reaped = ModelExecutionOrphanReaper.reapOrphans(root)
+            assertEquals(0, reaped)
+            assertTrue(run.exists())
+        } finally {
+            ModelExecutionRunRegistry.unregister(run)
+        }
+        // Once the client releases ownership, the same evidence reaps.
+        assertEquals(1, ModelExecutionOrphanReaper.reapOrphans(root))
+        assertFalse(run.exists())
+    }
+
+    @Test
+    fun `never reaps a registered dir with stale beat and dead pid`() {
+        val root = stagingRoot()
+        val run = runDir(root)
+        writeDeadWorkerRef(run)
+        val beat = File(run, ModelExecutionRunDir.FILE_LIVENESS_BEAT)
+        beat.writeText("""{"at":1}""")
+        beat.setLastModified(System.currentTimeMillis() - 60_000L)
+        run.setLastModified(oldMtime)
+        ModelExecutionRunRegistry.register(run)
+        try {
+            assertEquals(0, ModelExecutionOrphanReaper.reapOrphans(root))
+            assertTrue(run.exists())
+        } finally {
+            ModelExecutionRunRegistry.unregister(run)
+        }
+    }
+
+    // ── [worker-crash-cleanup] stale beat + PID evidence matrix ──
+
+    @Test
+    fun `keeps crashed-worker dir when pid is still ALIVE despite stale beat`() {
+        val root = stagingRoot()
+        val run = runDir(root)
+        // Wildcard ref (blank name / uid<0 / startTicks<=0) matching THIS JVM
+        // process → probeDeathEvidence = ALIVE: a stalled beat alone (GC,
+        // scheduler starvation, freeze) is not death.
+        writeWorkerRef(run, pid = ProcessHandle.current().pid().toInt(), processName = "")
+        val beat = File(run, ModelExecutionRunDir.FILE_LIVENESS_BEAT)
+        beat.writeText("""{"at":1}""")
+        beat.setLastModified(System.currentTimeMillis() - 60_000L)
+        run.setLastModified(oldMtime)
+
+        assertEquals(0, ModelExecutionOrphanReaper.reapOrphans(root))
+        assertTrue(run.exists())
+    }
+
+    @Test
+    fun `keeps crashed-worker dir when pid probe reports IDENTITY_MISMATCH`() {
+        val root = stagingRoot()
+        val run = runDir(root)
+        // Real pid, wrong processName → PRESENT but mismatched: drift
+        // suspicion, not proof of death → must keep.
+        writeWorkerRef(run, pid = ProcessHandle.current().pid().toInt(), processName = "modelservice")
+        val beat = File(run, ModelExecutionRunDir.FILE_LIVENESS_BEAT)
+        beat.writeText("""{"at":1}""")
+        beat.setLastModified(System.currentTimeMillis() - 60_000L)
+        run.setLastModified(oldMtime)
+
+        assertEquals(0, ModelExecutionOrphanReaper.reapOrphans(root))
+        assertTrue(run.exists())
     }
 }

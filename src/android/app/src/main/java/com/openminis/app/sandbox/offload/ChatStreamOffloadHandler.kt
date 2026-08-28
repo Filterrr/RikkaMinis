@@ -125,6 +125,10 @@ object ChatStreamOffloadHandler {
         }
 
         val cancelFile = File(dir, ModelExecutionService.CANCEL_FILE)
+        // [startup-barrier] Register ownership before any file/service work
+        // so the orphan reaper can never touch this dir while a live client
+        // owns it. Unregistered in the inner finally below (every exit).
+        ModelExecutionRunRegistry.register(dir)
         // [TF-F] Declared OUTSIDE the try so the finally block can read/write
         // them (a `finally` cannot reference locals declared inside the try's
         // nested scope). These drive the terminal-and-exit delete decision.
@@ -315,6 +319,8 @@ object ChatStreamOffloadHandler {
                 }
                 awaitTerminalAndWorkerExitThenDelete(dir, runId)
             } catch (_: Exception) {}
+            // [startup-barrier] Release ownership on every exit path.
+            ModelExecutionRunRegistry.unregister(dir)
         }
     }.flowOn(Dispatchers.IO)
 
