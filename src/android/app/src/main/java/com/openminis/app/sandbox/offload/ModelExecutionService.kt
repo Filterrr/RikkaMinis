@@ -112,8 +112,66 @@ class ModelExecutionService : Service() {
          * onStartCommand enqueues, and the first-queued acquires this mutex before
          * dispatching to the provider. This keeps `activeRequests` (in-flight, in
          * the provider) and the lifecycle transition honest.
+         *
+         * [mutex-starvation] The mutex is also the root cause of the "all new
+         * LLM requests stop responding until app restart" hang: a provider
+         * call that blocks in a silent SSE read (OkHttp readLine, read timeout
+         * widened to 30 min) holds this static mutex for its whole wedge, and
+         * the worker-side cancel check only runs when a chunk arrives — a
+         * wedged stream that never emits another chunk ignores `cancel`
+         * FOREVER. The request heartbeat (started BEFORE the mutex) keeps
+         * beating, so the client never classifies death and every new request
+         * queues behind the dead weight. The per-run watchdog started in
+         * onStartCommand (see [startRunWatchdog]) is the escape hatch: it
+         * reclaims the process when the client cancelled, or when the
+         * execution phase exceeds the generation backstop.
          */
         private val executionMutex = kotlinx.coroutines.sync.Mutex()
+
+        /**
+         * [worker-cancel-kill] Grace between a run's `cancel` file appearing
+         * and the watchdog reclaiming the process. The cancel file is written
+         * by a client that has ALREADY stopped consuming (stream finally /
+         * dispatcher timeout), so once it has persisted this long the only
+         * thing the run can still produce is output nobody will read.
+         */
+        private const val CANCEL_KILL_GRACE_MS = 10_000L
+
+        /**
+         * [worker-budget-kill] Absolute ceiling for the mutex-held EXECUTION
+         * phase (provider call), deliberately one minute beyond the app-wide
+         * generation backstop ([FirstChunkTimeoutPolicy.GENERATION_TIMEOUT_SEC],
+         * which is also the client's total-stream ceiling). By the time this
+         * fires the client has already timed out; every durable byte this run
+         * will ever write is fsynced per the TF-B protocol, so reclaiming the
+         * process returns the wedged native heap to the OS instead of
+         * starving every subsequent request behind the execution mutex.
+         */
+        private const val TOTAL_EXECUTION_BUDGET_MS =
+            FirstChunkTimeoutPolicy.GENERATION_TIMEOUT_SEC * 1000L + 60_000L
+
+        /**
+         * [mutex-starvation] Timestamp of the CURRENT mutex-held execution
+         * start (0 = no provider call executing). Set on mutex acquisition,
+         * cleared on release; the per-run watchdogs use it so a QUEUED
+         * request's wait time never counts against the budget — only the
+         * active provider call does.
+         */
+        @Volatile
+        private var executionStartedAtMs = 0L
+
+        /**
+         * [mutex-starvation] runId of the request whose provider call
+         * currently holds [executionMutex] (null = idle). Lets a per-run
+         * watchdog tell "MY run is the wedged executing one" (safe to
+         * cancel-kill) from "I am merely queued behind a healthy sibling"
+         * (must NOT kill — that sibling may be streaming for its user).
+         */
+        @Volatile
+        private var executingRunId: String? = null
+
+        /** [mutex-starvation] One-shot latch so only the first watchdog reaps. */
+        private val watchdogReaped = AtomicBoolean(false)
     }
 
     /** Worker-side registry: number of requests currently being executed. */
@@ -200,6 +258,15 @@ class ModelExecutionService : Service() {
             // /proc (hidepid=invisible) is not.
             val heartbeat = LivenessHeartbeat(dir)
             heartbeat.start()
+            // [mutex-starvation] Per-run watchdog: the escape hatch for a
+            // provider call wedged inside the execution mutex (blocking SSE
+            // read that ignores cooperative cancellation AND the cancel file,
+            // because the cancel check only runs on chunk arrival). See the
+            // CANCEL_KILL_GRACE_MS / TOTAL_EXECUTION_BUDGET_MS notes in the
+            // companion. runDone is set in the outer finally — the watchdog
+            // must never outlive the request thread it guards.
+            val runDone = AtomicBoolean(false)
+            val watchdog = startRunWatchdog(dir, runId, runDone)
             kotlinx.coroutines.runBlocking {
                 // ── TF-I: identity registration, OUTSIDE the mutex ──
                 ModelExecutionRunLog.log(dir, android.os.Process.myPid(), ModelExecutionRunLog.Phase.REQUEST_THREAD_START, runId = runId)
@@ -238,6 +305,11 @@ class ModelExecutionService : Service() {
 
                 executionMutex.withLock {
                     synchronized(lifecycleLock) { queuedRequests.decrementAndGet() }
+                    // [mutex-starvation] budget clock + executing identity start
+                    // when the provider call actually starts (not while queued
+                    // behind a previous request) — see TOTAL_EXECUTION_BUDGET_MS.
+                    executionStartedAtMs = System.currentTimeMillis()
+                    executingRunId = runId
                     try {
                         val requestText = requestFile.readText()
                         val isStreaming = JSONObject(requestText).optBoolean("streaming", false)
@@ -256,10 +328,27 @@ class ModelExecutionService : Service() {
                             // both see we are alive AND know we finished writing
                             // only once the beat goes silent after terminal.
                             heartbeat.start()
-                            ModelExecutionRunDir.writeReady(dir)
-                            val result = executeRun(requestText)
-                            writeResultAtomically(dir, result)
-                            Log.i(TAG, "result written ($result.length bytes), pid=${android.os.Process.myPid()}")
+                            // [mutex-starvation] If the client already gave up
+                            // (dispatcher timeout wrote `cancel` while this
+                            // request was queued), skip the provider call —
+                            // its tokens and the mutex hold would be spent on a
+                            // result nobody will read. Mirrors the streaming
+                            // path's pre-first-chunk cancel check.
+                            if (File(dir, CANCEL_FILE).exists()) {
+                                Log.w(TAG, "run $runId was cancelled before execution — skipping provider call")
+                                ModelExecutionRunLog.log(dir, android.os.Process.myPid(), ModelExecutionRunLog.Phase.STREAM_ERROR, "cancelled_before_execution", runId = runId)
+                                writeResultAtomically(dir, JSONObject().apply {
+                                    put("cancelled", true)
+                                    put("error", "model_use_failed")
+                                    put("message", "cancelled before execution")
+                                    put("exit_code", 1)
+                                }.toString())
+                            } else {
+                                ModelExecutionRunDir.writeReady(dir)
+                                val result = executeRun(requestText)
+                                writeResultAtomically(dir, result)
+                                Log.i(TAG, "result written ($result.length bytes), pid=${android.os.Process.myPid()}")
+                            }
                         }
                     } catch (t: Throwable) {
                         Log.w(TAG, "execution failed: ${t.message}", t)
@@ -270,6 +359,13 @@ class ModelExecutionService : Service() {
                                 put("exit_code", 1)
                             }.toString())
                         } catch (_: Throwable) {}
+                    } finally {
+                        // [mutex-starvation] The provider call (whatever its
+                        // outcome) is over — stop the budget clock and release
+                        // the executing identity so an ack-barrier wait never
+                        // counts against the budget.
+                        executionStartedAtMs = 0L
+                        executingRunId = null
                     }
                 }
 
@@ -308,6 +404,11 @@ class ModelExecutionService : Service() {
                     // future request revives it); the beat file stays as the
                     // durable "worker finished" evidence.
                     heartbeat.stop()
+                    // [mutex-starvation] The run completed through the normal
+                    // protocol — retire its watchdog so it never reaps a
+                    // process that is now merely ack-waiting / quiescent.
+                    runDone.set(true)
+                    watchdog.interrupt()
                 }
             }
         }.apply { isDaemon = false }.start()
@@ -463,6 +564,130 @@ class ModelExecutionService : Service() {
      */
     private fun generationMatches(capturedGeneration: Long): Boolean =
         capturedGeneration == requestGeneration.get()
+
+    /**
+     * [mutex-starvation] Per-run watchdog thread — the escape hatch for the
+     * "all new LLM requests stop responding until app restart" hang.
+     *
+     * Root cause being bounded: the provider call runs INSIDE the global
+     * [executionMutex] and may block in a silent SSE read for the whole
+     * 30-minute OkHttp read timeout (or longer — a cancelled stream ignores
+     * the cancel file, because the in-collect cancel check only fires on chunk
+     * arrival). The request heartbeat beats the whole time, so the client
+     * never classifies death; every subsequent request queues on the mutex
+     * and appears "stuck". Restarting the app killed the `:modelservice`
+     * process and its static mutex — which is exactly why a restart "fixed"
+     * it. The watchdog reproduces that recovery in-process:
+     *
+     *  1. CANCEL-KILL: this run's client wrote `cancel` and it has persisted
+     *     for [CANCEL_KILL_GRACE_MS]. The client has already stopped
+     *     consuming (the stream/dispatch finally writes cancel only after it
+     *     stopped reading), so the run can only ever produce output nobody
+     *     will read. Fires only when THIS run is the executing provider call
+     *     (see [maybeWatchdogCancelKill]) so a healthy sibling stream is never
+     *     severed (B2); requests queued behind it simply re-dispatch onto a
+     *     fresh worker via the retryable 0-chunk death classification.
+     *  2. BUDGET-KILL: the mutex-held execution phase has exceeded
+     *     [TOTAL_EXECUTION_BUDGET_MS] — beyond the app-wide generation
+     *     backstop the client itself enforces, so the client is already gone
+     *     and the provider call is provably wedged past every legitimate
+     *     ceiling. All durable output was fsynced per the TF-B protocol;
+     *     reclaiming the process frees the wedged native heap AND the mutex
+     *     for the queued requests (their clients see the beat go stale, get a
+     *     0-chunk retryable death, and re-dispatch onto a fresh worker).
+     *
+     * The watchdog is retired (runDone) by the request thread's outer finally
+     * once the run completes through the normal protocol, so a healthy run
+     * is never killed by its own watchdog.
+     */
+    private fun startRunWatchdog(dir: File, runId: String?, runDone: AtomicBoolean): Thread {
+        val cancelFile = File(dir, CANCEL_FILE)
+        return Thread {
+            var cancelFirstSeenAtMs = 0L
+            while (!runDone.get()) {
+                try { Thread.sleep(1_000L) } catch (_: InterruptedException) { return@Thread }
+                if (runDone.get() || watchdogReaped.get()) return@Thread
+                val now = System.currentTimeMillis()
+                // (1) cancel-kill: only when THIS run is the executing provider call.
+                if (cancelFile.exists()) {
+                    if (cancelFirstSeenAtMs == 0L) cancelFirstSeenAtMs = now
+                    if (now - cancelFirstSeenAtMs > CANCEL_KILL_GRACE_MS &&
+                        maybeWatchdogCancelKill(dir, runId)
+                    ) return@Thread
+                } else {
+                    cancelFirstSeenAtMs = 0L
+                }
+                // (2) budget-kill: the CURRENT provider call (whichever run holds
+                // the mutex) is wedged beyond the generation backstop.
+                val execStartedAt = executionStartedAtMs
+                if (execStartedAt > 0L && now - execStartedAt > TOTAL_EXECUTION_BUDGET_MS) {
+                    watchdogBudgetKill(dir, runId)
+                    return@Thread
+                }
+            }
+        }.apply {
+            isDaemon = true
+            name = "model-run-watchdog"
+            start()
+        }
+    }
+
+    /**
+     * [mutex-starvation] Reap the process for a run whose client cancelled.
+     * Fires ONLY when THIS run is the one whose provider call currently holds
+     * the execution mutex ([executingRunId] == this run) — i.e. the cancelled
+     * run is itself the wedge — and no run is awaiting client consumption.
+     * A request that is merely QUEUED behind a healthy sibling stream must
+     * never trigger a kill (B2: never sever an in-flight stream for its
+     * user); it will observe its cancel cheaply at mutex acquisition.
+     * Decides under [lifecycleLock] with a fresh snapshot so a request that
+     * arrived between the watchdog's poll and now is never severed.
+     * Returns true when the kill decision was made.
+     */
+    private fun maybeWatchdogCancelKill(dir: File, runId: String?): Boolean {
+        synchronized(lifecycleLock) {
+            if (executingRunId != runId ||
+                pendingAckTokens.isNotEmpty() ||
+                !File(dir, CANCEL_FILE).exists()
+            ) {
+                return false
+            }
+            Log.w(
+                TAG,
+                "watchdog cancel-kill: client cancelled run runId=$runId which is the executing " +
+                    "provider call — reclaiming wedged worker pid=${android.os.Process.myPid()} " +
+                    "(queued=${queuedRequests.get()} will re-dispatch on a fresh worker)",
+            )
+            ModelExecutionRunLog.log(
+                dir, android.os.Process.myPid(),
+                ModelExecutionRunLog.Phase.SELF_REAP, "watchdog_cancel_kill", runId = runId,
+            )
+            watchdogReaped.set(true)
+            selfReap()
+        }
+        return true
+    }
+
+    /**
+     * [mutex-starvation] Unconditional reap: the mutex-held execution phase
+     * exceeded [TOTAL_EXECUTION_BUDGET_MS]. Every legitimate ceiling (client
+     * total-stream timeout, OkHttp read timeout, first-chunk budget) is
+     * strictly below this bound, so the call is wedged and its client is
+     * already gone. Durable output was fsynced per the TF-B protocol.
+     */
+    private fun watchdogBudgetKill(dir: File, runId: String?) {
+        Log.w(
+            TAG,
+            "watchdog budget-kill: execution phase exceeded ${TOTAL_EXECUTION_BUDGET_MS}ms — " +
+                "reclaiming wedged worker pid=${android.os.Process.myPid()} runId=$runId",
+        )
+        ModelExecutionRunLog.log(
+            dir, android.os.Process.myPid(),
+            ModelExecutionRunLog.Phase.SELF_REAP, "watchdog_budget_kill", runId = runId,
+        )
+        watchdogReaped.set(true)
+        selfReap()
+    }
 
     /**
      * True when the main process asked us to drain. On reclaim the main
