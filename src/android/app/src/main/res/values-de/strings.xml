@@ -995,7 +995,7 @@
     <string name="mcp_add">MCP-Server hinzufügen</string>
     <string name="mcp_edit">MCP-Server bearbeiten</string>
     <string name="mcp_section_servers">Server</string>
-    <string name="mcp_section_footer">MCP-Server ermöglichen dem Agenten, externe Tools über minis-mcp-cli aufzurufen. Konfigurationen werden in /var/minis/mcp-servers/servers.json gespeichert (Claude-Desktop-kompatibel).</string>
+    <string name="mcp_section_footer">MCP-Server ermöglichen dem Agenten, externe Tools über RikkaMinis-mcp-cli aufzurufen. Konfigurationen werden in /var/minis/mcp-servers/servers.json gespeichert (Claude-Desktop-kompatibel).</string>
     <string name="mcp_empty_title">Keine MCP-Server</string>
     <string name="mcp_empty_action">Füge mit der +-Schaltfläche einen Server hinzu.</string>
     <string name="mcp_transport_http">HTTP</string>

@@ -760,7 +760,7 @@
     <string name="mcp_add">新增 MCP 伺服器</string>
     <string name="mcp_edit">編輯 MCP 伺服器</string>
     <string name="mcp_section_servers">伺服器</string>
-    <string name="mcp_section_footer">MCP 伺服器讓 AI 透過 minis-mcp-cli 呼叫外部工具。設定儲存在 /var/minis/mcp-servers/servers.json（與 Claude Desktop 相容）。</string>
+    <string name="mcp_section_footer">MCP 伺服器讓 AI 透過 RikkaMinis-mcp-cli 呼叫外部工具。設定儲存在 /var/minis/mcp-servers/servers.json（與 Claude Desktop 相容）。</string>
     <string name="mcp_empty_title">尚無 MCP 伺服器</string>
     <string name="mcp_empty_action">點擊 + 按鈕新增伺服器。</string>
     <string name="mcp_transport_http">HTTP</string>
