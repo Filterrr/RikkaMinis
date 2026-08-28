@@ -338,15 +338,21 @@ class MainActivity : ComponentActivity() {
                 ?.let { DeepLinkAction.OpenSession(it) }
                 ?: DeepLinkAction.Unknown
         }
-        // [fix/lang-switch-nav-jump] True when this onCreate is the tail end
-        // of an Activity recreation (configuration change — e.g. language
-        // switch, theme, orientation). The NavController restores its own
-        // back stack in that case, so AppNavigation must NOT re-run the
-        // cold-start launch-mode dispatch (which would jump back to a chat).
-        // LMK/process-death restore also arrives with a non-null bundle, so
-        // we can't key on savedInstanceState alone — isChangingConfigurations
-        // is the precise recreation signal.
-        val isActivityRecreation = savedInstanceState != null && isChangingConfigurations
+        // [fix/lang-switch-nav-jump] True when this onCreate is NOT a genuine
+        // cold start: either an Activity recreation (configuration change —
+        // e.g. language switch) or a process-death/LMK restore. Both arrive
+        // with a non-null savedInstanceState and in BOTH cases the
+        // NavController (rememberSaveable + NavControllerSaver) restores its
+        // own back stack, so AppNavigation must NOT re-run the cold-start
+        // launch-mode dispatch (which would jump the user back to a chat).
+        //
+        // NOTE: do NOT gate on isChangingConfigurations() — that flag is only
+        // true on the OLD instance while it is being destroyed; in the new
+        // instance's onCreate it is always false. Real-device logs confirmed
+        // the previous `savedInstanceState != null && isChangingConfigurations`
+        // gate never fired, letting the dispatcher run after a language
+        // switch and yank the user into the draft chat.
+        val hasSavedNavState = savedInstanceState != null
 
         setContent {
             val prefs = remember { getAppearancePrefs(this) }
@@ -456,7 +462,7 @@ class MainActivity : ComponentActivity() {
                     memoryRepository = app.memoryRepository,
                     navController = navController,
                     initialDeepLink = launchDeepLink,
-                    isActivityRecreation = isActivityRecreation,
+                    isActivityRecreation = hasSavedNavState,
                 )
 
                 // T-config: root-level minis-config confirm dialog.
