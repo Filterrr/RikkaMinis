@@ -6941,6 +6941,16 @@ class ChatViewModel(
         // node that burned its whole budget just pays for the same wall again).
         var lengthWallEmptyHits = 0
 
+        // [T-length-wall-seam-dedup] True when the PREVIOUS turn ended with
+        // finish_reason="length" and had visible text (the truncation-continue
+        // path). Only then is the next turn's text a "continuation" whose head
+        // may illegally repeat the truncated tail — mergeLengthWallSeam trims
+        // that overlap at the fold point below. Normal turn boundaries (a tool
+        // round-trip between two full turns) must NOT go through seam-dedup:
+        // a legitimate boundary can share short phrases by coincidence, and
+        // trimming there would silently eat real content.
+        var lastTurnWasLengthWall = false
+
         // T7-D: 终态 reducer 状态机入口已在 RunStarted 前初始化（见上）；
         // 此处不再重复 init —— 重复 `AgentRunState.initial()` 会重置已经把
         // RunStarted 消费掉的 reducer 回 IDLE，导致后续事件再次 REJECTED。
@@ -7877,9 +7887,60 @@ class ChatViewModel(
             // turn boundary. After this point everything is plain String
             // semantics — `turnText` participates in cross-turn accumulation
             // and gets persisted into agentHistory below.
-            val turnText = turnTextSb.toString()
-            // Accumulate text across turns
-            accumulatedText += turnText
+            //
+            // [T-length-wall-seam-dedup] When the PREVIOUS turn was truncated
+            // by the output-token wall, this turn's text is a continuation —
+            // models frequently back up to an earlier semantic anchor and
+            // re-emit a phrase they already output, which used to be kept
+            // verbatim on every layer and produced the field-observed
+            // mid-sentence duplication like
+            // `…已经站在一个，是因为它确实已经站在一个一个比较高的…`.
+            // The seam (suffix-of-accumulated ∩ prefix-of-continuation) is
+            // trimmed ONCE here and applied consistently to all three
+            // representations that must stay in sync:
+            //   1. accumulatedText (message body / updateAssistantMessage)
+            //   2. this turn's text blocks in allToolBlocks (renderer reads
+            //      kind=="text" blocks — the actual UI source of truth)
+            //   3. turnText → agentHistory Text part + DB persistence
+            // A trim that only patched one layer would leave the duplicated
+            // seam in the others (e.g. history keeping the dup would teach
+            // the model to keep duplicating on the next request).
+            val turnTextRaw = turnTextSb.toString()
+            var turnText = turnTextRaw
+            var trimmedSeamChars = 0
+            if (lastTurnWasLengthWall && turnTextRaw.isNotEmpty()) {
+                val merged = mergeLengthWallSeam(accumulatedText, turnTextRaw)
+                trimmedSeamChars = accumulatedText.length + turnTextRaw.length - merged.length
+                accumulatedText = merged
+                if (trimmedSeamChars > 0) {
+                    turnText = turnTextRaw.substring(minOf(trimmedSeamChars, turnTextRaw.length))
+                    // Re-base this turn's text blocks: consume the duplicated
+                    // seam chars from the head of the turn's text blocks
+                    // (dropping blocks that are pure seam). Non-text blocks
+                    // (tool cards from interleaved tool_use) are skipped in
+                    // place — they carry no seam.
+                    var remaining = trimmedSeamChars
+                    var bi = turnStartBlockIndex
+                    while (remaining > 0 && bi < allToolBlocks.size) {
+                        val b = allToolBlocks[bi]
+                        if (b.kind != "text" || b.content.isEmpty()) { bi++; continue }
+                        if (remaining >= b.content.length) {
+                            remaining -= b.content.length
+                            allToolBlocks.removeAt(bi)
+                        } else {
+                            allToolBlocks[bi] = b.copy(content = b.content.substring(remaining))
+                            remaining = 0
+                        }
+                    }
+                    AppLogger.info(
+                        TAG_STREAM,
+                        "[T-length-wall-seam-dedup] trimmed $trimmedSeamChars duplicated seam char(s) across text/blocks/history",
+                    )
+                }
+            } else {
+                accumulatedText += turnTextRaw
+            }
+            lastTurnWasLengthWall = turnFinishReason == "length" && turnTextRaw.isNotEmpty()
 
             // Build assistant contentParts for history
             val assistantParts = mutableListOf<AgentContentPart>()
@@ -7985,6 +8046,41 @@ class ChatViewModel(
                         AppLogger.warning(
                             TAG_STREAM,
                             "runAgentLoop turn=$turn finish=length — truncated (${turnText.length} chars), continuing loop to let the model finish",
+                        )
+                        // [T-length-wall-reminder] Inject a continuation
+                        // instruction as a synthetic USER message (same
+                        // delivery pattern as resume()'s stop-continue
+                        // reminder). Without it the next request presents the
+                        // truncated reply as bare context and models frequently
+                        // back up to an earlier semantic anchor, re-emitting a
+                        // phrase they already output — the field-observed
+                        // mid-sentence duplication. The reminder anchors the
+                        // exact cut point and forbids repetition.
+                        // mergeLengthWallSeam below remains the belt-and-
+                        // braces guard for models that repeat anyway.
+                        //
+                        // Not persisted to DB (unlike resume()'s reminder):
+                        // this is a transient in-loop instruction. Guard
+                        // against stacking: if the history tail already
+                        // carries one of these reminders (double wall), drop
+                        // the old one first so consecutive length-walls do
+                        // not pile up reminder turns.
+                        val prevTail = agentHistory.lastOrNull()
+                        val tailIsLengthWallReminder = prevTail != null &&
+                            prevTail.role == LLMMessage.Role.USER &&
+                            prevTail.contentParts.size == 1 &&
+                            (prevTail.contentParts.first() as? AgentContentPart.Text)?.text
+                                ?.contains("cut off mid-sentence") == true
+                        if (tailIsLengthWallReminder) {
+                            agentHistory.removeAt(agentHistory.size - 1)
+                        }
+                        val reminder = lengthWallReminder(turnText.takeLast(80))
+                        agentHistory.add(
+                            LLMMessage(
+                                role = LLMMessage.Role.USER,
+                                content = reminder,
+                                contentParts = listOf(AgentContentPart.Text(reminder)),
+                            )
                         )
                         continue
                     }
