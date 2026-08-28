@@ -790,9 +790,9 @@ object ExecutionCoordinator {
         // stream.jsonl truncated (no DONE, no error) and the UI silently stalled
         // until the poll timeout. Skip the shutdown request and let the next
         // non-streaming pressure tick handle it.
-        if (ChatStreamOffloadHandler.activeStreams > 0) {
+        if (ChatStreamOffloadHandler.activeStreams.get() > 0) {
             Log.w(TAG, "[direction-A] skipped reclaim: active stream in progress " +
-                "(activeStreams=${ChatStreamOffloadHandler.activeStreams}, native ${nativeNowMb}MB)")
+                "(activeStreams=${ChatStreamOffloadHandler.activeStreams.get()}, native ${nativeNowMb}MB)")
             return
         }
         try {

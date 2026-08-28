@@ -137,6 +137,22 @@ class ModelExecutionRunDirTest {
         )
     }
 
+    @Test
+    fun `identity mismatch is UNKNOWN not DEAD`() {
+        // [mismatch-is-not-death] The pid is occupied by something else —
+        // either the worker died and the pid was recycled, or the identity
+        // read-back drifted while the worker is still alive. The second
+        // possibility forbids reporting DEAD: no destructive caller may act
+        // on a mismatch.
+        val d = dir()
+        writeFakeProc(pid = 9003, comm = "recycled.process", startTicks = 999L, uid = 10123)
+        ModelExecutionRunDir.writeWorkerPid(d, ref(9003, processName = ":modelservice", procStartTicks = 424242L, uid = 10123))
+        assertEquals(
+            ModelExecutionRunDir.WorkerLiveness.UNKNOWN,
+            ModelExecutionRunDir.probeLiveness(d, "abc", fakeProcRoot()),
+        )
+    }
+
     // ── safeToDelete — the P0 invariant ─────────────────────────────
 
     @Test
@@ -186,6 +202,63 @@ class ModelExecutionRunDirTest {
         ModelExecutionRunDir.writeWorkerPid(d, ref(deadPid))
         File(d, ModelExecutionMailbox.FILE_RESULT).writeText("""{"ok":true}""")
         assertFalse(ModelExecutionRunDir.safeToDelete(d, "abc"))
+    }
+
+    @Test
+    fun `terminal plus identity mismatch is NOT safe to delete`() {
+        // [mismatch-is-not-death] Even with a terminal marker, an identity
+        // mismatch is drift suspicion (the worker may be alive with read-back
+        // drift), not confirmed death. The old probeLiveness collapsed this
+        // into DEAD and authorized the delete; now it must be refused —
+        // the dir is kept as an orphan until the pid provably disappears.
+        val d = dir()
+        writeFakeProc(pid = 9007, comm = "recycled.process", startTicks = 999L, uid = 10123)
+        ModelExecutionRunDir.writeWorkerPid(d, ref(9007, processName = ":modelservice", procStartTicks = 424242L, uid = 10123))
+        File(d, ModelExecutionMailbox.FILE_RESULT).writeText("""{"ok":true}""")
+        ModelExecutionRunDir.writeTerminal(d)
+        assertFalse(ModelExecutionRunDir.safeToDelete(d, "abc", fakeProcRoot()))
+    }
+
+    // ── writeTerminal atomic commit ([atomic-terminal]) ─────────────
+
+    @Test
+    fun `writeTerminal commits complete json and leaves no tmp residue`() {
+        val d = dir()
+        assertTrue(ModelExecutionRunDir.writeTerminal(d))
+        val target = File(d, ModelExecutionRunDir.FILE_TERMINAL)
+        assertTrue(target.isFile)
+        // Content must be complete, parseable JSON — a partial marker would
+        // be a false "run complete" signal for every presence-only consumer.
+        val parsed = org.json.JSONObject(target.readText())
+        assertTrue(parsed.has("at"))
+        assertFalse(File(d, "${ModelExecutionRunDir.FILE_TERMINAL}.tmp").exists())
+    }
+
+    @Test
+    fun `writeTerminal is idempotent`() {
+        val d = dir()
+        assertTrue(ModelExecutionRunDir.writeTerminal(d))
+        val first = File(d, ModelExecutionRunDir.FILE_TERMINAL).readText()
+        assertTrue(ModelExecutionRunDir.writeTerminal(d))
+        assertEquals(first, File(d, ModelExecutionRunDir.FILE_TERMINAL).readText())
+    }
+
+    @Test
+    fun `writeTerminal rename failure leaves no in-place fallback marker`() {
+        // Force rename() to fail: a DIRECTORY at the target path cannot be
+        // replaced by a file rename (EISDIR on POSIX). The pre-fix fallback
+        // then tried an in-place write (which crashes mid-write exactly on
+        // the "false completion" path this test pins); the fix instead
+        // deletes the tmp and returns false — no partial marker, no residue.
+        val d = dir()
+        val target = File(d, ModelExecutionRunDir.FILE_TERMINAL)
+        target.mkdirs()
+        File(target, "sentinel").writeText("x") // non-empty dir
+        assertFalse(ModelExecutionRunDir.writeTerminal(d))
+        // Still a directory (untouched — never written in place) and the
+        // tmp staging file is cleaned up.
+        assertTrue(target.isDirectory)
+        assertFalse(File(d, "${ModelExecutionRunDir.FILE_TERMINAL}.tmp").exists())
     }
 
     // ── defensive worker writes (P0-B) ──────────────────────────────

@@ -129,6 +129,46 @@ object ModelExecutionRunDir {
     }
 
     /**
+     * [beat-state-machine] Three-state classification of the liveness beat.
+     *
+     * The states are NOT interchangeable and conflating them is the
+     * startup-race bug: "beat file has never existed" (the worker may be
+     * scheduled but not yet running — startService latency) must NEVER be
+     * read as "worker stopped"; only STALE proves "the worker WAS alive and
+     * then stopped beating" (crash / kill / finish). PURE so the client's
+     * exit decision is JVM-testable. See workerStoppedWriting.
+     */
+    enum class BeatState { NEVER_SEEN, FRESH, STALE }
+
+    fun beatState(dir: File, nowMs: Long = System.currentTimeMillis()): BeatState = when {
+        !File(dir, FILE_LIVENESS_BEAT).isFile -> BeatState.NEVER_SEEN
+        beatStale(dir, nowMs) -> BeatState.STALE
+        else -> BeatState.FRESH
+    }
+
+    /**
+     * [beat-state-machine] Client-side pure decision: has this run's worker
+     * provably stopped WRITING the run dir?
+     *
+     * TRUE only on:
+     *  - terminal marker present — the worker's declared LAST durable write
+     *    (it stops the heartbeat only after writing terminal); or
+     *  - beat STALE — the worker was provably alive and stopped beating
+     *    without finishing (crash / LMK kill).
+     *
+     * Deliberately FALSE for NEVER_SEEN: an absent beat cannot distinguish
+     * "worker still starting" from "worker never started" — neither authorizes
+     * deletion. The caller keeps such a dir as an orphan; the reaper (which
+     * additionally demands a confirmed-dead pid and a released client
+     * registration) reclaims it later.
+     */
+    fun workerStoppedWriting(
+        dir: File,
+        terminal: Boolean = terminalPresent(dir),
+        beat: BeatState = beatState(dir),
+    ): Boolean = terminal || beat == BeatState.STALE
+
+    /**
      * Worker-side: atomically refresh the liveness heartbeat so a peer process
      * (main process) can see, via a shared-uid file, that this worker is still
      * alive. Writes a fresh-timestamp JSON via tmp+rename so a reader never sees
@@ -245,9 +285,24 @@ object ModelExecutionRunDir {
     }
 
     /**
-     * Three-state liveness probe for THIS run dir only. Identity mismatch is
-     * definitive evidence that the recorded worker is gone/replaced; unreadable
-     * proc state is UNKNOWN and must never authorize retry or deletion.
+     * Three-state liveness probe for THIS run dir only.
+     *
+     * [probe-semantics] CONTRACT vs [probeDeathEvidence] — one rule above all:
+     * **only a MISSING /proc entry is proof of death.** An identity mismatch
+     * (pid exists but name/uid/startTicks disagree with the recorded ref) is
+     * drift suspicion, not proof: the worker may still be alive with a
+     * read-back drift, so this probe returns UNKNOWN for it and NO
+     * destructive path (delete / kill / reclaim / retry) may act on a
+     * mismatch. Same for unreadable proc state.
+     *
+     *   - probeLiveness ("is the recorded worker's pid still ours?"):
+     *     MISSING → DEAD; unreadable OR identity-mismatch → UNKNOWN;
+     *     match → ALIVE.
+     *   - probeDeathEvidence ("is the worker PROVABLY dead?") exposes the
+     *     fine-grained kinds ([DeathKind]) for callers that also want the
+     *     drift/stall distinction (e.g. the reaper logs it).
+     *
+     * In both probes, UNKNOWN never authorizes deletion.
      */
     fun probeLiveness(
         dir: File,
@@ -264,7 +319,14 @@ object ModelExecutionRunDir {
                 if (actual != null && procIdentityMatches(ref, actual)) {
                     WorkerLiveness.ALIVE
                 } else {
-                    WorkerLiveness.DEAD
+                    // [mismatch-is-not-death] The pid is occupied by SOMETHING
+                    // that is not our worker — either it died and the pid was
+                    // recycled, or the identity read-back drifted while the
+                    // worker is still alive. Indistinguishable here, and the
+                    // second possibility forbids reporting DEAD: a caller
+                    // (e.g. [safeToDelete]) must keep the dir instead of
+                    // deleting it under a possibly-live worker.
+                    WorkerLiveness.UNKNOWN
                 }
             }
         }
@@ -343,21 +405,41 @@ object ModelExecutionRunDir {
      * "write-complete" and the worker must NOT self-reap before the client
      * has consumed the stream (see the stream-ACK barrier in
      * [ModelExecutionService]).
+     *
+     * [terminal-last-write] INVARIANT: once `terminal.json` exists, the
+     * worker writes NOTHING further into the run dir — no run-log line, no
+     * state update, no result append. The client's delete barrier keys on
+     * this marker precisely because it proves "no write can still race the
+     * delete". The ONLY sanctioned exception is the liveness heartbeat file
+     * (a communication channel, not run output): its stop is ordered AFTER
+     * terminal so a client never sees "stale beat + no terminal", and a beat
+     * write that loses the race with deletion lands in a deleted dir and is
+     * swallowed — it can never resurrect the dir or corrupt the protocol.
      */
     fun writeTerminal(dir: File): Boolean = runCatching {
         val tmp = File(dir, "$FILE_TERMINAL.tmp")
         val target = File(dir, FILE_TERMINAL)
+        // [atomic-terminal] Idempotent: a present marker is already committed.
+        if (target.isFile) return@runCatching true
         java.io.FileOutputStream(tmp).use { fos ->
             fos.write(JSONObject().put("at", System.currentTimeMillis()).toString().toByteArray(Charsets.UTF_8))
             fos.flush()
             try { fos.fd.sync() } catch (_: Throwable) {}
         }
         if (!tmp.renameTo(target)) {
-            // Fallback: if rename is rejected, write in place (still better
-            // than never marking terminal — blocks safeToDelete forever).
-            File(dir, FILE_TERMINAL).writeText(
-                JSONObject().put("at", System.currentTimeMillis()).toString(),
-            )
+            // [atomic-terminal] rename failed → commit failed. NEVER fall back
+            // to an in-place write: a crash mid-`writeText` would leave a
+            // PARTIAL `terminal.json` whose mere existence signals "run
+            // complete" to every presence-only consumer (client delete
+            // barrier, reaper path (a), safeToDelete) — a false completion
+            // that deletes the dir while output may be unfinished. The safe
+            // direction is NO marker: the run is then classified by the
+            // orphan reaper (stale-beat / no-beat evidence) instead. The
+            // former fallback traded that correctness for avoiding "blocks
+            // safeToDelete forever" — a liveness concern the reaper already
+            // owns.
+            tmp.delete()
+            return@runCatching false
         }
         fsyncDir(dir)
         true
@@ -428,9 +510,12 @@ object ModelExecutionRunDir {
      * SAFE only when BOTH hold:
      *   - a terminal marker is present (the worker finished writing run dir
      *     files and marked itself terminal), and
-     *   - the worker's process is confirmed gone (DEAD) OR the worker never
-     *     provided a valid pid ref (absent/stale → nothing of ours alive). An
-     *     UNKNOWN liveness means the worker might still be running — NOT safe.
+     *   - the worker's process is confirmed gone (pid MISSING → DEAD) OR the
+     *     worker never provided a valid pid ref (absent/stale → nothing of
+     *     ours alive). UNKNOWN liveness — unreadable /proc OR an identity
+     *     mismatch ([mismatch-is-not-death]: the pid may be recycled OR the
+     *     worker may be alive with read-back drift) — means the worker might
+     *     still be running: NOT safe with a readable ref.
      *
      * The old code deleted on `result.json` OR `cancel.ack` existence alone,
      * which raced the worker's `finishRequest()` → `writeState()` → ENOENT.
