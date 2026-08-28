@@ -105,6 +105,13 @@ object ChatStreamOffloadHandler {
         requestJson: String,
         thinkingEnabled: Boolean = false,
     ): Flow<LLMStreamChunk> = flow {
+        // [active-streams-leak] `--` pairs in the inner finally below AND in
+        // the dir-creation catch right here — the ONLY throwing statements
+        // between `++` and that inner try are this staging block (everything
+        // between it and the try is plain local initialization; keep it that
+        // way). One leaked decrement permanently inflated the counter and
+        // disabled ExecutionCoordinator.maybeReclaimModelService forever
+        // (phantom in-flight stream → :modelservice never reclaimed).
         activeStreams++
         val dir = try {
             val root = File(context.cacheDir, STAGING_ROOT)
@@ -113,6 +120,7 @@ object ChatStreamOffloadHandler {
             if (!d.mkdir()) throw IllegalStateException("cannot create run dir")
             d
         } catch (e: Exception) {
+            activeStreams--
             throw RuntimeException("stream staging failed", e)
         }
 
@@ -294,7 +302,7 @@ object ChatStreamOffloadHandler {
             // [TF-F] Unified terminal-and-exit protocol: never delete a run dir
             // while the worker might still be writing to it. Only when
             //   - a terminal marker exists (worker's LAST write), AND
-            //   - the worker's pid is confirmed gone (or there is no valid ref)
+            //   - the worker has stopped writing (beat gone/stale)
             // do we delete. `result.json`/`cancel.ack` alone are NOT enough —
             // the worker may still be inside finishRequest() writing state.json
             // (the exact P0 race). Timeout → leave the dir as an orphan and
@@ -311,89 +319,100 @@ object ChatStreamOffloadHandler {
     }.flowOn(Dispatchers.IO)
 
     /**
-     * [TF-F] Wait for (a) this run's terminal marker, then (b) the worker's
-     * process to disappear, and only then delete the run dir. Any timeout or
-     * ambiguity keeps the dir as an orphan (never delete under a live worker).
+     * [TF-F] Complete the run-dir lifecycle in two STRICTLY ordered phases:
+     *
+     *  (a) ACK-FIRST: as soon as the durable output is committed (result.json
+     *      / cancel.ack / terminal), write client.ack. The worker writes
+     *      state.json and terminal.json only AFTER receiving this ack (its
+     *      ack-barrier runs between result and finishRequest), so acking first
+     *      is what lets it finish at all — waiting for terminal before acking
+     *      would stall every stream for the worker's whole 15s ack timeout.
+     *
+     *  (b) TERMINAL-ONLY DELETE BARRIER: deletion requires `terminal.json`
+     *      (the worker's LAST durable write — state.json is written between
+     *      result and terminal) or a gone/stale liveness beat (worker stopped
+     *      beating, which only happens after terminal on the healthy path or
+     *      on real process death). The old code also accepted result.json /
+     *      client.ack as "done" — but those are written BEFORE state.json, so
+     *      deleting on them raced the worker's final writes and left it
+     *      ack-waiting on a deleted dir, pinning its native heap for up to
+     *      45s (ack timeout + controlled drain) per stream — the exact leak
+     *      containment failure the offload exists to prevent. Ambiguity →
+     *      keep as orphan; the orphan reaper reclaims it later.
      */
     private suspend fun awaitTerminalAndWorkerExitThenDelete(dir: File, runId: String?) {
-        // (a) terminal marker. A DONE/error line usually precedes it by a
-        // hair (finishRequest writes state + terminal right after the result),
-        // so give it a bounded window.
-        val termDeadline = System.currentTimeMillis() + CANCEL_ACK_TIMEOUT_MS
-        var terminalSeen = ModelExecutionRunDir.terminalPresent(dir)
-        while (!terminalSeen && System.currentTimeMillis() < termDeadline) {
-            terminalSeen = ModelExecutionRunDir.terminalPresent(dir)
-                || File(dir, ModelExecutionMailbox.FILE_RESULT).exists()
-                || File(dir, ModelExecutionMailbox.FILE_CANCEL_ACK).exists()
-            if (!terminalSeen) kotlinx.coroutines.delay(CANCEL_ACK_POLL_MS)
+        // (a) wait (bounded) for the durable output, then release the ack barrier.
+        val ackDeadline = System.currentTimeMillis() + CANCEL_ACK_TIMEOUT_MS
+        var outputSeen = durableOutputSeen(dir)
+        while (!outputSeen && System.currentTimeMillis() < ackDeadline) {
+            kotlinx.coroutines.delay(CANCEL_ACK_POLL_MS)
+            outputSeen = durableOutputSeen(dir)
         }
-        // If the terminal marker itself never appeared but we DID see a result /
-        // cancel ack, the worker is done with run-dir writes and will write
-        // terminal (or already self-reaped). Treat result/ack as the terminal
-        // barrier for deletion — the actual deletion still requires the pid gone.
-        val writeBarrierSeen = terminalSeen ||
-            File(dir, ModelExecutionMailbox.FILE_RESULT).exists() ||
-            File(dir, ModelExecutionMailbox.FILE_CANCEL_ACK).exists()
-
-        // TF-G: client-ACK — the other half of the self-reap barrier. Once the
-        // client has seen the terminal barrier (it has read every emitted chunk
-        // by this point, since the loop consumed stream.jsonl as it grew), it
-        // MUST tell the worker "consumed" so the worker can stop holding an
-        // unacked response and self-reap promptly. Without this the streaming
-        // worker holds unacked>0 and (with the TF-G barrier) refuses to reap
-        // until its ack timeout + controlled drain — pinning the process for up
-        // to 45s and leaving the run dir as an orphan. The Dispatcher (non-
-        // streaming) already acks; streaming now does too.
-        if (writeBarrierSeen) {
+        if (outputSeen) {
             try { ModelExecutionMailbox.writeClientAck(dir) } catch (_: Exception) {}
+        } else {
+            // Nothing durable ever appeared within the window; the dir is the
+            // worker's problem now (likely still starting or already dead) —
+            // fall through to the terminal wait, which will keep it as orphan.
+            Log.w(TAG, "no durable output for ${dir.name} within ${CANCEL_ACK_TIMEOUT_MS}ms")
         }
 
-        // (b) worker process gone. Reuse the dispatcher's bounded wait logic.
-        if (writeBarrierSeen && awaitWorkerExit(dir, runId, WORKER_EXIT_WAIT_MS)) {
+        // (b) terminal-only write barrier + worker stopped writing.
+        val terminalSeen = awaitTerminal(dir, WORKER_EXIT_WAIT_MS)
+        if (terminalSeen && awaitWorkerExit(dir, runId, WORKER_EXIT_WAIT_MS)) {
             try { dir.deleteRecursively() } catch (_: Exception) {}
         } else {
             Log.w(
                 TAG,
-                "stream run dir kept as orphan (terminal=$writeBarrierSeen dir=${dir.name})",
+                "stream run dir kept as orphan (terminal=$terminalSeen dir=${dir.name})",
             )
         }
     }
 
-    /**
-     * [TF-J2] Bounded wait for this run's worker to stop beating (its liveness
-     * heartbeat file `liveness.beat` going stale). Returns true as soon as the
-     * beat is confirmed absent-or-stale — the worker has stopped, so the run
-     * dir is safe to delete. On a healthy finish the worker stops beating and
-     * writes terminal; on a crash the beat simply goes silent.
-     *
-     * NOTE: the old /proc-based probeLiveness is unreliable here because /proc
-     * is hidepid=invisible on this device (an app process can only see itself),
-     * so the main process ALWAYS saw the worker pid as "missing" — which both
-     * false-killed live workers (above) and would have kept this wait from ever
-     * confirming a real exit. The heartbeat file, on the shared same-uid
-     * filesystem, is the source of truth instead.
-     */
-    private suspend fun awaitWorkerExit(dir: File, runId: String?, timeoutMs: Long): Boolean {
+    /** Durable output the client can ack on: result / cancel-ack / terminal. */
+    private fun durableOutputSeen(dir: File): Boolean =
+        ModelExecutionRunDir.terminalPresent(dir) ||
+            File(dir, ModelExecutionMailbox.FILE_RESULT).exists() ||
+            File(dir, ModelExecutionMailbox.FILE_CANCEL_ACK).exists()
+
+    /** Bounded wait for `terminal.json` only (the worker's LAST write). */
+    private suspend fun awaitTerminal(dir: File, timeoutMs: Long): Boolean {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
-            val beatFile = File(dir, ModelExecutionRunDir.FILE_LIVENESS_BEAT)
-            val gone = !beatFile.isFile ||
-                ModelExecutionRunDir.beatStale(dir) ||
-                ModelExecutionRunDir.clientAckPresent(dir)
-            // A terminal marker is the worker's LAST durable write; once present
-            // the worker is done writing and will self-reap. clientAckPresent is
-            // our own handshake confirming we consumed the output.
-            val done = ModelExecutionRunDir.terminalPresent(dir) ||
-                File(dir, ModelExecutionMailbox.FILE_RESULT).exists()
-            if (done || gone) return true
+            if (ModelExecutionRunDir.terminalPresent(dir)) return true
+            kotlinx.coroutines.delay(CANCEL_ACK_POLL_MS)
+        }
+        return ModelExecutionRunDir.terminalPresent(dir)
+    }
+
+    /**
+     * [TF-J2] Bounded wait for this run's worker to be DONE WRITING the dir.
+     * Safe to delete only when:
+     *   - `terminal.json` is present (the worker's LAST durable write; the
+     *     heartbeat stops only after it), or
+     *   - the liveness beat is absent or STALE (the worker was beating and
+     *     stopped — real process death, since on the healthy path the beat
+     *     continues until after terminal).
+     *
+     * [strict-write-barrier] `result.json` and `client.ack` are deliberately
+     * NOT sufficient here: finishRequest writes state.json AFTER them, so
+     * deleting on them raced the worker's final writes (the dir vanished
+     * under it, its ack barrier then waited the full 15s timeout and the
+     * controlled drain gave up on a missing dir — pinning the process and
+     * its native heap). clientAckPresent is likewise not a signal: it is OUR
+     * own write, present immediately.
+     */
+    private suspend fun awaitWorkerExit(dir: File, runId: String?, timeoutMs: Long): Boolean {
+        val beatFile = File(dir, ModelExecutionRunDir.FILE_LIVENESS_BEAT)
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (ModelExecutionRunDir.terminalPresent(dir)) return true
+            if (!beatFile.isFile || ModelExecutionRunDir.beatStale(dir)) return true
             delay(WORKER_EXIT_POLL_MS)
         }
-        val beatFileFinal = File(dir, ModelExecutionRunDir.FILE_LIVENESS_BEAT)
-        return !beatFileFinal.isFile ||
-            ModelExecutionRunDir.beatStale(dir) ||
-            ModelExecutionRunDir.clientAckPresent(dir) ||
-            ModelExecutionRunDir.terminalPresent(dir) ||
-            File(dir, ModelExecutionMailbox.FILE_RESULT).exists()
+        return ModelExecutionRunDir.terminalPresent(dir) ||
+            !beatFile.isFile ||
+            ModelExecutionRunDir.beatStale(dir)
     }
 
     /**

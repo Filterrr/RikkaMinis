@@ -458,11 +458,32 @@ class ModelExecutionService : Service() {
     private fun finishRequestLocked(dir: File, generation: Long): ModelExecutionWorkerState {
         val runId = runIdOf(dir)
         // This request is done regardless of generation: the active count must
-        // always drop. Generation only gates the final-state/terminal/reap
-        // decision for the NEWEST request.
+        // always drop. Generation only gates the PROCESS-WIDE self-reap
+        // decision for the NEWEST request (maybeSelfReapLocked re-checks it) —
+        // it must never gate this run's OWN dir finalization.
         activeRequests.decrementAndGet()
         if (generation != requestGeneration.get()) {
-            Log.i(TAG, "finishRequest ignored (stale generation $generation vs ${requestGeneration.get()}), runId=$runId")
+            Log.i(TAG, "finishRequest stale generation ($generation vs ${requestGeneration.get()}), runId=$runId")
+            // [stale-generation-terminal] A newer request now owns the
+            // process-wide lifecycle decision, but THIS run's dir still owes
+            // its final state + terminal marker: the client deletes only
+            // after terminal (TF-F protocol) and the orphan reaper
+            // classifies by it. The old early-return leaked a never-terminal
+            // dir forever whenever a sibling request raced the finish — the
+            // client then timed out on every poll loop and left the dir as
+            // an orphan with no terminal, exactly the DIED_MID_STREAM
+            // cleanup hole.
+            if (dir.isDirectory) {
+                runCatching {
+                    ModelExecutionMailbox.writeState(
+                        dir,
+                        lifecycleState,
+                        activeRequests.get(),
+                        unacked = pendingAckTokens.size,
+                    )
+                    ModelExecutionRunDir.writeTerminal(dir)
+                }
+            }
             return lifecycleState
         }
         val dirMissing = !dir.isDirectory
