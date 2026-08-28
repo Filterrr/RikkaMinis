@@ -7,6 +7,7 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.core.net.toUri
 import com.openminis.app.logging.AppLogger
+import com.openminis.app.R
 
 /**
  * Centralized router for non-http(s) URL schemes that show up inside our
@@ -34,7 +35,7 @@ import com.openminis.app.logging.AppLogger
 object BrowserExternalSchemeHandler {
     private const val TAG = "BrowserExternalScheme"
 
-    private val INTERNAL_SCHEMES = setOf("http", "https", "about", "file")
+    private val INTERNAL_SCHEMES = setOf("http", "https", "about", "file", "minis")
 
     /**
      * `intent://` schemes that require Intent.parseUri (NOT plain
@@ -99,7 +100,7 @@ object BrowserExternalSchemeHandler {
                 AppLogger.info(TAG, "blocked unknown scheme: $scheme (uri=$uri)")
                 Toast.makeText(
                     context,
-                    "Blocked link to external app ($scheme)",
+                    context.getString(R.string.webpreview_blocked_scheme),
                     Toast.LENGTH_SHORT,
                 ).show()
                 true

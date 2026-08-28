@@ -399,9 +399,9 @@
     <string name="skill_section_installed">已安装</string>
     <string name="skill_section_footer">Skill 通过专门的指令和工作流扩展 AI agent。启用后会被载入 system prompt。</string>
     <string name="skill_empty_title">未安装 Skill</string>
-    <string name="skill_empty_action">点击 + 导入 SKILL.md 或浏览 Minis Skills。</string>
+    <string name="skill_empty_action">点击 + 导入 SKILL.md 或浏览 RikkaMinis Skills。</string>
     <string name="skill_import_modal_title">导入技能</string>
-    <string name="skill_minis_skills_modal">Minis Skills</string>
+    <string name="skill_minis_skills_modal">RikkaMinis Skills</string>
     <string name="skill_delete_confirm_title">删除 %1$s？</string>
     <string name="skill_delete_confirm_text">这将永久删除该 skill 及其文件。</string>
     <string name="skill_import_sheet_title">导入技能</string>
@@ -449,7 +449,7 @@
     <string name="skill_detail_source_file">文件导入</string>
     <string name="skill_detail_source_bundled">内置</string>
     <string name="skill_detail_source_session">会话创建</string>
-    <string name="skills_browser_title">Minis Skills</string>
+    <string name="skills_browser_title">RikkaMinis Skills</string>
     <string name="skills_browser_import_button">导入此项</string>
     <string name="skills_browser_hud_importing">导入中…</string>
     <string name="skills_browser_error_not_folder">请先选择一个 skill 文件夹</string>
@@ -1574,4 +1574,8 @@
     <string name="config_confirm_effect_info">可逆操作，建议快速过目。</string>
     <string name="chat_copy_code">复制代码</string>
     <string name="rootfs_insufficient_space">空间不足：需要约 %1$d MB，可用仅 %2$d MB。请清理存储后重试。</string>
+
+    <!-- Fix: minis:// 链接失效/文件已清理时的提示，以及本地化的外部 scheme 拦截文案。 -->
+    <string name="chat_link_file_missing">此文件已不可用。</string>
+    <string name="webpreview_blocked_scheme">已拦截指向外部应用的链接。</string>
 </resources>

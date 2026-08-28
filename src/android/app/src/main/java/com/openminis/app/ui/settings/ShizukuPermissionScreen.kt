@@ -29,7 +29,7 @@ import com.openminis.app.offload.ShizukuManager
  *                        whichever they prefer.
  *   NOT_RUNNING       → "Open Manager App and press Start" — launches the
  *                        installed manager.
- *   NEED_PERMISSION   → "Authorize Minis" CTA → triggers system dialog.
+ *   NEED_PERMISSION   → "Authorize RikkaMinis" CTA → triggers system dialog.
  *   READY             → green status row with version + uid.
  */
 @Composable
