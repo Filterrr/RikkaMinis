@@ -705,6 +705,8 @@ internal fun formatToolDetailsForClipboard(block: AssistantBlock): String {
         ToolBlockStatus.FAILED -> "error"
         ToolBlockStatus.TIMEOUT -> "timeout"
         ToolBlockStatus.CANCELLED -> "cancelled"
+        // [T-dedup-neutral-status] Copied-out details show the true reason.
+        ToolBlockStatus.DEDUPLICATED -> "deduplicated (skipped identical call)"
         ToolBlockStatus.RUNNING, ToolBlockStatus.STREAMING, ToolBlockStatus.PENDING -> "running"
         null -> "unknown"
     }
@@ -758,7 +760,10 @@ internal fun ToolCallPill(
     val isDone = block.toolStatus == ToolBlockStatus.SUCCESS
     val isFailed = block.toolStatus == ToolBlockStatus.FAILED ||
         block.toolStatus == ToolBlockStatus.TIMEOUT
-    val isCancelled = block.toolStatus == ToolBlockStatus.CANCELLED
+    // [T-dedup-neutral-status] DEDUPLICATED joins the cancelled bucket: neutral
+    // grey styling, NO error color — the drop was intentional, not a failure.
+    val isCancelled = block.toolStatus == ToolBlockStatus.CANCELLED ||
+        block.toolStatus == ToolBlockStatus.DEDUPLICATED
 
     val toolAccent = toolAccentColor(block.toolName)
     val toolIcon = toolIconFor(block.toolName)

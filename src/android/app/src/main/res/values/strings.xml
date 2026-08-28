@@ -91,6 +91,8 @@
     <string name="overlay_completion_completed">Completed</string>
     <string name="overlay_completion_failed">Failed</string>
     <string name="overlay_completion_cancelled">Cancelled</string>
+    <!-- [T-dedup-neutral-status] same-turn deduplicated tool pill content -->
+    <string name="tool_dedup_skipped">Skipped — identical call already ran</string>
     <string name="overlay_completion_timeout">Timed out</string>
     <string name="bg_service_notification_title">RikkaMinis Agent Active</string>
     <string name="bg_service_notification_text">%1$s | %2$s | %3$s</string>

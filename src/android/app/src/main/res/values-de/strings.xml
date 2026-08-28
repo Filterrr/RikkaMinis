@@ -969,6 +969,8 @@
     <string name="overlay_completion_completed">Abgeschlossen</string>
     <string name="overlay_completion_failed">Fehlgeschlagen</string>
     <string name="overlay_completion_cancelled">Abgebrochen</string>
+    <!-- [T-dedup-neutral-status] same-turn deduplicated tool pill content -->
+    <string name="tool_dedup_skipped">Übersprungen — identischer Aufruf lief bereits</string>
     <string name="overlay_completion_timeout">Zeitüberschreitung</string>
     <string name="image_action_copy">Kopieren</string>
     <string name="image_action_share">Teilen</string>

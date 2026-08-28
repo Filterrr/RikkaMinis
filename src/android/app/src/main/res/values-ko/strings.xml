@@ -968,6 +968,8 @@
     <string name="overlay_completion_completed">완료됨</string>
     <string name="overlay_completion_failed">실패</string>
     <string name="overlay_completion_cancelled">취소됨</string>
+    <!-- [T-dedup-neutral-status] same-turn deduplicated tool pill content -->
+    <string name="tool_dedup_skipped">건너뜀 — 동일한 호출이 이미 실행됨</string>
     <string name="overlay_completion_timeout">시간 초과</string>
     <string name="image_action_copy">복사</string>
     <string name="image_action_share">공유</string>

@@ -752,7 +752,9 @@ internal fun FloatingToolStatusBar(
     val isDone = block.toolStatus == ToolBlockStatus.SUCCESS
     val isFailed = block.toolStatus == ToolBlockStatus.FAILED ||
         block.toolStatus == ToolBlockStatus.TIMEOUT
-    val isCancelled = block.toolStatus == ToolBlockStatus.CANCELLED
+    // [T-dedup-neutral-status] DEDUPLICATED shares cancelled's neutral styling.
+    val isCancelled = block.toolStatus == ToolBlockStatus.CANCELLED ||
+        block.toolStatus == ToolBlockStatus.DEDUPLICATED
     val isRunning = block.toolStatus == ToolBlockStatus.RUNNING ||
         block.toolStatus == ToolBlockStatus.STREAMING ||
         block.toolStatus == ToolBlockStatus.PENDING

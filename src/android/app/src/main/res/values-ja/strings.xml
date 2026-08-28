@@ -912,6 +912,8 @@
     <string name="overlay_completion_completed">完了</string>
     <string name="overlay_completion_failed">失敗</string>
     <string name="overlay_completion_cancelled">キャンセル</string>
+    <!-- [T-dedup-neutral-status] same-turn deduplicated tool pill content -->
+    <string name="tool_dedup_skipped">スキップ — 同一呼び出しを既に実行済み</string>
     <string name="overlay_completion_timeout">タイムアウト</string>
     <string name="logs_config_status_rejected">却下</string>
     <string name="logs_config_status_timeout">タイムアウト</string>
