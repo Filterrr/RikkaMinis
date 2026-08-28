@@ -354,11 +354,14 @@ object ModelExecutionDispatcher {
     private fun reapSafe(dir: File): Boolean {
         // Worker's LAST durable marker — once present, it will self-reap.
         if (ModelExecutionRunDir.terminalPresent(dir)) return true
-        // result committed by a worker that has stopped beating.
+        // result committed by a worker that has PROVABLY stopped writing.
+        // [beat-state-machine] `workerStoppedWriting` accepts only a STALE
+        // beat — the former `!beatFile.isFile` treated a NEVER-SEEN beat as
+        // "worker gone", which (combined with result.json) could delete the
+        // dir while the worker was still inside finishRequest() writing
+        // state.json (the same P0 race the streaming path fixed).
         val result = File(dir, ModelExecutionMailbox.FILE_RESULT).exists()
-        val beatFile = File(dir, ModelExecutionRunDir.FILE_LIVENESS_BEAT)
-        val beatGoneOrStale = !beatFile.isFile || ModelExecutionRunDir.beatStale(dir)
-        return result && beatGoneOrStale
+        return result && ModelExecutionRunDir.workerStoppedWriting(dir)
     }
 
     /** Extract the stable runId from a `run-<uuid>` dir name (shared helper). */

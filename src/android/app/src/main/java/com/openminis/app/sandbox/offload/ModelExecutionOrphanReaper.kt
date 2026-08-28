@@ -31,10 +31,13 @@ import java.io.File
  *         I/O stall, GC/native stall, or process freeze can all stall the
  *         beat while the worker lives. ALIVE / UNKNOWN / IDENTITY_MISMATCH
  *         never authorize deletion); or
- *      c. [worker-crash-cleanup] no beat AND no worker.pid ref — the worker
- *         never registered. Safe ONLY because criterion 1 already proved no
- *         live client owns the dir; the 10-minute age covers any plausible
- *         startService delivery latency;
+ *      c. [worker-crash-cleanup] no beat, and either no worker.pid ref at
+ *         all (the worker never registered — safe ONLY because criterion 1
+ *         already proved no live client owns the dir; the 10-minute age
+ *         covers any plausible startService delivery latency) or a pid ref
+ *         that is CONFIRMED dead ([DeathKind.MISSING] — the request thread
+ *         wrote its pid, then the process died before the first beat; the
+ *         old code never reaped this sub-case, a permanent orphan); or
  *   3. the dir's mtime is older than [ORPHAN_AGE_MS] (never race an active run);
  *   4. the canonical path is confirmed under `[cacheDir]/model-exec/` (never
  *      delete outside the staging root — canonicalize + prefix guard);
@@ -134,11 +137,24 @@ object ModelExecutionOrphanReaper {
         ) {
             return true
         }
-        // Path (c): worker never registered at all: no beat and no worker.pid
-        // ref (startService failed, or the process died before the request
-        // thread ran). Safe only in combination with criterion 1 (no live
-        // client owns the dir) + the 10-min age guard.
-        if (!beatPresent && !File(child, ModelExecutionRunDir.FILE_WORKER_PID).isFile) return true
+        // Path (c): worker never beat. Two sub-cases, both final:
+        //  - no pid ref at all → the worker NEVER started (startService
+        //    failed, or the process died before its request thread ran) —
+        //    reapable directly, since criterion 1 (no live client owns the
+        //    dir) + the 10-min age already exclude any startup window;
+        //  - pid ref present but no beat → the request thread ran and wrote
+        //    its pid, but the first beat was lost (I/O failure) or the worker
+        //    died between the pid write and the beat. Only a CONFIRMED-dead
+        //    pid ([DeathKind.MISSING]) authorizes the reap: an ALIVE pid
+        //    means the worker may legitimately still be working with a lost
+        //    beat, and UNKNOWN / IDENTITY_MISMATCH never delete
+        //    ([mismatch-is-not-death]). Without this sub-path such a dir was
+        //    NEVER reaped (path (b) demands a beat) — a permanent orphan.
+        if (!beatPresent) {
+            if (!File(child, ModelExecutionRunDir.FILE_WORKER_PID).isFile) return true
+            return ModelExecutionRunDir.probeDeathEvidence(child, runId).kind ==
+                ModelExecutionRunDir.DeathKind.MISSING
+        }
         return false
     }
 

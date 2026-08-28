@@ -50,7 +50,10 @@ class ModelExecutionOrphanReaperTest {
             ModelExecutionRunDir.encodeWorkerRef(
                 ModelExecutionRunDir.WorkerProcessRef(
                     pid = pid,
-                    runId = "test",
+                    // The reaper derives expectedRunId from the dir name —
+                    // a ref whose runId does not match the dir reads back as
+                    // NO_REF (conservative keep), never MISSING/ALIVE.
+                    runId = ModelExecutionDispatcher.runIdOf(run) ?: "test",
                     nonce = "nonce",
                     processName = processName,
                     startedAtMs = 0L,
@@ -62,6 +65,16 @@ class ModelExecutionOrphanReaperTest {
     /** A pid guaranteed to have no /proc entry on the host → probe MISSING. */
     private fun writeDeadWorkerRef(run: File) =
         writeWorkerRef(run, pid = Int.MAX_VALUE, processName = "modelservice")
+
+    /**
+     * THIS JVM process's pid — guaranteed to be ALIVE and /proc-readable by
+     * the test (same uid). Resolved via /proc/self because `ProcessHandle`
+     * is a Java 9+ API absent from the Android mockable jar the unit tests
+     * compile against.
+     */
+    private fun currentPid(): Int =
+        File("/proc/self").canonicalFile.name.toIntOrNull()
+            ?: error("cannot determine current pid (non-Linux host?)")
 
     @Test
     fun `reaps crashed-worker dir with stale beat and no terminal`() {
@@ -112,12 +125,29 @@ class ModelExecutionOrphanReaperTest {
     fun `keeps dir whose worker registered but has not beaten yet`() {
         val root = stagingRoot()
         val run = runDir(root)
-        writeDeadWorkerRef(run)
+        // Worker alive (this JVM process, wildcard identity) but its first
+        // beat has not landed yet — the startup window must NOT be reaped.
+        writeWorkerRef(run, pid = currentPid(), processName = "")
         run.setLastModified(oldMtime)
 
         val reaped = ModelExecutionOrphanReaper.reapOrphans(root)
         assertEquals(0, reaped)
         assertTrue(run.exists())
+    }
+
+    @Test
+    fun `reaps dir whose worker registered, never beat, and pid is confirmed dead`() {
+        val root = stagingRoot()
+        val run = runDir(root)
+        // Request thread wrote its pid, then the process died before the
+        // first beat landed. Old code never reaped this (path (b) demands a
+        // beat) — a permanent orphan; now MISSING proves death and reaps.
+        writeDeadWorkerRef(run)
+        run.setLastModified(oldMtime)
+
+        val reaped = ModelExecutionOrphanReaper.reapOrphans(root)
+        assertEquals(1, reaped)
+        assertFalse(run.exists())
     }
 
     @Test
@@ -210,7 +240,7 @@ class ModelExecutionOrphanReaperTest {
         // Wildcard ref (blank name / uid<0 / startTicks<=0) matching THIS JVM
         // process → probeDeathEvidence = ALIVE: a stalled beat alone (GC,
         // scheduler starvation, freeze) is not death.
-        writeWorkerRef(run, pid = ProcessHandle.current().pid().toInt(), processName = "")
+        writeWorkerRef(run, pid = currentPid(), processName = "")
         val beat = File(run, ModelExecutionRunDir.FILE_LIVENESS_BEAT)
         beat.writeText("""{"at":1}""")
         beat.setLastModified(System.currentTimeMillis() - 60_000L)
@@ -226,7 +256,7 @@ class ModelExecutionOrphanReaperTest {
         val run = runDir(root)
         // Real pid, wrong processName → PRESENT but mismatched: drift
         // suspicion, not proof of death → must keep.
-        writeWorkerRef(run, pid = ProcessHandle.current().pid().toInt(), processName = "modelservice")
+        writeWorkerRef(run, pid = currentPid(), processName = "modelservice")
         val beat = File(run, ModelExecutionRunDir.FILE_LIVENESS_BEAT)
         beat.writeText("""{"at":1}""")
         beat.setLastModified(System.currentTimeMillis() - 60_000L)
