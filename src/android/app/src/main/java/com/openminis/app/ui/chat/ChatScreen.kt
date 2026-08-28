@@ -1690,6 +1690,12 @@ fun ChatScreen(
                 is ChatLinkAction.ExternalApp ->
                     com.openminis.app.ui.browser.BrowserExternalSchemeHandler
                         .handle(context, action.url)
+                is ChatLinkAction.MissingFile ->
+                    android.widget.Toast.makeText(
+                        context,
+                        context.getString(R.string.chat_link_file_missing),
+                        android.widget.Toast.LENGTH_SHORT,
+                    ).show()
                 is ChatLinkAction.Web -> previewUrl = action.url
             }
         }

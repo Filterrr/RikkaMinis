@@ -23,6 +23,9 @@ sealed class ChatLinkAction {
     data class SandboxFile(val item: FileItem) : ChatLinkAction()
     data class ExternalApp(val url: String) : ChatLinkAction()
     data class Web(val url: String) : ChatLinkAction()
+    /** A minis:// resource link that no longer resolves to an on-disk
+     *  file (cleaned up, or a cross-session path that went stale). */
+    data class MissingFile(val url: String) : ChatLinkAction()
 }
 
 object ChatLinkResolver {
@@ -53,6 +56,15 @@ object ChatLinkResolver {
             "resolve url=${trimmed.take(200)} sid=$sessionId hostFile=${hostFile?.absolutePath} exists=${hostFile?.exists()}")
         if (hostFile != null && hostFile.exists() && !hostFile.isDirectory) {
             FileItem.from(hostFile)?.let { return ChatLinkAction.SandboxFile(it) }
+        }
+
+        // A minis:// link that is neither a recognized deep-link action
+        // nor a resolvable sandbox file (file cleaned up, cross-session
+        // path gone stale). Return MissingFile instead of falling through
+        // to the external-scheme branch — otherwise the app's own minis://
+        // links get misreported as "Blocked link to external app (minis)".
+        if (scheme == "minis") {
+            return ChatLinkAction.MissingFile(trimmed)
         }
 
         // T136: intent://, mailto:, tel:, geo:, market: etc. need a system

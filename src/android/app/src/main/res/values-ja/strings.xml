@@ -310,9 +310,9 @@
     <string name="skill_section_installed">インストール済み</string>
     <string name="skill_section_footer">Skill は専用の指示やワークフローで AI エージェントを拡張します。有効時にシステムプロンプトに読み込まれます。</string>
     <string name="skill_empty_title">Skill が未インストール</string>
-    <string name="skill_empty_action">+ をタップして SKILL.md をインポートするか、Minis Skills を閲覧してください。</string>
+    <string name="skill_empty_action">+ をタップして SKILL.md をインポートするか、RikkaMinis Skills を閲覧してください。</string>
     <string name="skill_import_modal_title">スキルをインポート</string>
-    <string name="skill_minis_skills_modal">Minis Skills</string>
+    <string name="skill_minis_skills_modal">RikkaMinis Skills</string>
     <string name="skill_delete_confirm_title">%1$s を削除しますか？</string>
     <string name="skill_delete_confirm_text">この skill とファイルを完全に削除します。</string>
     <string name="skill_import_sheet_title">スキルをインポート</string>
@@ -360,7 +360,7 @@
     <string name="skill_detail_source_file">ファイルインポート</string>
     <string name="skill_detail_source_bundled">内蔵</string>
     <string name="skill_detail_source_session">セッション作成</string>
-    <string name="skills_browser_title">Minis Skills</string>
+    <string name="skills_browser_title">RikkaMinis Skills</string>
     <string name="skills_browser_import_button">これをインポート</string>
     <string name="skills_browser_hud_importing">インポート中…</string>
     <string name="skills_browser_error_not_folder">先に skill フォルダを選択してください</string>
@@ -1264,4 +1264,8 @@
     <string name="config_confirm_effect_info">元に戻せますが、ひと目確認する価値があります。</string>
     <string name="chat_copy_code">コードをコピー</string>
     <string name="rootfs_insufficient_space">容量不足: 約 %1$d MB 必要ですが、利用可能なのは %2$d MB のみです。ストレージを空けて再試行してください。</string>
+
+    <!-- Fix: minis:// リンク対象のファイルが消えた場合の表記、および外部 scheme 遮断の文言。 -->
+    <string name="chat_link_file_missing">このファイルは利用できなくなりました。</string>
+    <string name="webpreview_blocked_scheme">外部アプリへのリンクをブロックしました。</string>
 </resources>

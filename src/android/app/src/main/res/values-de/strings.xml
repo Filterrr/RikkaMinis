@@ -310,9 +310,9 @@
     <string name="skill_section_installed">Installiert</string>
     <string name="skill_section_footer">Skills erweitern den KI-Agenten um spezialisierte Anweisungen und Workflows. Bei Aktivierung werden sie in den System-Prompt geladen.</string>
     <string name="skill_empty_title">Keine Skills installiert</string>
-    <string name="skill_empty_action">Auf + tippen, um SKILL.md zu importieren oder Minis Skills zu durchsuchen.</string>
+    <string name="skill_empty_action">Auf + tippen, um SKILL.md zu importieren oder RikkaMinis Skills zu durchsuchen.</string>
     <string name="skill_import_modal_title">Skill importieren</string>
-    <string name="skill_minis_skills_modal">Minis Skills</string>
+    <string name="skill_minis_skills_modal">RikkaMinis Skills</string>
     <string name="skill_delete_confirm_title">%1$s löschen?</string>
     <string name="skill_delete_confirm_text">Skill und zugehörige Dateien werden dauerhaft entfernt.</string>
     <string name="skill_import_sheet_title">Skill importieren</string>
@@ -360,7 +360,7 @@
     <string name="skill_detail_source_file">Dateiimport</string>
     <string name="skill_detail_source_bundled">Integriert</string>
     <string name="skill_detail_source_session">In Sitzung erstellt</string>
-    <string name="skills_browser_title">Minis Skills</string>
+    <string name="skills_browser_title">RikkaMinis Skills</string>
     <string name="skills_browser_import_button">Diesen importieren</string>
     <string name="skills_browser_hud_importing">Importiert…</string>
     <string name="skills_browser_error_not_folder">Wählen Sie zuerst einen Skill-Ordner</string>
@@ -1257,4 +1257,8 @@
     <string name="config_confirm_effect_info">Umkehrbar, aber einen kurzen Blick wert.</string>
     <string name="chat_copy_code">Code kopieren</string>
     <string name="rootfs_insufficient_space">Nicht genug Speicherplatz: etwa %1$d MB erforderlich, nur %2$d MB verfügbar. Bitte Speicher freigeben und erneut versuchen.</string>
+
+    <!-- Fix: Hinweise für gelöschte minis://-Dateien und blockierte externe Links. -->
+    <string name="chat_link_file_missing">Diese Datei ist nicht mehr verfügbar.</string>
+    <string name="webpreview_blocked_scheme">Link zu externer App blockiert.</string>
 </resources>

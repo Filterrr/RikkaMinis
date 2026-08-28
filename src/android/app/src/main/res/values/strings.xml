@@ -702,9 +702,9 @@
     <string name="skill_section_installed">Installed</string>
     <string name="skill_section_footer">Skills extend the AI agent with specialized instructions and workflows. They are loaded into the system prompt when enabled.</string>
     <string name="skill_empty_title">No Skills Installed</string>
-    <string name="skill_empty_action">Tap + to import a SKILL.md, .zip, or .skill file, or browse Minis Skills.</string>
+    <string name="skill_empty_action">Tap + to import a SKILL.md, .zip, or .skill file, or browse RikkaMinis Skills.</string>
     <string name="skill_import_modal_title">Import Skill</string>
-    <string name="skill_minis_skills_modal">Minis Skills</string>
+    <string name="skill_minis_skills_modal">RikkaMinis Skills</string>
     <string name="skill_delete_confirm_title">Delete %1$s?</string>
     <string name="skill_delete_confirm_text">This will permanently remove the skill and its files.</string>
     <string name="skill_import_sheet_title">Import Skill</string>
@@ -752,7 +752,7 @@
     <string name="skill_detail_source_file">File import</string>
     <string name="skill_detail_source_bundled">Built-in</string>
     <string name="skill_detail_source_session">Session created</string>
-    <string name="skills_browser_title">Minis Skills</string>
+    <string name="skills_browser_title">RikkaMinis Skills</string>
     <string name="skills_browser_import_button">Import This</string>
     <string name="skills_browser_hud_importing">Importing…</string>
     <string name="skills_browser_error_not_folder">Select a skill folder first</string>
@@ -1643,4 +1643,9 @@
     <string name="chat_copy_code">Copy code</string>
     <string name="rootfs_insufficient_space">Not enough space: need about %1$d MB, only %2$d MB available. Please free up storage and retry.</string>
     <!-- i18n-hardening-C-temp: shared with B (B defines all 8 locales); values-only fallback until merge de-dup -->
+
+    <!-- Fix: minis:// link fragments that went stale / cleaned-up files, and
+         a properly localized external-scheme guard message. -->
+    <string name="chat_link_file_missing">This file is no longer available.</string>
+    <string name="webpreview_blocked_scheme">Blocked link to external app.</string>
 </resources>
