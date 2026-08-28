@@ -230,8 +230,22 @@ class MainActivity : ComponentActivity() {
             // last-session file written on every chat-route change. Either way,
             // honour the crash-frequency force-home grace so we don't drop the
             // user straight back into the chat that may have been the crash trigger.
-            ?: getSharedPreferences(PREF_CRASH_RECOVERY, MODE_PRIVATE)
-                .getString(KEY_LAST_CHAT_SESSION_ID, null)
+            //
+            // [fix/lang-switch-nav-jump] The process-level fallback must ONLY
+            // fire on a true cold start (savedInstanceState == null, i.e. the
+            // SIGABRT/LMK path where onSaveInstanceState never ran). On an
+            // Activity recreation (configuration change — e.g. switching
+            // language in Settings → Appearance) the bundle is non-null and is
+            // the authoritative source: when the user is NOT inside a chat the
+            // bundle carries no session id, and falling back to the stale
+            // KEY_LAST_CHAT_SESSION_ID would yank them from Settings back into
+            // the previous chat.
+            ?: if (savedInstanceState == null) {
+                getSharedPreferences(PREF_CRASH_RECOVERY, MODE_PRIVATE)
+                    .getString(KEY_LAST_CHAT_SESSION_ID, null)
+            } else {
+                null
+            }
             ?.takeUnless {
                 com.openminis.app.crash.CrashFrequencyDetector.shouldForceHomeOnLaunch(this)
             }
@@ -324,6 +338,15 @@ class MainActivity : ComponentActivity() {
                 ?.let { DeepLinkAction.OpenSession(it) }
                 ?: DeepLinkAction.Unknown
         }
+        // [fix/lang-switch-nav-jump] True when this onCreate is the tail end
+        // of an Activity recreation (configuration change — e.g. language
+        // switch, theme, orientation). The NavController restores its own
+        // back stack in that case, so AppNavigation must NOT re-run the
+        // cold-start launch-mode dispatch (which would jump back to a chat).
+        // LMK/process-death restore also arrives with a non-null bundle, so
+        // we can't key on savedInstanceState alone — isChangingConfigurations
+        // is the precise recreation signal.
+        val isActivityRecreation = savedInstanceState != null && isChangingConfigurations
 
         setContent {
             val prefs = remember { getAppearancePrefs(this) }
@@ -433,6 +456,7 @@ class MainActivity : ComponentActivity() {
                     memoryRepository = app.memoryRepository,
                     navController = navController,
                     initialDeepLink = launchDeepLink,
+                    isActivityRecreation = isActivityRecreation,
                 )
 
                 // T-config: root-level minis-config confirm dialog.

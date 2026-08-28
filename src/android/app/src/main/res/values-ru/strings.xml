@@ -1150,7 +1150,7 @@
     <string name="mcp_add">Добавить сервер MCP</string>
     <string name="mcp_edit">Изменить сервер MCP</string>
     <string name="mcp_section_servers">Серверы</string>
-    <string name="mcp_section_footer">Серверы MCP позволяют агенту вызывать внешние инструменты через minis-mcp-cli. Конфигурация хранится в /var/minis/mcp-servers/servers.json (совместимо с Claude Desktop).</string>
+    <string name="mcp_section_footer">Серверы MCP позволяют агенту вызывать внешние инструменты через RikkaMinis-mcp-cli. Конфигурация хранится в /var/minis/mcp-servers/servers.json (совместимо с Claude Desktop).</string>
     <string name="mcp_empty_title">Нет серверов MCP</string>
     <string name="mcp_empty_action">Добавьте сервер кнопкой +.</string>
     <string name="mcp_transport_http">HTTP</string>
