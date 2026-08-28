@@ -72,6 +72,8 @@
     <string name="overlay_completion_completed">Завершено</string>
     <string name="overlay_completion_failed">Не удалось</string>
     <string name="overlay_completion_cancelled">Отменено</string>
+    <!-- [T-dedup-neutral-status] same-turn deduplicated tool pill content -->
+    <string name="tool_dedup_skipped">Пропущено — идентичный вызов уже выполнен</string>
     <string name="overlay_completion_timeout">Время истекло</string>
     <string name="bg_service_notification_title">Агент RikkaMinis активен</string>
     <string name="bg_service_notification_text">%1$s | %2$s | %3$s</string>

@@ -672,6 +672,8 @@
     <string name="overlay_completion_completed">執行完成</string>
     <string name="overlay_completion_failed">執行失敗</string>
     <string name="overlay_completion_cancelled">已取消</string>
+    <!-- [T-dedup-neutral-status] same-turn deduplicated tool pill content -->
+    <string name="tool_dedup_skipped">已跳過 — 相同呼叫已執行過</string>
     <string name="overlay_completion_timeout">已逾時</string>
     <string name="sessionlist_welcome_step1_title">新增供應商</string>
     <string name="sessionlist_welcome_step1_subtitle">設定 API Key 或使用 OAuth 登入</string>
