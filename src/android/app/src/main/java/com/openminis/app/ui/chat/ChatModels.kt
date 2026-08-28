@@ -231,7 +231,7 @@ data class QueuedPrompt(
  *    FAILED so the UI can render a clock icon instead of a generic error.
  */
 enum class ToolBlockStatus {
-    STREAMING, PENDING, RUNNING, SUCCESS, FAILED, CANCELLED, TIMEOUT
+    STREAMING, PENDING, RUNNING, SUCCESS, FAILED, CANCELLED, TIMEOUT, DEDUPLICATED
 }
 
 /** Slash command descriptor shown in the "/" popup. Mirrors iOS SlashCommand. */

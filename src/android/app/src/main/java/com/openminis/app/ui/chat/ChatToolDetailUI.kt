@@ -1173,6 +1173,8 @@ internal fun ToolDetailSheet(
                             ToolBlockStatus.FAILED -> Icons.Default.Error to ToolErrorColor
                             ToolBlockStatus.CANCELLED -> Icons.Default.Cancel to ToolCancelColor
                             ToolBlockStatus.TIMEOUT -> Icons.Default.Schedule to ToolErrorColor
+                            // [T-dedup-neutral-status] Same as cancelled: neutral grey
+                            ToolBlockStatus.DEDUPLICATED -> Icons.Default.Cancel to ToolCancelColor
                             else -> Icons.Default.CheckCircle to ToolCheckColor
                         }
                         Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))

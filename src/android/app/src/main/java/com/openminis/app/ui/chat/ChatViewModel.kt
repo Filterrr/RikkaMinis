@@ -8289,8 +8289,15 @@ class ChatViewModel(
                     val dupBlockIdx = allToolBlocks.indexOfFirst { it.id == id }
                     if (dupBlockIdx >= 0) {
                         allToolBlocks[dupBlockIdx] = allToolBlocks[dupBlockIdx].copy(
-                            toolStatus = ToolBlockStatus.FAILED,
-                            content = "Deduplicated: identical tool call already executed as $firstId",
+                            // [T-dedup-neutral-status] DEDUPLICATED (not FAILED):
+                            // the call was dropped on purpose because an
+                            // identical call already ran — rendering it as a
+                            // red error misled users into thinking the tool
+                            // broke. Neutral grey "skipped" styling matches
+                            // the intent; the model-facing synthetic
+                            // tool_result below is unchanged.
+                            toolStatus = ToolBlockStatus.DEDUPLICATED,
+                            content = context.getString(R.string.tool_dedup_skipped),
                             durationMs = 0,
                         )
                     }
@@ -11862,6 +11869,14 @@ Environment variables:
                                         result.output.startsWith(CANCELLED_MARKER) ||
                                             result.output.startsWith(LEGACY_CANCELLED_MARKER)
                                     ) -> ToolBlockStatus.CANCELLED
+                                    // [T-dedup-neutral-status] Same-turn dedup
+                                    // drops carry a success-flagged synthetic
+                                    // "Deduplicated: …" result — restore the
+                                    // neutral DEDUPLICATED pill (was: SUCCESS,
+                                    // which made the block's status visually
+                                    // drift FAILED→SUCCESS across a reload).
+                                    result.success && result.output.startsWith("Deduplicated:") ->
+                                        ToolBlockStatus.DEDUPLICATED
                                     result.success -> ToolBlockStatus.SUCCESS
                                     else -> ToolBlockStatus.FAILED
                                 },
