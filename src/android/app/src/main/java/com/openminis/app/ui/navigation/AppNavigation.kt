@@ -259,6 +259,13 @@ fun AppNavigation(
     memoryRepository: MemoryRepository? = null,
     navController: NavHostController = rememberNavController(),
     initialDeepLink: DeepLinkAction? = null,
+    /**
+     * True when the NavController already has saved state to restore — i.e.
+     * this composition follows an Activity recreation (config change, e.g.
+     * language switch) or a process-death restore. In both cases the
+     * cold-start launch-mode dispatch must be skipped (see the
+     * LaunchedEffect(Unit) below); it must only run on a genuine cold start.
+     */
     isActivityRecreation: Boolean = false,
 ) {
     val context = LocalContext.current
@@ -344,9 +351,10 @@ fun AppNavigation(
     // settle into RESUMED before navigating; for mode 3 (Home) we don't
     // need to navigate at all so we can skip the wait entirely.
     LaunchedEffect(Unit) {
-        // [fix/lang-switch-nav-jump] On an Activity recreation (configuration
-        // change — e.g. switching language in Settings → Appearance), the
-        // NavController's own state restoration already rebuilds the back
+        // [fix/lang-switch-nav-jump] On anything that is NOT a genuine cold
+        // start (Activity recreation from a config change — e.g. switching
+        // language in Settings → Appearance — or a process-death/LMK restore),
+        // the NavController's own state restoration already rebuilds the back
         // stack to whatever screen the user was on. Re-running the
         // cold-start launch-mode dispatch here would yank them back into a
         // chat (per the "Launch Session" preference) the moment they tap a
