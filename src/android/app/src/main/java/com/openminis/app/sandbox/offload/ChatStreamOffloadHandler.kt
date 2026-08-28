@@ -80,12 +80,15 @@ object ChatStreamOffloadHandler {
      * to skip stopService(:modelservice) while a stream is active — otherwise the
      * app process kill would sever the stream mid-answer (stream.jsonl left without
      * DONE/error, leaving the UI silently stalled until the poll timeout).
-     * @Volatile because it is incremented/decremented from stream coroutines but
-     * read from a different execution context (reclaim path).
+     *
+     * [atomic-counter] MUST be an [AtomicInteger]: the former `@Volatile var`
+     * with `++`/`--` was NOT atomic — `@Volatile` guarantees visibility, not
+     * read-modify-write exclusivity. Two concurrent streams could both read 0
+     * and both write 1 (undercount → phantom "no streams" →
+     * maybeReclaimModelService reclaims :modelservice under a live stream), or
+     * lost decrements could double-release. See ActiveStreamsStressTest.
      */
-    @Volatile
-    var activeStreams = 0
-        private set
+    val activeStreams = java.util.concurrent.atomic.AtomicInteger(0)
 
     /**
      * Execute a streaming request and expose decoded chunks as a [Flow].
@@ -112,7 +115,7 @@ object ChatStreamOffloadHandler {
         // way). One leaked decrement permanently inflated the counter and
         // disabled ExecutionCoordinator.maybeReclaimModelService forever
         // (phantom in-flight stream → :modelservice never reclaimed).
-        activeStreams++
+        activeStreams.incrementAndGet()
         val dir = try {
             val root = File(context.cacheDir, STAGING_ROOT)
             root.mkdirs()
@@ -120,7 +123,7 @@ object ChatStreamOffloadHandler {
             if (!d.mkdir()) throw IllegalStateException("cannot create run dir")
             d
         } catch (e: Exception) {
-            activeStreams--
+            activeStreams.decrementAndGet()
             throw RuntimeException("stream staging failed", e)
         }
 
@@ -302,7 +305,7 @@ object ChatStreamOffloadHandler {
         } finally {
             // [B2] A stream is no longer in flight regardless of how we exited
             // (timeout / external cancel / normal close).
-            activeStreams--
+            activeStreams.decrementAndGet()
             // [TF-F] Unified terminal-and-exit protocol: never delete a run dir
             // while the worker might still be writing to it. Only when
             //   - a terminal marker exists (worker's LAST write), AND
@@ -393,12 +396,13 @@ object ChatStreamOffloadHandler {
 
     /**
      * [TF-J2] Bounded wait for this run's worker to be DONE WRITING the dir.
-     * Safe to delete only when:
-     *   - `terminal.json` is present (the worker's LAST durable write; the
-     *     heartbeat stops only after it), or
-     *   - the liveness beat is absent or STALE (the worker was beating and
-     *     stopped — real process death, since on the healthy path the beat
-     *     continues until after terminal).
+     * Delegates the per-poll decision to [ModelExecutionRunDir.workerStoppedWriting]:
+     * safe only on terminal present, or beat STALE (worker provably alive,
+     * then stopped — crash / kill). A beat that was NEVER SEEN is deliberately
+     * NOT an exit signal ([beat-state-machine]: the worker may still be inside
+     * its startService → request-thread → first-beat startup window; treating
+     * an absent beat as "worker gone" let a client's cleanup delete the run
+     * dir under a worker that was only starting up).
      *
      * [strict-write-barrier] `result.json` and `client.ack` are deliberately
      * NOT sufficient here: finishRequest writes state.json AFTER them, so
@@ -409,16 +413,12 @@ object ChatStreamOffloadHandler {
      * own write, present immediately.
      */
     private suspend fun awaitWorkerExit(dir: File, runId: String?, timeoutMs: Long): Boolean {
-        val beatFile = File(dir, ModelExecutionRunDir.FILE_LIVENESS_BEAT)
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
-            if (ModelExecutionRunDir.terminalPresent(dir)) return true
-            if (!beatFile.isFile || ModelExecutionRunDir.beatStale(dir)) return true
+            if (ModelExecutionRunDir.workerStoppedWriting(dir)) return true
             delay(WORKER_EXIT_POLL_MS)
         }
-        return ModelExecutionRunDir.terminalPresent(dir) ||
-            !beatFile.isFile ||
-            ModelExecutionRunDir.beatStale(dir)
+        return ModelExecutionRunDir.workerStoppedWriting(dir)
     }
 
     /**

@@ -560,8 +560,18 @@ class ModelExecutionService : Service() {
         // TF-H: final state + terminal are written under the lock. terminal is
         // now the LAST write of the run — it must not appear while the worker
         // may still be ack-waiting.
+        // [terminal-last-write] The SELF_REAP run-log entry is written BEFORE
+        // the terminal marker: terminal.json must be the run dir's FINAL
+        // write (the client's delete barrier keys on it), so no log/state
+        // write may follow it. The heartbeat thread is the only sanctioned
+        // writer afterwards (liveness channel, by design — its writes land
+        // in a deleted dir and are swallowed if the client already reaped).
         ModelExecutionMailbox.writeState(dir, next, activeRequests.get(), unacked = pendingAckTokens.size)
         if (ModelExecutionLifecycle.shouldKill(next, quiescence)) {
+            ModelExecutionRunLog.log(
+                dir, android.os.Process.myPid(),
+                ModelExecutionRunLog.Phase.SELF_REAP, "quiescent", runId = runId,
+            )
             ModelExecutionRunDir.writeTerminal(dir)
             maybeSelfReapLocked(dir, next, quiescence, runId, generation)
         } else {
@@ -608,7 +618,8 @@ class ModelExecutionService : Service() {
                 return
             }
             Log.i(TAG, "terminal written, quiescent self-reap, pid=${android.os.Process.myPid()}")
-            ModelExecutionRunLog.log(dir, android.os.Process.myPid(), ModelExecutionRunLog.Phase.SELF_REAP, "quiescent", runId = runId)
+            // [terminal-last-write] No write after terminal: the SELF_REAP log
+            // entry moved into finishRequestLocked BEFORE writeTerminal.
             selfReap()
         }
     }

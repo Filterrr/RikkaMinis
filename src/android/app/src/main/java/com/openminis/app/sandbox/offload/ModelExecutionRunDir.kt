@@ -129,6 +129,46 @@ object ModelExecutionRunDir {
     }
 
     /**
+     * [beat-state-machine] Three-state classification of the liveness beat.
+     *
+     * The states are NOT interchangeable and conflating them is the
+     * startup-race bug: "beat file has never existed" (the worker may be
+     * scheduled but not yet running — startService latency) must NEVER be
+     * read as "worker stopped"; only STALE proves "the worker WAS alive and
+     * then stopped beating" (crash / kill / finish). PURE so the client's
+     * exit decision is JVM-testable. See workerStoppedWriting.
+     */
+    enum class BeatState { NEVER_SEEN, FRESH, STALE }
+
+    fun beatState(dir: File, nowMs: Long = System.currentTimeMillis()): BeatState = when {
+        !File(dir, FILE_LIVENESS_BEAT).isFile -> BeatState.NEVER_SEEN
+        beatStale(dir, nowMs) -> BeatState.STALE
+        else -> BeatState.FRESH
+    }
+
+    /**
+     * [beat-state-machine] Client-side pure decision: has this run's worker
+     * provably stopped WRITING the run dir?
+     *
+     * TRUE only on:
+     *  - terminal marker present — the worker's declared LAST durable write
+     *    (it stops the heartbeat only after writing terminal); or
+     *  - beat STALE — the worker was provably alive and stopped beating
+     *    without finishing (crash / LMK kill).
+     *
+     * Deliberately FALSE for NEVER_SEEN: an absent beat cannot distinguish
+     * "worker still starting" from "worker never started" — neither authorizes
+     * deletion. The caller keeps such a dir as an orphan; the reaper (which
+     * additionally demands a confirmed-dead pid and a released client
+     * registration) reclaims it later.
+     */
+    fun workerStoppedWriting(
+        dir: File,
+        terminal: Boolean = terminalPresent(dir),
+        beat: BeatState = beatState(dir),
+    ): Boolean = terminal || beat == BeatState.STALE
+
+    /**
      * Worker-side: atomically refresh the liveness heartbeat so a peer process
      * (main process) can see, via a shared-uid file, that this worker is still
      * alive. Writes a fresh-timestamp JSON via tmp+rename so a reader never sees
@@ -359,6 +399,16 @@ object ModelExecutionRunDir {
      * "write-complete" and the worker must NOT self-reap before the client
      * has consumed the stream (see the stream-ACK barrier in
      * [ModelExecutionService]).
+     *
+     * [terminal-last-write] INVARIANT: once `terminal.json` exists, the
+     * worker writes NOTHING further into the run dir — no run-log line, no
+     * state update, no result append. The client's delete barrier keys on
+     * this marker precisely because it proves "no write can still race the
+     * delete". The ONLY sanctioned exception is the liveness heartbeat file
+     * (a communication channel, not run output): its stop is ordered AFTER
+     * terminal so a client never sees "stale beat + no terminal", and a beat
+     * write that loses the race with deletion lands in a deleted dir and is
+     * swallowed — it can never resurrect the dir or corrupt the protocol.
      */
     fun writeTerminal(dir: File): Boolean = runCatching {
         val tmp = File(dir, "$FILE_TERMINAL.tmp")
