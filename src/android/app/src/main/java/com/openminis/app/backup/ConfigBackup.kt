@@ -119,6 +119,7 @@ object ConfigBackup {
         chatRepo: ChatRepository? = null,
         chatWindowDays: Int = 90,
         includeHiddenModels: Boolean = true,
+        memoryFileNames: Set<String>? = null,
     ): String {
         val registry = ConfigRegistry.get()
 
@@ -316,6 +317,14 @@ object ConfigBackup {
         val memoryFiles = JSONArray()
         if (memoryRepo != null) {
             for (info in runCatching { memoryRepo.listAllFiles() }.getOrDefault(emptyList())) {
+                // [T-sync-memory-scope] Auto-sync passes an explicit allow-list
+                // of shared stable files (currently only GLOBAL.md) and
+                // EXCLUDES the per-device YYYY-MM-DD daily logs — a daily log
+                // is a record of *this* device's agent activity, not a shared
+                // resource, and syncing it as a whole-file overwrite destroys
+                // the receiving device's same-day entries. Manual full backups
+                // keep carrying every file (memoryFileNames == null).
+                if (memoryFileNames != null && info.name !in memoryFileNames) continue
                 val content = runCatching { memoryRepo.readFile(info.name) }.getOrNull() ?: continue
                 memoryFiles.put(JSONObject().apply {
                     put("name", info.name)
