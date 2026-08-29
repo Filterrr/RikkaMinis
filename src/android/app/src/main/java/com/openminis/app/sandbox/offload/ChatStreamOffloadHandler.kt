@@ -12,7 +12,6 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
-import java.io.RandomAccessFile
 import java.util.UUID
 
 /**
@@ -142,6 +141,12 @@ object ChatStreamOffloadHandler {
         try {
             val requestFile = File(dir, "request.json")
             val streamFile = File(dir, ModelExecutionService.STREAM_FILE)
+            // [T-chat-stream-line-reader-unify] Reuse the bounded reader instead of
+            // the ad-hoc readAppendedChunks below. Single source of truth for
+            // max-read / max-line / oversized-line handling; the old implementation
+            // had neither and risked pulling a multi-MB single line into memory or
+            // splitting a UTF-8 char across poll windows.
+            val lineReader = BoundedLineReader()
             try { streamFile.createNewFile() } catch (e: Exception) {
                 throw RuntimeException("cannot create stream file", e)
             }
@@ -166,29 +171,43 @@ object ChatStreamOffloadHandler {
                     ensureActive()
                     val newLen = streamFile.length()
                     if (newLen > lastRead) {
-                        lastGrowAtMs = System.currentTimeMillis()
-                        val chunks = readAppendedChunks(streamFile, lastRead, newLen)
-                        lastRead = chunks.second
-                        for (line in chunks.first) {
-                            if (line.isBlank()) continue
-                            if (ChatStreamJsonl.isDone(line)) {
-                                terminalSeen = true
-                                return@withTimeoutOrNull true
+                        when (val result = lineReader.readAppended(streamFile, lastRead, newLen)) {
+                            is BoundedLineReader.ReadResult.Lines -> {
+                                lastGrowAtMs = System.currentTimeMillis()
+                                lastRead = result.newOffset
+                                for (line in result.lines) {
+                                    if (line.isBlank()) continue
+                                    if (ChatStreamJsonl.isDone(line)) {
+                                        terminalSeen = true
+                                        return@withTimeoutOrNull true
+                                    }
+                                    if (ChatStreamJsonl.isError(line)) {
+                                        // [TF-F] an error LINE is a stream-terminal
+                                        // event (the worker will also write result +
+                                        // terminal marker in finishRequest). Mark it so
+                                        // the finally never blind-deletes a live worker.
+                                        terminalSeen = true
+                                        throw ModelStreamErrorException(
+                                            ChatStreamJsonl.errorMessage(line),
+                                            hadChunks = emittedChunks,
+                                        )
+                                    }
+                                    ChatStreamJsonl.decode(line)?.let {
+                                        emittedChunks = true
+                                        emit(it)
+                                    }
+                                }
                             }
-                            if (ChatStreamJsonl.isError(line)) {
-                                // [TF-F] an error LINE is a stream-terminal
-                                // event (the worker will also write result +
-                                // terminal marker in finishRequest). Mark it so
-                                // the finally never blind-deletes a live worker.
-                                terminalSeen = true
-                                throw ModelStreamErrorException(
-                                    ChatStreamJsonl.errorMessage(line),
-                                    hadChunks = emittedChunks,
-                                )
+                            is BoundedLineReader.ReadResult.OversizedLine -> {
+                                // A single JSONL line exceeded maxLineBytes (256 KiB). Skip it
+                                // and advance past it so we don't re-read the same giant line
+                                // forever. Log so diagnostics can spot a producer bug.
+                                lastGrowAtMs = System.currentTimeMillis()
+                                lastRead = result.lineStartOffset + result.lineByteLength
+                                Log.w(TAG, "oversized stream line skipped: ${result.lineByteLength} bytes at offset ${result.lineStartOffset}")
                             }
-                            ChatStreamJsonl.decode(line)?.let {
-                                emittedChunks = true
-                                emit(it)
+                            BoundedLineReader.ReadResult.Partial -> {
+                                // No complete line yet — keep polling; lastRead unchanged.
                             }
                         }
                     }
@@ -421,26 +440,4 @@ object ChatStreamOffloadHandler {
         )
     }
 
-    /** Read only the bytes appended after [offset] up to the last newline; return (lines, newOffset). */
-    private fun readAppendedChunks(file: File, offset: Long, newLen: Long): Pair<List<String>, Long> {
-        return try {
-            RandomAccessFile(file, "r").use { raf ->
-                raf.seek(offset)
-                val n = (newLen - offset).toInt()
-                if (n <= 0) return emptyList<String>() to offset
-                val buf = ByteArray(n)
-                val read = raf.read(buf, 0, n)
-                if (read <= 0) return emptyList<String>() to offset
-                val text = String(buf, 0, read, Charsets.UTF_8)
-                // Only advance to the last complete newline so a partial line is retried next poll.
-                val completeEnd = text.lastIndexOf('\n')
-                if (completeEnd < 0) return emptyList<String>() to offset
-                val lines = text.substring(0, completeEnd).split('\n')
-                lines to (offset + completeEnd + 1)
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "readAppendedChunks failed: ${e.message}")
-            emptyList<String>() to offset
-        }
-    }
 }
