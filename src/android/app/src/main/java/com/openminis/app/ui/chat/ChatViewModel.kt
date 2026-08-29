@@ -426,6 +426,17 @@ class ChatViewModel(
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
 
+    // [T-chat-sysinfo-coalesce] Pending coalesce window for appendSystemInfo.
+    // Same-iconKind calls within SYSINFO_COALESCE_WINDOW_MS are merged into one
+    // ChatMessage with accumulated toolBlocks; different iconKind flushes the
+    // current window immediately. Runs on Main so the single _messages.value
+    // write is atomic from the UI's perspective.
+    private var pendingSysInfoJob: Job? = null
+    private var pendingSysInfoIconKind: String? = null
+    private var pendingSysInfoBlocks: MutableList<AssistantBlock> = mutableListOf()
+    private var pendingSysInfoPayload: String? = null
+    private var pendingSysInfoFirstId: String? = null
+
     // ── Long-session window cap ────────────────────────────────────────
     //
     // [T-android-larky-longsession-followup] On sessions with hundreds of
@@ -1856,7 +1867,16 @@ class ChatViewModel(
     /**
      * Append a system-info block to the conversation. Not persisted — matches the
      * iOS `appendSystemInfo` behavior which surfaces a local notice in the chat
-     * stream. Future work: wire real conversation compaction through the LLM.
+     * stream.
+     *
+     * [T-chat-sysinfo-coalesce] Consecutive same-iconKind calls within
+     * [SYSINFO_COALESCE_WINDOW_MS] are merged into ONE ChatMessage whose
+     * toolBlocks accumulate in call order; payload takes the last non-null
+     * value. Different iconKind flushes the current window first. The merge
+     * runs on Main via viewModelScope so the single _messages.value write is
+     * atomic from the UI's perspective and avoids the per-call
+     * read-modify-write that used to recompose the entire LazyColumn on every
+     * system notice during compact/revert failure chains.
      */
     private fun appendSystemInfo(text: String, iconKind: String, payload: String? = null) {
         val block = AssistantBlock(
@@ -1869,11 +1889,46 @@ class ChatViewModel(
             // affordance opening a detail sheet (mirrors iOS CompactSummarySheet).
             toolArgs = payload.orEmpty(),
         )
+        // Different iconKind → flush any pending window first (preserve ordering).
+        if (pendingSysInfoIconKind != null && pendingSysInfoIconKind != iconKind) {
+            flushPendingSysInfo()
+        }
+        // Start or extend the coalesce window.
+        if (pendingSysInfoIconKind == null) {
+            pendingSysInfoIconKind = iconKind
+            pendingSysInfoFirstId = block.id
+            pendingSysInfoBlocks.clear()
+            pendingSysInfoPayload = payload
+        } else {
+            // Same kind: accumulate. Last non-null payload wins.
+            if (payload != null) pendingSysInfoPayload = payload
+        }
+        pendingSysInfoBlocks.add(block)
+        // Schedule (or reschedule) the flush at the end of the window.
+        pendingSysInfoJob?.cancel()
+        pendingSysInfoJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
+            kotlinx.coroutines.delay(SYSINFO_COALESCE_WINDOW_MS)
+            flushPendingSysInfo()
+        }
+    }
+
+    /** Flush the pending coalesce window into a single ChatMessage. Idempotent. */
+    private fun flushPendingSysInfo() {
+        pendingSysInfoJob?.cancel()
+        pendingSysInfoJob = null
+        pendingSysInfoIconKind ?: return
+        val blocks = pendingSysInfoBlocks.toList()
+        val id = pendingSysInfoFirstId ?: "sysinfo_${System.currentTimeMillis()}"
+        pendingSysInfoIconKind = null
+        pendingSysInfoBlocks.clear()
+        pendingSysInfoPayload = null
+        pendingSysInfoFirstId = null
+        if (blocks.isEmpty()) return
         _messages.value = _messages.value + ChatMessage(
-            id = "sysinfo_${System.currentTimeMillis()}",
+            id = id,
             role = "system",
             content = "",
-            toolBlocks = listOf(block),
+            toolBlocks = blocks,
         )
     }
 
@@ -11708,6 +11763,9 @@ Environment variables:
 
     override fun onCleared() {
         super.onCleared()
+        // [T-chat-sysinfo-coalesce] Flush any pending coalesce window so the
+        // last system notice isn't lost when the ViewModel is destroyed.
+        flushPendingSysInfo()
         // Tear down whichever shell was actually serving this VM. Terminate
         // both ids when the rename happened, since a draft shell may still
         // linger if the agent ran a tool before `ensureSession()`.
@@ -12265,3 +12323,16 @@ internal fun buildTurnPartsPure(
     }
     return out
 }
+
+// [T-chat-sysinfo-coalesce] Window in which consecutive same-iconKind
+// appendSystemInfo calls are merged into one ChatMessage. Chosen to cover
+// compact/revert failure chains (5+ calls typically fire within <100ms)
+// without delaying a genuinely spaced user-facing notice.
+private const val SYSINFO_COALESCE_WINDOW_MS = 200L
+
+/** Pure: identity pass-through today; reserved for future dedup/trim rules. */
+internal fun coalesceSystemInfoBlocks(blocks: List<AssistantBlock>): List<AssistantBlock> = blocks
+
+/** Pure: last non-null payload wins; all-null → null. */
+internal fun resolveCoalescedPayload(payloads: List<String?>): String? =
+    payloads.lastOrNull { it != null }
