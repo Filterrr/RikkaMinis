@@ -8320,6 +8320,16 @@ class ChatViewModel(
                             content = context.getString(R.string.tool_dedup_skipped),
                             durationMs = 0,
                         )
+                        // [T-dedup-neutral-status] PUSH the flip immediately —
+                        // the loop-detector and preflight blocked branches both
+                        // publish their terminal flip, but this branch used to
+                        // fall through silently, leaving the dropped block
+                        // stuck on PENDING (spinner / "waiting") on screen
+                        // until the turn's next bulk publish — the exact
+                        // "occupying space, never runs" symptom.
+                        withContext(Dispatchers.Main) {
+                            updateAssistantMessage(assistantId, accumulatedText, true, allToolBlocks)
+                        }
                     }
                     resultParts.add(AgentContentPart.ToolResult(
                         id = id,
