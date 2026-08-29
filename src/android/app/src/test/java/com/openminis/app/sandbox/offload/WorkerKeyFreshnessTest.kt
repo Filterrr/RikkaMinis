@@ -72,6 +72,28 @@ class WorkerKeyFreshnessTest {
         assertTrue(WorkerKeyFreshness.isStale(1L, Long.MAX_VALUE))
     }
 
+    // ── [T-stale-key-clock-skew] ────────────────────────────────────────────
+
+    @Test
+    fun `mtime one second before baseline is not stale`() {
+        // 1s of backwards drift is filesystem jitter, not a clock event.
+        assertFalse(WorkerKeyFreshness.isStale(10_000L, 9_000L))
+    }
+
+    @Test
+    fun `mtime five seconds before baseline is stale (clock skew)`() {
+        // 5s backwards drift = RTC / NTP jump. Worker must die so retry
+        // spawns a fresh process that reads the new key.
+        assertTrue(WorkerKeyFreshness.isStale(10_000L, 5_000L))
+    }
+
+    @Test
+    fun `mtime at baseline is not stale (same instant)`() {
+        // Covered by `mtime equal to baseline is not stale`, but pin explicitly
+        // for the rewrite so a future refactor that drops `==` doesn't slip.
+        assertFalse(WorkerKeyFreshness.isStale(10_000L, 10_000L))
+    }
+
     // ── secretsFile layout ───────────────────────────────────────────────
 
     @Test

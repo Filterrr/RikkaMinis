@@ -3,6 +3,13 @@ package com.openminis.app.sandbox.offload
 import java.io.File
 
 /**
+ * Clock-skew grace window (ms) for the backward-rewrite detection in
+ * [WorkerKeyFreshness.isStale]. Any backwards drift smaller than this is
+ * normal filesystem jitter (mtime resolution / re-mount), not a clock event.
+ */
+private const val CLOCK_SKEW_GRACE_MS = 1_000L
+
+/**
  * [T-stale-apikey-worker-cache] Cross-process staleness detection for the
  * `provider_secrets` EncryptedSharedPreferences file read by the
  * `:modelservice` worker.
@@ -60,6 +67,17 @@ import java.io.File
  *
  * Extracted as a pure object (File-based, no Android classes) so it is
  * trivially JVM-testable, following the FE-4 route-A pattern.
+ *
+ * ## Clock-skew backward rewrites [T-stale-key-clock-skew]
+ * The original fix only caught FORWARD rewrites (currentMtime > baselineMs).
+ * Android devices can move the system clock backwards on RTC drift / NTP
+ * correction / daylight-saving transitions; in that window the
+ * encryptedSharedPreferences mtime may land BELOW the worker's baseline, the
+ * new key looks "unchanged", and the worker keeps serving the cached old
+ * key. This fix is additive (not mutually exclusive) to the forward
+ * detection: a backward mtime beyond a 1s grace is now also treated as
+ * stale, so the worker dies and the retry path re-captures the baseline on
+ * the next process birth (same worker-death handoff as the forward case).
  */
 object WorkerKeyFreshness {
 
@@ -80,14 +98,32 @@ object WorkerKeyFreshness {
     }
 
     /**
-     * Pure decision: has the file been rewritten after [baselineMs]?
+     * Decide whether the provider_secrets file has been rewritten in a way
+     * the worker must react to. Three cases:
+     *
+     *   1. Normal forward rewrite: currentMtime > baselineMs → STALE (existing
+     *      behavior, the user's complaint path).
+     *   2. OS clock skew / RTC drift: currentMtime is at least
+     *      [CLOCK_SKEW_GRACE_MS] BELOW baselineMs → treat as STALE so the
+     *      worker re-captures the baseline on next request and the retry
+     *      spawns a fresh process that reads the new key on its first-ever
+     *      prefs load.
+     *   3. Same-time / small backwards drift (< grace): NOT stale — the
+     *      cached key matches disk, no need to die.
+     *
+     * The grace is conservative: 1s of backwards drift is normal filesystem
+     * jitter (ext4 / f2fs mtime resolution, sdcardfs re-mount after reboot),
+     * not an actual clock event.
      *
      * A missing file (mtime == 0) is never stale: nothing was written yet, so
      * the in-memory default (no key) matches disk. A baseline of 0 (not
      * captured) is likewise never stale.
      */
-    fun isStale(baselineMs: Long, currentMtimeMs: Long): Boolean =
-        baselineMs > 0 && currentMtimeMs > baselineMs
+    fun isStale(baselineMs: Long, currentMtimeMs: Long): Boolean {
+        if (baselineMs <= 0L) return false
+        if (currentMtimeMs > baselineMs) return true
+        return currentMtimeMs < baselineMs - CLOCK_SKEW_GRACE_MS
+    }
 
     /** Staleness of the real secrets file for this dataDir. */
     fun isStaleNow(dataDir: File): Boolean =
