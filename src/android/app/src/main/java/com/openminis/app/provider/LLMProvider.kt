@@ -51,6 +51,20 @@ interface LLMProvider {
     val streamTextIsMonolithic: Boolean get() = false
 
     /**
+     * [T-length-wall-prefill] True when the provider accepts an ASSISTANT
+     * message as the FINAL message of a request, so a truncated
+     * (finish_reason="length"/max_tokens) reply can be continued by prefill —
+     * re-sending the incomplete assistant text as the last message with NO
+     * synthetic user message after it. The model is then forced to continue
+     * the unfinished assistant turn and has no room to back up and re-emit
+     * already-output text (the root cause of length-wall seam duplication).
+     *
+     * False (default) for strict third-party relays that require the last
+     * message to be USER — those fall back to the reminder + seam-trim path.
+     */
+    val supportsPrefill: Boolean get() = false
+
+    /**
      * [T-android-thinking-level-arch] PUBLIC entry — this is what every caller
      * (agent loop, fallback, quick test, model-use, …) invokes. It is NOT
      * overridden by providers: the default implementation clamps the requested
