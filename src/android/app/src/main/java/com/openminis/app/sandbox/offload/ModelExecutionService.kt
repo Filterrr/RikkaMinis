@@ -1251,8 +1251,26 @@ class ModelExecutionService : Service() {
 
     // ── helpers ──
 
-    private inline fun <reified T : Enum<T>> safeEnum(name: String, default: T): T =
-        try { java.lang.Enum.valueOf(T::class.java, name) } catch (_: Exception) { default }
+    /**
+     * [T-model-exec-strict-enum] Strict enum parse: unknown values throw
+     * [UnknownEnumValueException] instead of silently falling back to a
+     * default. The outer catch in executeRun / executeStreamingRun converts
+     * this into an error result / stream error line, and the main process's
+     * dispatch() retry spawns a fresh worker that can read the new value.
+     *
+     * Why not keep the default fallback: a cross-version worker receiving a
+     * newer enum case (e.g. a new ProviderType added in a main-process-only
+     * update) would silently route the request through the WRONG protocol
+     * (default openAI), producing a 400 that looks like a provider bug and
+     * wastes a network round-trip before the retry fixes it. Failing fast
+     * makes the retry immediate and the log actionable.
+     */
+    private inline fun <reified T : Enum<T>> safeEnum(name: String, @Suppress("UNUSED_PARAMETER") default: T): T =
+        try {
+            java.lang.Enum.valueOf(T::class.java, name)
+        } catch (_: IllegalArgumentException) {
+            throw UnknownEnumValueException(T::class.java.simpleName, name)
+        }
 
     private inline fun <reified T : Enum<T>> safeEnumOrNull(name: String): T? =
         enumValues<T>().firstOrNull { it.name == name }
@@ -1408,3 +1426,20 @@ private class LivenessHeartbeat(
         try { ModelExecutionRunDir.touchLivenessBeat(d) } catch (_: Throwable) {}
     }
 }
+
+/**
+ * [T-model-exec-strict-enum] Thrown when the worker receives an enum value
+ * it doesn't recognize — typically because the main process serialized a
+ * NEWER enum case that this (older) worker build doesn't know about. The
+ * outer catch in executeRun / executeStreamingRun writes an error result /
+ * stream error line; the main process's dispatch() retry then spawns a
+ * fresh worker that reads the correct enum on its first-ever prefs load.
+ *
+ * Replaces the old silent-fallback-to-default behavior which could route
+ * an Anthropic request through the OpenAI protocol (or vice versa) and
+ * produce a confusing 400 / parse failure that looked like a provider bug.
+ */
+internal class UnknownEnumValueException(
+    val enumClass: String,
+    val unknownValue: String,
+) : RuntimeException("unknown $enumClass value: $unknownValue")
