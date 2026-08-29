@@ -536,6 +536,20 @@ class OpenAIProvider constructor(
         basePath.lowercase().contains("api.deepseek.com")
 
     /**
+     * [T-length-wall-prefill] Whether this OpenAI-compatible endpoint accepts
+     * an ASSISTANT message as the final message (prefill continuation of a
+     * truncated reply). Official OpenAI + Azure + the known OpenAI-compatible
+     * gateways (OpenRouter / DashScope / Volcengine Ark / official DeepSeek)
+     * all honor a trailing assistant prefill. STRICT third-party relays that
+     * require the last message to be USER (e.g. tokenrhythm-class proxies)
+     * reject it with a 400 — those fall back to the reminder + seam-trim path,
+     * so the allowlist is deliberately conservative: unknown bases default to
+     * NO prefill (behaviour unchanged from before this flag existed).
+     */
+    override val supportsPrefill: Boolean
+        get() = supportsPrefillForOpenAIBase(basePath, isAzure)
+
+    /**
      * [T-thinking-off-explicit] The wire value for "thinking OFF", or null to
      * keep the historical omit-the-field behavior. ALLOWLIST, not blanket
      * (mirrors iOS OpenAIAgentProvider.explicitOffEffort): only vendors whose
@@ -3027,3 +3041,24 @@ private class OkHttpNetTraceListener : EventListener() {
         )
     }
 }
+
+/**
+ * [T-length-wall-prefill] Pure decision: does this OpenAI-compatible base URL
+ * accept an assistant-final prefill (continuation of a truncated reply)?
+ *
+ * Allowlist — official OpenAI + Azure + the known OpenAI-compatible gateways
+ * (OpenRouter / DashScope / Volcengine Ark / official DeepSeek) honor a
+ * trailing assistant prefill. STRICT third-party relays that require the last
+ * message to be USER (tokenrhythm-class proxies) reject it with a 400, so
+ * unknown bases default to NO prefill (behaviour unchanged from before).
+ */
+internal fun supportsPrefillForOpenAIBase(basePath: String, isAzure: Boolean): Boolean =
+    isAzure ||
+        basePath.lowercase().let { b ->
+            b.startsWith("https://api.openai.com") ||
+                b.contains("openrouter.ai") ||
+                b.contains("dashscope") ||
+                b.contains("volces") ||
+                b.contains("ark.") ||
+                b.contains("api.deepseek.com")
+        }

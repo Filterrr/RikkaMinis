@@ -43,6 +43,9 @@ class GeminiProvider(
 ) : LLMProvider {
     override val name = "Google"
     override var instanceContext: com.openminis.app.data.model.ProviderInstance? = null
+    // Gemini contents: a final role="model" content part is a valid prefill —
+    // continueContent / partial model turn is natively supported.
+    override val supportsPrefill: Boolean get() = true
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)

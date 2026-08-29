@@ -8047,9 +8047,29 @@ class ChatViewModel(
                             TAG_STREAM,
                             "runAgentLoop turn=$turn finish=length — truncated (${turnText.length} chars), continuing loop to let the model finish",
                         )
-                        // [T-length-wall-reminder] Inject a continuation
-                        // instruction as a synthetic USER message (same
-                        // delivery pattern as resume()'s stop-continue
+                        // [T-length-wall-prefill] When the provider accepts
+                        // an assistant-final prefill, the truncated assistant
+                        // text is ALREADY the last message in agentHistory
+                        // (added above), so continuing the loop re-sends it as
+                        // the final message with NO synthetic user message —
+                        // the model is forced to continue the unfinished
+                        // assistant turn and has no room to back up and
+                        // re-emit already-output text (the ROOT cause of
+                        // length-wall seam duplication, which the reminder +
+                        // seam-trim below could only patch after the fact).
+                        // mergeLengthWallSeam stays as belt-and-braces for
+                        // models that repeat even under prefill.
+                        if (currentProvider?.supportsPrefill == true) {
+                            AppLogger.info(
+                                TAG_STREAM,
+                                "runAgentLoop turn=$turn finish=length — prefill continuation (no reminder) via ${currentProvider.name}",
+                            )
+                            continue
+                        }
+                        // [T-length-wall-reminder] Prefill NOT supported
+                        // (strict relay requiring a final USER message): inject
+                        // a continuation instruction as a synthetic USER message
+                        // (same delivery pattern as resume()'s stop-continue
                         // reminder). Without it the next request presents the
                         // truncated reply as bare context and models frequently
                         // back up to an earlier semantic anchor, re-emitting a
