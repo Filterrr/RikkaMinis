@@ -113,22 +113,42 @@ class ChatLengthWallLogicTest {
         assertEquals(text, mergeLengthWallSeam(text, text))
     }
 
-    @Test fun `threshold boundary - exactly 6 chars overlap trims`() {
-        // 6-char overlap == LENGTH_WALL_MIN_SEAM_OVERLAP → trims.
-        val a = "一二三四五六"
-        val b = "一二三四五六七八"
-        // suffix of a == prefix of b of length 6: "一二三四五六"
+    @Test fun `threshold boundary - exactly 3 chars overlap trims`() {
+        // 3-char overlap == LENGTH_WALL_MIN_SEAM_OVERLAP → trims.
+        val a = "一二三"
+        val b = "一二三四五"
+        // suffix of a == prefix of b of length 3: "一二三"
         val merged = mergeLengthWallSeam(a, b)
-        assertEquals(a + "七八", merged)
+        assertEquals(a + "四五", merged)
     }
 
-    @Test fun `threshold boundary - 5 chars overlap kept`() {
-        // 5-char overlap < 6 threshold → plain concat (no trim).
-        val a = "一二三四五"
-        val b = "一二三四五六七八"
-        // suffix of a of length 5 = "一二三四五" == prefix of b (first 5)
+    @Test fun `threshold boundary - 2 chars overlap kept`() {
+        // 2-char overlap < 3 threshold → plain concat (no trim).
+        val a = "一二"
+        val b = "一二三四五"
+        // suffix of a of length 2 = "一二" == prefix of b (first 2)
         val merged = mergeLengthWallSeam(a, b)
         assertEquals(a + b, merged)
+    }
+
+    @Test fun `field symptom - 4 char phrase repetition is trimmed`() {
+        // User-reported "业界几乎" class: a 4-char phrase that the OLD 6-char
+        // threshold could not catch. The model backs up and re-emits it.
+        val truncated = "……主动走出了一条业界几乎"
+        val continuation = "业界几乎没人走的路。"
+        val merged = mergeLengthWallSeam(truncated, continuation)
+        assertEquals("……主动走出了一条业界几乎没人走的路。", merged)
+        assertEquals(1, countOccurrences(merged, "业界几乎"))
+    }
+
+    @Test fun `field symptom - 5 char sentence head repetition is trimmed`() {
+        // "春天来了。" (5 chars incl. 。) — the model restarts the sentence
+        // head it already output. Below the OLD 6 threshold, now caught.
+        val truncated = "春天来了。"
+        val continuation = "春天来了。风变得温柔起来。"
+        val merged = mergeLengthWallSeam(truncated, continuation)
+        assertEquals("春天来了。风变得温柔起来。", merged)
+        assertEquals(1, countOccurrences(merged, "春天来了。"))
     }
 
     // ── lengthWallReminder ────────────────────────────────────────────────

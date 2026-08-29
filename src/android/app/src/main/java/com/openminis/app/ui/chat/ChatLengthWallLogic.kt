@@ -30,11 +30,14 @@ package com.openminis.app.ui.chat
 
 /** Minimum seam-overlap length (chars) considered a real duplication.
  *  Shorter overlaps are legitimate language patterns (e.g. "。" + "，")
- *  and must not be trimmed. Mirrors the spirit of
- *  [MINIMUM_STREAMING_OVERLAP_LENGTH] in StreamingMarkdownText.kt but is
- *  deliberately larger: a length-wall seam is model-level text, and trimming
- *  a 1-2 char overlap risks eating legitimate punctuation joins. */
-const val LENGTH_WALL_MIN_SEAM_OVERLAP = 6
+ *  and must not be trimmed. Mirrors [MINIMUM_STREAMING_OVERLAP_LENGTH] in
+ *  StreamingMarkdownText.kt (=3). The original value of 6 was sized for
+ *  conservative joins but field data (user-reported "业界几乎" 4-char and
+ *  "春天来了。" 5-char repeats, tokenrhythm deepseek/glm/kimi relay) showed
+ *  models back up and re-emit SHORT phrases that 6 could not catch — so 3
+ *  aligns with the streaming dedup threshold and still leaves 1-2 char
+ *  punctuation joins untouched. */
+const val LENGTH_WALL_MIN_SEAM_OVERLAP = 3
 
 /** Hard cap for the overlap scan (performance: the scan is O(n*m) worst case
  *  via indexOf; capped so a pathological megabyte turn cannot stall the loop). */
