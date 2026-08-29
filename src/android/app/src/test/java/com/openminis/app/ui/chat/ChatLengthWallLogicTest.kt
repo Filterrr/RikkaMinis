@@ -151,6 +151,52 @@ class ChatLengthWallLogicTest {
         assertEquals(1, countOccurrences(merged, "春天来了。"))
     }
 
+    // ── [T-length-wall-seam-punct] leading-punctuation blind spot ─────────
+
+    @Test fun `leading comma before repeated phrase is trimmed`() {
+        // Field symptom: the model re-emits the truncated tail behind a
+        // joining comma. The raw scan compares against the comma and missed
+        // the 4-char overlap entirely (the "修过但没解决" gap).
+        val truncated = "……主动走出了一条业界几乎"
+        val continuation = "，主动走出了一条业界几乎没人走的路。"
+        val merged = mergeLengthWallSeam(truncated, continuation)
+        assertEquals("……主动走出了一条业界几乎没人走的路。", merged)
+        assertEquals(1, countOccurrences(merged, "主动走出了一条业界几乎"))
+    }
+
+    @Test fun `leading full stop before repeated sentence is trimmed`() {
+        val truncated = "春天来了。"
+        val continuation = "。春天来了。风变得温柔起来。"
+        val merged = mergeLengthWallSeam(truncated, continuation)
+        assertEquals("春天来了。风变得温柔起来。", merged)
+        assertEquals(1, countOccurrences(merged, "春天来了。"))
+    }
+
+    @Test fun `leading punctuation kept on non-repeat join`() {
+        // A comma that fronts genuinely NEW text (no overlap) is legitimate
+        // sentence flow — it must survive, not be stripped by overreach.
+        val truncated = "第一段结束"
+        val continuation = "，第二段开始。"
+        val merged = mergeLengthWallSeam(truncated, continuation)
+        assertEquals("第一段结束，第二段开始。", merged)
+    }
+
+    @Test fun `leading punctuation with sub-threshold overlap is kept`() {
+        // 2-char overlap behind a comma (< threshold) — plain concat, the
+        // comma and the short overlap both survive.
+        val truncated = "一二"
+        val continuation = "，一二三四五"
+        val merged = mergeLengthWallSeam(truncated, continuation)
+        assertEquals("一二，一二三四五", merged)
+    }
+
+    @Test fun `stripLeadingPunctuation strips full run and stops at text`() {
+        assertEquals("内容", stripLeadingPunctuation("，。、内容"))
+        assertEquals("内容", stripLeadingPunctuation("内容"))
+        assertEquals("", stripLeadingPunctuation("，。、"))
+        assertEquals("A。", stripLeadingPunctuation("。A。"))
+    }
+
     // ── lengthWallReminder ────────────────────────────────────────────────
 
     @Test fun `reminder embeds the truncated tail as anchor`() {

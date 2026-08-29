@@ -73,6 +73,37 @@ fun lengthWallSeamOverlap(truncated: String, continuation: String): Int {
 }
 
 /**
+ * [T-length-wall-seam-punct] Full/half-width punctuation + whitespace that
+ * can open a length-wall continuation as "restart the sentence" residue.
+ * Models frequently back up to an earlier anchor and re-emit a phrase they
+ * already produced, prefixed with a joining comma / full stop — e.g. the
+ * field symptom "…业界几乎，主动走出了一条业界几乎…". That leading mark
+ * sits BEFORE the repeated phrase, so the raw suffix-prefix scan
+ * ([lengthWallSeamOverlap]) compares against a continuation whose head is
+ * punctuation and collapses to 0, leaving the duplication intact.
+ * Stripping the leading run first lets the scan find the real overlap.
+ */
+private val LEADING_PUNCTUATION_CHARS = setOf(
+    '，', '。', '、', '；', '：', '！', '？', '…', '—', '·', '～',
+    '「', '」', '『', '』', '（', '）', '【', '】', '《', '》',
+    '“', '”', '‘', '’', '"', '\'',
+    '.', ',', ';', ':', '!', '?', '(', ')', '[', ']', '<', '>', '-',
+    ' ', '\t', '\n', '\r',
+)
+
+/**
+ * Strip the leading run of punctuation/whitespace from [text] (the
+ * continuation head). Returns the remainder after the run; the empty string
+ * when [text] is entirely punctuation. Leaves [text] untouched when it opens
+ * with a non-punctuation character (zero-allocation fast path).
+ */
+fun stripLeadingPunctuation(text: String): String {
+    var i = 0
+    while (i < text.length && text[i] in LEADING_PUNCTUATION_CHARS) i++
+    return if (i == 0) text else text.substring(i)
+}
+
+/**
  * Merge a length-wall continuation into the truncated text, trimming any
  * seam overlap so no already-output phrase survives twice.
  *
@@ -89,12 +120,24 @@ fun lengthWallSeamOverlap(truncated: String, continuation: String): Int {
 fun mergeLengthWallSeam(truncated: String, continuation: String): String {
     if (continuation.isEmpty()) return truncated
     if (truncated.isEmpty()) return continuation
-    val overlap = lengthWallSeamOverlap(truncated, continuation)
-    return if (overlap >= LENGTH_WALL_MIN_SEAM_OVERLAP) {
-        truncated + continuation.substring(overlap)
-    } else {
-        truncated + continuation
+    // [T-length-wall-seam-punct] Strip the continuation's leading
+    // punctuation/whitespace run BEFORE the overlap scan: models that back
+    // up to an earlier anchor re-emit the repeated phrase behind a joining
+    // mark (e.g. "…业界几乎，主动走出了一条业界几乎…"), and a raw scan
+    // compares against that mark and misses the real overlap entirely. The
+    // stripped head is used ONLY for overlap detection; the cut is then
+    // applied to the ORIGINAL continuation (leading marks + overlap) so the
+    // mark is removed exactly when it fronts a duplicated phrase and kept
+    // otherwise (it is legitimate sentence flow on a non-repeat join).
+    val stripped = stripLeadingPunctuation(continuation)
+    if (stripped.isEmpty()) return truncated + continuation
+    val overlap = lengthWallSeamOverlap(truncated, stripped)
+    if (overlap >= LENGTH_WALL_MIN_SEAM_OVERLAP) {
+        val leadingMarks = continuation.length - stripped.length
+        val cut = leadingMarks + overlap
+        return truncated + continuation.substring(cut)
     }
+    return truncated + continuation
 }
 
 /**
