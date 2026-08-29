@@ -257,7 +257,7 @@ class ModelExecutionService : Service() {
                             // only once the beat goes silent after terminal.
                             heartbeat.start()
                             ModelExecutionRunDir.writeReady(dir)
-                            val result = executeRun(requestText)
+                            val result = executeRun(requestText, dir)
                             writeResultAtomically(dir, result)
                             Log.i(TAG, "result written ($result.length bytes), pid=${android.os.Process.myPid()}")
                         }
@@ -517,6 +517,43 @@ class ModelExecutionService : Service() {
     }
 
     /**
+     * [T-stale-apikey-worker-cache] Stale-secrets abort. The main process
+     * rewrote `provider_secrets` after this worker was born, so our cached
+     * EncryptedSharedPreferences map may hold the OLD API key. We cannot
+     * re-read it in-process (SharedPreferences is a per-process singleton
+     * cache; re-opening under another name would mint a fresh Tink keyset
+     * that can't decrypt the existing ciphertext). Instead: log the reason,
+     * flush the run log, and kill the process WITHOUT writing result.json or
+     * an error line. The client then classifies this as a 0-chunk worker
+     * death → transient → auto-retry re-dispatches → a NEW worker process
+     * loads the fresh key on its first-ever prefs read.
+     *
+     * Call sites run inside the request thread while holding executionMutex;
+     * killing the process here also bypasses the ack barrier — correct,
+     * because nothing was served. The run dir is left as an orphan for the
+     * reaper (no terminal marker is ever written by a killed worker).
+     */
+    private fun abortOnStaleKeyCache(runId: String?, dir: File?) {
+        val pid = android.os.Process.myPid()
+        Log.w(
+            TAG,
+            "stale_key_cache: provider_secrets.xml rewritten by the main process after this " +
+                "worker started — killing worker pid=$pid runId=$runId so the retry spawns a " +
+                "fresh process that reads the new key",
+        )
+        // Log BEFORE kill so classifyWorkerDeath's tail summary shows the cause.
+        if (dir != null) {
+            ModelExecutionRunLog.log(
+                dir, pid,
+                ModelExecutionRunLog.Phase.SELF_REAP,
+                WorkerKeyFreshness.STALE_KEY_CACHE,
+                runId = runId,
+            )
+        }
+        selfReap()
+    }
+
+    /**
      * TF-H: non-streaming runs ack like streaming ones once the client wrote
      * client.ack. Kept here so callers can release the per-run token.
      */
@@ -527,7 +564,7 @@ class ModelExecutionService : Service() {
         }
     }
 
-    private fun executeRun(requestJson: String): String {
+    private fun executeRun(requestJson: String, dir: File): String {
         val req = JSONObject(requestJson)
 
         // ── Reconstruct ProviderInstance ──
@@ -605,6 +642,17 @@ class ModelExecutionService : Service() {
         }
 
         // ── API key: read from EncryptedSharedPreferences (same uid) ──
+        // [T-stale-apikey-worker-cache] Detect a mid-lifetime rewrite of the
+        // secrets file BEFORE reading the key: SharedPreferences is a
+        // per-process singleton cache, so a key saved by the main process
+        // after THIS process first loaded the prefs is invisible here and we
+        // would send the OLD (quota-exhausted) key. Abort → client retries →
+        // fresh process reads the new key. See WorkerKeyFreshness.
+        WorkerKeyFreshness.captureBaseline(getDataDir())
+        if (WorkerKeyFreshness.isStaleNow(getDataDir())) {
+            abortOnStaleKeyCache(runIdOf(dir), dir)
+            return JSONObject().apply { put("error", WorkerKeyFreshness.STALE_KEY_CACHE) }.toString()
+        }
         val apiKey = try {
             com.openminis.app.util.EncryptedPrefsFactory.safeCreate(this, "provider_secrets")
                 .getString("apikey_${instance.id}", null) ?: ""
@@ -849,6 +897,23 @@ class ModelExecutionService : Service() {
             val thinkingLevel = safeEnum(getString(req, "thinking_level"), com.openminis.app.data.model.ThinkingLevel.OFF)
 
             // ── API key: read from EncryptedSharedPreferences (same uid) ──
+            // [T-stale-apikey-worker-cache] Same guard as executeRun: if the
+            // main process saved a new key after this worker was born, our
+            // cached prefs map is stale — abort (kill) so the client's retry
+            // spawns a fresh process that reads the new key. No error line /
+            // result.json is written: the client must see a 0-chunk worker
+            // death, not a terminal failure. See WorkerKeyFreshness.
+            WorkerKeyFreshness.captureBaseline(getDataDir())
+            if (WorkerKeyFreshness.isStaleNow(getDataDir())) {
+                abortOnStaleKeyCache(runId, dir)
+                // killProcess never returns on success. The lines below only
+                // run in the pathological "kill failed" case: emit a typed
+                // error line so the client surfaces a transient failure (and
+                // its auto-retry re-dispatches) instead of hanging on a
+                // stream that will never produce chunks.
+                appendLine(ChatStreamJsonl.errorLine(WorkerKeyFreshness.STALE_KEY_CACHE))
+                return
+            }
             val apiKey = try {
                 com.openminis.app.util.EncryptedPrefsFactory.safeCreate(this, "provider_secrets")
                     .getString("apikey_${instance.id}", null) ?: ""

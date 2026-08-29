@@ -201,7 +201,21 @@ object ModelExecutionDispatcher {
      * dispatch failure (timeout / IO / service unavailable) so callers can
      * fall back to the in-process path.
      */
-    suspend fun dispatch(context: Context, requestJson: String): String? {
+    suspend fun dispatch(context: Context, requestJson: String): String? =
+        dispatchOnce(context, requestJson)
+            // [T-stale-apikey-worker-cache] One transparent re-dispatch after a
+            // confirmed worker death: the worker process was killed (stale-key
+            // abort / hard crash) before writing anything, so the request was
+            // never served. A fresh startService spawns a NEW worker whose
+            // first-ever prefs load sees the just-saved API key. Bounded to a
+            // single retry so a worker that keeps dying surfaces as a real
+            // null to the caller.
+            ?: run {
+                Log.w(TAG, "dispatch got no result — one retry after worker death (stale-key cache / crash), pid re-spawn expected")
+                dispatchOnce(context, requestJson)
+            }
+
+    private suspend fun dispatchOnce(context: Context, requestJson: String): String? {
         val dir = try {
             val root = File(context.cacheDir, STAGING_ROOT)
             root.mkdirs()
@@ -232,6 +246,12 @@ object ModelExecutionDispatcher {
         }
 
         // Poll for the result file.
+        // [T-stale-apikey-worker-cache] workerDied: set when the poll loop
+        // short-circuits on a confirmed dead worker (stale beat, no output).
+        // It skips the post-poll cleanup waits — the worker is already dead,
+        // so there is nothing left to wait for — and lets the outer dispatch()
+        // re-dispatch promptly instead of burning TERMINAL/REAP waits.
+        var workerDied = false
         val result: String? = withTimeoutOrNull(REQUEST_TIMEOUT_MS) {
             var read: String? = null
             while (true) {
@@ -242,6 +262,18 @@ object ModelExecutionDispatcher {
                         Log.w(TAG, "read result failed: ${e.message}")
                         null
                     }
+                    break
+                }
+                // [T-stale-apikey-worker-cache] Fast worker-death short-circuit:
+                // the worker beat at least once (it accepted this request) and
+                // then went silent WITHOUT ever writing a result — it died
+                // (e.g. the stale-key abort kills the process before any
+                // output). Waiting out the full 3-minute timeout would stall
+                // the caller for nothing; exit the poll immediately so the
+                // gateway-level retry can re-dispatch onto a fresh process.
+                if (workerDiedWithoutResult(dir)) {
+                    Log.w(TAG, "worker died without a result (beat stale, no result.json) — ending poll early, dir=${dir.name}")
+                    workerDied = true
                     break
                 }
                 delay(POLL_INTERVAL_MS)
@@ -255,6 +287,12 @@ object ModelExecutionDispatcher {
             try {
                 ModelExecutionMailbox.writeClientAck(dir)
             } catch (_: Exception) {}
+        } else if (workerDied) {
+            // [T-stale-apikey-worker-cache] Confirmed dead worker: no cancel
+            // (nobody left to read it) and no cleanup waits (nothing can still
+            // be writing). Leave the dir as an orphan for the reaper and let
+            // the outer dispatch() re-dispatch NOW.
+            Log.w(TAG, "run dir orphaned after confirmed worker death, dir=${dir.name}")
         } else {
             Log.w(TAG, "timeout waiting for model-exec result — falling back in-process")
             // Try to stop the worker (it may be mid-run); it self-reaps on cancel
@@ -273,11 +311,11 @@ object ModelExecutionDispatcher {
         // worker still alive/unknown → leave the dir as an ORPHAN (never
         // delete) and let the orphan reaper reclaim later when the pid is
         // dead + terminal.
-        val terminalSeen = awaitTerminal(dir, TERMINAL_WAIT_MS)
-        val reaped = waitForWorkerReap(dir, REAP_WAIT_MS)
-        if (terminalSeen && reaped) {
+        val terminalSeen = if (workerDied) false else awaitTerminal(dir, TERMINAL_WAIT_MS)
+        val reaped = if (workerDied) false else waitForWorkerReap(dir, REAP_WAIT_MS)
+        if (!workerDied && terminalSeen && reaped) {
             try { dir.deleteRecursively() } catch (_: Exception) {}
-        } else {
+        } else if (!workerDied) {
             Log.w(
                 TAG,
                 "run dir kept as orphan (terminal=$terminalSeen reaped=$reaped dir=${dir.name}) — " +
@@ -343,6 +381,29 @@ object ModelExecutionDispatcher {
         val beatFile = File(dir, ModelExecutionRunDir.FILE_LIVENESS_BEAT)
         val beatGoneOrStale = !beatFile.isFile || ModelExecutionRunDir.beatStale(dir)
         return result && beatGoneOrStale
+    }
+
+    /**
+     * [T-stale-apikey-worker-cache] True when the worker for this run dir is
+     * provably DEAD without ever producing a result: it beat at least once
+     * (so it existed and accepted the request), the beat has gone stale
+     * (>= ModelExecutionRunDir.LIVENESS_STALE_MS of silence), and no result /
+     * cancel-ack / terminal marker was written. This is the signature of a
+     * process kill — most commonly the stale-key abort, but any hard crash
+     * matches too. Used by the dispatch poll loop to stop waiting the full
+     * REQUEST_TIMEOUT_MS on a worker that can never answer.
+     */
+    private fun workerDiedWithoutResult(dir: File): Boolean {
+        val beatFile = File(dir, ModelExecutionRunDir.FILE_LIVENESS_BEAT)
+        // Never beat → still starting up (or beat file lost); NOT a confirmed death.
+        if (!beatFile.isFile) return false
+        // Still beating → alive; keep waiting.
+        if (!ModelExecutionRunDir.beatStale(dir)) return false
+        // Beat went stale — dead unless it left any output behind.
+        val hasOutput = File(dir, ModelExecutionService.RESULT_FILE).exists() ||
+            File(dir, ModelExecutionMailbox.FILE_CANCEL_ACK).exists() ||
+            ModelExecutionRunDir.terminalPresent(dir)
+        return !hasOutput
     }
 
     /** Extract the stable runId from a `run-<uuid>` dir name (shared helper). */
