@@ -4,6 +4,7 @@ import com.openminis.app.data.model.LLMError
 import com.openminis.app.data.model.LLMMessage
 import com.openminis.app.data.model.LLMModel
 import com.openminis.app.data.model.LLMStreamChunk
+import com.openminis.app.data.model.ThinkingLevel
 import com.openminis.app.provider.openai.OpenAIProvider
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
@@ -394,5 +395,47 @@ class OpenAIProviderTest {
     fun `provider model can be changed`() {
         provider.model = LLMModel.gpt4o
         assertEquals(LLMModel.gpt4o, provider.model)
+    }
+
+    // -- Qwen thinking-off (T-qwen-thinking-off-omission) --
+
+    @Test
+    fun `qwen thinking OFF emits enable_thinking false`() = runBlocking {
+        provider.model = LLMModel("qwen3.8-max", "Qwen3.8 Max", "OpenAI", supportsReasoning = true)
+        server.enqueue(
+            MockResponse()
+                .setBody(sseBody("""{"choices":[{"delta":{"content":"ok"}}]}"""))
+                .setHeader("Content-Type", "text/event-stream")
+        )
+
+        provider.sendMessage(
+            listOf(LLMMessage(LLMMessage.Role.USER, "test")), null, 100,
+            thinkingLevel = ThinkingLevel.OFF,
+        )
+
+        val request = server.takeRequest()
+        val body = JSONObject(request.body.readUtf8())
+        assertEquals(false, body.getBoolean("enable_thinking"))
+        assertTrue(!body.has("reasoning_effort"))
+        assertTrue(!body.has("thinking"))
+    }
+
+    @Test
+    fun `qwen thinking OFF does not affect non-qwen models`() = runBlocking {
+        provider.model = LLMModel("gpt-4o-mini", "GPT-4o Mini", "OpenAI")
+        server.enqueue(
+            MockResponse()
+                .setBody(sseBody("""{"choices":[{"delta":{"content":"ok"}}]}"""))
+                .setHeader("Content-Type", "text/event-stream")
+        )
+
+        provider.sendMessage(
+            listOf(LLMMessage(LLMMessage.Role.USER, "test")), null, 100,
+            thinkingLevel = ThinkingLevel.OFF,
+        )
+
+        val request = server.takeRequest()
+        val body = JSONObject(request.body.readUtf8())
+        assertTrue(!body.has("enable_thinking"))
     }
 }

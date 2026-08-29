@@ -2203,14 +2203,31 @@ class OpenAIProvider constructor(
         // reasoning_effort against a STRICT low/medium/high enum and reject the
         // whole request on "none"/"minimal" (mirrors iOS ff60c818 + c5efeb1e).
         if (!level.isEnabled) {
+            // [T-qwen-thinking-off-omission] Qwen/DashScope models think BY
+            // DEFAULT (Bailian/DashScope "provider" default), so thinking OFF
+            // must emit an explicit `enable_thinking: false` — omission lets the
+            // vendor default kick in and the model silently enters its reasoning
+            // phase, which stalls the visible stream (the reported "using a
+            // model and it suddenly freezes" bug). Verified live against
+            // tokenrhythm.studio qwen3.8-max (Bailian): without the field the
+            // response carries `reasoning_content` + `reasoning_tokens`; with
+            // `enable_thinking: false` it streams text immediately. Note the
+            // qwen branch historically `return`ed here with NO field at all —
+            // the offEffort allowlist below is for reasoning_effort vendors
+            // only, so qwen must be handled BEFORE the allowlist gate.
+            if (lid.contains("qwen") || isDashScope) {
+                body.put("enable_thinking", false)
+                com.openminis.app.logging.AppLogger.info(
+                    "OpenAIProvider",
+                    "Qwen/DashScope thinking disabled via enable_thinking:false on $lid (base=$basePath)"
+                )
+                return
+            }
             val offEffort = explicitOffEffort() ?: return
             if (lid.contains("mimo") || lid.contains("agnes")) return
             when {
                 lid.startsWith("o") || lid.startsWith("gpt-5") ->
                     body.put("reasoning_effort", offEffort)
-                // Qwen/DashScope keep their native enable_thinking mechanism —
-                // never route them through reasoning_effort.
-                lid.contains("qwen") || isDashScope -> return
                 lid.contains("deepseek") || lid.contains("glm") ||
                     lid.contains("kimi") || lid.contains("minimax") -> {
                     // Native self-reasoning families: only the unified-effort
