@@ -51,6 +51,10 @@ class AnthropicProvider(
     override val name = "Anthropic"
     override var instanceContext: com.openminis.app.data.model.ProviderInstance? = null
     override val defaultMaxOutputTokens: Int get() = 64_000
+    // Anthropic Messages API: a truncated (max_tokens) reply is continued by
+    // appending the partial assistant content back into messages and re-sending
+    // (see "Stop reasons and fallback" → max_tokens → continue the response).
+    override val supportsPrefill: Boolean get() = true
 
     /**
      * [T-android-enhanced-cache] Enhanced Cache toggle — when true, every
