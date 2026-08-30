@@ -1,9 +1,13 @@
 package com.openminis.app.ui.settings
 
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Bolt
@@ -22,10 +26,15 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.stringResource
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import com.openminis.app.data.model.ModelOverrides
+import com.openminis.app.data.model.ThinkingLevel
 import com.openminis.app.data.model.inferContextWindowTokens
 import com.openminis.app.data.model.normalizeModalityName
 import com.openminis.app.data.repository.ProviderRepository
+import com.openminis.app.provider.catalogMaxThinkingLevel
+import com.openminis.app.ui.chat.localizedName
 import com.openminis.app.ui.components.RowLabel
 import com.openminis.app.ui.components.SectionTextField
 import com.openminis.app.R
@@ -81,6 +90,12 @@ fun ModelEntryDetailScreen(
     var thinkingEnabled by remember {
         mutableStateOf(overrides.supportsReasoning ?: baseModel.supportsReasoning ?: false)
     }
+    // [T-android-thinking-level-arch] User-set thinking ceiling for this
+    // model (ModelOverrides.maxThinkingLevel). null = inherit the catalog
+    // default — the override exists in the data layer but had NO UI to set
+    // it, and the old save path silently dropped a pre-existing value.
+    var maxThinkingOverride by remember { mutableStateOf(overrides.maxThinkingLevel) }
+    var showThinkingLevelDialog by remember { mutableStateOf(false) }
     var isHidden by remember { mutableStateOf(entry.isHidden) }
     var showQuickTest by remember { mutableStateOf(false) }
 
@@ -143,6 +158,11 @@ fun ModelEntryDetailScreen(
                         contextWindow = contextWindowText.trim().toIntOrNull()?.takeIf { it > 0 },
                         // supportsReasoning: persist only when user diverged from base.
                         supportsReasoning = thinkingEnabled.takeIf { it != (baseModel.supportsReasoning ?: false) },
+                        // [T-android-thinking-level-arch] Persist the ceiling
+                        // override (null = inherit catalog default). The old
+                        // save path omitted this field, silently erasing any
+                        // maxThinkingLevel already persisted on the entry.
+                        maxThinkingLevel = maxThinkingOverride,
                         // Modality lists: persist only when user-edited set differs
                         // from baseModel's set; otherwise leave null so the entry
                         // tracks future provider updates to the base modalities.
@@ -234,8 +254,29 @@ fun ModelEntryDetailScreen(
                 title = stringResource(R.string.modeldetail_thinking),
                 checked = thinkingEnabled,
                 onCheckedChange = { thinkingEnabled = it },
-                showDivider = false,
+                showDivider = thinkingEnabled,
             )
+            // [T-android-thinking-level-arch] Ceiling override picker. The
+            // catalog default for THIS model is shown as the Auto row's
+            // subtitle so the user knows what "inherit" resolves to — and can
+            // lift a model the catalog caps at XHIGH up to Max (极限), or clamp
+            // a MAX model down. Tiers above the catalog default are opt-in by
+            // design; the provider layer still clamps to a wire-valid effort.
+            if (thinkingEnabled) {
+                val context = androidx.compose.ui.platform.LocalContext.current
+                val catalogDefault = baseModel.catalogMaxThinkingLevel
+                SettingsValueRow(
+                    title = stringResource(R.string.modeldetail_max_thinking_level),
+                    value = maxThinkingOverride?.localizedName(context)
+                        ?: stringResource(R.string.modeldetail_max_thinking_auto),
+                    subtitle = stringResource(
+                        R.string.modeldetail_max_thinking_auto_desc,
+                        catalogDefault.localizedName(context),
+                    ),
+                    onClick = { showThinkingLevelDialog = true },
+                    showDivider = false,
+                )
+            }
         }
 
         // ── Visibility ──────────────────────────────────────────────────
@@ -336,6 +377,57 @@ fun ModelEntryDetailScreen(
             entry = entry,
             providerRepository = providerRepository,
             onDismiss = { showQuickTest = false },
+        )
+    }
+
+    // [T-android-thinking-level-arch] Ceiling override dialog: Auto (inherit
+    // catalog default) + every enabled tier up to ULTRA — including MAX (极限).
+    // Above-default tiers are deliberately offered: the catalog is a curated
+    // conservative guess, and this override is the escape hatch that makes Max
+    // reachable on models the catalog caps lower.
+    if (showThinkingLevelDialog) {
+        val context = androidx.compose.ui.platform.LocalContext.current
+        val catalogDefault = baseModel.catalogMaxThinkingLevel
+        AlertDialog(
+            onDismissRequest = { showThinkingLevelDialog = false },
+            title = { Text(stringResource(R.string.modeldetail_max_thinking_level)) },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 360.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    SettingsChoiceRow(
+                        title = stringResource(
+                            R.string.modeldetail_max_thinking_auto_desc,
+                            catalogDefault.localizedName(context),
+                        ),
+                        selected = maxThinkingOverride == null,
+                        onSelect = {
+                            maxThinkingOverride = null
+                            showThinkingLevelDialog = false
+                        },
+                    )
+                    ThinkingLevel.entries
+                        .filter { it != ThinkingLevel.OFF }
+                        .forEach { level ->
+                            SettingsChoiceRow(
+                                title = level.localizedName(context),
+                                selected = maxThinkingOverride == level,
+                                onSelect = {
+                                    maxThinkingOverride = level
+                                    showThinkingLevelDialog = false
+                                },
+                                showDivider = level != ThinkingLevel.ULTRA,
+                            )
+                        }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showThinkingLevelDialog = false }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            },
         )
     }
 }

@@ -682,6 +682,9 @@
     <string name="modeldetail_section_capabilities">機能</string>
     <string name="modeldetail_context_window">コンテキスト ウィンドウ</string>
     <string name="modeldetail_thinking">思考</string>
+    <string name="modeldetail_max_thinking_level">推論強度の上限</string>
+    <string name="modeldetail_max_thinking_auto">自動</string>
+    <string name="modeldetail_max_thinking_auto_desc">自動（デフォルト：%s）</string>
     <string name="modeldetail_capabilities_footer">コンテキスト ウィンドウと最大出力トークン数（トークン単位）。空白の場合はプロバイダーのデフォルトを使用します。拡張推論をサポートするモデルでは思考を有効にしてください。</string>
     <string name="modeldetail_provider_default">プロバイダーのデフォルト</string>
     <string name="modeldetail_max_tokens_exceeds_warning">プロバイダーが報告した上限（%1$d）を超えています。値は保存されますが、エラーが発生する可能性があります。</string>

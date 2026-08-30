@@ -1,8 +1,11 @@
 package com.openminis.app.data
 
+import com.openminis.app.data.model.LLMModel
+import com.openminis.app.data.model.ModelEntry
 import com.openminis.app.data.model.ModelGroup
 import com.openminis.app.data.model.ModelOverrides
 import com.openminis.app.data.model.ThinkingLevel
+import com.openminis.app.provider.effectiveMaxThinkingLevel
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -82,5 +85,81 @@ class ThinkingLevelTest {
         val wire = """{"maxThinkingLevel":"MAX"}"""
         val ov = json.decodeFromString(ModelOverrides.serializer(), wire)
         assertEquals(ThinkingLevel.MAX, ov.maxThinkingLevel)
+    }
+
+    // ── [T-android-thinking-level-arch] Max (极限) ceiling-override chain ──
+    // The ModelEntryDetailScreen picker persists overrides.maxThinkingLevel;
+    // these tests verify the resolution that makes Max selectable on a model
+    // the catalog caps lower, plus the picker's rank-based availability filter.
+
+    private fun entry(
+        id: String,
+        override: ThinkingLevel? = null,
+        supportsReasoning: Boolean? = true,
+    ) = ModelEntry(
+        providerInstanceId = "p1",
+        baseModel = LLMModel(
+            id = id,
+            displayName = id,
+            provider = "openai",
+            supportsReasoning = supportsReasoning,
+        ),
+        overrides = ModelOverrides(maxThinkingLevel = override),
+    )
+
+    @Test
+    fun effectiveMax_noOverride_inheritsCatalogDefault() {
+        // gpt-5.5 → catalog XHIGH (explicit rule); a mimo → HIGH (explicit rule).
+        assertEquals(ThinkingLevel.XHIGH, entry("gpt-5.5-chat").effectiveMaxThinkingLevel)
+        assertEquals(ThinkingLevel.HIGH, entry("mimo-v2.5-pro").effectiveMaxThinkingLevel)
+    }
+
+    @Test
+    fun effectiveMax_noCatalogRule_defaultsToMax() {
+        // [T-android-thinking-level-arch] Models without a catalog rule
+        // (DeepSeek, GLM, Qwen, …) default to the CURRENT top tier — MAX.
+        // The old XHIGH default silently hid Max from the chat picker and
+        // the model-group Intensity selector for every such model.
+        assertEquals(ThinkingLevel.MAX, entry("deepseek-v4-chat").effectiveMaxThinkingLevel)
+        assertEquals(ThinkingLevel.MAX, entry("glm-5-airx").effectiveMaxThinkingLevel)
+        assertEquals(ThinkingLevel.MAX, entry("qwen4-max").effectiveMaxThinkingLevel)
+    }
+
+    @Test
+    fun effectiveMax_userOverride_liftsCeilingToMax() {
+        // The core of the feature: a model the catalog caps at XHIGH is lifted
+        // to MAX (极限) by the user-set ceiling — exactly what the new picker
+        // on ModelEntryDetailScreen persists.
+        assertEquals(ThinkingLevel.MAX, entry("gpt-5.5-chat", override = ThinkingLevel.MAX).effectiveMaxThinkingLevel)
+        // And can clamp down just as well.
+        assertEquals(ThinkingLevel.HIGH, entry("claude-opus-4-8", override = ThinkingLevel.HIGH).effectiveMaxThinkingLevel)
+    }
+
+    @Test
+    fun effectiveMax_overrideBeatsCatalog_forMaxCapableModel() {
+        // gpt-5.6-sol is catalog-MAX; the explicit MAX override resolves to
+        // the same ceiling (no regression), and ULTRA keeps working above it.
+        assertEquals(ThinkingLevel.MAX, entry("gpt-5.6-sol", override = ThinkingLevel.MAX).effectiveMaxThinkingLevel)
+        assertEquals(ThinkingLevel.ULTRA, entry("gpt-5.6-sol", override = ThinkingLevel.ULTRA).effectiveMaxThinkingLevel)
+    }
+
+    @Test
+    fun availableLevels_rankFilter_includesMaxOnceCeilingLifted() {
+        // Mirrors ChatViewModel.availableThinkingLevels / the model-group
+        // Intensity selector: filter { it != OFF && it.rank <= ceiling.rank }.
+        fun available(ceiling: ThinkingLevel): List<ThinkingLevel> =
+            ThinkingLevel.entries.filter { it != ThinkingLevel.OFF && it.rank <= ceiling.rank }
+
+        // A HIGH-capped model (explicit mimo/seed rule): Max NOT offered.
+        assertEquals(
+            listOf(ThinkingLevel.LOW, ThinkingLevel.MEDIUM, ThinkingLevel.HIGH),
+            available(ThinkingLevel.HIGH),
+        )
+        // The new default ceiling (Max, no catalog rule): Max IS offered,
+        // Ultra still isn't.
+        assertEquals(
+            listOf(ThinkingLevel.LOW, ThinkingLevel.MEDIUM, ThinkingLevel.HIGH, ThinkingLevel.XHIGH, ThinkingLevel.MAX),
+            available(ThinkingLevel.MAX),
+        )
     }
 }

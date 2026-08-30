@@ -65,9 +65,14 @@ object ThinkingLevelCatalog {
  *   1. supportsReasoning == false → OFF (checked BEFORE catalog rules so a
  *      broadened family rule can't lift a non-reasoning member's ceiling).
  *   2. ThinkingLevelCatalog rule.
- *   3. true/null → XHIGH (conservative default so a reasoning model isn't
- *      accidentally capped below the tiers every provider already accepted
- *      pre-GPT-5.6).
+ *   3. true/null → MAX (the highest tier this build knows). The conservative
+ *      default tracks the CURRENT top tier — it was XHIGH pre-GPT-5.6, which
+ *      silently hid Max from the chat picker and the model-group Intensity
+ *      selector for every model without an explicit rule (DeepSeek, GLM,
+ *      Qwen…). Explicit rules that clamp DOWN (mimo/seed → HIGH) still win:
+ *      those backends 400 on higher efforts. Wire-layer clamps
+ *      (clampEffortForModel / per-family thinking-budget caps) remain the
+ *      final defense for unknown backends.
  */
 val LLMModel.catalogMaxThinkingLevel: ThinkingLevel
     get() {
@@ -77,7 +82,7 @@ val LLMModel.catalogMaxThinkingLevel: ThinkingLevel
         // ceiling of that family's non-reasoning members (mimo-v2.5-tts/-asr).
         // [T-fallback-thinking-preclamp]
         if (supportsReasoning == false) return ThinkingLevel.OFF
-        return ThinkingLevelCatalog.declaredMaxLevel(id) ?: ThinkingLevel.XHIGH
+        return ThinkingLevelCatalog.declaredMaxLevel(id) ?: ThinkingLevel.MAX
     }
 
 /**
