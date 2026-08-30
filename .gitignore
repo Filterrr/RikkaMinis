@@ -112,6 +112,11 @@ src/ios/Generated/
 # .claude/skills/debug-server/; regenerated on every debug build.
 src/android/app/src/debug/assets/debug-skill/
 
+# Semantic-memory runtime artifacts (vector index is rebuilt at runtime from
+# daily logs; it must never be committed — it embeds the developer's raw
+# memory entries including identifiers).
+src/android/app/src/main/assets/skills/semantic-memory/vector_index.pkl
+
 # Prebuilt Android sandbox binaries (extracted from official APK, already
 # contain W^X bypass needed on Android 10+). CI skips NDK compilation.
 # src/android/app/src/main/assets/proot-aarch64
