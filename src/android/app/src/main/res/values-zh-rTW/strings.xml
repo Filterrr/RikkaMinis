@@ -320,6 +320,9 @@
     <string name="modeldetail_section_capabilities">能力</string>
     <string name="modeldetail_context_window">上下文視窗</string>
     <string name="modeldetail_thinking">思考</string>
+    <string name="modeldetail_max_thinking_level">推理強度上限</string>
+    <string name="modeldetail_max_thinking_auto">自動</string>
+    <string name="modeldetail_max_thinking_auto_desc">自動（預設：%s）</string>
     <string name="modeldetail_capabilities_footer">上下文視窗和最大輸出 Token 數（以 tokens 計）。留空使用供應商預設值。對支援擴展推理的模型啟用思考模式。</string>
     <string name="modeldetail_provider_default">供應商預設</string>
     <string name="modeldetail_max_tokens_exceeds_warning">超過供應商回報的上限（%1$d）。值已保存，但可能導致請求失敗。</string>

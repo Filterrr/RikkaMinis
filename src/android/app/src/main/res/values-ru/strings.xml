@@ -780,6 +780,9 @@
     <string name="modeldetail_section_capabilities">Возможности</string>
     <string name="modeldetail_context_window">Контекстное окно</string>
     <string name="modeldetail_thinking">Размышление</string>
+    <string name="modeldetail_max_thinking_level">Макс. уровень мышления</string>
+    <string name="modeldetail_max_thinking_auto">Авто</string>
+    <string name="modeldetail_max_thinking_auto_desc">Авто (по умолчанию: %s)</string>
     <string name="modeldetail_capabilities_footer">Контекстное окно и макс. токенов вывода (в токенах). Оставьте пустым, чтобы использовать значения по умолчанию провайдера. Включите «Размышление» для моделей с поддержкой расширенного рассуждения.</string>
     <string name="modeldetail_provider_default">По умолчанию у провайдера</string>
     <string name="modeldetail_max_tokens_exceeds_warning">Превышает заявленный провайдером лимит (%1$d). Значение сохранено, но может вызвать ошибки.</string>

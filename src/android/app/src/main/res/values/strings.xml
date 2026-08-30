@@ -952,6 +952,10 @@
     <string name="modeldetail_section_capabilities">Capabilities</string>
     <string name="modeldetail_context_window">Context Window</string>
     <string name="modeldetail_thinking">Thinking</string>
+    <!-- [T-android-thinking-level-arch] Ceiling override on ModelEntryDetailScreen -->
+    <string name="modeldetail_max_thinking_level">Max Thinking Level</string>
+    <string name="modeldetail_max_thinking_auto">Auto</string>
+    <string name="modeldetail_max_thinking_auto_desc">Auto (default: %s)</string>
     <string name="modeldetail_capabilities_footer">Context window and max output tokens (in tokens). Leave empty to use provider defaults. Enable Thinking for models that support extended reasoning.</string>
     <string name="modeldetail_provider_default">Provider default</string>
     <string name="modeldetail_max_tokens_exceeds_warning">Exceeds provider-reported limit (%1$d). The value is saved but may cause errors.</string>
