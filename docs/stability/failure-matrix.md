@@ -3,6 +3,12 @@
 > T0 交付物之二。基线：`9672e09e`（origin/main，2026-08-15）。
 > 本文件是 T4-A（fakes + 场景协议 + 独立 runner）和 T4-B（生产 adapter）的共用场景表。
 > 每个场景必须断言右侧列出的全部项目，**禁止只验证错误字符串**。
+>
+> **状态（2026-08-30）：本矩阵已落地。** harness 已合入 main（
+> `src/android/app/src/test/.../harness/`）：FakeRuntimePort / ScenarioVerifier /
+> FaultScenarios（T4-A），以及 RealAgentAdapter / RealRuntimePort（T4-B，接 T7
+> 冻结的 `AgentRuntimePort`）。F01-F14 场景断言参见本文件 §1 场景表 +
+> `t4b-acceptance-checklist.md` 的生产侧专属断言。
 
 ---
 

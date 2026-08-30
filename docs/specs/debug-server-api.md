@@ -1,5 +1,20 @@
 # Debug Server API
 
+> **⚠️ 平台差异说明（2026-08-30 标注）：本文档是上游 iOS 视角的 spec，描述的
+> 是 iOS 的 UIKit view-tree 调试服务器。** RikkaMinis 本 fork 是 Android
+> 实现，对应物是 `src/android/app/src/main/java/com/openminis/app/debug/` 下的
+> `DebugServer.kt`（DEBUG-only，JSON-RPC 2.0），关键差异：
+> - **端口**：Android 用 `5321`（本文档其余处的 `8321` 是 iOS 端口），监听
+>   `0.0.0.0`；
+> - **鉴权**：Android 对**所有**客户端（含 loopback）强制 `X-Minis-Token` /
+>   `Authorization: Bearer`，token 存于 `files/debug_server_token`，CORS 全部
+>   剥离（无 `Access-Control-Allow-Origin`）；
+> - **方法**：`debug.viewTree` 在 Android 侧输出 Compose 语义树而非 UIKit
+>   view 树；其余方法（`debug.browser.*` / `debug.logs.*` / `debug.llmRequests`
+>   / `debug.agentTrace` / `debug.shellExecute` / `debug.fetch` 等）与 iOS 对齐，
+>   完整清单见 `DebugRPCHandler.kt` 的 `when(method)` 分发。
+> 本文档其余部分作为 iOS 上游参考保留。
+
 MinisApp includes a built-in JSON-RPC 2.0 debug server (DEBUG builds only) for runtime view inspection.
 
 ## Connection

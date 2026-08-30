@@ -1,7 +1,11 @@
-# RikkaMinis Trace 扩展 JSON Schema（T6 预备）
+# RikkaMinis Trace 扩展 JSON Schema（v2）
 
 > 编制于 T1-T5 并行施工期间，T0 基线 `e6f2be32`。
-> 用途：T6 开工时直接以此 schema 编码，无需重新设计。
+> **状态（2026-08-30）：本 schema 已实现。** `tools/AgentTraceRecorder.kt`
+> （当前 ~699 行）已落地全部 v2 事件（`trace_schema_version` / `run_id` /
+> `state_transition` / `budget_consume` / `budget_refuse` / `resource_acquire` /
+> `resource_release` / `retry_decision` / `persistence_result` / `terminal_state`），
+> 并保留对 1.0 旧记录的向后兼容解析。
 > 向后兼容：所有已有字段保持原样，新字段为可选（optional）。
 
 ---

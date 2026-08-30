@@ -1,18 +1,22 @@
 # Contributing
 
 This is an **Android-only fork** of
-[OpenMinis/OpenMinis](https://github.com/OpenMinis/OpenMinis) whose purpose is
-to build a working APK in CI and publish it automatically.
+[OpenMinis/OpenMinis](https://github.com/OpenMinis/OpenMinis) that builds a
+working APK in CI, publishes it automatically, and carries a small set of
+Android-specific product changes on top of upstream (see
+[README.md](README.md) — "What this fork changes").
 
 ## Where to report what
 
-**Bugs in the app itself** — a broken feature, a UI problem, an agent
-misbehaving — belong **upstream**, at
+**Bugs in a feature that exists identically upstream** — a UI problem, a model
+provider issue, an agent misbehaving — belong **upstream**, at
 [OpenMinis/OpenMinis/issues](https://github.com/OpenMinis/OpenMinis/issues).
-This fork does not modify application code, so a fix here would not reach other
-users and would be overwritten at the next sync.
+If the bug also reproduces in the official upstream build, it is an upstream
+issue, not this fork's.
 
-**Issues with the build or the published APK** belong here. For example:
+**Issues with this fork's own surface** belong here — the build, the published
+APK, or any of the fork-specific product changes listed in the README. For
+example:
 
 - The APK from [Releases](https://github.com/logicflow-GYW/RikkaMinis/releases/tag/android-latest)
   fails to install or crashes on launch
@@ -22,7 +26,7 @@ users and would be overwritten at the next sync.
 - Documentation here is wrong or out of date
 
 Unlike upstream, this repository **does accept pull requests** — for build
-tooling, CI and docs.
+tooling, CI, docs and the fork-specific product changes.
 
 ## Before opening a build issue
 

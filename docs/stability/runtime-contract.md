@@ -3,6 +3,11 @@
 > T0 交付物之一。编制基线：`9672e09e`（2026-08-15 00:18:09 +0800，origin/main）。
 > 本文件只冻结现状 + 目标契约，**不修改任何生产行为**。
 > 编制日期：2026-08-15。
+>
+> **⚠️ 历史文档（2026-08-30 标注）：本文件是 2026-08-15 的基线快照，其中的
+> 行数/文件数/T 系列任务进度均已过期——这些 T 任务（T1-T9）已全部完成并合入
+> main，契约内容也已落地到生产代码。行数与任务状态请看当前 main 的实际代码，
+> 本文件仅保留当时的契约定义与验收口径，供追溯设计意图。**
 
 ---
 
@@ -15,9 +20,9 @@
 | 基线 commit 消息 | `cleanup: remove orphaned fallback-comment + duplicate line` |
 | 基线时间 | 2026-08-15 00:18:09 +0800 |
 | Gradle 模块 | 单模块 `:app`（`settings.gradle.kts` 只 include `:app`） |
-| 主源码 | 404 个 `.kt` 文件，145,261 行（`src/android/app/src/main`） |
-| 测试源码 | 69 个 `.kt` 文件，13,733 行（`src/android/app/src/test`） |
-| 测试/主源码比 | ≈ 9.5%（行数口径） |
+| 主源码 | 404 个 `.kt` 文件，145,261 行（`src/android/app/src/main`）——**过期，现为 448 文件 / ~159,859 行（main @ d49235c）** |
+| 测试源码 | 69 个 `.kt` 文件，13,733 行（`src/android/app/src/test`）——**过期，现为 187 文件 / ~34,598 行** |
+| 测试/主源码比 | ≈ 9.5%（行数口径）——**过期，现约 17.8%** |
 | CI workflow | `build-apk.yml`（main push + workflow_dispatch）、`scan-gate.yml`（PR）、`sync-upstream.yml` |
 | 构建目录 | `src/android/`（`./gradlew` 在 `src/android/` 下执行） |
 
@@ -46,11 +51,14 @@ sh scripts/scan/scan.sh
 
 已知测试限制（T0 记录，供后续任务参照）：
 
-- 沙箱 PRoot 拦截 JVM 内存标记（PaX），**沙箱内无法运行 gradle 单测**（java 启动即失败）。JVM 测试验证只能靠 CI，或把逻辑抽成纯函数后用 Python 复刻验证。
+- ~~沙箱 PRoot 拦截 JVM 内存标记（PaX），沙箱内无法运行 gradle 单测~~ **已过时**：沙箱内可跑纯 Kotlin/JVM 单测（Java 17 + kotlinc 编译 + JUnitCore），见 `sandbox-jvm-testing` skill。Gradle 全量单测仍依赖 CI。
 - 仪器测试（androidTest）需要真机，CI 只编译不运行。
 - 测试环境 JVM 无 Android 框架，凡依赖 `android.content.*` / `android.os.*` 的代码无法直接单测，必须先抽纯逻辑层。
 
 ## 3. 热点文件唯一 Owner（T0 冻结，后续任务必须服从）
+
+> ⚠️ 本节的 T 系列任务已全部闭环，Owner 与「阶段交接」约束已随施工结束失效；
+> 保留此表仅用于追溯当时的分工设计，不再是当前约束。
 
 | 文件 | 路径 | 行数 | 唯一 Owner | 阶段交接 |
 |---|---|---|---|---|

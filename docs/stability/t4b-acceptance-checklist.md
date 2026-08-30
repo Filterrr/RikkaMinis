@@ -2,7 +2,9 @@
 
 > 版本：v1.0（2026-08-15）
 > 基线：main `314e5c3`（T4-A 已合并）
-> 依赖：T7（Agent Run 主链接入，`ChatViewModel.kt`）完成后本清单才可执行。
+> 依赖：T7（Agent Run 主链接入，`ChatViewModel.kt`）——**已合入 main，本清单
+> 现已可执行**（`AgentRuntimePort` 已冻结，`RealAgentAdapter` / `RealRuntimePort`
+> 落地）。下方 §2 的 `Assumed(await T7)` 项按 T7 冻结后的真实行为复核即可。
 > 本清单是 `failure-matrix.md`（T0）在 T4-B 视角的**可执行化**：每个场景列出
 > 在真实主链上必须断言的具体值/条件。断言执行器 = `ScenarioVerifier` +
 > 本清单的补充检查（生产侧特有）。
@@ -126,5 +128,5 @@
 - 执行器代码：`harness/adapter/`（接口 + 骨架 + 纯逻辑映射 + 结构测试）✅
 - 场景定义：`harness/scenarios/FaultScenarios.kt`（T4-A）✅
 - 断言引擎：`harness/runner/ScenarioVerifier.kt`（T4-A）✅
-- **阻塞**：T7（`ChatViewModel.kt` 主链接入）—— `AgentRuntimePort` 真实实现
-  未冻结，§2 的 Assumed 项不可验证。
+- T7 主链接入：`AgentRuntimePort` 已冻结，`RealAgentAdapter` / `RealRuntimePort`
+  （`harness/adapter/real/`）已落地 ✅ —— 原「阻塞」项已解除。

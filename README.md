@@ -62,6 +62,12 @@ SHA-256  FC:0C:40:0D:B7:7E:C1:81:A3:35:18:C2:E8:13:6A:AE
   多台设备间同步备份，随时上传、列出、恢复或删除远端备份。备份/恢复运行在
   应用级持久 scope（即使离开设置页也会完成），长任务结束时通过系统托盘
   通知反馈，并已防止在过程中被误触重复触发。
+- **多设备自动同步（冲突合并）。** 设置 → 存储 → 备份与恢复 里的自动同步
+  开关把多台设备挂到同一个 WebDAV 备份上，`SyncMerge` 用 Lamport 式逐对象
+  版本折叠合并改动：两台设备同一天都在用时不再互相覆盖——兄弟设备改动胜出、
+  删除以墓碑传播、两台收敛到同一文档。同步范围只含配置/提供方/分组/环境变量
+  和 `GLOBAL.md`；每日日志是每设备审计副本、`MEMORY-ROLLUP.md` 是从每日日志
+  蒸馏出来的，整文件同步会互相覆盖，故不纳入。
 - **诚实的排除项。** 聊天历史仅以纯文本携带：媒体（图片/视频）和附件文件会被
   丢弃，只包含最近 N 天的活动（0–365，默认 90；0 表示禁用聊天历史）。
   挂载文件夹的授权无法在 Android 设备间迁移，MCP OAuth 客户端密钥/令牌
@@ -110,6 +116,11 @@ SHA-256  FC:0C:40:0D:B7:7E:C1:81:A3:35:18:C2:E8:13:6A:AE
 - **其他原生库保持 vendored。** `libpty_bridge.so`、`libminis_crash_handler.so`
   和 `libjieba_jni.so` 按原样提交。
 - **单元测试在 CI 中运行。** 完整的 JVM 单元测试套件——含备份/恢复（ConfigBackupPayloadTest 等）、终端消毒、Provider 适配器、LLM 错误处理等全部测试——在 APK 构建之前执行，任何一条失败都会中止构建（无静默跳过）。
+- **构建前静态扫描门禁。** 每次 CI 构建在 Gradle 之前先跑 `scripts/scan/scan.sh`：
+  四处同步检查（数据类字段在 Model→Entity→toSnapshot→toProviderConfig 四层
+  必须同步，缺一层字段会静默蒸发）、i18n 孤儿键检查、枚举解析安全检查
+  （禁裸 `valueOf`）、provider 进程边界守护（app 进程不得直接调 provider 网络
+  入口，只能由 `:modelservice` 持有）。任何一条硬失败都会中止构建。
 - **iOS 源码已移除。** `src/ios/` 已删除；本树仅限 Android。
 - **自动发布。** 成功构建会把 APK 发布到 `android-latest` release。
 - **平台技能打进资产包。** `semantic-memory`、`github-ops`、

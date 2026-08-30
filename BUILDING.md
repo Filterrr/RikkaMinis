@@ -1,12 +1,14 @@
 # Building
 
-This fork is deliberately easy to build: **no NDK, no submodules, no rootfs
-preparation.** The native sandbox binaries are committed to the repository, so a
-build is a plain Gradle run.
+Most of the build is a plain Gradle run — but the sandbox engine is built from
+source, so you need the NDK and the `deps/proot` submodule for a full release
+build:
 
 ```sh
-git clone https://github.com/logicflow-GYW/RikkaMinis.git
-cd RikkaMinis/src/android
+git clone --recurse-submodules https://github.com/logicflow-GYW/RikkaMinis.git
+cd RikkaMinis
+./deps/build_proot.sh           # build the PRoot sandbox engine from source
+cd src/android
 ./gradlew assembleRelease
 ```
 
@@ -24,12 +26,14 @@ If you only want to *install* the app, you do not need any of this — grab the
 | JDK | **17** (Temurin recommended) |
 | Android SDK | **compileSdk 36**, targetSdk 35, minSdk 26 |
 | Gradle | 8.11.1 — provided by the wrapper, do not install separately |
+| NDK | **r28** — required only to build the PRoot sandbox engine via `deps/build_proot.sh` |
 
 Android Studio bundles a suitable JDK and SDK; opening `src/android` as a
 project works out of the box. From the command line, `ANDROID_HOME` (or
 `ANDROID_SDK_ROOT`) must point at your SDK.
 
-**You do not need the NDK or CMake.** Native compilation is disabled — see
+**You do not need CMake.** AGP native compilation is disabled — only PRoot is
+built, via its own `deps/build_proot.sh` script (which does need NDK r28). See
 below.
 
 ---
@@ -154,11 +158,15 @@ missing value is actually required.
 triggered manually from the Actions tab. It:
 
 1. Restores the signing keystore from the `DEBUG_KEYSTORE_B64` secret
-2. Installs NDK r28 and builds PRoot from source via `./deps/build_proot.sh clean`
-3. Verifies the build products (`libproot.so`, `libproot-loader.so`) exist
-4. Runs the full unit-test suite (`testReleaseUnitTest`) — red means red
-5. Runs `assembleRelease`
-6. Publishes the APK to the `android-latest` release
+2. Runs the pre-build scan gate (`scripts/scan/scan.sh`) — four-way field-sync
+   check, i18n orphan-key check, enum-parse safety, provider process-boundary
+   guard
+3. Installs NDK r28 and builds PRoot from source via `./deps/build_proot.sh clean`
+4. Verifies the build products (`libproot.so`, `libproot-loader.so`) exist
+5. Runs the full unit-test suite (`testReleaseUnitTest`) — red means red
+6. Compiles the instrumented tests (`compileDebugAndroidTestKotlin`)
+7. Runs `assembleRelease`
+8. Publishes the APK to the `android-latest` release
 
 ### Signing in CI
 

@@ -3,6 +3,16 @@
 **Status:** Draft
 **Date:** 2026-02-16
 
+> **⚠️ 平台差异说明（2026-08-30 标注）：本文档是上游 iOS 视角的 spec。**
+> RikkaMinis 本 fork 是 Android（PRoot + Alpine）实现，`minis://` 的 URL 格式
+> 与 namespace 约定（§2、§4）跨平台通用、仍然准确；但 §3 会话模型与 §5 路径
+> 解析的 iOS 专属实现（iSH、`meta.db`、`Library/MinisChat/<sessionId>/`）在本
+> fork 中对应为：**PRoot 沙箱把 `/var/minis/` 挂载为当前会话的工作目录**，
+> 会话隔离由 `PRootKernel.resolveHostPath` + 会话切换时挂载点切换保证。
+> 实际生效的 `minis://` 语义以运行时 system prompt 中的
+> 「Shared directory /var/minis/」区块为准（namespace：`attachments` /
+> `workspace` / `offloads` / `browser` / `shared` / `mounts`）。
+
 ## 1. Overview
 
 `minis://` is a **session-scoped** unified resource locator for persistent, addressable resources within the Minis ecosystem. It bridges three layers — the AI agent, the iSH Linux shell, and the iOS host app — with a single URL that works in tool results, Markdown rendering, and inter-component references.
