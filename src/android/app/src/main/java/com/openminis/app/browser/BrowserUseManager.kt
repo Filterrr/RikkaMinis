@@ -53,6 +53,31 @@ class BrowserUseManager(
         private const val MAX_FULL_PAGE_HEIGHT_PX = 32768
 
         /**
+         * [fix/fullpage-bitmap-byte-cap] Absolute byte ceiling for the ARGB_8888
+         * capture bitmap. The 32768px height cap alone is NOT an OOM guard — a
+         * 1440×32768 capture allocates ~180MB of native bitmap in ONE action
+         * (the "large-attachment tool call RSS spike" shape). Width × height × 4
+         * must stay under this cap; taller requests are truncated harder (the
+         * metadata already exposes truncated:true + original scrollHeight so the
+         * agent can scroll-then-stitch). 48MB ≈ 8192×1440×4 — far above anything
+         * useful for LLM inference (payloads are re-encoded to ≤2000px anyway),
+         * while capping the worst-case single-action native spike.
+         */
+        private const val MAX_CAPTURE_BITMAP_BYTES = 48L * 1024L * 1024L
+
+        /**
+         * Effective full-page capture height in PHYSICAL px given the capture
+         * width: min(requestedHeight, height that fits [MAX_CAPTURE_BITMAP_BYTES]).
+         * Pure function (JVM-testable). Returns the coerced height — callers
+         * compare against the requested height to set the truncated flag.
+         */
+        internal fun cappedFullPageHeightPx(requestedHeightPx: Long, captureWidthPx: Long): Long {
+            if (requestedHeightPx <= 0 || captureWidthPx <= 0) return requestedHeightPx
+            val maxHeightForWidth = MAX_CAPTURE_BITMAP_BYTES / (captureWidthPx * 4L)
+            return requestedHeightPx.coerceAtMost(maxHeightForWidth)
+        }
+
+        /**
          * [T-android-screenshot-cache-cap] Bucket size for [pruneScreenshotCache]:
          * keep at most this many snapshot/screenshot jpg files in
          * `cacheDir/browser_screenshots`. 128 files ≈ a few MB of JPEG at
@@ -715,9 +740,19 @@ class BrowserUseManager(
             } else {
                 withContext(Dispatchers.Main) { webView.height }
             }
+            // [fix/fullpage-bitmap-byte-cap] Second guard: also cap by the
+            // ARGB_8888 byte budget for the actual capture width. 32768px alone
+            // allowed ~180MB native bitmaps on wide viewports.
+            val captureWidthPx = (currentProfile.viewportSize.first * density).toLong()
+                .coerceAtLeast(webView.width.toLong()).coerceAtLeast(1L)
+            val byteCappedPx = cappedFullPageHeightPx(scrollHeightPx.toLong(), captureWidthPx).toInt()
+            if (byteCappedPx < scrollHeightPx) {
+                Log.i(TAG, "full_page byte-cap: $scrollHeightPx px → $byteCappedPx px (width=$captureWidthPx, budget=${MAX_CAPTURE_BITMAP_BYTES / (1024 * 1024)}MB)")
+            }
+            val effectiveHeightPx = byteCappedPx.coerceAtLeast(1)
             originalHeightPx = scrollHeightPx
-            val cappedPx = scrollHeightPx.coerceAtMost(MAX_FULL_PAGE_HEIGHT_PX)
-            truncated = scrollHeightPx > MAX_FULL_PAGE_HEIGHT_PX
+            val cappedPx = effectiveHeightPx.coerceAtMost(MAX_FULL_PAGE_HEIGHT_PX)
+            truncated = scrollHeightPx > cappedPx
 
             // Eagerize lazy images and wait two RAFs so layout settles before capture.
             try {
