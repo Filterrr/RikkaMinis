@@ -130,6 +130,9 @@ object ProviderRssProbe {
         // [fix/slow-accumulation-clause] 首次调用后的 afterRss（条件 C 的地基）。
         var firstPostCallRssKb: Long = Long.MAX_VALUE,
         var leaked: Boolean = false,
+        // 触发 latch 时命中的条件名（PEAK-DELTA… / POST-IDLE-DRIFT… /
+        // SLOW-ACCUM… / CUM…），summary 输出用。null = 未触发。
+        var leakReason: String? = null,
     ) {
         fun averageDeltaKb(): Long = if (count == 0) 0L else totalDeltaKb / count
     }
@@ -325,6 +328,16 @@ object ProviderRssProbe {
         val condition = decideLeakSuspect(st, peakDelta, record)
         if (!st.leaked && condition != null) {
             st.leaked = true
+            // 条件名 = condition 首个空格前 token 的类别段：
+            // 'SLOW-ACCUM-drift-…' → SLOW-ACCUM；'POST-IDLE-DRIFT-…' → POST-IDLE-DRIFT；
+            // 'PEAK-DELTA-…' → PEAK-DELTA；'CUM-…' → CUM。
+            val head = condition.substringBefore(' ')
+            st.leakReason = when {
+                head.startsWith("POST-IDLE") -> "POST-IDLE-DRIFT"
+                head.startsWith("SLOW-ACCUM") -> "SLOW-ACCUM"
+                head.startsWith("PEAK-DELTA") -> "PEAK-DELTA"
+                else -> "CUM"
+            }
             Log.w(
                 TAG,
                 "[provider-rss] LEAK-SUSPECT ${record.kind} (${condition}) " +
@@ -393,12 +406,16 @@ object ProviderRssProbe {
             .sortedByDescending { it.value.totalDeltaKb }
             .forEach { (kind, st) ->
                 val baseline = if (st.lowestPostCallRssKb == Long.MAX_VALUE) "?" else (st.lowestPostCallRssKb / 1024).toString() + "MB"
+                // [fix/slow-accumulation-clause] 记录触发时的条件名（A/B/C），
+                // summary 一眼可读归因（此前只有 [LEAK-SUSPECT] 无条件名）。
+                val reason = st.leakReason?.let { " [$it]" } ?: ""
                 sb.append(
                     "  $kind: cum=${st.totalDeltaKb / 1024}MB count=${st.count} " +
                         "avg=${st.averageDeltaKb() / 1024}MB peakΔmax=${st.peakDeltaMaxKb / 1024}MB " +
                         "peakAbs=${if (st.peakRssMaxKb >= 0) st.peakRssMaxKb / 1024 else 0}MB " +
                         "postRss=${st.postCallRssKb / 1024}MB lowest=$baseline" +
-                        (if (st.leaked) " [LEAK-SUSPECT]" else "")
+                        (if (st.leaked) " [LEAK-SUSPECT]" else "") +
+                        reason
                 ).append('\n')
             }
         Log.i(TAG, "[provider-rss] $sb")

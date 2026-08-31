@@ -257,9 +257,10 @@ class ProviderRssProbeTest {
             )
         }
         val summary = ProviderRssProbe.summary()
+        // summary 行格式：… [LEAK-SUSPECT] [SLOW-ACCUM]（条件名随 latch 记录）。
         assertTrue(
             "expected LEAK-SUSPECT on slow accumulation, got:\n$summary",
-            summary.contains("[LEAK-SUSPECT]") && summary.contains("SLOW-ACCUM"),
+            summary.contains("[LEAK-SUSPECT]") && summary.contains("[SLOW-ACCUM]"),
         )
     }
 
