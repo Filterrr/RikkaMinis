@@ -2442,6 +2442,83 @@ class ChatViewModel(
             mutated[mi] = msg.copy(contentParts = newParts)
         }
 
+        // [fix/history-bytes-offload] Byte elision at the request boundary used
+        // to be request-scoped only: agentHistory kept the full ByteArray of
+        // every ImageData / ToolResult.imageData forever. 50 browser-screenshot
+        // turns ≈ 50–75MB of Java heap pinned for the process lifetime, and
+        // each subsequent request re-decoded + re-encoded all of it
+        // (ImageBudget.compressUnderBudget at the provider boundary).
+        //
+        // Mirror the request plan back into agentHistory: for every dropped
+        // image, replace the in-memory bytes with the same re-fetchable
+        // placeholder the request already carries. The linuxPath (or the
+        // lazily-created spillover path resolved above) keeps the image
+        // addressable via `read_image`, so this is storage reclamation, not
+        // data loss — identical semantics to iOS elided-image placeholders.
+        // Identity hash lookup: the bytes object in agentHistory is the SAME
+        // instance that was planned (effectiveAgentHistory returns
+        // agentHistory.toList() — shallow copy, same part objects), so
+        // System.identityHashCode matching is exact, not probabilistic.
+        var offloadedCount = 0
+        var offloadedBytes = 0L
+        for (msg in agentHistory) {
+            if (msg.contentParts.isEmpty()) continue
+            val histParts = msg.contentParts
+            var msgMutated = false
+            val newHistParts = ArrayList<AgentContentPart>(histParts.size)
+            for (part in histParts) {
+                when (part) {
+                    is AgentContentPart.ImageData -> {
+                        val id = ImageBudget.ImagePartId.of(part.data)
+                        if (id in plan.droppedIds) {
+                            offloadedCount++
+                            offloadedBytes += part.data.size.toLong()
+                            val path = resolvedPaths[id]
+                            newHistParts.add(
+                                AgentContentPart.ImageData(
+                                    data = ByteArray(0), mimeType = part.mimeType, linuxPath = path,
+                                )
+                            )
+                            msgMutated = true
+                        } else newHistParts.add(part)
+                    }
+                    is AgentContentPart.ToolResult -> {
+                        val img = part.imageData
+                        if (img != null) {
+                            val id = ImageBudget.ImagePartId.of(img)
+                            if (id in plan.droppedIds) {
+                                offloadedCount++
+                                offloadedBytes += img.size.toLong()
+                                val path = resolvedPaths[id]
+                                val note = ImageBudget.elidedImagePlaceholder(path)
+                                newHistParts.add(
+                                    part.copy(
+                                        imageData = null,
+                                        imageMimeType = null,
+                                        content = part.content +
+                                            (if (part.content.isEmpty()) "" else "\n") + note,
+                                    )
+                                )
+                                msgMutated = true
+                            } else newHistParts.add(part)
+                        } else newHistParts.add(part)
+                    }
+                    else -> newHistParts.add(part)
+                }
+            }
+            if (msgMutated) {
+                val idx = agentHistory.indexOfFirst { it === msg }
+                if (idx >= 0) agentHistory[idx] = msg.copy(contentParts = newHistParts)
+            }
+        }
+        if (offloadedCount > 0) {
+            AppLogger.info(
+                TAG,
+                "historyBytesOffload: freed $offloadedBytes B ($offloadedCount images) from agentHistory — " +
+                    "linuxPath placeholders keep them re-fetchable via read_image",
+            )
+        }
+
         _requestBudgetEvent.tryEmit(plan)
         AppLogger.info(
             TAG,
@@ -12060,8 +12137,19 @@ Environment variables:
                         if (!file.exists()) continue
                         val bytes = try { file.readBytes() } catch (_: Exception) { continue }
                         val restoredPath = part.linuxPath
-                        imageParts.add(LLMMessage.ImagePart(bytes, mime, linuxPath = restoredPath))
-                        contentParts.add(AgentContentPart.ImageData(bytes, mime, linuxPath = restoredPath))
+                        // [fix/restore-inference-resize] Session restore used to
+                        // load ORIGINAL-resolution bytes straight into agentHistory
+                        // (a 12MP photo ≈ 8MB pinned per image; a 10-image session
+                        // restore spikes resident memory by ~80–100MB permanently).
+                        // Re-encode to the same 2000px inference payload every other
+                        // entry path (composer / browser screenshot / read_image)
+                        // uses — the full-res original stays on disk in the media
+                        // store and remains addressable via linuxPath (read_image /
+                        // shell cat). Null → source already ≤2000px or re-encode
+                        // failed: fall back to raw bytes (previous behavior).
+                        val inferenceBytes = resizeImageBytes(bytes, mime, maxEdge = 2000) ?: bytes
+                        imageParts.add(LLMMessage.ImagePart(inferenceBytes, mime, linuxPath = restoredPath))
+                        contentParts.add(AgentContentPart.ImageData(inferenceBytes, mime, linuxPath = restoredPath))
                     }
                 }
             }

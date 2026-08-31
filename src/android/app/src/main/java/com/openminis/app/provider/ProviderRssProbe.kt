@@ -54,6 +54,22 @@ object ProviderRssProbe {
     private const val POST_IDLE_DRIFT_KB = 256L * 1024L
 
     /**
+     * [fix/slow-accumulation-clause] 条件 C「慢累积」：至少经过这么多调用后才可能判 C。
+     * 抓「每轮小幅 +、从不回落」的低斜率泄漏（browser 截图字节在 agentHistory
+     * 里线性堆积的典型形状）——条件 A 要单次 512MB、条件 B 要 256MB 漂移，
+     * 都在这种形状下永远不触发。
+     */
+    private const val SLOW_ACCUM_MIN_CALLS = 20
+
+    /**
+     * [fix/slow-accumulation-clause] 当前 afterRss 相对首次调用后 RSS 的抬升
+     * 超过该值（64MB）即触发条件 C。取条件 B 的 1/4：低斜率泄漏 20+ 轮内点名，
+     * 健康 ±20MB 波动够不着；中途回落（GC / WebView 回收）时 drift 自动缩小，
+     * 自愈不误报。
+     */
+    private const val SLOW_ACCUM_FLOOR_DRIFT_KB = 64L * 1024L
+
+    /**
      * 单条 provider 调用的完整观测记录。所有字段仅在打点层使用，不影响调用结果。
      * - pid          ：provider 调用发生在哪个进程（主进程 / :modelservice 子进程）。
      * - processName  ：进程名（如 com.openminis.app 或 com.openminis.app:modelservice）。
@@ -111,7 +127,12 @@ object ProviderRssProbe {
         var lastDeltaKb: Long = 0L,
         var postCallRssKb: Long = 0L,    // 最近一次 afterRss
         var lowestPostCallRssKb: Long = Long.MAX_VALUE, // 观察到的 afterRss 最低点（基线）
+        // [fix/slow-accumulation-clause] 首次调用后的 afterRss（条件 C 的地基）。
+        var firstPostCallRssKb: Long = Long.MAX_VALUE,
         var leaked: Boolean = false,
+        // 触发 latch 时命中的条件名（PEAK-DELTA… / POST-IDLE-DRIFT… /
+        // SLOW-ACCUM… / CUM…），summary 输出用。null = 未触发。
+        var leakReason: String? = null,
     ) {
         fun averageDeltaKb(): Long = if (count == 0) 0L else totalDeltaKb / count
     }
@@ -291,6 +312,7 @@ object ProviderRssProbe {
         st.totalDeltaKb += record.afterRss - record.beforeRss
         st.lastDeltaKb = record.afterRss - record.beforeRss
         st.postCallRssKb = record.afterRss
+        if (st.firstPostCallRssKb == Long.MAX_VALUE) st.firstPostCallRssKb = record.afterRss
         st.lowestPostCallRssKb = minOf(st.lowestPostCallRssKb, record.afterRss)
         val peakDelta = record.peakDeltaKb()
         if (peakDelta > st.peakDeltaMaxKb) st.peakDeltaMaxKb = peakDelta
@@ -306,6 +328,16 @@ object ProviderRssProbe {
         val condition = decideLeakSuspect(st, peakDelta, record)
         if (!st.leaked && condition != null) {
             st.leaked = true
+            // 条件名 = condition 首个空格前 token 的类别段：
+            // 'SLOW-ACCUM-drift-…' → SLOW-ACCUM；'POST-IDLE-DRIFT-…' → POST-IDLE-DRIFT；
+            // 'PEAK-DELTA-…' → PEAK-DELTA；'CUM-…' → CUM。
+            val head = condition.substringBefore(' ')
+            st.leakReason = when {
+                head.startsWith("POST-IDLE") -> "POST-IDLE-DRIFT"
+                head.startsWith("SLOW-ACCUM") -> "SLOW-ACCUM"
+                head.startsWith("PEAK-DELTA") -> "PEAK-DELTA"
+                else -> "CUM"
+            }
             Log.w(
                 TAG,
                 "[provider-rss] LEAK-SUSPECT ${record.kind} (${condition}) " +
@@ -321,6 +353,13 @@ object ProviderRssProbe {
      * - B「多轮后 post-idle RSS 不回落」：已足量调用（≥ [POST_IDLE_MIN_CALLS]）后，
      *   afterRss 相对最低点累计漂移 ≥ [POST_IDLE_DRIFT_KB]，且当前 afterRss 未回落到基线附近
      *   （相对最低点仍漂移 ≥ 阈值的一半）——说明内存只涨不落。
+     * - C「慢累积」（[fix/slow-accumulation-clause]）：≥ [SLOW_ACCUM_MIN_CALLS] 次调用后
+     *   当前 afterRss 较【首次调用后】地基抬升 ≥ [SLOW_ACCUM_FLOOR_DRIFT_KB]。抓「每轮
+     *   +1.5MB 截图、从不回落」的低斜率泄漏——A（单次 512MB）和 B（256MB 漂移）在这种
+     *   形状下永远不触发。注意语义：必须用【当前】afterRss 而非 lowestPostCallRss 做
+     *   漂移终点——单调上升时 lowest 恒等于 first（首调即最低点），用 lowest 算漂移
+     *   恒为 0，条件永不触发（Python 复刻验证抓出的原始设计错误）。用当前值的好处：
+     *   中途回落（GC / WebView 回收）时 drift 自动缩小，自愈不误报。
      * 两者满足其一即判可疑；不再只靠累计 cum。
      */
     private fun decideLeakSuspect(
@@ -338,6 +377,15 @@ object ProviderRssProbe {
             val stillOffBaseline = drift >= POST_IDLE_DRIFT_KB / 2L
             if (drift >= POST_IDLE_DRIFT_KB && stillOffBaseline) {
                 return "POST-IDLE-DRIFT-${drift / 1024}MB>=${POST_IDLE_DRIFT_KB / 1024}MB"
+            }
+        }
+        // [fix/slow-accumulation-clause] 条件 C：慢累积。当前 afterRss 相对首调
+        // 地基（firstPostCallRssKb）抬升越阈且调用次数足够多 → 判可疑。
+        if (st.count >= SLOW_ACCUM_MIN_CALLS && st.firstPostCallRssKb != Long.MAX_VALUE) {
+            val drift = record.afterRss - st.firstPostCallRssKb
+            if (drift >= SLOW_ACCUM_FLOOR_DRIFT_KB) {
+                return "SLOW-ACCUM-drift-${drift / 1024}MB>=${SLOW_ACCUM_FLOOR_DRIFT_KB / 1024}MB " +
+                    "over ${st.count} calls (first=${st.firstPostCallRssKb / 1024}MB now=${record.afterRss / 1024}MB)"
             }
         }
         // 兜底：累计 cum 超阈值（兼容旧语义）
@@ -358,12 +406,16 @@ object ProviderRssProbe {
             .sortedByDescending { it.value.totalDeltaKb }
             .forEach { (kind, st) ->
                 val baseline = if (st.lowestPostCallRssKb == Long.MAX_VALUE) "?" else (st.lowestPostCallRssKb / 1024).toString() + "MB"
+                // [fix/slow-accumulation-clause] 记录触发时的条件名（A/B/C），
+                // summary 一眼可读归因（此前只有 [LEAK-SUSPECT] 无条件名）。
+                val reason = st.leakReason?.let { " [$it]" } ?: ""
                 sb.append(
                     "  $kind: cum=${st.totalDeltaKb / 1024}MB count=${st.count} " +
                         "avg=${st.averageDeltaKb() / 1024}MB peakΔmax=${st.peakDeltaMaxKb / 1024}MB " +
                         "peakAbs=${if (st.peakRssMaxKb >= 0) st.peakRssMaxKb / 1024 else 0}MB " +
                         "postRss=${st.postCallRssKb / 1024}MB lowest=$baseline" +
-                        (if (st.leaked) " [LEAK-SUSPECT]" else "")
+                        (if (st.leaked) " [LEAK-SUSPECT]" else "") +
+                        reason
                 ).append('\n')
             }
         Log.i(TAG, "[provider-rss] $sb")

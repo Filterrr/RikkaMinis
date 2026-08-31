@@ -239,6 +239,52 @@ class ProviderRssProbeTest {
     }
 
     @Test
+    fun `slow low-slope accumulation without recovery flags leak suspect`() {
+        // [fix/slow-accumulation-clause] 条件 C：每轮 +1.5MB、从不回落的低斜率
+        // 泄漏（browser 截图字节在历史里线性堆积的形状）。50 轮累计 +75MB，
+        // 当前 afterRss 相对首调地基的漂移 ≥64MB → 应判 LEAK-SUSPECT（SLOW-ACCUM），
+        // 而条件 A（单次 512MB）与 B（256MB 漂移）在这种形状下永远不触发。
+        var after = 100_000L
+        for (i in 0 until 50) {
+            after += 1_500L
+            ProviderRssProbe.record(
+                ProviderRssProbe.ProbeRecord(
+                    kind = "streamMessage:mock",
+                    beforeRss = after - 1_500L,
+                    afterRss = after,
+                    peakRss = after,
+                )
+            )
+        }
+        val summary = ProviderRssProbe.summary()
+        // summary 行格式：… [LEAK-SUSPECT] [SLOW-ACCUM]（条件名随 latch 记录）。
+        assertTrue(
+            "expected LEAK-SUSPECT on slow accumulation, got:\n$summary",
+            summary.contains("[LEAK-SUSPECT]") && summary.contains("[SLOW-ACCUM]"),
+        )
+    }
+
+    @Test
+    fun `fewer than slow-accum min calls does not flag condition C`() {
+        // 19 次调用（< SLOW_ACCUM_MIN_CALLS=20），每轮 +2MB：次数不足 →
+        // 不判 C（也不判 A/B——幅度太小）。
+        var after = 100_000L
+        repeat(19) {
+            after += 2_000L
+            ProviderRssProbe.record(
+                ProviderRssProbe.ProbeRecord(
+                    kind = "streamMessage:mock",
+                    beforeRss = after - 2_000L,
+                    afterRss = after,
+                    peakRss = after,
+                )
+            )
+        }
+        val summary = ProviderRssProbe.summary()
+        assertFalse("below min-calls floor should NOT flag, got:\n$summary", summary.contains("[LEAK-SUSPECT]"))
+    }
+
+    @Test
     fun `record ignores empty kind`() {
         ProviderRssProbe.record(ProviderRssProbe.ProbeRecord(kind = "", beforeRss = 100_000, afterRss = 200_000))
         val summary = ProviderRssProbe.summary()
