@@ -45,12 +45,14 @@ object ToolConcurrencyPolicy {
 
     /**
      * [T-subagent-serial] spawn_agent is deliberately NOT parallel-safe and
-     * additionally gated by SubagentDispatchGate (single-run slot): a
-     * sub-agent run occupies the provider stream + registry channels for
-     * minutes at a time, and interleaving two runs would race the shared
-     * shell/browser resources the sub-agent is now allowed to touch.
+     * [T-subagent-parallel] Updated: spawn_agent now forms its OWN parallel
+     * batch group (isParallelWithSelf) — multiple spawns fan out via async{},
+     * bounded by the per-chat SubagentDispatchLimiter. Each run owns its
+     * registry entry and stream; shared shell/browser resources stay safe
+     * (shell commands are separate ExecutionCoordinator commands, browser
+     * actions serialize per-tab in the pool).
      */
-    // "spawn_agent" stays out of the whitelist → SERIAL_BARRIER.
+    // spawn_agent: not parallel-safe with reads, but parallel-with-self.
 
     /**
      * browser_use actions that never mutate page/tab state and may run
@@ -76,8 +78,22 @@ object ToolConcurrencyPolicy {
             val action = parseAction(argsJson) ?: return false
             return action in BROWSER_READ_ACTIONS
         }
+        // [T-subagent-parallel] spawn_agent runs concurrently with OTHER
+        // spawn_agent calls (each holds its own registry run + stream; the
+        // worker's executionMutex interleaves the model calls). It still
+        // must not be batched with plain parallel-safe reads — a long spawn
+        // would head-of-line block the whole batch in one scope.
+        if (toolName == "spawn_agent") return false
         return toolName in PARALLEL_SAFE_TOOLS
     }
+
+    /**
+     * [T-subagent-parallel] True when [toolName] may run CONCURRENTLY with
+     * other calls of the SAME tool (spawn_agent-only parallel group).
+     * Used by the dispatch loop to fan a run of spawn_agent calls out via
+     * async{} while keeping the result order stable.
+     */
+    fun isParallelWithSelf(toolName: String): Boolean = toolName == "spawn_agent"
 
     /**
      * Greedy partitioning that merges consecutive PARALLEL_SAFE calls into
@@ -85,10 +101,14 @@ object ToolConcurrencyPolicy {
      * preserving original order. Ported from OmniBot
      * AgentToolConcurrencyPolicy.partitionToolCalls (greedy, order-preserving).
      *
+     * [T-subagent-parallel] A consecutive run of spawn_agent calls forms its
+     * own parallel batch too (via [isParallelWithSelf]) — the dispatch loop
+     * fans it out, the per-chat limiter bounds actual concurrency.
+     *
      * @param calls list of (id, toolName, argsJson) in the order the model
      *   emitted them.
      * @return batches in original order; a batch is either one serial call
-     *   or a run of N>=1 parallel-safe calls.
+     *   or a run of N>=1 parallel-safe calls (or N>=1 spawn_agent calls).
      */
     fun partitionToolCalls(
         calls: List<Triple<String, String, String>>,
@@ -96,19 +116,23 @@ object ToolConcurrencyPolicy {
         if (calls.isEmpty()) return emptyList()
         val batches = mutableListOf<List<Triple<String, String, String>>>()
         val current = mutableListOf<Triple<String, String, String>>()
-        var currentParallel = false
+        var currentGroup: BatchKind = BatchKind.SERIAL
         for (call in calls) {
-            val parallel = isParallelSafe(call.second, call.third)
+            val group = when {
+                isParallelSafe(call.second, call.third) -> BatchKind.READ_PARALLEL
+                isParallelWithSelf(call.second) -> BatchKind.SPAWN_PARALLEL
+                else -> BatchKind.SERIAL
+            }
             if (current.isEmpty()) {
                 current.add(call)
-                currentParallel = parallel
-            } else if (parallel && currentParallel) {
+                currentGroup = group
+            } else if (group != BatchKind.SERIAL && group == currentGroup) {
                 current.add(call)
             } else {
                 batches.add(current.toList())
                 current.clear()
                 current.add(call)
-                currentParallel = parallel
+                currentGroup = group
             }
         }
         if (current.isNotEmpty()) {
@@ -116,6 +140,8 @@ object ToolConcurrencyPolicy {
         }
         return batches
     }
+
+    private enum class BatchKind { SERIAL, READ_PARALLEL, SPAWN_PARALLEL }
 
     private fun parseAction(argsJson: String?): String? {
         if (argsJson.isNullOrBlank()) return null

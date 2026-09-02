@@ -229,18 +229,124 @@ class SubagentRunRegistry {
 }
 
 /**
- * [T-subagent-serial] Serial dispatch gate for spawn_agent.
+ * [T-subagent-parallel] Concurrency limiter for sub-agent runs.
  *
- * spawn_agent is classified SERIAL_BARRIER in ToolConcurrencyPolicy, so the
- * Pass-2 loop never launches two spawn_agent calls concurrently — but the
- * MAIN agent model may still batch spawn_agent alongside other serial tools
- * within one turn, and those run sequentially on the same coroutine. The
- * real re-entrancy risk is different: a queued second spawn_agent starting
- * while the first one's registry entry is still RUNNING would leave two
- * "running" pills pointing at one chat (confusing, and the in-chat prompt
- * would refuse). This atomic flag makes any concurrent re-entry (today:
- * none; future: concurrent dispatch or skill-triggered spawns) fail fast
- * with an actionable error instead of interleaving registries.
+ * Replaces the former global single-run gate: N sub-agents may now run
+ * CONCURRENTLY in one chat (default 2, skill-tunable via frontmatter
+ * `max_parallel`). The limiter is a fair FIFO semaphore with a
+ * stale-lease escape hatch inherited from the old gate's self-heal —
+ * a permit leaked by a process-level cancel race can never wedge future
+ * spawns forever, because acquire(force=true) steals all permits after
+ * [LEASE_STALE_MS].
+ *
+ * Why not zero limits: the :modelservice worker serializes provider
+ * calls behind one executionMutex, so parallel sub-agents INTERLEAVE
+ * their model turns rather than multiply throughput — but interleaving
+ * still cuts wall-clock dramatically for multi-step sub-tasks (while
+ * agent A's tools execute — file writes, shell commands, browser —
+ * agent B's stream holds the mutex and makes progress, and vice versa).
+ */
+class SubagentDispatchLimiter(
+    private val maxPermits: Int,
+) {
+    init {
+        require(maxPermits >= 1) { "maxPermits must be >= 1" }
+    }
+
+    private val lock = java.util.concurrent.locks.ReentrantLock(true)
+    private val condition = lock.newCondition()
+    private var acquiredAtMs: Long = 0L
+    private var held: Int = 0
+
+    /** Lease ceiling — matches the 30-min generation backstop + margin. */
+    private companion object {
+        const val LEASE_STALE_MS = 31L * 60L * 1000L
+    }
+
+    /**
+     * Acquire a permit, blocking until one frees. When the current holder
+     * set has outlived [LEASE_STALE_MS] it is force-reset REGARDLESS of
+     * [force] — the false-interrupt self-heal: a dead holder set must not
+     * wedge future spawns behind "no permits" forever, and no legitimate
+     * run outlives the generation ceiling anyway. Callers that want the
+     * stale set left alone can pass force=false only to document intent;
+     * safety wins.
+     */
+    fun acquire(force: Boolean = false) {
+        lock.lock()
+        try {
+            while (true) {
+                val now = System.currentTimeMillis()
+                if (held >= maxPermits) {
+                    val stale = acquiredAtMs > 0 && now - acquiredAtMs > LEASE_STALE_MS
+                    if (stale) {
+                        // Self-heal: every holder is provably dead — reset.
+                        held = 0
+                    } else {
+                        condition.await(5_000L, java.util.concurrent.TimeUnit.MILLISECONDS)
+                        continue
+                    }
+                }
+                if (held == 0) acquiredAtMs = now
+                held++
+                return
+            }
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    /**
+     * Try to acquire a permit WITHOUT blocking. False when the limiter is
+     * at capacity (and no stale lease to take over).
+     */
+    fun acquireOrFalse(): Boolean {
+        lock.lock()
+        try {
+            val now = System.currentTimeMillis()
+            if (held >= maxPermits) {
+                val stale = acquiredAtMs > 0 && now - acquiredAtMs > LEASE_STALE_MS
+                if (stale) {
+                    held = 0  // self-heal a leaked permit set
+                } else {
+                    return false
+                }
+            }
+            if (held == 0) acquiredAtMs = now
+            held++
+            return true
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    /** Release one permit. Idempotent-safe: never goes below zero. */
+    fun release() {
+        lock.lock()
+        try {
+            if (held > 0) held--
+            if (held == 0) acquiredAtMs = 0L
+            condition.signalAll()
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    /** Test/diagnostics: permits currently held. */
+    fun heldCount(): Int {
+        lock.lock()
+        try {
+            return held
+        } finally {
+            lock.unlock()
+        }
+    }
+}
+
+/**
+ * [T-subagent-serial] Legacy name kept for compatibility with tests and
+ * external references; the production path uses per-chat
+ * [SubagentDispatchLimiter] instances now.
  */
 object SubagentDispatchGate {
     private val busy = AtomicBoolean(false)

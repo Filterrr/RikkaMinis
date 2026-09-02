@@ -144,3 +144,89 @@ class SubagentRunRegistryTest {
         assertEquals("subagentRunRegistry", SubagentSkill.RUN_REGISTRY_KEY)
     }
 }
+
+// ── [T-subagent-parallel] limiter tests ──────────────────────────────────
+
+class SubagentDispatchLimiterTest {
+
+    @Test
+    fun `non-blocking acquire admits up to max then refuses`() {
+        val limiter = SubagentDispatchLimiter(2)
+        assertTrue(limiter.acquireOrFalse())
+        assertTrue(limiter.acquireOrFalse())
+        assertFalse(limiter.acquireOrFalse())
+        assertEquals(2, limiter.heldCount())
+        limiter.release()
+        assertTrue(limiter.acquireOrFalse())
+        limiter.release()
+        limiter.release()
+        assertEquals(0, limiter.heldCount())
+    }
+
+    @Test
+    fun `release never goes below zero`() {
+        val limiter = SubagentDispatchLimiter(1)
+        limiter.release()
+        limiter.release()
+        assertEquals(0, limiter.heldCount())
+        assertTrue(limiter.acquireOrFalse())
+        limiter.release()
+        assertEquals(0, limiter.heldCount())
+    }
+
+    @Test
+    fun `blocking acquire succeeds once a permit frees`() {
+        val limiter = SubagentDispatchLimiter(1)
+        assertTrue(limiter.acquireOrFalse())
+        val t = Thread {
+            Thread.sleep(150)
+            limiter.release()
+        }
+        t.start()
+        val startedAt = System.currentTimeMillis()
+        limiter.acquire()  // blocks until the release above
+        val waited = System.currentTimeMillis() - startedAt
+        t.join()
+        assertTrue("blocking acquire should have waited ≥100ms, waited ${waited}ms", waited >= 100)
+        limiter.release()
+    }
+
+    @Test
+    fun `concurrent acquires never exceed the permit count`() {
+        val limiter = SubagentDispatchLimiter(2)
+        var overMax = 0
+        val observedMax = java.util.concurrent.atomic.AtomicInteger(0)
+        val threads = (1..8).map {
+            Thread {
+                limiter.acquire()
+                val now = limiter.heldCount()
+                observedMax.updateAndGet { prev -> maxOf(prev, now) }
+                if (now > 2) overMax++
+                Thread.sleep(80)
+                limiter.release()
+            }
+        }
+        threads.forEach { it.start() }
+        threads.forEach { it.join() }
+        assertEquals(0, overMax)
+        assertTrue("observed max held was ${observedMax.get()}", observedMax.get() <= 2)
+        assertEquals(0, limiter.heldCount())
+    }
+
+    @Test
+    fun `blocking acquire self-heals a stale permit set`() {
+        val limiter = SubagentDispatchLimiter(1)
+        assertTrue(limiter.acquireOrFalse())
+        // Simulate a leaked holder from 32 minutes ago.
+        val field = SubagentDispatchLimiter::class.java.getDeclaredField("acquiredAtMs")
+        field.isAccessible = true
+        field.set(limiter, System.currentTimeMillis() - 32L * 60L * 1000L)
+        // Blocking acquire force-resets the stale set instead of waiting 5s cycles forever.
+        val startedAt = System.currentTimeMillis()
+        limiter.acquire()
+        val waited = System.currentTimeMillis() - startedAt
+        assertTrue("stale takeover should be fast, took ${waited}ms", waited < 2000)
+        limiter.release()
+        assertEquals(0, limiter.heldCount())
+    }
+}

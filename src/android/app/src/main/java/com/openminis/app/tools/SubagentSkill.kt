@@ -64,6 +64,12 @@ object SubagentSkill {
     private const val DEFAULT_MAX_TURNS = 12
     private const val DEFAULT_MAX_OUTPUT_TOKENS = 4096
 
+    /** [T-subagent-parallel] Hard cap on concurrent sub-agents per chat. */
+    const val MAX_PARALLEL_CAP = 4
+
+    /** Default concurrent-run ceiling when the skill doesn't opt in higher. */
+    const val DEFAULT_MAX_PARALLEL = 2
+
     /**
      * Parsed from a skill's SKILL.md frontmatter. Returned by
      * [parseSubagentConfig] for every skill; [isSubagent] is false
@@ -75,6 +81,12 @@ object SubagentSkill {
         val maxOutputTokens: Int = DEFAULT_MAX_OUTPUT_TOKENS,
         /** Null = allow all non-FORBIDDEN tools. Non-null = explicit allowlist. */
         val allowedTools: Set<String>? = null,
+        /**
+         * [T-subagent-parallel] Max sub-agents of THIS skill that may run
+         * concurrently in one chat (the per-chat limiter takes the min of
+         * the requester's config and the app cap). 1 = serial.
+         */
+        val maxParallel: Int = 1,
     )
 
     // ── Tool definition ──────────────────────────────────────────────────
@@ -155,6 +167,7 @@ object SubagentSkill {
         var maxTurns = DEFAULT_MAX_TURNS
         var maxOutputTokens = DEFAULT_MAX_OUTPUT_TOKENS
         var allowedTools: Set<String>? = null
+        var maxParallel = 1
 
         var i = 0
         while (i < lines.size) {
@@ -169,6 +182,14 @@ object SubagentSkill {
                 }
                 trimmed.startsWith("max_output_tokens:") -> {
                     maxOutputTokens = trimmed.substringAfter(":").trim().toIntOrNull() ?: DEFAULT_MAX_OUTPUT_TOKENS
+                }
+                trimmed.startsWith("max_parallel:") -> {
+                    // [T-subagent-parallel] Optional concurrency knob for this
+                    // skill; clamped to [1, 4] — the worker serializes model
+                    // calls anyway, so more than 4 interleaved agents just
+                    // queues without benefit.
+                    maxParallel = (trimmed.substringAfter(":").trim().toIntOrNull() ?: 1)
+                        .coerceIn(1, MAX_PARALLEL_CAP)
                 }
                 trimmed.startsWith("allowed_tools:") -> {
                     val listStr = trimmed.substringAfter(":").trim()
@@ -198,6 +219,7 @@ object SubagentSkill {
             maxTurns = maxTurns.coerceIn(1, 100),
             maxOutputTokens = maxOutputTokens.coerceIn(256, 128_000),
             allowedTools = allowedTools,
+            maxParallel = maxParallel,
         )
     }
 

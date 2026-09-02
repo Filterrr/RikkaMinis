@@ -73,7 +73,7 @@ import com.openminis.app.tools.FileWriteTool
 import com.openminis.app.tools.MemoryRollupTool
 import com.openminis.app.tools.MemoryTools
 import com.openminis.app.tools.ReadImageTool
-import com.openminis.app.tools.SubagentDispatchGate
+import com.openminis.app.tools.SubagentDispatchLimiter
 import com.openminis.app.tools.SubagentRunRegistry
 import com.openminis.app.tools.SubagentSkill
 import com.openminis.app.tools.SubagentToolCall
@@ -779,12 +779,15 @@ class ChatViewModel(
     val subagentRunRegistry = SubagentRunRegistry()
 
     /**
-     * [T-subagent-parity] Registry run id of the sub-agent currently being
-     * executed by this VM, used by [executeSubagentShell]'s line callback
-     * to route live output. Null outside a spawn_agent run. Single-run is
-     * guaranteed by [SubagentDispatchGate].
+     * [T-subagent-parallel] Per-chat concurrency limiter for sub-agent runs.
+     * Default [SubagentSkill.DEFAULT_MAX_PARALLEL] (2) concurrent spawns; a
+     * skill's frontmatter `max_parallel` can raise the ceiling to
+     * [SubagentSkill.MAX_PARALLEL_CAP] (4). Replaces the old global
+     * single-run gate that made every spawn serial.
      */
-    internal var activeSubagentRunId: String? = null
+    val subagentSpawnLimiter = SubagentDispatchLimiter(
+        SubagentSkill.DEFAULT_MAX_PARALLEL,
+    )
 
     // [T-android-split-chat] openToolDetail / closeToolDetail moved to ChatViewModelUiStateExt.kt.
 
@@ -8578,10 +8581,17 @@ class ChatViewModel(
 
             // ============================ Pass 2 ============================
             val resultsById = LinkedHashMap<String, ToolExecutionResult>()
-            if (pending.size > 1 && pending.all { ToolConcurrencyPolicy.isParallelSafe(it.name, it.argsStr) }) {
-                // All pending tools are parallel-safe pure reads. Launch them
-                // concurrently, then pull each result in the original order so
-                // Pass 3 observes the same sequence as the old sequential loop.
+            val allReadParallel = pending.size > 1 && pending.all { ToolConcurrencyPolicy.isParallelSafe(it.name, it.argsStr) }
+            val allSpawnParallel = pending.size > 1 && pending.all { ToolConcurrencyPolicy.isParallelWithSelf(it.name) }
+            if (allReadParallel || allSpawnParallel) {
+                // [T-subagent-parallel] Two parallel batch kinds:
+                //  - READ_PARALLEL: pure reads (file_read / read_image) — the
+                //    classic fan-out.
+                //  - SPAWN_PARALLEL: a consecutive run of spawn_agent calls
+                //    fans out so N sub-agents run CONCURRENTLY (bounded by the
+                //    per-chat SubagentDispatchLimiter). Results are pulled in
+                //    the original order afterwards, so Pass 3 observes the
+                //    same sequence as the sequential loop.
                 val deferred = coroutineScope {
                     pending.map { p ->
                         p.id to async {
@@ -9117,12 +9127,18 @@ class ChatViewModel(
             )
         }
 
-        // [T-subagent-serial] Single-run slot — fail fast on re-entry instead
-        // of interleaving two registries / provider streams.
-        if (!SubagentDispatchGate.tryAcquire()) {
+        // [T-subagent-parallel] Per-chat concurrency limiter (default 2
+        // concurrent runs, skill frontmatter `max_parallel` can raise to 4).
+        // acquire() BLOCKS until a permit frees — a third spawn waits behind
+        // the first two instead of failing. The stale-lease force-takeover
+        // (31-min ceiling) still bounds a leaked permit. Every permit holder
+        // releases in its own finally; cancelStream releases nothing here —
+        // with N holders a blanket release would corrupt the count.
+        if (!subagentSpawnLimiter.acquireOrFalse()) {
+            val held = subagentSpawnLimiter.heldCount()
             return ToolExecutionResult(
-                "Error: another sub-agent is already running in this chat. " +
-                    "Wait for it to finish before spawning another one.",
+                "Error: $held sub-agent(s) already running and the concurrency " +
+                    "limit is reached. Wait for one to finish before spawning more.",
                 false, toolTitle = title,
             )
         }
@@ -9130,7 +9146,7 @@ class ChatViewModel(
         try {
             return executeSpawnAgentToolInner(args, skillName, query, title, runUntil, blockId)
         } finally {
-            SubagentDispatchGate.release()
+            subagentSpawnLimiter.release()
         }
     }
 
@@ -9199,7 +9215,6 @@ class ChatViewModel(
             title = title,
             maxTurns = config.maxTurns,
         )
-        activeSubagentRunId = run.id
 
         // 6. Run the sub-agent loop
         val resultSb = StringBuilder()
@@ -9331,9 +9346,10 @@ class ChatViewModel(
                     },
                 ))
 
-                // Execute tools sequentially
+                // Execute tools sequentially (within THIS run; parallel runs
+                // have their own sequential chains)
                 for (call in toolCalls) {
-                    val result = executeSubagentTool(call.name, call.args.toString(), call.id)
+                    val result = executeSubagentTool(call.name, call.args.toString(), call.id, run.id)
                     val resultContent = if (result.success) {
                         result.output
                     } else {
@@ -9419,8 +9435,6 @@ class ChatViewModel(
                 }
             }
             return ToolExecutionResult(summary, false, toolTitle = "Sub-agent: ${skill.name}")
-        } finally {
-            if (activeSubagentRunId == run.id) activeSubagentRunId = null
         }
 
         if (turns >= config.maxTurns && lastText.isNotBlank()) {
@@ -9521,15 +9535,22 @@ class ChatViewModel(
      * [SubagentSkill.buildFilteredTools] excludes them from the sub-agent's
      * schema in the first place.
      */
-    private suspend fun executeSubagentTool(name: String, argsJson: String, callId: String): ToolExecutionResult {
+    private suspend fun executeSubagentTool(
+        name: String,
+        argsJson: String,
+        callId: String,
+        runId: String,
+    ): ToolExecutionResult {
         return when (name) {
             "shell_execute" -> {
                 // [T-subagent-parity] Full shell power, same hardened
                 // ExecutionCoordinator path as the main agent. Live output
                 // streams into the registry via the lineCallback, keyed by
                 // the model's tool-call id (the registry step was created
-                // with that id in the ToolCallComplete handler).
-                executeSubagentShell(argsJson, callId)
+                // with that id in the ToolCallComplete handler). runId is
+                // threaded so parallel runs each route to their own registry
+                // entry.
+                executeSubagentShell(argsJson, callId, runId)
             }
             "browser_use" -> {
                 // [T-subagent-parity] The browser is the session's shared
@@ -9549,7 +9570,7 @@ class ChatViewModel(
      * minus the parent-loop UI plumbing (toolBlocks / assistantId belong to
      * the main agent's conversation, not the sub-agent's).
      */
-    private suspend fun executeSubagentShell(argsJson: String, stepId: String): ToolExecutionResult {
+    private suspend fun executeSubagentShell(argsJson: String, stepId: String, runId: String): ToolExecutionResult {
         val args = try { JSONObject(argsJson) } catch (_: Exception) { JSONObject() }
         val command = args.optString("command", "")
         val timeoutSec = args.optInt("timeout", 900).coerceIn(1, 900)
@@ -9557,13 +9578,12 @@ class ChatViewModel(
         if (command.isBlank()) {
             return ToolExecutionResult("Error: 'command' is required", false, toolTitle = toolTitle)
         }
-        val runId = activeSubagentRunId
         val result = ExecutionCoordinator.execute(
             sessionId = activeSessionId,
             command = command,
             timeout = timeoutSec * 1000L,
             lineCallback = { rawLine ->
-                if (runId == null) return@execute
+                if (runId.isEmpty()) return@execute
                 val trimmedLine = rawLine.trimEnd()
                 if (trimmedLine.isEmpty()) return@execute
                 subagentRunRegistry.stepOutput(runId, stepId, trimmedLine)
@@ -9575,7 +9595,7 @@ class ChatViewModel(
         val timedOut = result.exitCode == 124
         val finalOutput = "$output$exitInfo"
         val (redactedOut, _) = com.openminis.app.data.EnvVarRedactor.redactIfEnabled(finalOutput)
-        if (runId != null) {
+        if (runId.isNotEmpty()) {
             subagentRunRegistry.stepFinished(
                 runId, stepId, result.exitCode == 0,
                 output = redactedOut.lines().takeLast(
@@ -11767,23 +11787,21 @@ Environment variables:
             ExecutionCoordinator.stopCurrentCommand(sessionId)
         }
         // [T-subagent-gate-lease] Reconcile the sub-agent registry FIRST so
-        // the pill reflects the cancel immediately, then release the single-
-        // run slot: the cancelled streamJob's runner will still call release()
-        // in its own finally (idempotent — AtomicBoolean.set(false)), but
-        // between this moment and that finally the slot MUST be re-usable by
-        // a queued prompt drain's fresh spawn (T189 drains fire 200ms after
-        // this point and historically hit "another sub-agent is already
-        // running" when the dead holder's finally hadn't run yet).
-        val cancelledRunId = subagentRunRegistry.runs.value
-            .firstOrNull { it.isActive && it.blockId.isNotEmpty() }?.id
-        if (cancelledRunId != null) {
+        // the pill reflects the cancel immediately. The per-chat limiter is
+        // NOT blanket-released here: N parallel runs each hold their own
+        // permit and each runner's finally releases its own — a blanket
+        // release would corrupt the count and over-admit new spawns. The
+        // 31-min stale-lease self-heal bounds any leaked permit anyway.
+        val cancelledRunIds = subagentRunRegistry.runs.value
+            .filter { it.isActive && it.blockId.isNotEmpty() }
+            .map { it.id }
+        for (rid in cancelledRunIds) {
             subagentRunRegistry.finish(
-                cancelledRunId,
+                rid,
                 SubagentRunRegistry.RunStatus.CANCELLED,
                 error = "interrupted by user stop",
             )
         }
-        SubagentDispatchGate.release()
         handleUserCancelledCleanup()
 
         // T189: iOS parity (AIChatViewModel.swift L2592-2610). If the user
@@ -12202,13 +12220,10 @@ Environment variables:
         // [T-subagent-ui] VM is going away — drop the sub-agent run history
         // with it (the registry is per-VM by design).
         subagentRunRegistry.clear()
-        // [T-subagent-gate-lease] The gate is a process-global singleton but
-        // its legitimate holder lived inside THIS VM's streamJob. If the VM
-        // is destroyed while a spawn was executing (session deleted,
-        // process teardown race), release the slot so a future chat's first
-        // spawn is never wedged behind a dead holder. Releasing an
-        // already-free slot is harmless.
-        SubagentDispatchGate.release()
+        // [T-subagent-parallel] The per-chat limiter is per-VM like the
+        // registry — it dies with this VM, so no release is needed. (The
+        // old process-global gate required an onCleared release to avoid
+        // wedging other chats; per-chat limiters don't leak across chats.)
         // Tear down whichever shell was actually serving this VM. Terminate
         // both ids when the rename happened, since a draft shell may still
         // linger if the agent ran a tool before `ensureSession()`.
