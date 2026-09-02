@@ -169,7 +169,9 @@ fun SubagentDetailScreen(
 /**
  * Body for an existing run — task card, live step log, streaming result.
  * Split out so the null-run fallback above doesn't need a bare [return]
- * inside the composable body.
+ * inside the composable body. Lives OUTSIDE the header Column scope, so
+ * it fills the remaining space with [Modifier.fillMaxSize] (no ColumnScope
+ * weight available here).
  */
 @Composable
 private fun SubagentRunDetailBody(run: SubagentRunRegistry.Run) {
@@ -190,7 +192,7 @@ private fun SubagentRunDetailBody(run: SubagentRunRegistry.Run) {
         LazyColumn(
             state = listState,
             modifier = Modifier
-                .weight(1f)
+                .fillMaxSize()
                 .fillMaxWidth(),
             contentPadding = PaddingValues(
                 horizontal = 16.dp, vertical = 12.dp,

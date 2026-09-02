@@ -40,6 +40,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.openminis.app.tools.SubagentRunRegistry
+import com.openminis.app.ui.theme.ChatColors
 
 /**
  * The prompt row. [runs] = full registry list (newest first);
