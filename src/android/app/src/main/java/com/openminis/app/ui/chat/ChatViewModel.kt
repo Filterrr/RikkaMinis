@@ -155,6 +155,15 @@ class ChatViewModel(
         /** T9: trace retention cap per session (oldest pruned first). */
         const val MAX_TRACE_FILES_PER_SESSION = 20
 
+        /**
+         * [T-subagent-transient-retry] Sub-agent stream retry backoff
+         * (seconds) — mirrors the main loop's AUTO_RETRY_DELAYS_SEC. Applied
+         * per sub-agent TURN on transient provider errors (SSL jitter /
+         * stream resets / 0-chunk worker deaths), so one flaky wire second
+         * doesn't kill a whole spawn_agent run.
+         */
+        private val SUBAGENT_STREAM_RETRY_DELAYS_SEC = intArrayOf(1, 2, 4)
+
         // ── T7-A: 观察预算默认上限（advisory 观察用，不阻断任何行为）──
         // 这些数字只用于 trace 记录当前消耗进度（budget_consume/refuse 事件），
         // 不改变生产行为；T7-C 接入 enforced 模式前由 T4-B/T10 依据真实基线校准。
@@ -9217,34 +9226,87 @@ class ChatViewModel(
                 // TF-D: sub-agent runs through :modelservice via the gateway. Chunks
                 // are accumulated incrementally as they stream in — never buffered
                 // wholesale via `toList()` (unbounded retention of the whole turn).
-                ProviderExecutionGateway.stream(
-                    context = context,
-                    instance = instance,
-                    model = provider.model,
-                    messages = history.toList(),
-                    systemPrompt = systemPrompt,
-                    maxTokens = config.maxOutputTokens,
-                    temperature = null,
-                    tools = subagentTools,
-                    thinkingLevel = ThinkingLevel.OFF,
-                ).collect { chunk ->
-                    when (chunk) {
-                        is LLMStreamChunk.Text -> {
-                            textSb.append(chunk.text)
-                            // [T-subagent-ui] stream the sub-agent's narration
-                            // into the detail page's live output card.
-                            subagentRunRegistry.appendResultText(run.id, chunk.text)
+                //
+                // [T-subagent-transient-retry] Mirror the MAIN agent loop's
+                // transient-error policy (AUTO_RETRY_DELAYS_SEC: 1s/2s/4s on the
+                // same provider). SSL jitter (SSLException → NetworkError),
+                // stream resets, and 0-chunk worker deaths are transient by the
+                // main loop's own classification — without this, ONE flaky
+                // second on the wire killed the whole spawn_agent run ("SSL
+                // BAD_DECRYPT on turn 1, zero steps" observed live). Only the
+                // CURRENT turn's stream is retried: executed tool results are
+                // already appended to history, so the retry re-issues the
+                // model request, never the tool calls.
+                var streamRetryAttempt = 0
+                while (true) {
+                    textSb.setLength(0)
+                    toolCalls.clear()
+                    try {
+                        ProviderExecutionGateway.stream(
+                            context = context,
+                            instance = instance,
+                            model = provider.model,
+                            messages = history.toList(),
+                            systemPrompt = systemPrompt,
+                            maxTokens = config.maxOutputTokens,
+                            temperature = null,
+                            tools = subagentTools,
+                            thinkingLevel = ThinkingLevel.OFF,
+                        ).collect { chunk ->
+                            when (chunk) {
+                                is LLMStreamChunk.Text -> {
+                                    textSb.append(chunk.text)
+                                    // [T-subagent-ui] stream the sub-agent's narration
+                                    // into the detail page's live output card.
+                                    subagentRunRegistry.appendResultText(run.id, chunk.text)
+                                }
+                                is LLMStreamChunk.ToolCallComplete -> {
+                                    toolCalls.add(SubagentToolCall(chunk.id, chunk.name, chunk.args))
+                                    subagentRunRegistry.stepStarted(
+                                        run.id, chunk.id, turns, chunk.name,
+                                        try {
+                                            chunk.args.optString("tool_title", chunk.name)
+                                        } catch (_: Exception) { chunk.name },
+                                    )
+                                }
+                                else -> {}
+                            }
                         }
-                        is LLMStreamChunk.ToolCallComplete -> {
-                            toolCalls.add(SubagentToolCall(chunk.id, chunk.name, chunk.args))
-                            subagentRunRegistry.stepStarted(
-                                run.id, chunk.id, turns, chunk.name,
-                                try {
-                                    chunk.args.optString("tool_title", chunk.name)
-                                } catch (_: Exception) { chunk.name },
+                        break  // stream finished cleanly — exit the retry loop
+                    } catch (e: Exception) {
+                        if (e is CancellationException) throw e
+                        val actual = unwrapFlowException(e)
+                        val is5xx = actual is com.openminis.app.data.model.LLMError.ProviderError &&
+                            actual.detail.contains(Regex("\\b[5][0-9]{2}\\b"))
+                        val workerDiedZeroChunk =
+                            ((actual is com.openminis.app.sandbox.offload.ModelWorkerDiedException) ||
+                                (actual is com.openminis.app.sandbox.offload.ModelStreamErrorException)) &&
+                            (actual as? com.openminis.app.sandbox.offload.ModelExecutionStreamException)?.hadChunks == false
+                        val isTransient = actual is com.openminis.app.data.model.LLMError.NetworkError ||
+                            actual is com.openminis.app.data.model.LLMError.TransientError ||
+                            is5xx ||
+                            workerDiedZeroChunk
+                        if (isTransient && streamRetryAttempt < SUBAGENT_STREAM_RETRY_DELAYS_SEC.size) {
+                            val delaySec = SUBAGENT_STREAM_RETRY_DELAYS_SEC[streamRetryAttempt]
+                            streamRetryAttempt += 1
+                            val errDesc = actual.message ?: actual.javaClass.simpleName
+                            AppLogger.warning(
+                                TAG,
+                                "[Subagent] transient stream error on ${provider.model.displayName}, " +
+                                    "turn $turns retry $streamRetryAttempt/" +
+                                    "${SUBAGENT_STREAM_RETRY_DELAYS_SEC.size} in ${delaySec}s: $errDesc",
                             )
+                            // Surface the retry on the detail page so the run
+                            // doesn't LOOK dead while backing off.
+                            subagentRunRegistry.appendResultText(
+                                run.id,
+                                "\n\n[transient stream error ($errDesc) — retrying " +
+                                    "$streamRetryAttempt/${SUBAGENT_STREAM_RETRY_DELAYS_SEC.size} in ${delaySec}s]\n",
+                            )
+                            kotlinx.coroutines.delay(delaySec * 1000L)
+                            continue
                         }
-                        else -> {}
+                        throw e  // fatal for this run — outer handler journals + reports
                     }
                 }
 
