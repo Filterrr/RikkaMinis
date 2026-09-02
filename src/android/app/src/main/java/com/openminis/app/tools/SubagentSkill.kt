@@ -13,6 +13,14 @@ interface SkillInfo {
     val name: String
     val description: String
     val body: String
+    /**
+     * Raw YAML frontmatter (fences excluded), preserved verbatim from the
+     * skill's SKILL.md. May be null for plain-body skills or legacy rows
+     * persisted before frontmatter preservation existed. Sub-agent config
+     * parsing reads this FIRST; the body's own frontmatter (if any) is the
+     * fallback.
+     */
+    val frontmatter: String? get() = null
 }
 
 /**
@@ -120,28 +128,32 @@ object SubagentSkill {
      * `subagent: true` in the frontmatter — existing skills are unaffected.
      */
     fun parseSubagentConfig(skill: SkillInfo): SubagentConfig {
-        val body = skill.body
-        if (body.isBlank()) return SubagentConfig()
+        // [T-subagent-fm] Prefer the preserved raw frontmatter — the
+        // registry strips frontmatter from [SkillInfo.body] when skills
+        // were imported before preservation existed, and pre-1.0.5 skill
+        // bodies never carry it at all. Fall back to body-embedded
+        // frontmatter for SkillInfo implementations that don't set the
+        // field (tests, lightweight wrappers).
+        val frontmatter = skill.frontmatter
+            ?: run {
+                val lines = skill.body.lines()
+                if (lines.size < 2 || !lines[0].trim().startsWith("---")) return@run null
+                val endIdx = lines.subList(1, lines.size)
+                    .indexOfFirst { it.trim().startsWith("---") }
+                    .takeIf { it >= 0 } ?: return@run null
+                lines.subList(1, endIdx + 1).joinToString("\n")
+            }
+        if (frontmatter.isNullOrBlank()) return SubagentConfig()
 
-        // Extract frontmatter between --- markers
-        val lines = body.lines()
-        if (lines.size < 2 || !lines[0].trim().startsWith("---")) return SubagentConfig()
-
-        val endIdx = lines.subList(1, lines.size)
-            .indexOfFirst { it.trim().startsWith("---") }
-            .takeIf { it >= 0 }
-            ?.plus(1)
-        if (endIdx == null) return SubagentConfig()
-
-        val frontmatter = lines.subList(1, endIdx)
+        val lines = frontmatter.lines()
         var isSubagent = false
         var maxTurns = DEFAULT_MAX_TURNS
         var maxOutputTokens = DEFAULT_MAX_OUTPUT_TOKENS
         var allowedTools: Set<String>? = null
 
         var i = 0
-        while (i < frontmatter.size) {
-            val trimmed = frontmatter[i].trim()
+        while (i < lines.size) {
+            val trimmed = lines[i].trim()
             when {
                 trimmed.startsWith("subagent:") -> {
                     val value = trimmed.substringAfter(":").trim()
@@ -161,8 +173,8 @@ object SubagentSkill {
                     }
                     // Multi-line form: subsequent lines starting with "- "
                     var j = i + 1
-                    while (j < frontmatter.size) {
-                        val item = frontmatter[j].trim()
+                    while (j < lines.size) {
+                        val item = lines[j].trim()
                         if (item.startsWith("- ")) {
                             tools.add(item.removePrefix("- ").trim().trim('"', '\''))
                             j++

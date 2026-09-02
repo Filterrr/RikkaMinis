@@ -616,6 +616,7 @@ fun SkillDetailScreen(
                         name = parsed.name,
                         description = parsed.description,
                         body = parsed.body,
+                        frontmatter = parsed.frontmatter,
                     )
                     updateStatus = if (ok) UpdateStatus.Done else UpdateStatus.Failed(context.getString(R.string.skill_detail_error_update_failed))
                 }

@@ -106,6 +106,14 @@ class SkillRepository(private val context: Context) {
         val installedAt: Long = System.currentTimeMillis(),
         val updatedAt: Long = System.currentTimeMillis(),
         override val body: String = "",
+        /**
+         * Raw YAML frontmatter of the skill's SKILL.md (between the `---`
+         * fences, fences excluded). Preserved verbatim so extension keys
+         * this app does not model (e.g. `subagent: true`, `allowed_tools`)
+         * survive the parse → DB → writeSkillMd round trip. Null for
+         * legacy rows / plain-body skills without frontmatter.
+         */
+        override val frontmatter: String? = null,
         /** Original GitHub URL when importSource is URL (null otherwise). */
         val sourceURL: String? = null,
         /** Cumulative read count of this skill's SKILL.md; normalized to 0–100 after exceeding 1000. */
@@ -144,7 +152,15 @@ class SkillRepository(private val context: Context) {
      * [addLock] so concurrent calls with the same slug can't produce
      * duplicate DB rows / on-disk dirs or lose the _skills update.
      */
-    fun add(name: String, description: String, body: String, version: String = "1.0.0", source: ImportSource = ImportSource.FILE, sourceURL: String? = null): Skill? {
+    fun add(
+        name: String,
+        description: String,
+        body: String,
+        version: String = "1.0.0",
+        source: ImportSource = ImportSource.FILE,
+        sourceURL: String? = null,
+        frontmatter: String? = null,
+    ): Skill? {
         val id = slugify(name)
         if (id.isBlank()) return null
 
@@ -160,6 +176,7 @@ class SkillRepository(private val context: Context) {
                 version = version,
                 importSource = source,
                 body = body,
+                frontmatter = frontmatter,
                 sourceURL = sourceURL,
             )
 
@@ -171,12 +188,21 @@ class SkillRepository(private val context: Context) {
         }
     }
 
-    fun update(id: String, name: String? = null, description: String? = null, body: String? = null): Boolean {
+    fun update(
+        id: String,
+        name: String? = null,
+        description: String? = null,
+        body: String? = null,
+        frontmatter: String? = null,
+    ): Boolean {
         val current = _skills.value.find { it.id == id } ?: return false
         val updated = current.copy(
             name = name ?: current.name,
             description = description ?: current.description,
             body = body ?: current.body,
+            // Explicit null (no frontmatter provided) keeps the existing one —
+            // the editor path sends raw content updates only.
+            frontmatter = frontmatter ?: current.frontmatter,
             updatedAt = System.currentTimeMillis(),
         )
 
@@ -410,6 +436,7 @@ class SkillRepository(private val context: Context) {
                 version = parsed.version,
                 importSource = source,
                 body = parsed.body,
+                frontmatter = parsed.frontmatter,
                 updatedAt = System.currentTimeMillis(),
                 sourceURL = sourceURL ?: current.sourceURL,
             )
@@ -432,6 +459,7 @@ class SkillRepository(private val context: Context) {
             version = parsed.version,
             source = source,
             sourceURL = sourceURL,
+            frontmatter = parsed.frontmatter,
         )
     }
 
@@ -649,6 +677,7 @@ class SkillRepository(private val context: Context) {
             name = parsed.name,
             description = parsed.description,
             body = parsed.body,
+            frontmatter = parsed.frontmatter,
         )
         if (!ok) return@withContext UpdateResult.Failure("Failed to write updated skill")
 
@@ -814,6 +843,7 @@ class SkillRepository(private val context: Context) {
             description = parsed.description,
             version = parsed.version,
             body = parsed.body,
+            frontmatter = parsed.frontmatter ?: current.frontmatter,
             updatedAt = System.currentTimeMillis(),
         )
         db.execSQL(
@@ -1221,6 +1251,7 @@ class SkillRepository(private val context: Context) {
                 description = parsed.description,
                 version = bundledVersion,
                 body = parsed.body,
+                frontmatter = parsed.frontmatter ?: existing.frontmatter,
                 updatedAt = System.currentTimeMillis(),
             )
             db.execSQL(
@@ -1238,6 +1269,7 @@ class SkillRepository(private val context: Context) {
                 body = parsed.body,
                 version = bundledVersion,
                 source = ImportSource.BUNDLED,
+                frontmatter = parsed.frontmatter,
             )
             extractBundledSiblings(dirName)
             Log.i(TAG, "Installed bundled skill: $dirName (v$bundledVersion)")
@@ -1347,6 +1379,7 @@ class SkillRepository(private val context: Context) {
         while (cursor.moveToNext()) {
             val id = cursor.getString(cursor.getColumnIndexOrThrow("id"))
             val body = readSkillMdBody(id)
+            val fm = readSkillMdFrontmatter(id)
             val sourceUrlIdx = cursor.getColumnIndex("source_url")
             val useCountIdx = cursor.getColumnIndex("use_count")
             var description = cursor.getString(cursor.getColumnIndexOrThrow("description"))
@@ -1383,6 +1416,7 @@ class SkillRepository(private val context: Context) {
                 installedAt = cursor.getLong(cursor.getColumnIndexOrThrow("installed_at")),
                 updatedAt = cursor.getLong(cursor.getColumnIndexOrThrow("updated_at")),
                 body = body,
+                frontmatter = fm,
                 sourceURL = if (sourceUrlIdx >= 0 && !cursor.isNull(sourceUrlIdx)) cursor.getString(sourceUrlIdx) else null,
                 useCount = if (useCountIdx >= 0) cursor.getDouble(useCountIdx) else 0.0,
             ))
@@ -1427,6 +1461,7 @@ class SkillRepository(private val context: Context) {
                         description = parsed.description,
                         importSource = ImportSource.SESSION,
                         body = parsed.body,
+                        frontmatter = parsed.frontmatter,
                     )
                     insertDb(skill)
                     dbSkills.add(skill)
@@ -1455,11 +1490,21 @@ class SkillRepository(private val context: Context) {
         val dir = File(skillsDir, skill.id)
         dir.mkdirs()
         val content = buildString {
-            appendLine("---")
-            appendLine("name: ${skill.name}")
-            appendLine("description: ${skill.description}")
-            appendLine("version: ${skill.version}")
-            appendLine("---")
+            // [T-subagent-fm] Write the preserved raw frontmatter when
+            // available so extension keys (subagent, allowed_tools, …)
+            // survive the round trip; fall back to the three modeled keys
+            // for skills without preserved frontmatter.
+            if (!skill.frontmatter.isNullOrBlank()) {
+                appendLine("---")
+                appendLine(skill.frontmatter)
+                appendLine("---")
+            } else {
+                appendLine("---")
+                appendLine("name: ${skill.name}")
+                appendLine("description: ${skill.description}")
+                appendLine("version: ${skill.version}")
+                appendLine("---")
+            }
             append(skill.body)
         }
         File(dir, "SKILL.md").writeText(content)
@@ -1472,11 +1517,24 @@ class SkillRepository(private val context: Context) {
         return parsed?.body ?: ""
     }
 
+    /**
+     * [T-subagent-fm] Read the preserved raw frontmatter of a skill's
+     * SKILL.md from disk (fences excluded). Returns null when the file is
+     * missing or carries no frontmatter.
+     */
+    private fun readSkillMdFrontmatter(id: String): String? {
+        val file = File(skillsDir, "$id/SKILL.md")
+        if (!file.exists()) return null
+        return parseSkillMd(file.readText())?.frontmatter
+    }
+
     data class ParsedSkill(
         val name: String,
         val description: String,
         val version: String = "1.0.0",
         val body: String,
+        /** Raw YAML frontmatter (fences excluded), preserved verbatim. */
+        val frontmatter: String? = null,
     )
 
     /**
@@ -1527,6 +1585,11 @@ class SkillRepository(private val context: Context) {
             }
         }
         if (frontmatterEndLine < 0) return null
+
+        // [T-subagent-fm] Preserve the raw frontmatter verbatim (fences
+        // excluded) so extension keys this app does not model survive the
+        // parse → DB → writeSkillMd round trip.
+        val frontmatter = lines.subList(1, frontmatterEndLine).joinToString("\n")
 
         var name = ""
         var description = ""
@@ -1588,7 +1651,7 @@ class SkillRepository(private val context: Context) {
             lines.subList(bodyStartLine, lines.size).joinToString("\n").trim('\n')
         } else ""
 
-        return ParsedSkill(name, description, version, body)
+        return ParsedSkill(name, description, version, body, frontmatter)
     }
 
     private fun slugify(name: String): String =
