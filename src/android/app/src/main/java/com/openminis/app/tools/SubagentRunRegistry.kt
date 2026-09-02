@@ -245,11 +245,53 @@ class SubagentRunRegistry {
 object SubagentDispatchGate {
     private val busy = AtomicBoolean(false)
 
-    /** Try to acquire the single-run slot. False when a run is active. */
-    fun tryAcquire(): Boolean = busy.compareAndSet(false, true)
+    /**
+     * [T-subagent-gate-lease] When the slot was acquired. A stale lease
+     * (older than [LEASE_STALE_MS]) can be force-taken over by a new
+     * spawn: the previous holder is provably dead — nothing about a
+     * sub-agent run legitimately takes longer than the gateway's own
+     * generation ceiling — and a leaked `true` (process-level cancel race
+     * where the holder's finally never ran) must not wedge every future
+     * spawn behind "another sub-agent is already running" forever.
+     */
+    @Volatile
+    private var acquiredAtMs: Long = 0L
+
+    /** Lease ceiling — matches the 30-min generation backstop + margin. */
+    private const val LEASE_STALE_MS = 31L * 60L * 1000L
+
+    /**
+     * Try to acquire the single-run slot. False when a run is active —
+     * UNLESS that run's lease is stale, in which case it is taken over
+     * (self-heal) and true is returned.
+     */
+    fun tryAcquire(): Boolean {
+        while (true) {
+            val now = System.currentTimeMillis()
+            if (busy.compareAndSet(false, true)) {
+                acquiredAtMs = now
+                return true
+            }
+            // Held — check for a leaked lease from a dead holder.
+            val held = acquiredAtMs
+            if (held > 0 && now - held > LEASE_STALE_MS) {
+                // Try to steal: only succeeds if the flag is still set with
+                // the same stale timestamp (lost no race in between).
+                if (busy.compareAndSet(true, true) && acquiredAtMs == held) {
+                    acquiredAtMs = now
+                    return true  // force takeover
+                }
+            }
+            return false
+        }
+    }
 
     /** Release the slot. Called in a finally block by the runner. */
     fun release() {
+        acquiredAtMs = 0L
         busy.set(false)
     }
+
+    /** Test/diagnostics: is the slot currently held? */
+    fun isHeld(): Boolean = busy.get()
 }

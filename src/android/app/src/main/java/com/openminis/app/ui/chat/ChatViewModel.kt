@@ -9609,7 +9609,13 @@ class ChatViewModel(
         "memory_write" -> executeMemoryWriteTool(argsJson)
         "memory_get" -> executeMemoryGetTool(argsJson)
         "memory_rollup" -> executeMemoryRollupTool()
-        else -> ToolExecutionResult("Error: Unknown or forbidden tool: $name", false)
+        else -> ToolExecutionResult(
+            "Error: Unknown or forbidden tool: $name. " +
+                "This tool does not exist in your tool set — do NOT retry it and do NOT " +
+                "improvise around it. Sub-agents cannot spawn further agents. Finish now: " +
+                "report what you have accomplished so far and state this tool gap as a caveat.",
+            false,
+        )
     }
 
     /**
@@ -11760,6 +11766,24 @@ Environment variables:
             // Mid-turn rename: sweep any lingering draft shell too.
             ExecutionCoordinator.stopCurrentCommand(sessionId)
         }
+        // [T-subagent-gate-lease] Reconcile the sub-agent registry FIRST so
+        // the pill reflects the cancel immediately, then release the single-
+        // run slot: the cancelled streamJob's runner will still call release()
+        // in its own finally (idempotent — AtomicBoolean.set(false)), but
+        // between this moment and that finally the slot MUST be re-usable by
+        // a queued prompt drain's fresh spawn (T189 drains fire 200ms after
+        // this point and historically hit "another sub-agent is already
+        // running" when the dead holder's finally hadn't run yet).
+        val cancelledRunId = subagentRunRegistry.runs.value
+            .firstOrNull { it.isActive && it.blockId.isNotEmpty() }?.id
+        if (cancelledRunId != null) {
+            subagentRunRegistry.finish(
+                cancelledRunId,
+                SubagentRunRegistry.RunStatus.CANCELLED,
+                error = "interrupted by user stop",
+            )
+        }
+        SubagentDispatchGate.release()
         handleUserCancelledCleanup()
 
         // T189: iOS parity (AIChatViewModel.swift L2592-2610). If the user
@@ -12178,6 +12202,13 @@ Environment variables:
         // [T-subagent-ui] VM is going away — drop the sub-agent run history
         // with it (the registry is per-VM by design).
         subagentRunRegistry.clear()
+        // [T-subagent-gate-lease] The gate is a process-global singleton but
+        // its legitimate holder lived inside THIS VM's streamJob. If the VM
+        // is destroyed while a spawn was executing (session deleted,
+        // process teardown race), release the slot so a future chat's first
+        // spawn is never wedged behind a dead holder. Releasing an
+        // already-free slot is harmless.
+        SubagentDispatchGate.release()
         // Tear down whichever shell was actually serving this VM. Terminate
         // both ids when the rename happened, since a draft shell may still
         // linger if the agent ran a tool before `ensureSession()`.

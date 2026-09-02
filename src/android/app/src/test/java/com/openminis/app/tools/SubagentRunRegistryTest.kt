@@ -116,6 +116,26 @@ class SubagentRunRegistryTest {
     }
 
     @Test
+    fun `dispatch gate self-heals a stale lease`() {
+        // Simulate a leaked hold: acquire and never release.
+        assertTrue(SubagentDispatchGate.tryAcquire())
+        // Immediately after, the slot is genuinely busy.
+        assertFalse(SubagentDispatchGate.tryAcquire())
+        // Force the lease timestamp into the stale window (as if the holder
+        // died 32 minutes ago without releasing — the false-interrupt path).
+        val field = SubagentDispatchGate::class.java.getDeclaredField("acquiredAtMs")
+        field.isAccessible = true
+        field.set(SubagentDispatchGate, System.currentTimeMillis() - 32L * 60L * 1000L)
+        // A new spawn force-takes the stale lease instead of failing forever.
+        assertTrue(SubagentDispatchGate.tryAcquire())
+        // And the takeover is a real exclusive hold again.
+        assertFalse(SubagentDispatchGate.tryAcquire())
+        SubagentDispatchGate.release()
+        assertTrue(SubagentDispatchGate.tryAcquire())
+        SubagentDispatchGate.release()
+    }
+
+    @Test
     fun `spawn_agent definition carries run_until and registry key`() {
         val def = SubagentSkill.definition()
         assertEquals("spawn_agent", def.name)
