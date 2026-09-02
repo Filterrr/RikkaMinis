@@ -33,6 +33,13 @@ object SubagentSkill {
 
     const val NAME = "spawn_agent"
 
+    /**
+     * [T-subagent-ui] Registry key on ChatViewModel — the main agent's
+     * dispatch loop registers a run here before executing it so the chat
+     * prompt pill and the second-level detail page can stream its progress.
+     */
+    const val RUN_REGISTRY_KEY = "subagentRunRegistry"
+
     /** Tools that sub-agents are NEVER allowed to use. */
     val FORBIDDEN_TOOLS: Set<String> = setOf(
         NAME,              // anti-recursion
@@ -66,11 +73,15 @@ object SubagentSkill {
             "result. Use this to delegate complex sub-tasks to a focused agent. " +
             "The skill must be defined with `subagent: true` in its SKILL.md " +
             "frontmatter and must already be installed and enabled. " +
-            "Recursive spawn_agent is forbidden.",
+            "Recursive spawn_agent is forbidden. " +
+            "While the sub-agent runs, the user sees a prompt pill in the chat " +
+            "and can open a second-level page that streams the sub-agent's " +
+            "execution process (every tool call and output) in real time.",
         parameters = mapOf(
             "tool_title" to AgentToolParam(
                 "string",
-                "A concise 5-10 word summary of what this sub-agent should do",
+                "A concise 5-10 word summary of what this sub-agent should do. " +
+                    "Shown to the user as the live status label.",
             ),
             "skill_name" to AgentToolParam(
                 "string",
@@ -78,11 +89,21 @@ object SubagentSkill {
             ),
             "query" to AgentToolParam(
                 "string",
-                "The task, question, or instruction to give to the sub-agent",
+                "The task, question, or instruction to give to the sub-agent. " +
+                    "Make it self-contained: the sub-agent cannot see this " +
+                    "conversation and only knows what you write here.",
+            ),
+            "run_until" to AgentToolParam(
+                "string",
+                "Optional. 'done' (default): return only when the sub-agent " +
+                    "finishes, with its full final report. 'first_turn': return " +
+                    "after the sub-agent's first turn with its partial output — " +
+                    "use when the caller only needs an early readout.",
+                enumValues = listOf("done", "first_turn"),
             ),
         ),
         required = listOf("tool_title", "skill_name", "query"),
-        propertyOrdering = listOf("tool_title", "skill_name", "query"),
+        propertyOrdering = listOf("tool_title", "skill_name", "query", "run_until"),
     )
 
     // ── Config parsing ───────────────────────────────────────────────────

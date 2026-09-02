@@ -8,6 +8,7 @@ import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.Radar
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.ui.graphics.Color
@@ -27,6 +28,9 @@ internal fun toolAccentColor(toolName: String): Color = when (toolName) {
     "read_image" -> ToolAccents.image
     "memory_write", "memory_get" -> ToolAccents.memory
     "web_search" -> ToolAccents.search    // iOS: .cyan for search
+    // [T-subagent-ui] Sub-agent runs get a distinct violet accent so they
+    // read as "another agent", not another tool.
+    "spawn_agent" -> Color(0xFF7C5CFF)
     else -> ToolAccents.fallback
 }
 
@@ -40,5 +44,6 @@ internal fun toolIconFor(toolName: String) = when (toolName) {
     "read_image" -> Icons.Default.Image                // iOS: photo
     "memory_write", "memory_get" -> Icons.Default.Psychology // iOS: brain.head.profile
     "web_search" -> Icons.Default.Search               // iOS: magnifyingglass
+    "spawn_agent" -> Icons.Default.Radar               // [T-subagent-ui]
     else -> Icons.Default.Build
 }

@@ -73,6 +73,8 @@ import com.openminis.app.tools.FileWriteTool
 import com.openminis.app.tools.MemoryRollupTool
 import com.openminis.app.tools.MemoryTools
 import com.openminis.app.tools.ReadImageTool
+import com.openminis.app.tools.SubagentDispatchGate
+import com.openminis.app.tools.SubagentRunRegistry
 import com.openminis.app.tools.SubagentSkill
 import com.openminis.app.tools.SubagentToolCall
 import com.openminis.app.tools.ToolConcurrencyPolicy
@@ -760,6 +762,20 @@ class ChatViewModel(
      */
     internal val _selectedToolDetailId = MutableStateFlow<String?>(null)
     val selectedToolDetailId: StateFlow<String?> = _selectedToolDetailId.asStateFlow()
+
+    // [T-subagent-ui] Sub-agent run registry — drives the in-chat prompt
+    // pill ("N sub-agent(s) running — tap to view") and the second-level
+    // SubagentDetailScreen. Per-VM (one chat) by design: runs belong to the
+    // conversation that spawned them. Cleared with the chat.
+    val subagentRunRegistry = SubagentRunRegistry()
+
+    /**
+     * [T-subagent-parity] Registry run id of the sub-agent currently being
+     * executed by this VM, used by [executeSubagentShell]'s line callback
+     * to route live output. Null outside a spawn_agent run. Single-run is
+     * guaranteed by [SubagentDispatchGate].
+     */
+    internal var activeSubagentRunId: String? = null
 
     // [T-android-split-chat] openToolDetail / closeToolDetail moved to ChatViewModelUiStateExt.kt.
 
@@ -4558,6 +4574,11 @@ class ChatViewModel(
         // newly cleared chat doesn't briefly flash a stale tool's sheet
         // before the existence-guard catches up.
         _selectedToolDetailId.value = null
+        // [T-subagent-ui] Sub-agent run history belongs to the wiped
+        // conversation; drop it with the rest of the per-session UI state.
+        // Any run still marked RUNNING is already dead — cancelStream()
+        // above tore down the agent loop that drove it.
+        subagentRunRegistry.clear()
         // Drop any browser tabs the agent spawned for this session, and
         // delete the persisted tab snapshot so a future open starts clean.
         // iOS calls BrowserTabPool.deletePersistedData(for:) +
@@ -9008,8 +9029,10 @@ class ChatViewModel(
                 "memory_get" -> executeMemoryGetTool(argsJson)
                 "memory_rollup" -> executeMemoryRollupTool()
                 // [T7-subagent] spawn_agent: delegate to an independent sub-agent
-                // instance running the named skill.
-                SubagentSkill.NAME -> executeSpawnAgentTool(argsJson)
+                // instance running the named skill. [T-subagent-ui] pass the
+                // tool_use block id so the registry run can be linked to this
+                // pill (tap → second-level detail page).
+                SubagentSkill.NAME -> executeSpawnAgentTool(argsJson, toolId)
                 else -> ToolExecutionResult("Unknown tool: $name", false)
             }
         } finally {
@@ -9058,12 +9081,20 @@ class ChatViewModel(
      * prompt (from the skill body), a filtered tool set, and runs its own
      * independent loop with its own budget. Context is fully isolated from
      * the main agent's [agentHistory].
+     *
+     * [T-subagent-ui] The run is registered in [subagentRunRegistry] before
+     * the loop starts: the chat screen shows a prompt pill ("N sub-agent(s)
+     * running — tap to view") while any run is active, and each pill / the
+     * floating status bar's spawn_agent card routes to a second-level
+     * detail page streaming the sub-agent's steps (every tool call + live
+     * output) in real time.
      */
-    private suspend fun executeSpawnAgentTool(argsJson: String): ToolExecutionResult {
+    private suspend fun executeSpawnAgentTool(argsJson: String, blockId: String): ToolExecutionResult {
         val args = try { JSONObject(argsJson) } catch (_: Exception) { JSONObject() }
         val skillName = args.optString("skill_name", "").trim()
         val query = args.optString("query", "").trim()
         val title = args.optString("tool_title", "Sub-agent").ifBlank { "Sub-agent" }
+        val runUntil = args.optString("run_until", "done").ifBlank { "done" }
 
         if (skillName.isBlank()) {
             return ToolExecutionResult("Error: spawn_agent requires 'skill_name'", false, toolTitle = title)
@@ -9071,7 +9102,37 @@ class ChatViewModel(
         if (query.isBlank()) {
             return ToolExecutionResult("Error: spawn_agent requires 'query'", false, toolTitle = title)
         }
+        if (runUntil != "done" && runUntil != "first_turn") {
+            return ToolExecutionResult(
+                "Error: spawn_agent.run_until must be 'done' or 'first_turn'", false, toolTitle = title,
+            )
+        }
 
+        // [T-subagent-serial] Single-run slot — fail fast on re-entry instead
+        // of interleaving two registries / provider streams.
+        if (!SubagentDispatchGate.tryAcquire()) {
+            return ToolExecutionResult(
+                "Error: another sub-agent is already running in this chat. " +
+                    "Wait for it to finish before spawning another one.",
+                false, toolTitle = title,
+            )
+        }
+
+        try {
+            return executeSpawnAgentToolInner(args, skillName, query, title, runUntil, blockId)
+        } finally {
+            SubagentDispatchGate.release()
+        }
+    }
+
+    private suspend fun executeSpawnAgentToolInner(
+        args: JSONObject,
+        skillName: String,
+        query: String,
+        title: String,
+        runUntil: String,
+        blockId: String,
+    ): ToolExecutionResult {
         val repo = skillRepository ?: return ToolExecutionResult(
             "Error: Skill system unavailable", false, toolTitle = title,
         )
@@ -9117,7 +9178,21 @@ class ChatViewModel(
             "Error: No active provider available", false, toolTitle = title,
         )
 
-        // 5. Run the sub-agent loop
+        // 5. [T-subagent-ui] Register the run — from here on the user sees
+        // the in-chat pill and can open the live detail page. blockId links
+        // the run to this spawn_agent tool pill (empty when unavailable —
+        // e.g. synthetic error paths before registration).
+        val run = subagentRunRegistry.register(
+            blockId = blockId,
+            skillId = skill.id,
+            skillName = skill.name,
+            query = query,
+            title = title,
+            maxTurns = config.maxTurns,
+        )
+        activeSubagentRunId = run.id
+
+        // 6. Run the sub-agent loop
         val resultSb = StringBuilder()
         var turns = 0
         var lastText = ""
@@ -9125,10 +9200,17 @@ class ChatViewModel(
         try {
             while (turns < config.maxTurns) {
                 turns++
-                val instance = provider.instanceContext ?: return ToolExecutionResult(
-                    "Error: No provider instance context for sub-agent remote execution",
-                    false, toolTitle = title,
-                )
+                subagentRunRegistry.turnStarted(run.id, turns)
+                val instance = provider.instanceContext ?: let {
+                    subagentRunRegistry.finish(
+                        run.id, SubagentRunRegistry.RunStatus.FAILED,
+                        error = "No provider instance context",
+                    )
+                    return ToolExecutionResult(
+                        "Error: No provider instance context for sub-agent remote execution",
+                        false, toolTitle = title,
+                    )
+                }
                 val textSb = StringBuilder()
                 val toolCalls = mutableListOf<SubagentToolCall>()
 
@@ -9147,9 +9229,20 @@ class ChatViewModel(
                     thinkingLevel = ThinkingLevel.OFF,
                 ).collect { chunk ->
                     when (chunk) {
-                        is LLMStreamChunk.Text -> textSb.append(chunk.text)
+                        is LLMStreamChunk.Text -> {
+                            textSb.append(chunk.text)
+                            // [T-subagent-ui] stream the sub-agent's narration
+                            // into the detail page's live output card.
+                            subagentRunRegistry.appendResultText(run.id, chunk.text)
+                        }
                         is LLMStreamChunk.ToolCallComplete -> {
                             toolCalls.add(SubagentToolCall(chunk.id, chunk.name, chunk.args))
+                            subagentRunRegistry.stepStarted(
+                                run.id, chunk.id, turns, chunk.name,
+                                try {
+                                    chunk.args.optString("tool_title", chunk.name)
+                                } catch (_: Exception) { chunk.name },
+                            )
                         }
                         else -> {}
                     }
@@ -9178,12 +9271,18 @@ class ChatViewModel(
 
                 // Execute tools sequentially
                 for (call in toolCalls) {
-                    val result = executeSubagentTool(call.name, call.args.toString())
+                    val result = executeSubagentTool(call.name, call.args.toString(), call.id)
                     val resultContent = if (result.success) {
                         result.output
                     } else {
                         "Error: ${result.output}"
                     }
+                    subagentRunRegistry.stepFinished(
+                        run.id, call.id, result.success,
+                        output = resultContent.lines().takeLast(
+                            SubagentRunRegistry.MAX_STEP_OUTPUT_LINES,
+                        ).joinToString("\n"),
+                    )
                     history.add(LLMMessage(
                         role = LLMMessage.Role.USER,
                         content = "Result of ${call.name} (${call.id}):\n$resultContent",
@@ -9193,10 +9292,28 @@ class ChatViewModel(
                         )),
                     ))
                 }
+
+                if (runUntil == "first_turn") {
+                    // [T-subagent-early-readout] Caller asked for a first-turn
+                    // readout only — stop after executing turn 1's tools.
+                    val partial = resultSb.toString().trim()
+                    subagentRunRegistry.finish(
+                        run.id, SubagentRunRegistry.RunStatus.SUCCESS,
+                        resultText = partial,
+                        error = "Stopped early (run_until=first_turn)",
+                    )
+                    val summary = "Sub-agent '$skillName' first-turn readout " +
+                        "(1/${config.maxTurns} turns):\n\n---\n$partial"
+                    return ToolExecutionResult(summary, true, toolTitle = "Sub-agent: ${skill.name}")
+                }
             }
         } catch (e: Exception) {
             val msg = e.message ?: e.javaClass.simpleName
             AppLogger.warning(TAG, "[Subagent] '$skillName' error after $turns turn(s): $msg")
+            subagentRunRegistry.finish(
+                run.id, SubagentRunRegistry.RunStatus.FAILED,
+                resultText = resultSb.toString(), error = msg,
+            )
             val partial = resultSb.toString().ifBlank { "" }
             val summary = buildString {
                 append("Sub-agent '$skillName' encountered an error after $turns turn(s).\n")
@@ -9206,6 +9323,8 @@ class ChatViewModel(
                 append("\nError: $msg")
             }
             return ToolExecutionResult(summary, false, toolTitle = "Sub-agent: ${skill.name}")
+        } finally {
+            if (activeSubagentRunId == run.id) activeSubagentRunId = null
         }
 
         if (turns >= config.maxTurns && lastText.isNotBlank()) {
@@ -9214,24 +9333,111 @@ class ChatViewModel(
 
         val finalText = resultSb.toString().trim()
         if (finalText.isBlank()) {
+            subagentRunRegistry.finish(run.id, SubagentRunRegistry.RunStatus.SUCCESS, resultText = "")
             return ToolExecutionResult(
                 "Sub-agent '$skillName' completed in $turns turn(s) with no output.",
                 true, toolTitle = "Sub-agent: ${skill.name}",
             )
         }
 
+        subagentRunRegistry.finish(run.id, SubagentRunRegistry.RunStatus.SUCCESS, resultText = finalText)
         val summary = "Sub-agent '$skillName' completed in $turns turn(s).\n\n---\n$finalText"
         return ToolExecutionResult(summary, true, toolTitle = "Sub-agent: ${skill.name}")
     }
 
     /**
      * [T7-subagent] Execute a tool inside a sub-agent's loop. Mirrors the
-     * main [executeTool] dispatch but without UI updates (toolBlocks,
-     * assistantId, etc.) — the sub-agent produces file/memory results only.
-     * Tools that are FORBIDDEN for sub-agents never reach this method
-     * because [SubagentSkill.buildFilteredTools] excludes them.
+     * main [executeTool] dispatch but without parent-conversation UI updates
+     * (toolBlocks, assistantId, etc.) — progress is streamed through the
+     * registry instead.
+     *
+     * [T-subagent-parity] The sub-agent now has the SAME tool surface as the
+     * main agent minus the FORBIDDEN set (spawn_agent itself is anti-
+     * recursion): shell_execute runs through the session's
+     * [ExecutionCoordinator] with live output streamed into the registry,
+     * browser_use through the session's [BrowserTabPool], and the file /
+     * memory tools fall through to the main agent's executors. Tools that
+     * are FORBIDDEN never reach this method because
+     * [SubagentSkill.buildFilteredTools] excludes them from the sub-agent's
+     * schema in the first place.
      */
-    private fun executeSubagentTool(name: String, argsJson: String): ToolExecutionResult = when (name) {
+    private suspend fun executeSubagentTool(name: String, argsJson: String, callId: String): ToolExecutionResult {
+        return when (name) {
+            "shell_execute" -> {
+                // [T-subagent-parity] Full shell power, same hardened
+                // ExecutionCoordinator path as the main agent. Live output
+                // streams into the registry via the lineCallback, keyed by
+                // the model's tool-call id (the registry step was created
+                // with that id in the ToolCallComplete handler).
+                executeSubagentShell(argsJson, callId)
+            }
+            "browser_use" -> {
+                // [T-subagent-parity] The browser is the session's shared
+                // tab pool — same execution path as the main agent's
+                // browser_use (pool-side per-tab mutexes serialize access).
+                executeBrowserUseTool(argsJson)
+            }
+            else -> executeSubagentFileTool(name, argsJson)
+        }
+    }
+
+    /**
+     * [T-subagent-parity] shell_execute inside a sub-agent: built on
+     * [ExecutionCoordinator] with per-line streaming into the registry's
+     * current step. Mirrors the main agent's [executeShellCommand]
+     * (timeout clamping, exit-code suffix, timeout flag, env-var redaction)
+     * minus the parent-loop UI plumbing (toolBlocks / assistantId belong to
+     * the main agent's conversation, not the sub-agent's).
+     */
+    private suspend fun executeSubagentShell(argsJson: String, stepId: String): ToolExecutionResult {
+        val args = try { JSONObject(argsJson) } catch (_: Exception) { JSONObject() }
+        val command = args.optString("command", "")
+        val timeoutSec = args.optInt("timeout", 900).coerceIn(1, 900)
+        val toolTitle = args.optString("tool_title", "shell_execute")
+        if (command.isBlank()) {
+            return ToolExecutionResult("Error: 'command' is required", false, toolTitle = toolTitle)
+        }
+        val runId = activeSubagentRunId
+        val result = ExecutionCoordinator.execute(
+            sessionId = activeSessionId,
+            command = command,
+            timeout = timeoutSec * 1000L,
+            lineCallback = { rawLine ->
+                if (runId == null) return@execute
+                val trimmedLine = rawLine.trimEnd()
+                if (trimmedLine.isEmpty()) return@execute
+                subagentRunRegistry.stepOutput(runId, stepId, trimmedLine)
+            },
+        )
+        val output = if (result.output.isBlank()) "(no output)" else result.output
+        val exitInfo = if (result.exitCode != 0) " (exit code ${result.exitCode})" else ""
+        // Exit code 124 = the wrapper timeout fired (mirrors main path).
+        val timedOut = result.exitCode == 124
+        val finalOutput = "$output$exitInfo"
+        val (redactedOut, _) = com.openminis.app.data.EnvVarRedactor.redactIfEnabled(finalOutput)
+        if (runId != null) {
+            subagentRunRegistry.stepFinished(
+                runId, stepId, result.exitCode == 0,
+                output = redactedOut.lines().takeLast(
+                    SubagentRunRegistry.MAX_STEP_OUTPUT_LINES,
+                ).joinToString("\n"),
+            )
+        }
+        return ToolExecutionResult(
+            output = redactedOut,
+            success = result.exitCode == 0,
+            toolTitle = toolTitle,
+            timedOut = timedOut,
+        )
+    }
+
+    /**
+     * [T-subagent-parity] file/memory tools inside a sub-agent — same
+     * executors as the main agent (paths resolve through the session's
+     * sandbox identically). Skill reload hooks fire on writes to /skills/
+     * exactly like the main path.
+     */
+    private fun executeSubagentFileTool(name: String, argsJson: String): ToolExecutionResult = when (name) {
         FileReadTool.NAME -> FileReadTool.execute(argsJson, activeSessionId, context)
         FileWriteTool.NAME -> FileWriteTool.execute(argsJson, activeSessionId, context).also {
             if (it.success) maybeReloadSkillsForPath(argsJson)
@@ -10497,7 +10703,12 @@ Available tools:
 - file_write: Create new files or overwrite existing files (faster than echo/tee).
 - file_edit: Edit existing files with exact string replacement (old_string → new_string). Preferred over file_write for modifications — always file_read first.
 - browser_use: Web browsing (navigate, screenshot, click, type, get_text, scroll, scroll_and_collect, get_readable, get_backbone, fetch, etc.). Starts with a desktop Chrome user agent. Use screenshot to see the page.
-  当 browser_use 触达 Google 登录 / OAuth 页（accounts.google.com、signin.google.com、myaccount.google.com、oauth2.googleapis.com 等）或网页返回 "disallowed_useragent" / 403 包含 "browser is not secure" 字样时，**不要重试或尝试登录** — Google 永久禁止 in-app WebView 完成登录，重试只会浪费 turn。改为告诉用户："此页面需要在系统 Chrome 完成登录" 并给出可点击的 Markdown link [在 Chrome 中打开](https://accounts.google.com/...)。点该 link 时 app 会跳出 Custom Tab；用户在 Chrome 完成操作后，请他**把所需结果（邮件正文 / 文档摘要 / 表格数据）粘贴回 chat**，你再继续帮他处理。这是 Android 平台限制，不是 bug。${toolListMemoryBullets}
+  当 browser_use 触达 Google 登录 / OAuth 页（accounts.google.com、signin.google.com、myaccount.google.com、oauth2.googleapis.com 等）或网页返回 "disallowed_useragent" / 403 包含 "browser is not secure" 字样时，**不要重试或尝试登录** — Google 永久禁止 in-app WebView 完成登录，重试只会浪费 turn。改为告诉用户："此页面需要在系统 Chrome 完成登录" 并给出可点击的 Markdown link [在 Chrome 中打开](https://accounts.google.com/...)。点该 link 时 app 会跳出 Custom Tab；用户在 Chrome 完成操作后，请他**把所需结果（邮件正文 / 文档摘要 / 表格数据）粘贴回 chat**，你再继续帮他处理。这是 Android 平台限制，不是 bug.${toolListMemoryBullets}
+- spawn_agent: Spawn a sub-agent (副 agent) to execute a delegated sub-task with its own context, system prompt, and budget. The sub-agent is a skill marked `subagent: true` (e.g. the built-in `general-agent`) and has the SAME tool capabilities as you — shell, browser, file read/write/edit — minus spawning further agents and memory. Use it when a sub-task is complex and self-contained (deep research, large codebase exploration, multi-step file processing, focused investigation). Rules:
+  * The task message (`query`) must be self-contained — the sub-agent cannot see this conversation. Include the goal, constraints, relevant file paths, and what the final report should contain.
+  * While a sub-agent runs, the user sees a prompt pill under the chat and can open a second-level page streaming the sub-agent's execution process (every tool call + live output). Do not narrate sub-agent progress yourself — the UI already shows it; just summarize when the run returns.
+  * Only ONE sub-agent runs at a time in a chat. The call blocks until the sub-agent finishes (or `run_until: first_turn` returns an early readout).
+  * When the result comes back, verify it against your own knowledge before presenting it to the user — you own the final answer.
 
 Shared directory /var/minis/ (bidirectional read/write between shell and app):
   /var/minis/attachments/ — Media files (images, audio, video). Display inline with ![desc](minis://attachments/filename).
@@ -11785,6 +11996,9 @@ Environment variables:
 
     override fun onCleared() {
         super.onCleared()
+        // [T-subagent-ui] VM is going away — drop the sub-agent run history
+        // with it (the registry is per-VM by design).
+        subagentRunRegistry.clear()
         // Tear down whichever shell was actually serving this VM. Terminate
         // both ids when the rename happened, since a draft shell may still
         // linger if the agent ran a tool before `ensureSession()`.

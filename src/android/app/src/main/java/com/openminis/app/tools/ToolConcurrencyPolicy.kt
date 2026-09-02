@@ -44,6 +44,15 @@ object ToolConcurrencyPolicy {
     )
 
     /**
+     * [T-subagent-serial] spawn_agent is deliberately NOT parallel-safe and
+     * additionally gated by SubagentDispatchGate (single-run slot): a
+     * sub-agent run occupies the provider stream + registry channels for
+     * minutes at a time, and interleaving two runs would race the shared
+     * shell/browser resources the sub-agent is now allowed to touch.
+     */
+    // "spawn_agent" stays out of the whitelist → SERIAL_BARRIER.
+
+    /**
      * browser_use actions that never mutate page/tab state and may run
      * concurrently with each other. Mirrors OmniBot's
      * BROWSER_USE_PARALLEL_SAFE_ACTIONS = { get_text, screenshot } plus the

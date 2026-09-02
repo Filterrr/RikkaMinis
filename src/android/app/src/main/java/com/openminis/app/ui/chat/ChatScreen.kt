@@ -290,6 +290,7 @@ import com.openminis.app.data.repository.ChatRepository
 import com.openminis.app.data.repository.MemoryRepository
 import com.openminis.app.data.repository.ProviderRepository
 import com.openminis.app.ui.browser.BrowserSheet
+import com.openminis.app.ui.subagent.ChatSubagentRunsHolder
 import com.openminis.app.ui.theme.ChatColors
 import com.openminis.app.ui.components.MinisTextButton
 
@@ -468,6 +469,8 @@ fun ChatScreen(
     onOpenSession: (String) -> Unit = {},
     /** Open Settings from the chat-history drawer footer. */
     onOpenSettings: () -> Unit = {},
+    /** [T-subagent-ui] Open the second-level sub-agent detail page for a run. */
+    onOpenSubagentDetail: (String) -> Unit = {},
 ) {
     val context = LocalContext.current
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -509,6 +512,17 @@ fun ChatScreen(
     val showBrowserSheet by viewModel.showBrowserSheet.collectAsState()
     val showMemorySheet by viewModel.showMemorySheet.collectAsState()
     val memoryToolRecords by viewModel.memoryToolRecords.collectAsState()
+    // [T-subagent-ui] Sub-agent run registry — drives the in-chat prompt row
+    // and pushes live state to the second-level detail page.
+    val subagentRuns by viewModel.subagentRunRegistry.runs.collectAsState()
+    val subagentActiveCount = subagentRuns.count { it.isActive }
+    // Publish the live registry flow for the nav-level SubagentDetailScreen
+    // (AppNavigation has no VM reference; the holder is the FilePreviewHolder-
+    // style bridge). The flow object is stable for the VM's lifetime, so
+    // re-publishing on each composition is a no-op write.
+    SideEffect {
+        ChatSubagentRunsHolder.push(viewModel.subagentRunRegistry.runs)
+    }
     val selectedGroupName by viewModel.selectedGroupName.collectAsState()
     val providerName by viewModel.providerName.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -3821,7 +3835,12 @@ fun ChatScreen(
                                 onRetry = if (item.isLastCancelled && !isStreaming && !canResume) ({ safeMutate { viewModel.retryLast() } }) else null,
                                 onStop = { viewModel.cancelStream() },
                                 onOpenTerminalWithCommand = onOpenTerminalWithCommand,
-                                onOpenDetail = { viewModel.openToolDetail(it) },
+                                // [T-subagent-ui] spawn_agent blocks → live detail page.
+                                onOpenDetail = { blockId ->
+                                    val run = subagentRuns.firstOrNull { it.blockId == blockId }
+                                    if (run != null) onOpenSubagentDetail(run.id)
+                                    else viewModel.openToolDetail(blockId)
+                                },
                                 onRerunFromHere = if (!isStreaming) ({
                                     val anchorId = item.tools.firstOrNull()?.id
                                     if (anchorId != null) {
@@ -3862,7 +3881,14 @@ fun ChatScreen(
                                 // scope (otherwise the sheet snaps shut when
                                 // the pill scrolls off-screen and Compose
                                 // disposes the item).
-                                onOpenDetail = { viewModel.openToolDetail(it) },
+                                // [T-subagent-ui] spawn_agent pills route to the
+                                // second-level live detail page instead of the
+                                // generic tool sheet.
+                                onOpenDetail = { blockId ->
+                                    val run = subagentRuns.firstOrNull { it.blockId == blockId }
+                                    if (run != null) onOpenSubagentDetail(run.id)
+                                    else viewModel.openToolDetail(blockId)
+                                },
                                 // [T-android-rerun-from-tool-block-position]
                                 // Re-run cuts at THIS tool_use block: keep the
                                 // blocks before it in the same turn, drop it +
@@ -3978,7 +4004,12 @@ fun ChatScreen(
                                                     } else null,
                                                     onStop = { viewModel.cancelStream() },
                                                     onOpenTerminalWithCommand = onOpenTerminalWithCommand,
-                                                    onOpenDetail = { viewModel.openToolDetail(it) },
+                                                    // [T-subagent-ui] spawn_agent → live detail page.
+                                                    onOpenDetail = { blockId ->
+                                                        val run = subagentRuns.firstOrNull { it.blockId == blockId }
+                                                        if (run != null) onOpenSubagentDetail(run.id)
+                                                        else viewModel.openToolDetail(blockId)
+                                                    },
                                                     onRerunFromHere = if (!isStreaming) ({
                                                         val messageId = item.messageId
                                                         val blockId = block.id
@@ -4149,7 +4180,13 @@ fun ChatScreen(
                             // T261: route detail open through the same VM
                             // state as in-list pills so both surfaces share
                             // one always-mounted sheet instance.
-                            onOpenDetail = { viewModel.openToolDetail(it) },
+                            // [T-subagent-ui] Floating-bar spawn_agent card also
+                            // routes to the live detail page.
+                            onOpenDetail = { blockId ->
+                                val run = subagentRuns.firstOrNull { it.blockId == blockId }
+                                if (run != null) onOpenSubagentDetail(run.id)
+                                else viewModel.openToolDetail(blockId)
+                            },
                         )
                     }
                 } else {
@@ -4307,6 +4344,23 @@ fun ChatScreen(
             // StateFlow subscription lives INSIDE the composer leaf instead of
             // at ChatScreen scope — typing no longer re-executes the whole
             // message-list body (the long-session input jank root cause).
+            //
+            // [T-subagent-ui] In-chat sub-agent prompt row: rendered directly
+            // above the composer while any sub-agent run is active (plus up
+            // to 3 recent history rows). Tap → second-level detail page with
+            // the live execution process.
+            if (subagentRuns.isNotEmpty()) {
+                SubagentPromptRow(
+                    runs = subagentRuns,
+                    activeCount = subagentActiveCount,
+                    onOpenRun = { runId ->
+                        // Live registry flow already published to
+                        // ChatSubagentRunsHolder by the SideEffect above —
+                        // just navigate.
+                        onOpenSubagentDetail(runId)
+                    },
+                )
+            }
             ChatInputArea(
                 viewModel = viewModel,
                 sessionId = sessionId,
