@@ -157,7 +157,9 @@ class SubagentSkillTest {
         )
         val filtered = SubagentSkill.buildFilteredTools(all, null)
         val names = filtered.map { it.name }.toSet()
-        assertEquals(setOf("file_read", "memory_get"), names)
+        // [T-subagent-parity] shell_execute / browser_use are allowed —
+        // only spawn_agent (anti-recursion) stays forbidden.
+        assertEquals(setOf("file_read", "shell_execute", "browser_use", "memory_get"), names)
     }
 
     @Test
@@ -181,11 +183,12 @@ class SubagentSkillTest {
             makeTool("shell_execute"),
             makeTool("spawn_agent"),
         )
-        // Even if the skill author lists them, FORBIDDEN wins.
+        // Even if the skill author lists them, FORBIDDEN wins. [T-subagent-parity]
+        // shell_execute is no longer forbidden, so only spawn_agent is dropped.
         val filtered = SubagentSkill.buildFilteredTools(
             all, setOf("file_read", "shell_execute", "spawn_agent"),
         )
-        assertEquals(listOf("file_read"), filtered.map { it.name })
+        assertEquals(listOf("file_read", "shell_execute"), filtered.map { it.name })
     }
 
     @Test

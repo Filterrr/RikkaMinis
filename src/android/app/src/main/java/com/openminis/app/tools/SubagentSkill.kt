@@ -50,9 +50,14 @@ object SubagentSkill {
 
     /** Tools that sub-agents are NEVER allowed to use. */
     val FORBIDDEN_TOOLS: Set<String> = setOf(
-        NAME,              // anti-recursion
-        "shell_execute",   // privilege escalation (terminal, android-* CLIs)
-        "browser_use",     // shared browser resource — no racing
+        NAME,              // anti-recursion — sub-agents cannot spawn sub-agents
+        // [T-subagent-parity] shell_execute and browser_use are ALLOWED:
+        // executeSubagentTool routes them through the session's
+        // ExecutionCoordinator / BrowserTabPool with live registry streaming
+        // — the same hardened paths the main agent uses. The sub-agent is
+        // the same kind of agent as its parent (per the spawn_agent tool
+        // contract); only recursion and parent-conversation state
+        // (memory tools) stay off-limits.
     )
 
     /** Default budget for sub-agents when the skill doesn't specify. */
