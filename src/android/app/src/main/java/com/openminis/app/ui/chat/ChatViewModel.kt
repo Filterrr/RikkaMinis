@@ -9302,11 +9302,41 @@ class ChatViewModel(
                         resultText = partial,
                         error = "Stopped early (run_until=first_turn)",
                     )
-                    val summary = "Sub-agent '$skillName' first-turn readout " +
-                        "(1/${config.maxTurns} turns):\n\n---\n$partial"
+                    val journalPath = journalSubagentRun(
+                        run, "STOPPED_FIRST_TURN", partial, turns,
+                        error = "stopped early (run_until=first_turn)",
+                    )
+                    val summary = buildString {
+                        append("Sub-agent '$skillName' first-turn readout ")
+                        append("(1/${config.maxTurns} turns):\n\n---\n$partial\n---")
+                        if (journalPath != null) {
+                            append("\n\nFull journal: $journalPath")
+                        }
+                    }
                     return ToolExecutionResult(summary, true, toolTitle = "Sub-agent: ${skill.name}")
                 }
             }
+        } catch (e: CancellationException) {
+            // [T-subagent-durability] NEVER swallow cancellation. The
+            // framework treats the whole run as dead and discards whatever
+            // this function returns — a synthesized "failure" result here
+            // is unreachable (the false-interrupt bug: side effects landed,
+            // report lost). Instead: journal the partial report to disk,
+            // reconcile the registry to CANCELLED (the pill must not spin
+            // forever), then rethrow so the framework's cancel cleanup can
+            // attach the recovery pointer to the persisted tool_result.
+            val partial = resultSb.toString()
+            subagentRunRegistry.finish(
+                run.id, SubagentRunRegistry.RunStatus.CANCELLED,
+                resultText = partial,
+                error = e.message ?: "cancelled",
+            )
+            journalSubagentRun(
+                run, "CANCELLED", partial, turns,
+                error = e.message ?: "cancelled by user",
+            )
+            AppLogger.warning(TAG, "[Subagent] '$skillName' cancelled after $turns turn(s); partial report journaled")
+            throw e
         } catch (e: Exception) {
             val msg = e.message ?: e.javaClass.simpleName
             AppLogger.warning(TAG, "[Subagent] '$skillName' error after $turns turn(s): $msg")
@@ -9314,13 +9344,17 @@ class ChatViewModel(
                 run.id, SubagentRunRegistry.RunStatus.FAILED,
                 resultText = resultSb.toString(), error = msg,
             )
-            val partial = resultSb.toString().ifBlank { "" }
+            val partial = resultSb.toString()
+            val journalPath = journalSubagentRun(run, "FAILED", partial, turns, error = msg)
             val summary = buildString {
                 append("Sub-agent '$skillName' encountered an error after $turns turn(s).\n")
                 if (partial.isNotBlank()) {
                     append("\nPartial output:\n---\n$partial\n---\n")
                 }
                 append("\nError: $msg")
+                if (journalPath != null) {
+                    append("\n\nRecoverable: the full partial report is journaled at $journalPath — file_read it to retrieve everything the sub-agent produced before failing.")
+                }
             }
             return ToolExecutionResult(summary, false, toolTitle = "Sub-agent: ${skill.name}")
         } finally {
@@ -9341,9 +9375,73 @@ class ChatViewModel(
         }
 
         subagentRunRegistry.finish(run.id, SubagentRunRegistry.RunStatus.SUCCESS, resultText = finalText)
-        val summary = "Sub-agent '$skillName' completed in $turns turn(s).\n\n---\n$finalText"
+        val journalPath = journalSubagentRun(run, "SUCCESS", finalText, turns)
+        val journalNote = journalPath?.let { "\n\n(Journaled at $it — survives interruption.)" } ?: ""
+        val summary = "Sub-agent '$skillName' completed in $turns turn(s).\n\n---\n$finalText$journalNote"
         return ToolExecutionResult(summary, true, toolTitle = "Sub-agent: ${skill.name}")
     }
+
+    /**
+     * [T-subagent-durability] Persist the sub-agent's terminal report to
+     * `/var/minis/workspace/.subagent/<runId>.md` (session sandbox path,
+     * resolved via PRootKernel like the ERRORS.md learnings journal).
+     *
+     * Why: the spawn_agent tool_result is NOT durable on interruption —
+     * a user cancel (or process death) discards the return value and the
+     * framework persists only a synthetic CANCELLED_MARKER. The journal is
+     * the recovery anchor: the parent agent (or the user) can always
+     * `file_read` it to retrieve the partial/final report, and the model
+     * is told the path in both the success and failure summaries so the
+     * pointer survives into the conversation history.
+     *
+     * Failures are swallowed — journaling must never break the run itself.
+     */
+    private fun journalSubagentRun(
+        run: SubagentRunRegistry.Run,
+        terminal: String,
+        resultText: String,
+        turns: Int,
+        error: String? = null,
+    ): String? = runCatching {
+        val file = PRootKernel.resolveSessionHostPath(
+            activeSessionId,
+            "/var/minis/workspace/.subagent/${run.id}.md",
+            context,
+        ) ?: return null
+        file.parentFile?.mkdirs()
+        val body = buildString {
+            appendLine("# Sub-agent run: ${run.title.ifBlank { run.skillName }}")
+            appendLine()
+            appendLine("- run id: ${run.id}")
+            appendLine("- skill: ${run.skillId}")
+            appendLine("- terminal status: $terminal")
+            appendLine("- turns: $turns/${run.maxTurns}")
+            appendLine("- started: ${java.time.Instant.ofEpochMilli(run.startedAtMs)}")
+            error?.let { appendLine("- note: $it") }
+            appendLine()
+            appendLine("## Task")
+            appendLine()
+            appendLine(run.query)
+            appendLine()
+            appendLine("## Report")
+            appendLine()
+            if (resultText.isBlank()) appendLine("(no text output produced)") else appendLine(resultText)
+            appendLine()
+            appendLine("## Steps")
+            appendLine()
+            for (step in run.steps) {
+                appendLine("### [${step.status}] ${step.toolTitle.ifBlank { step.toolName }} (${step.durationMs}ms)")
+                if (step.output.isNotBlank()) {
+                    appendLine("```")
+                    appendLine(step.output)
+                    appendLine("```")
+                }
+                appendLine()
+            }
+        }
+        file.writeText(body)
+        "/var/minis/workspace/.subagent/${run.id}.md"
+    }.getOrNull()
 
     /**
      * [T7-subagent] Execute a tool inside a sub-agent's loop. Mirrors the
@@ -11781,10 +11879,29 @@ Environment variables:
             msgs[lastIdx] = last.copy(toolBlocks = updatedBlocks)
             _messages.value = msgs
             val parts = cancelledIds.map { (id, name) ->
+                // [T-subagent-durability] spawn_agent results are recoverable:
+                // the sub-agent loop journals its partial report to
+                // /var/minis/workspace/.subagent/<runId>.md before rethrowing
+                // cancellation. Point the model at the journal instead of the
+                // bare cancelled marker so the final report stays reachable —
+                // the model can file_read it on the next turn and continue.
+                val journal = if (name == SubagentSkill.NAME) {
+                    subagentRunRegistry.runs.value
+                        .firstOrNull { it.blockId == id }
+                        ?.let { run -> "/var/minis/workspace/.subagent/${run.id}.md" }
+                } else null
                 AgentContentPart.ToolResult(
                     id = id,
                     name = name,
-                    content = CANCELLED_MARKER,
+                    content = if (journal != null) {
+                        "$CANCELLED_MARKER\n" +
+                            "The sub-agent's work up to cancellation was journaled. " +
+                            "Recovery: file_read $journal — it contains the task, " +
+                            "the partial report, and every tool step. Resume from it " +
+                            "or re-run the remaining work; do NOT assume the report is lost."
+                    } else {
+                        CANCELLED_MARKER
+                    },
                     isError = true,
                 )
             }
