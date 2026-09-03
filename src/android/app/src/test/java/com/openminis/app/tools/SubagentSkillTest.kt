@@ -154,12 +154,16 @@ class SubagentSkillTest {
             makeTool("spawn_agent"),
             makeTool("browser_use"),
             makeTool("memory_get"),
+            makeTool("unknown_future_tool"),
         )
         val filtered = SubagentSkill.buildFilteredTools(all, null)
         val names = filtered.map { it.name }.toSet()
-        // [T-subagent-parity] shell_execute / browser_use are allowed —
-        // only spawn_agent (anti-recursion) stays forbidden.
-        assertEquals(setOf("file_read", "shell_execute", "browser_use", "memory_get"), names)
+        // [T-subagent-parity] shell_execute / browser_use are allowed.
+        // [T-agent-capability] spawn_agent + memory tools are forbidden
+        // (capability isolation); unknown_future_tool is dropped by the
+        // fail-closed capability catalog — new main-agent tools never
+        // leak to sub-agents automatically.
+        assertEquals(setOf("file_read", "shell_execute", "browser_use"), names)
     }
 
     @Test
@@ -173,7 +177,9 @@ class SubagentSkillTest {
         )
         val filtered = SubagentSkill.buildFilteredTools(all, setOf("file_read", "memory_get"))
         val names = filtered.map { it.name }.toSet()
-        assertEquals(setOf("file_read", "memory_get"), names)
+        // [T-agent-capability] memory_get is FORBIDDEN for sub-agents — the
+        // allowlist can only narrow the base capability set, never widen it.
+        assertEquals(setOf("file_read"), names)
     }
 
     @Test

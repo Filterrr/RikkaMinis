@@ -97,7 +97,9 @@ class SkillRepository(private val context: Context) {
     )
 
     data class Skill(
-        val id: String = UUID.randomUUID().toString(),
+        // [T-agent-capability] SkillInfo.id now has a default getter (= name);
+        // this class keeps its UUID id and must override explicitly.
+        override val id: String = UUID.randomUUID().toString(),
         override val name: String,
         override val description: String = "",
         val version: String = "1.0.0",
