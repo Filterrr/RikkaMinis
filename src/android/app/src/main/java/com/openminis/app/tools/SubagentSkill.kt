@@ -13,6 +13,14 @@ interface SkillInfo {
     val name: String
     val description: String
     val body: String
+    /**
+     * Raw YAML frontmatter (fences excluded), preserved verbatim from the
+     * skill's SKILL.md. May be null for plain-body skills or legacy rows
+     * persisted before frontmatter preservation existed. Sub-agent config
+     * parsing reads this FIRST; the body's own frontmatter (if any) is the
+     * fallback.
+     */
+    val frontmatter: String? get() = null
 }
 
 /**
@@ -33,16 +41,34 @@ object SubagentSkill {
 
     const val NAME = "spawn_agent"
 
+    /**
+     * [T-subagent-ui] Registry key on ChatViewModel — the main agent's
+     * dispatch loop registers a run here before executing it so the chat
+     * prompt pill and the second-level detail page can stream its progress.
+     */
+    const val RUN_REGISTRY_KEY = "subagentRunRegistry"
+
     /** Tools that sub-agents are NEVER allowed to use. */
     val FORBIDDEN_TOOLS: Set<String> = setOf(
-        NAME,              // anti-recursion
-        "shell_execute",   // privilege escalation (terminal, android-* CLIs)
-        "browser_use",     // shared browser resource — no racing
+        NAME,              // anti-recursion — sub-agents cannot spawn sub-agents
+        // [T-subagent-parity] shell_execute and browser_use are ALLOWED:
+        // executeSubagentTool routes them through the session's
+        // ExecutionCoordinator / BrowserTabPool with live registry streaming
+        // — the same hardened paths the main agent uses. The sub-agent is
+        // the same kind of agent as its parent (per the spawn_agent tool
+        // contract); only recursion and parent-conversation state
+        // (memory tools) stay off-limits.
     )
 
     /** Default budget for sub-agents when the skill doesn't specify. */
     private const val DEFAULT_MAX_TURNS = 12
     private const val DEFAULT_MAX_OUTPUT_TOKENS = 4096
+
+    /** [T-subagent-parallel] Hard cap on concurrent sub-agents per chat. */
+    const val MAX_PARALLEL_CAP = 4
+
+    /** Default concurrent-run ceiling when the skill doesn't opt in higher. */
+    const val DEFAULT_MAX_PARALLEL = 2
 
     /**
      * Parsed from a skill's SKILL.md frontmatter. Returned by
@@ -55,6 +81,12 @@ object SubagentSkill {
         val maxOutputTokens: Int = DEFAULT_MAX_OUTPUT_TOKENS,
         /** Null = allow all non-FORBIDDEN tools. Non-null = explicit allowlist. */
         val allowedTools: Set<String>? = null,
+        /**
+         * [T-subagent-parallel] Max sub-agents of THIS skill that may run
+         * concurrently in one chat (the per-chat limiter takes the min of
+         * the requester's config and the app cap). 1 = serial.
+         */
+        val maxParallel: Int = 1,
     )
 
     // ── Tool definition ──────────────────────────────────────────────────
@@ -66,11 +98,15 @@ object SubagentSkill {
             "result. Use this to delegate complex sub-tasks to a focused agent. " +
             "The skill must be defined with `subagent: true` in its SKILL.md " +
             "frontmatter and must already be installed and enabled. " +
-            "Recursive spawn_agent is forbidden.",
+            "Recursive spawn_agent is forbidden. " +
+            "While the sub-agent runs, the user sees a prompt pill in the chat " +
+            "and can open a second-level page that streams the sub-agent's " +
+            "execution process (every tool call and output) in real time.",
         parameters = mapOf(
             "tool_title" to AgentToolParam(
                 "string",
-                "A concise 5-10 word summary of what this sub-agent should do",
+                "A concise 5-10 word summary of what this sub-agent should do. " +
+                    "Shown to the user as the live status label.",
             ),
             "skill_name" to AgentToolParam(
                 "string",
@@ -78,11 +114,21 @@ object SubagentSkill {
             ),
             "query" to AgentToolParam(
                 "string",
-                "The task, question, or instruction to give to the sub-agent",
+                "The task, question, or instruction to give to the sub-agent. " +
+                    "Make it self-contained: the sub-agent cannot see this " +
+                    "conversation and only knows what you write here.",
+            ),
+            "run_until" to AgentToolParam(
+                "string",
+                "Optional. 'done' (default): return only when the sub-agent " +
+                    "finishes, with its full final report. 'first_turn': return " +
+                    "after the sub-agent's first turn with its partial output — " +
+                    "use when the caller only needs an early readout.",
+                enumValues = listOf("done", "first_turn"),
             ),
         ),
         required = listOf("tool_title", "skill_name", "query"),
-        propertyOrdering = listOf("tool_title", "skill_name", "query"),
+        propertyOrdering = listOf("tool_title", "skill_name", "query", "run_until"),
     )
 
     // ── Config parsing ───────────────────────────────────────────────────
@@ -99,28 +145,33 @@ object SubagentSkill {
      * `subagent: true` in the frontmatter — existing skills are unaffected.
      */
     fun parseSubagentConfig(skill: SkillInfo): SubagentConfig {
-        val body = skill.body
-        if (body.isBlank()) return SubagentConfig()
+        // [T-subagent-fm] Prefer the preserved raw frontmatter — the
+        // registry strips frontmatter from [SkillInfo.body] when skills
+        // were imported before preservation existed, and pre-1.0.5 skill
+        // bodies never carry it at all. Fall back to body-embedded
+        // frontmatter for SkillInfo implementations that don't set the
+        // field (tests, lightweight wrappers).
+        val frontmatter = skill.frontmatter
+            ?: run {
+                val lines = skill.body.lines()
+                if (lines.size < 2 || !lines[0].trim().startsWith("---")) return@run null
+                val endIdx = lines.subList(1, lines.size)
+                    .indexOfFirst { it.trim().startsWith("---") }
+                    .takeIf { it >= 0 } ?: return@run null
+                lines.subList(1, endIdx + 1).joinToString("\n")
+            }
+        if (frontmatter.isNullOrBlank()) return SubagentConfig()
 
-        // Extract frontmatter between --- markers
-        val lines = body.lines()
-        if (lines.size < 2 || !lines[0].trim().startsWith("---")) return SubagentConfig()
-
-        val endIdx = lines.subList(1, lines.size)
-            .indexOfFirst { it.trim().startsWith("---") }
-            .takeIf { it >= 0 }
-            ?.plus(1)
-        if (endIdx == null) return SubagentConfig()
-
-        val frontmatter = lines.subList(1, endIdx)
+        val lines = frontmatter.lines()
         var isSubagent = false
         var maxTurns = DEFAULT_MAX_TURNS
         var maxOutputTokens = DEFAULT_MAX_OUTPUT_TOKENS
         var allowedTools: Set<String>? = null
+        var maxParallel = 1
 
         var i = 0
-        while (i < frontmatter.size) {
-            val trimmed = frontmatter[i].trim()
+        while (i < lines.size) {
+            val trimmed = lines[i].trim()
             when {
                 trimmed.startsWith("subagent:") -> {
                     val value = trimmed.substringAfter(":").trim()
@@ -132,6 +183,14 @@ object SubagentSkill {
                 trimmed.startsWith("max_output_tokens:") -> {
                     maxOutputTokens = trimmed.substringAfter(":").trim().toIntOrNull() ?: DEFAULT_MAX_OUTPUT_TOKENS
                 }
+                trimmed.startsWith("max_parallel:") -> {
+                    // [T-subagent-parallel] Optional concurrency knob for this
+                    // skill; clamped to [1, 4] — the worker serializes model
+                    // calls anyway, so more than 4 interleaved agents just
+                    // queues without benefit.
+                    maxParallel = (trimmed.substringAfter(":").trim().toIntOrNull() ?: 1)
+                        .coerceIn(1, MAX_PARALLEL_CAP)
+                }
                 trimmed.startsWith("allowed_tools:") -> {
                     val listStr = trimmed.substringAfter(":").trim()
                     val tools = mutableSetOf<String>()
@@ -140,8 +199,8 @@ object SubagentSkill {
                     }
                     // Multi-line form: subsequent lines starting with "- "
                     var j = i + 1
-                    while (j < frontmatter.size) {
-                        val item = frontmatter[j].trim()
+                    while (j < lines.size) {
+                        val item = lines[j].trim()
                         if (item.startsWith("- ")) {
                             tools.add(item.removePrefix("- ").trim().trim('"', '\''))
                             j++
@@ -160,6 +219,7 @@ object SubagentSkill {
             maxTurns = maxTurns.coerceIn(1, 100),
             maxOutputTokens = maxOutputTokens.coerceIn(256, 128_000),
             allowedTools = allowedTools,
+            maxParallel = maxParallel,
         )
     }
 

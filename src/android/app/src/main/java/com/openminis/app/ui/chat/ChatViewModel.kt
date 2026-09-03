@@ -73,6 +73,8 @@ import com.openminis.app.tools.FileWriteTool
 import com.openminis.app.tools.MemoryRollupTool
 import com.openminis.app.tools.MemoryTools
 import com.openminis.app.tools.ReadImageTool
+import com.openminis.app.tools.SubagentDispatchLimiter
+import com.openminis.app.tools.SubagentRunRegistry
 import com.openminis.app.tools.SubagentSkill
 import com.openminis.app.tools.SubagentToolCall
 import com.openminis.app.tools.ToolConcurrencyPolicy
@@ -152,6 +154,15 @@ class ChatViewModel(
          */
         /** T9: trace retention cap per session (oldest pruned first). */
         const val MAX_TRACE_FILES_PER_SESSION = 20
+
+        /**
+         * [T-subagent-transient-retry] Sub-agent stream retry backoff
+         * (seconds) — mirrors the main loop's AUTO_RETRY_DELAYS_SEC. Applied
+         * per sub-agent TURN on transient provider errors (SSL jitter /
+         * stream resets / 0-chunk worker deaths), so one flaky wire second
+         * doesn't kill a whole spawn_agent run.
+         */
+        private val SUBAGENT_STREAM_RETRY_DELAYS_SEC = intArrayOf(1, 2, 4)
 
         // ── T7-A: 观察预算默认上限（advisory 观察用，不阻断任何行为）──
         // 这些数字只用于 trace 记录当前消耗进度（budget_consume/refuse 事件），
@@ -760,6 +771,23 @@ class ChatViewModel(
      */
     internal val _selectedToolDetailId = MutableStateFlow<String?>(null)
     val selectedToolDetailId: StateFlow<String?> = _selectedToolDetailId.asStateFlow()
+
+    // [T-subagent-ui] Sub-agent run registry — drives the in-chat prompt
+    // pill ("N sub-agent(s) running — tap to view") and the second-level
+    // SubagentDetailScreen. Per-VM (one chat) by design: runs belong to the
+    // conversation that spawned them. Cleared with the chat.
+    val subagentRunRegistry = SubagentRunRegistry()
+
+    /**
+     * [T-subagent-parallel] Per-chat concurrency limiter for sub-agent runs.
+     * Default [SubagentSkill.DEFAULT_MAX_PARALLEL] (2) concurrent spawns; a
+     * skill's frontmatter `max_parallel` can raise the ceiling to
+     * [SubagentSkill.MAX_PARALLEL_CAP] (4). Replaces the old global
+     * single-run gate that made every spawn serial.
+     */
+    val subagentSpawnLimiter = SubagentDispatchLimiter(
+        SubagentSkill.DEFAULT_MAX_PARALLEL,
+    )
 
     // [T-android-split-chat] openToolDetail / closeToolDetail moved to ChatViewModelUiStateExt.kt.
 
@@ -4558,6 +4586,11 @@ class ChatViewModel(
         // newly cleared chat doesn't briefly flash a stale tool's sheet
         // before the existence-guard catches up.
         _selectedToolDetailId.value = null
+        // [T-subagent-ui] Sub-agent run history belongs to the wiped
+        // conversation; drop it with the rest of the per-session UI state.
+        // Any run still marked RUNNING is already dead — cancelStream()
+        // above tore down the agent loop that drove it.
+        subagentRunRegistry.clear()
         // Drop any browser tabs the agent spawned for this session, and
         // delete the persisted tab snapshot so a future open starts clean.
         // iOS calls BrowserTabPool.deletePersistedData(for:) +
@@ -8548,10 +8581,17 @@ class ChatViewModel(
 
             // ============================ Pass 2 ============================
             val resultsById = LinkedHashMap<String, ToolExecutionResult>()
-            if (pending.size > 1 && pending.all { ToolConcurrencyPolicy.isParallelSafe(it.name, it.argsStr) }) {
-                // All pending tools are parallel-safe pure reads. Launch them
-                // concurrently, then pull each result in the original order so
-                // Pass 3 observes the same sequence as the old sequential loop.
+            val allReadParallel = pending.size > 1 && pending.all { ToolConcurrencyPolicy.isParallelSafe(it.name, it.argsStr) }
+            val allSpawnParallel = pending.size > 1 && pending.all { ToolConcurrencyPolicy.isParallelWithSelf(it.name) }
+            if (allReadParallel || allSpawnParallel) {
+                // [T-subagent-parallel] Two parallel batch kinds:
+                //  - READ_PARALLEL: pure reads (file_read / read_image) — the
+                //    classic fan-out.
+                //  - SPAWN_PARALLEL: a consecutive run of spawn_agent calls
+                //    fans out so N sub-agents run CONCURRENTLY (bounded by the
+                //    per-chat SubagentDispatchLimiter). Results are pulled in
+                //    the original order afterwards, so Pass 3 observes the
+                //    same sequence as the sequential loop.
                 val deferred = coroutineScope {
                     pending.map { p ->
                         p.id to async {
@@ -9008,8 +9048,10 @@ class ChatViewModel(
                 "memory_get" -> executeMemoryGetTool(argsJson)
                 "memory_rollup" -> executeMemoryRollupTool()
                 // [T7-subagent] spawn_agent: delegate to an independent sub-agent
-                // instance running the named skill.
-                SubagentSkill.NAME -> executeSpawnAgentTool(argsJson)
+                // instance running the named skill. [T-subagent-ui] pass the
+                // tool_use block id so the registry run can be linked to this
+                // pill (tap → second-level detail page).
+                SubagentSkill.NAME -> executeSpawnAgentTool(argsJson, toolId)
                 else -> ToolExecutionResult("Unknown tool: $name", false)
             }
         } finally {
@@ -9058,12 +9100,20 @@ class ChatViewModel(
      * prompt (from the skill body), a filtered tool set, and runs its own
      * independent loop with its own budget. Context is fully isolated from
      * the main agent's [agentHistory].
+     *
+     * [T-subagent-ui] The run is registered in [subagentRunRegistry] before
+     * the loop starts: the chat screen shows a prompt pill ("N sub-agent(s)
+     * running — tap to view") while any run is active, and each pill / the
+     * floating status bar's spawn_agent card routes to a second-level
+     * detail page streaming the sub-agent's steps (every tool call + live
+     * output) in real time.
      */
-    private suspend fun executeSpawnAgentTool(argsJson: String): ToolExecutionResult {
+    private suspend fun executeSpawnAgentTool(argsJson: String, blockId: String): ToolExecutionResult {
         val args = try { JSONObject(argsJson) } catch (_: Exception) { JSONObject() }
         val skillName = args.optString("skill_name", "").trim()
         val query = args.optString("query", "").trim()
         val title = args.optString("tool_title", "Sub-agent").ifBlank { "Sub-agent" }
+        val runUntil = args.optString("run_until", "done").ifBlank { "done" }
 
         if (skillName.isBlank()) {
             return ToolExecutionResult("Error: spawn_agent requires 'skill_name'", false, toolTitle = title)
@@ -9071,7 +9121,43 @@ class ChatViewModel(
         if (query.isBlank()) {
             return ToolExecutionResult("Error: spawn_agent requires 'query'", false, toolTitle = title)
         }
+        if (runUntil != "done" && runUntil != "first_turn") {
+            return ToolExecutionResult(
+                "Error: spawn_agent.run_until must be 'done' or 'first_turn'", false, toolTitle = title,
+            )
+        }
 
+        // [T-subagent-parallel] Per-chat concurrency limiter (default 2
+        // concurrent runs, skill frontmatter `max_parallel` can raise to 4).
+        // acquire() BLOCKS until a permit frees — a third spawn waits behind
+        // the first two instead of failing. The stale-lease force-takeover
+        // (31-min ceiling) still bounds a leaked permit. Every permit holder
+        // releases in its own finally; cancelStream releases nothing here —
+        // with N holders a blanket release would corrupt the count.
+        if (!subagentSpawnLimiter.acquireOrFalse()) {
+            val held = subagentSpawnLimiter.heldCount()
+            return ToolExecutionResult(
+                "Error: $held sub-agent(s) already running and the concurrency " +
+                    "limit is reached. Wait for one to finish before spawning more.",
+                false, toolTitle = title,
+            )
+        }
+
+        try {
+            return executeSpawnAgentToolInner(args, skillName, query, title, runUntil, blockId)
+        } finally {
+            subagentSpawnLimiter.release()
+        }
+    }
+
+    private suspend fun executeSpawnAgentToolInner(
+        args: JSONObject,
+        skillName: String,
+        query: String,
+        title: String,
+        runUntil: String,
+        blockId: String,
+    ): ToolExecutionResult {
         val repo = skillRepository ?: return ToolExecutionResult(
             "Error: Skill system unavailable", false, toolTitle = title,
         )
@@ -9117,7 +9203,20 @@ class ChatViewModel(
             "Error: No active provider available", false, toolTitle = title,
         )
 
-        // 5. Run the sub-agent loop
+        // 5. [T-subagent-ui] Register the run — from here on the user sees
+        // the in-chat pill and can open the live detail page. blockId links
+        // the run to this spawn_agent tool pill (empty when unavailable —
+        // e.g. synthetic error paths before registration).
+        val run = subagentRunRegistry.register(
+            blockId = blockId,
+            skillId = skill.id,
+            skillName = skill.name,
+            query = query,
+            title = title,
+            maxTurns = config.maxTurns,
+        )
+
+        // 6. Run the sub-agent loop
         val resultSb = StringBuilder()
         var turns = 0
         var lastText = ""
@@ -9125,33 +9224,104 @@ class ChatViewModel(
         try {
             while (turns < config.maxTurns) {
                 turns++
-                val instance = provider.instanceContext ?: return ToolExecutionResult(
-                    "Error: No provider instance context for sub-agent remote execution",
-                    false, toolTitle = title,
-                )
+                subagentRunRegistry.turnStarted(run.id, turns)
+                val instance = provider.instanceContext ?: let {
+                    subagentRunRegistry.finish(
+                        run.id, SubagentRunRegistry.RunStatus.FAILED,
+                        error = "No provider instance context",
+                    )
+                    return ToolExecutionResult(
+                        "Error: No provider instance context for sub-agent remote execution",
+                        false, toolTitle = title,
+                    )
+                }
                 val textSb = StringBuilder()
                 val toolCalls = mutableListOf<SubagentToolCall>()
 
                 // TF-D: sub-agent runs through :modelservice via the gateway. Chunks
                 // are accumulated incrementally as they stream in — never buffered
                 // wholesale via `toList()` (unbounded retention of the whole turn).
-                ProviderExecutionGateway.stream(
-                    context = context,
-                    instance = instance,
-                    model = provider.model,
-                    messages = history.toList(),
-                    systemPrompt = systemPrompt,
-                    maxTokens = config.maxOutputTokens,
-                    temperature = null,
-                    tools = subagentTools,
-                    thinkingLevel = ThinkingLevel.OFF,
-                ).collect { chunk ->
-                    when (chunk) {
-                        is LLMStreamChunk.Text -> textSb.append(chunk.text)
-                        is LLMStreamChunk.ToolCallComplete -> {
-                            toolCalls.add(SubagentToolCall(chunk.id, chunk.name, chunk.args))
+                //
+                // [T-subagent-transient-retry] Mirror the MAIN agent loop's
+                // transient-error policy (AUTO_RETRY_DELAYS_SEC: 1s/2s/4s on the
+                // same provider). SSL jitter (SSLException → NetworkError),
+                // stream resets, and 0-chunk worker deaths are transient by the
+                // main loop's own classification — without this, ONE flaky
+                // second on the wire killed the whole spawn_agent run ("SSL
+                // BAD_DECRYPT on turn 1, zero steps" observed live). Only the
+                // CURRENT turn's stream is retried: executed tool results are
+                // already appended to history, so the retry re-issues the
+                // model request, never the tool calls.
+                var streamRetryAttempt = 0
+                while (true) {
+                    textSb.setLength(0)
+                    toolCalls.clear()
+                    try {
+                        ProviderExecutionGateway.stream(
+                            context = context,
+                            instance = instance,
+                            model = provider.model,
+                            messages = history.toList(),
+                            systemPrompt = systemPrompt,
+                            maxTokens = config.maxOutputTokens,
+                            temperature = null,
+                            tools = subagentTools,
+                            thinkingLevel = ThinkingLevel.OFF,
+                        ).collect { chunk ->
+                            when (chunk) {
+                                is LLMStreamChunk.Text -> {
+                                    textSb.append(chunk.text)
+                                    // [T-subagent-ui] stream the sub-agent's narration
+                                    // into the detail page's live output card.
+                                    subagentRunRegistry.appendResultText(run.id, chunk.text)
+                                }
+                                is LLMStreamChunk.ToolCallComplete -> {
+                                    toolCalls.add(SubagentToolCall(chunk.id, chunk.name, chunk.args))
+                                    subagentRunRegistry.stepStarted(
+                                        run.id, chunk.id, turns, chunk.name,
+                                        try {
+                                            chunk.args.optString("tool_title", chunk.name)
+                                        } catch (_: Exception) { chunk.name },
+                                    )
+                                }
+                                else -> {}
+                            }
                         }
-                        else -> {}
+                        break  // stream finished cleanly — exit the retry loop
+                    } catch (e: Exception) {
+                        if (e is CancellationException) throw e
+                        val actual = unwrapFlowException(e)
+                        val is5xx = actual is com.openminis.app.data.model.LLMError.ProviderError &&
+                            actual.detail.contains(Regex("\\b[5][0-9]{2}\\b"))
+                        val workerDiedZeroChunk =
+                            ((actual is com.openminis.app.sandbox.offload.ModelWorkerDiedException) ||
+                                (actual is com.openminis.app.sandbox.offload.ModelStreamErrorException)) &&
+                            (actual as? com.openminis.app.sandbox.offload.ModelExecutionStreamException)?.hadChunks == false
+                        val isTransient = actual is com.openminis.app.data.model.LLMError.NetworkError ||
+                            actual is com.openminis.app.data.model.LLMError.TransientError ||
+                            is5xx ||
+                            workerDiedZeroChunk
+                        if (isTransient && streamRetryAttempt < SUBAGENT_STREAM_RETRY_DELAYS_SEC.size) {
+                            val delaySec = SUBAGENT_STREAM_RETRY_DELAYS_SEC[streamRetryAttempt]
+                            streamRetryAttempt += 1
+                            val errDesc = actual.message ?: actual.javaClass.simpleName
+                            AppLogger.warning(
+                                TAG,
+                                "[Subagent] transient stream error on ${provider.model.displayName}, " +
+                                    "turn $turns retry $streamRetryAttempt/" +
+                                    "${SUBAGENT_STREAM_RETRY_DELAYS_SEC.size} in ${delaySec}s: $errDesc",
+                            )
+                            // Surface the retry on the detail page so the run
+                            // doesn't LOOK dead while backing off.
+                            subagentRunRegistry.appendResultText(
+                                run.id,
+                                "\n\n[transient stream error ($errDesc) — retrying " +
+                                    "$streamRetryAttempt/${SUBAGENT_STREAM_RETRY_DELAYS_SEC.size} in ${delaySec}s]\n",
+                            )
+                            kotlinx.coroutines.delay(delaySec * 1000L)
+                            continue
+                        }
+                        throw e  // fatal for this run — outer handler journals + reports
                     }
                 }
 
@@ -9176,14 +9346,21 @@ class ChatViewModel(
                     },
                 ))
 
-                // Execute tools sequentially
+                // Execute tools sequentially (within THIS run; parallel runs
+                // have their own sequential chains)
                 for (call in toolCalls) {
-                    val result = executeSubagentTool(call.name, call.args.toString())
+                    val result = executeSubagentTool(call.name, call.args.toString(), call.id, run.id)
                     val resultContent = if (result.success) {
                         result.output
                     } else {
                         "Error: ${result.output}"
                     }
+                    subagentRunRegistry.stepFinished(
+                        run.id, call.id, result.success,
+                        output = resultContent.lines().takeLast(
+                            SubagentRunRegistry.MAX_STEP_OUTPUT_LINES,
+                        ).joinToString("\n"),
+                    )
                     history.add(LLMMessage(
                         role = LLMMessage.Role.USER,
                         content = "Result of ${call.name} (${call.id}):\n$resultContent",
@@ -9193,17 +9370,69 @@ class ChatViewModel(
                         )),
                     ))
                 }
+
+                if (runUntil == "first_turn") {
+                    // [T-subagent-early-readout] Caller asked for a first-turn
+                    // readout only — stop after executing turn 1's tools.
+                    val partial = resultSb.toString().trim()
+                    subagentRunRegistry.finish(
+                        run.id, SubagentRunRegistry.RunStatus.SUCCESS,
+                        resultText = partial,
+                        error = "Stopped early (run_until=first_turn)",
+                    )
+                    val journalPath = journalSubagentRun(
+                        run, "STOPPED_FIRST_TURN", partial, turns,
+                        error = "stopped early (run_until=first_turn)",
+                    )
+                    val summary = buildString {
+                        append("Sub-agent '$skillName' first-turn readout ")
+                        append("(1/${config.maxTurns} turns):\n\n---\n$partial\n---")
+                        if (journalPath != null) {
+                            append("\n\nFull journal: $journalPath")
+                        }
+                    }
+                    return ToolExecutionResult(summary, true, toolTitle = "Sub-agent: ${skill.name}")
+                }
             }
+        } catch (e: CancellationException) {
+            // [T-subagent-durability] NEVER swallow cancellation. The
+            // framework treats the whole run as dead and discards whatever
+            // this function returns — a synthesized "failure" result here
+            // is unreachable (the false-interrupt bug: side effects landed,
+            // report lost). Instead: journal the partial report to disk,
+            // reconcile the registry to CANCELLED (the pill must not spin
+            // forever), then rethrow so the framework's cancel cleanup can
+            // attach the recovery pointer to the persisted tool_result.
+            val partial = resultSb.toString()
+            subagentRunRegistry.finish(
+                run.id, SubagentRunRegistry.RunStatus.CANCELLED,
+                resultText = partial,
+                error = e.message ?: "cancelled",
+            )
+            journalSubagentRun(
+                run, "CANCELLED", partial, turns,
+                error = e.message ?: "cancelled by user",
+            )
+            AppLogger.warning(TAG, "[Subagent] '$skillName' cancelled after $turns turn(s); partial report journaled")
+            throw e
         } catch (e: Exception) {
             val msg = e.message ?: e.javaClass.simpleName
             AppLogger.warning(TAG, "[Subagent] '$skillName' error after $turns turn(s): $msg")
-            val partial = resultSb.toString().ifBlank { "" }
+            subagentRunRegistry.finish(
+                run.id, SubagentRunRegistry.RunStatus.FAILED,
+                resultText = resultSb.toString(), error = msg,
+            )
+            val partial = resultSb.toString()
+            val journalPath = journalSubagentRun(run, "FAILED", partial, turns, error = msg)
             val summary = buildString {
                 append("Sub-agent '$skillName' encountered an error after $turns turn(s).\n")
                 if (partial.isNotBlank()) {
                     append("\nPartial output:\n---\n$partial\n---\n")
                 }
                 append("\nError: $msg")
+                if (journalPath != null) {
+                    append("\n\nRecoverable: the full partial report is journaled at $journalPath — file_read it to retrieve everything the sub-agent produced before failing.")
+                }
             }
             return ToolExecutionResult(summary, false, toolTitle = "Sub-agent: ${skill.name}")
         }
@@ -9214,24 +9443,181 @@ class ChatViewModel(
 
         val finalText = resultSb.toString().trim()
         if (finalText.isBlank()) {
+            subagentRunRegistry.finish(run.id, SubagentRunRegistry.RunStatus.SUCCESS, resultText = "")
             return ToolExecutionResult(
                 "Sub-agent '$skillName' completed in $turns turn(s) with no output.",
                 true, toolTitle = "Sub-agent: ${skill.name}",
             )
         }
 
-        val summary = "Sub-agent '$skillName' completed in $turns turn(s).\n\n---\n$finalText"
+        subagentRunRegistry.finish(run.id, SubagentRunRegistry.RunStatus.SUCCESS, resultText = finalText)
+        val journalPath = journalSubagentRun(run, "SUCCESS", finalText, turns)
+        val journalNote = journalPath?.let { "\n\n(Journaled at $it — survives interruption.)" } ?: ""
+        val summary = "Sub-agent '$skillName' completed in $turns turn(s).\n\n---\n$finalText$journalNote"
         return ToolExecutionResult(summary, true, toolTitle = "Sub-agent: ${skill.name}")
     }
 
     /**
-     * [T7-subagent] Execute a tool inside a sub-agent's loop. Mirrors the
-     * main [executeTool] dispatch but without UI updates (toolBlocks,
-     * assistantId, etc.) — the sub-agent produces file/memory results only.
-     * Tools that are FORBIDDEN for sub-agents never reach this method
-     * because [SubagentSkill.buildFilteredTools] excludes them.
+     * [T-subagent-durability] Persist the sub-agent's terminal report to
+     * `/var/minis/workspace/.subagent/<runId>.md` (session sandbox path,
+     * resolved via PRootKernel like the ERRORS.md learnings journal).
+     *
+     * Why: the spawn_agent tool_result is NOT durable on interruption —
+     * a user cancel (or process death) discards the return value and the
+     * framework persists only a synthetic CANCELLED_MARKER. The journal is
+     * the recovery anchor: the parent agent (or the user) can always
+     * `file_read` it to retrieve the partial/final report, and the model
+     * is told the path in both the success and failure summaries so the
+     * pointer survives into the conversation history.
+     *
+     * Failures are swallowed — journaling must never break the run itself.
      */
-    private fun executeSubagentTool(name: String, argsJson: String): ToolExecutionResult = when (name) {
+    private fun journalSubagentRun(
+        run: SubagentRunRegistry.Run,
+        terminal: String,
+        resultText: String,
+        turns: Int,
+        error: String? = null,
+    ): String? = runCatching {
+        val file = PRootKernel.resolveSessionHostPath(
+            activeSessionId,
+            "/var/minis/workspace/.subagent/${run.id}.md",
+            context,
+        ) ?: return null
+        file.parentFile?.mkdirs()
+        val body = buildString {
+            appendLine("# Sub-agent run: ${run.title.ifBlank { run.skillName }}")
+            appendLine()
+            appendLine("- run id: ${run.id}")
+            appendLine("- skill: ${run.skillId}")
+            appendLine("- terminal status: $terminal")
+            appendLine("- turns: $turns/${run.maxTurns}")
+            appendLine("- started: ${java.time.Instant.ofEpochMilli(run.startedAtMs)}")
+            error?.let { appendLine("- note: $it") }
+            appendLine()
+            appendLine("## Task")
+            appendLine()
+            appendLine(run.query)
+            appendLine()
+            appendLine("## Report")
+            appendLine()
+            if (resultText.isBlank()) appendLine("(no text output produced)") else appendLine(resultText)
+            appendLine()
+            appendLine("## Steps")
+            appendLine()
+            for (step in run.steps) {
+                appendLine("### [${step.status}] ${step.toolTitle.ifBlank { step.toolName }} (${step.durationMs}ms)")
+                if (step.output.isNotBlank()) {
+                    appendLine("```")
+                    appendLine(step.output)
+                    appendLine("```")
+                }
+                appendLine()
+            }
+        }
+        file.writeText(body)
+        "/var/minis/workspace/.subagent/${run.id}.md"
+    }.getOrNull()
+
+    /**
+     * [T7-subagent] Execute a tool inside a sub-agent's loop. Mirrors the
+     * main [executeTool] dispatch but without parent-conversation UI updates
+     * (toolBlocks, assistantId, etc.) — progress is streamed through the
+     * registry instead.
+     *
+     * [T-subagent-parity] The sub-agent now has the SAME tool surface as the
+     * main agent minus the FORBIDDEN set (spawn_agent itself is anti-
+     * recursion): shell_execute runs through the session's
+     * [ExecutionCoordinator] with live output streamed into the registry,
+     * browser_use through the session's [BrowserTabPool], and the file /
+     * memory tools fall through to the main agent's executors. Tools that
+     * are FORBIDDEN never reach this method because
+     * [SubagentSkill.buildFilteredTools] excludes them from the sub-agent's
+     * schema in the first place.
+     */
+    private suspend fun executeSubagentTool(
+        name: String,
+        argsJson: String,
+        callId: String,
+        runId: String,
+    ): ToolExecutionResult {
+        return when (name) {
+            "shell_execute" -> {
+                // [T-subagent-parity] Full shell power, same hardened
+                // ExecutionCoordinator path as the main agent. Live output
+                // streams into the registry via the lineCallback, keyed by
+                // the model's tool-call id (the registry step was created
+                // with that id in the ToolCallComplete handler). runId is
+                // threaded so parallel runs each route to their own registry
+                // entry.
+                executeSubagentShell(argsJson, callId, runId)
+            }
+            "browser_use" -> {
+                // [T-subagent-parity] The browser is the session's shared
+                // tab pool — same execution path as the main agent's
+                // browser_use (pool-side per-tab mutexes serialize access).
+                executeBrowserUseTool(argsJson)
+            }
+            else -> executeSubagentFileTool(name, argsJson)
+        }
+    }
+
+    /**
+     * [T-subagent-parity] shell_execute inside a sub-agent: built on
+     * [ExecutionCoordinator] with per-line streaming into the registry's
+     * current step. Mirrors the main agent's [executeShellCommand]
+     * (timeout clamping, exit-code suffix, timeout flag, env-var redaction)
+     * minus the parent-loop UI plumbing (toolBlocks / assistantId belong to
+     * the main agent's conversation, not the sub-agent's).
+     */
+    private suspend fun executeSubagentShell(argsJson: String, stepId: String, runId: String): ToolExecutionResult {
+        val args = try { JSONObject(argsJson) } catch (_: Exception) { JSONObject() }
+        val command = args.optString("command", "")
+        val timeoutSec = args.optInt("timeout", 900).coerceIn(1, 900)
+        val toolTitle = args.optString("tool_title", "shell_execute")
+        if (command.isBlank()) {
+            return ToolExecutionResult("Error: 'command' is required", false, toolTitle = toolTitle)
+        }
+        val result = ExecutionCoordinator.execute(
+            sessionId = activeSessionId,
+            command = command,
+            timeout = timeoutSec * 1000L,
+            lineCallback = { rawLine ->
+                if (runId.isEmpty()) return@execute
+                val trimmedLine = rawLine.trimEnd()
+                if (trimmedLine.isEmpty()) return@execute
+                subagentRunRegistry.stepOutput(runId, stepId, trimmedLine)
+            },
+        )
+        val output = if (result.output.isBlank()) "(no output)" else result.output
+        val exitInfo = if (result.exitCode != 0) " (exit code ${result.exitCode})" else ""
+        // Exit code 124 = the wrapper timeout fired (mirrors main path).
+        val timedOut = result.exitCode == 124
+        val finalOutput = "$output$exitInfo"
+        val (redactedOut, _) = com.openminis.app.data.EnvVarRedactor.redactIfEnabled(finalOutput)
+        if (runId.isNotEmpty()) {
+            subagentRunRegistry.stepFinished(
+                runId, stepId, result.exitCode == 0,
+                output = redactedOut.lines().takeLast(
+                    SubagentRunRegistry.MAX_STEP_OUTPUT_LINES,
+                ).joinToString("\n"),
+            )
+        }
+        return ToolExecutionResult(
+            output = redactedOut,
+            success = result.exitCode == 0,
+            toolTitle = toolTitle,
+            timedOut = timedOut,
+        )
+    }
+
+    /**
+     * [T-subagent-parity] file/memory tools inside a sub-agent — same
+     * executors as the main agent (paths resolve through the session's
+     * sandbox identically). Skill reload hooks fire on writes to /skills/
+     * exactly like the main path.
+     */
+    private fun executeSubagentFileTool(name: String, argsJson: String): ToolExecutionResult = when (name) {
         FileReadTool.NAME -> FileReadTool.execute(argsJson, activeSessionId, context)
         FileWriteTool.NAME -> FileWriteTool.execute(argsJson, activeSessionId, context).also {
             if (it.success) maybeReloadSkillsForPath(argsJson)
@@ -9243,7 +9629,13 @@ class ChatViewModel(
         "memory_write" -> executeMemoryWriteTool(argsJson)
         "memory_get" -> executeMemoryGetTool(argsJson)
         "memory_rollup" -> executeMemoryRollupTool()
-        else -> ToolExecutionResult("Error: Unknown or forbidden tool: $name", false)
+        else -> ToolExecutionResult(
+            "Error: Unknown or forbidden tool: $name. " +
+                "This tool does not exist in your tool set — do NOT retry it and do NOT " +
+                "improvise around it. Sub-agents cannot spawn further agents. Finish now: " +
+                "report what you have accomplished so far and state this tool gap as a caveat.",
+            false,
+        )
     }
 
     /**
@@ -10497,7 +10889,12 @@ Available tools:
 - file_write: Create new files or overwrite existing files (faster than echo/tee).
 - file_edit: Edit existing files with exact string replacement (old_string → new_string). Preferred over file_write for modifications — always file_read first.
 - browser_use: Web browsing (navigate, screenshot, click, type, get_text, scroll, scroll_and_collect, get_readable, get_backbone, fetch, etc.). Starts with a desktop Chrome user agent. Use screenshot to see the page.
-  当 browser_use 触达 Google 登录 / OAuth 页（accounts.google.com、signin.google.com、myaccount.google.com、oauth2.googleapis.com 等）或网页返回 "disallowed_useragent" / 403 包含 "browser is not secure" 字样时，**不要重试或尝试登录** — Google 永久禁止 in-app WebView 完成登录，重试只会浪费 turn。改为告诉用户："此页面需要在系统 Chrome 完成登录" 并给出可点击的 Markdown link [在 Chrome 中打开](https://accounts.google.com/...)。点该 link 时 app 会跳出 Custom Tab；用户在 Chrome 完成操作后，请他**把所需结果（邮件正文 / 文档摘要 / 表格数据）粘贴回 chat**，你再继续帮他处理。这是 Android 平台限制，不是 bug。${toolListMemoryBullets}
+  当 browser_use 触达 Google 登录 / OAuth 页（accounts.google.com、signin.google.com、myaccount.google.com、oauth2.googleapis.com 等）或网页返回 "disallowed_useragent" / 403 包含 "browser is not secure" 字样时，**不要重试或尝试登录** — Google 永久禁止 in-app WebView 完成登录，重试只会浪费 turn。改为告诉用户："此页面需要在系统 Chrome 完成登录" 并给出可点击的 Markdown link [在 Chrome 中打开](https://accounts.google.com/...)。点该 link 时 app 会跳出 Custom Tab；用户在 Chrome 完成操作后，请他**把所需结果（邮件正文 / 文档摘要 / 表格数据）粘贴回 chat**，你再继续帮他处理。这是 Android 平台限制，不是 bug.${toolListMemoryBullets}
+- spawn_agent: Spawn a sub-agent (副 agent) to execute a delegated sub-task with its own context, system prompt, and budget. The sub-agent is a skill marked `subagent: true` (e.g. the built-in `general-agent`) and has the SAME tool capabilities as you — shell, browser, file read/write/edit — minus spawning further agents and memory. Use it when a sub-task is complex and self-contained (deep research, large codebase exploration, multi-step file processing, focused investigation). Rules:
+  * The task message (`query`) must be self-contained — the sub-agent cannot see this conversation. Include the goal, constraints, relevant file paths, and what the final report should contain.
+  * While a sub-agent runs, the user sees a prompt pill under the chat and can open a second-level page streaming the sub-agent's execution process (every tool call + live output). Do not narrate sub-agent progress yourself — the UI already shows it; just summarize when the run returns.
+  * Only ONE sub-agent runs at a time in a chat. The call blocks until the sub-agent finishes (or `run_until: first_turn` returns an early readout).
+  * When the result comes back, verify it against your own knowledge before presenting it to the user — you own the final answer.
 
 Shared directory /var/minis/ (bidirectional read/write between shell and app):
   /var/minis/attachments/ — Media files (images, audio, video). Display inline with ![desc](minis://attachments/filename).
@@ -11389,6 +11786,22 @@ Environment variables:
             // Mid-turn rename: sweep any lingering draft shell too.
             ExecutionCoordinator.stopCurrentCommand(sessionId)
         }
+        // [T-subagent-gate-lease] Reconcile the sub-agent registry FIRST so
+        // the pill reflects the cancel immediately. The per-chat limiter is
+        // NOT blanket-released here: N parallel runs each hold their own
+        // permit and each runner's finally releases its own — a blanket
+        // release would corrupt the count and over-admit new spawns. The
+        // 31-min stale-lease self-heal bounds any leaked permit anyway.
+        val cancelledRunIds = subagentRunRegistry.runs.value
+            .filter { it.isActive && it.blockId.isNotEmpty() }
+            .map { it.id }
+        for (rid in cancelledRunIds) {
+            subagentRunRegistry.finish(
+                rid,
+                SubagentRunRegistry.RunStatus.CANCELLED,
+                error = "interrupted by user stop",
+            )
+        }
         handleUserCancelledCleanup()
 
         // T189: iOS parity (AIChatViewModel.swift L2592-2610). If the user
@@ -11570,10 +11983,29 @@ Environment variables:
             msgs[lastIdx] = last.copy(toolBlocks = updatedBlocks)
             _messages.value = msgs
             val parts = cancelledIds.map { (id, name) ->
+                // [T-subagent-durability] spawn_agent results are recoverable:
+                // the sub-agent loop journals its partial report to
+                // /var/minis/workspace/.subagent/<runId>.md before rethrowing
+                // cancellation. Point the model at the journal instead of the
+                // bare cancelled marker so the final report stays reachable —
+                // the model can file_read it on the next turn and continue.
+                val journal = if (name == SubagentSkill.NAME) {
+                    subagentRunRegistry.runs.value
+                        .firstOrNull { it.blockId == id }
+                        ?.let { run -> "/var/minis/workspace/.subagent/${run.id}.md" }
+                } else null
                 AgentContentPart.ToolResult(
                     id = id,
                     name = name,
-                    content = CANCELLED_MARKER,
+                    content = if (journal != null) {
+                        "$CANCELLED_MARKER\n" +
+                            "The sub-agent's work up to cancellation was journaled. " +
+                            "Recovery: file_read $journal — it contains the task, " +
+                            "the partial report, and every tool step. Resume from it " +
+                            "or re-run the remaining work; do NOT assume the report is lost."
+                    } else {
+                        CANCELLED_MARKER
+                    },
                     isError = true,
                 )
             }
@@ -11785,6 +12217,13 @@ Environment variables:
 
     override fun onCleared() {
         super.onCleared()
+        // [T-subagent-ui] VM is going away — drop the sub-agent run history
+        // with it (the registry is per-VM by design).
+        subagentRunRegistry.clear()
+        // [T-subagent-parallel] The per-chat limiter is per-VM like the
+        // registry — it dies with this VM, so no release is needed. (The
+        // old process-global gate required an onCleared release to avoid
+        // wedging other chats; per-chat limiters don't leak across chats.)
         // Tear down whichever shell was actually serving this VM. Terminate
         // both ids when the rename happened, since a draft shell may still
         // linger if the agent ran a tool before `ensureSession()`.

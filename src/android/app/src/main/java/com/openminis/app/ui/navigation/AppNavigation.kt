@@ -51,6 +51,7 @@ import com.openminis.app.ui.sandbox.FileBrowserViewModel
 import com.openminis.app.ui.sandbox.FileItem
 import com.openminis.app.ui.sandbox.FilePreviewScreen
 import com.openminis.app.ui.sandbox.RootfsManagementScreen
+import com.openminis.app.ui.subagent.SubagentDetailScreen
 import com.openminis.app.ui.settings.EnvironmentVariablesScreen
 import com.openminis.app.ui.settings.AppearanceScreen
 import com.openminis.app.ui.settings.ChatMenuSettingsScreen
@@ -156,6 +157,9 @@ object Routes {
     const val SKILL_DETAIL = "skill/{skillId}"
     const val SKILL_FILE = "skill_file/{skillId}/{relativePath}"
     const val MINIS_SKILLS_BROWSER = "minis_skills_browser"
+    /** [T-subagent-ui] Sub-agent run detail (second-level page under chat). */
+    const val SUBAGENT_DETAIL = "subagent_detail/{runId}"
+    fun subagentDetail(runId: String): String = "subagent_detail/$runId"
 
     fun skillDetail(skillId: String) = "skill/$skillId"
     fun skillFile(skillId: String, relativePath: String = "SKILL.md"): String {
@@ -623,6 +627,13 @@ fun AppNavigation(
                     }
                 },
                 onOpenSettings = { navController.safeNavigate(Routes.SETTINGS) },
+                // [T-subagent-ui] Sub-agent run detail (second-level page).
+                // ChatScreen publishes its registry flow into
+                // ChatSubagentRunsHolder on every composition (SideEffect),
+                // so by the time this fires the holder carries the live flow.
+                onOpenSubagentDetail = { runId ->
+                    navController.safeNavigate(Routes.subagentDetail(runId))
+                },
             )
         }
 
@@ -1118,6 +1129,23 @@ fun AppNavigation(
                     onBack = { navController.safePopBackStack() },
                 )
             }
+        }
+
+        // [T-subagent-ui] Second-level page: live execution process of one
+        // sub-agent run. The run list is pushed from the ChatScreen's VM
+        // (per-chat registry) so the page re-renders on every streaming
+        // update; the route carries only the stable run id.
+        composable(
+            Routes.SUBAGENT_DETAIL,
+            arguments = listOf(
+                navArgument("runId") { type = NavType.StringType },
+            ),
+        ) { backStackEntry ->
+            val runId = backStackEntry.arguments?.getString("runId") ?: return@composable
+            SubagentDetailScreen(
+                runId = runId,
+                onBack = { navController.safePopBackStack() },
+            )
         }
 
         composable(

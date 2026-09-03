@@ -300,6 +300,7 @@ private suspend fun importSkillFromCurrentUrl(
             val updated = skillRepository.update(
                 id = slugify(parsed),
                 body = extractBody(content),
+                frontmatter = extractFrontmatter(content),
             )
             if (updated) {
                 onStateChange(HudState.SUCCESS, context.getString(R.string.skills_browser_success_updated, parsed))
@@ -387,6 +388,15 @@ private fun extractBody(content: String): String {
     val endIdx = trimmed.indexOf("---", 3)
     if (endIdx < 0) return content
     return trimmed.substring(endIdx + 3).trimStart()
+}
+
+/** Raw YAML frontmatter (fences excluded); null when absent. */
+private fun extractFrontmatter(content: String): String? {
+    val trimmed = content.trimStart()
+    if (!trimmed.startsWith("---")) return null
+    val endIdx = trimmed.indexOf("---", 3)
+    if (endIdx < 0) return null
+    return trimmed.substring(3, endIdx).trim('\n', '\r').takeIf { it.isNotBlank() }
 }
 
 private fun slugify(name: String): String =
