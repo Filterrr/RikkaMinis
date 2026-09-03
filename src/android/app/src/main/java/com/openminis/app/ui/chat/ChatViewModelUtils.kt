@@ -8,6 +8,15 @@ import java.net.URLConnection
  * the same source of truth as ToolLoopDetector's cross-turn hash.
  */
 internal fun toolCallDedupeFingerprint(name: String, args: JSONObject): String {
+    // [T-subagent-orchestration] join_subagents / wait_any are TIME-SENSITIVE:
+    // a model legitimately re-issues the identical call to poll again ("has it
+    // finished yet?"). Deduping the second call would wedge the turn — exempt
+    // them from same-turn dedupe entirely.
+    if (name == com.openminis.app.tools.SubagentOrchestrationTools.JOIN_NAME ||
+        name == com.openminis.app.tools.SubagentOrchestrationTools.WAIT_ANY_NAME
+    ) {
+        return "$name|no-dedupe|${System.nanoTime()}"
+    }
     val filtered = linkedMapOf<String, Any?>()
     val keys = args.keys().asSequence()
         .filter { it !in com.openminis.app.agent.ToolLoopDetector.ARGS_HASH_IGNORED_KEYS }

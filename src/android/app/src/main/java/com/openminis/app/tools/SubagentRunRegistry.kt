@@ -44,7 +44,7 @@ import java.util.concurrent.atomic.AtomicLong
 class SubagentRunRegistry {
 
     /** How a sub-agent run terminated. */
-    enum class RunStatus { RUNNING, SUCCESS, FAILED, CANCELLED }
+    enum class RunStatus { RUNNING, SUCCESS, FAILED, CANCELLED, QUEUED }
 
     /** One entry in the sub-agent's live execution log (a tool call step). */
     data class Step(
@@ -83,6 +83,18 @@ class SubagentRunRegistry {
          * per-session workspace host path through it. Empty for tests.
          */
         val sessionId: String = "",
+        /**
+         * [T-subagent-orchestration] Spawn batch group id when the run was
+         * created as part of a spawn_agent batch (single spawns get one too
+         * — a group of one). Empty for legacy/unknown runs.
+         */
+        val groupId: String = "",
+        /**
+         * [T-subagent-durability] Durable journal path surfaced once known
+         * (terminal write or recovery pointer). The detail page shows it as
+         * a recovery anchor.
+         */
+        val journalPath: String? = null,
         val status: RunStatus = RunStatus.RUNNING,
         val startedAtMs: Long = System.currentTimeMillis(),
         val endedAtMs: Long = 0L,
@@ -97,7 +109,9 @@ class SubagentRunRegistry {
         /** True when the user opened the detail page at least once. */
         val opened: Boolean = false,
     ) {
-        val isActive: Boolean get() = status == RunStatus.RUNNING
+        val isActive: Boolean get() = status == RunStatus.RUNNING || status == RunStatus.QUEUED
+        val isExecuting: Boolean get() = status == RunStatus.RUNNING
+        val isQueued: Boolean get() = status == RunStatus.QUEUED
         val durationMs: Long
             get() = (if (endedAtMs > 0) endedAtMs else System.currentTimeMillis()) - startedAtMs
     }
@@ -149,6 +163,8 @@ class SubagentRunRegistry {
         title: String,
         maxTurns: Int,
         sessionId: String = "",
+        groupId: String = "",
+        queued: Boolean = false,
     ): Run {
         val run = Run(
             id = nextId("subagent"),
@@ -158,6 +174,12 @@ class SubagentRunRegistry {
             query = query,
             title = title,
             sessionId = sessionId,
+            groupId = groupId,
+            // [T-subagent-orchestration] QUEUED: the spawn is registered
+            // BEFORE the scheduler hands out a permit, so over-limit spawns
+            // are visible as "queued · waiting for slot" instead of
+            // appearing only when they start executing.
+            status = if (queued) RunStatus.QUEUED else RunStatus.RUNNING,
             maxTurns = maxTurns,
         )
         // Newest first — the pill shows the freshest run; detail page lists
@@ -168,6 +190,48 @@ class SubagentRunRegistry {
             }
         }
         return run
+    }
+
+    /**
+     * [T-subagent-orchestration] The scheduler granted a permit — flip a
+     * QUEUED run to RUNNING and stamp the actual execution start time (the
+     * queue wait is still visible via the untouched [Run.startedAtMs].
+     */
+    fun markExecuting(runId: String) {
+        updateRun(runId) { run ->
+            if (run.status == RunStatus.QUEUED) {
+                run.copy(status = RunStatus.RUNNING, startedAtMs = System.currentTimeMillis())
+            } else {
+                run
+            }
+        }
+    }
+
+    /** [T-subagent-orchestration] Attach the spawn-batch group id after creation. */
+    fun setGroupId(runId: String, groupId: String) {
+        if (groupId.isEmpty()) return
+        updateRun(runId) { if (it.groupId == groupId) it else it.copy(groupId = groupId) }
+    }
+
+    /** [T-subagent-durability] Surface the journal path as soon as it is known. */
+    fun setJournalPath(runId: String, path: String?) {
+        if (path.isNullOrEmpty()) return
+        updateRun(runId) { if (it.journalPath == path) it else it.copy(journalPath = path) }
+    }
+
+    /**
+     * [T-subagent-orchestration] Group progress snapshot for UI + prompts:
+     * (total, finished, active) over the CURRENT registry contents for the
+     * group's run ids. Members pruned by [MAX_RETAINED_RUNS] are dropped
+     * from the count.
+     */
+    fun groupProgress(groupId: String): Triple<Int, Int, Int>? {
+        if (groupId.isEmpty()) return null
+        val members = _runs.value.filter { it.groupId == groupId }
+        if (members.isEmpty()) return null
+        val finished = members.count { !it.isActive }
+        val active = members.count { it.isActive }
+        return Triple(members.size, finished, active)
     }
 
     fun updateRun(runId: String, transform: (Run) -> Run) {
@@ -235,6 +299,24 @@ class SubagentRunRegistry {
 
     fun markOpened(runId: String) {
         updateRun(runId) { if (it.opened) it else it.copy(opened = true) }
+    }
+
+    /**
+     * [T-subagent-orchestration] Terminal flip that only applies to runs
+     * still active (RUNNING/QUEUED). cancel_subagents races the runner's
+     * own finally-path: if the runner already finished the run, this is a
+     * no-op instead of overwriting SUCCESS with CANCELLED.
+     */
+    fun finishIfActive(runId: String, status: RunStatus, resultText: String = "", error: String? = null) {
+        updateRun(runId) { run ->
+            if (!run.isActive) run
+            else run.copy(
+                status = status,
+                endedAtMs = System.currentTimeMillis(),
+                resultText = resultText.ifBlank { run.resultText },
+                error = error,
+            )
+        }
     }
 
     fun finish(runId: String, status: RunStatus, resultText: String = "", error: String? = null) {

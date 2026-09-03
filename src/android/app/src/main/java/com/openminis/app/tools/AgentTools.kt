@@ -34,6 +34,12 @@ object AgentTools {
         // SubagentSkill.buildFilteredTools (spawn_agent itself is FORBIDDEN
         // there, so recursion is structurally impossible).
         add(SubagentSkill.definition())
+        // [T-subagent-orchestration] Parent-side orchestration: join / wait-any
+        // / cancel for detached spawns. Sub-agents never see these (capability
+        // catalog + FORBIDDEN_TOOLS fail closed twice).
+        add(SubagentOrchestrationTools.joinDefinition())
+        add(SubagentOrchestrationTools.waitAnyDefinition())
+        add(SubagentOrchestrationTools.cancelDefinition())
         if (memoryEnabled) {
             add(memoryWriteDefinition())
             add(memoryGetDefinition())

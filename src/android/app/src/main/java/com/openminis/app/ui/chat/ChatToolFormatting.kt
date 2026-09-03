@@ -29,8 +29,10 @@ internal fun toolAccentColor(toolName: String): Color = when (toolName) {
     "memory_write", "memory_get" -> ToolAccents.memory
     "web_search" -> ToolAccents.search    // iOS: .cyan for search
     // [T-subagent-ui] Sub-agent runs get a distinct violet accent so they
-    // read as "another agent", not another tool.
-    "spawn_agent" -> Color(0xFF7C5CFF)
+    // read as "another agent", not another tool. Orchestration tools share
+    // the family accent.
+    "spawn_agent", "join_subagents", "wait_any" -> Color(0xFF7C5CFF)
+    "cancel_subagents" -> Color(0xFFE5484D)
     else -> ToolAccents.fallback
 }
 
@@ -44,6 +46,7 @@ internal fun toolIconFor(toolName: String) = when (toolName) {
     "read_image" -> Icons.Default.Image                // iOS: photo
     "memory_write", "memory_get" -> Icons.Default.Psychology // iOS: brain.head.profile
     "web_search" -> Icons.Default.Search               // iOS: magnifyingglass
-    "spawn_agent" -> Icons.Default.Radar               // [T-subagent-ui]
+    "spawn_agent", "join_subagents", "wait_any" -> Icons.Default.Radar  // [T-subagent-ui] / [T-subagent-orchestration]
+    "cancel_subagents" -> Icons.Default.Error
     else -> Icons.Default.Build
 }
