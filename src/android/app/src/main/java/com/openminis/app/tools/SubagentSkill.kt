@@ -14,6 +14,12 @@ interface SkillInfo {
     val description: String
     val body: String
     /**
+     * Stable identifier for session-enablement lookups and scheduler keys.
+     * Defaults to [name] — implementations that model persistence
+     * (SkillRepository.Skill) override it with a UUID.
+     */
+    val id: String get() = name
+    /**
      * Raw YAML frontmatter (fences excluded), preserved verbatim from the
      * skill's SKILL.md. May be null for plain-body skills or legacy rows
      * persisted before frontmatter preservation existed. Sub-agent config
@@ -31,11 +37,16 @@ interface SkillInfo {
  * [spawn_agent] tool dispatches to it; the sub-agent's context is fully
  * isolated from the main agent's history.
  *
- * FORBIDDEN tools (never passed to a sub-agent):
- *   - spawn_agent    (anti-recursion)
- *   - shell_execute  (terminal/android privilege escalation)
- *   - browser_use    (browser is a shared resource; a sub-agent shouldn't
- *                     race the main agent's browser tabs)
+ * FORBIDDEN capabilities (never passed to a sub-agent, [T-subagent-capability]):
+ *   - spawn_agent     (anti-recursion)
+ *   - memory_get / memory_write / memory_rollup
+ *     (context + memory isolation — a sub-agent must never read or mutate
+ *     the parent agent's long-term memory; its SKILL.md contract says
+ *     "minus spawning further agents and memory", and the runtime now
+ *     enforces exactly that. See [AgentCapabilities].)
+ *
+ * shell_execute / browser_use remain ALLOWED: they route through the
+ * session's hardened ExecutionCoordinator / BrowserTabPool paths.
  */
 object SubagentSkill {
 
@@ -48,16 +59,33 @@ object SubagentSkill {
      */
     const val RUN_REGISTRY_KEY = "subagentRunRegistry"
 
-    /** Tools that sub-agents are NEVER allowed to use. */
+    /** [T-subagent-result] run_until value: run until the model finishes naturally. */
+    const val RUN_UNTIL_DONE = "done"
+
+    /**
+     * [T-subagent-first-turn] run_until value: stop after the sub-agent's
+     * first turn completes — i.e. after turn 1's model output AND its tool
+     * calls have executed and the results are recorded. Renamed from the
+     * misleading `first_turn` (which sounded like "first model output,
+     * tools still pending"). The legacy value is still accepted for one
+     * deprecation window and mapped to [RUN_UNTIL_TURN_COMPLETE].
+     */
+    const val RUN_UNTIL_TURN_COMPLETE = "turn_complete"
+
+    /** Legacy run_until value accepted as an alias (deprecated). */
+    const val RUN_UNTIL_LEGACY_FIRST_TURN = "first_turn"
+
+    /**
+     * Tools that sub-agents are NEVER allowed to use — the runtime
+     * executor refuses these even if a stale allowlist or schema bug
+     * offers them (defense in depth alongside the capability filter).
+     * [T-subagent-capability] memory tools are forbidden for isolation.
+     */
     val FORBIDDEN_TOOLS: Set<String> = setOf(
-        NAME,              // anti-recursion — sub-agents cannot spawn sub-agents
-        // [T-subagent-parity] shell_execute and browser_use are ALLOWED:
-        // executeSubagentTool routes them through the session's
-        // ExecutionCoordinator / BrowserTabPool with live registry streaming
-        // — the same hardened paths the main agent uses. The sub-agent is
-        // the same kind of agent as its parent (per the spawn_agent tool
-        // contract); only recursion and parent-conversation state
-        // (memory tools) stay off-limits.
+        NAME,          // anti-recursion — sub-agents cannot spawn sub-agents
+        "memory_get",      // memory isolation — sub-agent cannot read parent memory
+        "memory_write",    // memory isolation — sub-agent cannot mutate parent memory
+        "memory_rollup",   // memory isolation — sub-agent cannot distill parent memory
     )
 
     /** Default budget for sub-agents when the skill doesn't specify. */
@@ -121,10 +149,13 @@ object SubagentSkill {
             "run_until" to AgentToolParam(
                 "string",
                 "Optional. 'done' (default): return only when the sub-agent " +
-                    "finishes, with its full final report. 'first_turn': return " +
-                    "after the sub-agent's first turn with its partial output — " +
-                    "use when the caller only needs an early readout.",
-                enumValues = listOf("done", "first_turn"),
+                    "finishes, with its full final report. 'turn_complete': " +
+                    "return after the sub-agent's FIRST turn completes — its " +
+                    "model output and that turn's tool calls have executed — " +
+                    "with the partial output and recorded steps. Use when the " +
+                    "caller only needs an early readout. (Legacy alias " +
+                    "'first_turn' is accepted with the same meaning.)",
+                enumValues = listOf("done", "turn_complete", "first_turn"),
             ),
         ),
         required = listOf("tool_title", "skill_name", "query"),
@@ -139,7 +170,11 @@ object SubagentSkill {
      *   subagent: true
      *   max_turns: 12
      *   max_output_tokens: 4096
-     *   allowed_tools: [file_read, file_write, memory_get]
+     *   allowed_tools: [file_read, file_write, shell_execute]
+     *   max_parallel: 2
+     *
+     * (FORBIDDEN tools — spawn_agent and the memory tools — can never be
+     * re-enabled via allowed_tools; see [AgentCapabilities].)
      *
      * Returns [SubagentConfig] with isSubagent=false for skills without
      * `subagent: true` in the frontmatter — existing skills are unaffected.
@@ -225,15 +260,21 @@ object SubagentSkill {
 
     /**
      * Build the filtered tool list for a sub-agent.
-     * Excludes [FORBIDDEN_TOOLS] and, when [allowedTools] is non-null,
-     * only includes tools whose name is in that set.
+     *
+     * [T-agent-capability] Fail-closed capability filter: a tool must be
+     * known in the [AgentCapabilities] catalog AND its capability must be
+     * in [AgentCapabilities.SUBAGENT_BASE] (never in the hard-forbidden
+     * set). Unknown tools are dropped — new main-agent tools never leak to
+     * sub-agents automatically. On top of the capability check, an
+     * explicit [allowedTools] allowlist further narrows the set, and
+     * [SubagentSkill.FORBIDDEN_TOOLS] always wins.
      */
     fun buildFilteredTools(
         allTools: List<AgentToolDefinition>,
         allowedTools: Set<String>?,
     ): List<AgentToolDefinition> {
         return allTools.filter { tool ->
-            tool.name !in FORBIDDEN_TOOLS &&
+            AgentCapabilities.isToolGrantableToSubagent(tool.name) &&
                 (allowedTools == null || tool.name in allowedTools)
         }
     }

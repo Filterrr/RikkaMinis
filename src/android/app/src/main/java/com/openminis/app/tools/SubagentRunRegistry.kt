@@ -3,7 +3,11 @@ package com.openminis.app.tools
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.CoroutineScope
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -18,21 +22,24 @@ import java.util.concurrent.atomic.AtomicLong
  *     failed) so the user can review what each sub-agent did; the registry
  *     only prunes to [MAX_RETAINED_RUNS] to bound memory.
  *
- *  2. [_hasActiveRuns] — a lightweight boolean derived from [runs], read by
- *     ChatScreen to decide whether the pill row is visible at all.
+ *  2. [hasActiveRuns] — a lightweight boolean DERIVED from [runs] via a
+ *     [kotlinx.coroutines.flow.Flow.map] (see [derivedHasActiveRuns]) —
+ *     single source of truth, no duplicated state to drift.
  *
  * Registry is per-ChatViewModel instance (one chat session) — created in
  * ChatViewModel's init, cleared with the chat. Not a global singleton:
  * sub-agent runs belong to the conversation that spawned them, and
  * navigating between chats must not flash another chat's runs.
  *
- * Thread-safety: `runs` is a single [MutableStateFlow] whose list is
- * replaced on every update (copy-on-write). [emitRun] / [updateRun] are
- * safe to call from the tool-dispatch coroutines and shell line callbacks
- * because each mutation re-reads the latest list under the flow value
- * swap; worst case two interleaved updates collapse to whichever swap
- * lands last, which is acceptable for a live progress view (every path
- * also emits a final terminal update).
+ * Thread-safety: [T-subagent-atomic-registry] every mutation goes through
+ * [MutableStateFlow.update] — its compare-and-set loop re-reads the LATEST
+ * value on every attempt, so two concurrent updates can no longer collapse
+ * to whichever swap lands last (the old read-modify-write lost updates:
+ * a concurrent finish(SUCCESS) could be overwritten by a racing
+ * stepOutput, leaving a finished run spinning as RUNNING in the UI).
+ * Now each transform applies to the freshest list and retried until it
+ * lands atomically; updates from tool-dispatch coroutines, shell line
+ * callbacks, and parallel runs are all lossless.
  */
 class SubagentRunRegistry {
 
@@ -71,6 +78,11 @@ class SubagentRunRegistry {
         val query: String,
         /** Short "what is this sub-agent doing" — spawn tool_title. */
         val title: String,
+        /**
+         * Session sandbox id the run executes in — journaling resolves the
+         * per-session workspace host path through it. Empty for tests.
+         */
+        val sessionId: String = "",
         val status: RunStatus = RunStatus.RUNNING,
         val startedAtMs: Long = System.currentTimeMillis(),
         val endedAtMs: Long = 0L,
@@ -93,19 +105,40 @@ class SubagentRunRegistry {
     private val _runs = MutableStateFlow<List<Run>>(emptyList())
     val runs: StateFlow<List<Run>> = _runs.asStateFlow()
 
-    private val _hasActiveRuns = MutableStateFlow(false)
-    val hasActiveRuns: StateFlow<Boolean> = _hasActiveRuns.asStateFlow()
+    /**
+     * [T-subagent-atomic-registry] Derived from [runs] — no duplicated
+     * `_hasActiveRuns` state. Collectors outside a coroutine scope can use
+     * the eager snapshot below instead.
+     */
+    fun derivedHasActiveRuns(scope: CoroutineScope) = runs.map { list ->
+        list.any(Run::isActive)
+    }.stateIn(scope, SharingStarted.Eagerly, false)
 
     /** Monotonic ids — unique within the VM lifetime, stable across updates. */
     private val idCounter = AtomicLong(0)
     fun nextId(prefix: String): String = "$prefix-${idCounter.incrementAndGet()}"
 
+    /**
+     * Synchronous snapshot of "any run active" for imperative callers
+     * (UI click handlers, tests). Kept in lockstep with the flow updates
+     * by the same single-writer mutation path.
+     */
+    val hasActiveRunsSnapshot: Boolean
+        get() = _runs.value.any { it.isActive }
+
     // [T-subagent-serial] spawn_agent is classified SERIAL_BARRIER in the
     // dispatch loop (non-parallel-safe), so at most one run is RUNNING at a
     // time — but the boolean is derived, not asserted, so a policy change
     // keeps the UI correct.
-    private fun recomputeActive() {
-        _hasActiveRuns.value = _runs.value.any { it.isActive }
+
+    /**
+     * [T-subagent-atomic-registry] Atomic compare-and-set mutation on the
+     * runs list. The transform receives the FRESHEST list and is retried
+     * until its swap lands — interleaved updates compose instead of
+     * overwriting each other.
+     */
+    private inline fun mutateRuns(transform: (List<Run>) -> List<Run>) {
+        _runs.update { current -> transform(current) }
     }
 
     fun register(
@@ -115,6 +148,7 @@ class SubagentRunRegistry {
         query: String,
         title: String,
         maxTurns: Int,
+        sessionId: String = "",
     ): Run {
         val run = Run(
             id = nextId("subagent"),
@@ -123,25 +157,25 @@ class SubagentRunRegistry {
             skillName = skillName,
             query = query,
             title = title,
+            sessionId = sessionId,
             maxTurns = maxTurns,
         )
         // Newest first — the pill shows the freshest run; detail page lists
         // history the same way.
-        _runs.value = listOf(run) + _runs.value.let { list ->
-            if (list.size >= MAX_RETAINED_RUNS) list.take(MAX_RETAINED_RUNS - 1) else list
+        mutateRuns { current ->
+            listOf(run) + current.let { list ->
+                if (list.size >= MAX_RETAINED_RUNS) list.take(MAX_RETAINED_RUNS - 1) else list
+            }
         }
-        recomputeActive()
         return run
     }
 
     fun updateRun(runId: String, transform: (Run) -> Run) {
-        val current = _runs.value
-        val idx = current.indexOfFirst { it.id == runId }
-        if (idx < 0) return
-        val updated = current.toMutableList()
-        updated[idx] = transform(current[idx])
-        _runs.value = updated
-        recomputeActive()
+        mutateRuns { current ->
+            val idx = current.indexOfFirst { it.id == runId }
+            if (idx < 0) return@mutateRuns current
+            current.toMutableList().apply { this[idx] = transform(current[idx]) }
+        }
     }
 
     /** Turn started — bump the turn counter and clear stale step state. */
@@ -216,8 +250,7 @@ class SubagentRunRegistry {
 
     /** Wipe all state (clearChat / session switch). */
     fun clear() {
-        _runs.value = emptyList()
-        recomputeActive()
+        mutateRuns { emptyList() }
     }
 
     companion object {
@@ -229,175 +262,12 @@ class SubagentRunRegistry {
 }
 
 /**
- * [T-subagent-parallel] Concurrency limiter for sub-agent runs.
+ * [T-subagent-parallel] Two-level scheduler front-end + legacy helpers.
  *
- * Replaces the former global single-run gate: N sub-agents may now run
- * CONCURRENTLY in one chat (default 2, skill-tunable via frontmatter
- * `max_parallel`). The limiter is a fair FIFO semaphore with a
- * stale-lease escape hatch inherited from the old gate's self-heal —
- * a permit leaked by a process-level cancel race can never wedge future
- * spawns forever, because acquire(force=true) steals all permits after
- * [LEASE_STALE_MS].
- *
- * Why not zero limits: the :modelservice worker serializes provider
- * calls behind one executionMutex, so parallel sub-agents INTERLEAVE
- * their model turns rather than multiply throughput — but interleaving
- * still cuts wall-clock dramatically for multi-step sub-tasks (while
- * agent A's tools execute — file writes, shell commands, browser —
- * agent B's stream holds the mutex and makes progress, and vice versa).
+ * The production concurrency scheduler is [SubagentScheduler] (coroutine
+ * Semaphore based, skill-frontmatter aware, queueing). The former manual
+ * [SubagentDispatchLimiter] is retired: its shared single-lease self-heal
+ * could release permits still legitimately held by younger holders after
+ * the 31-min stale reset, and its acquireOrFalse() production path turned
+ * max_parallel into "over limit → spawn fails" instead of queueing.
  */
-class SubagentDispatchLimiter(
-    private val maxPermits: Int,
-) {
-    init {
-        require(maxPermits >= 1) { "maxPermits must be >= 1" }
-    }
-
-    private val lock = java.util.concurrent.locks.ReentrantLock(true)
-    private val condition = lock.newCondition()
-    private var acquiredAtMs: Long = 0L
-    private var held: Int = 0
-
-    /** Lease ceiling — matches the 30-min generation backstop + margin. */
-    private companion object {
-        const val LEASE_STALE_MS = 31L * 60L * 1000L
-    }
-
-    /**
-     * Acquire a permit, blocking until one frees. When the current holder
-     * set has outlived [LEASE_STALE_MS] it is force-reset REGARDLESS of
-     * [force] — the false-interrupt self-heal: a dead holder set must not
-     * wedge future spawns behind "no permits" forever, and no legitimate
-     * run outlives the generation ceiling anyway. Callers that want the
-     * stale set left alone can pass force=false only to document intent;
-     * safety wins.
-     */
-    fun acquire(force: Boolean = false) {
-        lock.lock()
-        try {
-            while (true) {
-                val now = System.currentTimeMillis()
-                if (held >= maxPermits) {
-                    val stale = acquiredAtMs > 0 && now - acquiredAtMs > LEASE_STALE_MS
-                    if (stale) {
-                        // Self-heal: every holder is provably dead — reset.
-                        held = 0
-                    } else {
-                        condition.await(5_000L, java.util.concurrent.TimeUnit.MILLISECONDS)
-                        continue
-                    }
-                }
-                if (held == 0) acquiredAtMs = now
-                held++
-                return
-            }
-        } finally {
-            lock.unlock()
-        }
-    }
-
-    /**
-     * Try to acquire a permit WITHOUT blocking. False when the limiter is
-     * at capacity (and no stale lease to take over).
-     */
-    fun acquireOrFalse(): Boolean {
-        lock.lock()
-        try {
-            val now = System.currentTimeMillis()
-            if (held >= maxPermits) {
-                val stale = acquiredAtMs > 0 && now - acquiredAtMs > LEASE_STALE_MS
-                if (stale) {
-                    held = 0  // self-heal a leaked permit set
-                } else {
-                    return false
-                }
-            }
-            if (held == 0) acquiredAtMs = now
-            held++
-            return true
-        } finally {
-            lock.unlock()
-        }
-    }
-
-    /** Release one permit. Idempotent-safe: never goes below zero. */
-    fun release() {
-        lock.lock()
-        try {
-            if (held > 0) held--
-            if (held == 0) acquiredAtMs = 0L
-            condition.signalAll()
-        } finally {
-            lock.unlock()
-        }
-    }
-
-    /** Test/diagnostics: permits currently held. */
-    fun heldCount(): Int {
-        lock.lock()
-        try {
-            return held
-        } finally {
-            lock.unlock()
-        }
-    }
-}
-
-/**
- * [T-subagent-serial] Legacy name kept for compatibility with tests and
- * external references; the production path uses per-chat
- * [SubagentDispatchLimiter] instances now.
- */
-object SubagentDispatchGate {
-    private val busy = AtomicBoolean(false)
-
-    /**
-     * [T-subagent-gate-lease] When the slot was acquired. A stale lease
-     * (older than [LEASE_STALE_MS]) can be force-taken over by a new
-     * spawn: the previous holder is provably dead — nothing about a
-     * sub-agent run legitimately takes longer than the gateway's own
-     * generation ceiling — and a leaked `true` (process-level cancel race
-     * where the holder's finally never ran) must not wedge every future
-     * spawn behind "another sub-agent is already running" forever.
-     */
-    @Volatile
-    private var acquiredAtMs: Long = 0L
-
-    /** Lease ceiling — matches the 30-min generation backstop + margin. */
-    private const val LEASE_STALE_MS = 31L * 60L * 1000L
-
-    /**
-     * Try to acquire the single-run slot. False when a run is active —
-     * UNLESS that run's lease is stale, in which case it is taken over
-     * (self-heal) and true is returned.
-     */
-    fun tryAcquire(): Boolean {
-        while (true) {
-            val now = System.currentTimeMillis()
-            if (busy.compareAndSet(false, true)) {
-                acquiredAtMs = now
-                return true
-            }
-            // Held — check for a leaked lease from a dead holder.
-            val held = acquiredAtMs
-            if (held > 0 && now - held > LEASE_STALE_MS) {
-                // Try to steal: only succeeds if the flag is still set with
-                // the same stale timestamp (lost no race in between).
-                if (busy.compareAndSet(true, true) && acquiredAtMs == held) {
-                    acquiredAtMs = now
-                    return true  // force takeover
-                }
-            }
-            return false
-        }
-    }
-
-    /** Release the slot. Called in a finally block by the runner. */
-    fun release() {
-        acquiredAtMs = 0L
-        busy.set(false)
-    }
-
-    /** Test/diagnostics: is the slot currently held? */
-    fun isHeld(): Boolean = busy.get()
-}

@@ -47,7 +47,7 @@ object ToolConcurrencyPolicy {
      * [T-subagent-serial] spawn_agent is deliberately NOT parallel-safe and
      * [T-subagent-parallel] Updated: spawn_agent now forms its OWN parallel
      * batch group (isParallelWithSelf) — multiple spawns fan out via async{},
-     * bounded by the per-chat SubagentDispatchLimiter. Each run owns its
+     * bounded by the per-chat SubagentScheduler. Each run owns its
      * registry entry and stream; shared shell/browser resources stay safe
      * (shell commands are separate ExecutionCoordinator commands, browser
      * actions serialize per-tab in the pool).
