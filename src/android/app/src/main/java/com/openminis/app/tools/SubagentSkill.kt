@@ -76,6 +76,16 @@ object SubagentSkill {
     const val RUN_UNTIL_LEGACY_FIRST_TURN = "first_turn"
 
     /**
+     * [T-subagent-orchestration] run_until value: fire-and-forget. The spawn
+     * tool result returns IMMEDIATELY with the run_id + group_id while the
+     * sub-agent keeps executing in the background (chat-VM scope). The parent
+     * collects results later via join_subagents / wait_any, or discards runs
+     * with cancel_subagents. Detached runs survive a user stream-cancel
+     * (they are not part of the cancelled streamJob) but die with the VM.
+     */
+    const val RUN_UNTIL_DETACH = "detach"
+
+    /**
      * Tools that sub-agents are NEVER allowed to use — the runtime
      * executor refuses these even if a stale allowlist or schema bug
      * offers them (defense in depth alongside the capability filter).
@@ -86,6 +96,12 @@ object SubagentSkill {
         "memory_get",      // memory isolation — sub-agent cannot read parent memory
         "memory_write",    // memory isolation — sub-agent cannot mutate parent memory
         "memory_rollup",   // memory isolation — sub-agent cannot distill parent memory
+        // [T-subagent-orchestration] Orchestration is the PARENT's job: a
+        // sub-agent cannot join/wait/cancel runs (including its own) — the
+        // spawner owns its lifecycle.
+        SubagentOrchestrationTools.JOIN_NAME,
+        SubagentOrchestrationTools.WAIT_ANY_NAME,
+        SubagentOrchestrationTools.CANCEL_NAME,
     )
 
     /** Default budget for sub-agents when the skill doesn't specify. */
@@ -129,7 +145,11 @@ object SubagentSkill {
             "Recursive spawn_agent is forbidden. " +
             "While the sub-agent runs, the user sees a prompt pill in the chat " +
             "and can open a second-level page that streams the sub-agent's " +
-            "execution process (every tool call and output) in real time.",
+            "execution process (every tool call and output) in real time. " +
+            "Multiple spawn_agent calls emitted in ONE turn run in parallel " +
+            "(bounded by max_parallel); each spawn batch forms a group. " +
+            "With run_until='detach' the call returns immediately and the " +
+            "result is collected later via join_subagents / wait_any.",
         parameters = mapOf(
             "tool_title" to AgentToolParam(
                 "string",
@@ -153,9 +173,14 @@ object SubagentSkill {
                     "return after the sub-agent's FIRST turn completes — its " +
                     "model output and that turn's tool calls have executed — " +
                     "with the partial output and recorded steps. Use when the " +
-                    "caller only needs an early readout. (Legacy alias " +
-                    "'first_turn' is accepted with the same meaning.)",
-                enumValues = listOf("done", "turn_complete", "first_turn"),
+                    "caller only needs an early readout. 'detach': return " +
+                    "IMMEDIATELY with the run_id while the sub-agent keeps " +
+                    "running in the background — collect results later with " +
+                    "join_subagents, race them with wait_any, or discard with " +
+                    "cancel_subagents. Multiple detached spawns in one turn run " +
+                    "truly in parallel. (Legacy alias 'first_turn' is accepted " +
+                    "with turn_complete's meaning.)",
+                enumValues = listOf("done", "turn_complete", "detach", "first_turn"),
             ),
         ),
         required = listOf("tool_title", "skill_name", "query"),

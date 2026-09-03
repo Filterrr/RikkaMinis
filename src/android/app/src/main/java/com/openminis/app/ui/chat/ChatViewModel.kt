@@ -73,11 +73,14 @@ import com.openminis.app.tools.FileWriteTool
 import com.openminis.app.tools.MemoryRollupTool
 import com.openminis.app.tools.MemoryTools
 import com.openminis.app.tools.ReadImageTool
+import com.openminis.app.tools.SubagentOrchestration
 import com.openminis.app.tools.SubagentRunRegistry
 import com.openminis.app.tools.SubagentRunner
 import com.openminis.app.tools.SubagentScheduler
 import com.openminis.app.tools.SubagentSkill
 import com.openminis.app.tools.ToolBatchExecutor
+import com.openminis.app.tools.ToolConcurrencyPolicy
+import com.openminis.app.tools.SubagentOrchestrationTools
 import com.openminis.app.tools.ToolExecutionResult
 import com.openminis.app.tools.ToolFailureHook
 import com.openminis.app.offload.OffloadPermissionManager
@@ -86,6 +89,7 @@ import com.openminis.app.service.SessionConcurrencyManager
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -782,6 +786,25 @@ class ChatViewModel(
     )
 
     /**
+     * [T-subagent-orchestration] Group + job registries for sub-agent
+     * orchestration (SubagentGroup / join / wait_any / cancel). Per-VM like
+     * the run registry; cleared with the chat.
+     */
+    val subagentOrchestration = SubagentOrchestration.Registries()
+
+    /**
+     * [T-subagent-orchestration] Scope for DETACHED sub-agent runs
+     * (run_until="detach"). Supervisor semantics: one background run's
+     * failure must not cancel siblings. NOT a child of streamJob — a user
+     * stream-cancel must not kill detached runs — but tied to this VM's
+     * lifetime so leaving the chat tears everything down.
+     */
+    private val subagentOrchestrationScope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob(viewModelScope.coroutineContext[kotlinx.coroutines.Job])
+            + kotlinx.coroutines.Dispatchers.IO,
+    )
+
+    /**
      * [T-subagent-runner] Sub-agent runtime extracted from this ViewModel —
      * spawn_agent lifecycle (loop, tool dispatch, journaling, structured
      * results) lives in [SubagentRunner]; this class only supplies the
@@ -792,6 +815,7 @@ class ChatViewModel(
         context = context,
         scheduler = subagentScheduler,
         registry = subagentRunRegistry,
+        orchestration = subagentOrchestration,
         deps = object : SubagentRunner.Deps {
             override fun findSkill(skillName: String) =
                 this@ChatViewModel.skillRepository?.skills?.value?.find {
@@ -811,6 +835,7 @@ class ChatViewModel(
                 this@ChatViewModel.maybeReloadSkillsForPath(argsJson)
             override fun unwrapFlowException(e: Throwable) =
                 this@ChatViewModel.unwrapFlowException(e)
+            override fun orchestrationScope() = subagentOrchestrationScope
         },
     )
 
@@ -4615,7 +4640,12 @@ class ChatViewModel(
         // conversation; drop it with the rest of the per-session UI state.
         // Any run still marked RUNNING is already dead — cancelStream()
         // above tore down the agent loop that drove it.
+        // [T-subagent-orchestration] Group/job history goes with it, and the
+        // orchestration scope is torn down so detached runs die with the
+        // wiped conversation instead of leaking past it.
         subagentRunRegistry.clear()
+        subagentOrchestration.clear()
+        subagentOrchestrationScope.cancel(kotlinx.coroutines.CancellationException("chat cleared"))
         // Drop any browser tabs the agent spawned for this session, and
         // delete the persisted tab snapshot so a future open starts clean.
         // iOS calls BrowserTabPool.deletePersistedData(for:) +
@@ -8614,6 +8644,23 @@ class ChatViewModel(
             // greedy) so mixed batches now parallelize their leading
             // read-groups instead of degrading the WHOLE batch to serial —
             // and the sub-agent loop runs the exact same semantics.
+            //
+            // [T-subagent-orchestration] Mint one SubagentGroup id per
+            // contiguous spawn_agent batch (same policy partitioning the
+            // executor uses), so join_subagents / wait_any / cancel_subagents
+            // can address the whole batch by group_id. A single spawn forms a
+            // group of one. Membership attaches in executeSpawnAgent.
+            val spawnGroupIds = HashMap<String, String>()
+            ToolConcurrencyPolicy.partitionToolCalls(
+                pending.map { p -> Triple(p.id, p.name, p.argsStr) },
+            ).forEach { batch ->
+                if (batch.any { it.second == SubagentSkill.NAME }) {
+                    val groupId = subagentOrchestration.nextGroupId()
+                    batch.forEach { triple ->
+                        if (triple.second == SubagentSkill.NAME) spawnGroupIds[triple.first] = groupId
+                    }
+                }
+            }
             val resultsById = LinkedHashMap<String, ToolExecutionResult>()
             val batchResults = ToolBatchExecutor.executeBatched(
                 pending.map { p -> ToolBatchExecutor.Call(p.id, p.name, p.argsStr) },
@@ -8638,7 +8685,7 @@ class ChatViewModel(
                 },
             ) { call ->
                 val p = pending.first { it.id == call.id }
-                executeTool(p.name, p.argsStr, p.id, allToolBlocks, assistantId, accumulatedText)
+                executeTool(p.name, p.argsStr, p.id, allToolBlocks, assistantId, accumulatedText, spawnGroupIds[p.id] ?: "")
             }
             for ((p, result) in pending.zip(batchResults)) {
                 resultsById[p.id] = result
@@ -8995,6 +9042,7 @@ class ChatViewModel(
         toolBlocks: MutableList<AssistantBlock>,
         assistantId: String,
         currentText: String,
+        spawnGroupId: String = "",
     ): ToolExecutionResult {
         // T330: tri-state permission gating moved into the offload IPC
         // handler (OffloadGate). The CLIs land there whether the LLM
@@ -9068,8 +9116,16 @@ class ChatViewModel(
                 // [T7-subagent] spawn_agent: delegate to an independent sub-agent
                 // instance running the named skill. [T-subagent-ui] pass the
                 // tool_use block id so the registry run can be linked to this
-                // pill (tap → second-level detail page).
-                SubagentSkill.NAME -> subagentRunner.executeSpawnAgent(argsJson, toolId)
+                // pill (tap → second-level detail page). [T-subagent-orchestration]
+                // pass the batch group id so join/wait/cancel can address the
+                // whole spawn batch.
+                SubagentSkill.NAME -> subagentRunner.executeSpawnAgent(argsJson, toolId, spawnGroupId)
+                // [T-subagent-orchestration] join / wait-any / cancel for
+                // detached spawns. Parent-only — sub-agents can't reach here.
+                SubagentOrchestrationTools.JOIN_NAME,
+                SubagentOrchestrationTools.WAIT_ANY_NAME,
+                SubagentOrchestrationTools.CANCEL_NAME,
+                -> subagentRunner.executeOrchestrationTool(name, argsJson)
                 else -> ToolExecutionResult("Unknown tool: $name", false)
             }
         } finally {
@@ -10367,8 +10423,12 @@ Available tools:
 - spawn_agent: Spawn a sub-agent (副 agent) to execute a delegated sub-task with its own context, system prompt, and budget. The sub-agent is a skill marked `subagent: true` (e.g. the built-in `general-agent`) and has the SAME tool capabilities as you — shell, browser, file read/write/edit — minus spawning further agents and memory. Use it when a sub-task is complex and self-contained (deep research, large codebase exploration, multi-step file processing, focused investigation). Rules:
   * The task message (`query`) must be self-contained — the sub-agent cannot see this conversation. Include the goal, constraints, relevant file paths, and what the final report should contain.
   * While a sub-agent runs, the user sees a prompt pill under the chat and can open a second-level page streaming the sub-agent's execution process (every tool call + live output). Do not narrate sub-agent progress yourself — the UI already shows it; just summarize when the run returns.
-  * Only ONE sub-agent runs at a time in a chat. The call blocks until the sub-agent finishes (or `run_until: first_turn` returns an early readout).
+  * Multiple spawn_agent calls emitted in ONE turn run in PARALLEL (bounded by the scheduler — over-limit spawns queue automatically and show as "queued" in the UI). Each spawn batch forms a group (group_id).
+  * Default (run_until omitted or 'done'): the call blocks until the sub-agent finishes and returns its full report. run_until='turn_complete': early readout after turn 1. run_until='detach': the call returns IMMEDIATELY with a run_id while the sub-agent keeps running — collect results later with join_subagents (all members' reports), race them with wait_any (first winner), or discard with cancel_subagents. Detached spawns in one turn are the way to run N agents truly concurrently.
   * When the result comes back, verify it against your own knowledge before presenting it to the user — you own the final answer.
+- join_subagents: Wait for detached sub-agent runs to finish and collect all their reports (by run_ids, group_id, or default-most-recent-group). Safe to re-call: still-running members time out with a note instead of blocking forever.
+- wait_any: Race detached runs and return the first completion (success_only=true skips failures — useful for competitive search tasks). Reap losing racers with cancel_subagents.
+- cancel_subagents: Cancel running detached sub-agents (by run_ids / group_id / all live detached). Their partial reports are journaled; blocked joins wake with a 'cancelled' outcome.
 
 Shared directory /var/minis/ (bidirectional read/write between shell and app):
   /var/minis/attachments/ — Media files (images, audio, video). Display inline with ![desc](minis://attachments/filename).
@@ -11266,8 +11326,19 @@ Environment variables:
         // permit and each runner's finally releases its own — a blanket
         // release would corrupt the count and over-admit new spawns. The
         // 31-min stale-lease self-heal bounds any leaked permit anyway.
+        //
+        // [T-subagent-orchestration] Only INLINE runs die with the stream:
+        // they execute inside the cancelled streamJob's dispatch. Detached
+        // runs (run_until="detach") live on the orchestration scope and keep
+        // running — the user can still open their pills / join them next turn.
         val cancelledRunIds = subagentRunRegistry.runs.value
             .filter { it.isActive && it.blockId.isNotEmpty() }
+            .filter { run ->
+                // [T-subagent-orchestration] Detached runs (run_until="detach")
+                // execute on the orchestration scope — NOT inside the cancelled
+                // streamJob — so a user stream-cancel must not kill them.
+                subagentOrchestration.getJob(run.id)?.detached != true
+            }
             .map { it.id }
         for (rid in cancelledRunIds) {
             subagentRunRegistry.finish(
@@ -11275,6 +11346,12 @@ Environment variables:
                 SubagentRunRegistry.RunStatus.CANCELLED,
                 error = "interrupted by user stop",
             )
+            // [T-subagent-orchestration] Wake any join/wait blocked on the
+            // cancelled inline run so the parent's next turn isn't wedged.
+            subagentOrchestration.getJob(rid)?.let { job ->
+                job.coroutineJob?.cancel(kotlinx.coroutines.CancellationException("interrupted by user stop"))
+                SubagentOrchestration.cancelCascade(listOf(job), "interrupted by user stop")
+            }
         }
         handleUserCancelledCleanup()
 
@@ -11694,6 +11771,11 @@ Environment variables:
         // [T-subagent-ui] VM is going away — drop the sub-agent run history
         // with it (the registry is per-VM by design).
         subagentRunRegistry.clear()
+        // [T-subagent-orchestration] Group/job metadata dies with the VM, and
+        // the orchestration scope (detached runs) is cancelled — background
+        // runs never outlive their chat.
+        subagentOrchestration.clear()
+        subagentOrchestrationScope.cancel(kotlinx.coroutines.CancellationException("ViewModel cleared"))
         // [T-subagent-parallel] The per-chat limiter is per-VM like the
         // registry — it dies with this VM, so no release is needed. (The
         // old process-global gate required an onCleared release to avoid

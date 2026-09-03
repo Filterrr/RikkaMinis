@@ -128,11 +128,13 @@ fun SubagentDetailScreen(
                 Text(
                     text = when {
                         run == null -> "Finished"
+                        run.isQueued -> "Queued · waiting for a free slot"
                         run.isActive -> "Running · turn ${run.turn}/${run.maxTurns}"
                         else -> when (run.status) {
                             SubagentRunRegistry.RunStatus.SUCCESS -> "Completed"
                             SubagentRunRegistry.RunStatus.FAILED -> "Failed"
                             SubagentRunRegistry.RunStatus.CANCELLED -> "Cancelled"
+                            SubagentRunRegistry.RunStatus.QUEUED -> "Queued"
                             SubagentRunRegistry.RunStatus.RUNNING -> "Running"
                         } + " · " + formatDuration(run.durationMs)
                     },
@@ -228,6 +230,26 @@ private fun SubagentRunDetailBody(run: SubagentRunRegistry.Run) {
                         fontFamily = FontFamily.Monospace,
                         color = ChatColors.secondaryText,
                     )
+                    // [T-subagent-orchestration] Group provenance — the batch
+                    // id the pill belongs to (join/wait/cancel target).
+                    if (run.groupId.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            "group: ${run.groupId}",
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = ChatColors.secondaryText,
+                        )
+                    }
+                    run.journalPath?.let { journal ->
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            "journal: $journal",
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = ChatColors.secondaryText,
+                        )
+                    }
                 }
             }
 

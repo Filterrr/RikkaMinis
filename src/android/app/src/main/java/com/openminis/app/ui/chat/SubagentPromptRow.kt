@@ -151,6 +151,9 @@ private fun SubagentPill(
                 append(" · ")
                 append(
                     when {
+                        // [T-subagent-orchestration] Queued behind the
+                        // scheduler (per-skill / global cap) — visible wait.
+                        run.isQueued -> "queued · waiting for slot"
                         isActive -> "running · turn ${run.turn}/${run.maxTurns}"
                         run.status == SubagentRunRegistry.RunStatus.SUCCESS -> "done"
                         run.status == SubagentRunRegistry.RunStatus.FAILED -> "failed"
@@ -159,7 +162,7 @@ private fun SubagentPill(
                 )
             },
             fontSize = 12.sp,
-            fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Medium,
+            fontWeight = if (isActive || run.isQueued) FontWeight.SemiBold else FontWeight.Medium,
             color = ChatColors.primaryText,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,

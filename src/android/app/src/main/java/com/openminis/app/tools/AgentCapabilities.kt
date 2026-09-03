@@ -56,6 +56,12 @@ object AgentCapabilities {
         "memory_write" -> AgentCapability.MEMORY_WRITE
         "memory_rollup" -> AgentCapability.MEMORY_WRITE
         "spawn_agent" -> AgentCapability.SPAWN_AGENT
+        // [T-subagent-orchestration] Parent-only orchestration tools share
+        // the SPAWN_AGENT capability — never grantable to sub-agents, so a
+        // sub-agent can neither join others' results nor cancel siblings.
+        "join_subagents" -> AgentCapability.SPAWN_AGENT
+        "wait_any" -> AgentCapability.SPAWN_AGENT
+        "cancel_subagents" -> AgentCapability.SPAWN_AGENT
         else -> null
     }
 

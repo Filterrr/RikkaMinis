@@ -14,6 +14,7 @@ import com.openminis.app.sandbox.offload.ModelStreamErrorException
 import com.openminis.app.sandbox.offload.ModelWorkerDiedException
 import com.openminis.app.sandbox.offload.ProviderExecutionGateway
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 
 /**
@@ -37,6 +38,7 @@ class SubagentRunner(
     private val context: Context,
     private val scheduler: SubagentScheduler,
     private val registry: SubagentRunRegistry,
+    private val orchestration: SubagentOrchestration.Registries,
     private val deps: Deps,
 ) {
     /**
@@ -54,6 +56,16 @@ class SubagentRunner(
         suspend fun executeBrowserUse(argsJson: String): ToolExecutionResult
         fun maybeReloadSkillsForPath(argsJson: String)
         fun unwrapFlowException(e: Throwable): Throwable
+
+        /**
+         * [T-subagent-orchestration] Scope for DETACHED sub-agent runs
+         * (run_until="detach"). Must outlive the parent stream job (a user
+         * stream-cancel must NOT kill background runs) but die with the chat
+         * VM. Recommended: CoroutineScope(SupervisorJob(viewModelScope job)
+         * + Dispatchers.IO) — supervisor semantics isolate sibling failures,
+         * VM clear tears everything down.
+         */
+        fun orchestrationScope(): kotlinx.coroutines.CoroutineScope
     }
 
     // ── Entry point ──────────────────────────────────────────────────────
@@ -61,8 +73,16 @@ class SubagentRunner(
     /**
      * Execute one spawn_agent tool call. Returns the model-facing result;
      * streams every step into [registry] for the pill + detail page.
+     *
+     * [groupId] links the spawn to its dispatch batch ([T-subagent-orchestration]
+     * SubagentGroup) — the parent loop mints one group per spawn batch so
+     * join/wait/cancel can address the whole batch by id.
      */
-    suspend fun executeSpawnAgent(argsJson: String, blockId: String): ToolExecutionResult {
+    suspend fun executeSpawnAgent(
+        argsJson: String,
+        blockId: String,
+        groupId: String = "",
+    ): ToolExecutionResult {
         val args = try { JSONObject(argsJson) } catch (_: Exception) { JSONObject() }
         val skillName = args.optString("skill_name", "").trim()
         val query = args.optString("query", "").trim()
@@ -80,12 +100,13 @@ class SubagentRunner(
         val runUntil = when (rawRunUntil) {
             SubagentSkill.RUN_UNTIL_DONE -> SubagentSkill.RUN_UNTIL_DONE
             SubagentSkill.RUN_UNTIL_TURN_COMPLETE -> SubagentSkill.RUN_UNTIL_TURN_COMPLETE
+            SubagentSkill.RUN_UNTIL_DETACH -> SubagentSkill.RUN_UNTIL_DETACH
             SubagentSkill.RUN_UNTIL_LEGACY_FIRST_TURN -> SubagentSkill.RUN_UNTIL_TURN_COMPLETE
             else -> null
         }
         if (runUntil == null) {
             return ToolExecutionResult(
-                "Error: spawn_agent.run_until must be 'done' or 'turn_complete' " +
+                "Error: spawn_agent.run_until must be 'done', 'turn_complete', or 'detach' " +
                     "(legacy 'first_turn' is accepted as an alias)",
                 false, toolTitle = title,
             )
@@ -111,30 +132,8 @@ class SubagentRunner(
             )
         }
 
-        // [T-subagent-scheduler] Queue on the two-level scheduler: per-skill
-        // cap (frontmatter max_parallel — NOW actually consumed) then the
-        // chat-global cap. Fair FIFO; over-limit spawns WAIT instead of
-        // failing with a concurrency error (the old acquireOrFalse behavior
-        // turned max_parallel into "over limit → spawn fails").
-        return scheduler.run(skill.id, config.maxParallel) {
-            executeLoop(skill, config, skillName, query, title, runUntil, blockId)
-        }
-    }
-
-    // ── Model loop ───────────────────────────────────────────────────────
-
-    private suspend fun executeLoop(
-        skill: SkillInfo,
-        config: SubagentSkill.SubagentConfig,
-        skillName: String,
-        query: String,
-        title: String,
-        runUntil: String,
-        blockId: String,
-    ): ToolExecutionResult {
-        val sessionId = deps.activeSessionId()
-
-        // Fail-closed capability filter + explicit allowlist.
+        // Fail-closed capability filter + explicit allowlist (validated
+        // BEFORE registration so a misconfigured skill never creates a run).
         val subagentTools = SubagentSkill.buildFilteredTools(deps.agentTools(), config.allowedTools)
         if (subagentTools.isEmpty()) {
             return ToolExecutionResult(
@@ -142,15 +141,15 @@ class SubagentRunner(
                 false, toolTitle = title,
             )
         }
-
-        val systemPrompt = SubagentSkill.buildSystemPrompt(skill)
-        val history = mutableListOf(LLMMessage(role = LLMMessage.Role.USER, content = query))
         val provider = deps.currentProvider() ?: return ToolExecutionResult(
             "Error: No active provider available", false, toolTitle = title,
         )
+        val sessionId = deps.activeSessionId()
 
-        // [T-subagent-ui] Register the run — from here on the user sees
-        // the in-chat pill and can open the live detail page.
+        // [T-subagent-orchestration] Register BEFORE the scheduler hands out
+        // a permit, flagged QUEUED — over-limit spawns become visible as
+        // "queued · waiting for slot" in the pill row instead of appearing
+        // only when execution starts.
         val run = registry.register(
             blockId = blockId,
             skillId = skill.id,
@@ -159,7 +158,162 @@ class SubagentRunner(
             title = title,
             maxTurns = config.maxTurns,
             sessionId = sessionId,
+            groupId = groupId,
+            queued = true,
         )
+        val job = SubagentOrchestration.SubagentJob(
+            runId = run.id,
+            skillId = skill.id,
+            skillName = skill.name,
+            detached = runUntil == SubagentSkill.RUN_UNTIL_DETACH,
+        )
+        orchestration.putJob(job)
+
+        if (runUntil == SubagentSkill.RUN_UNTIL_DETACH) {
+            // [T-subagent-orchestration] Fire-and-forget: launch on the
+            // orchestration scope (outlives stream cancel, dies with the VM)
+            // and return the handle immediately. The parent collects via
+            // join_subagents / wait_any or discards via cancel_subagents.
+            val detachedJob = deps.orchestrationScope().launch {
+                try {
+                    scheduler.run(skill.id, config.maxParallel) {
+                        registry.markExecuting(run.id)
+                        executeLoop(
+                            run = run, skill = skill, config = config, skillName = skillName,
+                            query = query, title = title, runUntil = SubagentSkill.RUN_UNTIL_DONE,
+                            sessionId = sessionId, provider = provider, subagentTools = subagentTools,
+                        )
+                    }
+                } catch (e: CancellationException) {
+                    // cancel_subagents completed the deferred first, then
+                    // cancelled this coroutine (or the VM is being torn down).
+                    // executeLoop reconciles the registry when it was running;
+                    // reconcile here for the never-started case.
+                    registry.finishIfActive(
+                        run.id, SubagentRunRegistry.RunStatus.CANCELLED,
+                        error = e.message ?: "detached run cancelled",
+                    )
+                    journal(run, "CANCELLED", "", 0, e.message ?: "cancelled", emptyList(), sessionId)
+                } catch (e: Exception) {
+                    AppLogger.warning(TAG, "[Subagent] detached '$skillName' crashed: ${e.message}")
+                    registry.finishIfActive(
+                        run.id, SubagentRunRegistry.RunStatus.FAILED,
+                        error = e.message ?: e.javaClass.simpleName,
+                    )
+                } finally {
+                    // Complete the job from the registry's terminal snapshot if
+                    // nobody else did (cancel path completes the deferred BEFORE
+                    // cancelling the coroutine, so this is usually a no-op).
+                    completeJobFromRegistry(job)
+                }
+            }
+            job.coroutineJob = detachedJob
+            return ToolExecutionResult(
+                output = buildString {
+                    append("Sub-agent '$skillName' spawned detached.")
+                    append("\nrun_id: ${run.id}")
+                    if (groupId.isNotEmpty()) append("\ngroup_id: $groupId")
+                    append("\n\nIt is now running in the background — this call returned WITHOUT waiting. ")
+                    append("Collect the result later with join_subagents (run_ids or group_id), ")
+                    append("or race siblings with wait_any. Cancel with cancel_subagents if it becomes unnecessary. ")
+                    append("Meanwhile continue other work — do not idle.")
+                },
+                success = true,
+                toolTitle = "Sub-agent: $skillName",
+            )
+        }
+
+        // [T-subagent-scheduler] Inline spawn: queue on the two-level
+        // scheduler (per-skill cap then chat-global cap), flip QUEUED→
+        // RUNNING when the permit lands, and complete the job deferred in
+        // every exit path so a later join_subagents(run_ids=[…]) can pick
+        // up even an inline result.
+        return scheduler.run(skill.id, config.maxParallel) {
+            registry.markExecuting(run.id)
+            try {
+                val result = executeLoop(
+                    run = run, skill = skill, config = config, skillName = skillName,
+                    query = query, title = title, runUntil = runUntil,
+                    sessionId = sessionId, provider = provider, subagentTools = subagentTools,
+                )
+                job.deferred.complete(
+                    SubagentOrchestration.JobOutcome(
+                        runId = run.id,
+                        success = result.success,
+                        report = result.output,
+                        skillName = skill.name,
+                        journalPath = run.id.let { rid ->
+                            registry.runs.value.firstOrNull { it.id == rid }?.journalPath
+                        },
+                        error = if (result.success) null else result.output.take(300),
+                    ),
+                )
+                result
+            } catch (e: CancellationException) {
+                job.deferred.complete(
+                    SubagentOrchestration.JobOutcome(
+                        runId = run.id, success = false, report = "",
+                        skillName = skill.name, cancelled = true,
+                        error = e.message ?: "cancelled",
+                    ),
+                )
+                throw e
+            } catch (e: Exception) {
+                job.deferred.complete(
+                    SubagentOrchestration.JobOutcome(
+                        runId = run.id, success = false, report = "",
+                        skillName = skill.name,
+                        error = e.message ?: e.javaClass.simpleName,
+                    ),
+                )
+                throw e
+            }
+        }
+    }
+
+    /**
+     * [T-subagent-orchestration] Complete a job's deferred from the run's
+     * terminal registry snapshot. No-op when the deferred already completed
+     * (cancel cascade finished it first).
+     */
+    private fun completeJobFromRegistry(job: SubagentOrchestration.SubagentJob) {
+        if (job.deferred.isCompleted) return
+        val snapshot = registry.runs.value.firstOrNull { it.id == job.runId }
+        job.deferred.complete(
+            SubagentOrchestration.JobOutcome(
+                runId = job.runId,
+                success = snapshot?.status == SubagentRunRegistry.RunStatus.SUCCESS,
+                report = snapshot?.resultText ?: "",
+                skillName = job.skillName,
+                journalPath = snapshot?.journalPath,
+                error = snapshot?.error,
+                cancelled = snapshot?.status == SubagentRunRegistry.RunStatus.CANCELLED,
+            ),
+        )
+    }
+
+    // ── Model loop ───────────────────────────────────────────────────────
+
+    /**
+     * The sub-agent's model loop. The run is ALREADY registered (and possibly
+     * still QUEUED when this is invoked through the scheduler wrapper) —
+     * registration moved to [executeSpawnAgent] so queued spawns are visible
+     * in the UI before a scheduler permit lands.
+     */
+    private suspend fun executeLoop(
+        run: SubagentRunRegistry.Run,
+        skill: SkillInfo,
+        config: SubagentSkill.SubagentConfig,
+        skillName: String,
+        query: String,
+        title: String,
+        runUntil: String,
+        sessionId: String,
+        provider: com.openminis.app.provider.LLMProvider,
+        subagentTools: List<AgentToolDefinition>,
+    ): ToolExecutionResult {
+        val systemPrompt = SubagentSkill.buildSystemPrompt(skill)
+        val history = mutableListOf(LLMMessage(role = LLMMessage.Role.USER, content = query))
 
         val resultSb = StringBuilder()
         val artifacts = mutableListOf<String>()
@@ -533,15 +687,176 @@ class SubagentRunner(
         error: String?,
         artifacts: List<String>,
         sessionId: String,
-    ): String? = SubagentRunJournal.write(
-        run = if (run.sessionId.isEmpty()) run.copy(sessionId = sessionId) else run,
-        terminal = terminal,
-        resultText = resultText,
-        turns = turns,
-        error = error,
-        artifacts = artifacts,
-        context = context,
-    )
+    ): String? {
+        val path = SubagentRunJournal.write(
+            run = if (run.sessionId.isEmpty()) run.copy(sessionId = sessionId) else run,
+            terminal = terminal,
+            resultText = resultText,
+            turns = turns,
+            error = error,
+            artifacts = artifacts,
+            context = context,
+        )
+        // [T-subagent-orchestration] Surface the anchor in the registry so
+        // the detail page + join results can point at it.
+        if (!path.isNullOrEmpty()) registry.setJournalPath(run.id, path)
+        return path
+    }
+
+    // ── Orchestration tools (parent-only) ────────────────────────────────
+
+    /**
+     * [T-subagent-orchestration] join_subagents / wait_any / cancel_subagents
+     * executor. Sub-agents never reach this (FORBIDDEN_TOOLS + capability
+     * catalog keep the tools out of their schema AND refuse them at runtime).
+     */
+    suspend fun executeOrchestrationTool(name: String, argsJson: String): ToolExecutionResult {
+        val args = try { JSONObject(argsJson) } catch (_: Exception) { JSONObject() }
+        val toolTitle = args.optString("tool_title", name).ifBlank { name }
+        val runIds = SubagentOrchestrationTools.parseRunIds(
+            args.optString("run_ids", "").ifBlank { null },
+        )
+        val groupId = args.optString("group_id", "").trim().ifEmpty { null }
+
+        return when (name) {
+            SubagentOrchestrationTools.JOIN_NAME -> {
+                val timeoutMs = (args.optLong("timeout_sec", 0L)
+                    .takeIf { it > 0 } ?: SubagentOrchestration.DEFAULT_JOIN_TIMEOUT_MS) * 1000L
+                val target = SubagentOrchestration.resolveJoinTargets(orchestration, runIds, groupId)
+                    ?: return ToolExecutionResult(
+                        "No matching sub-agent runs found" +
+                            (runIds.takeIf { it.isNotEmpty() }?.let { " for run_ids=$it" } ?: "")
+                            .let { s -> s + (groupId?.let { " / group_id=$it" } ?: "") } +
+                            ". Detached spawns (run_until='detach') return run_id / group_id — " +
+                            "pass those. Nothing to join yet? spawn_agent first.",
+                        false, toolTitle = toolTitle,
+                    )
+                val (group, jobs) = target
+                val outcomes = SubagentOrchestration.joinAll(jobs, timeoutMs)
+                buildJoinPrompt(group, jobs, outcomes, timedOut = outcomes.any { !it.success && it.error?.contains("join timed out") == true })
+            }
+            SubagentOrchestrationTools.WAIT_ANY_NAME -> {
+                val timeoutMs = (args.optLong("timeout_sec", 0L)
+                    .takeIf { it > 0 } ?: SubagentOrchestration.DEFAULT_WAIT_ANY_TIMEOUT_MS) * 1000L
+                val successOnly = args.optBoolean("success_only", true)
+                val target = SubagentOrchestration.resolveJoinTargets(orchestration, runIds, groupId)
+                    ?: return ToolExecutionResult(
+                        "No matching sub-agent runs found for wait_any" +
+                            (groupId?.let { " / group_id=$it" } ?: "") +
+                            ". Detached spawns return run_id / group_id — pass those.",
+                        false, toolTitle = toolTitle,
+                    )
+                val (group, jobs) = target
+                val winner = SubagentOrchestration.waitAny(jobs, timeoutMs, successOnly)
+                if (winner == null) {
+                    ToolExecutionResult(
+                        "wait_any timed out after ${timeoutMs / 1000}s — no member of group ${group.id} " +
+                            "completed" + (if (successOnly) " successfully" else "") + " yet. " +
+                            "The runs keep going; call wait_any or join_subagents again later.",
+                        false, toolTitle = toolTitle,
+                    )
+                } else {
+                    val losers = jobs.filter { it.runId != winner.runId }
+                    ToolExecutionResult(
+                        buildString {
+                            append("wait_any: first completion in group ${group.id} → run ")
+                            append(winner.runId)
+                            append(" (").append(winner.skillName).append(")")
+                            append(if (winner.cancelled) " CANCELLED" else if (winner.success) " SUCCESS" else " FAILED")
+                            append("\n\n---\n").append(winner.report.ifBlank { "(no report text)" })
+                            winner.journalPath?.let { append("\n\nJournal: $it") }
+                            append("\n\n---\nStill running (NOT waited on): ")
+                            append(losers.joinToString(", ") { it.runId }.ifEmpty { "(none)" })
+                            append(". Reap losers with cancel_subagents when you no longer need them.")
+                        },
+                        success = !winner.cancelled && (winner.success || !successOnly),
+                        toolTitle = toolTitle,
+                    )
+                }
+            }
+            SubagentOrchestrationTools.CANCEL_NAME -> {
+                val reason = args.optString("reason", "cancelled by parent agent").ifBlank { "cancelled by parent agent" }
+                val jobs = when {
+                    runIds.isNotEmpty() -> orchestration.getJobs(runIds)
+                    !groupId.isNullOrBlank() -> {
+                        val group = orchestration.getGroup(groupId)
+                            ?: return ToolExecutionResult(
+                                "No group '$groupId' found.", false, toolTitle = toolTitle,
+                            )
+                        orchestration.getJobs(group.runIds)
+                    }
+                    else -> orchestration.liveDetachedJobs()
+                }
+                if (jobs.isEmpty()) {
+                    return ToolExecutionResult(
+                        "No matching sub-agent runs to cancel" +
+                            (groupId?.let { " for group_id=$it" } ?: "") + ".",
+                        false, toolTitle = toolTitle,
+                    )
+                }
+                val wakeRunIds = SubagentOrchestration.cancelCascade(jobs, reason)
+                var killed = 0
+                for (job in jobs) {
+                    registry.finishIfActive(
+                        job.runId, SubagentRunRegistry.RunStatus.CANCELLED,
+                        error = reason,
+                    )
+                    job.coroutineJob?.let { cj ->
+                        if (cj.isActive) {
+                            cj.cancel(kotlinx.coroutines.CancellationException(reason))
+                            killed++
+                        }
+                    }
+                }
+                ToolExecutionResult(
+                    buildString {
+                        append("Cancelled ${jobs.size} sub-agent run(s) — $killed background coroutine(s) torn down, ")
+                        append("registry reconciled, ${wakeRunIds.size} blocked join/wait woke with 'cancelled'. ")
+                        append("Cancelled runs: ").append(jobs.joinToString(", ") { it.runId })
+                    },
+                    true, toolTitle = toolTitle,
+                )
+            }
+            else -> ToolExecutionResult("Error: unknown orchestration tool '$name'", false, toolTitle = toolTitle)
+        }
+    }
+
+    /** Model-facing rendering of a join's outcomes. */
+    private fun buildJoinPrompt(
+        group: SubagentOrchestration.SubagentGroup,
+        jobs: List<SubagentOrchestration.SubagentJob>,
+        outcomes: List<SubagentOrchestration.JobOutcome>,
+        timedOut: Boolean,
+    ): ToolExecutionResult {
+        val sb = StringBuilder()
+        sb.append(SubagentOrchestration.joinSummary(group, jobs, outcomes))
+        sb.append("\n")
+        for ((job, outcome) in jobs.zip(outcomes)) {
+            sb.append("\n\n=== run ").append(job.runId)
+                .append(" (").append(outcome.skillName).append(") — ")
+                .append(
+                    when {
+                        outcome.cancelled -> "CANCELLED"
+                        outcome.success -> "SUCCESS"
+                        else -> "FAILED"
+                    },
+                )
+                .append(" ===")
+            if (outcome.report.isNotBlank()) sb.append("\n").append(outcome.report)
+            else sb.append("\n(no report text)")
+            outcome.error?.let { sb.append("\nError: ").append(it) }
+            outcome.journalPath?.let { sb.append("\nJournal: ").append(it) }
+        }
+        if (timedOut) {
+            sb.append("\n\nOne or more runs timed out of this join but keep running in the background — ")
+            sb.append("call join_subagents again for just those run_ids to collect them later.")
+        }
+        return ToolExecutionResult(
+            sb.toString(),
+            success = outcomes.isNotEmpty() && outcomes.all { it.success || it.cancelled },
+            toolTitle = "join_subagents",
+        )
+    }
 
     companion object {
         private const val TAG = "ChatViewModel"
