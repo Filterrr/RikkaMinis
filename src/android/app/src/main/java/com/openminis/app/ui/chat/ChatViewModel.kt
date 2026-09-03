@@ -73,6 +73,7 @@ import com.openminis.app.tools.FileWriteTool
 import com.openminis.app.tools.MemoryRollupTool
 import com.openminis.app.tools.MemoryTools
 import com.openminis.app.tools.ReadImageTool
+import com.openminis.app.tools.SubagentOrchestration
 import com.openminis.app.tools.SubagentRunRegistry
 import com.openminis.app.tools.SubagentRunner
 import com.openminis.app.tools.SubagentScheduler
