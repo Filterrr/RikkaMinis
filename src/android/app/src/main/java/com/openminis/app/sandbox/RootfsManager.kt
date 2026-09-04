@@ -234,6 +234,13 @@ class RootfsManager private constructor(private val context: Context) {
             // failures are queued for retryFailedDpkgWorld on next boot.
             restoreDpkgWorld()
 
+            // [T-ubuntu-migration] One-time cleanup of the legacy Alpine
+            // rootfs from pre-migration installs. Runs only AFTER the Ubuntu
+            // rootfs is fully extracted, verified, and overlaid — a low-disk
+            // device never loses the old rootfs before the new one works.
+            // /var/minis/* data is host-side (bind-mounted) and unaffected.
+            cleanupLegacyAlpineRootfs()
+
             Log.i(TAG, "Rootfs installation complete")
             _installState.value = RootfsInstallState.Installed
         } catch (t: Throwable) {
@@ -303,8 +310,30 @@ class RootfsManager private constructor(private val context: Context) {
             libc = exists("lib/ld-linux-aarch64.so.1"),
             glibc = exists("lib/aarch64-linux-gnu/libc.so.6"),
             aptGet = executable("usr/bin/apt-get"),
-            dpkgDatabase = exists("var/lib/dpkg/status"),
+            dpkgDatabase = dpkgDatabaseOk(),
         )
+    }
+
+    /**
+     * dpkg database health: the status file must exist AND parse to at least
+     * one installed package block. A truncated `var/lib/dpkg/status` (0
+     * bytes / no valid blocks) would otherwise pass the existence-only check
+     * and keep [RootfsHealth.healthy] true while every apt operation fails.
+     * Same host-side file read as [dumpDpkgWorld]; costs one parse of an
+     * ~90 KB file on the failure path only (healthy boots short-circuit on
+     * the earlier stat checks... not exactly — order follows the data-class
+     * construction, so the parse runs every boot; acceptable: a 91-package
+     * parse is sub-millisecond on device).
+     */
+    private fun dpkgDatabaseOk(): Boolean {
+        val db = File(rootfsDir, "var/lib/dpkg/status")
+        if (!db.exists()) return false
+        return try {
+            parseDpkgStatus(db.readText()).isNotEmpty()
+        } catch (t: Exception) {
+            Log.w(TAG, "[Integrity] dpkg status unreadable: ${t.message}")
+            false
+        }
     }
 
     /**
@@ -512,11 +541,25 @@ class RootfsManager private constructor(private val context: Context) {
     val apkWorldFailedFile: File get() = File(context.filesDir, "dpkg-world-failed.txt")
 
     /**
-     * Snapshot the currently installed packages to the host side
-     * (filesDir/dpkg-world.txt). Reads dpkg's `var/lib/dpkg/status` directly
-     * on the host filesystem — no proot involved, cheap enough to run on
-     * every boot. A restorable snapshot is only meaningful when the rootfs is
-     * in its final state, so callers invoke this AFTER any auto-repair
+     * Snapshot USER-installed packages to the host side
+     * (filesDir/dpkg-world.txt) as plain package NAMES — one `apt-get
+     * install` line, no version pins.
+     *
+     * Deliberately NOT a full `dpkg status` dump: the factory Ubuntu base
+     * rootfs ships ~91 packages, and snapshotting all of them pinned to
+     * exact versions would (a) save system packages the next extraction
+     * provides anyway, and (b) break on the first bundled-rootfs point
+     * update — apt would try to reinstall old versions of base packages
+     * that no longer exist in the archive, failing the whole batch.
+     *
+     * Instead: `apt-mark showmanual` inside the guest lists explicitly
+     * installed packages; subtracting the factory baseline leaves exactly
+     * what the USER asked for. Version-less names reinstall from whatever
+     * the current archive provides — the same semantics as the snapshot's
+     * purpose (persist user intent across rebuilds).
+     *
+     * A restorable snapshot is only meaningful when the rootfs is in its
+     * final state, so callers invoke this AFTER any auto-repair
      * (PRootKernel.boot) or right before a wipe ([reset]).
      */
     suspend fun dumpDpkgWorld() = withContext(Dispatchers.IO) {
@@ -525,30 +568,109 @@ class RootfsManager private constructor(private val context: Context) {
             Log.d(TAG, "[DpkgWorld] dpkg db not present — rootfs not installed, skip dump")
             return@withContext
         }
+        if (!prootBinary.exists()) {
+            Log.w(TAG, "[DpkgWorld] proot binary not available, skip dump")
+            return@withContext
+        }
         try {
-            val packages = parseDpkgStatus(db.readText())
-            // Guard: an unreadable/corrupt dpkg db parses to an empty list.
-            // The factory rootfs always ships packages, so an empty parse
-            // means the db is broken (the classic pre-Stage-3-reset state) —
-            // overwriting the snapshot with it would erase user packages on
-            // the next restore. Keep the previous snapshot instead.
-            if (packages.isEmpty()) {
-                Log.w(TAG, "[DpkgWorld] dpkg db unreadable (${db.length()} bytes, 0 packages) — keeping previous snapshot")
+            val manual = runAptMarkShowManual()
+            if (manual == null) {
+                Log.w(TAG, "[DpkgWorld] apt-mark showmanual failed — keeping previous snapshot")
                 return@withContext
             }
-            apkWorldFile.writeText(formatDpkgWorld(packages))
-            Log.i(TAG, "[DpkgWorld] snapshot ${packages.size} packages -> ${apkWorldFile.name}")
+            // Guard: a healthy factory rootfs always reports >= the baseline
+            // size. An absurdly small result means the probe ran against a
+            // broken guest — keep the previous snapshot rather than wiping it.
+            if (manual.size < FACTORY_MANUAL_BASELINE.size) {
+                Log.w(TAG, "[DpkgWorld] showmanual=${manual.size} < baseline=${FACTORY_MANUAL_BASELINE.size} — suspicious, keeping previous snapshot")
+                return@withContext
+            }
+            val userPkgs = manual.subtract(FACTORY_MANUAL_BASELINE).sorted()
+            if (userPkgs.isEmpty()) {
+                Log.i(TAG, "[DpkgWorld] no user-installed packages (manual=${manual.size}, all factory)")
+                apkWorldFile.delete()
+                return@withContext
+            }
+            apkWorldFile.writeText(formatDpkgWorld(userPkgs))
+            Log.i(TAG, "[DpkgWorld] snapshot ${userPkgs.size} user package(s) -> ${apkWorldFile.name}: ${userPkgs.take(8).joinToString()}")
         } catch (t: Exception) {
             Log.w(TAG, "[DpkgWorld] dump failed: ${t.message}")
         }
     }
 
     /**
-     * Re-apply the snapshot after a fresh extraction:
-     * `apt-get install -y name=version` for every recorded package (order
-     * preserved). Needs network (apt has no offline install), which is why
-     * failures are non-blocking: the failed list is persisted to
-     * [apkWorldFailedFile] for the next boot's [retryFailedDpkgWorld], and
+     * Factory `apt-mark showmanual` baseline of the bundled Ubuntu base
+     * rootfs (24.04.4 arm64). User packages = showmanual minus this set.
+     *
+     * Kept as a hard-coded set rather than a manifest file: it changes only
+     * when the bundled rootfs asset changes, and a tiny drift (a package
+     * promoted to manual by a base-image update) degrades gracefully — that
+     * package is just never snapshotted as "user" because apt installs it
+     * as a dependency anyway.
+     */
+    private val FACTORY_MANUAL_BASELINE = setOf(
+        "apt", "apt-utils", "base-files", "base-passwd", "bash", "bsdutils",
+        "coreutils", "dash", "debconf", "debianutils", "diffutils", "dpkg",
+        "e2fsprogs", "findutils", "gcc-14-base", "gpgv", "grep", "gzip",
+        "hostname", "init-system-helpers", "libacl1", "libapt-pkg6.0t64",
+        "libattr1", "libaudit-common", "libaudit1", "libbase-files",
+        "libblkid1", "libbsd0", "libbz2-1.0", "libc-bin", "libcom-err2",
+        "libcrypt1", "libdebconfclient0", "libexpat1", "libext2fs2t64",
+        "libffi8", "libgcc-s1", "libgcrypt20", "libgmp10", "libgnutls30t64",
+        "libgpg-error0", "libhogweed6t64", "libidn2-0", "liblz4-1",
+        "liblzma5", "libmd0", "libmount1", "libnettle8t64", "libnghttp2-14",
+        "libp11-kit0", "libpam-modules", "libpam-modules-bin", "libpam-runtime",
+        "libpam0g", "libproc2-0", "libpsl5t64", "libseccomp2", "libselinux1",
+        "libsemanage-common", "libsemanage2", "libsepol2", "libsmartcols1",
+        "libss2", "libssl3t64", "libstdc++6", "libtasn1-6", "libtinfo6",
+        "libudev1", "libunistring5", "libuuid1", "libxxhash0", "libzstd1",
+        "login", "logsave", "lsb-base", "mawk", "mount", "ncurses-base",
+        "ncurses-bin", "p11-kit", "passwd", "procps", "sed", "sensible-utils",
+        "sysvinit-utils", "tar", "ubuntu-keyring", "ucf", "util-linux",
+        "zlib1g",
+    )
+
+    /**
+     * Run `apt-mark showmanual` inside the guest via proot and return the
+     * package-name list, or null when the probe failed (proot missing,
+     * apt-mark unavailable, non-zero exit). No network involved.
+     */
+    private suspend fun runAptMarkShowManual(): Set<String>? = withContext(Dispatchers.IO) {
+        runCatching {
+            val cmd = listOf(
+                prootBinary.absolutePath, "-0", "--link2symlink", "--kill-on-exit",
+                "-r", rootfsDir.absolutePath,
+                "-b", "/dev", "-b", "/proc", "-b", "/sys", "-w", "/root",
+                "/bin/sh", "-c", "/usr/bin/apt-mark showmanual"
+            )
+            val p = ProcessBuilder(cmd)
+                .redirectErrorStream(true)
+                .apply { environment().putAll(prootLoaderEnv()) }
+                .start()
+            val output = p.inputStream.readBytes().toString(Charset.forName("UTF-8"))
+            val finished = p.waitFor(60, java.util.concurrent.TimeUnit.SECONDS)
+            val code = if (finished) p.exitValue() else -1
+            if (p.isAlive) p.destroyForcibly()
+            if (code != 0) {
+                Log.w(TAG, "[DpkgWorld] apt-mark showmanual exit=$code output=${output.takeLast(200)}")
+                return@runCatching null
+            }
+            output.lineSequence()
+                .map { it.trim() }
+                .filter { it.isNotEmpty() && !it.startsWith('#') }
+                .toSet()
+        }.getOrNull()
+    }
+
+    /**
+     * Re-apply the snapshot after a fresh extraction: one
+     * `apt-get update` + ONE batched `apt-get install -y <names...>`.
+     * Names only — no version pins (see [dumpDpkgWorld]).
+     *
+     * Needs network (apt has no offline install), which is why failures are
+     * non-blocking: when the batch fails, apt's own per-package diagnostics
+     * are parsed to re-queue ONLY the packages it could not satisfy (a
+     * package gone from the archive must not poison unrelated ones), and
      * the rootfs stays usable — a missing user package just surfaces as
      * "not installed".
      */
@@ -557,69 +679,117 @@ class RootfsManager private constructor(private val context: Context) {
             Log.d(TAG, "[DpkgWorld] no snapshot file, nothing to restore")
             return@withContext true
         }
-        val packages = try {
+        val names = try {
             parseDpkgWorld(apkWorldFile.readText())
         } catch (t: Exception) {
             Log.e(TAG, "[DpkgWorld] failed to read snapshot, skip restore", t)
             return@withContext false
         }
-        if (packages.isEmpty()) {
+        if (names.isEmpty()) {
             Log.i(TAG, "[DpkgWorld] snapshot empty, nothing to restore")
             return@withContext true
         }
-        val args = packages.map { "${it.name}=${it.version}" }
-        Log.i(TAG, "[DpkgWorld] restoring ${args.size} packages: ${args.take(6).joinToString()}")
-        val code = runAptInstallInGuest(args)
-        if (code == 0) {
-            Log.i(TAG, "[DpkgWorld] restore OK (${args.size} packages)")
+        Log.i(TAG, "[DpkgWorld] restoring ${names.size} package(s): ${names.take(8).joinToString()}")
+        val result = runAptInstallInGuest(names)
+        if (result.exitCode == 0) {
+            Log.i(TAG, "[DpkgWorld] restore OK (${names.size} packages)")
             try { apkWorldFailedFile.delete() } catch (_: Exception) {}
             return@withContext true
         }
-        writeDpkgWorldFailed(args)
-        Log.w(TAG, "[DpkgWorld] restore failed (exit=$code) — ${args.size} pkg(s) queued for retry")
+        val failed = extractFailedPackages(result.output, names)
+        if (failed.isEmpty()) {
+            Log.w(TAG, "[DpkgWorld] restore failed (exit=${result.exitCode}) — whole batch queued for retry")
+            writeDpkgWorldFailed(names)
+        } else {
+            Log.w(TAG, "[DpkgWorld] restore partial (exit=${result.exitCode}) — ${failed.size} pkg(s) queued: ${failed.take(8).joinToString()}")
+            writeDpkgWorldFailed(failed)
+        }
         false
     }
 
     /**
-     * Retry the previously-failed packages at boot time, one by one
-     * (the list is usually small). Runs with the user's mirror config
-     * already applied, so packages that failed against the factory repos
-     * get a second chance. Clears the retry list on full success.
+     * Parse apt's error output for packages that actually failed. Patterns:
+     *   `E: Unable to locate package <name>`
+     *   `E: Package '<name>' has no installation candidate`
+     *   `E: Version '<v>' for '<name>' was not found` (legacy snapshots)
+     * Falls back to the whole batch when nothing recognizable is found —
+     * a total network failure should retry everything, not silently drop
+     * packages.
+     */
+    private fun extractFailedPackages(output: String, requested: List<String>): List<String> {
+        val failed = mutableSetOf<String>()
+        // (pattern, group index of the package name within the match)
+        val patterns = listOf(
+            Regex("""Unable to locate package (\S+)""") to 1,
+            Regex("""Package '([^']+)' has no installation candidate""") to 1,
+            Regex("""Version '[^']*' for '([^']*)' was not found""") to 1,
+            Regex("""'?([A-Za-z0-9+.:-]+)'? (?:is not|but it is not) (?:installable|going to be installed)""") to 1,
+            Regex("""Depends: (\S+) but it is not (?:installable|going to be installed)""") to 1,
+        )
+        for (line in output.lines()) {
+            for ((re, group) in patterns) {
+                re.find(line)?.let { m ->
+                    val pkg = m.groupValues[group]
+                    if (pkg.isNotEmpty()) failed.add(pkg)
+                }
+            }
+        }
+        val known = failed.filter { it in requested.toSet() }
+        return if (known.isEmpty()) requested else known
+    }
+
+    /**
+     * Retry previously-failed packages. One `apt-get update` + ONE batched
+     * install — never per-package update loops on the boot path. Names only
+     * (legacy `name=version` lines are accepted and stripped of the pin).
+     * Retries carry a strike counter: after [MAX_DPKG_WORLD_RETRY_STRIKES]
+     * failed boot attempts the list is dropped and a manual
+     * `apt-get install <pkg>` inside the sandbox takes over. Clears the
+     * retry list on full success.
      */
     suspend fun retryFailedDpkgWorld(): Boolean = withContext(Dispatchers.IO) {
         if (!apkWorldFailedFile.exists()) return@withContext true
-        val args = try {
+        val names = try {
             apkWorldFailedFile.readLines()
-                .map { it.trim() }
-                .filter { it.isNotEmpty() && !it.startsWith("#") && '=' in it }
+                .map { it.trim().substringBefore('=') }
+                .filter { it.isNotEmpty() && !it.startsWith("#") }
         } catch (t: Exception) {
             Log.w(TAG, "[DpkgWorld] failed to read retry list", t)
             return@withContext false
         }
-        if (args.isEmpty()) {
+        if (names.isEmpty()) {
             try { apkWorldFailedFile.delete() } catch (_: Exception) {}
             return@withContext true
         }
-        Log.i(TAG, "[DpkgWorld] retrying ${args.size} previously-failed package(s)")
-        var allOk = true
-        val stillFailed = mutableListOf<String>()
-        for (arg in args) {
-            val code = runAptInstallInGuest(listOf(arg))
-            if (code == 0) {
-                Log.i(TAG, "[DpkgWorld] retry OK: $arg")
-            } else {
-                allOk = false
-                stillFailed.add(arg)
-            }
-        }
-        if (stillFailed.isEmpty()) {
+
+        val prefs = context.getSharedPreferences("dpkg_world_retry", Context.MODE_PRIVATE)
+        val strikes = prefs.getInt("strikes", 0)
+        if (strikes >= MAX_DPKG_WORLD_RETRY_STRIKES) {
+            Log.w(TAG, "[DpkgWorld] retry list dropped after $strikes failed boot attempts — install manually: apt-get install ${names.joinToString(" ")}")
             try { apkWorldFailedFile.delete() } catch (_: Exception) {}
-            Log.i(TAG, "[DpkgWorld] retry fully succeeded")
-        } else {
-            writeDpkgWorldFailed(stillFailed)
-            Log.w(TAG, "[DpkgWorld] ${stillFailed.size} package(s) still failing: ${stillFailed.take(5).joinToString()}")
+            prefs.edit().remove("strikes").apply()
+            return@withContext true
         }
-        allOk
+
+        Log.i(TAG, "[DpkgWorld] retrying ${names.size} package(s) (strike ${strikes + 1}/$MAX_DPKG_WORLD_RETRY_STRIKES): ${names.take(8).joinToString()}")
+        val result = runAptInstallInGuest(names)
+        if (result.exitCode == 0) {
+            try { apkWorldFailedFile.delete() } catch (_: Exception) {}
+            prefs.edit().remove("strikes").apply()
+            Log.i(TAG, "[DpkgWorld] retry fully succeeded")
+            return@withContext true
+        }
+
+        val failed = extractFailedPackages(result.output, names)
+        if (failed.isEmpty()) {
+            // Network-level failure: keep everything, count the strike.
+            writeDpkgWorldFailed(names)
+        } else {
+            writeDpkgWorldFailed(failed)
+        }
+        prefs.edit().putInt("strikes", strikes + 1).apply()
+        Log.w(TAG, "[DpkgWorld] retry failed (exit=${result.exitCode}) — ${failed.size} pkg(s) remain queued")
+        false
     }
 
     /** Persist a failed `name=version` list for the next boot's retry. */
@@ -663,22 +833,25 @@ class RootfsManager private constructor(private val context: Context) {
         return env
     }
 
+    /** Result of one guest apt run: exit code + merged output for parsing. */
+    data class AptResult(val exitCode: Int, val output: String)
+
     /**
-     * Run `apt-get install -y <name>=<version>...` inside the guest via
-     * proot (with a preceding `apt-get update` — apt's index is a cache, not
-     * a database, so it never survives the extraction this runs after).
-     * Returns the apt exit code (0 = all installed), or -1 on process
-     * failure / timeout.
+     * Run `apt-get update` (once) then `apt-get install -y <names...>` inside
+     * the guest via proot. apt's index is a cache, not a database, so it
+     * never survives the extraction this runs after — but it must run exactly
+     * once per invocation, never once per package.
+     * Returns an [AptResult]; exitCode -1 means process failure / timeout.
      */
-    private suspend fun runAptInstallInGuest(pkgArgs: List<String>): Int = withContext(Dispatchers.IO) {
+    private suspend fun runAptInstallInGuest(pkgNames: List<String>): AptResult = withContext(Dispatchers.IO) {
         if (!prootBinary.exists()) {
             Log.w(TAG, "[DpkgWorld] proot binary not available")
-            return@withContext -1
+            return@withContext AptResult(-1, "")
         }
         val script = buildString {
             append("DEBIAN_FRONTEND=noninteractive apt-get update -qq ; ")
             append("DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ")
-            append(pkgArgs.joinToString(" "))
+            append(pkgNames.joinToString(" "))
         }
         val cmd = listOf(
             prootBinary.absolutePath, "-0", "--link2symlink", "--kill-on-exit",
@@ -697,12 +870,31 @@ class RootfsManager private constructor(private val context: Context) {
             val finished = p.waitFor(600, java.util.concurrent.TimeUnit.SECONDS)
             val code = if (finished) p.exitValue() else -1
             if (p.isAlive) p.destroyForcibly()
-            Log.i(TAG, "[DpkgWorld] apt install exit=$code pkgs=${pkgArgs.size} output=${output.takeLast(400)}")
-            code
+            Log.i(TAG, "[DpkgWorld] apt install exit=$code pkgs=${pkgNames.size} output=${output.takeLast(400)}")
+            AptResult(code, output)
         }.onFailure { t ->
             Log.e(TAG, "[DpkgWorld] apt install process failed", t)
-            -1
-        }.getOrDefault(-1)
+            AptResult(-1, "")
+        }.getOrDefault(AptResult(-1, ""))
+    }
+
+    /**
+     * Delete the legacy `filesDir/alpine-rootfs` left behind by pre-Ubuntu
+     * installs. Called only from the success tail of [installIfNeeded], so a
+     * failed/mid-install run never removes the old rootfs before the new one
+     * is usable. Failed cleanup is logged, non-fatal — storage reclaim also
+     * happens through Settings → Storage.
+     */
+    private fun cleanupLegacyAlpineRootfs() {
+        val legacy = File(context.filesDir, "alpine-rootfs")
+        if (!legacy.exists()) return
+        try {
+            val freedMb = legacy.walkBottomUp().filter { it.isFile }.sumOf { it.length() } / (1024L * 1024L)
+            legacy.deleteRecursively()
+            Log.i(TAG, "[Migration] legacy alpine-rootfs removed (~${freedMb} MiB freed)")
+        } catch (t: Throwable) {
+            Log.w(TAG, "[Migration] legacy alpine-rootfs cleanup failed: ${t.message}")
+        }
     }
 
     /**
@@ -1037,6 +1229,13 @@ class RootfsManager private constructor(private val context: Context) {
         private const val DEFAULT_MOUNT_ASSET = "default_mount"
 
         /**
+         * Boot-time dpkg-world retry attempts before the queue is dropped.
+         * Prevents a permanently-unsatisfiable package list from taxing
+         * every startup with a doomed apt round-trip.
+         */
+        private const val MAX_DPKG_WORLD_RETRY_STRIKES = 3
+
+        /**
          * Parse the line-based integrity manifest text ("rel/path=size" per
          * line) into a map. Malformed lines are skipped; an empty or
          * unparseable manifest yields an empty map, which `verifyIntegrity`
@@ -1144,8 +1343,9 @@ internal fun extractTar(
             }
             continue
         }
-        val outFile = File(targetDir, fullName)
-        val isTarget = onlyPrefixes == null || onlyPrefixes.any { fullName.startsWith(it) }
+        val outFile = safeTarEntryFile(targetDir, fullName)
+        val isTarget = outFile != null &&
+            (onlyPrefixes == null || onlyPrefixes.any { fullName.startsWith(it) })
 
         when (typeFlag) {
             '5', 'D' -> {
@@ -1198,12 +1398,16 @@ internal fun extractTar(
                 continue // Already consumed data + padding
             }
             '1' -> {
-                // Hard link — create a copy
+                // Hard link — create a copy. linkName gets the same
+                // containment check as regular entry names: a link that
+                // points outside the target dir is skipped, not materialized.
                 if (isTarget) {
-                    outFile.parentFile?.mkdirs()
-                    val linkTarget = File(targetDir, linkName)
-                    if (linkTarget.exists()) {
+                    val linkTarget = safeTarEntryFile(targetDir, linkName)
+                    if (linkTarget != null && linkTarget.exists()) {
+                        outFile.parentFile?.mkdirs()
                         linkTarget.copyTo(outFile, overwrite = true)
+                    } else {
+                        Log.w("RootfsManager", "Skipped hardlink with unsafe/missing target: $fullName -> $linkName")
                     }
                 }
             }
@@ -1216,6 +1420,28 @@ internal fun extractTar(
             val blocks = (size + 511) / 512 * 512
             skipFully(input, blocks)
         }
+    }
+}
+
+/**
+ * Resolve a tar entry name against [targetDir] with path containment: the
+ * normalized canonical path MUST stay inside the target directory. Blocks
+ * `../` traversal, absolute names, and symlink-escape names. Returns null
+ * (caller skips the entry) instead of throwing, so a single hostile entry
+ * cannot abort the whole extraction.
+ */
+internal fun safeTarEntryFile(targetDir: File, fullName: String): File? {
+    if (fullName.isEmpty() || fullName.startsWith("/")) return null
+    val rootPath = try {
+        targetDir.canonicalFile.toPath()
+    } catch (_: Exception) {
+        return null
+    }
+    return try {
+        val resolved = rootPath.resolve(fullName).normalize()
+        if (resolved.startsWith(rootPath)) resolved.toFile() else null
+    } catch (_: Exception) {
+        null
     }
 }
 
@@ -1344,12 +1570,15 @@ data class ApkPackage(val name: String, val version: String)
 
 /**
  * Parse dpkg's `/var/lib/dpkg/status` (read host-side — no proot needed)
- * into ordered (name, version) pairs. Each package is a block of
+ * into ordered (name, version) pairs. Used by the [RootfsHealth] database
+ * check (at least one valid block) and by [parseDpkgWorld] consumers of
+ * legacy `name=version` snapshots. Each package is a block of
  * `Key: value` lines terminated by a blank line; the name lives under
- * `Package:`, the version under `Version:`. Status blocks marked
- * `Status: ... not-installed` are skipped (stale config remnants).
- * Blocks missing either field are skipped; a trailing block without a
- * closing blank line is still captured.
+ * `Package:`, the version under `Version:`. Status blocks whose third
+ * field (`state`) is `config-files` / `not-installed` are skipped — the
+ * package was removed and must not be restored. Blocks missing either
+ * field are skipped; a trailing block without a closing blank line is
+ * still captured.
  */
 internal fun parseDpkgStatus(text: String): List<ApkPackage> {
     val result = mutableListOf<ApkPackage>()
@@ -1388,31 +1617,30 @@ internal fun parseDpkgStatus(text: String): List<ApkPackage> {
 }
 
 /**
- * Serialize packages as one `name=version` line each, with a header
- * comment (parseable back by [parseDpkgWorld]).
+ * Serialize user package NAMES (no versions — restore re-resolves from the
+ * current archive) as one name per line, with a header comment parseable
+ * back by [parseDpkgWorld].
  */
-internal fun formatDpkgWorld(packages: List<ApkPackage>): String =
+internal fun formatDpkgWorld(names: List<String>): String =
     buildString {
-        appendLine("# dpkg-world snapshot — `<name>=<version>` per line, written by RootfsManager.dumpDpkgWorld()")
-        for (p in packages) appendLine("${p.name}=${p.version}")
+        appendLine("# dpkg-world snapshot — user package names, one per line, written by RootfsManager.dumpDpkgWorld()")
+        for (n in names) appendLine(n)
     }
 
 /**
- * Parse a dpkg-world snapshot (or retry list) back into packages.
- * Tolerates blank lines, `#` comments, and malformed lines (skipped).
+ * Parse a dpkg-world snapshot (or retry list) back into package names.
+ * Current format: bare names. Legacy `name=version` lines (written by the
+ * pre-migration exact-pin implementation) are accepted and the pin is
+ * stripped, so old snapshots restore as name-only installs. Tolerates
+ * blank lines, `#` comments, and malformed lines (skipped).
  */
-internal fun parseDpkgWorld(text: String): List<ApkPackage> {
-    val result = mutableListOf<ApkPackage>()
+internal fun parseDpkgWorld(text: String): List<String> {
+    val result = mutableListOf<String>()
     for (line in text.lines()) {
         val t = line.trim()
         if (t.isEmpty() || t.startsWith("#")) continue
-        val eq = t.indexOf('=')
-        if (eq <= 0) continue
-        val name = t.substring(0, eq).trim()
-        val version = t.substring(eq + 1).trim()
-        if (name.isNotEmpty() && version.isNotEmpty()) {
-            result.add(ApkPackage(name, version))
-        }
+        val name = t.substringBefore('=').trim()
+        if (name.isNotEmpty()) result.add(name)
     }
     return result
 }

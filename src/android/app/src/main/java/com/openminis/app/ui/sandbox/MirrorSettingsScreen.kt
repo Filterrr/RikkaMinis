@@ -136,7 +136,7 @@ object MirrorCatalog {
         MirrorEntry("npm.$id", name, url, url, MirrorCategory.NPM, region, official)
 
     val aptMirrors = listOf(
-        apt("official", "Ubuntu Ports", "http://ports.ubuntu.com/ubuntu-ports/", "Global", official = true),
+        apt("official", "Ubuntu Ports", "https://ports.ubuntu.com/ubuntu-ports/", "Global", official = true),
         apt("tuna", "Tsinghua TUNA", "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/", "China"),
         apt("aliyun", "Alibaba", "https://mirrors.aliyun.com/ubuntu-ports/", "China"),
         apt("ustc", "USTC", "https://mirrors.ustc.edu.cn/ubuntu-ports/", "China"),

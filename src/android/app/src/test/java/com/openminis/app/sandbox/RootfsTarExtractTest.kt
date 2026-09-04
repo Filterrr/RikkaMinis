@@ -153,6 +153,37 @@ class RootfsTarExtractTest {
     }
 
     @Test
+    fun `path traversal entries are rejected`() {
+        // Hostile archive: ../ escape must be skipped, not materialized.
+        extract(
+            listOf(
+                tarEntry("usr/bin/ok", "OK".toByteArray()),
+                tarEntry("../../etc/evil", "PWNED".toByteArray()),
+            ),
+            prefixes = setOf("usr/bin/", "etc"),
+        )
+        assertFile("usr/bin/ok", "OK")
+        assertFalse("traversal entry must not escape", tmp.root.resolve("../../etc/evil").exists())
+        // Nothing landed outside the temp root (canonical containment).
+        val parent = tmp.root.parentFile
+        parent.listFiles()?.filter { it.name.startsWith("evil") || it.name == "etc" && it !in tmp.root.listFiles().toList() }
+            ?.let { for (f in it) assertFalse("no spill: ${f.absolutePath}", f.exists() && f.absolutePath.startsWith(tmp.root.absolutePath).not()) }
+    }
+
+    @Test
+    fun `hardlink with traversal target is skipped`() {
+        extract(
+            listOf(
+                tarEntry("usr/bin/test", "COREUTILS-TEST".toByteArray()),
+                tarEntry("usr/bin/evil-link", typeflag = '1', linkName = "../../../etc/passwd"),
+            ),
+            prefixes = setOf("usr/bin/"),
+        )
+        assertFile("usr/bin/test", "COREUTILS-TEST")
+        assertFalse("unsafe hardlink must not be materialized", tmp.root.resolve("usr/bin/evil-link").exists())
+    }
+
+    @Test
     fun `hardlink entries are materialized as file copies`() {
         // Ubuntu ships real hardlinks (e.g. /usr/bin/[ vs /usr/bin/test).
         // extractTar copies the target content (typeflag '1' path).

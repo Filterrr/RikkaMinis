@@ -14,6 +14,7 @@ import java.io.File
 import java.io.IOException
 import java.util.TimeZone
 import kotlin.math.abs
+import kotlinx.coroutines.launch
 
 /**
  * PRoot configuration holder and command builder.
@@ -98,10 +99,13 @@ object PRootKernel {
         rootfsManager.refreshDns()
 
         // [Refactor-dpkg-world] Retry packages that failed to restore after a
-        // rebuild. Runs AFTER mirror re-application, so the retry uses the
-        // user's chosen repositories instead of the factory defaults that
-        // may have caused the original failure.
-        rootfsManager.retryFailedDpkgWorld()
+        // rebuild — but OFF the critical boot path: the batched apt round-trip
+        // (update + install) can take tens of seconds on a slow mirror and
+        // must not delay first shell availability. Fire-and-forget on IO; the
+        // strike counter in RootfsManager caps repeated doomed attempts.
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).kotlinx.coroutines.launch {
+            rootfsManager.retryFailedDpkgWorld()
+        }
 
         // [Refactor-dpkg-world] Snapshot user-installed packages to the host
         // side LAST — the rootfs is only in its final state after

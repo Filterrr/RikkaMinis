@@ -136,7 +136,7 @@ See [docs/DEVELOPMENT_LIFECYCLE.md](docs/DEVELOPMENT_LIFECYCLE.md).
 - **proot is built from source.** The sandbox engine comes from the
   `deps/proot` submodule + `deps/build_proot.sh` + vendored `deps/talloc`,
   compiled with NDK r28 in CI. The Ubuntu Base rootfs (`ubuntu-base.tar.gz`,
-  8.5 MB) is committed as a prebuilt asset and unpacked at runtime by
+  ~30 MB) is committed as a prebuilt asset and unpacked at runtime by
   `RootfsManager` — the proot binary itself is not committed, fully
   reproducible.
 - **Other native libs stay vendored.** `libpty_bridge.so`,

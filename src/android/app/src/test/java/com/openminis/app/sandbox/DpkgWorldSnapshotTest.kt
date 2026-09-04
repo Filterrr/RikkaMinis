@@ -135,36 +135,47 @@ class DpkgWorldSnapshotTest {
         assertEquals(listOf(ApkPackage("real", "4.4.4")), parseDpkgStatus(text))
     }
 
-    // ── formatDpkgWorld / parseDpkgWorld round-trip ────────────────────
+    // ── formatDpkgWorld / parseDpkgWorld：纯名字新格式 + legacy 兼容 ────
 
     @Test
-    fun `world format parse round-trips`() {
-        val pkgs = listOf(
-            ApkPackage("curl", "8.5.0-2ubuntu10"),
-            ApkPackage("python3", "3.12.3-0ubuntu2"),
-            ApkPackage("vim", "2:9.1.0016-1ubuntu7"),
-        )
-        val text = formatDpkgWorld(pkgs)
-        assertEquals(pkgs, parseDpkgWorld(text))
+    fun `world format round-trips with bare names`() {
+        // New snapshot format: bare package names, NO version pins —
+        // restoring re-resolves from the current archive.
+        val names = listOf("curl", "python3-pip", "ffmpeg", "nodejs")
+        val text = formatDpkgWorld(names)
+        assertEquals(names, parseDpkgWorld(text))
     }
 
     @Test
     fun `parseDpkgWorld tolerates comments blanks and bad lines`() {
         val text = """
+            # dpkg-world snapshot — user package names, one per line
+            curl
+
+            python3-pip
+            =broken-no-name
+            nope-just-a-name
+            git  
+        """.trimIndent()
+        // `=broken-no-name` → name empty → skipped by the `=` guard;
+        // bare `nope-just-a-name` has no '=' so it survives as a valid name;
+        // `git  ` trims to `git`.
+        assertEquals(listOf("curl", "python3-pip", "nope-just-a-name", "git"), parseDpkgWorld(text))
+    }
+
+    @Test
+    fun `legacy name=version lines still parse with pin stripped`() {
+        // Snapshots written by the old exact-pin implementation must not
+        // break the new restore path: `=` is stripped, name survives.
+        val text = """
             # dpkg-world snapshot — <name>=<version> per line
             curl=8.5.0-2ubuntu10
 
             python3=3.12.3-0ubuntu2
-            =broken-no-name
-            nope-just-a-name
-            git=   1:2.43.0-1ubuntu7  
+            vim=2:9.1.0016-1ubuntu7
         """.trimIndent()
         assertEquals(
-            listOf(
-                ApkPackage("curl", "8.5.0-2ubuntu10"),
-                ApkPackage("python3", "3.12.3-0ubuntu2"),
-                ApkPackage("git", "1:2.43.0-1ubuntu7"),
-            ),
+            listOf("curl", "python3", "vim"),
             parseDpkgWorld(text),
         )
     }
@@ -173,5 +184,14 @@ class DpkgWorldSnapshotTest {
     fun `parse empty world text yields empty list`() {
         assertTrue(parseDpkgWorld("").isEmpty())
         assertTrue(parseDpkgWorld("# only a comment\n").isEmpty())
+    }
+
+    @Test
+    fun `traversal-style name is never a valid package`() {
+        // Defense-in-depth parity with the tar containment fix: a snapshot
+        // line that looks like a path is not a package name apt would take,
+        // but the parser must at least not mangle it into something else.
+        val names = parseDpkgWorld("../../etc/passwd\nfoo")
+        assertEquals(listOf("../../etc/passwd", "foo"), names)
     }
 }
