@@ -1,4 +1,4 @@
-package com.openminis.app.ui.subagent
+package com.openminis.app.ui.chat
 
 // [T-subagent-ui] In-chat prompt row for sub-agent runs, rebuilt as a
 // vertical "mission control" list. The old design packed every run into
@@ -8,6 +8,19 @@ package com.openminis.app.ui.subagent
 // glyph, title + status, live turn chip, live elapsed timer, slim turn
 // progress line — newest first, capped at MAX_VISIBLE rows with a "+N"
 // overflow counter. Tap any row → second-level SubagentDetailScreen.
+//
+// NOTE: package stays com.openminis.app.ui.chat (as upstream) — ChatScreen
+// references this composable unqualified from the same package, so moving
+// the package would break resolution (caught by CI, fixed here). Shared
+// status/timer helpers live in ui.subagent.SubagentUiCommon and are
+// imported below.
+
+import com.openminis.app.ui.subagent.SubagentAccent
+import com.openminis.app.ui.subagent.formatSubagentDuration
+import com.openminis.app.ui.subagent.rememberRunElapsedMs
+import com.openminis.app.ui.subagent.runStatusColor
+import com.openminis.app.ui.subagent.runStatusLabel
+import com.openminis.app.ui.subagent.turnProgressFraction
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
