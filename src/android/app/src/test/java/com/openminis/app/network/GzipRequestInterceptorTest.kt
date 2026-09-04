@@ -42,8 +42,10 @@ class GzipRequestInterceptorTest {
 
         val recorded = server.takeRequest()
         assertEquals("gzip", recorded.getHeader("Content-Encoding"))
-        val gunzipped = GzipSource(recorded.body.buffer().snapshot().clone()).buffer()
-            .readUtf8()
+        // Gunzip the recorded wire bytes and verify content integrity.
+        val bodyBuf = okio.Buffer()
+        recorded.body.copyTo(bodyBuf)
+        val gunzipped = GzipSource(bodyBuf).buffer().readUtf8()
         assertEquals(bigPayload, gunzipped)
         server.close()
     }
