@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -55,6 +56,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -64,6 +66,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -188,16 +191,31 @@ fun SubagentDetailScreen(
 private fun SubagentRunDetailBody(run: SubagentRunRegistry.Run) {
     val listState = rememberLazyListState()
     val stepCount = run.steps.size
-    // Follow the live log: keep the newest step visible while running.
-    // LazyColumn indices include the header items: "task" is 0, the
-    // "log-header" row (when present) is 1, so the newest step lands at
-    // index (1 if header else 0) + stepCount - 1 — the plain stepCount-1
-    // of the old build stopped one step short of the bottom.
-    val stepOffset = if (stepCount > 0) 1 else 0  // "task" item
+    // Pause auto-follow when the USER drags away from the bottom; resume
+    // when they return (derivedStateOf so only actual position flips
+    // recompose, not every scroll pixel). Programmatic animateScrollToItem
+    // does NOT emit drag interactions — user intent only.
+    var followPaused by remember { mutableStateOf(false) }
+    val atBottom by remember {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            val last = info.visibleItemsInfo.lastOrNull()
+            last == null || last.index >= info.totalItemsCount - 1
+        }
+    }
+    LaunchedEffect(listState) {
+        listState.interactionSource.interactions.collect { interaction ->
+            if (interaction is DragInteraction.Start) followPaused = !atBottom
+        }
+    }
+    LaunchedEffect(atBottom) {
+        if (atBottom) followPaused = false
+    }
+    // Follow the live log: keep the newest step visible while running,
+    // unless the user is reading history.
     LaunchedEffect(stepCount, run.isActive) {
-        if (run.isActive && stepCount > 0) {
-            val hasLogHeader = true // steps non-empty ⇒ header row exists
-            val target = stepOffset + (if (hasLogHeader) 1 else 0) + stepCount - 1
+        if (run.isActive && stepCount > 0 && !followPaused) {
+            val target = 1 + stepCount - 1  // "task" header + newest step
             runCatching {
                 listState.animateScrollToItem(target.coerceAtLeast(0))
             }
@@ -255,11 +273,64 @@ private fun SubagentRunDetailBody(run: SubagentRunRegistry.Run) {
                         MetaChip(label = "group", value = run.groupId.takeLast(6))
                     }
                 }
+                if (run.isExecuting && run.maxTurns > 0) {
+                    // Turn progress mirrors the in-chat capsule's slim line
+                    // (shared fraction logic, same 4–96% clamp) so the two
+                    // surfaces tell one consistent story.
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(3.dp)
+                            .background(
+                                SubagentAccent.copy(alpha = if (ChatColors.isDark) 0.18f else 0.12f),
+                                RoundedCornerShape(2.dp),
+                            ),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth(turnProgressFraction(run) ?: 0f)
+                                .height(3.dp)
+                                .background(SubagentAccent, RoundedCornerShape(2.dp)),
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        "turn ${run.turn} of ${run.maxTurns}",
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = ChatColors.tertiaryText,
+                    )
+                }
             }
         }
 
         // ── Execution log ───────────────────────────────────────────────
-        if (run.steps.isNotEmpty()) {
+        if (run.steps.isEmpty()) {
+            item(key = "log-empty") {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .alpha(0.65f)
+                        .padding(vertical = 8.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(12.dp),
+                        strokeWidth = 1.5.dp,
+                        color = SubagentAccent,
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        "waiting for first tool call…",
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = ChatColors.tertiaryText,
+                    )
+                }
+            }
+        } else {
             item(key = "log-header") {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -285,6 +356,7 @@ private fun SubagentRunDetailBody(run: SubagentRunRegistry.Run) {
         }
 
         // ── Streaming / final result ────────────────────────────────────
+        // ── Streaming / final result ────────────────────────────────────
         if (run.resultText.isNotBlank()) {
             item(key = "result") {
                 Row(
@@ -295,12 +367,20 @@ private fun SubagentRunDetailBody(run: SubagentRunRegistry.Run) {
                         .border(0.5.dp, ChatColors.toolBorder, RoundedCornerShape(12.dp)),
                 ) {
                     // Accent spine so the agent's own voice reads as
-                    // distinct from tool output above it.
+                    // distinct from tool output above it — vertical fade
+                    // keeps it subtle at the bottom of long text blocks.
                     Box(
                         modifier = Modifier
                             .width(3.dp)
                             .fillMaxHeight()
-                            .background(SubagentAccent.copy(alpha = 0.55f)),
+                            .background(
+                                Brush.verticalGradient(
+                                    listOf(
+                                        SubagentAccent.copy(alpha = 0.7f),
+                                        SubagentAccent.copy(alpha = 0.2f),
+                                    ),
+                                ),
+                            ),
                     )
                     Column(modifier = Modifier.padding(12.dp)) {
                         Text(
@@ -325,11 +405,7 @@ private fun SubagentRunDetailBody(run: SubagentRunRegistry.Run) {
         // ── Error banner ────────────────────────────────────────────────
         run.error?.let { err ->
             item(key = "error") {
-                Text(
-                    err,
-                    fontSize = 13.sp,
-                    lineHeight = 18.sp,
-                    color = ChatColors.error,
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(
@@ -337,7 +413,22 @@ private fun SubagentRunDetailBody(run: SubagentRunRegistry.Run) {
                             RoundedCornerShape(10.dp),
                         )
                         .padding(12.dp),
-                )
+                ) {
+                    Text(
+                        "ERROR",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = ChatColors.error,
+                        letterSpacing = 1.sp,
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        err,
+                        fontSize = 13.sp,
+                        lineHeight = 18.sp,
+                        color = ChatColors.error,
+                    )
+                }
             }
         }
     }
