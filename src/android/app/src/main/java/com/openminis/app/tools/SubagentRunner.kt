@@ -86,7 +86,11 @@ class SubagentRunner(
         val args = try { JSONObject(argsJson) } catch (_: Exception) { JSONObject() }
         val skillName = args.optString("skill_name", "").trim()
         val query = args.optString("query", "").trim()
-        val title = args.optString("tool_title", "Sub-agent").ifBlank { "Sub-agent" }
+        // [T-subagent-pill-title] Prefer the model's task title; fall back to
+        // the skill name (never a generic literal) so completed pills stay
+        // distinguishable when tool_title is omitted.
+        val title = args.optString("tool_title", "").trim()
+            .ifBlank { skillName.ifBlank { "Sub-agent" } }
         val rawRunUntil = args.optString("run_until", SubagentSkill.RUN_UNTIL_DONE)
             .ifBlank { SubagentSkill.RUN_UNTIL_DONE }
 
@@ -165,7 +169,7 @@ class SubagentRunner(
             queued = true,
         )
         if (outcome.reused) {
-            return deduplicatedSpawnResult(outcome.run.id, skillName)
+            return deduplicatedSpawnResult(outcome.run.id, title)
         }
         val run = outcome.run
         val job = SubagentOrchestration.SubagentJob(
@@ -226,7 +230,7 @@ class SubagentRunner(
                     append("Meanwhile continue other work — do not idle.")
                 },
                 success = true,
-                toolTitle = "Sub-agent: $skillName",
+                toolTitle = "Sub-agent: $title",
             )
         }
 
@@ -286,7 +290,7 @@ class SubagentRunner(
      * job deferred completes on every exit path, so join_subagents can
      * collect an inline run's result later too.
      */
-    private fun deduplicatedSpawnResult(existingRunId: String, skillName: String): ToolExecutionResult {
+    private fun deduplicatedSpawnResult(existingRunId: String, title: String): ToolExecutionResult {
         val snapshot = registry.runs.value.firstOrNull { it.id == existingRunId }
         val statusDesc = if (snapshot?.isQueued == true) "queued (waiting for a scheduler slot)" else "running"
         return ToolExecutionResult(
@@ -300,7 +304,7 @@ class SubagentRunner(
                 append("Do NOT spawn this same task again while that run is active.")
             },
             success = true,
-            toolTitle = "Sub-agent: $skillName",
+            toolTitle = "Sub-agent: $title",
         )
     }
 
@@ -517,7 +521,7 @@ class SubagentRunner(
                         artifacts = artifacts.toList(),
                     )
                     return ToolExecutionResult(
-                        result.toPromptText(stoppedEarly = true), true, toolTitle = "Sub-agent: ${skill.name}",
+                        result.toPromptText(stoppedEarly = true), true, toolTitle = "Sub-agent: $title",
                     )
                 }
             }
@@ -554,7 +558,7 @@ class SubagentRunner(
                 artifacts = artifacts.toList(),
                 error = msg,
             )
-            return ToolExecutionResult(result.toPromptText(), false, toolTitle = "Sub-agent: ${skill.name}")
+            return ToolExecutionResult(result.toPromptText(), false, toolTitle = "Sub-agent: $title")
         }
 
         if (turns >= config.maxTurns && lastText.isNotBlank()) {
@@ -566,7 +570,7 @@ class SubagentRunner(
             registry.finish(run.id, SubagentRunRegistry.RunStatus.SUCCESS, resultText = "")
             return ToolExecutionResult(
                 "Sub-agent '$skillName' completed in $turns turn(s) with no output.",
-                true, toolTitle = "Sub-agent: ${skill.name}",
+                true, toolTitle = "Sub-agent: $title",
             )
         }
 
@@ -584,7 +588,7 @@ class SubagentRunner(
             ),
             artifacts = artifacts.toList(),
         )
-        return ToolExecutionResult(result.toPromptText(), true, toolTitle = "Sub-agent: ${skill.name}")
+        return ToolExecutionResult(result.toPromptText(), true, toolTitle = "Sub-agent: $title")
     }
 
 
