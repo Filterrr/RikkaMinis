@@ -21,6 +21,14 @@
          policy, not an OS runtime check, and Minis ships as a sideload.
     -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- [OPT3-fgs-modelservice] ModelStreamForegroundService promotes the
+         :modelservice worker to foreground while an LLM stream is in flight.
+         dataSync is the honest type for "ongoing data transfer"; see the
+         AgentForegroundService comment above for why the OTHER long-lived
+         service prefers mediaPlayback — this one only lives for the duration
+         of a single generation (demoted when the stream ends), so the 6h
+         dataSync window is not a realistic reach here. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <!-- T50: PARTIAL_WAKE_LOCK held by AgentForegroundService while sessions
          are streaming so Doze + OEM CPU throttling don't stall long shell
          tools after screen-off. -->
@@ -325,6 +333,15 @@
             android:name=".sandbox.offload.ModelExecutionService"
             android:process=":modelservice"
             android:exported="false" />
+
+        <!-- [OPT3-fgs-modelservice] Runs in the :modelservice process itself.
+             Promoted to foreground while a chat stream is in flight so long
+             generations survive OEM background limits; demoted when idle. -->
+        <service
+            android:name=".service.ModelStreamForegroundService"
+            android:process=":modelservice"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <!-- [native-oom Phase 1] Isolated process for native_offload socket
              server + handler registry. Keeps the heavy per-tool native/mmap

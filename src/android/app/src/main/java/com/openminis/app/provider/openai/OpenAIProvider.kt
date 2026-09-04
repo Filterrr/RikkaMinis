@@ -5,6 +5,7 @@ import com.openminis.app.data.model.AgentContentPart
 import com.openminis.app.data.model.AgentToolDefinition
 import com.openminis.app.data.model.LLMError
 import com.openminis.app.data.model.parseRetryAfterMs
+import com.openminis.app.network.GzipRequestInterceptor
 import com.openminis.app.data.model.LLMMediaAttachment
 import com.openminis.app.data.model.LLMMessage
 import com.openminis.app.data.model.LLMModel
@@ -484,13 +485,51 @@ class OpenAIProvider constructor(
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(FirstChunkTimeoutPolicy.GENERATION_TIMEOUT_SEC.toLong(), TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
+        // [OPT1-h2-ping] HTTP/2 connection-level liveness. Reasoning streams can
+        // sit silent for MINUTES at the DATA-frame layer (Codex: 2:50-3:10 with
+        // no keep-alive bytes) — but PING frames are answered by the connection
+        // itself, independent of stream activity. Without this, a half-open h2
+        // tunnel (proxy restart, upstream cut, network flap the pool survived)
+        // is only detected by the passive TTFB / first-data watchdogs AFTER a
+        // request has been written into it; with it, OkHttp fails the call the
+        // moment PING goes unanswered (~2x interval), surfacing a retryable
+        // NetworkError instead of a silent multi-minute hang. 30s: 2x the TTFB
+        // watchdog, well under the line-idle budget; no effect on healthy
+        // long-silence generations (server answers PINGs even while reasoning).
+        .pingInterval(30, TimeUnit.SECONDS)
         // [T-android-stale-conn-retry-hang] Shared pool so NetworkMonitor's
         // network-transition eviction reaches THIS client's connections —
         // a per-client pool was never evicted, and a dead h2 tunnel through
         // a local proxy got reused on every retry (silent infinite hang).
         .connectionPool(com.openminis.app.network.NetworkMonitor.sharedLLMConnectionPool)
         .eventListenerFactory { OkHttpNetTraceListener() }
+        // [OPT6-request-gzip] Compress large JSON request bodies (agent loops
+        // ship 100s of KB of tool output). Route-gated: official OpenAI hosts
+        // accept gzip; unknown relays are opted OUT by default (a relay that
+        // 400s on Content-Encoding would otherwise poison every big request).
+        .addInterceptor(
+            GzipRequestInterceptor(
+                shouldCompress = { req -> gzipEligibleHost(req.url.host) },
+            )
+        )
         .build()
+
+    /**
+     * [OPT6-request-gzip] Route gate for request-body compression. Official /
+     * first-party endpoints only — gzip request bodies are RFC-standard but
+     * some relay implementations mangle or reject Content-Encoding on input.
+     * [FIX-audit-P2-whitelist] Exact known API hosts (no wildcard subdomains:
+     * `*.openai.com` would have covered non-API properties too, and a
+     * wildcard on any base domain is a policy-inconsistent footgun).
+     */
+    private fun gzipEligibleHost(host: String): Boolean =
+        host.lowercase() in setOf(
+            "api.openai.com",
+            "api.anthropic.com",
+            "api.deepseek.com",
+            "dashscope.aliyuncs.com",
+            "api.x.ai",
+        )
 
     /** Detect OpenRouter base URL. */
     private val isOpenRouter: Boolean = basePath.contains("openrouter.ai")
@@ -2814,7 +2853,10 @@ class OpenAIProvider constructor(
             if (statusCode == 503 && (body.contains("no_available_providers") || body.contains("model_not_found"))) {
                 return LLMError.ProviderError(message)
             }
-            return LLMError.TransientError(message)
+            // [OPT2-retry-after] Carry the provider's Retry-After on transient
+            // 5xx bodies too (OpenRouter relays 429-style Retry-After on 503
+            // overload); the retry scheduler consumes it for the countdown.
+            return LLMError.TransientError(message, retryAfterMs)
         }
         return LLMError.ProviderError(message)
     }

@@ -1273,4 +1273,6 @@
     <!-- Fix: minis:// リンク対象のファイルが消えた場合の表記、および外部 scheme 遮断の文言。 -->
     <string name="chat_link_file_missing">このファイルは利用できなくなりました。</string>
     <string name="webpreview_blocked_scheme">外部アプリへのリンクをブロックしました。</string>
+    <string name="model_stream_fgs_channel">モデルストリーミング</string>
+    <string name="model_stream_fgs_generating">返信を生成中…</string>
 </resources>

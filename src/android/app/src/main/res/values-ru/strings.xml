@@ -1421,4 +1421,6 @@
     <!-- Fix: уведомления о недоступных файлах minis:// и о блокировке внешних scheme. -->
     <string name="chat_link_file_missing">Этот файл больше недоступен.</string>
     <string name="webpreview_blocked_scheme">Ссылка на внешнее приложение заблокирована.</string>
+    <string name="model_stream_fgs_channel">Потоковая передача модели</string>
+    <string name="model_stream_fgs_generating">Генерация ответа…</string>
 </resources>

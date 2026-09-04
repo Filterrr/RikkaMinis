@@ -51,9 +51,20 @@ class GeminiProvider(
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(FirstChunkTimeoutPolicy.GENERATION_TIMEOUT_SEC.toLong(), TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
+        // [OPT1-h2-ping] Shared with OpenAIProvider — rationale there.
+        .pingInterval(30, TimeUnit.SECONDS)
         // [T-android-stale-conn-retry-hang] Shared pool — see NetworkMonitor.
         // Network-transition eviction must reach provider connections.
         .connectionPool(com.openminis.app.network.NetworkMonitor.sharedLLMConnectionPool)
+        // [OPT6-request-gzip] Generative Language API accepts gzipped JSON
+        // request bodies; custom bases (proxies) → opt out (raw bodies).
+        // [FIX-audit-P2-whitelist] Exact Google API host (the former
+        // `*.googleapis.com` wildcard covered unrelated Google services).
+        .addInterceptor(
+            com.openminis.app.network.GzipRequestInterceptor(
+                shouldCompress = { req -> req.url.host.lowercase() == "generativelanguage.googleapis.com" },
+            )
+        )
         .build()
 
     override suspend fun sendMessageClamped(
@@ -520,7 +531,8 @@ class GeminiProvider(
         if (statusCode == 429) return LLMError.RateLimited(retryAfterMs = retryAfterMs)
         val message = "Gemini API error $statusCode: ${body.take(200)}"
         val transientCodes = setOf(500, 502, 503, 504, 529)
-        if (statusCode in transientCodes) return LLMError.TransientError(message)
+        // [OPT2-retry-after] Carry Retry-After on transient 5xx bodies.
+        if (statusCode in transientCodes) return LLMError.TransientError(message, retryAfterMs)
         return LLMError.ProviderError(message)
     }
 

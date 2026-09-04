@@ -1560,4 +1560,6 @@
     <!-- Fix: minis:// 連結失效/檔案已清理時的提示，以及本地化的外部 scheme 攔截文案。 -->
     <string name="chat_link_file_missing">此檔案已不可用。</string>
     <string name="webpreview_blocked_scheme">已攔截指向外部應用的連結。</string>
+    <string name="model_stream_fgs_channel">模型串流傳輸</string>
+    <string name="model_stream_fgs_generating">正在產生回覆…</string>
 </resources>

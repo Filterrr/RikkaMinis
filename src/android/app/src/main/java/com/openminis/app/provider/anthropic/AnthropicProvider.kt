@@ -84,9 +84,22 @@ class AnthropicProvider(
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(FirstChunkTimeoutPolicy.GENERATION_TIMEOUT_SEC.toLong(), TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
+        // [OPT1-h2-ping] Shared with OpenAIProvider — rationale there. Anthropic
+        // streams emit frequent SSE pings but the CONNECTING phase (and long
+        // tool-quiet windows over relay tunnels) still benefits: a half-open
+        // tunnel fails the in-flight call at the PING layer (~60s) instead of
+        // idling to the 30-min read timeout.
+        .pingInterval(30, TimeUnit.SECONDS)
         // [T-android-stale-conn-retry-hang] Shared pool — see NetworkMonitor.
         // Network-transition eviction must reach provider connections.
         .connectionPool(com.openminis.app.network.NetworkMonitor.sharedLLMConnectionPool)
+        // [OPT6-request-gzip] Anthropic's official endpoint accepts gzipped
+        // JSON bodies; custom bases are relays → opt out (raw bodies).
+        .addInterceptor(
+            com.openminis.app.network.GzipRequestInterceptor(
+                shouldCompress = { req -> req.url.host.lowercase() == "api.anthropic.com" },
+            )
+        )
         .build()
 
     override suspend fun sendMessageClamped(
@@ -945,7 +958,8 @@ class AnthropicProvider(
 
         val transientCodes = setOf(500, 502, 503, 504, 529)
         if (statusCode in transientCodes) {
-            return LLMError.TransientError(message)
+            // [OPT2-retry-after] Carry Retry-After on transient 5xx bodies.
+            return LLMError.TransientError(message, retryAfterMs)
         }
         return LLMError.ProviderError(message)
     }

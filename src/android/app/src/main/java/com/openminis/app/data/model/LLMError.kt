@@ -6,7 +6,7 @@ sealed class LLMError(message: String, cause: Throwable? = null) : Exception(mes
     class ProviderError(val detail: String) : LLMError("Provider error: $detail")
     class DecodingError(cause: Throwable) : LLMError("Decoding error: ${cause.message}", cause)
     class RateLimited(val retryAfterMs: Long? = null) : LLMError("Rate limited — please try again later")
-    class TransientError(val detail: String) : LLMError("Transient error: $detail")
+    class TransientError(val detail: String, val retryAfterMs: Long? = null) : LLMError("Transient error: $detail")
     class Cancelled : LLMError("Request was cancelled")
     class Unknown(cause: Throwable?) : LLMError("Unknown error: ${cause?.message}", cause)
 
