@@ -148,6 +148,10 @@ object SubagentSkill {
             "execution process (every tool call and output) in real time. " +
             "Multiple spawn_agent calls emitted in ONE turn run in parallel " +
             "(bounded by max_parallel); each spawn batch forms a group. " +
+            "Spawning is idempotent while a task is active: if a run with the " +
+            "same skill_name and query is still queued or running, the call " +
+            "returns that existing run_id instead of creating a duplicate — " +
+            "join or wait on it rather than spawning the same task again. " +
             "With run_until='detach' the call returns immediately and the " +
             "result is collected later via join_subagents / wait_any.",
         parameters = mapOf(

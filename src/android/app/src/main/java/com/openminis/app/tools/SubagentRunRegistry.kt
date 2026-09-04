@@ -119,6 +119,9 @@ class SubagentRunRegistry {
     private val _runs = MutableStateFlow<List<Run>>(emptyList())
     val runs: StateFlow<List<Run>> = _runs.asStateFlow()
 
+    /** [T-subagent-spawn-dedupe] Guards the check-then-insert in [registerOrReuse]. */
+    private val registerLock = Any()
+
     /**
      * [T-subagent-atomic-registry] Derived from [runs] — no duplicated
      * `_hasActiveRuns` state. Collectors outside a coroutine scope can use
@@ -190,6 +193,54 @@ class SubagentRunRegistry {
             }
         }
         return run
+    }
+
+    /**
+     * [T-subagent-spawn-dedupe] Outcome of an idempotent register attempt:
+     * [run] is either a freshly created run ([reused] == false) or an
+     * EXISTING active run with the same skill + query ([reused] == true).
+     */
+    data class RegisterOutcome(val run: Run, val reused: Boolean)
+
+    /**
+     * [T-subagent-spawn-dedupe] Idempotent register used by spawn_agent.
+     *
+     * While a run with the SAME skillId AND query is still active
+     * (QUEUED/RUNNING), a second identical spawn MUST NOT create a
+     * duplicate run. The model occasionally re-issues the same task
+     * cross-turn (the same-turn fingerprint dedupe in the dispatch loop
+     * only catches byte-identical args, and only within one turn), and
+     * same-batch spawns whose args differ only in tool_title / run_until
+     * slip past it too — each spawn used to create real duplicate work
+     * ("multiple identical sub-agents running at once"). Now the duplicate
+     * resolves to the existing run so the caller can answer the spawn
+     * with its run_id instead of executing again.
+     *
+     * Completed runs (SUCCESS/FAILED/CANCELLED) never match — re-running
+     * a finished task is a legitimate request; ToolLoopDetector guards
+     * pathological repetition. Check+insert run under [registerLock]:
+     * same-batch spawns fan out on concurrent coroutines, so a plain
+     * check-then-register could interleave and double-spawn.
+     */
+    fun registerOrReuse(
+        blockId: String,
+        skillId: String,
+        skillName: String,
+        query: String,
+        title: String,
+        maxTurns: Int,
+        sessionId: String = "",
+        groupId: String = "",
+        queued: Boolean = false,
+    ): RegisterOutcome = synchronized(registerLock) {
+        val duplicate = _runs.value.firstOrNull {
+            it.isActive && it.skillId == skillId && it.query == query
+        }
+        if (duplicate != null) return RegisterOutcome(duplicate, reused = true)
+        RegisterOutcome(
+            register(blockId, skillId, skillName, query, title, maxTurns, sessionId, groupId, queued),
+            reused = false,
+        )
     }
 
     /**
