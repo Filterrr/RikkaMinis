@@ -19,7 +19,7 @@ import org.json.JSONObject
 import java.io.File
 
 /**
- * `minis-model-use` — list, search, and invoke LLM models from Alpine shell.
+ * `minis-model-use` — list, search, and invoke LLM models from Ubuntu shell.
  * Mirrors iOS ModelUseOffload.m + ModelUseOffloadBridge.swift.
  *
  * Subcommands:

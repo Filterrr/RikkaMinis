@@ -106,7 +106,7 @@
     <string name="settings_max_concurrent_dialog_title">Max. gleichzeitige Sitzungen</string>
     <string name="settings_max_concurrent_restart_hint">Wirkt ab dem nächsten App-Start.</string>
     <string name="settings_section_storage">Speicher</string>
-    <string name="settings_storage_subtitle">Alpine-Linux-Rootfs verwalten und Dateien durchsuchen</string>
+    <string name="settings_storage_subtitle">Ubuntu-Linux-Rootfs verwalten und Dateien durchsuchen</string>
     <string name="settings_section_permissions">Berechtigungen</string>
     <string name="settings_permissions_subtitle">Zugriff des Agents auf datenschutzrelevante Funktionen steuern</string>
     <string name="settings_section_logs">Logs</string>
@@ -446,7 +446,7 @@
     <string name="rootfs_result_section">Ergebnis</string>
     <string name="rootfs_info_section">Info</string>
     <string name="rootfs_about_title">Über Rootfs</string>
-    <string name="rootfs_about_description">Das rootfs enthält das Alpine-Linux-Dateisystem, das von der Sandbox verwendet wird. Beim Zurücksetzen werden alle Daten gelöscht und der Werkszustand wiederhergestellt.</string>
+    <string name="rootfs_about_description">Das rootfs enthält das Ubuntu-Linux-Dateisystem, das von der Sandbox verwendet wird. Beim Zurücksetzen werden alle Daten gelöscht und der Werkszustand wiederhergestellt.</string>
     <string name="rootfs_about_operations">Zurücksetzen: alles löschen | Sichern: /root speichern | Wiederherstellen: gesicherte Daten wiederherstellen</string>
     <string name="rootfs_reset_confirm_title">Rootfs zurücksetzen?</string>
     <string name="rootfs_reset_confirm_message">Das gesamte rootfs wird gelöscht. Alle Daten gehen verloren.</string>
@@ -1256,7 +1256,7 @@
     <string name="filepreview_truncated_kb">Zeige die ersten %1$d KB von %2$s</string>
     <string name="filepreview_truncated_rows">Zeige die ersten %1$d Zeilen von %2$s</string>
     <string name="filepreview_no_app">Keine App verfügbar, um diese Datei zu öffnen.</string>
-    <string name="rootfs_explain_body">Das Rootfs enthält das vom Sandbox verwendete Alpine-Linux-Dateisystem. Ein Zurücksetzen löscht alle Daten und stellt den Werkszustand wieder her.</string>
+    <string name="rootfs_explain_body">Das Rootfs enthält das vom Sandbox verwendete Ubuntu-Linux-Dateisystem. Ein Zurücksetzen löscht alle Daten und stellt den Werkszustand wieder her.</string>
     <string name="rootfs_reset_body">Zurücksetzen: Alles löschen\nHinweis: Persistente Daten liegen im freigegebenen Bereich außerhalb des Rootfs und bleiben über Zurücksetzungen hinweg erhalten.</string>
     <string name="config_confirm_effect_warning">Dies kann spätere Tool-Aufrufe beeinträchtigen.</string>
     <string name="config_confirm_effect_info">Umkehrbar, aber einen kurzen Blick wert.</string>

@@ -135,7 +135,7 @@ See [docs/DEVELOPMENT_LIFECYCLE.md](docs/DEVELOPMENT_LIFECYCLE.md).
 
 - **proot is built from source.** The sandbox engine comes from the
   `deps/proot` submodule + `deps/build_proot.sh` + vendored `deps/talloc`,
-  compiled with NDK r28 in CI. The Alpine rootfs (`alpine-minirootfs.tar`,
+  compiled with NDK r28 in CI. The Ubuntu Base rootfs (`ubuntu-base.tar.gz`,
   8.5 MB) is committed as a prebuilt asset and unpacked at runtime by
   `RootfsManager` — the proot binary itself is not committed, fully
   reproducible.
@@ -260,7 +260,7 @@ Tokens are only used for authenticating those explicit requests.
 | | |
 |---|---|
 | **Bring your own model** | Claude, GPT, Gemini and other providers, via your own API keys or account sign-in. |
-| **A real Linux shell** | A sandboxed Alpine Linux environment runs on-device — the agent can install packages, run scripts, and work with real files. |
+| **A real Linux shell** | A sandboxed Ubuntu 24.04 Linux environment runs on-device — the agent can install packages, run scripts, and work with real files. |
 | **Device integration** | Calendar, Contacts, Clipboard, Location, Media, Alarms, Notifications and more, exposed to the agent as tools. |
 | **Browser automation** | The agent can browse and interact with the web on your behalf. |
 | **Skills & memory** | Extensible skills plus persistent memory across sessions. Complete skill bundles and memory files are included in local backups. |
@@ -353,7 +353,7 @@ the point of use — the agent can only use what you grant.
 src/android/      Android app (Kotlin / Compose)
   app/src/main/jniLibs/arm64-v8a/   Native libs (jieba, pty bridge, crash handler);
                                     libproot.so is a CI build artifact, not vendored
-  app/src/main/assets/              Alpine minirootfs + bundled platform skills (skills/)
+  app/src/main/assets/              Ubuntu Base rootfs + bundled platform skills (skills/)
 src/shared/       Assets shared with upstream's iOS tree (bashism rules)
 deps/             proot source (submodule) + build_proot.sh (NDK r28 build)
 docs/             Sync procedure and interface specifications
@@ -375,7 +375,7 @@ committed to this repository.
 **The sandbox** — [PRoot](https://github.com/termux/proot) (GPLv2), user-space
 chroot for the Android sandbox, via [OpenMinis' fork](https://github.com/OpenMinis/proot);
 **[talloc](https://talloc.samba.org)** (LGPLv3+) underpins it;
-**[Alpine Linux](https://alpinelinux.org)** — the minirootfs the sandbox boots.
+**[Ubuntu Base](https://ubuntu.com/download/server)** — the rootfs the sandbox boots (glibc + apt/dpkg).
 
 **Text & rendering** — [cppjieba](https://github.com/yanyiwu/cppjieba) (MIT),
 [KaTeX](https://katex.org) (MIT).

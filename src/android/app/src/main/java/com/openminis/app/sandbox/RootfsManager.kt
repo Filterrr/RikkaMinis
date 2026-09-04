@@ -40,56 +40,53 @@ sealed class RootfsInstallState {
  * The install marker (`.arch`) only proves extraction happened — it says
  * nothing about whether the files the runtime actually needs survived. A
  * silent_kill mid-write (HyperOS memory pressure kills the app while a file
- * write or apk operation is half-done) leaves the rootfs with a valid marker
+ * write or apt operation is half-done) leaves the rootfs with a valid marker
  * but missing/corrupt binaries — the classic symptom is the terminal dying
  * with `'/bin/bash' not found` while the app still reports "installed".
  *
  * Each check is a single stat() — cheap enough to run on every boot.
  */
 data class RootfsHealth(
-    /** /bin/bash — interactive terminal shell (readline-based). */
+    /** /usr/bin/bash — interactive terminal shell (readline-based). */
     val bash: Boolean,
-    /** /bin/sh — busybox ash fallback (symlink → /bin/busybox, apk-managed). */
+    /** /bin/sh — dash (symlink → /usr/bin/dash, the Debian /bin/sh). */
     val sh: Boolean,
-    /** /lib/ld-musl-aarch64.so.1 — dynamic loader every ELF needs. */
+    /** /lib/ld-linux-aarch64.so.1 — glibc loader every ELF needs. */
     val libc: Boolean,
-    /** /usr/lib/libreadline.so.8 — bash's line editing (symlink to .so.8.2). */
-    val libreadline: Boolean,
-    /** /usr/lib/libncursesw.so.6 — readline's terminal rendering. */
-    val libncursesw: Boolean,
-    /** /sbin/apk — package manager, needed for in-place auto-repair. */
-    val apk: Boolean,
-    /** /lib/apk/db/installed — apk's package database. */
-    val apkDatabase: Boolean,
+    /** /lib/aarch64-linux-gnu/libc.so.6 — glibc itself (bash's hard dep). */
+    val glibc: Boolean,
+    /** /usr/bin/apt-get — package manager, needed for in-place auto-repair. */
+    val aptGet: Boolean,
+    /** /var/lib/dpkg/status — dpkg's package database. */
+    val dpkgDatabase: Boolean,
 ) {
     /** Everything needed for the sandbox to function. */
     val healthy: Boolean
-        get() = bash && sh && libc && apk && apkDatabase
+        get() = bash && sh && libc && glibc && aptGet && dpkgDatabase
 
     /** Everything needed for an interactive bash terminal. */
     val terminalOk: Boolean
-        get() = bash && libc && libreadline && libncursesw
+        get() = bash && libc && glibc
 
     /** Human-readable list of missing paths (empty when fully healthy). */
     val missing: List<String>
         get() = buildList {
-            if (!bash) add("/bin/bash")
+            if (!bash) add("/usr/bin/bash")
             if (!sh) add("/bin/sh")
-            if (!libc) add("/lib/ld-musl-aarch64.so.1")
-            if (!libreadline) add("/usr/lib/libreadline.so.8")
-            if (!libncursesw) add("/usr/lib/libncursesw.so.6")
-            if (!apk) add("/sbin/apk")
-            if (!apkDatabase) add("/lib/apk/db/installed")
+            if (!libc) add("/lib/ld-linux-aarch64.so.1")
+            if (!glibc) add("/lib/aarch64-linux-gnu/libc.so.6")
+            if (!aptGet) add("/usr/bin/apt-get")
+            if (!dpkgDatabase) add("/var/lib/dpkg/status")
         }
 }
 
 /**
- * Manages Alpine Linux rootfs installation and PRoot binary extraction.
+ * Manages Ubuntu Base rootfs installation and PRoot binary extraction.
  * Corresponds to iOS RootfsManager.swift.
  */
 class RootfsManager private constructor(private val context: Context) {
 
-    val rootfsDir: File = File(context.filesDir, "alpine-rootfs")
+    val rootfsDir: File = File(context.filesDir, "ubuntu-rootfs")
     val prootBinary: File = File(context.applicationInfo.nativeLibraryDir, "libproot.so")
 
     private val archFile: File get() = File(rootfsDir, ".arch")
@@ -111,8 +108,8 @@ class RootfsManager private constructor(private val context: Context) {
     val installState: StateFlow<RootfsInstallState> = _installState.asStateFlow()
 
     /**
-     * Install Alpine rootfs from assets if not already present.
-     * Extracts alpine-minirootfs.tar.gz using manual POSIX tar parsing.
+     * Install the Ubuntu Base rootfs from assets if not already present.
+     * Extracts ubuntu-base.tar.gz using manual POSIX tar parsing.
      * Progress is published to [installState] (Preparing → Extracting(f) →
      * Finalizing → Installed / Failed).
      */
@@ -130,7 +127,7 @@ class RootfsManager private constructor(private val context: Context) {
             // corrupt rootfs when storage runs out mid-extract (a silent_kill
             // situation that otherwise only surfaces on the next boot as
             // "installed but broken"). Conservative estimate: compressed asset
-            // × 4 (observed Alpine minirootfs expansion) + 64 MiB margin.
+            // × 4 (observed Ubuntu base expansion) + 64 MiB margin.
             val spaceGateAssetName = try {
                 context.assets.open(ROOTFS_ASSET).close()
                 ROOTFS_ASSET
@@ -153,7 +150,7 @@ class RootfsManager private constructor(private val context: Context) {
             }
 
             _installState.value = RootfsInstallState.Preparing
-            Log.i(TAG, "Installing Alpine rootfs...")
+            Log.i(TAG, "Installing Ubuntu rootfs...")
 
             // Clean up any partial install
             if (rootfsDir.exists()) {
@@ -230,12 +227,12 @@ class RootfsManager private constructor(private val context: Context) {
                 .putBoolean("rootfs.freshInstall", true)
                 .apply()
 
-            // [Refactor-apk-world] A fresh extraction ships only the factory
+            // [Refactor-dpkg-world] A fresh extraction ships only the factory
             // packages. Re-apply the host-side snapshot of user packages
-            // (recorded by dumpApkWorld) so a reset / rebuild doesn't wipe
+            // (recorded by dumpDpkgWorld) so a reset / rebuild doesn't wipe
             // what the user installed. Skip is cheap (no snapshot = no-op);
-            // failures are queued for retryFailedApkWorld on next boot.
-            restoreApkWorld()
+            // failures are queued for retryFailedDpkgWorld on next boot.
+            restoreDpkgWorld()
 
             Log.i(TAG, "Rootfs installation complete")
             _installState.value = RootfsInstallState.Installed
@@ -272,9 +269,9 @@ class RootfsManager private constructor(private val context: Context) {
      * Snapshot which critical rootfs files are present, executable, and
      * match their expected sizes from the integrity manifest.
      *
-     * Cheap (7 stat calls), safe to call on every boot. See [RootfsHealth]
+     * Cheap (6 stat calls), safe to call on every boot. See [RootfsHealth]
      * for the rationale — a silent_kill can leave `.arch` valid but bash
-     * (or its readline/ncurses symlinks) missing.
+     * (or the glibc loader) missing.
      *
      * When `.integrity_manifest` exists, each file's size is verified against
      * the recorded value — a file that exists but has the wrong size (e.g.
@@ -301,13 +298,12 @@ class RootfsManager private constructor(private val context: Context) {
         }
 
         return RootfsHealth(
-            bash = exists("bin/bash"),
+            bash = exists("usr/bin/bash"),
             sh = exists("bin/sh"),
-            libc = exists("lib/ld-musl-aarch64.so.1"),
-            libreadline = exists("usr/lib/libreadline.so.8"),
-            libncursesw = exists("usr/lib/libncursesw.so.6"),
-            apk = executable("sbin/apk"),
-            apkDatabase = exists("lib/apk/db/installed"),
+            libc = exists("lib/ld-linux-aarch64.so.1"),
+            glibc = exists("lib/aarch64-linux-gnu/libc.so.6"),
+            aptGet = executable("usr/bin/apt-get"),
+            dpkgDatabase = exists("var/lib/dpkg/status"),
         )
     }
 
@@ -339,9 +335,9 @@ class RootfsManager private constructor(private val context: Context) {
      */
     private fun writeIntegrityManifest() {
         val criticalPaths = listOf(
-            "bin/bash", "bin/sh", "lib/ld-musl-aarch64.so.1",
-            "usr/lib/libreadline.so.8", "usr/lib/libncursesw.so.6",
-            "sbin/apk", "lib/apk/db/installed",
+            "usr/bin/bash", "bin/sh", "lib/ld-linux-aarch64.so.1",
+            "lib/aarch64-linux-gnu/libc.so.6",
+            "usr/bin/apt-get", "var/lib/dpkg/status",
         )
         try {
             val lines = criticalPaths.map { rel ->
@@ -359,13 +355,13 @@ class RootfsManager private constructor(private val context: Context) {
     /**
      * Attempt to repair a broken rootfs in place, least-to-most destructive:
      *
-     *  1. `apk fix --no-cache` — restore missing/corrupt files owned by
-     *     installed packages (readline/ncursesw symlinks, bash, …). Uses the
-     *     local apk database; no network needed when `.apk` files are cached.
-     *  2. `apk add --no-cache bash readline ncurses` — belt-and-braces for
-     *     the terminal's dynamic-linking chain.
+     *  1. `dpkg --configure -a` + `apt-get -f install` + reinstall of the
+     *     terminal's linking chain (bash, libc6) inside the guest via proot.
+     *     Uses the local dpkg database; needs network for the reinstall step.
+     *  2. Targeted restore of factory files from the bundled asset — no
+     *     network, no user-package loss (see [restoreCriticalFromAssets]).
      *  3. Full [reset] — delete + re-extract from the bundled asset. Last
-     *     resort (wipes user-installed packages), only when apk is unusable.
+     *     resort (wipes user-installed packages), only when dpkg is unusable.
      *
      * Returns true when the rootfs is healthy after the attempt.
      */
@@ -377,10 +373,14 @@ class RootfsManager private constructor(private val context: Context) {
         }
         Log.w(TAG, "[Repair] rootfs damaged, missing: ${initial.missing}")
 
-        // Stage 1+2: apk repair inside the guest via proot, so it operates on
-        // the real rootfs with the user's mirror config intact.
+        // Stage 1: dpkg repair inside the guest via proot, so it operates on
+        // the real rootfs with the user's mirror config intact. `apt-get -y
+        // install` of already-installed packages is a no-op when intact and
+        // reinstalls them from the archive when files were lost. `DEBIAN_
+        // FRONTEND=noninteractive` + the shipped policy-rc.d keep maintainer
+        // scripts quiet inside the sandbox.
         val prootFile = prootBinary
-        if (prootFile.exists() && initial.apk) {
+        if (prootFile.exists() && initial.aptGet) {
             val repairCmd = listOf(
                 prootFile.absolutePath,
                 "-0", "--link2symlink", "--kill-on-exit",
@@ -388,7 +388,9 @@ class RootfsManager private constructor(private val context: Context) {
                 "-b", "/dev", "-b", "/proc", "-b", "/sys",
                 "-w", "/root",
                 "/bin/sh", "-c",
-                "/sbin/apk fix --no-cache ; /sbin/apk add --no-cache bash readline ncurses ; true"
+                "dpkg --configure -a ; " +
+                    "DEBIAN_FRONTEND=noninteractive apt-get install -y -f bash libc6 ; " +
+                    "dpkg --configure -a ; true"
             )
             // PROOT_LOADER[_32] MUST point at the standalone loaders in
             // nativeLibraryDir — proot's embedded-loader fallback writes to
@@ -396,8 +398,8 @@ class RootfsManager private constructor(private val context: Context) {
             // deps/build_proot.sh). Without these, proot aborts in ~20ms
             // with status=1 and no output, and the repair silently no-ops.
             // PATH is set explicitly too — ProcessBuilder inherits the app
-            // process env (Android PATH), so a bare `apk` would be
-            // `apk: not found` (exit 127) inside the guest.
+            // process env (Android PATH), so a bare `apt-get` would be
+            // `not found` (exit 127) inside the guest.
             val loaderEnv = prootLoaderEnv()
 
             runCatching {
@@ -407,53 +409,39 @@ class RootfsManager private constructor(private val context: Context) {
                     .start()
                 val output = p.inputStream.readBytes().toString(Charset.forName("UTF-8"))
                 val code = p.waitFor()
-                Log.i(TAG, "[Repair] apk repair exit=$code output=${output.takeLast(500)}")
+                Log.i(TAG, "[Repair] dpkg/apt repair exit=$code output=${output.takeLast(500)}")
             }.onFailure { t ->
-                Log.e(TAG, "[Repair] apk repair process failed", t)
+                Log.e(TAG, "[Repair] dpkg/apt repair process failed", t)
             }
         }
 
         val after = verifyIntegrity()
         if (after.healthy) {
-            Log.i(TAG, "[Repair] rootfs healthy after apk repair")
+            Log.i(TAG, "[Repair] rootfs healthy after dpkg/apt repair")
             return@withContext true
         }
 
-        // Stage 2.5: targeted restore of factory files from the bundled
+        // Stage 2: targeted restore of factory files from the bundled
         // asset — no network, no user-package loss. This closes the hole
-        // where apk itself was fine (so Stage 3's database guard would NOT
-        // fire) but `apk fix` failed because the network was down: without
-        // it, a broken bash stayed broken forever until a manual reset.
-        // Only factory files safe to overwrite are restored; the apk
-        // database (user package records) is deliberately untouched.
+        // where apt itself was fine (so Stage 3's database guard would NOT
+        // fire) but the reinstall failed because the network was down:
+        // without it, a broken bash stayed broken forever until a manual
+        // reset. Only factory files safe to overwrite are restored; the
+        // dpkg database (user package records) is deliberately untouched.
         val restored = restoreCriticalFromAssets()
         if (restored) {
             Log.i(TAG, "[Repair] rootfs healthy after targeted asset restore")
             return@withContext true
         }
 
-        // Stage 2.6: offline install of bash/readline/ncurses from bundled
-        // APK files (assets/apk-offline/). These packages are NOT in the
-        // factory minirootfs (Stage 2.5 can't restore them), and `apk add`
-        // fails when the network is down. The bundled APK files cover the
-        // gap without requiring network access. Stage 2.5 must have restored
-        // busybox (/bin/sh) first, so proot can run inside the guest.
-        Log.i(TAG, "[Repair] Stage 2.6: offline install of extra packages")
-        installOfflinePackages()
-        val afterOffline = verifyIntegrity()
-        if (afterOffline.healthy) {
-            Log.i(TAG, "[Repair] rootfs healthy after offline package install")
-            return@withContext true
-        }
-
-        // Stage 3: last resort — full reset. Only when the apk *database*
-        // (user package records) is unusable: an apk binary that Stage 2.5
+        // Stage 3: last resort — full reset. Only when the dpkg *database*
+        // (user package records) is unusable: an apt-get that Stage 2
         // could not fix is not in the safe-restore set either, so it resets
         // too. A healthy database with a still-broken bash is NOT reset —
         // wiping user packages over a few missing binaries is worse than
         // leaving the terminal broken for a manual retry.
-        if (!verifyIntegrity().apkDatabase) {
-            Log.w(TAG, "[Repair] apk database unusable, falling back to full reset")
+        if (!verifyIntegrity().dpkgDatabase) {
+            Log.w(TAG, "[Repair] dpkg database unusable, falling back to full reset")
             runCatching { reset() }
         }
 
@@ -465,14 +453,15 @@ class RootfsManager private constructor(private val context: Context) {
     /**
      * Restore the rootfs's critical system files from the bundled asset tar,
      * without wiping user-installed packages. Only factory files that are
-     * safe to overwrite are restored (bash/busybox/sh, musl loader, readline,
-     * ncursesw, apk binary); the apk database (`lib/apk/db/installed`, which
-     * holds user package records) is deliberately excluded — if it is broken
-     * the caller must fall back to a full reset. Network-independent, so it
-     * also covers the "apk fix failed because the proxy is down" case.
+     * safe to overwrite are restored (bash, dash/sh, the glibc loader +
+     * libc.so.6, apt-get/dpkg binaries); the dpkg database
+     * (`var/lib/dpkg/status`, which holds user package records) is
+     * deliberately excluded — if it is broken the caller must fall back to a
+     * full reset. Network-independent, so it also covers the "apt-get failed
+     * because the proxy is down" case.
      *
      * Returns true when every non-database critical path is healthy after
-     * the restore (the apk database is ignored — restoring it would discard
+     * the restore (the dpkg database is ignored — restoring it would discard
      * user package records).
      */
     suspend fun restoreCriticalFromAssets(): Boolean = withContext(Dispatchers.IO) {
@@ -487,13 +476,13 @@ class RootfsManager private constructor(private val context: Context) {
                 val tarInput = if (assetName.endsWith(".gz")) GZIPInputStream(raw) else raw
                 extractTar(tarInput, rootfsDir, onlyPrefixes = CRITICAL_RESTORE_PREFIXES)
             }
-            // Some Android filesystems reject the tar's absolute `/bin/busybox`
-            // symlink target during targeted extraction. Recreate the Alpine
+            // Some Android filesystems reject the tar's absolute `/bin/dash`
+            // symlink target during targeted extraction. Recreate the Debian
             // canonical relative link explicitly; it remains inside the rootfs
             // under both ordinary File checks and PRoot's guest root.
-            ensureBusyboxShellSymlink(rootfsDir)
+            ensureDashShellSymlink(rootfsDir)
             val h = verifyIntegrity()
-            val nonDbOk = h.bash && h.sh && h.libc && h.libreadline && h.libncursesw && h.apk
+            val nonDbOk = h.bash && h.sh && h.libc && h.glibc && h.aptGet
             if (nonDbOk) {
                 Log.i(TAG, "[Repair] targeted restore OK")
             } else {
@@ -506,162 +495,88 @@ class RootfsManager private constructor(private val context: Context) {
         }
     }
 
-    /**
-     * Install bash, readline, and ncurses from bundled APK files
-     * (assets/apk-offline/) via proot, without network access.
-     * These packages are NOT in the factory minirootfs (Stage 2.5 can't
-     * restore them), and `apk add` fails when the network is down.
-     * The bundled APK files cover the gap without requiring network access.
-     * Stage 2.5 must have restored busybox (/bin/sh) first, so proot runs.
-     *
-     * Called from [autoRepair] Stage 2.6 after factory file restoration.
-     */
-    private suspend fun installOfflinePackages(): Boolean = withContext(Dispatchers.IO) {
-        if (!prootBinary.exists()) {
-            Log.w(TAG, "[OfflinePackages] proot binary not available")
-            return@withContext false
-        }
-        val apkDir = File(rootfsDir, "tmp/apk-offline")
-        apkDir.mkdirs()
-        try {
-            val apkFiles = mutableListOf<String>()
-            for (apkName in OFFLINE_PACKAGES) {
-                try {
-                    context.assets.open("apk-offline/$apkName").use { src ->
-                        val dst = File(apkDir, apkName)
-                        dst.outputStream().use { dstStream -> src.copyTo(dstStream) }
-                        apkFiles.add(dst.absolutePath)
-                    }
-                } catch (_: java.io.FileNotFoundException) {
-                    Log.w(TAG, "[OfflinePackages] asset not found: apk-offline/$apkName")
-                }
-            }
-            if (apkFiles.isEmpty()) {
-                Log.w(TAG, "[OfflinePackages] no APK files to install")
-                return@withContext false
-            }
-            val cmd = listOf(
-                prootBinary.absolutePath, "-0", "--link2symlink", "--kill-on-exit",
-                "-r", rootfsDir.absolutePath,
-                "-b", "/dev", "-b", "/proc", "-b", "/sys", "-w", "/root",
-                "-b", "${apkDir.absolutePath}:/tmp/apk-offline",
-                "/bin/sh", "-c",
-                // Absolute apk path + explicit PATH: the app-process PATH
-                // (Android's) is what proot children inherit, so a bare
-                // `apk` used to be `apk: not found` (exit 127) here. The
-                // trailing `; true` ALSO masked every real failure by
-                // forcing exit 0 — remove it so failures surface.
-                "/sbin/apk add --allow-untrusted /tmp/apk-offline/*.apk"
-            )
-            val loaderEnv = prootLoaderEnv()
-            runCatching {
-                val p = ProcessBuilder(cmd)
-                    .redirectErrorStream(true)
-                    .apply { environment().putAll(loaderEnv) }
-                    .start()
-                val output = p.inputStream.readBytes().toString(Charset.forName("UTF-8"))
-                val finished = p.waitFor(120, java.util.concurrent.TimeUnit.SECONDS)
-                val exitCode = if (finished) p.exitValue() else -1
-                if (p.isAlive) p.destroyForcibly()
-                Log.i(TAG, "[OfflinePackages] apk add exit=$exitCode output=${output.takeLast(500)}")
-                exitCode == 0
-            }.onFailure { t ->
-                Log.e(TAG, "[OfflinePackages] process failed", t)
-                false
-            }.getOrDefault(false)
-        } catch (t: Exception) {
-            Log.e(TAG, "[OfflinePackages] failed", t)
-            false
-        } finally {
-            apkDir.deleteRecursively()
-        }
-    }
-
-    // ── Apk world snapshot (user-package persistence) ─────────────────────
+    // ── Dpkg world snapshot (user-package persistence) ─────────────────────
     //
-    // The factory minirootfs ships no bash/readline/ncurses and no user
-    // packages — everything a user `apk add`s lives only inside the rootfs.
-    // A full rebuild (manual reset, or [autoRepair]'s Stage 3 after an
-    // unusable apk database) wipes it all. The snapshot makes user packages
-    // a recoverable state: [dumpApkWorld] persists `name=version` to the
-    // host side on every boot, and [restoreApkWorld] re-applies it right
-    // after a fresh extraction inside [installIfNeeded].
+    // The factory Ubuntu base rootfs ships 91 packages but no user packages —
+    // everything a user `apt-get install`s lives only inside the rootfs. A
+    // full rebuild (manual reset, or [autoRepair]'s Stage 3 after an unusable
+    // dpkg database) wipes it all. The snapshot makes user packages a
+    // recoverable state: [dumpDpkgWorld] persists `name=version` to the host
+    // side on every boot, and [restoreDpkgWorld] re-applies it right after a
+    // fresh extraction inside [installIfNeeded].
 
     /** Host-side snapshot of installed packages (`name=version` per line). */
-    val apkWorldFile: File get() = File(context.filesDir, "apk-world.txt")
+    val apkWorldFile: File get() = File(context.filesDir, "dpkg-world.txt")
 
     /** Host-side retry list for packages that failed to restore. */
-    val apkWorldFailedFile: File get() = File(context.filesDir, "apk-world-failed.txt")
+    val apkWorldFailedFile: File get() = File(context.filesDir, "dpkg-world-failed.txt")
 
     /**
      * Snapshot the currently installed packages to the host side
-     * (filesDir/apk-world.txt). Reads Alpine's `lib/apk/db/installed`
-     * directly on the host filesystem — no proot involved, cheap enough to
-     * run on every boot. A restorable snapshot is only meaningful when the
-     * rootfs is in its final state, so callers invoke this AFTER any
-     * auto-repair (PRootKernel.boot) or right before a wipe ([reset]).
+     * (filesDir/dpkg-world.txt). Reads dpkg's `var/lib/dpkg/status` directly
+     * on the host filesystem — no proot involved, cheap enough to run on
+     * every boot. A restorable snapshot is only meaningful when the rootfs is
+     * in its final state, so callers invoke this AFTER any auto-repair
+     * (PRootKernel.boot) or right before a wipe ([reset]).
      */
-    suspend fun dumpApkWorld() = withContext(Dispatchers.IO) {
-        val db = File(rootfsDir, "lib/apk/db/installed")
+    suspend fun dumpDpkgWorld() = withContext(Dispatchers.IO) {
+        val db = File(rootfsDir, "var/lib/dpkg/status")
         if (!db.exists()) {
-            Log.d(TAG, "[ApkWorld] apk db not present — rootfs not installed, skip dump")
+            Log.d(TAG, "[DpkgWorld] dpkg db not present — rootfs not installed, skip dump")
             return@withContext
         }
         try {
-            val packages = parseApkDbInstalled(db.readText())
-            // Guard: an unreadable/corrupt apk db parses to an empty list.
+            val packages = parseDpkgStatus(db.readText())
+            // Guard: an unreadable/corrupt dpkg db parses to an empty list.
             // The factory rootfs always ships packages, so an empty parse
             // means the db is broken (the classic pre-Stage-3-reset state) —
             // overwriting the snapshot with it would erase user packages on
             // the next restore. Keep the previous snapshot instead.
             if (packages.isEmpty()) {
-                Log.w(TAG, "[ApkWorld] apk db unreadable (${db.length()} bytes, 0 packages) — keeping previous snapshot")
+                Log.w(TAG, "[DpkgWorld] dpkg db unreadable (${db.length()} bytes, 0 packages) — keeping previous snapshot")
                 return@withContext
             }
-            apkWorldFile.writeText(formatApkWorld(packages))
-            Log.i(TAG, "[ApkWorld] snapshot ${packages.size} packages -> ${apkWorldFile.name}")
+            apkWorldFile.writeText(formatDpkgWorld(packages))
+            Log.i(TAG, "[DpkgWorld] snapshot ${packages.size} packages -> ${apkWorldFile.name}")
         } catch (t: Exception) {
-            Log.w(TAG, "[ApkWorld] dump failed: ${t.message}")
+            Log.w(TAG, "[DpkgWorld] dump failed: ${t.message}")
         }
     }
 
     /**
-     * Re-apply the snapshot after a fresh extraction: `apk add name=version`
-     * for every recorded package (order preserved), skipping the offline
-     * trio (bash/readline/ncurses) which the bundled-APK Stage 2.6 path
-     * guarantees on every rebuild.
-     *
-     * Failure (offline, repo issue, pruned version) is NON-blocking: the
-     * failed list is persisted to [apkWorldFailedFile] for the next boot's
-     * [retryFailedApkWorld], and the rootfs stays usable — a missing user
-     * package just surfaces as "not installed".
+     * Re-apply the snapshot after a fresh extraction:
+     * `apt-get install -y name=version` for every recorded package (order
+     * preserved). Needs network (apt has no offline install), which is why
+     * failures are non-blocking: the failed list is persisted to
+     * [apkWorldFailedFile] for the next boot's [retryFailedDpkgWorld], and
+     * the rootfs stays usable — a missing user package just surfaces as
+     * "not installed".
      */
-    suspend fun restoreApkWorld(): Boolean = withContext(Dispatchers.IO) {
+    suspend fun restoreDpkgWorld(): Boolean = withContext(Dispatchers.IO) {
         if (!apkWorldFile.exists()) {
-            Log.d(TAG, "[ApkWorld] no snapshot file, nothing to restore")
+            Log.d(TAG, "[DpkgWorld] no snapshot file, nothing to restore")
             return@withContext true
         }
         val packages = try {
-            parseApkWorld(apkWorldFile.readText())
+            parseDpkgWorld(apkWorldFile.readText())
         } catch (t: Exception) {
-            Log.e(TAG, "[ApkWorld] failed to read snapshot, skip restore", t)
+            Log.e(TAG, "[DpkgWorld] failed to read snapshot, skip restore", t)
             return@withContext false
         }
-        val targets = excludeOfflinePackages(packages)
-        if (targets.isEmpty()) {
-            Log.i(TAG, "[ApkWorld] snapshot holds only offline-trio packages, nothing to restore")
+        if (packages.isEmpty()) {
+            Log.i(TAG, "[DpkgWorld] snapshot empty, nothing to restore")
             return@withContext true
         }
-        val args = targets.map { "${it.name}=${it.version}" }
-        Log.i(TAG, "[ApkWorld] restoring ${args.size} packages: ${args.take(6).joinToString()}")
-        val code = runApkAddInGuest(args)
+        val args = packages.map { "${it.name}=${it.version}" }
+        Log.i(TAG, "[DpkgWorld] restoring ${args.size} packages: ${args.take(6).joinToString()}")
+        val code = runAptInstallInGuest(args)
         if (code == 0) {
-            Log.i(TAG, "[ApkWorld] restore OK (${args.size} packages)")
+            Log.i(TAG, "[DpkgWorld] restore OK (${args.size} packages)")
             try { apkWorldFailedFile.delete() } catch (_: Exception) {}
             return@withContext true
         }
-        writeApkWorldFailed(args)
-        Log.w(TAG, "[ApkWorld] restore failed (exit=$code) — ${args.size} pkg(s) queued for retry")
+        writeDpkgWorldFailed(args)
+        Log.w(TAG, "[DpkgWorld] restore failed (exit=$code) — ${args.size} pkg(s) queued for retry")
         false
     }
 
@@ -671,27 +586,27 @@ class RootfsManager private constructor(private val context: Context) {
      * already applied, so packages that failed against the factory repos
      * get a second chance. Clears the retry list on full success.
      */
-    suspend fun retryFailedApkWorld(): Boolean = withContext(Dispatchers.IO) {
+    suspend fun retryFailedDpkgWorld(): Boolean = withContext(Dispatchers.IO) {
         if (!apkWorldFailedFile.exists()) return@withContext true
         val args = try {
             apkWorldFailedFile.readLines()
                 .map { it.trim() }
                 .filter { it.isNotEmpty() && !it.startsWith("#") && '=' in it }
         } catch (t: Exception) {
-            Log.w(TAG, "[ApkWorld] failed to read retry list", t)
+            Log.w(TAG, "[DpkgWorld] failed to read retry list", t)
             return@withContext false
         }
         if (args.isEmpty()) {
             try { apkWorldFailedFile.delete() } catch (_: Exception) {}
             return@withContext true
         }
-        Log.i(TAG, "[ApkWorld] retrying ${args.size} previously-failed package(s)")
+        Log.i(TAG, "[DpkgWorld] retrying ${args.size} previously-failed package(s)")
         var allOk = true
         val stillFailed = mutableListOf<String>()
         for (arg in args) {
-            val code = runApkAddInGuest(listOf(arg))
+            val code = runAptInstallInGuest(listOf(arg))
             if (code == 0) {
-                Log.i(TAG, "[ApkWorld] retry OK: $arg")
+                Log.i(TAG, "[DpkgWorld] retry OK: $arg")
             } else {
                 allOk = false
                 stillFailed.add(arg)
@@ -699,25 +614,25 @@ class RootfsManager private constructor(private val context: Context) {
         }
         if (stillFailed.isEmpty()) {
             try { apkWorldFailedFile.delete() } catch (_: Exception) {}
-            Log.i(TAG, "[ApkWorld] retry fully succeeded")
+            Log.i(TAG, "[DpkgWorld] retry fully succeeded")
         } else {
-            writeApkWorldFailed(stillFailed)
-            Log.w(TAG, "[ApkWorld] ${stillFailed.size} package(s) still failing: ${stillFailed.take(5).joinToString()}")
+            writeDpkgWorldFailed(stillFailed)
+            Log.w(TAG, "[DpkgWorld] ${stillFailed.size} package(s) still failing: ${stillFailed.take(5).joinToString()}")
         }
         allOk
     }
 
     /** Persist a failed `name=version` list for the next boot's retry. */
-    private fun writeApkWorldFailed(args: List<String>) {
+    private fun writeDpkgWorldFailed(args: List<String>) {
         try {
             apkWorldFailedFile.writeText(
                 buildString {
-                    appendLine("# apk-world retry list — packages that failed to restore")
+                    appendLine("# dpkg-world retry list — packages that failed to restore")
                     args.forEach { appendLine(it) }
                 }
             )
         } catch (t: Exception) {
-            Log.w(TAG, "[ApkWorld] failed to write retry list: ${t.message}")
+            Log.w(TAG, "[DpkgWorld] failed to write retry list: ${t.message}")
         }
     }
 
@@ -727,15 +642,15 @@ class RootfsManager private constructor(private val context: Context) {
      *    (proot's embedded-loader fallback writes to PROOT_TMP_DIR and
      *    fails under Android noexec — without these proot aborts ~20ms in
      *    with status=1 and no output)
-     *  - `PATH` → the ALPINE guest PATH. ProcessBuilder inherits the app
+     *  - `PATH` → the Ubuntu guest PATH. ProcessBuilder inherits the app
      *    process env, whose PATH is Android's (`/sbin:/vendor/bin:...`) —
-     *    the guest `/bin/sh` then can't find `apk` (exit 127). This was
-     *    the real reason both Stage 2.6 and the apk-world restore silently
-     *    failed on device: `apk: not found` inside proot.
+     *    the guest `/bin/sh` then can't find `apt-get` (exit 127). This was
+     *    the real reason the old apk-world restore silently failed on
+     *    device: `apk: not found` inside proot.
      */
     private fun prootLoaderEnv(): Map<String, String> {
         val env = mutableMapOf(
-            "PATH" to ALPINE_PATH,
+            "PATH" to UBUNTU_PATH,
             "PROOT_TMP_DIR" to PRootKernel.getProotTmpDir(context).absolutePath,
             "LD_LIBRARY_PATH" to nativeLibDir.absolutePath,
         )
@@ -749,24 +664,28 @@ class RootfsManager private constructor(private val context: Context) {
     }
 
     /**
-     * Run `apk add --no-cache <name>=<version>...` inside the guest via
-     * proot. Shares the loader-env boilerplate with [installOfflinePackages].
-     * Returns the apk exit code (0 = all installed), or -1 on process
+     * Run `apt-get install -y <name>=<version>...` inside the guest via
+     * proot (with a preceding `apt-get update` — apt's index is a cache, not
+     * a database, so it never survives the extraction this runs after).
+     * Returns the apt exit code (0 = all installed), or -1 on process
      * failure / timeout.
      */
-    private suspend fun runApkAddInGuest(pkgArgs: List<String>): Int = withContext(Dispatchers.IO) {
+    private suspend fun runAptInstallInGuest(pkgArgs: List<String>): Int = withContext(Dispatchers.IO) {
         if (!prootBinary.exists()) {
-            Log.w(TAG, "[ApkWorld] proot binary not available")
+            Log.w(TAG, "[DpkgWorld] proot binary not available")
             return@withContext -1
+        }
+        val script = buildString {
+            append("DEBIAN_FRONTEND=noninteractive apt-get update -qq ; ")
+            append("DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ")
+            append(pkgArgs.joinToString(" "))
         }
         val cmd = listOf(
             prootBinary.absolutePath, "-0", "--link2symlink", "--kill-on-exit",
             "-r", rootfsDir.absolutePath,
             "-b", "/dev", "-b", "/proc", "-b", "/sys", "-w", "/root",
             "/bin/sh", "-c",
-            // Absolute path: the guest PATH is only guaranteed inside a
-            // session shell, not in proot children (see prootLoaderEnv).
-            "/sbin/apk add --no-cache ${pkgArgs.joinToString(" ")}"
+            script
         )
         val loaderEnv = prootLoaderEnv()
         runCatching {
@@ -775,13 +694,13 @@ class RootfsManager private constructor(private val context: Context) {
                 .apply { environment().putAll(loaderEnv) }
                 .start()
             val output = p.inputStream.readBytes().toString(Charset.forName("UTF-8"))
-            val finished = p.waitFor(180, java.util.concurrent.TimeUnit.SECONDS)
+            val finished = p.waitFor(600, java.util.concurrent.TimeUnit.SECONDS)
             val code = if (finished) p.exitValue() else -1
             if (p.isAlive) p.destroyForcibly()
-            Log.i(TAG, "[ApkWorld] apk add exit=$code pkgs=${pkgArgs.size} output=${output.takeLast(400)}")
+            Log.i(TAG, "[DpkgWorld] apt install exit=$code pkgs=${pkgArgs.size} output=${output.takeLast(400)}")
             code
         }.onFailure { t ->
-            Log.e(TAG, "[ApkWorld] apk add process failed", t)
+            Log.e(TAG, "[DpkgWorld] apt install process failed", t)
             -1
         }.getOrDefault(-1)
     }
@@ -806,10 +725,10 @@ class RootfsManager private constructor(private val context: Context) {
     }
 
     suspend fun reset(): Unit = withContext(Dispatchers.IO) {
-        // [Refactor-apk-world] Snapshot user packages BEFORE the wipe — the
+        // [Refactor-dpkg-world] Snapshot user packages BEFORE the wipe — the
         // boot path also dumps, but a manual reset can happen mid-session
         // between boots, so dump here too as the authoritative last state.
-        dumpApkWorld()
+        dumpDpkgWorld()
         rootfsDir.deleteRecursively()
         installIfNeeded()
     }
@@ -835,7 +754,7 @@ class RootfsManager private constructor(private val context: Context) {
 
     /**
      * Read system DNS servers and search domains from ConnectivityManager,
-     * then write resolv.conf into the Alpine rootfs.
+     * then write resolv.conf into the Ubuntu rootfs.
      * Mirrors iOS ISHKernel.configureDns / refreshDns.
      * Falls back to 8.8.8.8 / 8.8.4.4 if no system DNS available.
      */
@@ -929,7 +848,7 @@ class RootfsManager private constructor(private val context: Context) {
         }
 
         // Mirror iOS removeExternallyManagedMarker() — drop PEP 668 marker so
-        // `pip install` Just Works inside this embedded Alpine rootfs even
+        // `pip install` Just Works inside this embedded Ubuntu rootfs even
         // when the shipped pip.conf isn't being read (e.g. pip invoked with
         // --isolated or via a venv). Safe: this is a single-tenant sandbox.
         val markerRemoved = removeExternallyManagedMarker()
@@ -1084,18 +1003,19 @@ class RootfsManager private constructor(private val context: Context) {
     companion object {
         private const val TAG = "RootfsManager"
         private const val ARCH = "aarch64"
-        private const val ROOTFS_ASSET = "alpine-minirootfs.tar.gz"
-        private const val ROOTFS_ASSET_TAR = "alpine-minirootfs.tar"
+        private const val ROOTFS_ASSET = "ubuntu-base.tar.gz"
+        private const val ROOTFS_ASSET_TAR = "ubuntu-base.tar"
         /**
          * Worst-case expansion factor for the compressed rootfs asset.
-         * Alpine minirootfs compresses to roughly 1/3–1/4 of its extracted
-         * size, so `compressed × ROOTFS_EXPANSION_FACTOR` is a conservative
-         * estimate of the space extraction will actually need.
+         * Ubuntu base compresses to roughly 1/3–1/4 of its extracted size
+         * (29.9 MB → 105 MB measured on 24.04.4 arm64), so
+         * `compressed × ROOTFS_EXPANSION_FACTOR` is a conservative estimate
+         * of the space extraction will actually need.
          */
         private const val ROOTFS_EXPANSION_FACTOR = 4L
         /**
          * Extra margin (MiB) kept above the estimated extracted size so a
-         * half-full disk still has room for the apk world snapshot, integrity
+         * half-full disk still has room for the dpkg world snapshot, integrity
          * manifest and the first boot's package operations.
          */
         private const val ROOTFS_SPACE_MARGIN_MB = 64L
@@ -1115,11 +1035,6 @@ class RootfsManager private constructor(private val context: Context) {
         }
         private const val PROOT_ASSET = "proot-aarch64"
         private const val DEFAULT_MOUNT_ASSET = "default_mount"
-        private val OFFLINE_PACKAGES = listOf(
-            "bash-5.2.37-r0.apk",
-            "readline-8.2.13-r0.apk",
-            "ncurses-6.5_p20241006-r3.apk",
-        )
 
         /**
          * Parse the line-based integrity manifest text ("rel/path=size" per
@@ -1210,7 +1125,7 @@ internal fun extractTar(
         val rawName = if (prefix.isNotEmpty()) "$prefix/$name" else name
         // GNU/bsd tar archives commonly prefix entries with "./" — normalize
         // it away so onlyPrefixes matching and extraction paths are
-        // consistent with the on-disk rootfs layout (bin/bash, sbin/apk, ...).
+        // consistent with the on-disk rootfs layout (usr/bin/bash, usr/bin/dpkg, ...).
         var fullName = rawName
         while (fullName.startsWith("./")) fullName = fullName.removePrefix("./")
 
@@ -1337,28 +1252,25 @@ internal fun skipFully(input: InputStream, count: Long) {
 
 
 /**
- * Paths managed by apk (installed/upgraded at runtime, or grown by it —
- * the apk database). Their on-disk size legitimately differs from the
+ * Paths managed by apt/dpkg (installed/upgraded at runtime, or grown by them
+ * — the dpkg database). Their on-disk size legitimately differs from the
  * factory snapshot after any package change, so [verifyIntegrity] must only
  * check existence for them. Asserting the factory size made a freshly
- * `apk add`-ed bash (size != 0) look "missing" and a grown apk db look
- * "unusable" — which pushed autoRepair into a full-reset loop on EVERY boot
- * (2026-08-13). `/bin/sh` is a symlink to `/bin/busybox`, so it inherits
- * busybox's runtime size changes too — it was the last dynamic path still
- * size-asserted, causing a false `missing=[/bin/sh]` on every boot after a
- * busybox upgrade (fixed 2026-08-15).
+ * `apt-get install`-ed bash (size != 0) look "missing" and a grown dpkg db
+ * look "unusable" — the same class of false positive the Alpine build hit
+ * with apk upgrades (2026-08-13/15). `/bin/sh` is a symlink to
+ * `/usr/bin/dash`, so it inherits dash's runtime size changes too.
  */
 internal val DYNAMIC_INTEGRITY_PATHS = setOf(
-    "bin/bash",
+    "usr/bin/bash",
     "bin/sh",
-    "usr/lib/libreadline.so.8",
-    "usr/lib/libncursesw.so.6",
-    "lib/apk/db/installed",
+    "lib/aarch64-linux-gnu/libc.so.6",
+    "var/lib/dpkg/status",
 )
 
 /**
  * Decide whether a path passes the manifest size check. Dynamic
- * (apk-managed) paths and paths absent from the manifest are existence-only;
+ * (dpkg-managed) paths and paths absent from the manifest are existence-only;
  * everything else must match the factory snapshot size (catches truncation).
  * Pure so the boot contract is JVM-testable without an Android Context
  * ([RootfsHealthTest]).
@@ -1375,85 +1287,82 @@ internal fun integritySizePasses(
 
 /**
  * Factory files that are safe to restore over a damaged rootfs without
- * wiping user-installed packages. Prefix-matched so symlink chains
- * (e.g. libreadline.so.8 -> libreadline.so.8.x) are restored together with
- * their targets. The apk database (lib/apk/db/installed) is deliberately
- * excluded — it holds user package records and can only be rebuilt by a
- * full reset.
+ * wiping user-installed packages. Prefix-matched so multiarch paths
+ * (lib/ld-linux-aarch64.so.1 -> usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1
+ * and libc.so.6) are restored together with their targets. The dpkg database
+ * (var/lib/dpkg/status) is deliberately excluded — it holds user package
+ * records and can only be rebuilt by a full reset.
  */
 internal val CRITICAL_RESTORE_PREFIXES = setOf(
-    "bin/bash",
+    "usr/bin/bash",
+    "usr/bin/dash",
     "bin/sh",
-    "bin/busybox",
-    "lib/ld-musl-",
-    "usr/lib/libreadline",
-    "usr/lib/libncurses",
-    "sbin/apk",
+    "lib/ld-linux-",
+    "usr/lib/aarch64-linux-gnu/libc.",
+    "usr/bin/apt-get",
+    "usr/bin/dpkg",
+    "usr/bin/apt",
+    "usr/lib/apt/",
+    "usr/lib/dpkg/",
 )
 
-internal fun ensureBusyboxShellSymlink(rootfsDir: File): Boolean {
+internal fun ensureDashShellSymlink(rootfsDir: File): Boolean {
     val binDir = File(rootfsDir, "bin")
     val shell = File(binDir, "sh").toPath()
-    val busybox = File(binDir, "busybox")
+    val dash = File(rootfsDir, "usr/bin/dash")
     if (java.nio.file.Files.exists(shell)) return true
-    if (!busybox.exists()) return false
+    if (!dash.exists()) return false
     return try {
         binDir.mkdirs()
         if (java.nio.file.Files.exists(shell, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
             java.nio.file.Files.delete(shell)
         }
-        java.nio.file.Files.createSymbolicLink(shell, java.nio.file.Paths.get("busybox"))
+        java.nio.file.Files.createSymbolicLink(shell, java.nio.file.Paths.get("/usr/bin/dash"))
         java.nio.file.Files.exists(shell)
     } catch (t: Exception) {
-        Log.w("RootfsManager", "Failed to rebuild bin/sh -> busybox", t)
+        Log.w("RootfsManager", "Failed to rebuild bin/sh -> /usr/bin/dash", t)
         false
     }
 }
 
-// ── Apk world snapshot — pure functions (JVM-testable) ─────────────────
+// ── Dpkg world snapshot — pure functions (JVM-testable) ─────────────────
 
 /**
- * Package names guaranteed by the offline-install path
- * (assets/apk-offline/ via [RootfsManager.installOfflinePackages],
- * autoRepair Stage 2.6). The snapshot restore skips them: they are
- * re-installed from bundled APK files on every rebuild anyway.
- * File-level (private top-level) so [excludeOfflinePackages] can use it
- * without an Android Context.
- */
-private val OFFLINE_PACKAGE_NAMES = setOf("bash", "readline", "ncurses")
-
-/**
- * The Alpine guest PATH, matching what PRootKernel sets for session shells.
+ * The Ubuntu guest PATH, matching what PRootKernel sets for session shells.
  * proot child processes inherit the app process env (Android PATH:
  * /sbin:/vendor/bin:/system/sbin:...) — without an explicit override,
- * `/bin/sh -c "apk ..."` fails with `apk: not found` (exit 127).
+ * `/bin/sh -c "apt-get ..."` fails with `not found` (exit 127).
  */
-private const val ALPINE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/bin"
+private const val UBUNTU_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/bin"
 
 /**
- * A package name + version pair as recorded in Alpine's apk database.
- * Canonical form for `apk add <name>=<version>`.
+ * A package name + version pair as recorded in dpkg's status database.
+ * Canonical form for `apt-get install <name>=<version>` (epoch-qualified
+ * versions like `2:8.3` are accepted verbatim by apt).
  */
 data class ApkPackage(val name: String, val version: String)
 
 /**
- * Parse Alpine's `/lib/apk/db/installed` (read host-side — no proot needed)
+ * Parse dpkg's `/var/lib/dpkg/status` (read host-side — no proot needed)
  * into ordered (name, version) pairs. Each package is a block of
- * `KEY:value` lines terminated by a blank line; the name lives under `P:`,
- * the version under `V:` (apk writes P before V in every block). Blocks
- * missing either field are skipped; a trailing block without a closing
- * blank line is still captured.
+ * `Key: value` lines terminated by a blank line; the name lives under
+ * `Package:`, the version under `Version:`. Status blocks marked
+ * `Status: ... not-installed` are skipped (stale config remnants).
+ * Blocks missing either field are skipped; a trailing block without a
+ * closing blank line is still captured.
  */
-internal fun parseApkDbInstalled(text: String): List<ApkPackage> {
+internal fun parseDpkgStatus(text: String): List<ApkPackage> {
     val result = mutableListOf<ApkPackage>()
     var name: String? = null
     var version: String? = null
+    var installed = true
     fun flush() {
         val n = name
         val v = version
-        if (n != null && v != null) result.add(ApkPackage(n, v))
+        if (n != null && v != null && installed) result.add(ApkPackage(n, v))
         name = null
         version = null
+        installed = true
     }
     for (line in text.lines()) {
         val t = line.trim()
@@ -1462,8 +1371,10 @@ internal fun parseApkDbInstalled(text: String): List<ApkPackage> {
             continue
         }
         when {
-            t.startsWith("P:") -> name = t.substring(2).trim()
-            t.startsWith("V:") -> version = t.substring(2).trim()
+            t.startsWith("Package:") -> name = t.substringAfter(':').trim()
+            t.startsWith("Version:") -> version = t.substringAfter(':').trim()
+            t.startsWith("Status:") -> installed = t.contains(" installed") &&
+                !t.contains("not-installed")
         }
     }
     flush()
@@ -1472,19 +1383,19 @@ internal fun parseApkDbInstalled(text: String): List<ApkPackage> {
 
 /**
  * Serialize packages as one `name=version` line each, with a header
- * comment (parseable back by [parseApkWorld]).
+ * comment (parseable back by [parseDpkgWorld]).
  */
-internal fun formatApkWorld(packages: List<ApkPackage>): String =
+internal fun formatDpkgWorld(packages: List<ApkPackage>): String =
     buildString {
-        appendLine("# apk-world snapshot — `<name>=<version>` per line, written by RootfsManager.dumpApkWorld()")
+        appendLine("# dpkg-world snapshot — `<name>=<version>` per line, written by RootfsManager.dumpDpkgWorld()")
         for (p in packages) appendLine("${p.name}=${p.version}")
     }
 
 /**
- * Parse an apk-world snapshot (or retry list) back into packages.
+ * Parse a dpkg-world snapshot (or retry list) back into packages.
  * Tolerates blank lines, `#` comments, and malformed lines (skipped).
  */
-internal fun parseApkWorld(text: String): List<ApkPackage> {
+internal fun parseDpkgWorld(text: String): List<ApkPackage> {
     val result = mutableListOf<ApkPackage>()
     for (line in text.lines()) {
         val t = line.trim()
@@ -1499,13 +1410,3 @@ internal fun parseApkWorld(text: String): List<ApkPackage> {
     }
     return result
 }
-
-/**
- * Drop the offline trio (bash/readline/ncurses) from a snapshot before
- * restoring: [RootfsManager.installOfflinePackages] (autoRepair Stage 2.6)
- * re-installs them from bundled APK files on every rebuild — no network,
- * always the same version — so the snapshot restore must not touch them
- * (no duplicate work, no surprise version downgrades).
- */
-internal fun excludeOfflinePackages(packages: List<ApkPackage>): List<ApkPackage> =
-    packages.filterNot { it.name in OFFLINE_PACKAGE_NAMES }

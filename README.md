@@ -104,8 +104,8 @@ SHA-256  FC:0C:40:0D:B7:7E:C1:81:A3:35:18:C2:E8:13:6A:AE
 ### 构建与发布改动
 
 - **proot 从源码构建。** 沙箱引擎来自 `deps/proot` 子模块 + `deps/build_proot.sh`
-  + vendored 的 `deps/talloc`，在 CI 中用 NDK r28 编译。Alpine rootfs
-  （`alpine-minirootfs.tar`，8.5 MB）作为预置资产随仓库提交，运行时由
+  + vendored 的 `deps/talloc`，在 CI 中用 NDK r28 编译。Ubuntu Base rootfs
+  （`ubuntu-base.tar.gz`，约 30 MB）作为预置资产随仓库提交，运行时由
   `RootfsManager` 解包——proot 二进制本身不提交，完全可复现。
 - **其他原生库保持 vendored。** `libpty_bridge.so`、`libminis_crash_handler.so`
   和 `libjieba_jni.so` 按原样提交。
@@ -200,7 +200,7 @@ token 只用于这些显式请求的鉴权。
 | | |
 |---|---|
 | **自带模型** | Claude、GPT、Gemini 及其他提供方，使用你自己的 API 密钥或账号登录。 |
-| **真正的 Linux Shell** | 设备上运行沙箱化的 Alpine Linux 环境——智能体可以安装软件包、运行脚本、操作真实文件。 |
+| **真正的 Linux Shell** | 设备上运行沙箱化的 Ubuntu 24.04 Linux 环境——智能体可以安装软件包、运行脚本、操作真实文件。 |
 | **设备集成** | 日历、联系人、剪贴板、定位、媒体、闹钟、通知等，作为工具开放给智能体。 |
 | **浏览器自动化** | 智能体可以代表你浏览并操作网页。 |
 | **技能与记忆** | 可扩展技能 + 跨会话的持久记忆。完整技能包与记忆文件包含在本地备份中。 |
@@ -284,7 +284,7 @@ git rebase upstream/main               # 不要 merge
 src/android/      Android 应用（Kotlin / Compose）
   app/src/main/jniLibs/arm64-v8a/   原生库（jieba、pty bridge、crash handler）；
                                     libproot.so 是 CI 构建产物，非 vendored
-  app/src/main/assets/              Alpine minirootfs + 内置平台技能（skills/）
+  app/src/main/assets/              Ubuntu Base rootfs + 内置平台技能（skills/）
 src/shared/       与上游 iOS 树共享的资源（bashism 规则）
 deps/             proot 源码（子模块）+ build_proot.sh（NDK r28 构建）
 docs/             同步流程与接口规范
@@ -305,7 +305,7 @@ RikkaMinis 建立在大量开源工作之上——完整清单见
 **沙箱** — [PRoot](https://github.com/termux/proot)（GPLv2），Android 沙箱的用户态
 chroot，经由 [OpenMinis 的 fork](https://github.com/OpenMinis/proot)；
 **[talloc](https://talloc.samba.org)**（LGPLv3+）是其底层；
-**[Alpine Linux](https://alpinelinux.org)** — 沙箱启动所用的 minirootfs。
+**[Ubuntu Base](https://ubuntu.com/download/server)** — 沙箱启动所用的 rootfs（glibc + apt/dpkg）。
 
 **文本与渲染** — [cppjieba](https://github.com/yanyiwu/cppjieba)（MIT）、
 [KaTeX](https://katex.org)（MIT）。

@@ -18,8 +18,13 @@ import java.net.URL
  *   - persistent failure backoff (24h / 3-strikes) via SharedPreferences (F2),
  *   - one install attempt per process launch.
  *
- * On Android PRoot runs `apk add` natively (~1-3s), so the wait is minor; the
- * guards still matter for the offline / broken-source case.
+ * On Android PRoot runs `apt-get install` natively (~2-5s), so the wait is
+ * minor; the guards still matter for the offline / broken-source case.
+ *
+ * Ubuntu note: bash ships in the factory base rootfs, so on a healthy install
+ * the first probe (`command -v bash`) hits immediately and the install path
+ * is dead code — it only fires if the user `apt-get remove`d bash or the
+ * rootfs was damaged.
  */
 object OnDemandBash {
 
@@ -31,7 +36,7 @@ object OnDemandBash {
     private const val BACKOFF_WINDOW_MS = 24L * 3600 * 1000
     private const val UNAVAILABLE_TTL_MS = 10L * 60 * 1000
     private const val INSTALL_BUDGET_MS = 60_000L
-    private const val APK_PROBE_URL = "https://dl-cdn.alpinelinux.org/alpine/"
+    private const val APT_PROBE_URL = "http://ports.ubuntu.com/ubuntu-ports/"
 
     private sealed class Availability {
         object Unknown : Availability()
@@ -80,11 +85,15 @@ object OnDemandBash {
 
         if (!networkReachable()) {
             recordFailure(context); markUnavailable()
-            return Outcome.Unavailable("network/apk mirror unreachable")
+            return Outcome.Unavailable("network/apt mirror unreachable")
         }
 
         Log.i(TAG, "installing bash (budget ${INSTALL_BUDGET_MS / 1000}s)…")
-        val rc = executor.run("apk add bash", INSTALL_BUDGET_MS)
+        val rc = executor.run(
+            "DEBIAN_FRONTEND=noninteractive apt-get update -qq && " +
+                "DEBIAN_FRONTEND=noninteractive apt-get install -y bash",
+            INSTALL_BUDGET_MS,
+        )
         val verified = rc == 0 && executor.run("command -v bash >/dev/null 2>&1", 15_000) == 0
         if (verified) {
             clearFailure(context)
@@ -98,10 +107,10 @@ object OnDemandBash {
         }
         recordFailure(context); markUnavailable()
         Log.e(TAG, "bash install failed (rc=$rc)")
-        return Outcome.Unavailable("apk add bash failed (rc=$rc)")
+        return Outcome.Unavailable("apt-get install bash failed (rc=$rc)")
     }
 
-    /** Called when `bash <file>` itself returned 127 (user apk del'd) — M5. */
+    /** Called when `bash <file>` itself returned 127 (user apt-get removed bash) — M5. */
     suspend fun markDisappeared() = lock.withLock { availability = Availability.Unknown }
 
     private fun markUnavailable() {
@@ -111,7 +120,7 @@ object OnDemandBash {
     private fun backoffReason(context: Context): String? {
         val p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val count = p.getInt(KEY_FAIL_COUNT, 0)
-        if (count >= MAX_STRIKES) return "bash install disabled after $MAX_STRIKES failures (retry manually: apk add bash)"
+        if (count >= MAX_STRIKES) return "bash install disabled after $MAX_STRIKES failures (retry manually: apt-get install bash)"
         val last = p.getLong(KEY_LAST_FAIL, 0)
         if (last > 0 && System.currentTimeMillis() - last < BACKOFF_WINDOW_MS) return "bash install backing off (recent failure)"
         return null
@@ -130,7 +139,7 @@ object OnDemandBash {
 
     private suspend fun networkReachable(): Boolean = withContext(Dispatchers.IO) {
         try {
-            val c = (URL(APK_PROBE_URL).openConnection() as HttpURLConnection).apply {
+            val c = (URL(APT_PROBE_URL).openConnection() as HttpURLConnection).apply {
                 requestMethod = "HEAD"; connectTimeout = 5000; readTimeout = 5000
             }
             val code = c.responseCode

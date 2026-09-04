@@ -100,35 +100,71 @@ class RootfsTarExtractTest {
     }
 
     @Test
-    fun `prefix matches versioned symlink chain together`() {
+    fun `prefix matches symlink chain together`() {
+        // Ubuntu shape: /lib -> usr/lib, ld-linux symlink chain lives under
+        // usr/lib/aarch64-linux-gnu/. Both link + target must be restored.
         extract(
             listOf(
-                tarEntry("usr/lib/libreadline.so.8.2", "ELF-readline".toByteArray()),
+                tarEntry("usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1", "ELF-LOADER".toByteArray()),
                 tarEntry(
-                    "usr/lib/libreadline.so.8",
+                    "lib/ld-linux-aarch64.so.1",
                     typeflag = '2',
-                    linkName = "libreadline.so.8.2",
+                    linkName = "usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1",
                 ),
             ),
-            prefixes = setOf("usr/lib/libreadline"),
+            prefixes = setOf("lib/ld-linux-", "usr/lib/aarch64-linux-gnu/"),
         )
-        val link = tmp.root.resolve("usr/lib/libreadline.so.8")
+        val link = tmp.root.resolve("lib/ld-linux-aarch64.so.1")
         assertTrue("symlink must exist", Files.isSymbolicLink(link.toPath()))
-        assertEquals("libreadline.so.8.2", Files.readSymbolicLink(link.toPath()).toString())
-        assertFile("usr/lib/libreadline.so.8.2", "ELF-readline")
+        assertEquals("usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1", Files.readSymbolicLink(link.toPath()).toString())
+        assertFile("usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1", "ELF-LOADER")
     }
 
     @Test
     fun `symlink target restored when both are under the prefix`() {
         extract(
             listOf(
-                tarEntry("bin/busybox", "BUSYBOX".toByteArray()),
-                tarEntry("bin/sh", typeflag = '2', linkName = "bin/busybox"),
+                tarEntry("usr/bin/dash", "DASH".toByteArray()),
+                tarEntry("bin/sh", typeflag = '2', linkName = "usr/bin/dash"),
             ),
-            prefixes = setOf("bin/"),
+            prefixes = setOf("bin/", "usr/bin/dash"),
         )
         assertTrue(Files.isSymbolicLink(tmp.root.resolve("bin/sh").toPath()))
-        assertFile("bin/busybox", "BUSYBOX")
+        assertFile("usr/bin/dash", "DASH")
+    }
+
+    @Test
+    fun `ubuntu tar dir-symlink entries materialize and do not clobber`() {
+        // The real Ubuntu archive ships bin -> usr/bin, sbin -> usr/sbin,
+        // lib -> usr/lib as directory symlinks (typeflag '2'). extractTar
+        // must materialize them as symlinks and keep going.
+        extract(
+            listOf(
+                tarEntry("usr/bin/inner", "INNER".toByteArray()),
+                tarEntry("bin", typeflag = '2', linkName = "usr/bin"),
+                tarEntry("bin/inner", "OVERWRITTEN-FILE-VIA-LINK".toByteArray()),
+            ),
+            prefixes = setOf("usr/bin/", "bin"),
+        )
+        val link = tmp.root.resolve("bin").toPath()
+        assertTrue("bin must be a symlink", Files.isSymbolicLink(link))
+        assertEquals("usr/bin", Files.readSymbolicLink(link).toString())
+        assertFile("usr/bin/inner", "OVERWRITTEN-FILE-VIA-LINK")
+    }
+
+    @Test
+    fun `hardlink entries are materialized as file copies`() {
+        // Ubuntu ships real hardlinks (e.g. /usr/bin/[ vs /usr/bin/test).
+        // extractTar copies the target content (typeflag '1' path).
+        extract(
+            listOf(
+                tarEntry("usr/bin/test", "COREUTILS-TEST".toByteArray()),
+                tarEntry("usr/bin/[", typeflag = '1', linkName = "usr/bin/test"),
+            ),
+            prefixes = setOf("usr/bin/"),
+        )
+        assertFile("usr/bin/test", "COREUTILS-TEST")
+        assertFile("usr/bin/[", "COREUTILS-TEST")
     }
 
     @Test
@@ -157,33 +193,34 @@ class RootfsTarExtractTest {
     }
 
     @Test
-    fun `dot-slash prefixed entries match onlyPrefixes like the real archive`() {
-        // alpine-minirootfs.tar stores every entry with a "./" prefix
-        // ("./bin/bash", "./sbin/apk", ...). Regression for the targeted
-        // restore silently extracting nothing.
+    fun `dot-slash prefixed entries match onlyPrefixes like legacy archives`() {
+        // Alpine minirootfs archives stored every entry with a "./" prefix
+        // ("./bin/bash", ...). Ubuntu doesn't prefix, but the normalization
+        // must keep working — regression for the targeted restore silently
+        // extracting nothing.
         val entries = listOf(
-            tarEntry("./bin/bash", "#!/bin/bash\n".toByteArray()),
-            tarEntry("./sbin/apk", "APK-BIN".toByteArray()),
-            tarEntry("./usr/lib/libreadline.so.8", "READLINE".toByteArray()),
+            tarEntry("./usr/bin/bash", "#!/bin/bash\n".toByteArray()),
+            tarEntry("./usr/bin/dpkg", "DPKG-BIN".toByteArray()),
+            tarEntry("./usr/bin/apt-get", "APT-BIN".toByteArray()),
             tarEntry("./etc/ignored", "skip".toByteArray()),
         )
-        extract(entries, setOf("bin/bash", "sbin/apk", "usr/lib/libreadline"))
-        assertFile("bin/bash", "#!/bin/bash\n")
-        assertFile("sbin/apk", "APK-BIN")
-        assertFile("usr/lib/libreadline.so.8", "READLINE")
+        extract(entries, setOf("usr/bin/bash", "usr/bin/dpkg", "usr/bin/apt-get"))
+        assertFile("usr/bin/bash", "#!/bin/bash\n")
+        assertFile("usr/bin/dpkg", "DPKG-BIN")
+        assertFile("usr/bin/apt-get", "APT-BIN")
         assertFalse(tmp.root.resolve("etc/ignored").exists())
     }
 
     @Test
-    fun `dot-slash prefixed symlink chain restores sh pointing at busybox`() {
+    fun `dot-slash prefixed symlink chain restores sh pointing at dash`() {
         val entries = listOf(
-            tarEntry("./bin/busybox", "BUSYBOX-BIN".toByteArray()),
-            tarEntry("./bin/sh", typeflag = '2', linkName = "/bin/busybox"),
+            tarEntry("./usr/bin/dash", "DASH-BIN".toByteArray()),
+            tarEntry("./bin/sh", typeflag = '2', linkName = "/usr/bin/dash"),
         )
-        extract(entries, setOf("bin/sh", "bin/busybox"))
-        assertFile("bin/busybox", "BUSYBOX-BIN")
+        extract(entries, setOf("bin/sh", "usr/bin/dash"))
+        assertFile("usr/bin/dash", "DASH-BIN")
         val link = tmp.root.resolve("bin/sh").toPath()
         assertTrue("missing symlink bin/sh", Files.isSymbolicLink(link))
-        assertEquals("/bin/busybox", Files.readSymbolicLink(link).toString())
+        assertEquals("/usr/bin/dash", Files.readSymbolicLink(link).toString())
     }
 }

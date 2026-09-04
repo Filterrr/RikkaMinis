@@ -25,7 +25,7 @@
     <exclude domain="file" path="sessions/" />
     <exclude domain="file" path="minis-sessions/" />
 
-    <!-- Exclude rootfs — the Alpine image is large and re-downloadable
+    <!-- Exclude rootfs — the Ubuntu image is large and re-extractable
          from the app's "Reset Rootfs" action. -->
     <exclude domain="file" path="proot/" />
 

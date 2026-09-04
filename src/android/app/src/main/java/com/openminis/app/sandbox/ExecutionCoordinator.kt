@@ -828,7 +828,7 @@ object ExecutionCoordinator {
     /**
      * [P2-proot-resource-hygiene] Clear accumulated junk from the PROOT_TMP_DIR
      * cache and the guest rootfs temp dirs. PRoot writes transient files
-     * (loader cache, temp scratch) under app cache; apk/busybox and command
+     * (loader cache, temp scratch) under app cache; apt/dpkg and command
      * output also accumulate in rootfs /tmp and /var/tmp. Over weeks these grow
      * and push disk pressure / IO overhead (the "use it a long time → flash
      * crash" class of report). Mirrors RikkaHub's cleanupAllTempDirs, which runs

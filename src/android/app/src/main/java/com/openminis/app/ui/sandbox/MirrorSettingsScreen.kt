@@ -84,20 +84,20 @@ enum class MirrorCategory(
     val displayName: String,
     val configPath: String,
 ) {
-    ALPINE("alpine", "Alpine APK", "etc/apk/repositories"),
+    APT("apt", "Ubuntu APT", "etc/apt/sources.list.d/minis.sources"),
     PIP("pip", "Python pip", "etc/pip/pip.conf"),
     NPM("npm", "Node.js npm", "root/.npmrc");
 
     val icon: ImageVector
         get() = when (this) {
-            ALPINE -> Icons.Filled.Terrain
+            APT -> Icons.Filled.Terrain
             PIP -> Icons.Filled.Inventory2
             NPM -> Icons.Outlined.Javascript
         }
 
     val iconColor: Color
         get() = when (this) {
-            ALPINE -> Color(0xFF007AFF)
+            APT -> Color(0xFFE95420)
             PIP -> Color(0xFF34C759)
             NPM -> Color(0xFFFF3B30)
         }
@@ -124,10 +124,10 @@ data class MirrorTestResult(
 // ─── Mirror Definitions ──────────────────────────────────────────────────────
 
 object MirrorCatalog {
-    private const val ALPINE_PROBE = "v3.21/main/aarch64/APKINDEX.tar.gz"
+    private const val APT_PROBE = "dists/noble/Release"
 
-    private fun alpine(id: String, name: String, url: String, region: String, official: Boolean = false) =
-        MirrorEntry("alpine.$id", name, url, url + ALPINE_PROBE, MirrorCategory.ALPINE, region, official)
+    private fun apt(id: String, name: String, url: String, region: String, official: Boolean = false) =
+        MirrorEntry("apt.$id", name, url, url + APT_PROBE, MirrorCategory.APT, region, official)
 
     private fun pip(id: String, name: String, url: String, region: String, official: Boolean = false) =
         MirrorEntry("pip.$id", name, url, url, MirrorCategory.PIP, region, official)
@@ -135,17 +135,15 @@ object MirrorCatalog {
     private fun npm(id: String, name: String, url: String, region: String, official: Boolean = false) =
         MirrorEntry("npm.$id", name, url, url, MirrorCategory.NPM, region, official)
 
-    val alpineMirrors = listOf(
-        alpine("official", "Official CDN", "https://dl-cdn.alpinelinux.org/alpine/", "Global", official = true),
-        alpine("tuna", "Tsinghua TUNA", "https://mirrors.tuna.tsinghua.edu.cn/alpine/", "China"),
-        alpine("aliyun", "Alibaba", "https://mirrors.aliyun.com/alpine/", "China"),
-        alpine("ustc", "USTC", "https://mirrors.ustc.edu.cn/alpine/", "China"),
-        alpine("huawei", "Huawei", "https://repo.huaweicloud.com/alpine/", "China"),
-        alpine("tencent", "Tencent", "https://mirrors.cloud.tencent.com/alpine/", "China"),
-        alpine("leaseweb", "LEASEWEB UK", "https://mirror.leaseweb.com/alpine/", "Europe"),
-        alpine("rwth", "RWTH Germany", "https://ftp.halifax.rwth-aachen.de/alpine/", "Europe"),
-        alpine("jaist", "JAIST Japan", "https://ftp.jaist.ac.jp/pub/Linux/alpine/", "Asia"),
-        alpine("kakao", "Kakao Korea", "https://mirror.kakao.com/alpine/", "Asia"),
+    val aptMirrors = listOf(
+        apt("official", "Ubuntu Ports", "http://ports.ubuntu.com/ubuntu-ports/", "Global", official = true),
+        apt("tuna", "Tsinghua TUNA", "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/", "China"),
+        apt("aliyun", "Alibaba", "https://mirrors.aliyun.com/ubuntu-ports/", "China"),
+        apt("ustc", "USTC", "https://mirrors.ustc.edu.cn/ubuntu-ports/", "China"),
+        apt("huawei", "Huawei", "https://mirrors.huaweicloud.com/ubuntu-ports/", "China"),
+        apt("tencent", "Tencent", "https://mirrors.cloud.tencent.com/ubuntu-ports/", "China"),
+        apt("nju", "Nanjing Univ.", "https://mirrors.nju.edu.cn/ubuntu-ports/", "China"),
+        apt("bfsu", "BFSU", "https://mirrors.bfsu.edu.cn/ubuntu-ports/", "China"),
     )
 
     val pipMirrors = listOf(
@@ -164,10 +162,10 @@ object MirrorCatalog {
         npm("tencent", "Tencent", "https://mirrors.cloud.tencent.com/npm/", "China"),
     )
 
-    val allMirrors: List<MirrorEntry> = alpineMirrors + pipMirrors + npmMirrors
+    val allMirrors: List<MirrorEntry> = aptMirrors + pipMirrors + npmMirrors
 
     fun mirrors(category: MirrorCategory): List<MirrorEntry> = when (category) {
-        MirrorCategory.ALPINE -> alpineMirrors
+        MirrorCategory.APT -> aptMirrors
         MirrorCategory.PIP -> pipMirrors
         MirrorCategory.NPM -> npmMirrors
     }
@@ -425,7 +423,7 @@ object MirrorSpeedTestViewModel {
         useCustomMirror[category] == true && selectedMirrorId[category] != null
 
     private fun rootfsDataDir(context: Context): File =
-        File(context.applicationContext.filesDir, "alpine-rootfs")
+        File(context.applicationContext.filesDir, "ubuntu-rootfs")
 
     private fun applyMirror(context: Context, category: MirrorCategory) {
         val mirror = selectedMirror(category) ?: return
@@ -443,8 +441,25 @@ object MirrorSpeedTestViewModel {
         }
 
         val content = when (category) {
-            MirrorCategory.ALPINE ->
-                "${mirror.baseURL}v3.21/main\n${mirror.baseURL}v3.21/community\n"
+            MirrorCategory.APT -> {
+                // deb822 format, mirroring the shipped ubuntu.sources so apt
+                // tooling treats both uniformly. arm64 builds always come from
+                // the ports archive (amd64 uses archive.ubuntu.com instead).
+                """
+                Types: deb
+                URIs: ${mirror.baseURL}
+                Suites: noble noble-updates noble-backports
+                Components: main universe restricted multiverse
+                Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+                Types: deb
+                URIs: ${mirror.baseURL}
+                Suites: noble-security
+                Components: main universe restricted multiverse
+                Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+                """.trimIndent() + "\n"
+            }
             MirrorCategory.PIP -> {
                 val host = try { URI(mirror.baseURL).host ?: "" } catch (_: Exception) { "" }
                 """

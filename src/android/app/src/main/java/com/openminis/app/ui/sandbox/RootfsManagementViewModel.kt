@@ -149,10 +149,10 @@ class RootfsManagementViewModel : ViewModel() {
 
     /**
      * Verify critical rootfs files and repair in place when anything is
-     * missing. Less destructive than [resetRootfs]: runs `apk fix` inside the
-     * guest to restore bash/readline/ncurses, only falling back to a full
-     * reset when apk itself is unusable. The terminal falls back to /bin/sh
-     * independently if repair still leaves bash broken.
+     * missing. Less destructive than [resetRootfs]: runs `dpkg --configure -a`
+     * + `apt-get install -f` inside the guest to restore bash/libc6, only
+     * falling back to a full reset when dpkg itself is unusable. The terminal
+     * falls back to /bin/sh independently if repair still leaves bash broken.
      */
     fun repairRootfs(context: Context) {
         val manager = RootfsManager.getInstance(context)

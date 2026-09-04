@@ -6,7 +6,7 @@ import org.json.JSONObject
 import java.util.regex.Pattern
 
 /**
- * Detects busybox-ash-incompatible bash syntax so `shell_execute` can install +
+ * Detects /bin/sh-incompatible bash syntax so `shell_execute` can ensure bash +
  * switch to bash only when needed (T-bash-on-demand). The rule table and its
  * fix hints are the SHARED JSON (assets/bashism/bashism_rules.json, generated
  * from src/shared/bashism — the same file iOS loads), so the two platforms can

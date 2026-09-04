@@ -185,7 +185,7 @@ class NetworkMonitor {
      *
      * Mirrors iOS NetworkMonitor.swift:26,60 which calls refreshDns() on every
      * NWPath update so already-running shells pick up the new nameservers the
-     * next time they resolve a hostname (musl's getaddrinfo re-reads
+     * next time they resolve a hostname (glibc's getaddrinfo re-reads
      * resolv.conf on each lookup — no cache to invalidate).
      */
     private fun refreshSandboxDns(reason: String) {

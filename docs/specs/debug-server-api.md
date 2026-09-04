@@ -294,8 +294,8 @@ Get app paths and disk usage information.
 {
   "documentsPath": "/path/to/Documents",
   "libraryPath": "/path/to/Library",
-  "dataPath": "/path/to/alpine-rootfs/data",
-  "rootfsPath": "/path/to/Documents/alpine-rootfs",
+  "dataPath": "/path/to/ubuntu-rootfs/data",
+  "rootfsPath": "/path/to/Documents/ubuntu-rootfs",
   "bundlePath": "/path/to/Minis.app",
   "diskUsage": {
     "documents": 12345678,

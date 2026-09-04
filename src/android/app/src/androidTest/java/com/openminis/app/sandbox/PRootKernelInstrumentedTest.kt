@@ -118,7 +118,7 @@ class PRootKernelInstrumentedTest {
         // Should have -r flag with rootfs
         val rIndex = cmd.indexOf("-r")
         assertTrue("Should contain -r flag", rIndex >= 0)
-        assertTrue("Rootfs path should follow -r", cmd[rIndex + 1].contains("alpine-rootfs"))
+        assertTrue("Rootfs path should follow -r", cmd[rIndex + 1].contains("ubuntu-rootfs"))
 
         // Should bind /dev, /proc, /sys
         assertTrue("Should bind /dev", cmd.contains("/dev"))
@@ -234,7 +234,7 @@ class PRootKernelInstrumentedTest {
         // No bind mounts → should resolve relative to rootfsDir
         val result = PRootKernel.resolveHostPath("/etc/resolv.conf")
         assertNotNull(result)
-        assertTrue("Should resolve inside rootfs", result!!.path.contains("alpine-rootfs"))
+        assertTrue("Should resolve inside rootfs", result!!.path.contains("ubuntu-rootfs"))
         assertTrue("Should end with etc/resolv.conf", result.path.endsWith("etc/resolv.conf"))
     }
 
@@ -265,7 +265,7 @@ class PRootKernelInstrumentedTest {
 
     private fun canBoot(): Boolean {
         return try {
-            context.assets.open("alpine-minirootfs.tar.gz").use { }
+            context.assets.open("ubuntu-base.tar.gz").use { }
             context.assets.open("proot-aarch64").use { }
             true
         } catch (_: Exception) {

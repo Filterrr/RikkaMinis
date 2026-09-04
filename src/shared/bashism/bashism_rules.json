@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "_comment": "Single source of truth for busybox-ash bashism detection (T-bash-on-demand). Loaded at runtime by BOTH iOS (bundle resource) and Android (asset). Every rule is grounded in on-device testing against Alpine 3.21.0 / BusyBox 1.37.0 ash (see /tmp/bashism_test_report.md, 2026-07-18). Patterns MUST stay inside the common ICU/java.util.regex dialect subset, MUST NOT contain nested quantifiers (ReDoS), and are matched LINE BY LINE against the script with heredoc BODIES stripped. tier: S = silent-wrong under ash (highest priority, never prune), E = loud error under ash, T1 = explicit bash reference (ensure installed, do not switch interpreter).",
+  "_comment": "Single source of truth for /bin/sh (dash) bashism detection (T-bash-on-demand). Loaded at runtime by BOTH iOS (bundle resource) and Android (asset). Rules were grounded in on-device testing against Alpine 3.21.0 / BusyBox 1.37.0 ash (see /tmp/bashism_test_report.md, 2026-07-18) and re-validated against Ubuntu 24.04 / dash 0.5.12 (the new /bin/sh). Patterns MUST stay inside the common ICU/java.util.regex dialect subset, MUST NOT contain nested quantifiers (ReDoS), and are matched LINE BY LINE against the script with heredoc BODIES stripped. tier: S = silent-wrong under /bin/sh (highest priority, never prune), E = loud error under /bin/sh, T1 = explicit bash reference (ensure installed, do not switch interpreter).",
   "rules": [
     {
       "name": "bash-shebang",
@@ -20,42 +20,42 @@
       "name": "arith-command",
       "tier": "S",
       "pattern": "(?<!\\$)\\(\\(",
-      "behaviorNote": "busybox sh parses (( )) as nested subshells and runs the expression as a COMMAND (exit 127); `if (( x > y ))` silently takes the WRONG branch.",
+      "behaviorNote": "dash parses (( )) as nested subshells and runs the expression as a COMMAND (exit 127); `if (( x > y ))` silently takes the WRONG branch.",
       "fixHint": "Comparisons: `[ \"$x\" -gt 5 ]`. Arithmetic assignment: `x=$((x + 1))` ($((..)) expansion IS supported)."
     },
     {
       "name": "compound-assign",
       "tier": "S",
       "pattern": "\\b[A-Za-z_][A-Za-z0-9_]*\\+=",
-      "behaviorNote": "busybox sh treats `x+=1` as a COMMAND named 'x+=1' ('not found'); the variable is never updated while the script appears to run.",
+      "behaviorNote": "dash treats `x+=1` as a COMMAND named 'x+=1' ('not found'); the variable is never updated while the script appears to run.",
       "fixHint": "Numeric: `x=$((x + n))`. String append: `s=\"${s}suffix\"`. Array append: `list=\"$list item\"` or `set -- \"$@\" item`."
     },
     {
       "name": "brace-range",
       "tier": "S",
       "pattern": "\\{-?[0-9]{1,10}\\.\\.-?[0-9]{1,10}(\\.\\.-?[0-9]{1,10})?\\}|\\{[A-Za-z]\\.\\.[A-Za-z]\\}",
-      "behaviorNote": "busybox sh does not brace-expand; `{1..3}` is passed through as the LITERAL string with no error.",
+      "behaviorNote": "dash does not brace-expand; `{1..3}` is passed through as the LITERAL string with no error.",
       "fixHint": "Write the list out (`1 2 3`) or use `$(seq 1 3)` for numeric ranges."
     },
     {
       "name": "printf-v",
       "tier": "S",
       "pattern": "\\bprintf\\s+-v\\b",
-      "behaviorNote": "busybox printf has no -v; output becomes '-v ...' and the variable is never assigned, with no error.",
+      "behaviorNote": "dash printf has no -v; output becomes '-v ...' and the variable is never assigned, with no error.",
       "fixHint": "Use command substitution: `var=$(printf 'fmt' args)`."
     },
     {
       "name": "array-def",
       "tier": "E",
       "pattern": "\\b[A-Za-z_][A-Za-z0-9_]*=\\(",
-      "behaviorNote": "Arrays are unsupported: `a=(1 2 3)` is a syntax error in busybox sh.",
+      "behaviorNote": "Arrays are unsupported: `a=(1 2 3)` is a syntax error in dash.",
       "fixHint": "Use a space-separated string (`a=\"1 2 3\"; for x in $a; do ...`) or positional parameters (`set -- 1 2 3`)."
     },
     {
       "name": "array-expand",
       "tier": "E",
       "pattern": "\\$\\{#?[A-Za-z_][A-Za-z0-9_]*\\[",
-      "behaviorNote": "`${a[@]}` / `${#a[@]}` are 'bad substitution' in busybox sh.",
+      "behaviorNote": "`${a[@]}` / `${#a[@]}` are 'bad substitution' in dash.",
       "fixHint": "With positional parameters use `\"$@\"` and `$#`; with a space-separated string iterate with `for`."
     },
     {

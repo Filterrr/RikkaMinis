@@ -146,7 +146,7 @@
     <string name="settings_max_concurrent_dialog_title">Макс. одновременных сеансов</string>
     <string name="settings_max_concurrent_restart_hint">Применяется при следующем запуске приложения.</string>
     <string name="settings_section_storage">Хранилище</string>
-    <string name="settings_storage_subtitle">Управление корневой ФС Alpine Linux и просмотр файлов</string>
+    <string name="settings_storage_subtitle">Управление корневой ФС Ubuntu Linux и просмотр файлов</string>
     <string name="settings_section_permissions">Разрешения</string>
     <string name="settings_permissions_subtitle">Управление доступом Агента к функциям, связанным с приватностью</string>
     <string name="settings_section_logs">Журналы</string>
@@ -686,7 +686,7 @@
     <string name="rootfs_result_section">Результат</string>
     <string name="rootfs_info_section">Информация</string>
     <string name="rootfs_about_title">О Rootfs</string>
-    <string name="rootfs_about_description">Rootfs содержит файловую систему Alpine Linux, используемую песочницей. Сброс удалит все данные и вернёт к заводскому состоянию.</string>
+    <string name="rootfs_about_description">Rootfs содержит файловую систему Ubuntu Linux, используемую песочницей. Сброс удалит все данные и вернёт к заводскому состоянию.</string>
     <string name="rootfs_about_operations">Сброс: удалить всё | Резервная копия: сохранить каталог /root | Восстановление: вернуть сохранённые данные</string>
     <string name="rootfs_reset_confirm_title">Сбросить Rootfs?</string>
     <string name="rootfs_reset_confirm_message">Это удалит весь rootfs. Все данные будут потеряны.</string>
@@ -1411,7 +1411,7 @@
     <string name="filepreview_truncated_kb">Показаны первые %1$d КБ из %2$s</string>
     <string name="filepreview_truncated_rows">Показаны первые %1$d строк из %2$s</string>
     <string name="filepreview_no_app">Нет приложения для открытия этого файла.</string>
-    <string name="rootfs_explain_body">Rootfs содержит файловую систему Alpine Linux, используемую песочницей. Сброс удалит все данные и вернёт заводское состояние.</string>
+    <string name="rootfs_explain_body">Rootfs содержит файловую систему Ubuntu Linux, используемую песочницей. Сброс удалит все данные и вернёт заводское состояние.</string>
     <string name="rootfs_reset_body">Сброс: удалить всё\nПримечание: постоянные данные хранятся в общей области вне rootfs и сохраняются после сброса.</string>
     <string name="config_confirm_effect_warning">Это может повлиять на последующие вызовы инструментов.</string>
     <string name="config_confirm_effect_info">Обратимо, но стоит быстро проверить.</string>

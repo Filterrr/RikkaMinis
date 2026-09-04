@@ -106,7 +106,7 @@
     <string name="settings_max_concurrent_dialog_title">동시 세션 수 상한</string>
     <string name="settings_max_concurrent_restart_hint">다음 앱 시작 시 적용됩니다.</string>
     <string name="settings_section_storage">저장 공간</string>
-    <string name="settings_storage_subtitle">Alpine Linux rootfs를 관리하고 파일을 탐색</string>
+    <string name="settings_storage_subtitle">Ubuntu Linux rootfs를 관리하고 파일을 탐색</string>
     <string name="settings_section_permissions">권한</string>
     <string name="settings_permissions_subtitle">프라이버시 관련 기능에 대한 에이전트의 접근을 제어</string>
     <string name="settings_section_logs">로그</string>
@@ -446,7 +446,7 @@
     <string name="rootfs_result_section">결과</string>
     <string name="rootfs_info_section">정보</string>
     <string name="rootfs_about_title">Rootfs에 대하여</string>
-    <string name="rootfs_about_description">rootfs 에는 샌드박스가 사용하는 Alpine Linux 파일시스템이 포함됩니다. 재설정하면 모든 데이터가 삭제되고 초기 상태로 복원됩니다.</string>
+    <string name="rootfs_about_description">rootfs 에는 샌드박스가 사용하는 Ubuntu Linux 파일시스템이 포함됩니다. 재설정하면 모든 데이터가 삭제되고 초기 상태로 복원됩니다.</string>
     <string name="rootfs_about_operations">재설정: 모두 삭제 | 백업: /root 저장 | 복원: 저장된 데이터 복원</string>
     <string name="rootfs_reset_confirm_title">Rootfs를 초기화하시겠습니까?</string>
     <string name="rootfs_reset_confirm_message">rootfs 전체가 삭제됩니다. 모든 데이터가 손실됩니다.</string>
@@ -1255,7 +1255,7 @@
     <string name="filepreview_truncated_kb">%2$s 중 처음 %1$d KB 표시</string>
     <string name="filepreview_truncated_rows">%2$s 중 처음 %1$d행 표시</string>
     <string name="filepreview_no_app">이 파일을 열 수 있는 앱이 없습니다.</string>
-    <string name="rootfs_explain_body">rootfs에는 샌드박스가 사용하는 Alpine Linux 파일 시스템이 포함되어 있습니다. 초기화하면 모든 데이터가 삭제되고 공장 상태로 복원됩니다.</string>
+    <string name="rootfs_explain_body">rootfs에는 샌드박스가 사용하는 Ubuntu Linux 파일 시스템이 포함되어 있습니다. 초기화하면 모든 데이터가 삭제되고 공장 상태로 복원됩니다.</string>
     <string name="rootfs_reset_body">초기화: 모든 항목 삭제\n참고: 영구 데이터는 rootfs 외부의 공유 영역에 저장되며 초기화 후에도 유지됩니다.</string>
     <string name="config_confirm_effect_warning">이후 도구 호출에 영향을 줄 수 있습니다.</string>
     <string name="config_confirm_effect_info">되돌릴 수 있지만 빠르게 확인할 가치가 있습니다.</string>

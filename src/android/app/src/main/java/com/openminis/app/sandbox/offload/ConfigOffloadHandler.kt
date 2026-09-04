@@ -195,7 +195,7 @@ class ConfigOffloadHandler : NativeOffloadHandler {
         // [T-android-minis-config-set-shell-escape] (issue #36) `--file <path>`
         // reads the value-json from a file instead of an argv positional. The
         // value normally rides through the guest shell as a positional arg, so
-        // busybox ash mangles embedded double-quotes / backslashes / newlines /
+        // /bin/sh mangles embedded double-quotes / backslashes / newlines /
         // $ / backticks before this handler sees them — breaking large free-text
         // writes like soul.body. Reading from a file bypasses shell escaping
         // entirely. Mirrors iOS 5dcff277.

@@ -142,7 +142,7 @@
     <string name="settings_max_concurrent_dialog_title">最大并发会话数</string>
     <string name="settings_max_concurrent_restart_hint">下次启动应用时生效。</string>
     <string name="settings_section_storage">存储</string>
-    <string name="settings_storage_subtitle">管理 Alpine Linux rootfs 并浏览文件</string>
+    <string name="settings_storage_subtitle">管理 Ubuntu Linux rootfs 并浏览文件</string>
     <string name="settings_section_permissions">权限</string>
     <string name="settings_permissions_subtitle">控制 agent 对隐私敏感功能的访问</string>
     <string name="settings_section_logs">日志</string>
@@ -537,7 +537,7 @@
     <string name="rootfs_result_section">结果</string>
     <string name="rootfs_info_section">信息</string>
     <string name="rootfs_about_title">关于 Rootfs</string>
-    <string name="rootfs_about_description">rootfs 包含沙箱使用的 Alpine Linux 文件系统。重置将删除所有数据并恢复出厂状态。</string>
+    <string name="rootfs_about_description">rootfs 包含沙箱使用的 Ubuntu Linux 文件系统。重置将删除所有数据并恢复出厂状态。</string>
     <string name="rootfs_about_operations">重置：删除全部 | 备份：保存 /root 目录 | 恢复：恢复已保存的数据</string>
     <string name="rootfs_reset_confirm_title">重置 Rootfs？</string>
     <string name="rootfs_reset_confirm_message">这将删除整个 rootfs。所有数据将丢失。</string>
@@ -1573,7 +1573,7 @@
     <string name="filepreview_truncated_kb">已显示前 %1$d KB（共 %2$s）</string>
     <string name="filepreview_truncated_rows">已显示前 %1$d 行（共 %2$s）</string>
     <string name="filepreview_no_app">没有可打开此文件的应用。</string>
-    <string name="rootfs_explain_body">rootfs 包含终端环境所用的 Alpine Linux 文件系统。重置将删除所有数据并恢复出厂状态。</string>
+    <string name="rootfs_explain_body">rootfs 包含终端环境所用的 Ubuntu Linux 文件系统。重置将删除所有数据并恢复出厂状态。</string>
     <string name="rootfs_reset_body">重置：删除全部内容\n注意：持久数据保存在 rootfs 外的共享区域，重置后仍会保留。</string>
     <string name="config_confirm_effect_warning">这可能影响后续工具调用。</string>
     <string name="config_confirm_effect_info">可逆操作，建议快速过目。</string>

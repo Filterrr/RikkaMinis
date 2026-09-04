@@ -248,7 +248,7 @@
     <string name="settings_max_concurrent_dialog_title">Max concurrent sessions</string>
     <string name="settings_max_concurrent_restart_hint">Takes effect on next app start.</string>
     <string name="settings_section_storage">Storage</string>
-    <string name="settings_storage_subtitle">Manage Alpine Linux rootfs and browse files</string>
+    <string name="settings_storage_subtitle">Manage Ubuntu Linux rootfs and browse files</string>
     <string name="settings_section_permissions">Permissions</string>
     <string name="settings_permissions_subtitle">Control agent access to privacy-sensitive features</string>
     <string name="settings_section_logs">Logs</string>
@@ -843,7 +843,7 @@
     <string name="rootfs_result_section">Result</string>
     <string name="rootfs_info_section">Info</string>
     <string name="rootfs_about_title">About Rootfs</string>
-    <string name="rootfs_about_description">The rootfs contains the Alpine Linux filesystem used by the sandbox. Resetting will delete all data and restore to factory state.</string>
+    <string name="rootfs_about_description">The rootfs contains the Ubuntu Linux filesystem used by the sandbox. Resetting will delete all data and restore to factory state.</string>
     <string name="rootfs_about_operations">Reset: Delete everything | Backup: Save /root directory | Restore: Recover saved data</string>
     <string name="rootfs_reset_confirm_title">Reset Rootfs?</string>
     <string name="rootfs_reset_confirm_message">This will delete the entire rootfs. All data will be lost.</string>
@@ -1645,7 +1645,7 @@
     <string name="filepreview_truncated_kb">Showing first %1$d KB of %2$s</string>
     <string name="filepreview_truncated_rows">Showing first %1$d rows of %2$s</string>
     <string name="filepreview_no_app">No app available to open this file.</string>
-    <string name="rootfs_explain_body">The rootfs contains the Alpine Linux filesystem used by the sandbox. Resetting will delete all data and restore to factory state.</string>
+    <string name="rootfs_explain_body">The rootfs contains the Ubuntu Linux filesystem used by the sandbox. Resetting will delete all data and restore to factory state.</string>
     <string name="rootfs_reset_body">Reset: Delete everything\nNote: persistent data lives in the shared area outside the rootfs and is kept across resets.</string>
     <string name="config_confirm_effect_warning">This may affect later tool calls.</string>
     <string name="config_confirm_effect_info">Reversible, but worth a quick look.</string>

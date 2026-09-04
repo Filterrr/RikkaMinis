@@ -164,7 +164,7 @@ jobs:
           # (dead terminal, status=1, no output). Missing loader => broken APK.
           test -s jniLibs/arm64-v8a/libproot-loader.so
           test -s assets/proot-aarch64
-          test -s assets/alpine-minirootfs.tar
+          test -s assets/ubuntu-base.tar.gz
           echo "7f454c46" > /tmp/elf_magic
           for so in jniLibs/arm64-v8a/*.so; do
             magic=$(head -c 4 "$so" | od -A n -t x1 | tr -d ' \n')
@@ -287,7 +287,7 @@ jobs:
         run: |
           APK=src/android/app/build/outputs/apk/release/app-release.apk
           ls -la "$APK"
-          unzip -l "$APK" | grep -E 'libproot\.so|proot-aarch64|alpine-minirootfs'
+          unzip -l "$APK" | grep -E 'libproot\.so|proot-aarch64|ubuntu-base'
           EXPECTED=$(sha256sum src/android/app/src/main/jniLibs/arm64-v8a/libproot.so | cut -d' ' -f1)
           unzip -p "$APK" lib/arm64-v8a/libproot.so > /tmp/apk_libproot.so
           ACTUAL=$(sha256sum /tmp/apk_libproot.so | cut -d' ' -f1)

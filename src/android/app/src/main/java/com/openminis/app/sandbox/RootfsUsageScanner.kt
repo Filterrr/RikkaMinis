@@ -7,7 +7,7 @@ import java.io.File
 
 /**
  * Computes the REAL on-disk footprint of the terminal rootfs
- * (filesDir/alpine-rootfs) for the Storage screen.
+ * (filesDir/ubuntu-rootfs) for the Storage screen.
  *
  * The old implementation (dir.walkTopDown() + File.isFile + File.length())
  * made the "Terminal Shell" row read far larger than the actual disk usage:

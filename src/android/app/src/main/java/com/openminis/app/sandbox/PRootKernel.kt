@@ -69,10 +69,10 @@ object PRootKernel {
 
         // [T-rootfs-integrity] Verify critical files survived extraction.
         // A silent_kill (HyperOS memory pressure) can leave the rootfs with
-        // a valid `.arch` marker but missing bash / readline / ncurses —
+        // a valid `.arch` marker but missing bash / the glibc loader —
         // the terminal dies with `'/bin/bash' not found` while the app still
         // reports "installed". Repair in place when possible, falling back to
-        // ash in the terminal session if repair fails.
+        // dash in the terminal session if repair fails.
         val health = rootfsManager.verifyIntegrity()
         if (!health.healthy) {
             Log.w(TAG, "Rootfs integrity check failed: missing=${health.missing}")
@@ -97,19 +97,19 @@ object PRootKernel {
         // Refresh DNS from system (mirrors iOS ISHKernel.configureDns)
         rootfsManager.refreshDns()
 
-        // [Refactor-apk-world] Retry packages that failed to restore after a
+        // [Refactor-dpkg-world] Retry packages that failed to restore after a
         // rebuild. Runs AFTER mirror re-application, so the retry uses the
         // user's chosen repositories instead of the factory defaults that
         // may have caused the original failure.
-        rootfsManager.retryFailedApkWorld()
+        rootfsManager.retryFailedDpkgWorld()
 
-        // [Refactor-apk-world] Snapshot user-installed packages to the host
+        // [Refactor-dpkg-world] Snapshot user-installed packages to the host
         // side LAST — the rootfs is only in its final state after
         // auto-repair AND the restore-retry above. Dumping earlier could
         // overwrite a good snapshot with a pre-retry (partially restored)
         // state, losing user packages on the next rebuild. A later full
         // rebuild (manual reset or Stage-3 reinstall) restores from it.
-        rootfsManager.dumpApkWorld()
+        rootfsManager.dumpDpkgWorld()
 
         // LD_LIBRARY_PATH for the extracted native libs. talloc used to be
         // staged here under a versioned name; deps/build_proot.sh now links it
@@ -125,7 +125,7 @@ object PRootKernel {
         if (loaderPath.exists()) prootLoaderPath = loaderPath.absolutePath
         if (loader32Path.exists()) prootLoader32Path = loader32Path.absolutePath
 
-        // Set default PATH for Alpine Linux
+        // Set default PATH for Ubuntu Linux
         customEnvironment.putIfAbsent("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/bin")
         customEnvironment.putIfAbsent("HOME", "/root")
 
@@ -135,11 +135,9 @@ object PRootKernel {
         // Mirrors iOS ISHShellExecutor.m:333.
         customEnvironment["BROWSER"] = "/usr/local/bin/minis-open"   // T195: force override; user dotfile BROWSER= would otherwise win
 
-        // ash-specific: ENV points at a file the shell sources on startup.
-        // Our /etc/profile sources /etc/profile.d/*.sh, so non-login shells
-        // (PersistentShell uses plain `/bin/sh`) still pick up HISTFILE,
-        // aliases, and the rest of the shipped profile. Mirrors iOS
-        // ISHShellExecutor.m:326.
+        // Shell-startup config: our /etc/profile sources /etc/profile.d/*.sh,
+        // so login shells pick up HISTFILE, aliases, and the rest of the
+        // shipped profile. Mirrors iOS ISHShellExecutor.m:326.
         customEnvironment.putIfAbsent("ENV", "/etc/profile")
 
         // Character-set declaration for tools that probe $CHARSET instead of
@@ -169,10 +167,10 @@ object PRootKernel {
         // Mirrored in default_mount/etc/profile.d/minis.sh for login shells.
         customEnvironment.putIfAbsent("UV_LINK_MODE", "symlink")
 
-        // Inject device timezone so Alpine userspace sees local time.
+        // Inject device timezone so Ubuntu userspace sees local time.
         // Mirrors iOS ISHShellExecutor.m:335-353 — uses POSIX TZ format with a
         // fixed name ("LCL") to avoid abbreviations like "GMT+8" which contain
-        // +/- and confuse musl's TZ parser. POSIX sign is reversed from UTC
+        // +/- and confuse glibc's TZ parser. POSIX sign is reversed from UTC
         // offset (UTC+8 → "LCL-8"), matching iOS exactly.
         customEnvironment["TZ"] = posixTz()
 
@@ -257,7 +255,7 @@ object PRootKernel {
     private const val MOUNTS_LINUX_PREFIX = "/var/minis/mounts/"
 
     // Sentinel in the read-only write-guard wrapper scripts so we can recognize
-    // and remove our own wrappers (vs a user/busybox binary of the same name).
+    // and remove our own wrappers (vs a user/system binary of the same name).
     private const val GUARD_MARKER = "minis-mount-readonly-guard"
 
     /**
@@ -522,7 +520,7 @@ object PRootKernel {
      *   UTC-3:00 → "LCL+3"
      *
      * POSIX TZ sign is inverted relative to UTC offset, and we use the fixed
-     * name "LCL" to avoid musl's confused parsing of abbreviations like
+     * name "LCL" to avoid glibc's confused parsing of abbreviations like
      * "GMT+8" (which contain an embedded sign).
      */
     fun posixTz(): String {
@@ -637,11 +635,11 @@ object PRootKernel {
         // T141: Translate hardlink() syscalls to symlink(). Android's /data
         // (ext4/F2FS as mounted by zygote) refuses cross-directory hardlinks
         // for app uids, so PRoot would otherwise pass link() straight through
-        // to the host kernel and the host kernel rejects with EPERM. Alpine's
-        // apk installs busybox-applet packages (binutils, gcc deps, etc.) by
-        // hardlinking ar/ld/nm/strip → busybox; without this flag every such
-        // install fails with "Permission denied". Symlinks are functionally
-        // equivalent for the apk consumer.
+        // to the host kernel and the host kernel rejects with EPERM. Ubuntu
+        // ships REAL hardlinks (coreutils dedups /usr/bin/[ vs test, etc.);
+        // without this flag apt/dpkg installs that hardlink files fail with
+        // "Permission denied". Symlinks are functionally equivalent for the
+        // package consumer.
         cmd.add("--link2symlink")
 
         // [P2-proot-resource-hygiene] Ask PRoot to exit once its child
@@ -838,116 +836,14 @@ object PRootKernel {
     }
 
     /**
-     * Install /usr/local/bin/ wrapper scripts that work around Android-specific
-     * sandbox limitations. These take precedence over /bin/busybox in PATH.
-     *
-     * top: Android's hidepid=2 + SELinux blocks reads of /proc/<other_pid>/stat
-     * for non-system UIDs, so plain `top` fails with "can't open 'stat': Permission
-     * denied". Restrict it transparently to the PIDs we can actually read.
-     *
-     * Always rewritten so improvements ship with each app update.
+     * Kept for call-site stability. The old Alpine build installed a busybox
+     * `top` emulation wrapper here because busybox walked all of /proc and
+     * aborted on Android's hidepid procfs. Ubuntu base ships real procps,
+     * whose `top` handles unreadable /proc entries gracefully — no wrapper
+     * needed any more.
      */
     private fun installShellWrappers(binDir: File) {
-        // busybox `top` walks all of /proc and aborts on the first unreadable
-        // /proc/<pid>/stat (Android sandbox blocks reads of other UIDs' procfs).
-        // busybox in this rootfs doesn't accept `-p PIDS` either. Workaround:
-        // simulate `top` with `ps` in a refresh loop, scoped to our session
-        // (only PIDs whose /proc/<pid>/stat is actually readable by us).
-        val topWrapper = File(binDir, "top")
-        topWrapper.writeText(
-            """#!/bin/sh
-            |# Auto-installed by MinisApp PRootKernel.
-            |# busybox top walks all of /proc and aborts on the first unreadable
-            |# entry under Android's procfs hidepid restrictions, and this build
-            |# of busybox doesn't accept `-p`. Emulate `top` with `ps` over the
-            |# PIDs we can actually inspect.
-            |
-            |# Parse a few common top-style flags so existing muscle memory works.
-            |delay=2
-            |iters=-1
-            |batch=0
-            |while [ ${'$'}# -gt 0 ]; do
-            |    case "${'$'}1" in
-            |        -d) delay=${'$'}2; shift 2;;
-            |        -n) iters=${'$'}2; shift 2;;
-            |        -b) batch=1; shift;;
-            |        -h|--help)
-            |            echo "Usage: top [-b] [-n COUNT] [-d SECONDS]"
-            |            exit 0;;
-            |        *) shift;;
-            |    esac
-            |done
-            |
-            |saved_stty=""
-            |on_exit() {
-            |    [ ${'$'}batch -eq 0 ] && printf '\033[?25h'
-            |    [ -n "${'$'}saved_stty" ] && stty "${'$'}saved_stty" 2>/dev/null
-            |}
-            |trap on_exit INT TERM EXIT
-            |
-            |list_readable_pids() {
-            |    for d in /proc/[0-9]*; do
-            |        [ -r "${'$'}d/stat" ] && printf '%s\n' "${'$'}{d##*/}"
-            |    done
-            |}
-            |
-            |render_once() {
-            |    pids=${'$'}(list_readable_pids | tr '\n' ',' | sed 's/,${'$'}//')
-            |    if [ -z "${'$'}pids" ]; then
-            |        echo "top: no readable processes in /proc (Android sandbox)"
-            |        return
-            |    fi
-            |    uptime_s=${'$'}(awk '{print int(${'$'}1)}' /proc/uptime 2>/dev/null)
-            |    [ -z "${'$'}uptime_s" ] && uptime_s=0
-            |    days=${'$'}((uptime_s / 86400))
-            |    hours=${'$'}(((uptime_s % 86400) / 3600))
-            |    mins=${'$'}(((uptime_s % 3600) / 60))
-            |    visible=${'$'}(echo "${'$'}pids" | tr ',' '\n' | wc -l)
-            |    printf 'top — up %dd %02d:%02d  visible processes: %d (own session only)\n' "${'$'}days" "${'$'}hours" "${'$'}mins" "${'$'}visible"
-            |    printf '%s\n' '  PID USER     STAT  RSS  PPID COMMAND'
-            |    /bin/busybox ps -o pid,user,stat,rss,ppid,comm 2>/dev/null \
-            |        | awk -v pids=",${'$'}pids," 'NR==1 {next} {if (index(pids,","${'$'}1",")) print "  " ${'$'}0}'
-            |}
-            |
-            |if [ ${'$'}batch -eq 1 ]; then
-            |    count=0
-            |    while [ ${'$'}iters -lt 0 ] || [ ${'$'}count -lt ${'$'}iters ]; do
-            |        render_once
-            |        count=${'$'}((count + 1))
-            |        [ ${'$'}iters -ge 0 ] && [ ${'$'}count -ge ${'$'}iters ] && break
-            |        sleep "${'$'}delay"
-            |    done
-            |    exit 0
-            |fi
-            |
-            |# Interactive mode: clear screen + redraw each interval. Exits on
-            |# Ctrl+C OR when the user presses 'q' / 'Q'. We put the TTY into
-            |# raw, no-echo mode so single keypresses are read without Enter.
-            |if [ -t 0 ]; then
-            |    saved_stty=${'$'}(stty -g 2>/dev/null)
-            |    stty -echo -icanon min 0 time 0 2>/dev/null
-            |fi
-            |printf '\033[?25l'
-            |count=0
-            |while [ ${'$'}iters -lt 0 ] || [ ${'$'}count -lt ${'$'}iters ]; do
-            |    printf '\033[H\033[2J'
-            |    render_once
-            |    count=${'$'}((count + 1))
-            |    [ ${'$'}iters -ge 0 ] && [ ${'$'}count -ge ${'$'}iters ] && break
-            |    # Sleep in small slices so 'q' is responsive within ~0.1s.
-            |    end=${'$'}((${'$'}(date +%s) + delay))
-            |    while [ ${'$'}(date +%s) -lt ${'$'}end ]; do
-            |        if [ -t 0 ]; then
-            |            ch=${'$'}(dd bs=1 count=1 2>/dev/null)
-            |            case "${'$'}ch" in q|Q) exit 0;; esac
-            |        fi
-            |        sleep 0.1
-            |    done
-            |done
-            |""".trimMargin()
-        )
-        topWrapper.setExecutable(true, false)
-        Log.d(TAG, "installShellWrappers: /usr/local/bin/top installed")
+        // no-op on Ubuntu
     }
 
     /**
@@ -979,7 +875,7 @@ object PRootKernel {
         val configFile = File(rootfs, "var/minis/.mount-readonly-prefixes")
 
         if (readOnlyLinuxPrefixes.isEmpty()) {
-            // No read-only mounts — remove the config + wrappers so plain busybox
+            // No read-only mounts — remove the config + wrappers so plain system
             // commands run unimpeded.
             runCatching { configFile.delete() }
             for (name in guardedCmds) {
@@ -1015,7 +911,7 @@ object PRootKernel {
                 |        done < "${'$'}cfg"
                 |    done
                 |fi
-                |exec /bin/busybox $name "${'$'}@"
+                |exec /usr/bin/$name "${'$'}@"
                 |""".trimMargin(),
             )
             wrapper.setExecutable(true, false)

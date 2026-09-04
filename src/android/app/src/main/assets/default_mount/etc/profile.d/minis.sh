@@ -1,23 +1,30 @@
 # MinisApp shell configuration
 # Loaded by /etc/profile via the profile.d mechanism (login shells only).
 
+# Locale: Ubuntu base ships only the C.utf8 locale — declare it explicitly so
+# glibc programs stop warning about an unset LANG.
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
+
 # T294: prompt parity with iOS — `root@minis:/var/minis#`. iOS bakes the
-# literal "minis" into PS1 (deps/prepare_alpine_rootfs.sh) rather than
-# relying on \h, so the prompt is stable regardless of what /etc/hostname
-# happens to contain. We do the same on Android so a fresh install
-# matches without needing a rootfs rebuild.
+# literal "minis" into PS1 rather than relying on \h, so the prompt is stable
+# regardless of what /etc/hostname happens to contain. We do the same here so
+# a fresh install matches without needing a rootfs rebuild.
 export PS1='\u@minis:\w\$ '
 
-# Enable ash command history with arrow keys
-export HISTFILE="$HOME/.ash_history"
+# Command history for login shells (interactive bash also sources ~/.bashrc,
+# overlaid from default_mount/root/.bashrc).
+export HISTFILE="$HOME/.bash_history"
 export HISTSIZE=1000
 
-# Point ENV to .ashrc so interactive ash picks up line-editing config
-export ENV="$HOME/.ashrc"
+# BASH_ENV: non-interactive bash (`bash -c`, which is what agent shells use)
+# sources this file — the dash equivalent of the old ash ENV mechanism. It
+# picks up the shipped aliases and prompt on non-login shells.
+export BASH_ENV="$HOME/.bashrc"
 
-# Default pager — less is standard on Alpine; keep explicit for scripts
-# that probe $PAGER.
-export PAGER=less
+# Default pager — less is NOT in the Ubuntu base rootfs; more is installed.
+# Keep explicit for scripts that probe $PAGER.
+export PAGER=more
 
 # URL interception: $BROWSER is also seeded directly into every process
 # envp via PRootKernel.customEnvironment so non-login shells (which never
@@ -33,3 +40,10 @@ export BROWSER=/usr/local/bin/minis-open
 # Force uv to symlink package files instead — the sentinels are then never
 # touched as link sources. Reported as openminis/openminis#7.
 export UV_LINK_MODE=symlink
+
+# Debian policy: never let apt/dpkg start daemons inside the sandbox —
+# there is no init system under PRoot, and maintainer scripts that try
+# (invoke-rc.d / systemctl) would block or fail noisily. The stub at
+# /usr/sbin/policy-rc.d (exit 101) is the same mechanism Termux's
+# proot-distro uses.
+export DEBIAN_FRONTEND=noninteractive
