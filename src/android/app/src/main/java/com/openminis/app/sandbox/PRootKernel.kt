@@ -14,6 +14,8 @@ import java.io.File
 import java.io.IOException
 import java.util.TimeZone
 import kotlin.math.abs
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 /**
@@ -103,7 +105,7 @@ object PRootKernel {
         // (update + install) can take tens of seconds on a slow mirror and
         // must not delay first shell availability. Fire-and-forget on IO; the
         // strike counter in RootfsManager caps repeated doomed attempts.
-        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).kotlinx.coroutines.launch {
+        CoroutineScope(Dispatchers.IO).launch {
             rootfsManager.retryFailedDpkgWorld()
         }
 
