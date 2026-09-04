@@ -43,14 +43,20 @@ object AutoRetryScheduler {
     ): Long {
         // Provider hint wins — capped so a 5-hour free-tier window doesn't
         // wedge the auto-retry loop for the whole cap duration.
+        // [FIX-audit-P2-semantics] The HARD cap applies to the FINAL delay
+        // (hint + jitter), so "capped at 30s" is now literally true instead
+        // of "30s + up to 1s jitter".
         val hinted = retryAfterSec?.coerceIn(0L, RETRY_AFTER_CAP_SEC)
         if (hinted != null) {
-            // Even a provider hint gets a small jitter floor (0..1s) so two
-            // clients on the same key don't re-strike on the same tick.
-            return hinted + rng.nextLong(0, 2)
+            // Positive jitter floor (0..1s) de-synchronizes two clients that
+            // share a key; min() keeps the total inside the documented cap.
+            return minOf(RETRY_AFTER_CAP_SEC, hinted + rng.nextLong(0, 2))
         }
-        // Exponential backoff with FULL jitter: base = 2^attempt seconds
-        // (1, 2, 4 — the old ladder becomes the upper bound), delay = rand(0, base].
+        // Exponential backoff with POSITIVE full jitter: base = 2^attempt
+        // seconds (1, 2, 4 — the old ladder becomes the upper bound), delay
+        // = rand(1, base]. (rand(1, base] rather than the textbook rand(0,
+        // base): a 0s retry strikes immediately, which reads as a glitch in
+        // the UI; the de-synchronization property is identical.)
         val base = 1L shl attempt.coerceIn(0, 30)
         return rng.nextLong(1, base + 1)
     }

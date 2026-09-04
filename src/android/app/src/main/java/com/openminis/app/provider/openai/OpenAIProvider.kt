@@ -518,17 +518,18 @@ class OpenAIProvider constructor(
      * [OPT6-request-gzip] Route gate for request-body compression. Official /
      * first-party endpoints only — gzip request bodies are RFC-standard but
      * some relay implementations mangle or reject Content-Encoding on input.
-     * Returns true for hosts we know handle it; unknown hosts stay raw.
+     * [FIX-audit-P2-whitelist] Exact known API hosts (no wildcard subdomains:
+     * `*.openai.com` would have covered non-API properties too, and a
+     * wildcard on any base domain is a policy-inconsistent footgun).
      */
-    private fun gzipEligibleHost(host: String): Boolean {
-        val h = host.lowercase()
-        return h == "api.openai.com" ||
-            h.endsWith(".openai.com") ||        // Azure uses *.openai.azure.com — NOT matched
-            h == "api.anthropic.com" ||
-            h == "api.deepseek.com" ||
-            h.endsWith(".dashscope.aliyuncs.com") ||
-            h == "api.x.ai"
-    }
+    private fun gzipEligibleHost(host: String): Boolean =
+        host.lowercase() in setOf(
+            "api.openai.com",
+            "api.anthropic.com",
+            "api.deepseek.com",
+            "dashscope.aliyuncs.com",
+            "api.x.ai",
+        )
 
     /** Detect OpenRouter base URL. */
     private val isOpenRouter: Boolean = basePath.contains("openrouter.ai")

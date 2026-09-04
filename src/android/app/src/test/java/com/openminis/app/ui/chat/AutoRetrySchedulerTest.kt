@@ -31,10 +31,10 @@ class AutoRetrySchedulerTest {
     }
 
     @Test
-    fun `hint honored - capped at 30s`() {
+    fun `hint honored - hard capped at 30s INCLUDING jitter`() {
+        // [FIX-audit-P2-semantics] final delay = min(30, hint + jitter{0,1})
         val d = AutoRetryScheduler.delaySec(0, retryAfterSec = 600L, rng = kotlin.random.Random(1))
-        // 30s cap + jitter floor {0,1}.
-        assertTrue("d=$d", d in 30..31)
+        assertEquals(30L, d)
     }
 
     @Test

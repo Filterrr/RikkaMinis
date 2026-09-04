@@ -47,7 +47,12 @@ class GzipRequestInterceptor(
 
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
-        if (request.method != "POST" && request.method != "PUT") return chain.proceed(request)
+        // [FIX-audit-P0] Body-carrying methods only. POST / PUT / PATCH are
+        // the JSON-body verbs; the method is PRESERVED when rebuilding (see
+        // the when below — never rewrite the verb here).
+        if (request.method != "POST" && request.method != "PUT" && request.method != "PATCH") {
+            return chain.proceed(request)
+        }
         // Never double-encode; never touch requests that already carry an encoding.
         if (!request.header("Content-Encoding").isNullOrBlank()) return chain.proceed(request)
         val body = request.body ?: return chain.proceed(request)
@@ -64,12 +69,19 @@ class GzipRequestInterceptor(
 
         val compressed = GzippedBody(contentType, body)
         compressibleRequests.incrementAndGet()
-        return chain.proceed(
-            request.newBuilder()
-                .post(compressed)
-                .header("Content-Encoding", "gzip")
-                .build()
-        )
+        // [FIX-audit-P0] Preserve the ORIGINAL verb. The old code called
+        // `.post(compressed)` unconditionally, silently rewriting PUT (and
+        // any future method) to POST — a real regression reachable via the
+        // OpenAIProvider raw-passthrough path, where the user-selected verb
+        // (PUT/DELETE/PATCH/…) rides the SAME interceptor-wired client.
+        val builder = request.newBuilder()
+            .header("Content-Encoding", "gzip")
+        when (request.method) {
+            "POST" -> builder.post(compressed)
+            "PUT" -> builder.put(compressed)
+            "PATCH" -> builder.patch(compressed)
+        }
+        return chain.proceed(builder.build())
     }
 
     /**

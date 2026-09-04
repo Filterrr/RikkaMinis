@@ -107,6 +107,42 @@ class ModelStreamForegroundService : Service() {
             ?.apply { setReferenceCounted(false); acquire(30 * 60 * 1000L) }
     }
 
+    /**
+     * [FIX-audit-P1-timeout] Android 15 (API 35) enforces a 6h/24h cumulative
+     * budget on `dataSync` foreground services; when the budget is exhausted
+     * while the service is running, the system calls onTimeout() and gives the
+     * process only a few seconds to stop before throwing
+     * RemoteServiceException (a crash). TargetSdk is 35+, so this override is
+     * REQUIRED for correctness — the old comment ("6h window not reachable")
+     * reasoned about per-stream time, but the budget is CUMULATIVE service
+     * runtime across the day.
+     *
+     * What stopping the FGS means here: the worker DEMOTES from foreground —
+     * the in-flight LLM stream itself keeps running (the service has no
+     * handle into ModelExecutionService's provider call, and killing it would
+     * corrupt the stream.jsonl protocol). Worst case after a timeout is the
+     * original pre-OPT3 status quo: an OEM may kill the background worker
+     * under pressure and the turn retries. The next onStreamStarted() edge
+     * tries startForegroundService again; if the 24h budget is truly
+     * exhausted the start throws and the existing catch degrades gracefully
+     * to a background worker.
+     */
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        Log.w(TAG, "FGS dataSync budget timeout (fgsType=$fgsType) — demoting to background")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        }
+        stopSelf()
+    }
+
+    /**
+     * API 34 (U) single-arg variant — called instead of the two-arg form on
+     * older floors. Both route to the same demote path.
+     */
+    override fun onTimeout(startId: Int) {
+        onTimeout(startId, -1)
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         createChannel()
         val notification = buildNotification()

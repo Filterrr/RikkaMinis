@@ -128,4 +128,59 @@ class GzipRequestInterceptorTest {
         assertTrue(GzipRequestInterceptor.compressibleRequests.get() > before)
         server.close()
     }
+
+    // ── [FIX-audit-P0] verb-preservation tests — the gzip rewrite must
+    // NEVER change the HTTP method. The original P0: `.post(compressed)`
+    // silently rewrote PUT to POST on the raw-passthrough path.
+
+    @Test
+    fun `large json PUT remains PUT after gzip`() {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setBody("ok"))
+        server.start()
+        val resp = client().newCall(
+            Request.Builder().url(server.url("/v1/resource"))
+                .put(bigPayload.toRequestBody(json)).build()
+        ).execute()
+        assertEquals(200, resp.code)
+        resp.close()
+
+        val recorded = server.takeRequest()
+        assertEquals("PUT", recorded.method)
+        assertEquals("gzip", recorded.getHeader("Content-Encoding"))
+        val bodyBuf = okio.Buffer()
+        recorded.body.copyTo(bodyBuf)
+        assertEquals(bigPayload, GzipSource(bodyBuf).buffer().readUtf8())
+        server.close()
+    }
+
+    @Test
+    fun `large json PATCH remains PATCH after gzip`() {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setBody("ok"))
+        server.start()
+        client().newCall(
+            Request.Builder().url(server.url("/v1/resource"))
+                .method("PATCH", bigPayload.toRequestBody(json)).build()
+        ).execute().close()
+
+        val recorded = server.takeRequest()
+        assertEquals("PATCH", recorded.method)
+        assertEquals("gzip", recorded.getHeader("Content-Encoding"))
+        server.close()
+    }
+
+    @Test
+    fun `GET never gets compressed or rewritten`() {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setBody("ok"))
+        server.start()
+        client().newCall(Request.Builder().url(server.url("/v1/models")).get().build())
+            .execute().close()
+
+        val recorded = server.takeRequest()
+        assertEquals("GET", recorded.method)
+        assertNull(recorded.getHeader("Content-Encoding"))
+        server.close()
+    }
 }

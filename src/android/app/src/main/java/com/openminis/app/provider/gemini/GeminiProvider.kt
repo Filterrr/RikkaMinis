@@ -58,11 +58,11 @@ class GeminiProvider(
         .connectionPool(com.openminis.app.network.NetworkMonitor.sharedLLMConnectionPool)
         // [OPT6-request-gzip] Generative Language API accepts gzipped JSON
         // request bodies; custom bases (proxies) → opt out (raw bodies).
+        // [FIX-audit-P2-whitelist] Exact Google API host (the former
+        // `*.googleapis.com` wildcard covered unrelated Google services).
         .addInterceptor(
             com.openminis.app.network.GzipRequestInterceptor(
-                shouldCompress = { req ->
-                    req.url.host.lowercase().let { it == "generativelanguage.googleapis.com" || it.endsWith(".googleapis.com") }
-                },
+                shouldCompress = { req -> req.url.host.lowercase() == "generativelanguage.googleapis.com" },
             )
         )
         .build()
