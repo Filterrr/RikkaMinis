@@ -40,7 +40,7 @@ class RootfsHealthTest {
         val h = healthy().copy(bash = false)
         assertFalse(h.healthy)
         assertFalse(h.terminalOk)
-        assertEquals(listOf("/bin/bash"), h.missing)
+        assertEquals(listOf("/usr/bin/bash"), h.missing)
     }
 
     @Test
@@ -90,7 +90,7 @@ class RootfsHealthTest {
     @Test
     fun `parse manifest skips malformed lines`() {
         val manifest = """
-            bin/bash=1234567
+            usr/bin/bash=1234567
             no-equals-here
             =nokey
             libc=badvalue

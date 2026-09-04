@@ -1373,8 +1373,14 @@ internal fun parseDpkgStatus(text: String): List<ApkPackage> {
         when {
             t.startsWith("Package:") -> name = t.substringAfter(':').trim()
             t.startsWith("Version:") -> version = t.substringAfter(':').trim()
-            t.startsWith("Status:") -> installed = t.contains(" installed") &&
-                !t.contains("not-installed")
+            t.startsWith("Status:") -> {
+                // dpkg Status: "<want> <flag> <state>" — e.g. "install ok
+                // installed", "install ok half-configured" (still counts as
+                // installed), "deinstall ok config-files" / "purge ok
+                // not-installed" (removed — must NOT be restored).
+                val state = t.substringAfter(':').trim().split(' ').getOrElse(2) { "" }
+                installed = state != "config-files" && state != "not-installed"
+            }
         }
     }
     flush()
