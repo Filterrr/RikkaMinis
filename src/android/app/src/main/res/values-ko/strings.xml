@@ -1265,4 +1265,6 @@
     <!-- Fix: minis:// 링크 대상 파일이 사라졌을 때 안내 및 외부 scheme 차단 문구. -->
     <string name="chat_link_file_missing">이 파일은 더 이상 사용할 수 없습니다.</string>
     <string name="webpreview_blocked_scheme">외부 앱으로 연결되는 링크를 차단했습니다.</string>
+    <string name="model_stream_fgs_channel">모델 스트리밍</string>
+    <string name="model_stream_fgs_generating">답변 생성 중…</string>
 </resources>

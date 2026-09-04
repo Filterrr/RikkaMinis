@@ -80,6 +80,9 @@
     <string name="bg_section_footer">Long-running agent tasks need permission to keep the CPU awake while the screen is off. Without these settings, the system may pause inference after a few minutes in the background.</string>
     <string name="bg_service_channel_name">Agent Status</string>
     <string name="bg_service_channel_description">Shows status of running agent sessions.</string>
+    <!-- OPT3-fgs-modelservice: silent ongoing row while an LLM stream is in flight -->
+    <string name="model_stream_fgs_channel">Model streaming</string>
+    <string name="model_stream_fgs_generating">Generating reply…</string>
     <!-- T-bg-overlay phase 2 fix — permission nudge for the SAW grant -->
     <string name="bg_overlay_nudge_channel_name">Background Overlay Permission</string>
     <string name="bg_overlay_nudge_channel_description">Reminds you to grant the system overlay permission so the background task overlay can appear.</string>

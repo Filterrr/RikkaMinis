@@ -140,8 +140,31 @@ class ModelExecutionService : Service() {
          * onStartCommand (see [startRunWatchdog]) is the escape hatch: it
          * reclaims the process when the client cancelled, or when the
          * execution phase exceeds the generation backstop.
+         *
+         * [OPT4-semaphore-2] Historical width was 1 ("ONE AT A TIME"): native-
+         * heap containment for the whole process. Two facts since make 2 the
+         * better tradeoff:
+         *   1. the heap-heavy allocations (SSE DirectByteBuffers, JSON parse,
+         *      image decode) are bounded per provider call, and the worker
+         *      process self-reaps after runs anyway — one extra concurrent
+         *      stream costs no more than one long agent loop's own growth;
+         *   2. the width-1 starvation cost is real and user-visible: a wedged-
+         *      but-alive stream blocks subagent calls, fallback probes and the
+         *      user's NEXT message for up to the 30-min generation backstop.
+         * A Kotlin Mutex is single-permit and cannot express width 2, so this
+         * is a Semaphore; [executionLock] keeps the withLock call shape.
          */
-        private val executionMutex = kotlinx.coroutines.sync.Mutex()
+        private val executionSemaphore = kotlinx.coroutines.sync.Semaphore(2)
+
+        /** [OPT4-semaphore-2] Mutex-shaped helper over the 2-permit semaphore. */
+        private suspend fun <T> executionLock(block: suspend () -> T): T {
+            executionSemaphore.acquire()
+            try {
+                return block()
+            } finally {
+                executionSemaphore.release()
+            }
+        }
 
         /**
          * [worker-cancel-kill] Grace between a run's `cancel` file appearing
@@ -166,11 +189,25 @@ class ModelExecutionService : Service() {
             FirstChunkTimeoutPolicy.GENERATION_TIMEOUT_SEC * 1000L + 60_000L
 
         /**
-         * [mutex-starvation] See [ModelExecutionState]. Single volatile
-         * reference — the atomic execution state for the watchdogs.
+         * [OPT4-semaphore-2] Per-run execution identities, keyed by runId.
+         * Was: a single volatile [ModelExecutionState] — correct at width 1,
+         * but two concurrent runs would overwrite each other's identity and
+         * break watchdog ownership. Registration happens when the run enters
+         * [executionLock] (provider call actually starting), removal in the
+         * locked region's finally. ConcurrentModification safety: the two
+         * accessors run on the shared watchdog thread; start/stop run on
+         * request threads — use ConcurrentHashMap.
          */
-        @Volatile
-        private var executionState: ModelExecutionState? = null
+        private val executionStates =
+            java.util.concurrent.ConcurrentHashMap<String, ModelExecutionState>()
+
+        private fun publishExecutionState(runId: String) {
+            executionStates[runId] = ModelExecutionState(runId, System.currentTimeMillis())
+        }
+
+        private fun retireExecutionState(runId: String) {
+            executionStates.remove(runId)
+        }
 
         /** [P2-rename] One-shot latch: this process has begun self-reaping. */
         private val processReapInitiated = AtomicBoolean(false)
@@ -202,12 +239,24 @@ class ModelExecutionService : Service() {
                 nowMs - state.startedAtMs > TOTAL_EXECUTION_BUDGET_MS
 
         /**
+         * [OPT4-semaphore-2] Lookup of MY run's execution snapshot, then the
+         * same pure decision as before. With 2 permits, another run's state
+         * no longer clobbers mine — each watchdog reads its own entry.
+         */
+        internal fun shouldBudgetKill(states: Map<String, ModelExecutionState>, myRunId: String?, nowMs: Long): Boolean =
+            shouldBudgetKill(myRunId?.let { states[it] }, myRunId, nowMs)
+
+        /**
          * [cancel-kill-ownership] Pure decision: is MY run the provider call
          * currently holding the execution mutex? Only then may a cancel-kill
          * fire (the cancelled run is itself the wedge). JVM-testable.
          */
         internal fun isExecuting(state: ModelExecutionState?, myRunId: String?): Boolean =
             state != null && myRunId != null && state.runId == myRunId
+
+        /** [OPT4-semaphore-2] Registry-based counterpart of [isExecuting]. */
+        internal fun isExecuting(states: Map<String, ModelExecutionState>, myRunId: String?): Boolean =
+            myRunId != null && states.containsKey(myRunId)
     }
 
     /** Worker-side registry: number of requests currently being executed. */
@@ -339,13 +388,18 @@ class ModelExecutionService : Service() {
                         "uid=${procState.identity?.uid} startTicks=${procState.identity?.procStartTicks}",
                 )
 
-                executionMutex.withLock {
+                // [OPT4-semaphore-2] was: executionMutex.withLock. Two
+                // concurrent runs are now allowed; each owns its own entry in
+                // [executionStates] — shouldBudgetKill/isExecuting resolve by
+                // runId, so ownership logic is width-agnostic.
+                executionLock {
                     synchronized(lifecycleLock) { queuedRequests.decrementAndGet() }
-                    // [mutex-starvation] Atomic budget clock + executing
-                    // identity, published in ONE reference write when the
-                    // provider call actually starts (not while queued behind a
-                    // previous request) — see ModelExecutionState.
-                    executionState = ModelExecutionState(runId, System.currentTimeMillis())
+                    // [mutex-starvation] Budget clock + executing identity,
+                    // published when the provider call actually starts (not
+                    // while queued) — see ModelExecutionState.
+                    // [OPT4-semaphore-2] Published into the per-run registry;
+                    // with 2 permits two identities coexist.
+                    publishExecutionState(runId)
                     try {
                         val requestText = requestFile.readText()
                         val isStreaming = JSONObject(requestText).optBoolean("streaming", false)
@@ -397,10 +451,12 @@ class ModelExecutionService : Service() {
                         } catch (_: Throwable) {}
                     } finally {
                         // [mutex-starvation] The provider call (whatever its
-                        // outcome) is over — retire the atomic execution state
-                        // so an ack-barrier wait never counts against the
-                        // budget and no watchdog can attribute it to this run.
-                        executionState = null
+                        // outcome) is over — retire the execution state so an
+                        // ack-barrier wait never counts against the budget and
+                        // no watchdog can attribute it to this run.
+                        // [OPT4-semaphore-2] Registry removal (was: single
+                        // volatile nulled out).
+                        retireExecutionState(runId)
                     }
                 }
 
@@ -656,7 +712,7 @@ class ModelExecutionService : Service() {
      *     fresh worker via the retryable 0-chunk death classification.
      *  2. BUDGET-KILL: THIS run's provider call has exceeded
      *     [TOTAL_EXECUTION_BUDGET_MS]. Ownership is verified against the
-     *     atomic [ModelExecutionState] snapshot ([shouldBudgetKill]) — never
+     *     per-run registry snapshot ([shouldBudgetKill]) — never
      *     against a bare timestamp — and re-verified under [lifecycleLock]
      *     before the reap, so the handoff race (run A's watchdog waking
      *     after A released the mutex and B acquired it) can never kill B.
@@ -694,12 +750,14 @@ class ModelExecutionService : Service() {
                         cancelFirstSeenAtMs = 0L
                     }
                     // (2) budget-kill: ownership-checked fast path …
-                    if (shouldBudgetKill(executionState, runId, now)) {
+                    // [OPT4-semaphore-2] resolve MY run's snapshot from the
+                    // registry, not a clobberable single volatile.
+                    if (shouldBudgetKill(executionStates, runId, now)) {
                         // … re-checked under the lifecycle lock so the
                         // execution cannot have been handed to another run
                         // in between (budget-kill handoff race).
                         synchronized(lifecycleLock) {
-                            if (shouldBudgetKill(executionState, runId, System.currentTimeMillis())) {
+                            if (shouldBudgetKill(executionStates, runId, System.currentTimeMillis())) {
                                 watchdogBudgetKill(dir, runId)
                             }
                         }
@@ -717,7 +775,7 @@ class ModelExecutionService : Service() {
     /**
      * [mutex-starvation] Reap the process for a run whose client cancelled.
      * Fires ONLY when THIS run is the one whose provider call currently holds
-     * the execution mutex (atomic [executionState], via [isExecuting]) — i.e.
+     * the execution mutex (per-run registry, via [isExecuting]) — i.e.
      * the cancelled run is itself the wedge — and no run is awaiting client
      * consumption. A request that is merely QUEUED behind a healthy sibling
      * stream must never trigger a kill (B2: never sever an in-flight stream
@@ -728,7 +786,7 @@ class ModelExecutionService : Service() {
      */
     private fun maybeWatchdogCancelKill(dir: File, runId: String?): Boolean {
         synchronized(lifecycleLock) {
-            if (!isExecuting(executionState, runId) ||
+            if (!isExecuting(executionStates, runId) ||
                 pendingAckTokens.isNotEmpty() ||
                 !File(dir, CANCEL_FILE).exists()
             ) {

@@ -3,8 +3,11 @@ package com.openminis.app.sandbox.offload
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import android.os.FileObserver
 import com.openminis.app.data.model.LLMStreamChunk
+import com.openminis.app.service.ModelStreamForegroundService
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
@@ -32,8 +35,51 @@ import java.util.UUID
 object ChatStreamOffloadHandler {
     private const val TAG = "ChatStreamOffload"
     private const val STAGING_ROOT = "model-exec"
-    private const val POLL_INTERVAL_MS = 160L
-/** First chunk arrived, then the stream went completely silent (no EOF,
+
+    /**
+     * [OPT5-fileobserver] Fallback poll cadence used ONLY when the
+     * inotify-based wake signal is unavailable or was missed (some OEM
+     * inotify implementations drop events under FUSE; also covers the
+     * worker's very first write racing observer registration). The old
+     * fixed 160ms poll (POLL_INTERVAL_MS) was the ONLY chunk-delivery
+     * path — it added 0-160ms (mean ~80ms) latency to every token batch
+     * and burned battery across whole generations. The observer path
+     * reacts to the actual MODIFY event, typically within a few ms; this
+     * interval is a pure safety net.
+     */
+    private const val FALLBACK_POLL_INTERVAL_MS = 500L
+
+    /**
+     * [OPT5-fileobserver] Watch stream.jsonl for MODIFies and forward each
+     * event as a wake signal into a rendezvous channel the poll loop waits
+     * on. inotify on Android fires MODIFY once per write burst, so the
+     * channel must be CONFLATED (or buffered) — a burst of writes between
+     * loop iterations collapses to one "there is new data" signal, which is
+     * exactly the semantics we want (the loop always reads to EOF anyway).
+     */
+    private class StreamFileWatcher(file: File) {
+        private val signal = Channel<Unit>(Channel.CONFLATED)
+        // String-path constructor (FileObserver(File, int) is API 29+; minSdk 26).
+        private val observer = object : FileObserver(file.absolutePath, FileObserver.MODIFY or FileObserver.CLOSE_WRITE) {
+            override fun onEvent(event: Int, path: String?) {
+                if (event == FileObserver.MODIFY || event == FileObserver.CLOSE_WRITE) {
+                    signal.trySend(Unit)
+                }
+            }
+        }
+
+        /** Waits for the next wake signal, up to [timeoutMs]. True when signalled. */
+        suspend fun awaitChange(timeoutMs: Long): Boolean {
+            // withTimeoutOrNull over receive: timeout = fallback poll tick.
+            val got = kotlinx.coroutines.withTimeoutOrNull(timeoutMs) { signal.receive() }
+            return got != null
+        }
+
+        fun start() = try { observer.startWatching() } catch (_: Exception) {}
+        fun stop() = try { observer.stopWatching() } catch (_: Exception) {}
+    }
+
+    /** First chunk arrived, then the stream went completely silent (no EOF,
      * no keep-alive, no new bytes) for this long — the classic "provider sent
      * the first chunk then the connection half-opened" hang. After the first
      * chunk, the worker-death liveness beat only detects worker PROCESS crash;
@@ -116,6 +162,11 @@ object ChatStreamOffloadHandler {
         // disabled ExecutionCoordinator.maybeReclaimModelService forever
         // (phantom in-flight stream → :modelservice never reclaimed).
         activeStreams.incrementAndGet()
+        // [OPT3-fgs-modelservice] Promote :modelservice to foreground for the
+        // stream's lifetime (0→1 edge starts the FGS; drain-to-0 stops it).
+        // On some OEMs the FGS start itself throws when the app is backgrounded
+        // — degrade to a plain background worker, never fail the stream.
+        ModelStreamForegroundService.onStreamStarted(context)
         val dir = try {
             val root = File(context.cacheDir, STAGING_ROOT)
             root.mkdirs()
@@ -124,6 +175,7 @@ object ChatStreamOffloadHandler {
             d
         } catch (e: Exception) {
             activeStreams.decrementAndGet()
+            ModelStreamForegroundService.onStreamEnded(context)
             throw RuntimeException("stream staging failed", e)
         }
 
@@ -177,126 +229,145 @@ object ChatStreamOffloadHandler {
             }
 
             val timedOut = withTimeoutOrNull(streamTimeoutMs) {
-                while (true) {
-                    ensureActive()
-                    val newLen = streamFile.length()
-                    if (newLen > lastRead) {
-                        lastGrowAtMs = System.currentTimeMillis()
-                        val chunks = readAppendedChunks(streamFile, lastRead, newLen)
-                        lastRead = chunks.second
-                        for (line in chunks.first) {
-                            if (line.isBlank()) continue
-                            if (ChatStreamJsonl.isDone(line)) {
-                                terminalSeen = true
-                                return@withTimeoutOrNull true
+                // [OPT5-fileobserver] Register the watcher AFTER the stream
+                // file exists (createNewFile above) and BEFORE dispatching to
+                // the service — the worker can only write after it starts, so
+                // the observer never misses the first burst. try/finally so a
+                // cancelled or errored stream never leaks a watch descriptor.
+                val watcher = StreamFileWatcher(streamFile)
+                watcher.start()
+                try {
+                    while (true) {
+                        ensureActive()
+                        val newLen = streamFile.length()
+                        if (newLen > lastRead) {
+                            lastGrowAtMs = System.currentTimeMillis()
+                            val chunks = readAppendedChunks(streamFile, lastRead, newLen)
+                            lastRead = chunks.second
+                            for (line in chunks.first) {
+                                if (line.isBlank()) continue
+                                if (ChatStreamJsonl.isDone(line)) {
+                                    terminalSeen = true
+                                    return@withTimeoutOrNull true
+                                }
+                                if (ChatStreamJsonl.isError(line)) {
+                                    // [TF-F] an error LINE is a stream-terminal
+                                    // event (the worker will also write result +
+                                    // terminal marker in finishRequest). Mark it so
+                                    // the finally never blind-deletes a live worker.
+                                    terminalSeen = true
+                                    throw ModelStreamErrorException(
+                                        ChatStreamJsonl.errorMessage(line),
+                                        hadChunks = emittedChunks,
+                                    )
+                                }
+                                ChatStreamJsonl.decode(line)?.let {
+                                    emittedChunks = true
+                                    emit(it)
+                                }
                             }
-                            if (ChatStreamJsonl.isError(line)) {
-                                // [TF-F] an error LINE is a stream-terminal
-                                // event (the worker will also write result +
-                                // terminal marker in finishRequest). Mark it so
-                                // the finally never blind-deletes a live worker.
-                                terminalSeen = true
-                                throw ModelStreamErrorException(
-                                    ChatStreamJsonl.errorMessage(line),
+                        }
+                        // [P1-1 stream-idle-stall] First chunk arrived, then the
+                        // stream went completely silent. The worker-death check
+                        // below only fires on a stale liveness BEAT (worker process
+                        // crash); it does NOT cover a worker that is alive but
+                        // stuck waiting on a silent upstream socket. Bound that
+                        // case with a dedicated line-idle watchdog.
+                        // hadChunks=true → fatal path, no auto-resend.
+                        if (emittedChunks &&
+                            !terminalSeen &&
+                            newLen == lastRead &&
+                            System.currentTimeMillis() - lastGrowAtMs > STREAM_IDLE_STALL_MS
+                        ) {
+                            throw ModelStreamErrorException(
+                                "stream stalled after first chunk: no data for ${STREAM_IDLE_STALL_MS}ms",
+                                hadChunks = true,
+                            )
+                        }
+                        // [TF-F crash recovery] Detect worker death THREE-STATE:
+                        // only a CONFIRMED dead pid (probe returns DEAD for THIS
+                        // run's pid ref) after a no-growth grace is worker_died.
+                        // UNKNOWN (no valid pid ref / ambiguous / recycle-race) is
+                        // never classified as death — we keep polling. A slow first
+                        // chunk (>WORKER_DIED_GRACE_MS, worker ALIVE) is NOT death.
+                        // A terminal result/marker present means the worker finished
+                        // NORMALLY (it self-reaps right after) — NOT a crash.
+                        //
+                        // TF-J2: death probe is driven by the worker liveness BEAT
+                        // file (shared same-uid filesystem), NOT by /proc.
+                        //
+                        // The classic probes here — probeLiveness / probeDeathEvidence —
+                        // read `/proc/<worker-pid>`. On this device /proc is mounted
+                        // `hidepid=invisible` (gid=3009); an app process can ONLY see
+                        // its OWN pid, so the main process ALWAYS reads "proc_missing"
+                        // for a perfectly alive worker → TF-A…TF-J spurious
+                        // "worker died before any output" retry loops.
+                        //
+                        // New decision: the streaming worker rewrites
+                        // `run-<uuid>/liveness.beat` every ~2s for the whole stream.
+                        //  - beat fresh  (younger than LIVENESS_STALE_MS=4s) ⇒ worker
+                        //    provably alive → keep polling, even if no chunk yet.
+                        //  - beat present but STALE (and no terminal/result) ⇒ worker
+                        //    was alive then stopped beating with no output ⇒ real death.
+                        //  - no beat yet ⇒ worker is still starting up (service spin-up,
+                        //    provider build, first chunk wait) → keep polling; bounded
+                        //    by streamTimeoutMs (= GENERATION_TIMEOUT_SEC, the 30-min
+                        //    generation backstop). Not death.
+                        // This matches the old semantics (only a worker that was provably
+                        // alive and THEN stopped is dead) without touching /proc.
+                        if (newLen == lastRead &&
+                            System.currentTimeMillis() - lastGrowAtMs > WORKER_DIED_GRACE_MS
+                        ) {
+                            val terminalOrResult = ModelExecutionRunDir.terminalPresent(dir) ||
+                                File(dir, ModelExecutionMailbox.FILE_RESULT).exists()
+                            val beatPresent = File(dir, ModelExecutionRunDir.FILE_LIVENESS_BEAT).isFile
+                            val beatExistingButStale = beatPresent &&
+                                ModelExecutionRunDir.beatStale(dir)
+                            // A beat that went stale with no terminal data is decisive:
+                            // the worker was alive (it beat) and has now stopped without
+                            // ever producing output.
+                            var decisive = false
+                            if (beatExistingButStale && !terminalOrResult) decisive = true
+                            // Reset any trailing suspicion only when we see a FRESH beat
+                            // (worker manifestly alive) or no beat at all (still starting).
+                            // (mis-…grace window is no longer meaningful without /proc.)
+                            if (beatPresent && !beatExistingButStale) {
+                                // fresh beat ⇒ alive; nothing to decide.
+                                decisive = false
+                            }
+                            if (decisive &&
+                                !ModelExecutionRunDir.terminalPresent(dir) &&
+                                !File(dir, ModelExecutionMailbox.FILE_RESULT).exists()
+                            ) {
+                                // TF-G P0-3: classify WHY the worker appears dead so
+                                // the caller can weigh retry (0-chunk) vs fatal, and
+                                // diagnostics get the run-log tail as evidence.
+                                val reason = classifyWorkerDeath(dir, emittedChunks)
+                                val phase = ModelExecutionRunLog.tailSummary(dir)
+                                Log.w(
+                                    TAG,
+                                    "worker died (${reason.name}) runId=$runId emittedChunks=$emittedChunks phase=$phase beat_stale_without_terminal dir=${dir.name}",
+                                )
+                                throw ModelWorkerDiedException(
                                     hadChunks = emittedChunks,
+                                    reason = reason,
+                                    runId = runId,
+                                    phaseSummary = phase,
                                 )
                             }
-                            ChatStreamJsonl.decode(line)?.let {
-                                emittedChunks = true
-                                emit(it)
-                            }
                         }
+                        // [OPT5-fileobserver] Chunk delivery is now event-driven:
+                        // wait for the inotify MODIFY/CLOSE_WRITE signal from the
+                        // worker's writes, with a fallback poll tick that also
+                        // covers (a) devices whose inotify drops events under
+                        // FUSE, and (b) writes that landed before the observer
+                        // started watching. Correctness is unchanged — the loop
+                        // always reads to EOF and the byte-offset protocol is
+                        // untouched; only the WAKE cadence changed.
+                        watcher.awaitChange(FALLBACK_POLL_INTERVAL_MS)
                     }
-                    // [P1-1 stream-idle-stall] First chunk arrived, then the
-                    // stream went completely silent. The worker-death check
-                    // below only fires on a stale liveness BEAT (worker process
-                    // crash); it does NOT cover a worker that is alive but
-                    // stuck waiting on a silent upstream socket. Bound that
-                    // case with a dedicated line-idle watchdog.
-                    // hadChunks=true → fatal path, no auto-resend.
-                    if (emittedChunks &&
-                        !terminalSeen &&
-                        newLen == lastRead &&
-                        System.currentTimeMillis() - lastGrowAtMs > STREAM_IDLE_STALL_MS
-                    ) {
-                        throw ModelStreamErrorException(
-                            "stream stalled after first chunk: no data for ${STREAM_IDLE_STALL_MS}ms",
-                            hadChunks = true,
-                        )
-                    }
-                    // [TF-F crash recovery] Detect worker death THREE-STATE:
-                    // only a CONFIRMED dead pid (probe returns DEAD for THIS
-                    // run's pid ref) after a no-growth grace is worker_died.
-                    // UNKNOWN (no valid pid ref / ambiguous / recycle-race) is
-                    // never classified as death — we keep polling. A slow first
-                    // chunk (>WORKER_DIED_GRACE_MS, worker ALIVE) is NOT death.
-                    // A terminal result/marker present means the worker finished
-                    // NORMALLY (it self-reaps right after) — NOT a crash.
-                    //
-                    // TF-J2: death probe is driven by the worker liveness BEAT
-                    // file (shared same-uid filesystem), NOT by /proc.
-                    //
-                    // The classic probes here — probeLiveness / probeDeathEvidence —
-                    // read `/proc/<worker-pid>`. On this device /proc is mounted
-                    // `hidepid=invisible` (gid=3009); an app process can ONLY see
-                    // its OWN pid, so the main process ALWAYS reads "proc_missing"
-                    // for a perfectly alive worker → TF-A…TF-J spurious
-                    // "worker died before any output" retry loops.
-                    //
-                    // New decision: the streaming worker rewrites
-                    // `run-<uuid>/liveness.beat` every ~2s for the whole stream.
-                    //  - beat fresh  (younger than LIVENESS_STALE_MS=4s) ⇒ worker
-                    //    provably alive → keep polling, even if no chunk yet.
-                    //  - beat present but STALE (and no terminal/result) ⇒ worker
-                    //    was alive then stopped beating with no output ⇒ real death.
-                    //  - no beat yet ⇒ worker is still starting up (service spin-up,
-                    //    provider build, first chunk wait) → keep polling; bounded
-                    //    by streamTimeoutMs (= GENERATION_TIMEOUT_SEC, the 30-min
-                    //    generation backstop). Not death.
-                    // This matches the old semantics (only a worker that was provably
-                    // alive and THEN stopped is dead) without touching /proc.
-                    if (newLen == lastRead &&
-                        System.currentTimeMillis() - lastGrowAtMs > WORKER_DIED_GRACE_MS
-                    ) {
-                        val terminalOrResult = ModelExecutionRunDir.terminalPresent(dir) ||
-                            File(dir, ModelExecutionMailbox.FILE_RESULT).exists()
-                        val beatPresent = File(dir, ModelExecutionRunDir.FILE_LIVENESS_BEAT).isFile
-                        val beatExistingButStale = beatPresent &&
-                            ModelExecutionRunDir.beatStale(dir)
-                        // A beat that went stale with no terminal data is decisive:
-                        // the worker was alive (it beat) and has now stopped without
-                        // ever producing output.
-                        var decisive = false
-                        if (beatExistingButStale && !terminalOrResult) decisive = true
-                        // Reset any trailing suspicion only when we see a FRESH beat
-                        // (worker manifestly alive) or no beat at all (still starting).
-                        // (mis-…grace window is no longer meaningful without /proc.)
-                        if (beatPresent && !beatExistingButStale) {
-                            // fresh beat ⇒ alive; nothing to decide.
-                            decisive = false
-                        }
-                        if (decisive &&
-                            !ModelExecutionRunDir.terminalPresent(dir) &&
-                            !File(dir, ModelExecutionMailbox.FILE_RESULT).exists()
-                        ) {
-                            // TF-G P0-3: classify WHY the worker appears dead so
-                            // the caller can weigh retry (0-chunk) vs fatal, and
-                            // diagnostics get the run-log tail as evidence.
-                            val reason = classifyWorkerDeath(dir, emittedChunks)
-                            val phase = ModelExecutionRunLog.tailSummary(dir)
-                            Log.w(
-                                TAG,
-                                "worker died (${reason.name}) runId=$runId emittedChunks=$emittedChunks phase=$phase beat_stale_without_terminal dir=${dir.name}",
-                            )
-                            throw ModelWorkerDiedException(
-                                hadChunks = emittedChunks,
-                                reason = reason,
-                                runId = runId,
-                                phaseSummary = phase,
-                            )
-                        }
-                    }
-                    delay(POLL_INTERVAL_MS)
+                } finally {
+                    watcher.stop()
                 }
             } == null
             if (timedOut) {
@@ -306,6 +377,10 @@ object ChatStreamOffloadHandler {
             // [B2] A stream is no longer in flight regardless of how we exited
             // (timeout / external cancel / normal close).
             activeStreams.decrementAndGet()
+            // [OPT3-fgs-modelservice] Demote :modelservice from foreground on
+            // the drain-to-0 edge — an idle worker is fully killable again,
+            // which is the whole point of the short-lived-worker model.
+            ModelStreamForegroundService.onStreamEnded(context)
             // [TF-F] Unified terminal-and-exit protocol: never delete a run dir
             // while the worker might still be writing to it. Only when
             //   - a terminal marker exists (worker's LAST write), AND

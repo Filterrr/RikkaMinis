@@ -61,4 +61,39 @@ class ModelExecutionWatchdogDecisionTest {
         assertFalse(ModelExecutionService.isExecuting(state, myRunId = "run-A "))
         assertFalse(ModelExecutionService.isExecuting(state, myRunId = "run-B"))
     }
+
+    // ── [OPT4-semaphore-2] registry-based overloads (width-2 concurrency) ──
+
+    @Test
+    fun `registry - two concurrent runs keep independent identities`() {
+        val now = System.currentTimeMillis()
+        val states = mapOf(
+            "run-A" to ModelExecutionState("run-A", now - budgetMs - 10_000L), // over budget
+            "run-B" to ModelExecutionState("run-B", now - 1_000L),             // fresh
+        )
+        // A's watchdog sees A over budget (A's own entry, not clobbered by B).
+        assertTrue(ModelExecutionService.shouldBudgetKill(states, myRunId = "run-A", nowMs = now))
+        // B is fresh — B's watchdog does nothing.
+        assertFalse(ModelExecutionService.shouldBudgetKill(states, myRunId = "run-B", nowMs = now))
+        // Ownership is per-run in both directions.
+        assertTrue(ModelExecutionService.isExecuting(states, myRunId = "run-A"))
+        assertTrue(ModelExecutionService.isExecuting(states, myRunId = "run-B"))
+        assertFalse(ModelExecutionService.isExecuting(states, myRunId = "run-C"))
+    }
+
+    @Test
+    fun `registry - retired run authorizes nothing`() {
+        val now = System.currentTimeMillis()
+        val states = mapOf("run-B" to ModelExecutionState("run-B", now - budgetMs - 10_000L))
+        // A retired its entry; A's watchdog must not fire on B's identity.
+        assertFalse(ModelExecutionService.shouldBudgetKill(states, myRunId = "run-A", nowMs = now))
+        assertFalse(ModelExecutionService.isExecuting(states, myRunId = "run-A"))
+    }
+
+    @Test
+    fun `registry - null runId is safe`() {
+        val states = mapOf("run-A" to ModelExecutionState("run-A", 0L))
+        assertFalse(ModelExecutionService.shouldBudgetKill(states, myRunId = null, nowMs = 1L))
+        assertFalse(ModelExecutionService.isExecuting(states, myRunId = null))
+    }
 }

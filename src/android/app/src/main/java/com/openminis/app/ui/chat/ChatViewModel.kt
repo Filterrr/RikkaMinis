@@ -393,7 +393,14 @@ class ChatViewModel(
         /// Max per-tool-call retained `accumulated` JSON snapshots from
         /// `ToolInputDelta`. Drained on preflight failure for diagnosis.
         private const val TOOL_INPUT_CHUNK_RING_MAX = 10
-        /** Auto-retry backoff schedule (seconds). Mirrors iOS retryDelays, scaled to task spec: 1s → 2s → 4s. */
+        /**
+         * Auto-retry backoff schedule upper bounds (seconds): 1 → 2 → 4.
+         * [OPT2-jitter-retry-after] The ACTUAL delay is decided by
+         * [AutoRetryScheduler.delaySec] — exponential backoff with full
+         * jitter bounded by this ladder, overridden by a provider
+         * `Retry-After` hint when the error carries one. The array stays as
+         * the attempt-count bound + documentation of the worst-case budget.
+         */
         private val AUTO_RETRY_DELAYS_SEC = intArrayOf(1, 2, 4)
 
         /**
@@ -7723,10 +7730,21 @@ class ChatViewModel(
                     // member would otherwise immediately expose as a "all fallbacks
                     // exhausted" banner. See 3b3a12f for the revert context.
                     if (isTransient && retryAttempt < AUTO_RETRY_DELAYS_SEC.size) {
-                        val delaySec = AUTO_RETRY_DELAYS_SEC[retryAttempt]
+                        // [OPT2-jitter-retry-after] Delay = provider Retry-After
+                        // hint (capped) when present, else exponential-backoff-
+                        // with-full-jitter whose upper bound is the old 1/2/4
+                        // ladder. Same worst-case budget as before; the hint
+                        // stops us from re-striking inside a known window, the
+                        // jitter de-synchronizes clients sharing a dead endpoint.
+                        val retryAfterSec = when (actual) {
+                            is com.openminis.app.data.model.LLMError.RateLimited -> actual.retryAfterMs?.let { it / 1000 + if (it % 1000 > 0) 1 else 0 }
+                            is com.openminis.app.data.model.LLMError.TransientError -> actual.retryAfterMs?.let { it / 1000 + if (it % 1000 > 0) 1 else 0 }
+                            else -> null
+                        }
+                        val delaySec = AutoRetryScheduler.delaySec(retryAttempt, retryAfterSec)
                         retryAttempt += 1
                         val errDesc = actual.message ?: actual.javaClass.simpleName
-                        Log.w(TAG, "🔁 Transient error on ${currentProvider.model.displayName}, retry $retryAttempt/${AUTO_RETRY_DELAYS_SEC.size} in ${delaySec}s: $errDesc")
+                        Log.w(TAG, "🔁 Transient error on ${currentProvider.model.displayName}, retry $retryAttempt/${AUTO_RETRY_DELAYS_SEC.size} in ${delaySec}s (retryAfter=${retryAfterSec ?: "-"}): $errDesc")
                         // T7-A: 观察 —— provider 瞬态失败（T5 ProviderAttemptFinished(TRANSIENT_FAILURE)）
                         t7State(t7PhaseSchema(AgentRunPhase.CALLING_MODEL), t7PhaseSchema(AgentRunPhase.RETRYING), "ProviderAttemptFinished(TRANSIENT_FAILURE)")
                         // T7-D: 旁路验证 —— provider 瞬态失败

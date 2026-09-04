@@ -4,6 +4,7 @@ import android.content.Context
 import com.openminis.app.data.model.LLMModel
 import com.openminis.app.data.model.ProviderInstance
 import com.openminis.app.data.model.ProviderType
+import com.openminis.app.network.ConnectionWarmer
 import com.openminis.app.provider.anthropic.AnthropicProvider
 import com.openminis.app.provider.gemini.GeminiProvider
 import com.openminis.app.provider.openai.OpenAIProvider
@@ -96,6 +97,25 @@ object ProviderFactory {
             }
         }).also { provider ->
             provider.instanceContext = instance
+            // [OPT7-conn-warmup] Every provider build is a "user is heading
+            // toward this endpoint" signal (model pick, group resolve, app
+            // start restore, fallback candidate build). Pre-arm the TLS
+            // connection so the first send skips DNS+TCP+TLS — 1-3s saved on
+            // cold start, more through a proxy. Debounced per host inside
+            // the warmer; fire-and-forget, no credentials on the wire.
+            ConnectionWarmer.warm(
+                instance.effectiveBaseURL ?: defaultBaseFor(instance.providerType),
+            )
         }
+    }
+
+    /** [OPT7-conn-warmup] Default origin for instances with no custom base. */
+    private fun defaultBaseFor(type: ProviderType): String = when (type) {
+        ProviderType.anthropic -> "https://api.anthropic.com"
+        ProviderType.gemini -> "https://generativelanguage.googleapis.com/v1beta"
+        ProviderType.openAI -> "https://api.openai.com/v1"
+        ProviderType.openRouter -> "https://openrouter.ai/api/v1"
+        ProviderType.xAI -> "https://api.x.ai/v1"
+        ProviderType.kimiCode -> KimiConstants.CODING_API_BASE + "/v1"
     }
 }
