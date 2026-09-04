@@ -58,7 +58,7 @@ object ConnectionWarmer {
 
         val headUrl = httpUrl.newBuilder()
             .scheme(httpUrl.scheme)     // preserve http/https as configured
-            .path("/")
+            .encodedPath("/")
             .query(null)
             .fragment(null)
             .build()
@@ -75,7 +75,7 @@ object ConnectionWarmer {
 
         val headRequest = okhttp3.Request.Builder()
             .url(headUrl)
-            .head()
+            .method("HEAD", null)
             .build()
         val call = client.newCall(headRequest)
         call.enqueue(object : okhttp3.Callback {

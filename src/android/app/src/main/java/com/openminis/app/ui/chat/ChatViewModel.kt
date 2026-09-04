@@ -7775,8 +7775,11 @@ class ChatViewModel(
                             setTransientInlineError("$errSummary — retrying ($retryAttempt/${AUTO_RETRY_DELAYS_SEC.size})…")
                         }
                         try {
-                            for (remaining in delaySec downTo 1) {
-                                _autoRetryCountdown.value = remaining
+                            // [OPT2-jitter-retry-after] delaySec is Long
+                            // (Retry-After can be minutes); countdown var
+                            // stays Long to match.
+                            for (remaining in delaySec downTo 1L) {
+                                _autoRetryCountdown.value = remaining.toInt()
                                 kotlinx.coroutines.delay(1000)
                             }
                         } finally {

@@ -88,8 +88,8 @@ class GzipRequestInterceptor(
     ) : okhttp3.RequestBody() {
         override fun contentType(): MediaType? = contentType
         override fun contentLength(): Long = -1L
-        override fun isOneShot(): Boolean = delegate.isOneShot
-        override fun isDuplex(): Boolean = delegate.isDuplex
+        override fun isOneShot(): Boolean = delegate.isOneShot()
+        override fun isDuplex(): Boolean = delegate.isDuplex()
         override fun writeTo(sink: BufferedSink) {
             val gzipSink = GzipSink(sink).buffer()
             try {
