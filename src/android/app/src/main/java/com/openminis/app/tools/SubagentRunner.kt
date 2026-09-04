@@ -150,7 +150,10 @@ class SubagentRunner(
         // a permit, flagged QUEUED — over-limit spawns become visible as
         // "queued · waiting for slot" in the pill row instead of appearing
         // only when execution starts.
-        val run = registry.register(
+        // [T-subagent-spawn-dedupe] Idempotent register: an identical task
+        // (same skill + query) still QUEUED/RUNNING resolves to the EXISTING
+        // run instead of double-spawning real duplicate work.
+        val outcome = registry.registerOrReuse(
             blockId = blockId,
             skillId = skill.id,
             skillName = skill.name,
@@ -161,6 +164,10 @@ class SubagentRunner(
             groupId = groupId,
             queued = true,
         )
+        if (outcome.reused) {
+            return deduplicatedSpawnResult(outcome.run.id, skillName)
+        }
+        val run = outcome.run
         val job = SubagentOrchestration.SubagentJob(
             runId = run.id,
             skillId = skill.id,
@@ -269,6 +276,32 @@ class SubagentRunner(
                 throw e
             }
         }
+    }
+
+    /**
+     * [T-subagent-spawn-dedupe] Model-facing answer for a duplicate spawn:
+     * the identical task already has an active run — hand back ITS handle
+     * so the model joins / waits / cancels that run instead of executing
+     * the same work twice. Works for both inline and detached spawns: the
+     * job deferred completes on every exit path, so join_subagents can
+     * collect an inline run's result later too.
+     */
+    private fun deduplicatedSpawnResult(existingRunId: String, skillName: String): ToolExecutionResult {
+        val snapshot = registry.runs.value.firstOrNull { it.id == existingRunId }
+        val statusDesc = if (snapshot?.isQueued == true) "queued (waiting for a scheduler slot)" else "running"
+        return ToolExecutionResult(
+            output = buildString {
+                append("Deduplicated: an identical sub-agent task is already $statusDesc — ")
+                append("no new run was created.")
+                append("\nrun_id: $existingRunId")
+                snapshot?.groupId?.takeIf { it.isNotEmpty() }?.let { append("\ngroup_id: $it") }
+                append("\n\nCollect its result with join_subagents (pass the run_id above), ")
+                append("race it with wait_any, or cancel it with cancel_subagents. ")
+                append("Do NOT spawn this same task again while that run is active.")
+            },
+            success = true,
+            toolTitle = "Sub-agent: $skillName",
+        )
     }
 
     /**

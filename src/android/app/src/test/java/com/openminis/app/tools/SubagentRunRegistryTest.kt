@@ -143,6 +143,65 @@ class SubagentRunRegistryTest {
         assertEquals(writers * perWriter, registry.runs.value.single().resultText.length)
     }
 
+    // ── [T-subagent-spawn-dedupe] idempotent register tests ───────────────
+
+    /**
+     * The reported bug: the model re-issues the same task (same skill +
+     * query) while the original is still active — the second spawn must
+     * resolve to the EXISTING run instead of creating a duplicate.
+     */
+    @Test
+    fun `registerOrReuse reuses active duplicate instead of double-spawning`() {
+        val registry = makeRegistry()
+        val first = registry.registerOrReuse("b1", "s", "s", "search X", "t", 4)
+        assertFalse(first.reused)
+        assertTrue(first.run.isActive)
+        val second = registry.registerOrReuse("b2", "s", "s", "search X", "t2", 4)
+        assertTrue(second.reused)
+        assertEquals(first.run.id, second.run.id)
+        assertEquals(1, registry.runs.value.size)
+    }
+
+    /** Only ACTIVE runs match — a finished task may legitimately re-run. */
+    @Test
+    fun `registerOrReuse allows re-run after terminal state`() {
+        val registry = makeRegistry()
+        val first = registry.registerOrReuse("b1", "s", "s", "q", "t", 4)
+        registry.finish(first.run.id, SubagentRunRegistry.RunStatus.SUCCESS, resultText = "ok")
+        val rerun = registry.registerOrReuse("b2", "s", "s", "q", "t", 4)
+        assertFalse(rerun.reused)
+        assertEquals(2, registry.runs.value.size)
+    }
+
+    /** Different query or different skill are different tasks — no reuse. */
+    @Test
+    fun `registerOrReuse distinguishes queries and skills`() {
+        val registry = makeRegistry()
+        registry.registerOrReuse("b1", "skill-a", "a", "q", "t", 4)
+        assertFalse(registry.registerOrReuse("b2", "skill-a", "a", "other q", "t", 4).reused)
+        assertFalse(registry.registerOrReuse("b3", "skill-b", "b", "q", "t", 4).reused)
+        assertEquals(3, registry.runs.value.size)
+    }
+
+    /**
+     * Same-batch spawns fan out on concurrent coroutines — the
+     * check-then-insert must be atomic or two identical spawns could
+     * interleave past each other and both create a run.
+     */
+    @Test
+    fun `concurrent identical registerOrReuse creates exactly one run`() = runBlocking {
+        val registry = makeRegistry()
+        val outcomes = (1..8).map { n ->
+            async(kotlinx.coroutines.Dispatchers.Default) {
+                registry.registerOrReuse("b$n", "s", "s", "same query", "t", 4)
+            }
+        }.awaitAll()
+        assertEquals(1, registry.runs.value.size)
+        assertEquals(1, outcomes.count { !it.reused })
+        val createdId = outcomes.first { !it.reused }.run.id
+        assertTrue(outcomes.all { it.run.id == createdId })
+    }
+
     /**
      * [T-subagent-atomic-registry] A finish() racing a step update must not
      * be overwritten back to RUNNING (the old read-swap race could resurrect
