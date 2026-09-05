@@ -842,20 +842,17 @@ internal fun ToolDetailSheet(
                             toolBlocks.map { it.imageFilePath },
                         ) {
                             value = withContext(Dispatchers.IO) {
-                                block.imageFilePath?.let { path ->
-                                    try { android.graphics.BitmapFactory.decodeFile(path) } catch (_: Exception) { null }
-                                } ?: run {
-                                    val blockIdx = toolBlocks.indexOfFirst { it.id == block.id }
-                                    if (blockIdx <= 0) null
-                                    else (blockIdx - 1 downTo 0).firstNotNullOfOrNull { i ->
-                                        val prev = toolBlocks[i]
-                                        if (prev.toolName == "browser_use" && prev.imageFilePath != null) {
-                                            try {
-                                                android.graphics.BitmapFactory.decodeFile(prev.imageFilePath)
-                                            } catch (_: Exception) { null }
-                                        } else null
+                                decodeScaledBitmap(block.imageFilePath)
+                                    ?: run {
+                                        val blockIdx = toolBlocks.indexOfFirst { it.id == block.id }
+                                        if (blockIdx <= 0) null
+                                        else (blockIdx - 1 downTo 0).firstNotNullOfOrNull { i ->
+                                            val prev = toolBlocks[i]
+                                            if (prev.toolName == "browser_use" && prev.imageFilePath != null) {
+                                                decodeScaledBitmap(prev.imageFilePath)
+                                            } else null
+                                        }
                                     }
-                                }
                             }
                         }
                         val screenshotBitmap = liveBitmap ?: savedBitmap
@@ -1045,9 +1042,10 @@ internal fun ToolDetailSheet(
                             imgPath,
                         ) {
                             value = if (imgPath == null) null else withContext(Dispatchers.IO) {
-                                val f = File(imgPath)
-                                if (!f.exists()) null
-                                else try { BitmapFactory.decodeFile(f.absolutePath) } catch (_: Throwable) { null }
+                                // [fix/chat-bitmap-draw-limit] downsampled decode —
+                                // full-size decode of a desktop full_page screenshot
+                                // crashes the hardware canvas on draw (100MB limit).
+                                decodeScaledBitmap(imgPath)
                             }
                         }
                         Column(

@@ -36,6 +36,16 @@ class BrowserTabPool(private val context: Context) : ComponentCallbacks2 {
 
     companion object {
         private const val TAG = "BrowserTabPool"
+
+        /**
+         * [fix/chat-bitmap-draw-limit] Upper bound for session viewport CSS
+         * dimensions (set_viewport). Unbounded viewports persist across app
+         * restarts and later produce >100MB ARGB captures that crash the
+         * hardware canvas when the chat UI draws them. 4096 CSS px per side
+         * exceeds every real desktop layout; full-length pages belong to
+         * full_page screenshots (byte-capped separately).
+         */
+        internal const val MAX_SESSION_VIEWPORT_CSS = 4096
         private const val MAX_TABS = 3
         private const val IDLE_CHECK_INTERVAL_MS = 60_000L  // 60 seconds
         /** Default idle timeout — matches iOS BrowserTabPool.idleTimeout (15 minutes). */
@@ -253,7 +263,9 @@ class BrowserTabPool(private val context: Context) : ComponentCallbacks2 {
         // Restore global custom viewport (0 = unset → fall back to UA profile).
         // Mirrors iOS `BrowserCustomViewport{Width,Height}` UserDefaults keys.
         _customViewportWidth.value = prefs.getInt(PREF_GLOBAL_VIEWPORT_WIDTH, 0).coerceAtLeast(0)
+            .let { if (it > 0) it.coerceAtMost(MAX_SESSION_VIEWPORT_CSS) else it }
         _customViewportHeight.value = prefs.getInt(PREF_GLOBAL_VIEWPORT_HEIGHT, 0).coerceAtLeast(0)
+            .let { if (it > 0) it.coerceAtMost(MAX_SESSION_VIEWPORT_CSS) else it }
 
         // Load user-configured idle timeout (default 15 min, matches iOS).
         val storedMinutes = prefs.getInt(PREF_IDLE_TIMEOUT_MINUTES, DEFAULT_IDLE_TIMEOUT_MINUTES)
@@ -1387,8 +1399,21 @@ class BrowserTabPool(private val context: Context) : ComponentCallbacks2 {
                 "set_viewport requires positive --width and --height, or --reset to restore defaults"
             )
         }
-        setSessionViewport(w, h)
-        BrowserActionResult(text = "Viewport set to ${w}x$h (session override)")
+        // [fix/chat-bitmap-draw-limit] Clamp the session viewport: set_viewport
+        // used to accept any positive size, and the override PERSISTS across
+        // app restarts (saveState/loadSavedState). An oversized viewport
+        // (e.g. 1280×2000 CSS on a 4x-density device) later makes every
+        // viewport capture a >100MB ARGB bitmap that crashes the hardware
+        // canvas when drawn in chat UI. 4096 CSS px per side covers all real
+        // desktop layouts; taller pages are the job of full_page screenshots
+        // (already byte-capped), not of a giant live viewport.
+        val clampedW = w.coerceAtMost(MAX_SESSION_VIEWPORT_CSS)
+        val clampedH = h.coerceAtMost(MAX_SESSION_VIEWPORT_CSS)
+        if (clampedW != w || clampedH != h) {
+            Log.i(TAG, "set_viewport clamp: ${w}x$h → ${clampedW}x${clampedH}")
+        }
+        setSessionViewport(clampedW, clampedH)
+        BrowserActionResult(text = "Viewport set to ${clampedW}x${clampedH} (session override)")
     }
 
     // -- Disk Persistence --
@@ -1442,8 +1467,11 @@ class BrowserTabPool(private val context: Context) : ComponentCallbacks2 {
             val w = json.optInt("sessionViewportWidth", 0)
             val h = json.optInt("sessionViewportHeight", 0)
             if (w > 0 && h > 0) {
-                _sessionViewportWidth.value = w
-                _sessionViewportHeight.value = h
+                // [fix/chat-bitmap-draw-limit] Clamp restored values too — a
+                // viewport persisted BEFORE the clamp existed (e.g. 1280×2000)
+                // must not resurrect itself past the safe bound on upgrade.
+                _sessionViewportWidth.value = w.coerceAtMost(MAX_SESSION_VIEWPORT_CSS)
+                _sessionViewportHeight.value = h.coerceAtMost(MAX_SESSION_VIEWPORT_CSS)
                 // Re-apply to any live tabs that predate load (rare). At
                 // session-load time we're not in a suspend context and the
                 // usual case has zero live tabs, so fire-and-forget is
