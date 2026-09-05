@@ -48,12 +48,15 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Radar
 import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -129,66 +132,101 @@ fun SubagentDetailScreen(
     // Hoisted: a @Composable call must not sit inside buildString's plain
     // lambda below. `let` is inline so the composable context is preserved.
     val elapsedMs = run?.let { rememberRunElapsedMs(it) } ?: 0L
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background),
-    ) {
-        // ── Top bar ─────────────────────────────────────────────────────
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(ChatColors.sheetHeaderBg)
-                .padding(horizontal = 4.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(onClick = onBack) {
-                Icon(
-                    Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "Back",
-                    tint = ChatColors.primaryText,
-                )
-            }
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = run?.title?.ifBlank { run.skillName } ?: "Sub-agent",
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = ChatColors.primaryText,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = buildString {
-                        append(runStatusLabel(run))
-                        if (run != null) {
-                            if (run.isExecuting && run.maxTurns > 0) {
-                                append(" · turn ${run.turn}/${run.maxTurns}")
-                            }
-                            append(" · ")
-                            append(formatSubagentDuration(elapsedMs))
+    // [T-subagent-ui-chat-consistent] Scaffold + M3 TopAppBar — the SAME
+    // chrome the main chat uses: container color = ChatColors.background
+    // at 0.92 alpha (content scrolls under the bar), status-bar insets
+    // handled by the TopAppBar itself (edge-to-edge), no hard divider.
+    // The old hand-rolled Row painted sheetHeaderBg (a sheet color, not a
+    // screen color) and left a status-bar hole on edge-to-edge builds.
+    Scaffold(
+        containerColor = ChatColors.background,
+        contentWindowInsets = WindowInsets(0),
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column(horizontalAlignment = Alignment.Start) {
+                        // Line 1: run title — mirrors the chat title's
+                        // 16sp/19lh SemiBold rhythm.
+                        Text(
+                            text = run?.title?.ifBlank { run.skillName } ?: "Sub-agent",
+                            fontSize = 16.sp,
+                            lineHeight = 19.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = ChatColors.primaryText,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        // Line 2: status dot + label + turn + elapsed — the
+                        // same info the old bar carried, now formatted like
+                        // the chat's model row (dot + 11sp tertiary text).
+                        // The live elapsed value comes from the hoisted
+                        // ticker above; status color/label from the shared
+                        // SubagentUiCommon helpers so pill and page agree.
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .background(runStatusColor(run), CircleShape),
+                            )
+                            Text(
+                                text = buildString {
+                                    append(runStatusLabel(run))
+                                    if (run != null) {
+                                        if (run.isExecuting && run.maxTurns > 0) {
+                                            append(" · turn ${run.turn}/${run.maxTurns}")
+                                        }
+                                        append(" · ")
+                                        append(formatSubagentDuration(elapsedMs))
+                                    }
+                                },
+                                fontSize = 11.sp,
+                                lineHeight = 13.sp,
+                                color = ChatColors.tertiaryText,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
                         }
-                    },
-                    fontSize = 12.sp,
-                    color = runStatusColor(run),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            if (run != null && run.isExecuting) {
-                CircularProgressIndicator(
-                    modifier = Modifier
-                        .padding(end = 16.dp)
-                        .size(18.dp),
-                    strokeWidth = 2.dp,
-                    color = SubagentAccent,
-                )
-            }
-        }
-        HorizontalDivider(thickness = 1.dp, color = ChatColors.sheetHeaderBorder)
-
+                    }
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = ChatColors.primaryText,
+                        )
+                    }
+                },
+                actions = {
+                    if (run != null && run.isExecuting) {
+                        CircularProgressIndicator(
+                            modifier = Modifier
+                                .padding(end = 16.dp)
+                                .size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = SubagentAccent,
+                        )
+                    }
+                },
+                windowInsets = WindowInsets.statusBars,
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = ChatColors.background.copy(alpha = 0.92f),
+                    scrolledContainerColor = ChatColors.background.copy(alpha = 0.92f),
+                ),
+                expandedHeight = 68.dp,
+            )
+        },
+    ) { innerPadding ->
         if (run == null) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding),
+                contentAlignment = Alignment.Center,
+            ) {
                 Text(
                     "This sub-agent run is no longer available.",
                     color = ChatColors.secondaryText,
@@ -196,20 +234,26 @@ fun SubagentDetailScreen(
                 )
             }
         } else {
-            SubagentRunDetailBody(run = run)
+            SubagentRunDetailBody(
+                run = run,
+                contentPadding = innerPadding,
+            )
         }
     }
 }
 
 /**
  * Body for an existing run — task header, live step log, streaming result.
- * Split out so the null-run fallback above doesn't need a bare [return]
- * inside the composable body. Lives OUTSIDE the header Column scope, so
- * it fills the remaining space with [Modifier.fillMaxSize] (no ColumnScope
- * weight available here).
+ * [contentPadding] comes from the Scaffold's inner padding (status bar +
+ * TopAppBar height), so the LazyColumn scrolls under the translucent top
+ * bar exactly like the chat message list does. Lives OUTSIDE the Scaffold
+ * scope's Column — fills the padded area with [Modifier.fillMaxSize].
  */
 @Composable
-private fun SubagentRunDetailBody(run: SubagentRunRegistry.Run) {
+private fun SubagentRunDetailBody(
+    run: SubagentRunRegistry.Run,
+    contentPadding: PaddingValues,
+) {
     val listState = rememberLazyListState()
     val stepCount = run.steps.size
     // [T-subagent-ui-collapse] Collapse/expand state lives HERE, in a
@@ -257,8 +301,15 @@ private fun SubagentRunDetailBody(run: SubagentRunRegistry.Run) {
         modifier = Modifier
             .fillMaxSize()
             .fillMaxWidth(),
+        // Scaffold inner padding: status bar + 68dp TopAppBar. The list
+        // paints edge-to-edge under the 0.92-alpha bar (chat parity); the
+        // extra top inset keeps the first card from hiding behind it, and
+        // a bottom landing pad matches the chat's scroll-footer rhythm.
         contentPadding = PaddingValues(
-            horizontal = 16.dp, vertical = 12.dp,
+            start = 16.dp,
+            end = 16.dp,
+            top = contentPadding.calculateTopPadding() + 12.dp,
+            bottom = contentPadding.calculateBottomPadding() + 12.dp,
         ),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
