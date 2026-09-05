@@ -1676,10 +1676,14 @@ internal fun safeTarEntryFile(targetDir: File, fullName: String): File? {
     // and a later `evil/pwned` would lexically pass while the actual write
     // followed the symlink out). Components not yet on disk are created by
     // this extraction as real directories — nothing to resolve.
+    // NOTE: subpath indexes are relative to the ABSOLUTE path root, so the
+    // component range starts at rootPath.nameCount — iterating from 0 walked
+    // the /tmp/... parents and broke out immediately, silently disabling the
+    // entire symlink check (audit round 3 regression).
     try {
         var cur = rootPath
-        for (part in resolved.subpath(0, resolved.nameCount)) {
-            cur = cur.resolve(part)
+        for (i in rootPath.nameCount until resolved.nameCount) {
+            cur = cur.resolve(resolved.getName(i))
             if (!java.nio.file.Files.exists(cur)) break
             if (java.nio.file.Files.isSymbolicLink(cur)) {
                 val target = java.nio.file.Files.readSymbolicLink(cur)

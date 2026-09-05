@@ -202,6 +202,32 @@ class RootfsTarExtractTest {
     }
 
     @Test
+    fun `ancestor walk covers symlinked parents inside and outside the root`() {
+        // Regression for audit round 3: the walk indexed subpath from 0 (the
+        // absolute /tmp/... root) so it broke out on the first component and
+        // NEVER checked symlinks. With the index fixed:
+        extract(listOf(tarEntry("usr/bin/ok", "OK".toByteArray())), prefixes = setOf("usr/bin/"))
+        val base = tmp.root.resolve("usr/bin")
+
+        // evil -> /tmp (absolute escape) must be refused.
+        java.nio.file.Files.createSymbolicLink(base.resolve("evil").toPath(), java.nio.file.Paths.get("/tmp"))
+        extract(listOf(tarEntry("usr/bin/evil/x", "X".toByteArray())), prefixes = setOf("usr/bin/"))
+        assertFalse(
+            "absolute-escape symlink must be refused",
+            java.nio.file.Files.exists(base.resolve("evil/x").toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS),
+        )
+
+        // rel -> ../rel-target (inside root) must pass; file lands at the
+        // symlink-resolved location INSIDE the tree.
+        java.nio.file.Files.createSymbolicLink(base.resolve("rel").toPath(), java.nio.file.Paths.get("../rel-target"))
+        extract(listOf(tarEntry("usr/bin/rel/y", "Y".toByteArray())), prefixes = setOf("usr/bin/"))
+        assertTrue(
+            "inside-root symlink writes must pass through",
+            java.nio.file.Files.exists(tmp.root.resolve("usr/rel-target/y").toPath()),
+        )
+    }
+
+    @Test
     fun `pre-existing inside-rootfs symlink to outside is refused for writes`() {
         // Extract a benign file, then plant evil -> /tmp (outside), then try
         // to write THROUGH it. safeTarEntryFile must refuse the second entry.
