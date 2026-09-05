@@ -5,7 +5,11 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.util.Log
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -59,10 +63,18 @@ data class RootfsHealth(
     val aptGet: Boolean,
     /** /var/lib/dpkg/status — dpkg's package database. */
     val dpkgDatabase: Boolean,
+    /**
+     * True when the integrity manifest itself is damaged (exists but
+     * unparsable). The size contract cannot be verified, so the rootfs must
+     * be treated as suspect — [healthy] is forced false so autoRepair runs.
+     * Only the factory-state manifest is affected; absent manifest (legacy
+     * installs) does NOT set this.
+     */
+    val manifestCorrupt: Boolean = false,
 ) {
     /** Everything needed for the sandbox to function. */
     val healthy: Boolean
-        get() = bash && sh && libc && glibc && aptGet && dpkgDatabase
+        get() = bash && sh && libc && glibc && aptGet && dpkgDatabase && !manifestCorrupt
 
     /** Everything needed for an interactive bash terminal. */
     val terminalOk: Boolean
@@ -85,6 +97,16 @@ data class RootfsHealth(
  * Corresponds to iOS RootfsManager.swift.
  */
 class RootfsManager private constructor(private val context: Context) {
+
+    /**
+     * Serializes every apt/dpkg mutation against the guest (dpkg-world
+     * restore, boot retry, auto-repair, user-initiated reset) so two apt
+     * transactions can never race on /var/lib/dpkg/ — dpkg's own file locks
+     * only fail LOUDLY (lock-frontend errors the user can't attribute), they
+     * don't queue. One in-process mutex is enough: every mutation entry
+     * point runs inside this single app process.
+     */
+    private val aptMutex = Mutex()
 
     val rootfsDir: File = File(context.filesDir, "ubuntu-rootfs")
     val prootBinary: File = File(context.applicationInfo.nativeLibraryDir, "libproot.so")
@@ -114,10 +136,19 @@ class RootfsManager private constructor(private val context: Context) {
      * Finalizing → Installed / Failed).
      */
     suspend fun installIfNeeded() = withContext(Dispatchers.IO) {
+        aptMutex.withLock { installIfNeededUnlocked() }
+    }
+
+    /**
+     * Core install — caller must hold [aptMutex]. The extraction itself
+     * touches no dpkg state, but the trailing dpkg-world restore runs apt
+     * and must not overlap another mutation.
+     */
+    private suspend fun installIfNeededUnlocked() {
         if (isInstalled) {
             Log.d(TAG, "Rootfs already installed at $rootfsDir")
             _installState.value = RootfsInstallState.Installed
-            return@withContext
+            return
         }
 
         try {
@@ -146,7 +177,7 @@ class RootfsManager private constructor(private val context: Context) {
                 _installState.value = RootfsInstallState.Failed(
                     context.getString(R.string.rootfs_insufficient_space, neededMB, freeMB)
                 )
-                return@withContext
+                return
             }
 
             _installState.value = RootfsInstallState.Preparing
@@ -230,9 +261,22 @@ class RootfsManager private constructor(private val context: Context) {
             // [Refactor-dpkg-world] A fresh extraction ships only the factory
             // packages. Re-apply the host-side snapshot of user packages
             // (recorded by dumpDpkgWorld) so a reset / rebuild doesn't wipe
-            // what the user installed. Skip is cheap (no snapshot = no-op);
-            // failures are queued for retryFailedDpkgWorld on next boot.
-            restoreDpkgWorld()
+            // what the user installed.
+            //
+            // DEFERRED, not inline: an apt round-trip (update + batched
+            // install) can take a minute+ on a slow mirror and would stall
+            // the FIRST shell on a fresh install. The deferred run below
+            // serializes on aptMutex with every other mutation; failures
+            // land in the retry queue and are reconciled on a later boot
+            // (strike-limited). A failure here never bricks the sandbox.
+            if (apkWorldFile.exists()) {
+                CoroutineScope(Dispatchers.IO).launch {
+                    aptMutex.withLock {
+                        runCatching { restoreDpkgWorldUnlocked() }
+                            .onFailure { t -> Log.e(TAG, "[DpkgWorld] deferred restore crashed", t) }
+                    }
+                }
+            }
 
             // [T-ubuntu-migration] One-time cleanup of the legacy Alpine
             // rootfs from pre-migration installs. Runs only AFTER the Ubuntu
@@ -291,6 +335,16 @@ class RootfsManager private constructor(private val context: Context) {
      * that predate this feature.
      */
     fun verifyIntegrity(): RootfsHealth {
+        // Fail-closed contract: a manifest that EXISTS but cannot be parsed is
+        // itself evidence of corruption — treat every size expectation as
+        // failed (empty map normally means "no expectations"; we additionally
+        // force the critical paths through a stricter existence check below).
+        // Absent manifest (legacy installs) stays existence-only.
+        val manifestCorrupt = integrityManifest.exists() && (
+            runCatching { parseIntegrityManifest(integrityManifest.readText()) }
+                .getOrElse { emptyMap() }
+                .isEmpty() && integrityManifest.length() > 0
+        )
         val expectedSizes = readIntegrityManifest()
 
         fun exists(rel: String): Boolean {
@@ -303,15 +357,40 @@ class RootfsManager private constructor(private val context: Context) {
             if (!f.exists() || !f.canExecute()) return false
             return integritySizePasses(rel, f.length(), expectedSizes)
         }
+        // ELF sanity for dpkg-managed binaries: existence alone accepted a
+        // truncated/corrupted bash (size != factory, so the size check was
+        // deliberately disabled for apt-managed paths). A 4-byte ELF magic
+        // probe catches the common silent-kill truncation without false
+        // positives across apt upgrades (ELF magic never changes).
+        fun elfOk(rel: String): Boolean {
+            val f = File(rootfsDir, rel)
+            if (!f.exists() || f.length() < 4) return false
+            return try {
+                java.io.RandomAccessFile(f, "r").use { raf ->
+                    val magic = ByteArray(4)
+                    raf.readFully(magic)
+                    // 0x7F 'E' 'L' 'F'
+                    magic[0] == 0x7F.toByte() && magic[1] == 'E'.code.toByte() &&
+                        magic[2] == 'L'.code.toByte() && magic[3] == 'F'.code.toByte()
+                }
+            } catch (_: Exception) {
+                false
+            }
+        }
 
-        return RootfsHealth(
-            bash = exists("usr/bin/bash"),
+        val health = RootfsHealth(
+            bash = elfOk("usr/bin/bash"),
             sh = exists("bin/sh"),
-            libc = exists("lib/ld-linux-aarch64.so.1"),
-            glibc = exists("lib/aarch64-linux-gnu/libc.so.6"),
-            aptGet = executable("usr/bin/apt-get"),
+            libc = elfOk("lib/ld-linux-aarch64.so.1"),
+            glibc = elfOk("lib/aarch64-linux-gnu/libc.so.6"),
+            aptGet = elfOk("usr/bin/apt-get") && File(rootfsDir, "usr/bin/apt-get").canExecute(),
             dpkgDatabase = dpkgDatabaseOk(),
+            manifestCorrupt = manifestCorrupt,
         )
+        if (manifestCorrupt) {
+            Log.w(TAG, "[Integrity] manifest corrupt — reporting rootfs suspect so repair runs")
+        }
+        return health
     }
 
     /**
@@ -410,7 +489,11 @@ class RootfsManager private constructor(private val context: Context) {
         // scripts quiet inside the sandbox.
         val prootFile = prootBinary
         if (prootFile.exists() && initial.aptGet) {
-            val repairCmd = listOf(
+            // Serialized against dpkg-world restore/retry: auto-repair can run
+            // at any boot, including one where a background retry is still in
+            // flight — two dpkg transactions on the same db must never race.
+            aptMutex.withLock {
+                val repairCmd = listOf(
                 prootFile.absolutePath,
                 "-0", "--link2symlink", "--kill-on-exit",
                 "-r", rootfsDir.absolutePath,
@@ -431,16 +514,12 @@ class RootfsManager private constructor(private val context: Context) {
             // `not found` (exit 127) inside the guest.
             val loaderEnv = prootLoaderEnv()
 
-            runCatching {
-                val p = ProcessBuilder(repairCmd)
-                    .redirectErrorStream(true)
-                    .apply { environment().putAll(loaderEnv) }
-                    .start()
-                val output = p.inputStream.readBytes().toString(Charset.forName("UTF-8"))
-                val code = p.waitFor()
-                Log.i(TAG, "[Repair] dpkg/apt repair exit=$code output=${output.takeLast(500)}")
-            }.onFailure { t ->
-                Log.e(TAG, "[Repair] dpkg/apt repair process failed", t)
+                runCatching {
+                    val r = runProotWithDeadline(repairCmd, loaderEnv, timeoutSec = 900)
+                    Log.i(TAG, "[Repair] dpkg/apt repair exit=${r.exitCode} output=${r.output.takeLast(500)}")
+                }.onFailure { t ->
+                    Log.e(TAG, "[Repair] dpkg/apt repair process failed", t)
+                }
             }
         }
 
@@ -476,6 +555,13 @@ class RootfsManager private constructor(private val context: Context) {
 
         val final = verifyIntegrity()
         Log.i(TAG, "[Repair] final health: ${final.missing.ifEmpty { listOf("OK") }}")
+        if (final.healthy && final.manifestCorrupt) {
+            // Repair succeeded but the manifest is still corrupt (it is only
+            // written by a full install). Regenerate it from the live rootfs
+            // so the corrupt-manifest flag doesn't re-trigger repair every boot.
+            writeIntegrityManifest()
+            return@withContext verifyIntegrity().healthy
+        }
         final.healthy
     }
 
@@ -563,33 +649,53 @@ class RootfsManager private constructor(private val context: Context) {
      * (PRootKernel.boot) or right before a wipe ([reset]).
      */
     suspend fun dumpDpkgWorld() = withContext(Dispatchers.IO) {
+        aptMutex.withLock { dumpDpkgWorldLocked() }
+    }
+
+    /**
+     * Core dump implementation — caller must hold [aptMutex] (or be a path
+     * that provably holds no competing apt transaction). Split from
+     * [dumpDpkgWorld] so `reset()` can snapshot while already holding the
+     * lock across the whole wipe+reinstall (Kotlin Mutex is non-reentrant).
+     */
+    private suspend fun dumpDpkgWorldLocked() {
         val db = File(rootfsDir, "var/lib/dpkg/status")
         if (!db.exists()) {
             Log.d(TAG, "[DpkgWorld] dpkg db not present — rootfs not installed, skip dump")
-            return@withContext
+            return
         }
         if (!prootBinary.exists()) {
             Log.w(TAG, "[DpkgWorld] proot binary not available, skip dump")
-            return@withContext
+            return
         }
         try {
-            val manual = runAptMarkShowManual()
+            val manual = runAptMarkShowManualUnlocked()
             if (manual == null) {
                 Log.w(TAG, "[DpkgWorld] apt-mark showmanual failed — keeping previous snapshot")
-                return@withContext
+                return
             }
-            // Guard: a healthy factory rootfs always reports >= the baseline
-            // size. An absurdly small result means the probe ran against a
-            // broken guest — keep the previous snapshot rather than wiping it.
-            if (manual.size < FACTORY_MANUAL_BASELINE.size) {
-                Log.w(TAG, "[DpkgWorld] showmanual=${manual.size} < baseline=${FACTORY_MANUAL_BASELINE.size} — suspicious, keeping previous snapshot")
-                return@withContext
+            // Guard: the probe is only meaningful when dpkg's database is
+            // sane. Count INSTALLED blocks in dpkg status (NOT manual size —
+            // a user can legitimately drop manual size below the baseline
+            // via apt-mark auto, and that must still produce a fresh dump).
+            // A collapse below ~60% of the factory count means a broken
+            // probe/guest, not user intent — keep the previous snapshot.
+            val statusInstalled = parseDpkgStatus(db.readText()).size
+            if (statusInstalled < FACTORY_MANUAL_BASELINE.size * 6 / 10) {
+                Log.w(TAG, "[DpkgWorld] dpkg status has only $statusInstalled installed packages — broken guest, keeping previous snapshot")
+                return
             }
             val userPkgs = manual.subtract(FACTORY_MANUAL_BASELINE).sorted()
             if (userPkgs.isEmpty()) {
-                Log.i(TAG, "[DpkgWorld] no user-installed packages (manual=${manual.size}, all factory)")
-                apkWorldFile.delete()
-                return@withContext
+                Log.i(TAG, "[DpkgWorld] no user-installed packages (manual=${manual.size}, all factory) — snapshot cleared")
+                // Overwrite with an explicit empty snapshot instead of
+                // deleting: any concurrent restore that re-reads the file
+                // sees a well-formed empty list, not a missing file (missing
+                // reads as "no snapshot" legacy semantics).
+                apkWorldFile.writeText(
+                    "# dpkg-world snapshot — user package names, one per line, written by RootfsManager.dumpDpkgWorld()\n"
+                )
+                return
             }
             apkWorldFile.writeText(formatDpkgWorld(userPkgs))
             Log.i(TAG, "[DpkgWorld] snapshot ${userPkgs.size} user package(s) -> ${apkWorldFile.name}: ${userPkgs.take(8).joinToString()}")
@@ -636,26 +742,24 @@ class RootfsManager private constructor(private val context: Context) {
      * apt-mark unavailable, non-zero exit). No network involved.
      */
     private suspend fun runAptMarkShowManual(): Set<String>? = withContext(Dispatchers.IO) {
-        runCatching {
+        aptMutex.withLock { runAptMarkShowManualUnlocked() }
+    }
+
+    /** Lock-free core of [runAptMarkShowManual] — caller holds [aptMutex]. */
+    private suspend fun runAptMarkShowManualUnlocked(): Set<String>? {
+        return runCatching {
             val cmd = listOf(
                 prootBinary.absolutePath, "-0", "--link2symlink", "--kill-on-exit",
                 "-r", rootfsDir.absolutePath,
                 "-b", "/dev", "-b", "/proc", "-b", "/sys", "-w", "/root",
                 "/bin/sh", "-c", "/usr/bin/apt-mark showmanual"
             )
-            val p = ProcessBuilder(cmd)
-                .redirectErrorStream(true)
-                .apply { environment().putAll(prootLoaderEnv()) }
-                .start()
-            val output = p.inputStream.readBytes().toString(Charset.forName("UTF-8"))
-            val finished = p.waitFor(60, java.util.concurrent.TimeUnit.SECONDS)
-            val code = if (finished) p.exitValue() else -1
-            if (p.isAlive) p.destroyForcibly()
-            if (code != 0) {
-                Log.w(TAG, "[DpkgWorld] apt-mark showmanual exit=$code output=${output.takeLast(200)}")
+            val r = runProotWithDeadline(cmd, prootLoaderEnv(), timeoutSec = 60)
+            if (r.exitCode != 0) {
+                Log.w(TAG, "[DpkgWorld] apt-mark showmanual exit=${r.exitCode} output=${r.output.takeLast(200)}")
                 return@runCatching null
             }
-            output.lineSequence()
+            r.output.lineSequence()
                 .map { it.trim() }
                 .filter { it.isNotEmpty() && !it.startsWith('#') }
                 .toSet()
@@ -675,6 +779,11 @@ class RootfsManager private constructor(private val context: Context) {
      * "not installed".
      */
     suspend fun restoreDpkgWorld(): Boolean = withContext(Dispatchers.IO) {
+        aptMutex.withLock { restoreDpkgWorldUnlocked() }
+    }
+
+    /** Lock-free core of [restoreDpkgWorld] — caller holds [aptMutex]. */
+    private suspend fun restoreDpkgWorldUnlocked(): Boolean = withContext(Dispatchers.IO) {
         if (!apkWorldFile.exists()) {
             Log.d(TAG, "[DpkgWorld] no snapshot file, nothing to restore")
             return@withContext true
@@ -748,6 +857,15 @@ class RootfsManager private constructor(private val context: Context) {
      * retry list on full success.
      */
     suspend fun retryFailedDpkgWorld(): Boolean = withContext(Dispatchers.IO) {
+        aptMutex.withLock { retryFailedDpkgWorldUnlocked() }
+    }
+
+    /**
+     * Lock-free core of [retryFailedDpkgWorld] — caller holds [aptMutex].
+     * Deliberately called OFF the critical boot path (PRootKernel.boot
+     * launches it on IO): a slow-mirror batch must not delay first shell.
+     */
+    private suspend fun retryFailedDpkgWorldUnlocked(): Boolean = withContext(Dispatchers.IO) {
         if (!apkWorldFailedFile.exists()) return@withContext true
         val names = try {
             apkWorldFailedFile.readLines()
@@ -837,11 +955,58 @@ class RootfsManager private constructor(private val context: Context) {
     data class AptResult(val exitCode: Int, val output: String)
 
     /**
+     * Run a proot child with a real wall-clock deadline. The naive
+     * `readBytes(); waitFor(timeout)` pattern never reaches the timeout:
+     * readBytes() blocks on stream EOF, which only arrives when the child
+     * exits — a hung apt hangs the dump/restore forever. Here the output is
+     * consumed on a separate thread and the waiter enforces the deadline;
+     * on expiry the child (and the proot tracer via --kill-on-exit) is
+     * destroyed.
+     */
+    private fun runProotWithDeadline(
+        cmd: List<String>,
+        loaderEnv: Map<String, String>,
+        timeoutSec: Long,
+    ): AptResult {
+        val p = ProcessBuilder(cmd)
+            .redirectErrorStream(true)
+            .apply { environment().putAll(loaderEnv) }
+            .start()
+        val outputFuture = java.util.concurrent.CompletableFuture.supplyAsync {
+            try {
+                p.inputStream.readBytes().toString(Charset.forName("UTF-8"))
+            } catch (_: Exception) {
+                ""
+            }
+        }
+        val finished = p.waitFor(timeoutSec, java.util.concurrent.TimeUnit.SECONDS)
+        val code: Int
+        if (finished) {
+            code = p.exitValue()
+        } else {
+            p.destroyForcibly()
+            code = -1
+            Log.w(TAG, "[Proot] child timed out after ${timeoutSec}s, killed: ${cmd.takeLast(3)}")
+        }
+        val output = try {
+            outputFuture.get(10, java.util.concurrent.TimeUnit.SECONDS)
+        } catch (_: Exception) {
+            ""
+        }
+        return AptResult(code, output)
+    }
+
+    /**
      * Run `apt-get update` (once) then `apt-get install -y <names...>` inside
      * the guest via proot. apt's index is a cache, not a database, so it
      * never survives the extraction this runs after — but it must run exactly
      * once per invocation, never once per package.
      * Returns an [AptResult]; exitCode -1 means process failure / timeout.
+     */
+    /**
+     * Run the batched apt install. NOT self-locking: every call site
+     * (restore/retry unlocked cores) already holds [aptMutex], and Kotlin's
+     * Mutex is non-reentrant — locking here would self-deadlock.
      */
     private suspend fun runAptInstallInGuest(pkgNames: List<String>): AptResult = withContext(Dispatchers.IO) {
         if (!prootBinary.exists()) {
@@ -860,18 +1025,10 @@ class RootfsManager private constructor(private val context: Context) {
             "/bin/sh", "-c",
             script
         )
-        val loaderEnv = prootLoaderEnv()
         runCatching {
-            val p = ProcessBuilder(cmd)
-                .redirectErrorStream(true)
-                .apply { environment().putAll(loaderEnv) }
-                .start()
-            val output = p.inputStream.readBytes().toString(Charset.forName("UTF-8"))
-            val finished = p.waitFor(600, java.util.concurrent.TimeUnit.SECONDS)
-            val code = if (finished) p.exitValue() else -1
-            if (p.isAlive) p.destroyForcibly()
-            Log.i(TAG, "[DpkgWorld] apt install exit=$code pkgs=${pkgNames.size} output=${output.takeLast(400)}")
-            AptResult(code, output)
+            val r = runProotWithDeadline(cmd, prootLoaderEnv(), timeoutSec = 600)
+            Log.i(TAG, "[DpkgWorld] apt install exit=${r.exitCode} pkgs=${pkgNames.size} output=${r.output.takeLast(400)}")
+            r
         }.onFailure { t ->
             Log.e(TAG, "[DpkgWorld] apt install process failed", t)
             AptResult(-1, "")
@@ -917,12 +1074,19 @@ class RootfsManager private constructor(private val context: Context) {
     }
 
     suspend fun reset(): Unit = withContext(Dispatchers.IO) {
-        // [Refactor-dpkg-world] Snapshot user packages BEFORE the wipe — the
-        // boot path also dumps, but a manual reset can happen mid-session
-        // between boots, so dump here too as the authoritative last state.
-        dumpDpkgWorld()
-        rootfsDir.deleteRecursively()
-        installIfNeeded()
+        // The whole wipe+reinstall runs under the apt mutex: a background
+        // boot retry firing mid-reset would install into a rootfs that is
+        // about to be deleted (or resurrect files under a half-built dpkg
+        // db). Kotlin Mutex is non-reentrant, so the install path exposes
+        // locked-core variants instead of re-acquiring.
+        aptMutex.withLock {
+            // Snapshot user packages BEFORE the wipe — a manual reset can
+            // happen mid-session between boots, so dump here too as the
+            // authoritative last state.
+            dumpDpkgWorldLocked()
+            rootfsDir.deleteRecursively()
+            installIfNeededUnlocked()
+        }
     }
 
     /**
@@ -1371,16 +1535,32 @@ internal fun extractTar(
                 if (isTarget) {
                     // Regular file (type '0' or null/legacy)
                     outFile.parentFile?.mkdirs()
+                    var complete = true
                     outFile.outputStream().use { output ->
                         var remaining = size
                         val buf = ByteArray(8192)
                         while (remaining > 0) {
                             val toRead = minOf(buf.size.toLong(), remaining).toInt()
                             val n = input.read(buf, 0, toRead)
-                            if (n < 0) break
+                            if (n < 0) {
+                                // Archive truncated mid-entry: a silent break
+                                // here materialized half-written files and
+                                // still reported extraction success. Fail the
+                                // whole extraction instead — the caller treats
+                                // it as a failed install (re-extract / repair)
+                                // rather than booting a corrupt rootfs.
+                                complete = false
+                                break
+                            }
                             output.write(buf, 0, n)
                             remaining -= n
                         }
+                    }
+                    if (!complete) {
+                        outFile.delete()
+                        throw java.io.EOFException(
+                            "tar stream ended inside entry '$fullName' (${size} bytes declared)"
+                        )
                     }
                     // Preserve executable permission from tar header
                     if (mode and 0b001_001_001 != 0) {

@@ -153,6 +153,23 @@ class RootfsTarExtractTest {
     }
 
     @Test
+    fun `truncated archive fails instead of writing partial files`() {
+        // A declared 4096-byte entry that the stream can only supply 100
+        // bytes of must FAIL the extraction (EOFException) and leave no
+        // partial file behind — silent half-files booted a corrupt rootfs.
+        val big = ByteArray(4096) { it.toByte() }
+        val bytes = tarEntry("usr/bin/truncated", big) + ByteArray(100) { 'X'.code.toByte() } + ByteArray(1024)
+        val ex = try {
+            extractTar(java.io.ByteArrayInputStream(bytes), tmp.root, null)
+            null
+        } catch (e: java.io.EOFException) {
+            e
+        }
+        assertTrue("expected EOFException, got $ex", ex != null)
+        assertFalse("partial file must not remain", tmp.root.resolve("usr/bin/truncated").exists())
+    }
+
+    @Test
     fun `path traversal entries are rejected`() {
         // Hostile archive: ../ escape must be skipped, not materialized.
         extract(

@@ -110,11 +110,13 @@ object PRootKernel {
         }
 
         // [Refactor-dpkg-world] Snapshot user-installed packages to the host
-        // side LAST — the rootfs is only in its final state after
-        // auto-repair AND the restore-retry above. Dumping earlier could
-        // overwrite a good snapshot with a pre-retry (partially restored)
-        // state, losing user packages on the next rebuild. A later full
-        // rebuild (manual reset or Stage-3 reinstall) restores from it.
+        // side. The dump and the background retry above are both serialized
+        // by RootfsManager.aptMutex, so they can never interleave dpkg
+        // state; whichever runs second observes the first's result. If the
+        // retry is still in flight when the dump runs, the dump simply
+        // captures pre-retry state — the NEXT boot's dump reconciles it.
+        // A later full rebuild (manual reset or Stage-3 reinstall) restores
+        // from this snapshot.
         rootfsManager.dumpDpkgWorld()
 
         // LD_LIBRARY_PATH for the extracted native libs. talloc used to be
