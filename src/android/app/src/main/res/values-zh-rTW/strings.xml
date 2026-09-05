@@ -242,6 +242,10 @@
     <string name="provider_list_no_api_key">無 API 金鑰</string>
     <string name="provider_list_disabled">已停用</string>
     <string name="provider_list_favorites">常用</string>
+    <string name="provider_list_sync_all">一鍵更新所有服務商</string>
+    <string name="provider_list_sync_all_success">已更新全部 %1$d 個服務商。</string>
+    <string name="provider_list_sync_partial">同步完成 — %1$d 個已更新，%2$d 個無密鑰，%3$d 個失敗。</string>
+    <string name="provider_list_sync_failed_generic">同步失敗，請檢查網路後重試。</string>
     <string name="provider_set_favorite">設為常用</string>
     <string name="provider_unset_favorite">取消常用</string>
     <string name="provider_detail_export">導出</string>

@@ -610,6 +610,10 @@
     <string name="provider_list_no_api_key">APIキーなし</string>
     <string name="provider_list_disabled">無効</string>
     <string name="provider_list_favorites">お気に入り</string>
+    <string name="provider_list_sync_all">すべてのプロバイダーを同期</string>
+    <string name="provider_list_sync_all_success">%1$d 件のプロバイダーをすべて同期しました。</string>
+    <string name="provider_list_sync_partial">同期完了 — 成功 %1$d 件、キーなし %2$d 件、失敗 %3$d 件。</string>
+    <string name="provider_list_sync_failed_generic">同期に失敗しました。接続を確認して再試行してください。</string>
     <string name="provider_set_favorite">お気に入りに追加</string>
     <string name="provider_unset_favorite">お気に入りから削除</string>
     <string name="provider_detail_export">エクスポート</string>

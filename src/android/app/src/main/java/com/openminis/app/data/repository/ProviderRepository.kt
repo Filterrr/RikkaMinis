@@ -34,6 +34,9 @@ import org.json.JSONObject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
@@ -1871,6 +1874,34 @@ class ProviderRepository(private val context: Context) {
         cal.timeInMillis = bMs
         return aYear == cal.get(java.util.Calendar.YEAR)
             && aDay == cal.get(java.util.Calendar.DAY_OF_YEAR)
+    }
+
+    /**
+     * One-tap "Sync all" entry point for the provider list top bar: force-refresh
+     * every enabled instance in parallel, bypassing disk caches (forceRefresh=true)
+     * and the daily-refresh gate that [refreshAllModelsIfNeeded] applies.
+     *
+     * Runs on the caller's scope (UI screens pass a coroutine scope backed by
+     * Dispatchers.IO — the *ModelsApi fetchers internally hop to Dispatchers.IO
+     * anyway). Per-instance failures are isolated: refreshModels() already
+     * catches fetch exceptions and maps them to ModelRefreshResult.FAILURE /
+     * PRESERVED, so one broken provider never cancels the others.
+     *
+     * Config mutations inside replaceEntries() are guarded by configLock, so
+     * concurrent per-instance completion is safe.
+     *
+     * @return list of per-instance results; caller aggregates for the toast.
+     */
+    suspend fun refreshAllModelsForce(): List<Pair<ProviderInstance, ModelRefreshResult>> {
+        awaitConfigLoaded()
+        val enabled = _config.value.instances.filter { it.isEnabled }
+        if (enabled.isEmpty()) return emptyList()
+        android.util.Log.i("ProviderRepo", "[ModelList] refreshAllModelsForce — ${enabled.size} instance(s), forceRefresh")
+        return coroutineScope {
+            enabled.map { instance ->
+                async { instance to refreshModels(instance, forceRefresh = true) }
+            }.awaitAll()
+        }
     }
 
     // API Key management
