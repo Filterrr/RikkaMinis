@@ -895,10 +895,35 @@ class BrowserUseManager(
                 webView.layout(0, 0, targetW, targetH)
                 w = targetW; h = targetH
             }
-            val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-            val canvas = Canvas(bitmap)
-            webView.draw(canvas)
-            Log.d(TAG, "captureWebViewBitmap ${w}x$h")
+            // [fix/chat-bitmap-draw-limit] Second half of the crash fix: the
+            // 48MB byte cap only guards the full_page STRETCH height — this
+            // shared capture path (viewport screenshot / live snapshot /
+            // auto-snapshot) draws whatever the WebView is currently laid out
+            // at. A persisted oversized session viewport (set_viewport had no
+            // upper bound and survived restarts) yields e.g. 5120×8000 ARGB =
+            // 163.8MB; the chat UI then decodes and draws it past Android's
+            // ~100MB hardware canvas limit → unconditional RuntimeException.
+            // Pre-scale the canvas so the bitmap NEVER exceeds the budget
+            // (decode-side decodeScaledBitmap is the second line of defense).
+            val bytes = w.toLong() * h.toLong() * 4L
+            val bitmap = if (bytes > MAX_CAPTURE_BITMAP_BYTES) {
+                val scale = kotlin.math.sqrt(
+                    MAX_CAPTURE_BITMAP_BYTES.toDouble() / bytes.toDouble()
+                ).toFloat()
+                val bw = (w * scale).toInt().coerceAtLeast(1)
+                val bh = (h * scale).toInt().coerceAtLeast(1)
+                Log.i(TAG, "capture byte-cap: ${w}x$h → ${bw}x${bh} (budget=${MAX_CAPTURE_BITMAP_BYTES / (1024 * 1024)}MB)")
+                Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888).also {
+                    val canvas = Canvas(it)
+                    canvas.scale(scale, scale)
+                    webView.draw(canvas)
+                }
+            } else {
+                Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also {
+                    webView.draw(Canvas(it))
+                }
+            }
+            Log.d(TAG, "captureWebViewBitmap ${bitmap.width}x${bitmap.height}")
             bitmap
         } catch (e: Exception) {
             Log.e(TAG, "captureWebViewBitmap failed: ${e.message}")
