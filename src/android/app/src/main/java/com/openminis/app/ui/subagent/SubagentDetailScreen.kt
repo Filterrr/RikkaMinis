@@ -19,11 +19,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -72,7 +70,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.SpanStyle
@@ -568,94 +565,153 @@ private fun SubagentResultCard(
     }
 
     val expanded = collapsed[RESULT_STEP_KEY] == false
+    // [T-subagent-ui-chat-consistent] The RESULT card reuses the tool-step
+    // card's EXACT visual language (same layout, same glyph rail, same
+    // black terminal output box with success-green base text) so the final
+    // report reads as the last entry of the execution log, not a foreign
+    // banner. The accent carries the sub-agent violet; the status glyph
+    // mirrors the run state (spinner while streaming, check once done).
     val lineCount = run.resultText.count { it == '\n' } + 1
+    val toggleable = lineCount > RESULT_PREVIEW_LINES || expanded
     val shape = RoundedCornerShape(12.dp)
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(IntrinsicSize.Min)
+            .clip(shape)
             .background(ChatColors.secondaryBg, shape)
             .border(0.5.dp, ChatColors.toolBorder, shape)
             .animateContentSize(),
     ) {
-        // Accent spine so the agent's own voice reads as distinct from tool
-        // output above it — vertical fade keeps it subtle at the bottom of
-        // long text blocks.
-        Box(
+        // Left rail — same 36dp accent chip the step cards use.
+        Column(
             modifier = Modifier
-                .width(3.dp)
-                .fillMaxHeight()
-                .background(
-                    Brush.verticalGradient(
-                        listOf(
-                            SubagentAccent.copy(alpha = 0.7f),
-                            SubagentAccent.copy(alpha = 0.2f),
-                        ),
-                    ),
-                ),
-        )
+                .width(36.dp)
+                .padding(top = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(24.dp)
+                    .background(SubagentAccent.copy(alpha = 0.14f), CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Default.Psychology,
+                    contentDescription = null,
+                    tint = SubagentAccent,
+                    modifier = Modifier.size(13.dp),
+                )
+            }
+        }
         Column(
             modifier = Modifier
                 .weight(1f)
-                .padding(12.dp),
+                .padding(start = 2.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
         ) {
+            // Title row — step-card rhythm: status glyph + 13sp Medium
+            // title + monospace duration on the right.
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    if (run.isActive) "OUTPUT (streaming)" else "RESULT",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = ChatColors.tertiaryText,
-                    letterSpacing = 1.sp,
-                )
-                Spacer(modifier = Modifier.weight(1f))
-                if (!expanded && lineCount > RESULT_PREVIEW_LINES) {
-                    Text(
-                        "⋯ $lineCount lines",
-                        fontSize = 10.sp,
-                        fontFamily = FontFamily.Monospace,
-                        color = ChatColors.tertiaryText,
+                if (run.isActive) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(12.dp),
+                        strokeWidth = 1.5.dp,
+                        color = SubagentAccent,
+                    )
+                } else {
+                    val doneGlyph = when (run.status) {
+                        SubagentRunRegistry.RunStatus.FAILED -> Icons.Default.Error
+                        SubagentRunRegistry.RunStatus.CANCELLED -> Icons.Default.Error
+                        else -> Icons.Default.CheckCircle
+                    }
+                    val doneTint = if (run.status == SubagentRunRegistry.RunStatus.FAILED) {
+                        ChatColors.error
+                    } else {
+                        ChatColors.success
+                    }
+                    Icon(
+                        doneGlyph,
+                        contentDescription = null,
+                        tint = doneTint,
+                        modifier = Modifier
+                            .size(13.dp)
+                            .alpha(0.9f),
                     )
                 }
                 Spacer(modifier = Modifier.width(6.dp))
-                val rotation by animateFloatAsState(
-                    targetValue = if (expanded) 0f else -90f,
-                    animationSpec = tween(durationMillis = 150),
-                    label = "resultChevron",
+                Text(
+                    text = if (run.isActive) "OUTPUT (streaming)" else "RESULT",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = ChatColors.primaryText,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
                 )
-                Icon(
-                    Icons.Default.KeyboardArrowDown,
-                    contentDescription = if (expanded) "Collapse" else "Expand",
-                    tint = ChatColors.tertiaryText,
-                    modifier = Modifier
-                        .size(16.dp)
-                        .graphicsLayer { rotationZ = rotation },
-                )
+                if (!run.isActive && run.durationMs > 0) {
+                    Text(
+                        formatSubagentDuration(run.durationMs),
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = ChatColors.secondaryText,
+                    )
+                }
             }
-            Spacer(modifier = Modifier.height(6.dp))
-            // [T-subagent-ui-ansi] Result text is model prose — ANSI-free in
-            // practice, so the parser short-circuits to one plain span and
-            // rendering cost is a single Text. Collapsed keeps the styled
-            // tail 10 lines; hint lives in the header row above.
-            SubagentColoredOutput(
-                rawOutput = run.resultText,
-                expanded = expanded,
-                previewLines = RESULT_PREVIEW_LINES,
-                fontSize = 14.sp,
-                lineHeight = 20.sp,
-                baseOverride = ChatColors.primaryText,
-                terminalCard = false,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(ChatColors.codeBlockBg, RoundedCornerShape(8.dp))
-                    .clickable {
-                        collapsed[RESULT_STEP_KEY] = expanded
-                        manualOverride[RESULT_STEP_KEY] = true
+            if (run.resultText.isNotBlank()) {
+                Spacer(modifier = Modifier.height(6.dp))
+                // Black terminal box, same as the step output boxes — the
+                // report IS tool-family output to the eye. Green base text
+                // (terminalCard default), in-box line hint, tail preview.
+                SubagentColoredOutput(
+                    rawOutput = run.resultText,
+                    expanded = expanded,
+                    previewLines = RESULT_PREVIEW_LINES,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color.Black, RoundedCornerShape(8.dp))
+                        .border(0.5.dp, Color(0xFF404040), RoundedCornerShape(8.dp))
+                        .clickable(enabled = toggleable) {
+                            collapsed[RESULT_STEP_KEY] = expanded
+                            manualOverride[RESULT_STEP_KEY] = true
+                        }
+                        .padding(8.dp)
+                        .animateContentSize(),
+                )
+                // Same toggle row as the step cards (only when there is
+                // something to toggle — short reports stay clean).
+                if (toggleable) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 2.dp)
+                            .clickable {
+                                collapsed[RESULT_STEP_KEY] = expanded
+                                manualOverride[RESULT_STEP_KEY] = true
+                            },
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center,
+                    ) {
+                        val rotation by animateFloatAsState(
+                            targetValue = if (expanded) 0f else -90f,
+                            animationSpec = tween(durationMillis = 150),
+                            label = "resultChevron",
+                        )
+                        Icon(
+                            Icons.Default.KeyboardArrowDown,
+                            contentDescription = null,
+                            tint = ChatColors.tertiaryText,
+                            modifier = Modifier
+                                .size(13.dp)
+                                .graphicsLayer { rotationZ = rotation },
+                        )
+                        Text(
+                            if (expanded) "collapse" else "full output",
+                            fontSize = 11.sp,
+                            color = ChatColors.tertiaryText,
+                        )
                     }
-                    .padding(10.dp)
-                    .animateContentSize(),
-                showLineHint = false,
-            )
+                }
+            }
         }
     }
 }
