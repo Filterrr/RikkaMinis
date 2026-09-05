@@ -225,7 +225,7 @@ class RootfsTarExtractTest {
         )
         assertFalse(
             "symlink escape must be refused (no file materialized through evil)",
-            java.nio.file.Files.exists(tmp.root.resolve("usr/bin/evil/pwned")),
+            java.nio.file.Files.exists(tmp.root.resolve("usr/bin/evil/pwned").toPath()),
         )
     }
 
