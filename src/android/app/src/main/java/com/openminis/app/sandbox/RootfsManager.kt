@@ -1582,6 +1582,16 @@ internal fun extractTar(
                 if (isTarget) {
                     // Regular file (type '0' or null/legacy)
                     outFile.parentFile?.mkdirs()
+                    // If an ancestor is a symlink INTO the rootfs (allowed by
+                    // safeTarEntryFile), the resolved real parent may not
+                    // exist yet — mkdirs above no-ops on the symlink path.
+                    // createDirectories follows the link and materializes the
+                    // real directory, so the write below succeeds.
+                    try {
+                        java.nio.file.Files.createDirectories(outFile.toPath().parent)
+                    } catch (_: Exception) {
+                        // fall through: the write itself will surface I/O errors
+                    }
                     var complete = true
                     outFile.outputStream().use { output ->
                         var remaining = size
