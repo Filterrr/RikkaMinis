@@ -708,6 +708,10 @@
     <string name="provider_list_no_api_key">Нет ключа API</string>
     <string name="provider_list_disabled">Отключено</string>
     <string name="provider_list_favorites">Избранное</string>
+    <string name="provider_list_sync_all">Синхронизировать всех провайдеров</string>
+    <string name="provider_list_sync_all_success">Все провайдеры (%1$d) синхронизированы.</string>
+    <string name="provider_list_sync_partial">Синхронизация завершена — %1$d синхронизировано, %2$d без ключа, %3$d с ошибкой.</string>
+    <string name="provider_list_sync_failed_generic">Не удалось синхронизировать. Проверьте подключение и повторите попытку.</string>
     <string name="provider_set_favorite">Добавить в избранное</string>
     <string name="provider_unset_favorite">Убрать из избранного</string>
     <string name="provider_detail_export">Экспортировать</string>

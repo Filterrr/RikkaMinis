@@ -873,6 +873,11 @@
     <string name="provider_list_no_api_key">No API key</string>
     <string name="provider_list_disabled">Disabled</string>
     <string name="provider_list_favorites">Favorites</string>
+    <!-- [provider-list-sync-all] One-tap sync-all action on the provider list top bar. -->
+    <string name="provider_list_sync_all">Sync all providers</string>
+    <string name="provider_list_sync_all_success">All %1$d providers synced.</string>
+    <string name="provider_list_sync_partial">Sync finished — %1$d synced, %2$d no key, %3$d failed.</string>
+    <string name="provider_list_sync_failed_generic">Sync failed. Check your connection and try again.</string>
     <string name="provider_set_favorite">Set as favorite</string>
     <string name="provider_unset_favorite">Remove from favorites</string>
     <string name="provider_detail_export">Export</string>

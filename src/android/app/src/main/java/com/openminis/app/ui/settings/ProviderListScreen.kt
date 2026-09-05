@@ -23,7 +23,9 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.outlined.VpnKey
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -37,6 +39,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,9 +50,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.stringResource
 import com.openminis.app.data.model.ProviderInstance
+import com.openminis.app.data.repository.ModelRefreshResult
 import com.openminis.app.data.repository.ProviderRepository
+import com.openminis.app.logging.AppLogger
 import com.openminis.app.R
 import com.openminis.app.ui.theme.ChatColors
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -84,6 +92,24 @@ fun ProviderListScreen(
     }
 
     var showMenu by remember { mutableStateOf(false) }
+
+    // [provider-list-sync-all] One-tap force refresh of every enabled provider,
+    // straight from the top bar. isSyncing shows a spinner in place of the icon
+    // so double-taps are naturally gated; the IO dispatcher keeps the awaited
+    // repository call off the main thread. Per-instance failures are isolated
+    // inside refreshModels() (exceptions map to FAILURE/PRESERVED), so one
+    // broken provider never aborts the batch. The explicit allowlist of
+    // Throwable mirrors the surrounding screens' blanket-catch posture.
+    val syncScope = rememberCoroutineScope()
+    var isSyncing by remember { mutableStateOf(false) }
+
+    fun syncSummary(ok: Int, noKey: Int, failed: Int, context: android.content.Context): String =
+        if (ok > 0 && noKey == 0 && failed == 0) {
+            context.getString(R.string.provider_list_sync_all_success, ok)
+        } else {
+            context.getString(R.string.provider_list_sync_partial, ok, noKey, failed)
+        }
+
 
     val importLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
@@ -130,6 +156,59 @@ fun ProviderListScreen(
         title = stringResource(R.string.provider_list_providers),
         onBack = null, // top-level page: rely on system back gesture / bottom nav
         actions = {
+            // [provider-list-sync-all] Force-refresh every enabled provider in
+            // one tap. Sits before the Add action, matching iOS-style ordering
+            // (secondary utility action, then the primary +).
+            IconButton(
+                onClick = {
+                    if (isSyncing) return@IconButton
+                    isSyncing = true
+                    syncScope.launch {
+                        try {
+                            val results = withContext(Dispatchers.IO) {
+                                providerRepository.refreshAllModelsForce()
+                            }
+                            val ok = results.count { it.second == ModelRefreshResult.SUCCESS_API }
+                            val noKey = results.count { it.second == ModelRefreshResult.NO_KEY }
+                            val failed = results.count {
+                                it.second == ModelRefreshResult.FAILURE || it.second == ModelRefreshResult.PRESERVED
+                            }
+                            Toast.makeText(
+                                context,
+                                syncSummary(ok, noKey, failed, context),
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                            AppLogger.info(
+                                "ProviderList",
+                                "Sync all finished: ok=$ok noKey=$noKey failed=$failed total=${results.size}",
+                            )
+                        } catch (ce: java.util.concurrent.CancellationException) {
+                            throw ce
+                        } catch (ie: java.lang.IllegalStateException) {
+                            Toast.makeText(context, context.getString(R.string.provider_list_sync_failed_generic), Toast.LENGTH_SHORT).show()
+                            AppLogger.error("ProviderList", "Sync all failed: ${ie.javaClass.simpleName}: ${ie.message}")
+                        } catch (re: java.lang.RuntimeException) {
+                            Toast.makeText(context, context.getString(R.string.provider_list_sync_failed_generic), Toast.LENGTH_SHORT).show()
+                            AppLogger.error("ProviderList", "Sync all failed: ${re.javaClass.simpleName}: ${re.message}")
+                        } finally {
+                            isSyncing = false
+                        }
+                    }
+                },
+                enabled = !isSyncing,
+            ) {
+                if (isSyncing) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.dp,
+                    )
+                } else {
+                    Icon(
+                        Icons.Default.Sync,
+                        contentDescription = stringResource(R.string.provider_list_sync_all),
+                    )
+                }
+            }
             IconButton(onClick = { showMenu = true }) {
                 Icon(Icons.Default.Add, contentDescription = stringResource(R.string.provider_list_add_provider))
             }

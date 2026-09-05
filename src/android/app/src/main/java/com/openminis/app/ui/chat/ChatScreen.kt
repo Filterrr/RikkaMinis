@@ -4371,6 +4371,7 @@ fun ChatScreen(
                 onFollowEvent = { followState = followReducer(followState, it) },
                 onMoveToSession = onMoveToSession,
                 onOpenModelPicker = { showModelPicker = true },
+                onSlashCommandsClick = { dispatchChatAction(ChatMenuPrefs.SLASH_COMMANDS) },
                 onPreviewAttachment = onPreviewAttachment,
                 onPreviewImageGallery = { items, idx -> previewImageGallery = items to idx },
                 onOpenWebAppSheet = { target -> webAppSheetTarget = target },
@@ -4924,6 +4925,10 @@ private fun ChatInputArea(
     onFollowEvent: (FollowEvent) -> Unit,
     onMoveToSession: (String) -> Unit,
     onOpenModelPicker: () -> Unit,
+    // [composer-slash-button-restored] dispatchChatAction is a LOCAL fun of
+    // the outer ChatScreen composable, so it can't be referenced from this
+    // separate composable — pass the toggle action in as a callback instead.
+    onSlashCommandsClick: () -> Unit,
     onPreviewAttachment: (com.openminis.app.ui.sandbox.FileItem) -> Unit,
     onPreviewImageGallery: (List<com.openminis.app.ui.components.ImageGalleryItem>, Int) -> Unit,
     onOpenWebAppSheet: (InputAttachment) -> Unit,
@@ -6178,10 +6183,38 @@ private fun ChatInputArea(
                         }
                     }
 
+                    // [composer-slash-button-restored] The dedicated "/" circle
+                    // button is back in the composer's bottom-left cluster (its
+                    // pre-move slot — see the comment below), so the command
+                    // palette is one tap away without typing "/" or digging
+                    // through the top-right "..." menu. The italic-bold "/"
+                    // glyph matches the chat-menu entry, keeping a single
+                    // affordance across both entry points. Routing through
+                    // dispatchChatAction(SLASH_COMMANDS) preserves the toggle
+                    // semantics (tap again / back / outside dismisses) and the
+                    // focus + IME behavior shared with the menu and the
+                    // history-drawer footer.
+                    Spacer(modifier = Modifier.width(8.dp))
+                    InputCircleButton(
+                        onClick = onSlashCommandsClick,
+                    ) {
+                        Text(
+                            "/",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontStyle = FontStyle.Italic,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(bottom = 2.dp),
+                        )
+                    }
+
                     // The "/" slash-command circle button used to sit here.
                     // Moved into the top-right chat menu (above Token Usage)
                     // to reclaim composer width; typing "/" still opens the
                     // same sheet, so no functionality was removed.
+                    // [composer-slash-button-restored] Reinstated above — the
+                    // menu entry remains as a discoverable fallback, and the
+                    // two share dispatchChatAction(SLASH_COMMANDS).
 
                     // T187: Exit Edit Mode pill, only while editingMessageId
                     // is non-null. Tap clears the edit flag + composer text
