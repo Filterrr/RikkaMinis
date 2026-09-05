@@ -26,7 +26,7 @@ OpenMinis 核心把领先的模型——Claude、GPT、Gemini 等——带进原
 
 ## 安装
 
-**→ [下载最新 APK](https://github.com/logicflow-GYW/RikkaMinis/releases/tag/android-latest)**
+**→ [下载最新 APK](https://github.com/Filterrr/RikkaMinis/releases/tag/android-latest)**
 
 每次推送到 `main` 的**代码改动**（`src/android/**`、`src/shared/**`、`deps/**`
 或 workflow 文件）都会构建一个发布版 APK 并重新发布到该链接——纯文档改动
