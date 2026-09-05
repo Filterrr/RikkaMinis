@@ -1581,17 +1581,11 @@ internal fun extractTar(
             '0', '\u0000' -> {
                 if (isTarget) {
                     // Regular file (type '0' or null/legacy)
-                    outFile.parentFile?.mkdirs()
-                    // If an ancestor is a symlink INTO the rootfs (allowed by
-                    // safeTarEntryFile), the resolved real parent may not
-                    // exist yet — mkdirs above no-ops on the symlink path.
-                    // createDirectories follows the link and materializes the
-                    // real directory, so the write below succeeds.
-                    try {
-                        java.nio.file.Files.createDirectories(outFile.toPath().parent)
-                    } catch (_: Exception) {
-                        // fall through: the write itself will surface I/O errors
-                    }
+                    // Materialize the REAL parent: when an ancestor is a
+                    // vetted symlink into the rootfs, plain mkdirs no-ops on
+                    // the link path and the write would FNF. This resolves
+                    // the chain and creates the real directory.
+                    materializeRealParent(rootfsDirForExtract(targetDir), outFile)
                     var complete = true
                     outFile.outputStream().use { output ->
                         var remaining = size
@@ -1705,6 +1699,50 @@ internal fun safeTarEntryFile(targetDir: File, fullName: String): File? {
         return null
     }
     return resolved.toFile()
+}
+
+/**
+ * Materialize the REAL parent directory of [outFile], resolving any
+ * vetted symlinks along the way ([safeTarEntryFile] has already verified
+ * every link stays inside the rootfs). Used before the regular-file write:
+ * Files.createDirectories cannot cross a symlink whose target does not
+ * exist yet (FileAlreadyExistsException / NoSuchFileException), but the
+ * write itself needs the resolved directory to exist.
+ *
+ * Returns the resolved real parent, or null when the chain cannot be
+ * materialized inside the rootfs.
+ */
+/** extractTar works on any target dir; the "rootfs" for containment IS the target dir. */
+private fun rootfsDirForExtract(targetDir: File): File = targetDir
+
+internal fun materializeRealParent(rootDir: File, outFile: File): File? {
+    return try {
+        val rootPath = rootDir.canonicalFile.toPath()
+        val outPath = outFile.toPath()
+        var cur = rootPath
+        var changed = false
+        for (i in rootPath.nameCount until outPath.nameCount - 1) {   // exclude the file itself
+            cur = cur.resolve(outPath.getName(i))
+            if (java.nio.file.Files.isSymbolicLink(cur)) {
+                val target = java.nio.file.Files.readSymbolicLink(cur)
+                val abs = if (target.isAbsolute) target else cur.parent.resolve(target).normalize()
+                if (!abs.startsWith(rootPath)) return null
+                cur = abs
+                changed = true
+            }
+        }
+        if (changed) {
+            java.nio.file.Files.createDirectories(cur)
+            cur.toFile()
+        } else {
+            // No symlinks in the chain — plain mkdirs already handled it.
+            outFile.parentFile?.mkdirs()
+            outFile.parentFile
+        }
+    } catch (t: Exception) {
+        Log.w("RootfsManager", "materializeRealParent failed for ${outFile.path}: ${t.message}")
+        null
+    }
 }
 
 internal fun extractString(header: ByteArray, offset: Int, length: Int): String {
