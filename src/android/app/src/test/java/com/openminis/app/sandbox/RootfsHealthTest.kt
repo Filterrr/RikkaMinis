@@ -142,14 +142,13 @@ assertEquals(100L, map["usr/bin/bash"])
     }
 
     @Test
-    fun `static files still assert factory snapshot size`() {
-        assertFalse("lib/ld-linux-aarch64.so.1" in DYNAMIC_INTEGRITY_PATHS)
-        assertFalse("usr/bin/apt-get" in DYNAMIC_INTEGRITY_PATHS)
+    fun `dpkg database is dynamic but loader entries verify by existence only`() {
+        // After the audit round the loader/libc/apt-get are all dpkg-managed
+        // (existence-only) — asserting a static factory size on them broke
+        // on the first `apt-get upgrade`. The db stays dynamic too.
+        assertTrue("var/lib/dpkg/status" in DYNAMIC_INTEGRITY_PATHS)
         val manifest = mapOf("lib/ld-linux-aarch64.so.1" to 456789L)
-        // Truncated static file (size mismatch) must still be caught…
-        assertFalse(integritySizePasses("lib/ld-linux-aarch64.so.1", actualSize = 111L, expectedSizes = manifest))
-        // …and an intact one passes.
-        assertTrue(integritySizePasses("lib/ld-linux-aarch64.so.1", actualSize = 456789L, expectedSizes = manifest))
+        assertTrue(integritySizePasses("lib/ld-linux-aarch64.so.1", actualSize = 111L, expectedSizes = manifest))
     }
 
     @Test

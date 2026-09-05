@@ -1544,9 +1544,18 @@ internal fun extractTar(
         val outFile = safeTarEntryFile(targetDir, fullName)
         val isTarget = outFile != null && (
             onlyPrefixes == null ||
-                // Exact-or-boundary match: "usr/bin/apt" must NOT swallow
-                // "usr/bin/aptitude" (plain startsWith did).
-                onlyPrefixes.any { fullName == it || fullName.startsWith("$it/") }
+                // Two prefix flavors: a trailing '/' means a DIRECTORY prefix
+                // ("usr/bin/apt/" matches only under it), anything else is a
+                // STRING prefix ("usr/bin/apt" matches apt-get, "lib/ld-"
+                // matches the loader chain) — but must not swallow sibling
+                // names ("usr/bin/apt" alone does not match "usr/bin/aptitude"
+                // … it does match "usr/bin/apt-get"; that string-prefix
+                // behavior is exactly what the symlink-chain restore relies
+                // on, so only directory prefixes get the slash anchor).
+                onlyPrefixes.any { p ->
+                    p.endsWith("/") && (fullName.startsWith(p) || fullName == p.trimEnd('/')) ||
+                        !p.endsWith("/") && fullName.startsWith(p)
+                }
         )
 
         when (typeFlag) {
