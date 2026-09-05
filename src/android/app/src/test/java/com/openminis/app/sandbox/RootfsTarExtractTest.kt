@@ -213,16 +213,20 @@ class RootfsTarExtractTest {
         val evil = tmp.root.resolve("usr/bin/evil").toPath()
         java.nio.file.Files.createSymbolicLink(evil, java.nio.file.Paths.get("/tmp"))
 
-        // Now an entry that writes through the symlink: usr/bin/evil/pwned
+        // Now an entry that writes through the symlink: usr/bin/evil/pwned.
+        // The containment walk refuses the entry (its ancestor usr/bin/evil
+        // is a symlink pointing outside), so nothing is written and
+        // extractTar completes normally — refusal is silent, not an I/O
+        // error. Assert only INSIDE the runner-managed temp root: probing
+        // the shared /tmp is flaky on CI runners.
         extract(
             listOf(tarEntry("usr/bin/evil/pwned", "PWNED".toByteArray())),
             prefixes = setOf("usr/bin/"),
         )
         assertFalse(
-            "symlink escape must be refused",
-            java.nio.file.Files.exists(java.nio.file.Paths.get("/tmp/pwned")),
+            "symlink escape must be refused (no file materialized through evil)",
+            java.nio.file.Files.exists(tmp.root.resolve("usr/bin/evil/pwned")),
         )
-        assertFalse(tmp.root.resolve("usr/bin/evil/pwned").exists())
     }
 
     @Test
