@@ -4371,6 +4371,7 @@ fun ChatScreen(
                 onFollowEvent = { followState = followReducer(followState, it) },
                 onMoveToSession = onMoveToSession,
                 onOpenModelPicker = { showModelPicker = true },
+                onSlashCommandsClick = { dispatchChatAction(ChatMenuPrefs.SLASH_COMMANDS) },
                 onPreviewAttachment = onPreviewAttachment,
                 onPreviewImageGallery = { items, idx -> previewImageGallery = items to idx },
                 onOpenWebAppSheet = { target -> webAppSheetTarget = target },
@@ -4924,6 +4925,10 @@ private fun ChatInputArea(
     onFollowEvent: (FollowEvent) -> Unit,
     onMoveToSession: (String) -> Unit,
     onOpenModelPicker: () -> Unit,
+    // [composer-slash-button-restored] dispatchChatAction is a LOCAL fun of
+    // the outer ChatScreen composable, so it can't be referenced from this
+    // separate composable — pass the toggle action in as a callback instead.
+    onSlashCommandsClick: () -> Unit,
     onPreviewAttachment: (com.openminis.app.ui.sandbox.FileItem) -> Unit,
     onPreviewImageGallery: (List<com.openminis.app.ui.components.ImageGalleryItem>, Int) -> Unit,
     onOpenWebAppSheet: (InputAttachment) -> Unit,
@@ -6191,7 +6196,7 @@ private fun ChatInputArea(
                     // history-drawer footer.
                     Spacer(modifier = Modifier.width(8.dp))
                     InputCircleButton(
-                        onClick = { dispatchChatAction(ChatMenuPrefs.SLASH_COMMANDS) },
+                        onClick = onSlashCommandsClick,
                     ) {
                         Text(
                             "/",
