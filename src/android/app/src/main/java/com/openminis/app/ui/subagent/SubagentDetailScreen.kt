@@ -643,6 +643,7 @@ private fun SubagentResultCard(
                 fontSize = 14.sp,
                 lineHeight = 20.sp,
                 baseOverride = ChatColors.primaryText,
+                terminalCard = false,
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(8.dp))
@@ -676,13 +677,18 @@ private fun SubagentCollapseToggle(label: String, onClick: () -> Unit) {
 
 /**
  * [T-subagent-ui-ansi] Colored monospace output text for the sub-agent
- * detail page. Parses ANSI SGR sequences ([SubagentAnsiText]) and renders
- * them as span styles on top of the chat palette:
+ * detail page, styled to MATCH the main chat's tool output card
+ * (ChatToolDetailUI's shell_execute branch): pure-black terminal card,
+ * 0xFF404040 border, ChatColors.success green as the base text color,
+ * light-blue link color. The log renders at the compact 11sp scale
+ * (the sheet's 13sp would blow out the row rhythm); colors identical.
+ *
+ * ANSI SGR sequences ([SubagentAnsiText]) render as span styles on top:
  *  - Bold → FontWeight.Bold; italic / underline via Compose span styles.
- *  - Default 8/16-colors get a luminance check against the box background:
- *    dark palette passes through, light palette darkens near-black/near-
- *    white "default" entries so colored output stays readable on both.
- *  - Truecolor / 256-cube values pass through as-is (alpha forced opaque).
+ *  - The black card is terminal truth: xterm defaults render as-is —
+ *    the old light-theme black/white remap is DROPPED because the card
+ *    background no longer follows the theme (always black, like the
+ *    chat's terminal card), so bright-white default text is correct.
  * The line-count hint sits inside the box so the tap target stays whole.
  */
 @Composable
@@ -695,9 +701,14 @@ private fun SubagentColoredOutput(
     lineHeight: TextUnit = 15.sp,
     baseOverride: Color? = null,
     showLineHint: Boolean = true,
+    terminalCard: Boolean = true,
 ) {
-    val baseColor = baseOverride ?: ChatColors.secondaryText
-    val isDark = ChatColors.isDark
+    // Main chat ToolDetailSheet shell-card palette: black bg + success
+    // green base + light-blue links. terminalCard=false (the RESULT card
+    // — model prose, not tool output) keeps the theme-colored rendering.
+    val cardBg = if (terminalCard) Color.Black else ChatColors.codeBlockBg
+    val baseColor = baseOverride
+        ?: if (terminalCard) ChatColors.success else ChatColors.secondaryText
     // Parse once per output change — NOT per style lookup — and reuse the
     // spans for both the expanded and collapsed (tail-sliced) rendering.
     val spans = remember(rawOutput) { SubagentAnsiText.parse(rawOutput) }
@@ -705,20 +716,11 @@ private fun SubagentColoredOutput(
         if (expanded) spans else SubagentAnsiText.tailLines(spans, previewLines)
     }
 
-    val annotated = remember(shownSpans, baseColor, isDark) {
+    val annotated = remember(shownSpans, baseColor) {
         buildAnnotatedString {
             for (span in shownSpans) {
-                val colorInt = span.color
-                val spanColor = when {
-                    colorInt == null -> null
-                    // xterm defaults (black/white entries) need contrast
-                    // fixes on light backgrounds; colored entries pass.
-                    !isDark && colorInt == 0xFF000000.toInt() -> 0xFF3A3A3A.toInt()
-                    !isDark && colorInt == 0xFFFFFFFF.toInt() -> 0xFFE5E5E5.toInt()
-                    else -> colorInt
-                }
                 withStyle(SpanStyle(
-                    color = spanColor?.let { Color(it) } ?: baseColor,
+                    color = span.color?.let { Color(it) } ?: baseColor,
                     fontWeight = if (span.bold) FontWeight.Bold else null,
                     fontStyle = if (span.italic) FontStyle.Italic else null,
                     textDecoration = if (span.underline) TextDecoration.Underline else null,
@@ -745,7 +747,9 @@ private fun SubagentColoredOutput(
                 "⋯ $lineCount lines — tap to expand",
                 fontSize = 10.sp,
                 fontFamily = FontFamily.Monospace,
-                color = ChatColors.tertiaryText,
+                // Fixed gray tuned for the black card (both themes) — the
+                // chat terminal card's own secondary text is theme-fixed too.
+                color = Color(0xFF98989D),
             )
         }
     }
@@ -860,6 +864,9 @@ private fun SubagentStepCard(
                 val toggleable = lineCount > COLLAPSED_PREVIEW_LINES || expanded
                 // [T-subagent-ui-ansi] Colored rendering: ANSI SGR spans →
                 // styled text; collapsed keeps the styled tail 3 lines.
+                // [T-subagent-ui-chat-consistent] Black terminal card —
+                // same shell as the chat's ToolDetailSheet output card
+                // (black bg, 0xFF404040 border, success-green base text).
                 SubagentColoredOutput(
                     rawOutput = step.output,
                     expanded = expanded,
@@ -867,7 +874,8 @@ private fun SubagentStepCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(8.dp))
-                        .background(ChatColors.codeBlockBg, RoundedCornerShape(8.dp))
+                        .background(Color.Black, RoundedCornerShape(8.dp))
+                        .border(0.5.dp, Color(0xFF404040), RoundedCornerShape(8.dp))
                         .clickable(enabled = toggleable) {
                             collapsed[step.id] = expanded
                             manualOverride[step.id] = true
