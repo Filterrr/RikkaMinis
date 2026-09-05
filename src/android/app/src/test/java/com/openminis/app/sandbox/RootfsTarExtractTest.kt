@@ -154,13 +154,27 @@ class RootfsTarExtractTest {
 
     @Test
     fun `truncated archive fails instead of writing partial files`() {
-        // A declared 4096-byte entry that the stream can only supply 100
-        // bytes of must FAIL the extraction (EOFException) and leave no
-        // partial file behind — silent half-files booted a corrupt rootfs.
-        val big = ByteArray(4096) { it.toByte() }
-        val bytes = tarEntry("usr/bin/truncated", big) + ByteArray(100) { 'X'.code.toByte() } + ByteArray(1024)
+        // Header DECLARES 4096 bytes but the stream only carries 100: the
+        // read loop must hit EOF, fail the extraction (EOFException), and
+        // leave no partial file behind — silent half-files booted a corrupt
+        // rootfs. (Construct the entry manually: tarEntry would pad the
+        // full declared size into the stream and the truncation would never
+        // happen.)
+        val header = tarEntry("usr/bin/truncated", content = ByteArray(100))
+        // Rewrite the declared size field (offset 124, 12 bytes octal) to
+        // 00000004000 octal = 4096, larger than the 100 bytes actually present.
+        val bytes2 = header.copyOf()
+        System.arraycopy("00000004000\u0000".toByteArray(Charsets.US_ASCII), 0, bytes2, 124, 12)
+        // Recompute checksum after the size edit: zero the field, sum, write.
+        java.util.Arrays.fill(bytes2, 148, 156, ' '.code.toByte())
+        var sum = 0
+        for (b in bytes2.sliceArray(0 until 512)) sum += b.toInt() and 0xFF
+        val chk = String.format("%06o", sum).toByteArray(Charsets.US_ASCII) + "\u0000 ".toByteArray(Charsets.US_ASCII)
+        System.arraycopy(chk, 0, bytes2, 148, 8)
+
+        val stream = bytes2 + ByteArray(1024) // no more content beyond the 100 bytes
         val ex = try {
-            extractTar(java.io.ByteArrayInputStream(bytes), tmp.root, null)
+            extractTar(java.io.ByteArrayInputStream(stream), tmp.root, null)
             null
         } catch (e: java.io.EOFException) {
             e
