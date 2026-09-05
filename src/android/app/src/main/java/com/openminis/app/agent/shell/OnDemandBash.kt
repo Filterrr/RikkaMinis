@@ -36,7 +36,7 @@ object OnDemandBash {
     private const val BACKOFF_WINDOW_MS = 24L * 3600 * 1000
     private const val UNAVAILABLE_TTL_MS = 10L * 60 * 1000
     private const val INSTALL_BUDGET_MS = 60_000L
-    private const val APT_PROBE_URL = "https://ports.ubuntu.com/ubuntu-ports/"
+    private const val APT_PROBE_URL = "http://ports.ubuntu.com/ubuntu-ports/"
 
     private sealed class Availability {
         object Unknown : Availability()

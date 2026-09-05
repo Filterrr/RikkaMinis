@@ -165,6 +165,9 @@ jobs:
           test -s jniLibs/arm64-v8a/libproot-loader.so
           test -s assets/proot-aarch64
           test -s assets/ubuntu-base.tar.gz
+          test -s assets/deb-offline/ca-certificates_20240203_all.deb
+          test -s assets/deb-offline/openssl_3.0.13-0ubuntu3_arm64.deb
+          test -s assets/deb-offline/libssl3t64_3.0.13-0ubuntu3_arm64.deb
           echo "7f454c46" > /tmp/elf_magic
           for so in jniLibs/arm64-v8a/*.so; do
             magic=$(head -c 4 "$so" | od -A n -t x1 | tr -d ' \n')
@@ -287,7 +290,7 @@ jobs:
         run: |
           APK=src/android/app/build/outputs/apk/release/app-release.apk
           ls -la "$APK"
-          unzip -l "$APK" | grep -E 'libproot\.so|proot-aarch64|ubuntu-base'
+          unzip -l "$APK" | grep -E 'libproot\.so|proot-aarch64|ubuntu-base|ca-certificates_20240203
           EXPECTED=$(sha256sum src/android/app/src/main/jniLibs/arm64-v8a/libproot.so | cut -d' ' -f1)
           unzip -p "$APK" lib/arm64-v8a/libproot.so > /tmp/apk_libproot.so
           ACTUAL=$(sha256sum /tmp/apk_libproot.so | cut -d' ' -f1)

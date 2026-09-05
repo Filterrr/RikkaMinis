@@ -160,7 +160,7 @@ android {
     }
 
     androidResources {
-        noCompress += listOf("tar.gz", "proot-aarch64")
+        noCompress += listOf("tar.gz", "proot-aarch64", "deb")
     }
 
     packaging {

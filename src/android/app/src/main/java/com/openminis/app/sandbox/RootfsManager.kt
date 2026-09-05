@@ -280,6 +280,14 @@ class RootfsManager private constructor(private val context: Context) {
                 }
             }
 
+            // [T-ca-bootstrap] The Ubuntu base rootfs ships NO ca-certificates:
+            // every HTTPS source fails TLS verification on the very first apt
+            // run (chicken-and-egg — you cannot apt-get install the certs over
+            // the TLS transport you cannot verify). Bundled debs close the gap
+            // offline, BEFORE anything else needs the network; dpkg needs no
+            // network for a local install.
+            installOfflineDebs()
+
             // [T-ubuntu-migration] One-time cleanup of the legacy Alpine
             // rootfs from pre-migration installs. Runs only AFTER the Ubuntu
             // rootfs is fully extracted, verified, and overlaid — a low-disk
@@ -818,6 +826,16 @@ class RootfsManager private constructor(private val context: Context) {
             Log.d(TAG, "[DpkgWorld] no snapshot file, nothing to restore")
             return@withContext true
         }
+        if (!File(rootfsDir, "etc/ssl/certs/ca-certificates.crt").exists()) {
+            // No CA trust yet (offline bootstrap failed/absent): HTTPS mirrors
+            // would fail verification and HTTP mirrors can't be guaranteed
+            // either — queue everything for the strike-limited retry instead
+            // of burning a doomed apt round-trip now.
+            val names = parseDpkgWorld(apkWorldFile.readText())
+            Log.w(TAG, "[DpkgWorld] CA trust missing — deferring ${names.size} package(s) to retry queue")
+            if (names.isNotEmpty()) writeDpkgWorldFailed(names)
+            return@withContext false
+        }
         val names = try {
             parseDpkgWorld(apkWorldFile.readText())
         } catch (t: Exception) {
@@ -1067,6 +1085,62 @@ class RootfsManager private constructor(private val context: Context) {
             Log.e(TAG, "[DpkgWorld] apt install process failed", t)
             AptResult(-1, "")
         }.getOrDefault(AptResult(-1, ""))
+    }
+
+    /**
+     * Offline install of the CA bootstrap trio (ca-certificates, openssl,
+     * libssl3t64) from assets/deb-offline/ via dpkg inside the guest.
+     * No network, no apt index, mirrors the old apk-offline pattern. Skipped
+     * silently when ca-certificates is already present (idempotent re-install
+     * on every fresh extraction; reset() re-runs it by construction).
+     */
+    private suspend fun installOfflineDebs() = withContext(Dispatchers.IO) {
+        if (File(rootfsDir, "etc/ssl/certs/ca-certificates.crt").exists()) {
+            Log.d(TAG, "[CaBootstrap] ca-certificates already present, skip")
+            return@withContext
+        }
+        if (!prootBinary.exists()) {
+            Log.w(TAG, "[CaBootstrap] proot binary not available, skip")
+            return@withContext
+        }
+        val debDir = File(rootfsDir, "tmp/deb-offline")
+        debDir.mkdirs()
+        try {
+            val copied = mutableListOf<String>()
+            for (name in OFFLINE_DEBS) {
+                try {
+                    context.assets.open("deb-offline/$name").use { input ->
+                        val dst = File(debDir, name)
+                        dst.outputStream().use { output -> input.copyTo(output) }
+                        copied.add("/tmp/deb-offline/$name")
+                    }
+                } catch (_: java.io.FileNotFoundException) {
+                    Log.w(TAG, "[CaBootstrap] asset missing: deb-offline/$name")
+                }
+            }
+            if (copied.size < OFFLINE_DEBS.size) {
+                Log.w(TAG, "[CaBootstrap] only ${copied.size}/${OFFLINE_DEBS.size} debs staged, skip install")
+                return@withContext
+            }
+            aptMutex.withLock {
+                val cmd = listOf(
+                    prootBinary.absolutePath, "-0", "--link2symlink", "--kill-on-exit",
+                    "-r", rootfsDir.absolutePath,
+                    "-b", "/dev", "-b", "/proc", "-b", "/sys", "-w", "/root",
+                    "/bin/sh", "-c",
+                    "DEBIAN_FRONTEND=noninteractive dpkg -i ${copied.joinToString(" ")}"
+                )
+                val r = runProotWithDeadline(cmd, prootLoaderEnv(), timeoutSec = 120)
+                Log.i(TAG, "[CaBootstrap] dpkg -i exit=${r.exitCode} output=${r.output.takeLast(300)}")
+                if (r.exitCode == 0) {
+                    Log.i(TAG, "[CaBootstrap] CA trust installed (${OFFLINE_DEBS.size} debs)")
+                } else {
+                    Log.w(TAG, "[CaBootstrap] offline CA install failed rc=${r.exitCode} — HTTPS sources stay broken until user installs ca-certificates")
+                }
+            }
+        } finally {
+            debDir.deleteRecursively()
+        }
     }
 
     /**
@@ -1425,6 +1499,17 @@ class RootfsManager private constructor(private val context: Context) {
         }
         private const val PROOT_ASSET = "proot-aarch64"
         private const val DEFAULT_MOUNT_ASSET = "default_mount"
+
+        /**
+         * Offline CA bootstrap debs (assets/deb-offline/), installed via
+         * dpkg on every fresh extraction. SHA256s verified against the
+         * noble archive manifest at packaging time.
+         */
+        private val OFFLINE_DEBS = listOf(
+            "libssl3t64_3.0.13-0ubuntu3_arm64.deb",
+            "openssl_3.0.13-0ubuntu3_arm64.deb",
+            "ca-certificates_20240203_all.deb",
+        )
 
         /**
          * Boot-time dpkg-world retry attempts before the queue is dropped.

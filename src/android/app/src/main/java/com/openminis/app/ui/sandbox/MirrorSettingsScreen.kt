@@ -136,7 +136,12 @@ object MirrorCatalog {
         MirrorEntry("npm.$id", name, url, url, MirrorCategory.NPM, region, official)
 
     val aptMirrors = listOf(
-        apt("official", "Ubuntu Ports", "https://ports.ubuntu.com/ubuntu-ports/", "Global", official = true),
+        // HTTP by design: the base rootfs boots WITHOUT ca-certificates, so
+        // an HTTPS official source dead-locks the very first apt run (cannot
+        // verify TLS before the trust store exists). Package integrity is
+        // still enforced by apt's GPG signature checks; HTTP protects nothing
+        // less here. Users can switch to HTTPS mirrors after the CA bootstrap.
+        apt("official", "Ubuntu Ports", "http://ports.ubuntu.com/ubuntu-ports/", "Global", official = true),
         apt("tuna", "Tsinghua TUNA", "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/", "China"),
         apt("aliyun", "Alibaba", "https://mirrors.aliyun.com/ubuntu-ports/", "China"),
         apt("ustc", "USTC", "https://mirrors.ustc.edu.cn/ubuntu-ports/", "China"),
