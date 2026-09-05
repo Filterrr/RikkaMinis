@@ -223,9 +223,16 @@ class RootfsTarExtractTest {
             listOf(tarEntry("usr/bin/evil/pwned", "PWNED".toByteArray())),
             prefixes = setOf("usr/bin/"),
         )
+        // NOFOLLOW on the FINAL component: evil itself points at /tmp, so a
+        // plain Files.exists would follow it and (if the CI runner happens
+        // to have /tmp/pwned) false-fail. The property under test is that no
+        // REGULAR FILE named pwned was materialized inside the tree.
         assertFalse(
             "symlink escape must be refused (no file materialized through evil)",
-            java.nio.file.Files.exists(tmp.root.resolve("usr/bin/evil/pwned").toPath()),
+            java.nio.file.Files.exists(
+                tmp.root.resolve("usr/bin/evil/pwned").toPath(),
+                java.nio.file.LinkOption.NOFOLLOW_LINKS,
+            ),
         )
     }
 
