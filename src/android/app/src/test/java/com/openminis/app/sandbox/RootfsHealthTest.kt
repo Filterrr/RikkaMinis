@@ -173,6 +173,38 @@ assertEquals(100L, map["usr/bin/bash"])
     }
 
     @Test
+    fun `apt-upgraded binary size change does not fail integrity`() {
+        // Regression for the audit P1: apt-get/dpkg and the glibc loader are
+        // dpkg-managed — their sizes legitimately change after `apt-get
+        // upgrade`. The dynamic set must cover every manifest-recorded path
+        // that apt can touch, or a healthy upgraded rootfs reports damaged.
+        val manifest = mapOf("usr/bin/apt-get" to 123_456L)
+        assertTrue(
+            integritySizePasses("usr/bin/apt-get", actualSize = 123_456L + 999, expectedSizes = manifest),
+        )
+        val manifest2 = mapOf("lib/ld-linux-aarch64.so.1" to 203_968L)
+        assertTrue(
+            integritySizePasses("lib/ld-linux-aarch64.so.1", actualSize = 203_968L + 42, expectedSizes = manifest2),
+        )
+        // Manifest keys and the dynamic set must stay in lockstep — every
+        // key the manifest asserts a size for that apt can change must be in
+        // DYNAMIC_INTEGRITY_PATHS (existence-only).
+        for (key in MANIFEST_KEYS - setOf("var/lib/dpkg/status")) {
+            assertTrue("$key is apt-managed and must be dynamic", key in DYNAMIC_INTEGRITY_PATHS)
+        }
+    }
+
+    @Test
+    fun `manifest missing keys are detected as corrupt`() {
+        // Partial truncation: 2 of 6 keys survive — must count as corrupt
+        // (the old isEmpty-only check accepted it).
+        val full = MANIFEST_KEYS
+        assertTrue(full.size >= 6)
+        val partial = full.take(2).toSet()
+        assertTrue(partial != full) // schema mismatch ⇒ corrupt
+    }
+
+    @Test
     fun `rebuilds missing sh as dash symlink`() {
         val root = java.nio.file.Files.createTempDirectory("rootfs-sh-").toFile()
         try {

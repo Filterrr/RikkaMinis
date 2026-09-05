@@ -99,12 +99,12 @@ data class RootfsHealth(
 class RootfsManager private constructor(private val context: Context) {
 
     /**
-     * Serializes every apt/dpkg mutation against the guest (dpkg-world
-     * restore, boot retry, auto-repair, user-initiated reset) so two apt
-     * transactions can never race on /var/lib/dpkg/ — dpkg's own file locks
-     * only fail LOUDLY (lock-frontend errors the user can't attribute), they
-     * don't queue. One in-process mutex is enough: every mutation entry
-     * point runs inside this single app process.
+     * Serializes every apt/dpkg mutation path OWNED BY RootfsManager
+     * (dpkg-world restore, boot retry, auto-repair, user-initiated reset) so
+     * two such transactions can never race on /var/lib/dpkg/. This is an
+     * IN-PROCESS lock: a user-typed `apt-get install` inside the shell runs
+     * outside it and can still contend — dpkg's own file lock will surface
+     * that as a loud lock-frontend error, which is the correct attribution.
      */
     private val aptMutex = Mutex()
 
@@ -230,8 +230,10 @@ class RootfsManager private constructor(private val context: Context) {
             archFile.writeText(ARCH)
 
             // Write integrity manifest so verifyIntegrity can detect
-            // partial/corrupt files on subsequent boots.
-            writeIntegrityManifest()
+            // partial/corrupt files on subsequent boots. FAILS the install
+            // when unwritable — a rootfs without a trustworthy manifest must
+            // not be reported Installed (fail-closed).
+            writeIntegrityManifestOrThrow()
 
             // Pre-create /var/minis directories. Mirrors iOS
             // RootfsManager.swift:76-80 (attachments/offloads/workspace/skills/
@@ -335,16 +337,18 @@ class RootfsManager private constructor(private val context: Context) {
      * that predate this feature.
      */
     fun verifyIntegrity(): RootfsHealth {
-        // Fail-closed contract: a manifest that EXISTS but cannot be parsed is
-        // itself evidence of corruption — treat every size expectation as
-        // failed (empty map normally means "no expectations"; we additionally
-        // force the critical paths through a stricter existence check below).
-        // Absent manifest (legacy installs) stays existence-only.
-        val manifestCorrupt = integrityManifest.exists() && (
-            runCatching { parseIntegrityManifest(integrityManifest.readText()) }
+        // Fail-closed contract, strict schema: a manifest that exists must
+        // parse AND cover EXACTLY the expected key set (all present, no
+        // unknown keys). A partially-truncated manifest (first 2 of 6 lines
+        // survive) would otherwise be silently accepted. Absent manifest
+        // (legacy installs) stays existence-only.
+        val manifestCorrupt = if (!integrityManifest.exists()) {
+            false
+        } else {
+            val parsed = runCatching { parseIntegrityManifest(integrityManifest.readText()) }
                 .getOrElse { emptyMap() }
-                .isEmpty() && integrityManifest.length() > 0
-        )
+            parsed.keys != MANIFEST_KEYS
+        }
         val expectedSizes = readIntegrityManifest()
 
         fun exists(rel: String): Boolean {
@@ -441,22 +445,41 @@ class RootfsManager private constructor(private val context: Context) {
      * will see `.arch` present but manifest absent, enabling a more thorough
      * integrity check.
      */
-    private fun writeIntegrityManifest() {
-        val criticalPaths = listOf(
-            "usr/bin/bash", "bin/sh", "lib/ld-linux-aarch64.so.1",
-            "lib/aarch64-linux-gnu/libc.so.6",
-            "usr/bin/apt-get", "var/lib/dpkg/status",
-        )
+    private fun writeIntegrityManifestOrThrow() {
+        val criticalPaths = MANIFEST_KEYS.toList()
+        // Atomic write (temp + fsync + rename): a silent_kill mid-write must
+        // leave either the old manifest or a complete new one — never a
+        // truncated one that would read as corrupt on the next boot.
+        val tmp = File(rootfsDir, ".integrity_manifest.tmp")
         try {
             val lines = criticalPaths.map { rel ->
                 val f = File(rootfsDir, rel)
                 val size = if (f.exists()) f.length() else 0L
                 "$rel=$size"
             }
-            integrityManifest.writeText(lines.joinToString("\n") + "\n")
+            tmp.writeText(lines.joinToString("\n") + "\n")
+            java.io.FileOutputStream(tmp).channel.force(true)
+            if (!tmp.renameTo(integrityManifest)) {
+                // rename can fail across odd filesystems; fall back to copy+delete
+                tmp.copyTo(integrityManifest, overwrite = true)
+                tmp.delete()
+            }
             Log.i(TAG, "[Integrity] Manifest written with ${lines.size} entries")
         } catch (e: Exception) {
-            Log.w(TAG, "[Integrity] Failed to write manifest: ${e.message}")
+            tmp.delete()
+            // Fail-closed: a fresh install whose manifest cannot be written
+            // must NOT be reported Installed with no manifest — the next
+            // boot would treat it as a legacy install and skip verification.
+            throw IllegalStateException("integrity manifest write failed", e)
+        }
+    }
+
+    /** Best-effort variant used by autoRepair regeneration (best effort with logging). */
+    private fun writeIntegrityManifest() {
+        try {
+            writeIntegrityManifestOrThrow()
+        } catch (e: Exception) {
+            Log.w(TAG, "[Integrity] manifest regeneration failed: ${e.message}")
         }
     }
 
@@ -555,10 +578,17 @@ class RootfsManager private constructor(private val context: Context) {
 
         val final = verifyIntegrity()
         Log.i(TAG, "[Repair] final health: ${final.missing.ifEmpty { listOf("OK") }}")
-        if (final.healthy && final.manifestCorrupt) {
-            // Repair succeeded but the manifest is still corrupt (it is only
-            // written by a full install). Regenerate it from the live rootfs
-            // so the corrupt-manifest flag doesn't re-trigger repair every boot.
+        // NOTE: healthy already folds in !manifestCorrupt, so the repair-
+        // succeeded condition must check the ENTITY checks directly, not
+        // healthy. The earlier `final.healthy && final.manifestCorrupt` was a
+        // contradiction (always false) → the corrupt manifest never got
+        // regenerated → autoRepair re-ran every boot (repair loop).
+        val entitiesOk = final.bash && final.sh && final.libc && final.glibc &&
+            final.aptGet && final.dpkgDatabase
+        if (final.manifestCorrupt && entitiesOk) {
+            // All critical files verify clean; only the manifest metadata is
+            // damaged. Regenerate it from the live rootfs so the corrupt-
+            // manifest flag doesn't re-trigger repair every boot.
             writeIntegrityManifest()
             return@withContext verifyIntegrity().healthy
         }
@@ -991,6 +1021,10 @@ class RootfsManager private constructor(private val context: Context) {
         val output = try {
             outputFuture.get(10, java.util.concurrent.TimeUnit.SECONDS)
         } catch (_: Exception) {
+            // Reader thread may still be draining the (now closed) pipe —
+            // cancel it so the common-pool thread is not parked on a stream
+            // that will never EOF.
+            outputFuture.cancel(true)
             ""
         }
         return AptResult(code, output)
@@ -1508,8 +1542,12 @@ internal fun extractTar(
             continue
         }
         val outFile = safeTarEntryFile(targetDir, fullName)
-        val isTarget = outFile != null &&
-            (onlyPrefixes == null || onlyPrefixes.any { fullName.startsWith(it) })
+        val isTarget = outFile != null && (
+            onlyPrefixes == null ||
+                // Exact-or-boundary match: "usr/bin/apt" must NOT swallow
+                // "usr/bin/aptitude" (plain startsWith did).
+                onlyPrefixes.any { fullName == it || fullName.startsWith("$it/") }
+        )
 
         when (typeFlag) {
             '5', 'D' -> {
@@ -1617,12 +1655,33 @@ internal fun safeTarEntryFile(targetDir: File, fullName: String): File? {
     } catch (_: Exception) {
         return null
     }
-    return try {
-        val resolved = rootPath.resolve(fullName).normalize()
-        if (resolved.startsWith(rootPath)) resolved.toFile() else null
+    val resolved = try {
+        rootPath.resolve(fullName).normalize()
     } catch (_: Exception) {
-        null
+        return null
     }
+    if (!resolved.startsWith(rootPath)) return null
+    // Lexical containment passed. Second layer: walk the EXISTING ancestor
+    // chain and reject when any real component is a symlink pointing outside
+    // the rootfs (a previously-extracted entry could be `evil -> /outside`,
+    // and a later `evil/pwned` would lexically pass while the actual write
+    // followed the symlink out). Components not yet on disk are created by
+    // this extraction as real directories — nothing to resolve.
+    try {
+        var cur = rootPath
+        for (part in resolved.subpath(0, resolved.nameCount)) {
+            cur = cur.resolve(part)
+            if (!java.nio.file.Files.exists(cur)) break
+            if (java.nio.file.Files.isSymbolicLink(cur)) {
+                val target = java.nio.file.Files.readSymbolicLink(cur)
+                val abs = if (target.isAbsolute) target else cur.parent.resolve(target).normalize()
+                if (!abs.startsWith(rootPath)) return null
+            }
+        }
+    } catch (_: Exception) {
+        return null
+    }
+    return resolved.toFile()
 }
 
 internal fun extractString(header: ByteArray, offset: Int, length: Int): String {
@@ -1667,10 +1726,22 @@ internal fun skipFully(input: InputStream, count: Long) {
  * with apk upgrades (2026-08-13/15). `/bin/sh` is a symlink to
  * `/usr/bin/dash`, so it inherits dash's runtime size changes too.
  */
+/** The exact key set a valid integrity manifest must contain. */
+internal val MANIFEST_KEYS = setOf(
+    "usr/bin/bash",
+    "bin/sh",
+    "lib/ld-linux-aarch64.so.1",
+    "lib/aarch64-linux-gnu/libc.so.6",
+    "usr/bin/apt-get",
+    "var/lib/dpkg/status",
+)
+
 internal val DYNAMIC_INTEGRITY_PATHS = setOf(
     "usr/bin/bash",
     "bin/sh",
+    "lib/ld-linux-aarch64.so.1",
     "lib/aarch64-linux-gnu/libc.so.6",
+    "usr/bin/apt-get",
     "var/lib/dpkg/status",
 )
 

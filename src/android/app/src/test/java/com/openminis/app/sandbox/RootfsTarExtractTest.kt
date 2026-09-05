@@ -202,6 +202,30 @@ class RootfsTarExtractTest {
     }
 
     @Test
+    fun `pre-existing inside-rootfs symlink to outside is refused for writes`() {
+        // Extract a benign file, then plant evil -> /tmp (outside), then try
+        // to write THROUGH it. safeTarEntryFile must refuse the second entry.
+        extract(
+            listOf(tarEntry("usr/bin/ok", "OK".toByteArray())),
+            prefixes = setOf("usr/bin/"),
+        )
+        // Plant the symlink manually (as a prior malicious extraction would have).
+        val evil = tmp.root.resolve("usr/bin/evil").toPath()
+        java.nio.file.Files.createSymbolicLink(evil, java.nio.file.Paths.get("/tmp"))
+
+        // Now an entry that writes through the symlink: usr/bin/evil/pwned
+        extract(
+            listOf(tarEntry("usr/bin/evil/pwned", "PWNED".toByteArray())),
+            prefixes = setOf("usr/bin/"),
+        )
+        assertFalse(
+            "symlink escape must be refused",
+            java.nio.file.Files.exists(java.nio.file.Paths.get("/tmp/pwned")),
+        )
+        assertFalse(tmp.root.resolve("usr/bin/evil/pwned").exists())
+    }
+
+    @Test
     fun `hardlink with traversal target is skipped`() {
         extract(
             listOf(
