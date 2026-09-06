@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CallSplit
 import androidx.compose.material.icons.filled.History
+import com.openminis.app.R
 import androidx.compose.material.icons.automirrored.filled.ListAlt
 
 /**
