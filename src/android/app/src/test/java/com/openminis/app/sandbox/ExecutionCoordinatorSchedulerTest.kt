@@ -284,9 +284,10 @@ class ExecutionCoordinatorSchedulerTest {
         assertEquals(256L, childRssHighWaterMarkMB(512))
         assertEquals(256L, childRssHighWaterMarkMB(1023))
         assertEquals(512L, childRssHighWaterMarkMB(1024))
-        assertEquals(1024L, childRssHighWaterMarkMB(2048))
-        assertEquals(1536L, childRssHighWaterMarkMB(4096))
-        assertEquals(1536L, childRssHighWaterMarkMB(8192))
+        // [mem-limit-2g] 充裕水位从 1024 提到 2048，4096+ 封顶也是 2048
+        assertEquals(2048L, childRssHighWaterMarkMB(2048))
+        assertEquals(2048L, childRssHighWaterMarkMB(4096))
+        assertEquals(2048L, childRssHighWaterMarkMB(8192))
     }
 
     @Test

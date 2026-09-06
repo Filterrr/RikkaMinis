@@ -89,10 +89,20 @@ object ShellExecutor {
         val output = StringBuilder()
         var exitCode = -1
 
+        /** [hud-truthful-sampler] tracer pid for this invocation (outer scope for finally). */
+        var prootPidRef = 0
+
         try {
             withTimeout(timeout) {
                 val process = processBuilder.start()
                 currentProcess = process
+                // [hud-truthful-sampler] Legacy one-shot path — register the
+                // tracer so live HUD numbers include it too.
+                val prootPid = PersistentShell.resolvePid(process)
+                if (prootPid > 0) {
+                    SandboxProcRegistry.register(prootPid)
+                }
+                prootPidRef = prootPid
 
                 try {
                     // Read raw chars to preserve \r for TerminalSanitizer CR-folding.
@@ -124,6 +134,8 @@ object ShellExecutor {
                     exitCode = process.waitFor()
                 } finally {
                     currentProcess = null
+                    // [hud-truthful-sampler] One-shot done — drop the tracer.
+                    if (prootPid > 0) SandboxProcRegistry.unregister(prootPid)
                 }
             }
         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
@@ -138,6 +150,13 @@ object ShellExecutor {
             currentProcess = null
             output.appendLine("\n[Error: ${e.message}]")
             exitCode = -1
+        } finally {
+            // [hud-truthful-sampler] Timeout/exception paths never reach the
+            // inner finally when start() itself threw — clear unconditionally.
+            if (prootPidRef > 0) {
+                SandboxProcRegistry.unregister(prootPidRef)
+                prootPidRef = 0
+            }
         }
 
         val durationMs = System.currentTimeMillis() - startTime
