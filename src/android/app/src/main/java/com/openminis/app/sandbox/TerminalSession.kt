@@ -162,6 +162,9 @@ class TerminalSession(private val context: Context) {
                 session.updateSize(cols, rows)
 
                 termuxSession = session
+                // [hud-truthful-sampler] Register the PRoot tracer PID so the
+                // live CPU/MEM HUD attributes the terminal's workload too.
+                termuxShellPid(session)?.let { SandboxProcRegistry.register(it) }
                 lastTranscriptLength = 0
                 _state.value = State.RUNNING
                 liveSessions.add(WeakReference(this@TerminalSession))
@@ -187,6 +190,8 @@ class TerminalSession(private val context: Context) {
         termuxSession = null
         attachedView = null
         if (s != null) {
+            // [hud-truthful-sampler] Drop the tracer from the HUD registry.
+            termuxShellPid(s)?.let { SandboxProcRegistry.unregister(it) }
             killTermuxProcessTree(s)
         }
         if (_state.value != State.STOPPED) _state.value = State.STOPPED
