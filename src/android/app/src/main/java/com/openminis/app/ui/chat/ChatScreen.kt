@@ -3400,6 +3400,21 @@ fun ChatScreen(
                             }
                             keyboardController?.show()
                         },
+                        // [T-quote-reply] Selection toolbar "Quote" — wrap the
+                        // excerpt in a Markdown blockquote and stage it in the
+                        // composer as a quote block (caret below, ready for the
+                        // user's follow-up question). Focus + IME behavior
+                        // mirrors Add-to-input.
+                        onQuoteInput = { quoted ->
+                            viewModel.quoteIntoInput(quoted)
+                            try {
+                                inputFocusRequester.requestFocus()
+                            } catch (_: IllegalStateException) {
+                                // FocusRequester not yet attached — composer
+                                // will gain focus on next user tap.
+                            }
+                            keyboardController?.show()
+                        },
                         selectionController = selectionController,
                     )
                 }
@@ -3725,6 +3740,19 @@ fun ChatScreen(
                                             tracedScrollToItem("EDIT-MSG", (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0), 0)
                                         }
                                         inputFocusRequester.requestFocus()
+                                    }
+                                }),
+                                // [T-quote-reply] Whole-message quote: stage the
+                                // message as a Markdown blockquote in the composer
+                                // (caret below the quote block, ready for the new
+                                // question). Gated while streaming / queued like
+                                // Retry / Edit — content may still change.
+                                onQuote = if (isStreaming || item.message.isQueued) null else ({
+                                    val quoted = QuoteTextFormatter.quoteMessage(item.message.content)
+                                    if (quoted.isNotEmpty()) {
+                                        viewModel.quoteIntoInput(quoted)
+                                        inputFocusRequester.requestFocus()
+                                        keyboardController?.show()
                                     }
                                 }),
                                 onWithdraw = if (item.message.isQueued) {

@@ -831,6 +831,7 @@
 
     <!-- T187 — user-bubble long-press Edit + Exit Edit + Clear Chat dialog -->
     <string name="chat_longpress_edit">Bearbeiten</string>
+    <string name="chat_longpress_quote">Zitieren</string>
     <string name="chat_edit_exit_button">Bearbeitung beenden</string>
     <string name="chat_clear_dialog_body">Alle Nachrichten dieser Sitzung entfernen? Dateien im Arbeitsbereich, Anhänge und Auslagerungen bleiben erhalten.</string>
     <string name="chat_clear_dialog_confirm">Löschen</string>
@@ -953,6 +954,7 @@
     <string name="sessionlist_welcome_step_done">Fertig</string>
     <!-- T-selection-add-to-input — Aktion im Auswahlmenü beim langen Drücken -->
     <string name="selection_add_to_chat_input">Zum Eingabefeld hinzufügen</string>
+    <string name="selection_quote">Zitieren</string>
     <!-- T-minis-textkit Auswahlmenü-Tasten -->
     <string name="selection_copy">Kopieren</string>
     <string name="selection_copy_markdown">Markdown kopieren</string>

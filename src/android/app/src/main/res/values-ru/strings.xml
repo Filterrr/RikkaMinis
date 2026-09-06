@@ -893,6 +893,7 @@
     <string name="notif_config_confirm_body_multi">%d изменений требуют вашего рассмотрения — откройте RikkaMinis, чтобы принять или отклонить.</string>
     <string name="notif_task_failed_body">Задача завершилась с ошибкой. Нажмите, чтобы открыть чат.</string>
     <string name="selection_add_to_chat_input">Добавить в поле ввода чата</string>
+    <string name="selection_quote">Цитировать</string>
     <string name="selection_copy">Копировать</string>
     <string name="selection_copy_markdown">Копировать Markdown</string>
     <string name="selection_copy_rich_text">Копировать форматированный текст</string>
@@ -942,6 +943,7 @@
     <string name="add_models_to_group_all_in_group">Все модели уже в этой группе.</string>
     <string name="add_models_to_group_no_match">Подходящие модели не найдены.</string>
     <string name="chat_longpress_edit">Изменить</string>
+    <string name="chat_longpress_quote">Цитировать</string>
     <string name="chat_edit_exit_button">Выйти из режима редактирования</string>
     <string name="chat_clear_dialog_body">Удалить все сообщения из этой сессии? Файлы в рабочей области, вложения и выгрузки сохранятся.</string>
     <string name="chat_clear_dialog_confirm">Очистить</string>

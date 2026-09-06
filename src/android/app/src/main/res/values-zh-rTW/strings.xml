@@ -470,6 +470,7 @@
 
     <!-- T187 — user-bubble long-press Edit + Exit Edit + Clear Chat dialog -->
     <string name="chat_longpress_edit">編輯</string>
+    <string name="chat_longpress_quote">引用</string>
     <string name="chat_edit_exit_button">退出編輯</string>
     <string name="chat_clear_dialog_body">刪除此會話的所有訊息？工作區檔案、附件和卸載內容會保留。</string>
     <string name="chat_clear_dialog_confirm">清除</string>
@@ -711,6 +712,7 @@
     <string name="perm_a11y_system_disabled">未啟用</string>
     <!-- T-selection-add-to-input — 長按選擇選單「加到輸入框」動作 -->
     <string name="selection_add_to_chat_input">加入到輸入框</string>
+    <string name="selection_quote">引用</string>
     <!-- T-minis-textkit 選擇選單按鈕 -->
     <string name="selection_copy">複製</string>
     <string name="selection_copy_markdown">複製 Markdown</string>

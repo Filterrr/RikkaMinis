@@ -954,6 +954,7 @@
     <string name="notif_task_failed_body">任务执行失败。点击打开聊天。</string>
     <!-- T-selection-add-to-input — 长按选择菜单"添加到输入框"动作 -->
     <string name="selection_add_to_chat_input">添加到输入框</string>
+    <string name="selection_quote">引用</string>
     <!-- T-minis-textkit 选择菜单按钮 -->
     <string name="selection_copy">复制</string>
     <string name="selection_copy_markdown">复制 Markdown</string>
@@ -1022,6 +1023,7 @@
 
     <!-- T187 — user-bubble long-press Edit + Exit Edit + Clear Chat dialog -->
     <string name="chat_longpress_edit">编辑</string>
+    <string name="chat_longpress_quote">引用</string>
     <string name="chat_edit_exit_button">退出编辑</string>
     <string name="chat_clear_dialog_body">删除此会话的所有消息？工作区文件、附件和卸载内容会保留。</string>
     <string name="chat_clear_dialog_confirm">清除</string>

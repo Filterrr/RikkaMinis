@@ -755,6 +755,39 @@ class ChatViewModel(
         setInputText(joined, caretOverride = joined.length)
     }
 
+    /**
+     * [T-quote-reply] Insert [quoted] (an already-formatted Markdown
+     * blockquote from QuoteTextFormatter) into the composer as a QUOTE
+     * BLOCK, positioned so the user types their new question *below* it.
+     *
+     * Layout rules:
+     *  - Empty composer → quote block + a blank line, caret at the very
+     *    end (right on the fresh input line).
+     *  - Non-empty composer → the existing text is preserved BELOW the
+     *    quote (the quote reads as "about this text ↑"), separated by a
+     *    blank line. The caret goes between the quote and the old text —
+     *    typing starts the new question; the user can also delete the old
+     *    text if it was a stray draft.
+     *
+     * Unlike [appendToInputText] (inline snippet append), this never joins
+     * onto the current line — a blockquote must start at column 0 to
+     * render. Multiple quotes concatenate as stacked quote blocks.
+     */
+    fun quoteIntoInput(quoted: String) {
+        if (quoted.isBlank()) return
+        val current = _inputText.value
+        val joined = if (current.isBlank()) {
+            "$quoted\n\n"
+        } else {
+            "$quoted\n\n$current"
+        }
+        // Caret sits right after the quote block's trailing blank line —
+        // on the fresh line where the user's question begins. When old
+        // text was preserved below, this is the seam between the two.
+        val caret = quoted.length + 2
+        setInputText(joined, caretOverride = caret)
+    }
+
     private val _isStreaming = MutableStateFlow(false)
     val isStreaming: StateFlow<Boolean> = _isStreaming.asStateFlow()
 

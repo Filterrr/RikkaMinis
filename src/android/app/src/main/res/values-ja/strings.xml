@@ -831,6 +831,7 @@
 
     <!-- T187 — user-bubble long-press Edit + Exit Edit + Clear Chat dialog -->
     <string name="chat_longpress_edit">編集</string>
+    <string name="chat_longpress_quote">引用</string>
     <string name="chat_edit_exit_button">編集モードを終了</string>
     <string name="chat_clear_dialog_body">このセッションのすべてのメッセージを削除しますか？ワークスペースのファイル、添付ファイル、オフロードは保持されます。</string>
     <string name="chat_clear_dialog_confirm">クリア</string>
@@ -966,6 +967,7 @@
     <string name="sessionlist_welcome_step_done">完了</string>
     <!-- T-selection-add-to-input — 長押し選択メニュー「入力欄に追加」 -->
     <string name="selection_add_to_chat_input">入力欄に追加</string>
+    <string name="selection_quote">引用</string>
     <!-- T-minis-textkit 選択メニューボタン -->
     <string name="selection_copy">コピー</string>
     <string name="selection_copy_markdown">Markdown をコピー</string>
