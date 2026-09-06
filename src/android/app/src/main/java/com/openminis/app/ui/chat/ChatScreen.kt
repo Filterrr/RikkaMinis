@@ -3755,6 +3755,25 @@ fun ChatScreen(
                                         keyboardController?.show()
                                     }
                                 }),
+                                // [T-message-fork] Branch the conversation from
+                                // this turn: DB rows ≤ the anchor's max sort_order
+                                // are re-id'd into a new session (forkSessionAtomic),
+                                // then this screen navigates to the fork. Same
+                                // streaming / queued gating as Quote / Edit.
+                                onFork = if (isStreaming || item.message.isQueued) null else ({
+                                    coroutineScope.launch {
+                                        val forkSid = viewModel.forkFromMessage(item.message.id)
+                                        if (forkSid != null) {
+                                            onOpenSession(forkSid)
+                                        } else {
+                                            android.widget.Toast.makeText(
+                                                context,
+                                                context.getString(R.string.fork_failed),
+                                                android.widget.Toast.LENGTH_SHORT,
+                                            ).show()
+                                        }
+                                    }
+                                }),
                                 onWithdraw = if (item.message.isQueued) {
                                     { safeMutate { viewModel.withdrawQueuedMessage(item.message.id) } }
                                 } else null,
@@ -3862,8 +3881,7 @@ fun ChatScreen(
                                 group = item,
                                 onRetry = if (item.isLastCancelled && !isStreaming && !canResume) ({ safeMutate { viewModel.retryLast() } }) else null,
                                 onStop = { viewModel.cancelStream() },
-                                onOpenTerminalWithCommand = onOpenTerminalWithCommand,
-                                // [T-subagent-ui] spawn_agent blocks → live detail page.
+                                onOpenTerminalWithCommand = onOpenTerminalWithCommand,                                // [T-subagent-ui] spawn_agent blocks → live detail page.
                                 onOpenDetail = { blockId ->
                                     val run = subagentRuns.firstOrNull { it.blockId == blockId }
                                     if (run != null) onOpenSubagentDetail(run.id)
@@ -3891,6 +3909,24 @@ fun ChatScreen(
                                         context.getString(R.string.tool_longpress_copied_toast),
                                         android.widget.Toast.LENGTH_SHORT,
                                     ).show()
+                                }) else null,
+                                // [T-message-fork] Branch from this assistant
+                                // turn: the anchor rows resolve via sourceDbIds
+                                // in forkFromMessage (merged bubbles copy whole).
+                                // Not offered while streaming.
+                                onFork = if (!isStreaming) ({
+                                    coroutineScope.launch {
+                                        val forkSid = viewModel.forkFromMessage(item.messageId)
+                                        if (forkSid != null) {
+                                            onOpenSession(forkSid)
+                                        } else {
+                                            android.widget.Toast.makeText(
+                                                context,
+                                                context.getString(R.string.fork_failed),
+                                                android.widget.Toast.LENGTH_SHORT,
+                                            ).show()
+                                        }
+                                    }
                                 }) else null,
                             )
                             is FlatChatItem.AssistantToolUse -> ToolCallPill(

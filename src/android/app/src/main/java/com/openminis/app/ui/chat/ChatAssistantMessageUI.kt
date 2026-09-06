@@ -235,6 +235,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.CallSplit
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
@@ -951,6 +952,17 @@ internal fun ToolCallPill(
                     leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp)) },
                 )
             }
+            // [T-message-fork] Branch the conversation here: every message up
+            // to and including this assistant turn is copied into a new
+            // session. Only offered when the group has finished (streaming
+            // would copy partial rows).
+            if (onFork != null) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.chat_longpress_fork)) },
+                    onClick = { showToolMenu = false; onFork() },
+                    leadingIcon = { Icon(Icons.Default.CallSplit, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                )
+            }
         }
       }
         // T251: removed inline Retry affordance next to cancelled/failed pills —
@@ -988,6 +1000,9 @@ internal fun ToolCallRunGroup(
     onOpenDetail: (String) -> Unit = {},
     onRerunFromHere: (() -> Unit)? = null,
     onCopyDetails: (() -> Unit)? = null,
+    // [T-message-fork] Branch the conversation from this assistant turn.
+    // Null while streaming — forking mid-turn would copy partial state.
+    onFork: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val isRunning = group.isRunning

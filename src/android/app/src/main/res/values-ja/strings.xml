@@ -832,6 +832,9 @@
     <!-- T187 — user-bubble long-press Edit + Exit Edit + Clear Chat dialog -->
     <string name="chat_longpress_edit">編集</string>
     <string name="chat_longpress_quote">引用</string>
+    <string name="chat_longpress_fork">ここから分岐</string>
+    <string name="chat_longpress_fork_desc">このメッセージを分岐点に、新しいセッションで会話を続けます（元のセッションは変更されません）。</string>
+    <string name="fork_failed">分岐の作成に失敗しました</string>
     <string name="chat_edit_exit_button">編集モードを終了</string>
     <string name="chat_clear_dialog_body">このセッションのすべてのメッセージを削除しますか？ワークスペースのファイル、添付ファイル、オフロードは保持されます。</string>
     <string name="chat_clear_dialog_confirm">クリア</string>

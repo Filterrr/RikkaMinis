@@ -235,6 +235,7 @@ import androidx.compose.material.icons.automirrored.filled.NoteAdd
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.FormatQuote
+import androidx.compose.material.icons.filled.CallSplit
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.ArrowCircleDown
@@ -291,6 +292,10 @@ internal fun UserMessageBubble(
     // [T-quote-reply] Whole-message quote → composer as a Markdown blockquote.
     // Null while streaming (content may still change) or queued.
     onQuote: (() -> Unit)? = null,
+    // [T-message-fork] Copy the conversation up to (and including) this turn
+    // into a new session. Null while streaming / queued (same gating as
+    // retry / edit) — forking mid-turn would copy partial state.
+    onFork: (() -> Unit)? = null,
     onWithdraw: (() -> Unit)? = null,
     onPreviewFile: (Uri, String) -> Unit = { _, _ -> },
 ) {
@@ -507,6 +512,16 @@ internal fun UserMessageBubble(
                         text = { Text(stringResource(R.string.chat_longpress_quote)) },
                         onClick = { showMenu = false; onQuote() },
                         leadingIcon = { Icon(Icons.Default.FormatQuote, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    )
+                }
+                // [T-message-fork] Branch the conversation here: copies every
+                // message up to and including this turn into a new session.
+                // Same gating as Quote / Edit (null while streaming / queued).
+                if (onFork != null) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.chat_longpress_fork)) },
+                        onClick = { showMenu = false; onFork() },
+                        leadingIcon = { Icon(Icons.Default.CallSplit, contentDescription = null, modifier = Modifier.size(18.dp)) },
                     )
                 }
             }

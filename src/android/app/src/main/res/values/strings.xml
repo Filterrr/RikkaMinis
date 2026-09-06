@@ -1180,6 +1180,9 @@
     <!-- T187 — user-bubble long-press Edit + Exit Edit Mode + Clear Chat dialog -->
     <string name="chat_longpress_edit">Edit</string>
     <string name="chat_longpress_quote">Quote</string>
+    <string name="chat_longpress_fork">Branch from here</string>
+    <string name="chat_longpress_fork_desc">Continue the conversation from this message in a new session (original chat stays untouched).</string>
+    <string name="fork_failed">Fork failed</string>
     <string name="chat_edit_exit_button">Exit Edit Mode</string>
     <string name="chat_clear_dialog_body">Remove all messages from this session? Files in workspace, attachments, and offloads are kept.</string>
     <string name="chat_clear_dialog_confirm">Clear</string>

@@ -471,6 +471,9 @@
     <!-- T187 — user-bubble long-press Edit + Exit Edit + Clear Chat dialog -->
     <string name="chat_longpress_edit">編輯</string>
     <string name="chat_longpress_quote">引用</string>
+    <string name="chat_longpress_fork">從此分支</string>
+    <string name="chat_longpress_fork_desc">以這則訊息為分叉點，在新會話中繼續對話（原始會話保持不變）。</string>
+    <string name="fork_failed">建立分支失敗</string>
     <string name="chat_edit_exit_button">退出編輯</string>
     <string name="chat_clear_dialog_body">刪除此會話的所有訊息？工作區檔案、附件和卸載內容會保留。</string>
     <string name="chat_clear_dialog_confirm">清除</string>

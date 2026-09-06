@@ -944,6 +944,9 @@
     <string name="add_models_to_group_no_match">Подходящие модели не найдены.</string>
     <string name="chat_longpress_edit">Изменить</string>
     <string name="chat_longpress_quote">Цитировать</string>
+    <string name="chat_longpress_fork">Ветвление отсюда</string>
+    <string name="chat_longpress_fork_desc">Продолжить разговор с этого сообщения в новой сессии (исходная сессия останется без изменений).</string>
+    <string name="fork_failed">Не удалось создать ветвление</string>
     <string name="chat_edit_exit_button">Выйти из режима редактирования</string>
     <string name="chat_clear_dialog_body">Удалить все сообщения из этой сессии? Файлы в рабочей области, вложения и выгрузки сохранятся.</string>
     <string name="chat_clear_dialog_confirm">Очистить</string>

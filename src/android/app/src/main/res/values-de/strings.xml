@@ -832,6 +832,9 @@
     <!-- T187 — user-bubble long-press Edit + Exit Edit + Clear Chat dialog -->
     <string name="chat_longpress_edit">Bearbeiten</string>
     <string name="chat_longpress_quote">Zitieren</string>
+    <string name="chat_longpress_fork">Ab hier verzweigen</string>
+    <string name="chat_longpress_fork_desc">Unterhaltung ab dieser Nachricht in einer neuen Sitzung fortsetzen (die ursprüngliche Sitzung bleibt unverändert).</string>
+    <string name="fork_failed">Verzweigung fehlgeschlagen</string>
     <string name="chat_edit_exit_button">Bearbeitung beenden</string>
     <string name="chat_clear_dialog_body">Alle Nachrichten dieser Sitzung entfernen? Dateien im Arbeitsbereich, Anhänge und Auslagerungen bleiben erhalten.</string>
     <string name="chat_clear_dialog_confirm">Löschen</string>

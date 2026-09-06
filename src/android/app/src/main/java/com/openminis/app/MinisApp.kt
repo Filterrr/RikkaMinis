@@ -376,6 +376,7 @@ class MinisApp : Application(), ImageLoaderFactory {
         chatRepository = ChatRepository(
             database.chatDao(),
             com.openminis.app.data.storage.SessionFileStore(this),
+            database = database,
         )
         providerRepository = ProviderRepository(this)
         envVarRepository = EnvVarRepository(this)

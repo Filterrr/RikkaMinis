@@ -2,8 +2,11 @@ package com.openminis.app.data.repository
 
 import android.database.sqlite.SQLiteBlobTooBigException
 import android.database.sqlite.SQLiteConstraintException
+import androidx.room.withTransaction
+import com.openminis.app.data.db.AppDatabase
 import com.openminis.app.data.db.ChatDao
 import com.openminis.app.data.db.ChatSessionEntity
+import com.openminis.app.data.db.CompactMarkerEntity
 import com.openminis.app.data.db.MessageEntity
 import com.openminis.app.data.db.UsageRecord
 import com.openminis.app.data.storage.SessionFileStore
@@ -22,6 +25,10 @@ import java.util.UUID
 class ChatRepository(
     internal val dao: ChatDao,
     private val sessionFiles: SessionFileStore? = null,
+    // [T-message-fork] Optional DB handle for multi-table atomic writes
+    // (forkFromMessage). Null only in legacy unit-test constructions; MinisApp
+    // injects the real instance.
+    private val database: AppDatabase? = null,
 ) {
 
     fun observeSessions(): Flow<List<ChatSessionEntity>> = dao.observeSessions()
@@ -134,8 +141,48 @@ class ChatRepository(
         }
     }
 
-    suspend fun updateSessionTitle(id: String, title: String) {
-        dao.updateSessionTitle(id, title, System.currentTimeMillis())
+    /**
+     * [T-message-fork] Atomically create a forked session: a new session row
+     * plus re-id'd copies of every message at or before the fork anchor, and
+     * copies of compact markers whose range falls inside the copied span.
+     *
+     * The caller (ChatViewModel.forkFromMessage) resolves the anchor cutoff
+     * and pre-renders the parts payloads via ForkMapper.remapPartsJson —
+     * this method only owns the DB transaction. Media / sandbox file copies
+     * happen AFTER commit (file failures degrade to broken thumbnails; a
+     * rolled-back fork would strand the user with nothing).
+     *
+     * @param rows message rows already re-id'd (new uuid) with
+     *   `sessionId = forkSid` and remapped parts payloads.
+     * @param markers compact markers to duplicate, re-parented to the fork.
+     * @return the inserted session row.
+     * @throws IllegalStateException when no database handle was injected
+     *   (unit-test construction) — forks are a user-facing feature and must
+     *   not silently degrade to non-atomic writes.
+     */
+    suspend fun forkSessionAtomic(
+        source: ChatSessionEntity,
+        forkSid: String,
+        rows: List<MessageEntity>,
+        markers: List<CompactMarkerEntity>,
+    ): ChatSessionEntity {
+        val db = database ?: error("ChatRepository.forkSessionAtomic requires a database handle")
+        val now = System.currentTimeMillis()
+        val forkSession = source.copy(
+            id = forkSid,
+            createdAt = now,
+            updatedAt = now,
+            pinnedAt = null,
+        )
+        db.withTransaction {
+            dao.insertSession(forkSession)
+            rows.forEach { dao.insertMessage(it) }
+            markers.forEach { dao.insertCompactMarker(it) }
+        }
+        return forkSession
+    }
+
+    suspend fun updateSessionTitle(id: String, title: String) {        dao.updateSessionTitle(id, title, System.currentTimeMillis())
     }
 
     suspend fun updateSessionTitleAndCategory(id: String, title: String, category: String?) {
