@@ -69,7 +69,7 @@ class SystemResourceMonitor {
     private var prevCpuTicks: Long? = null
     private var prevSampleNanos: Long? = null
 
-    private val cpuWindow = CpuRollingWindow(windowSize = 5)
+    private val cpuWindow = CpuRollingWindow(capacity = 5)
 
     /** Resolved once. CLK_TCK is effectively 100 on Android historically,
      *  but ask the kernel rather than hard-coding. */

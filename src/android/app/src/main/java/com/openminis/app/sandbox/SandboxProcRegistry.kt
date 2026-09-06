@@ -56,6 +56,7 @@ object SandboxProcRegistry {
     fun unregister(pid: Int) {
         if (pid <= 0) return
         procs.remove(pid)
+        isRegistered = procs.isNotEmpty()
     }
 
     /** Test/debug helper: drop all registrations. */
@@ -108,32 +109,33 @@ object SandboxProcRegistry {
         if (f.canRead()) f.readText() else null
     } catch (_: Throwable) { null }
 
-    companion object {
-        /**
-         * Parse `/proc/<pid>/stat` → utime + stime in clock ticks.
-         * Field 2 is the parenthesized comm (may contain spaces/parens), so
-         * anchor on the *last* ')'; after that, 0-indexed utime=11, stime=12.
-         * Returns null when unreadable (proc hidepid, dead pid, app data race).
-         */
-        internal fun internalProcStatCpuTicks(raw: String?): Long? {
-            if (raw.isNullOrEmpty()) return null
-            val rparen = raw.lastIndexOf(')')
-            if (rparen < 0 || rparen + 2 > raw.length) return null
-            val tail = raw.substring(rparen + 2).trim().split(' ').filter { it.isNotEmpty() }
-            if (tail.size < 13) return null
-            val utime = tail[11].toLongOrNull() ?: return null
-            val stime = tail[12].toLongOrNull() ?: return null
-            return utime + stime
-        }
+    // NOTE: `object` members are already static-like — no companion wrapper
+    // is legal (or needed) inside a standalone object.
 
-        /** `/proc/self/stat` convenience → [internalProcStatCpuTicks]. */
-        internal fun internalSelfCpuTicks(raw: String?): Long? = internalProcStatCpuTicks(raw)
+    /**
+     * Parse `/proc/<pid>/stat` → utime + stime in clock ticks.
+     * Field 2 is the parenthesized comm (may contain spaces/parens), so
+     * anchor on the *last* ')'; after that, 0-indexed utime=11, stime=12.
+     * Returns null when unreadable (proc hidepid, dead pid, app data race).
+     */
+    internal fun internalProcStatCpuTicks(raw: String?): Long? {
+        if (raw.isNullOrEmpty()) return null
+        val rparen = raw.lastIndexOf(')')
+        if (rparen < 0 || rparen + 2 > raw.length) return null
+        val tail = raw.substring(rparen + 2).trim().split(' ').filter { it.isNotEmpty() }
+        if (tail.size < 13) return null
+        val utime = tail[11].toLongOrNull() ?: return null
+        val stime = tail[12].toLongOrNull() ?: return null
+        return utime + stime
+    }
 
-        /** Parse a `/proc/<pid>/status` text → VmRSS in kB, or null when absent/unreadable. */
-        internal fun internalVmRssKb(statusText: String?): Long? {
-            if (statusText.isNullOrEmpty()) return null
-            val line = statusText.lineSequence().firstOrNull { it.startsWith("VmRSS:") } ?: return null
-            return line.substringAfter(":").trim().substringBefore(" kB").trim().toLongOrNull()
-        }
+    /** `/proc/self/stat` convenience → [internalProcStatCpuTicks]. */
+    internal fun internalSelfCpuTicks(raw: String?): Long? = internalProcStatCpuTicks(raw)
+
+    /** Parse a `/proc/<pid>/status` text → VmRSS in kB, or null when absent/unreadable. */
+    internal fun internalVmRssKb(statusText: String?): Long? {
+        if (statusText.isNullOrEmpty()) return null
+        val line = statusText.lineSequence().firstOrNull { it.startsWith("VmRSS:") } ?: return null
+        return line.substringAfter(":").trim().substringBefore(" kB").trim().toLongOrNull()
     }
 }
