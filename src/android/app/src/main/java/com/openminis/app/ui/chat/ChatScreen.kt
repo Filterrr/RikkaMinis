@@ -6187,9 +6187,10 @@ private fun ChatInputArea(
                     // button is back in the composer's bottom-left cluster (its
                     // pre-move slot — see the comment below), so the command
                     // palette is one tap away without typing "/" or digging
-                    // through the top-right "..." menu. The italic-bold "/"
-                    // glyph matches the chat-menu entry, keeping a single
-                    // affordance across both entry points. Routing through
+                    // through the top-right "..." menu. The "/" glyph keeps
+                    // a plain regular weight so the button reads visually
+                    // consistent with the neighboring circle buttons
+                    // (model picker / attach). Routing through
                     // dispatchChatAction(SLASH_COMMANDS) preserves the toggle
                     // semantics (tap again / back / outside dismisses) and the
                     // focus + IME behavior shared with the menu and the
@@ -6201,8 +6202,11 @@ private fun ChatInputArea(
                         Text(
                             "/",
                             fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontStyle = FontStyle.Italic,
+                            // Match the model-picker circle button: plain
+                            // regular weight, no italic — the old Bold+Italic
+                            // "/" read as a different affordance from every
+                            // other composer circle button beside it.
+                            fontWeight = FontWeight.Normal,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(bottom = 2.dp),
                         )
