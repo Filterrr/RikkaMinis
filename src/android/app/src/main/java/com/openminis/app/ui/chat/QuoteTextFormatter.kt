@@ -45,7 +45,9 @@ internal object QuoteTextFormatter {
         val cleaned = text.trim()
         if (cleaned.isEmpty()) return ""
         val capped = if (cleaned.length > MAX_QUOTE_SOURCE_CHARS) {
-            cleaned.take(MAX_QUOTE_SOURCE_CHARS).trimEnd() + "\n> …"
+            // Bare "…" marker: the trailing "> " prefix is added uniformly by
+            // blockquote() below — prefixing here too would double it up.
+            cleaned.take(MAX_QUOTE_SOURCE_CHARS).trimEnd() + "\n…"
         } else {
             cleaned
         }
