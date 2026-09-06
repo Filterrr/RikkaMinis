@@ -47,3 +47,16 @@ export UV_LINK_MODE=symlink
 # /usr/sbin/policy-rc.d (exit 101) is the same mechanism Termux's
 # proot-distro uses.
 export DEBIAN_FRONTEND=noninteractive
+
+# T-fix-tmpdir-leak: pin the POSIX temp dirs to the guest /tmp. Login shells
+# inherit the host app process env through proot, where TMPDIR points at an
+# Android app-cache path that does not exist inside the rootfs — Debian
+# maintainer scripts (update-ca-certificates' `mktemp -p "${TMPDIR:-/tmp}"`
+# under set -e) and anything else honoring TMPDIR then fails with
+# "No such file or directory". PRootKernel.customEnvironment seeds the same
+# values for non-login shells; this export covers interactive logins even if
+# a user-level env var overrides the seeded map.
+export TMPDIR=/tmp
+export TMP=/tmp
+export TEMP=/tmp
+export TEMPDIR=/tmp
