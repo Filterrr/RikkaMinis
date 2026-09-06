@@ -5326,7 +5326,7 @@ class ChatViewModel(
                 val forkSid = java.util.UUID.randomUUID().toString()
                 val copied = rows.map { row ->
                     row.copy(
-                        id = UUID.randomUUID().toString(),
+                        id = java.util.UUID.randomUUID().toString(),
                         sessionId = forkSid,
                         partsJson = ForkMapper.remapPartsJson(row.partsJson, fromSid, forkSid),
                     )
@@ -5340,7 +5340,7 @@ class ChatViewModel(
                 // boundary would mislead the fork's UI. Re-compact if needed.
                 val markers = chatRepository.dao.listCompactMarkers(fromSid)
                     .filter { (it.uiBoundarySortOrder ?: it.firstKeptSortOrder) <= cutoff }
-                    .map { it.copy(id = UUID.randomUUID().toString(), sessionId = forkSid) }
+                    .map { it.copy(id = java.util.UUID.randomUUID().toString(), sessionId = forkSid) }
 
                 chatRepository.forkSessionAtomic(
                     source = sourceSession.copy(
