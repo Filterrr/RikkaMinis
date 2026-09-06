@@ -72,6 +72,26 @@ class ForkMapperTest {
         assertEquals("fork:s1:m2", ForkMapper.forkSource("s1", "m2"))
     }
 
+    @Test
+    fun `fork source round-trips through the parser`() {
+        val lineage = ForkMapper.parseForkSource(ForkMapper.forkSource("abc-123", "msg-9"))
+        assertEquals(ForkMapper.ForkLineage("abc-123", "msg-9"), lineage)
+    }
+
+    @Test
+    fun `non-fork sources parse to null`() {
+        assertEquals(null, ForkMapper.parseForkSource(null))
+        assertEquals(null, ForkMapper.parseForkSource("shortcut"))
+        assertEquals(null, ForkMapper.parseForkSource("share"))
+        assertEquals(null, ForkMapper.parseForkSource("fork:"))
+        assertEquals(null, ForkMapper.parseForkSource("fork:only-sid"))
+        // Anchor ids containing colons survive: split limit=3 keeps the tail.
+        assertEquals(
+            ForkMapper.ForkLineage("s1", "a:b:c"),
+            ForkMapper.parseForkSource("fork:s1:a:b:c"),
+        )
+    }
+
     // ── file copies ─────────────────────────────────────────────────────
 
     @Test

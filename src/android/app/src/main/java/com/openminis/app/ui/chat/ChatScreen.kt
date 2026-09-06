@@ -457,6 +457,11 @@ fun ChatScreen(
      *  responsible for navigating; this screen has already stashed the
      *  pending transfer in [ChatViewModelStore.stashPendingTransfer]. */
     onMoveToSession: (sessionId: String) -> Unit = {},
+    // [T-message-fork-polish] Navigate to a session AND focus/highlight one
+    // message (the fork anchor). Wired by AppNavigation to
+    // Routes.chat(sid, focusMessageId) so the drawer lineage chip lands on
+    // the source message, not just the session top.
+    onMoveToSessionFocus: (sessionId: String, focusMessageId: String) -> Unit = { sid, _ -> onMoveToSession(sid) },
     onBrowseChatFiles: () -> Unit = {},
     /** T150: open FilePreviewScreen for a non-image attachment in a user bubble. */
     onPreviewAttachment: (com.openminis.app.ui.sandbox.FileItem) -> Unit = {},
@@ -668,6 +673,12 @@ fun ChatScreen(
     // [bottom-toolbar-customizable] Export format picker shared by the "..." menu
     // and the history-drawer footer (replaces the old inline submenu).
     var showExportFormatSheet by remember { mutableStateOf(false) }
+    // [T-message-fork-polish] Pending fork anchor: set by either fork entry
+    // (user bubble / tool-run group), consumed by ForkScopeSheet. Holding the
+    // anchor id here (instead of launching the fork inline) lets the scope
+    // sheet be a plain screen-level composable — same hoisting pattern as
+    // the export sheet above.
+    var pendingForkAnchorId by remember { mutableStateOf<String?>(null) }
     var showClearChatDialog by remember { mutableStateOf(false) }
     // [T-android-enhanced-cache] First-enable confirmation dialog visibility.
     var showEnhancedCacheDialog by remember { mutableStateOf(false) }
@@ -1916,6 +1927,19 @@ fun ChatScreen(
                             } catch (_: kotlinx.coroutines.CancellationException) {}
                             onOpenSession(id)
                         }
+                    }
+                },
+                // [T-message-fork-polish] Branch lineage chip → jump to the
+                // SOURCE session with the anchor message highlighted. Same
+                // close-first navigation contract as onSessionClick; the
+                // focusMessageId route arg drives the scroll + 1.6s highlight
+                // (P0-0 focus-a-message machinery, already in ChatScreen).
+                onOpenForkParent = { fromSid, anchorMessageId ->
+                    historyDrawerScope.launch {
+                        try {
+                            historyDrawerState.close()
+                        } catch (_: kotlinx.coroutines.CancellationException) {}
+                        onMoveToSessionFocus(fromSid, anchorMessageId)
                     }
                 },
                 onNewChat = {
@@ -3756,23 +3780,13 @@ fun ChatScreen(
                                     }
                                 }),
                                 // [T-message-fork] Branch the conversation from
-                                // this turn: DB rows ≤ the anchor's max sort_order
-                                // are re-id'd into a new session (forkSessionAtomic),
-                                // then this screen navigates to the fork. Same
-                                // streaming / queued gating as Quote / Edit.
+                                // this turn. [T-message-fork-polish] Opens the
+                                // scope picker (all history vs last 5 turns);
+                                // the actual fork runs from the sheet callback
+                                // below. Same streaming / queued gating as
+                                // Quote / Edit.
                                 onFork = if (isStreaming || item.message.isQueued) null else ({
-                                    coroutineScope.launch {
-                                        val forkSid = viewModel.forkFromMessage(item.message.id)
-                                        if (forkSid != null) {
-                                            onOpenSession(forkSid)
-                                        } else {
-                                            android.widget.Toast.makeText(
-                                                context,
-                                                context.getString(R.string.fork_failed),
-                                                android.widget.Toast.LENGTH_SHORT,
-                                            ).show()
-                                        }
-                                    }
+                                    pendingForkAnchorId = item.message.id
                                 }),
                                 onWithdraw = if (item.message.isQueued) {
                                     { safeMutate { viewModel.withdrawQueuedMessage(item.message.id) } }
@@ -3915,18 +3929,7 @@ fun ChatScreen(
                                 // in forkFromMessage (merged bubbles copy whole).
                                 // Not offered while streaming.
                                 onFork = if (!isStreaming) ({
-                                    coroutineScope.launch {
-                                        val forkSid = viewModel.forkFromMessage(item.messageId)
-                                        if (forkSid != null) {
-                                            onOpenSession(forkSid)
-                                        } else {
-                                            android.widget.Toast.makeText(
-                                                context,
-                                                context.getString(R.string.fork_failed),
-                                                android.widget.Toast.LENGTH_SHORT,
-                                            ).show()
-                                        }
-                                    }
+                                    pendingForkAnchorId = item.messageId
                                 }) else null,
                             )
                             is FlatChatItem.AssistantToolUse -> ToolCallPill(
@@ -4662,6 +4665,27 @@ fun ChatScreen(
             onExport = { format ->
                 showExportFormatSheet = false
                 exportCurrentChat(context, viewModel, chatRepository, coroutineScope, format)
+            },
+        )
+    }
+
+    // [T-message-fork-polish] Fork scope picker + typed-result handling.
+    // One implementation serves both fork entry points (user bubble and
+    // tool-run group); the anchor id was stashed by the menu callback.
+    pendingForkAnchorId?.let { anchorId ->
+        ForkScopeSheet(
+            onDismiss = { pendingForkAnchorId = null },
+            onScope = { scope ->
+                pendingForkAnchorId = null
+                coroutineScope.launch {
+                    when (val result = viewModel.forkFromMessage(anchorId, scope)) {
+                        is ForkResult.Success -> onOpenSession(result.forkSid)
+                        is ForkResult.Streaming -> forkToast(context, R.string.fork_failed_streaming)
+                        is ForkResult.Compacting -> forkToast(context, R.string.fork_failed_compacting)
+                        is ForkResult.NothingToCopy -> forkToast(context, R.string.fork_failed_empty)
+                        is ForkResult.DbError -> forkToast(context, R.string.fork_failed)
+                    }
+                }
             },
         )
     }
