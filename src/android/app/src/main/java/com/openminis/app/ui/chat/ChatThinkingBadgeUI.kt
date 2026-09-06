@@ -193,8 +193,18 @@ internal fun ThinkingLevelSheet(
  * bounded-memory. Draft sessions ("__new__" aliases, no DB row yet) get a
  * toast instead of an empty archive.
  */
-internal fun exportCurrentChat(
-    context: Context,
+// [T-message-fork-polish] Typed fork-failure toast. Lives near the export
+// helper because both are small screen-level utilities shared by the sheet
+// callbacks hoisted in ChatScreen.
+internal fun forkToast(context: android.content.Context, messageRes: Int) {
+    android.widget.Toast.makeText(
+        context,
+        context.getString(messageRes),
+        android.widget.Toast.LENGTH_SHORT,
+    ).show()
+}
+
+internal fun exportCurrentChat(    context: Context,
     viewModel: ChatViewModel,
     chatRepository: ChatRepository,
     scope: CoroutineScope,

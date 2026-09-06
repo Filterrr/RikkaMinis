@@ -457,6 +457,11 @@ fun ChatScreen(
      *  responsible for navigating; this screen has already stashed the
      *  pending transfer in [ChatViewModelStore.stashPendingTransfer]. */
     onMoveToSession: (sessionId: String) -> Unit = {},
+    // [T-message-fork-polish] Navigate to a session AND focus/highlight one
+    // message (the fork anchor). Wired by AppNavigation to
+    // Routes.chat(sid, focusMessageId) so the drawer lineage chip lands on
+    // the source message, not just the session top.
+    onMoveToSessionFocus: (sessionId: String, focusMessageId: String) -> Unit = { sid, _ -> onMoveToSession(sid) },
     onBrowseChatFiles: () -> Unit = {},
     /** T150: open FilePreviewScreen for a non-image attachment in a user bubble. */
     onPreviewAttachment: (com.openminis.app.ui.sandbox.FileItem) -> Unit = {},
@@ -668,6 +673,12 @@ fun ChatScreen(
     // [bottom-toolbar-customizable] Export format picker shared by the "..." menu
     // and the history-drawer footer (replaces the old inline submenu).
     var showExportFormatSheet by remember { mutableStateOf(false) }
+    // [T-message-fork-polish] Pending fork anchor: set by either fork entry
+    // (user bubble / tool-run group), consumed by ForkScopeSheet. Holding the
+    // anchor id here (instead of launching the fork inline) lets the scope
+    // sheet be a plain screen-level composable — same hoisting pattern as
+    // the export sheet above.
+    var pendingForkAnchorId by remember { mutableStateOf<String?>(null) }
     var showClearChatDialog by remember { mutableStateOf(false) }
     // [T-android-enhanced-cache] First-enable confirmation dialog visibility.
     var showEnhancedCacheDialog by remember { mutableStateOf(false) }
@@ -1916,6 +1927,19 @@ fun ChatScreen(
                             } catch (_: kotlinx.coroutines.CancellationException) {}
                             onOpenSession(id)
                         }
+                    }
+                },
+                // [T-message-fork-polish] Branch lineage chip → jump to the
+                // SOURCE session with the anchor message highlighted. Same
+                // close-first navigation contract as onSessionClick; the
+                // focusMessageId route arg drives the scroll + 1.6s highlight
+                // (P0-0 focus-a-message machinery, already in ChatScreen).
+                onOpenForkParent = { fromSid, anchorMessageId ->
+                    historyDrawerScope.launch {
+                        try {
+                            historyDrawerState.close()
+                        } catch (_: kotlinx.coroutines.CancellationException) {}
+                        onMoveToSessionFocus(fromSid, anchorMessageId)
                     }
                 },
                 onNewChat = {
@@ -3400,6 +3424,21 @@ fun ChatScreen(
                             }
                             keyboardController?.show()
                         },
+                        // [T-quote-reply] Selection toolbar "Quote" — wrap the
+                        // excerpt in a Markdown blockquote and stage it in the
+                        // composer as a quote block (caret below, ready for the
+                        // user's follow-up question). Focus + IME behavior
+                        // mirrors Add-to-input.
+                        onQuoteInput = { quoted ->
+                            viewModel.quoteIntoInput(quoted)
+                            try {
+                                inputFocusRequester.requestFocus()
+                            } catch (_: IllegalStateException) {
+                                // FocusRequester not yet attached — composer
+                                // will gain focus on next user tap.
+                            }
+                            keyboardController?.show()
+                        },
                         selectionController = selectionController,
                     )
                 }
@@ -3727,6 +3766,28 @@ fun ChatScreen(
                                         inputFocusRequester.requestFocus()
                                     }
                                 }),
+                                // [T-quote-reply] Whole-message quote: stage the
+                                // message as a Markdown blockquote in the composer
+                                // (caret below the quote block, ready for the new
+                                // question). Gated while streaming / queued like
+                                // Retry / Edit — content may still change.
+                                onQuote = if (isStreaming || item.message.isQueued) null else ({
+                                    val quoted = QuoteTextFormatter.quoteMessage(item.message.content)
+                                    if (quoted.isNotEmpty()) {
+                                        viewModel.quoteIntoInput(quoted)
+                                        inputFocusRequester.requestFocus()
+                                        keyboardController?.show()
+                                    }
+                                }),
+                                // [T-message-fork] Branch the conversation from
+                                // this turn. [T-message-fork-polish] Opens the
+                                // scope picker (all history vs last 5 turns);
+                                // the actual fork runs from the sheet callback
+                                // below. Same streaming / queued gating as
+                                // Quote / Edit.
+                                onFork = if (isStreaming || item.message.isQueued) null else ({
+                                    pendingForkAnchorId = item.message.id
+                                }),
                                 onWithdraw = if (item.message.isQueued) {
                                     { safeMutate { viewModel.withdrawQueuedMessage(item.message.id) } }
                                 } else null,
@@ -3834,8 +3895,7 @@ fun ChatScreen(
                                 group = item,
                                 onRetry = if (item.isLastCancelled && !isStreaming && !canResume) ({ safeMutate { viewModel.retryLast() } }) else null,
                                 onStop = { viewModel.cancelStream() },
-                                onOpenTerminalWithCommand = onOpenTerminalWithCommand,
-                                // [T-subagent-ui] spawn_agent blocks → live detail page.
+                                onOpenTerminalWithCommand = onOpenTerminalWithCommand,                                // [T-subagent-ui] spawn_agent blocks → live detail page.
                                 onOpenDetail = { blockId ->
                                     val run = subagentRuns.firstOrNull { it.blockId == blockId }
                                     if (run != null) onOpenSubagentDetail(run.id)
@@ -3863,6 +3923,13 @@ fun ChatScreen(
                                         context.getString(R.string.tool_longpress_copied_toast),
                                         android.widget.Toast.LENGTH_SHORT,
                                     ).show()
+                                }) else null,
+                                // [T-message-fork] Branch from this assistant
+                                // turn: the anchor rows resolve via sourceDbIds
+                                // in forkFromMessage (merged bubbles copy whole).
+                                // Not offered while streaming.
+                                onFork = if (!isStreaming) ({
+                                    pendingForkAnchorId = item.messageId
                                 }) else null,
                             )
                             is FlatChatItem.AssistantToolUse -> ToolCallPill(
@@ -4371,6 +4438,7 @@ fun ChatScreen(
                 onFollowEvent = { followState = followReducer(followState, it) },
                 onMoveToSession = onMoveToSession,
                 onOpenModelPicker = { showModelPicker = true },
+                onSlashCommandsClick = { dispatchChatAction(ChatMenuPrefs.SLASH_COMMANDS) },
                 onPreviewAttachment = onPreviewAttachment,
                 onPreviewImageGallery = { items, idx -> previewImageGallery = items to idx },
                 onOpenWebAppSheet = { target -> webAppSheetTarget = target },
@@ -4597,6 +4665,27 @@ fun ChatScreen(
             onExport = { format ->
                 showExportFormatSheet = false
                 exportCurrentChat(context, viewModel, chatRepository, coroutineScope, format)
+            },
+        )
+    }
+
+    // [T-message-fork-polish] Fork scope picker + typed-result handling.
+    // One implementation serves both fork entry points (user bubble and
+    // tool-run group); the anchor id was stashed by the menu callback.
+    pendingForkAnchorId?.let { anchorId ->
+        ForkScopeSheet(
+            onDismiss = { pendingForkAnchorId = null },
+            onScope = { scope ->
+                pendingForkAnchorId = null
+                coroutineScope.launch {
+                    when (val result = viewModel.forkFromMessage(anchorId, scope)) {
+                        is ForkResult.Success -> onOpenSession(result.forkSid)
+                        is ForkResult.Streaming -> forkToast(context, R.string.fork_failed_streaming)
+                        is ForkResult.Compacting -> forkToast(context, R.string.fork_failed_compacting)
+                        is ForkResult.NothingToCopy -> forkToast(context, R.string.fork_failed_empty)
+                        is ForkResult.DbError -> forkToast(context, R.string.fork_failed)
+                    }
+                }
             },
         )
     }
@@ -4924,6 +5013,10 @@ private fun ChatInputArea(
     onFollowEvent: (FollowEvent) -> Unit,
     onMoveToSession: (String) -> Unit,
     onOpenModelPicker: () -> Unit,
+    // [composer-slash-button-restored] dispatchChatAction is a LOCAL fun of
+    // the outer ChatScreen composable, so it can't be referenced from this
+    // separate composable — pass the toggle action in as a callback instead.
+    onSlashCommandsClick: () -> Unit,
     onPreviewAttachment: (com.openminis.app.ui.sandbox.FileItem) -> Unit,
     onPreviewImageGallery: (List<com.openminis.app.ui.components.ImageGalleryItem>, Int) -> Unit,
     onOpenWebAppSheet: (InputAttachment) -> Unit,
@@ -6178,10 +6271,42 @@ private fun ChatInputArea(
                         }
                     }
 
+                    // [composer-slash-button-restored] The dedicated "/" circle
+                    // button is back in the composer's bottom-left cluster (its
+                    // pre-move slot — see the comment below), so the command
+                    // palette is one tap away without typing "/" or digging
+                    // through the top-right "..." menu. The "/" glyph keeps
+                    // a plain regular weight so the button reads visually
+                    // consistent with the neighboring circle buttons
+                    // (model picker / attach). Routing through
+                    // dispatchChatAction(SLASH_COMMANDS) preserves the toggle
+                    // semantics (tap again / back / outside dismisses) and the
+                    // focus + IME behavior shared with the menu and the
+                    // history-drawer footer.
+                    Spacer(modifier = Modifier.width(8.dp))
+                    InputCircleButton(
+                        onClick = onSlashCommandsClick,
+                    ) {
+                        Text(
+                            "/",
+                            fontSize = 18.sp,
+                            // Match the model-picker circle button: plain
+                            // regular weight, no italic — the old Bold+Italic
+                            // "/" read as a different affordance from every
+                            // other composer circle button beside it.
+                            fontWeight = FontWeight.Normal,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(bottom = 2.dp),
+                        )
+                    }
+
                     // The "/" slash-command circle button used to sit here.
                     // Moved into the top-right chat menu (above Token Usage)
                     // to reclaim composer width; typing "/" still opens the
                     // same sheet, so no functionality was removed.
+                    // [composer-slash-button-restored] Reinstated above — the
+                    // menu entry remains as a discoverable fallback, and the
+                    // two share dispatchChatAction(SLASH_COMMANDS).
 
                     // T187: Exit Edit Mode pill, only while editingMessageId
                     // is non-null. Tap clears the edit flag + composer text

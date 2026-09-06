@@ -19,6 +19,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.filled.CallSplit
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PushPin
@@ -30,6 +32,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -96,6 +99,10 @@ fun ChatHistoryDrawer(
     onOpenDraft: () -> Unit = {},
     onDiscardDraft: () -> Unit = {},
     onSessionClick: (String) -> Unit,
+    // [T-message-fork-polish] Open the fork's SOURCE session and highlight
+    // the anchor message (Routes.chat(sid, focusMessageId)). Null → the
+    // lineage badge doesn't render (host has no focus-capable navigation).
+    onOpenForkParent: ((fromSid: String, anchorMessageId: String) -> Unit)? = null,
     onNewChat: () -> Unit,
     footerActions: List<ChatActionSpec> = emptyList(),
     onAction: (String) -> Unit = {},
@@ -218,6 +225,9 @@ fun ChatHistoryDrawer(
                             DrawerSectionHeader(period)
                         }
                         items(group, key = { it.id }) { session ->
+                            val lineage = remember(session.source) {
+                                ForkMapper.parseForkSource(session.source)
+                            }
                             DrawerSessionRow(
                                 session = session,
                                 selected = session.id == currentSessionId,
@@ -225,6 +235,11 @@ fun ChatHistoryDrawer(
                                 onLongClick = { deleteTarget = session },
                                 isPinned = session.pinnedAt != null,
                                 onTogglePin = { onPinSession(session.id) },
+                                // [T-message-fork-polish] Branch lineage badge:
+                                // forked sessions show a CallSplit chip that
+                                // jumps to the SOURCE session's anchor message.
+                                forkLineage = lineage,
+                                onOpenForkParent = onOpenForkParent,
                             )
                         }
                     }
@@ -271,7 +286,10 @@ fun ChatHistoryDrawer(
         MinisAlertDialog(
             onDismissRequest = { deleteTarget = null },
             title = stringResource(R.string.sessionlist_delete_one_title),
-            text = stringResource(R.string.sessionlist_delete_message),
+            // [T-message-fork-polish] Forked children survive a parent delete
+            // (their rows AND media were copied at fork time) — say so, or the
+            // user assumes the branches disappear too.
+            text = deleteTextWithForkCount(chatRepository, target),
             confirmText = stringResource(R.string.delete),
             isDestructive = true,
             onConfirm = {
@@ -287,6 +305,36 @@ fun ChatHistoryDrawer(
             },
         )
     }
+}
+
+/**
+ * [T-message-fork-polish] Build the delete-confirmation text, appending a
+ * lineage note when the target session has fork children. Blocking read is
+ * acceptable here (single indexed query on open, drawer-scoped); a failure
+ * falls back to the plain message. Both plural forms are pre-resolved as
+ * strings (composable-safe); only the count arrives asynchronously.
+ */
+@Composable
+private fun deleteTextWithForkCount(
+    chatRepository: ChatRepository,
+    target: ChatSessionEntity,
+): String {
+    val base = stringResource(R.string.sessionlist_delete_message)
+    val oneTemplate = stringResource(R.string.fork_delete_children_one)
+    val manyTemplate = stringResource(R.string.fork_delete_children_many)
+    var childrenNote by remember(target.id) { mutableStateOf<String?>(null) }
+    LaunchedEffect(target.id) {
+        childrenNote = runCatching {
+            chatRepository.dao.forkChildrenOf(target.id).size
+        }.getOrNull()?.takeIf { it > 0 }?.let { count ->
+            val template = if (count == 1) oneTemplate else manyTemplate
+            "\n\n" + java.text.MessageFormat.format(
+                template.replace("%1\$d", "{0,number,integer}"),
+                count,
+            )
+        }
+    }
+    return base + (childrenNote ?: "")
 }
 
 /**
@@ -357,6 +405,10 @@ private fun DrawerSessionRow(
     onLongClick: () -> Unit,
     isPinned: Boolean,
     onTogglePin: () -> Unit,
+    // [T-message-fork-polish] Non-null → this session is a fork; the badge
+    // shows its origin and tapping it jumps to the source anchor message.
+    forkLineage: ForkMapper.ForkLineage? = null,
+    onOpenForkParent: ((String, String) -> Unit)? = null,
 ) {
     val style = remember(session.category) { categoryStyle(session.category) }
     val ctx = LocalContext.current
@@ -417,6 +469,35 @@ private fun DrawerSessionRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+            }
+            // [T-message-fork-polish] Branch lineage chip. Tappable — jumps to
+            // the source session and highlights the anchor message, so the
+            // user can always answer "which conversation did this branch come
+            // from?" without hunting through the list.
+            if (forkLineage != null && onOpenForkParent != null) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .padding(top = 2.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable {
+                            onOpenForkParent(forkLineage.fromSid, forkLineage.anchorMessageId)
+                        }
+                        .padding(horizontal = 4.dp, vertical = 1.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.CallSplit,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(11.dp),
+                    )
+                    Spacer(modifier = Modifier.width(3.dp))
+                    Text(
+                        text = stringResource(R.string.fork_badge_from_parent),
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
             }
         }
 

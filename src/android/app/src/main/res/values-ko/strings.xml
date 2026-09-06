@@ -610,6 +610,10 @@
     <string name="provider_list_no_api_key">API 키 없음</string>
     <string name="provider_list_disabled">비활성화됨</string>
     <string name="provider_list_favorites">즐겨찾기</string>
+    <string name="provider_list_sync_all">모든 공급자 동기화</string>
+    <string name="provider_list_sync_all_success">모든 %1$d개 공급자가 동기화되었습니다.</string>
+    <string name="provider_list_sync_partial">동기화 완료 — %1$d개 성공, %2$d개 키 없음, %3$d개 실패.</string>
+    <string name="provider_list_sync_failed_generic">동기화에 실패했습니다. 연결을 확인한 후 다시 시도하세요.</string>
     <string name="provider_set_favorite">즐겨찾기로 설정</string>
     <string name="provider_unset_favorite">즐겨찾기에서 제거</string>
     <string name="provider_detail_export">내보내기</string>
@@ -827,6 +831,22 @@
 
     <!-- T187 — user-bubble long-press Edit + Exit Edit + Clear Chat dialog -->
     <string name="chat_longpress_edit">편집</string>
+    <string name="chat_longpress_quote">인용</string>
+    <string name="chat_longpress_fork">여기서 분기</string>
+    <string name="chat_longpress_fork_desc">이 메시지를 분기점으로 새 세션에서 대화를 계속합니다(원본 세션은 변경되지 않습니다).</string>
+    <string name="fork_failed">분기 만들기 실패</string>
+    <string name="fork_scope_title">이 대화 분기하기</string>
+    <string name="fork_scope_desc">새 분기가 담을 기록의 범위를 선택하세요.</string>
+    <string name="fork_badge_from_parent">부모 대화에서</string>
+    <string name="fork_delete_children_one">이 대화에는 분기가 1개 있습니다. 삭제해도 분기는 유지됩니다.</string>
+    <string name="fork_delete_children_many">이 대화에는 분기가 %1$d개 있습니다. 삭제해도 분기는 유지됩니다.</string>
+    <string name="fork_scope_all">전체 기록</string>
+    <string name="fork_scope_all_desc">완전한 복사본——분기가 이 대화와 정확히 일치합니다.</string>
+    <string name="fork_scope_last5">최근 5턴</string>
+    <string name="fork_scope_last5_desc">가벼운 분기——최근 5턴과 이 메시지만 포함.</string>
+    <string name="fork_failed_streaming">아직 생성 중</string>
+    <string name="fork_failed_compacting">응답이 끝난 후 다시 분기하세요.</string>
+    <string name="fork_failed_empty">컨텍스트 압축 중</string>
     <string name="chat_edit_exit_button">편집 모드 종료</string>
     <string name="chat_clear_dialog_body">이 세션의 모든 메시지를 삭제하시겠습니까? 작업 공간 파일, 첨부 파일 및 오프로드는 유지됩니다.</string>
     <string name="chat_clear_dialog_confirm">지우기</string>
@@ -948,6 +968,7 @@
     <string name="sessionlist_welcome_step_done">완료</string>
     <!-- T-selection-add-to-input — 길게 누르기 선택 메뉴 "입력란에 추가" -->
     <string name="selection_add_to_chat_input">입력란에 추가</string>
+    <string name="selection_quote">인용</string>
     <!-- T-minis-textkit 선택 메뉴 버튼 -->
     <string name="selection_copy">복사</string>
     <string name="selection_copy_markdown">Markdown 복사</string>

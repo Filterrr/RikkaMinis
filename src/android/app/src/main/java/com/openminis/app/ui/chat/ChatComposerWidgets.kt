@@ -603,7 +603,7 @@ private fun ToolPreviewThumbnail(
                 ) {
                     val path = block.imageFilePath
                     value = if (path == null) null else withContext(Dispatchers.IO) {
-                        try { android.graphics.BitmapFactory.decodeFile(path) } catch (_: Exception) { null }
+                        decodeScaledBitmap(path)
                     }
                 }
                 val bmp = bitmap
@@ -646,7 +646,7 @@ private fun ToolPreviewThumbnail(
                     // the thumb doesn't degrade to the globe placeholder.
                     val path = block.imageFilePath ?: fallbackImagePath
                     value = if (path == null) null else withContext(Dispatchers.IO) {
-                        try { android.graphics.BitmapFactory.decodeFile(path) } catch (_: Exception) { null }
+                        decodeScaledBitmap(path)
                     }
                 }
                 val bitmap = liveBitmap ?: savedBitmap

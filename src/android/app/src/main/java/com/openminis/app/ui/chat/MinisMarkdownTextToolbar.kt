@@ -67,6 +67,14 @@ internal class MinisMarkdownTextToolbar(
      */
     private val onAddToInput: ((String) -> Unit)? = null,
     /**
+     * [T-quote-reply] Invoked when the user taps **Quote** on the selection
+     * toolbar. Receives the selection already formatted as a Markdown
+     * blockquote (via QuoteTextFormatter); the host routes it into the
+     * composer through ChatViewModel.quoteIntoInput. Null disables the
+     * action.
+     */
+    private val onQuoteInput: ((String) -> Unit)? = null,
+    /**
      * [T-android-markdown-table-copy-actions] The MinisTextKit selection
      * controller. This toolbar is the one Compose's SelectionContainer shows
      * (via LocalTextToolbar), and a table-cell long-press also sets the
@@ -81,6 +89,9 @@ internal class MinisMarkdownTextToolbar(
         private set
 
     internal val canAddToInput: Boolean get() = onAddToInput != null
+
+    /** [T-quote-reply] True when the host wired a quote sink. */
+    internal val canQuoteInput: Boolean get() = onQuoteInput != null
 
     override val status: TextToolbarStatus
         get() = if (state.visible) TextToolbarStatus.Shown else TextToolbarStatus.Hidden
@@ -113,6 +124,17 @@ internal class MinisMarkdownTextToolbar(
     internal fun addSelectionToInput() {
         val sink = onAddToInput ?: return
         withSelection(sink)
+    }
+
+    /**
+     * [T-quote-reply] Resolve the current selection and forward it to
+     * [onQuoteInput] wrapped as a Markdown blockquote. Same clipboard
+     * round-trip as [addSelectionToInput] (see [withSelection]); no-op
+     * when quoting isn't wired.
+     */
+    internal fun quoteSelectionToInput() {
+        val sink = onQuoteInput ?: return
+        withSelection { sel -> sink(QuoteTextFormatter.quoteSelection(sel)) }
     }
 
     /**
@@ -248,6 +270,20 @@ internal fun MinisMarkdownTextToolbarHost(toolbar: MinisMarkdownTextToolbar) {
                         label = stringResource(R.string.selection_add_to_chat_input),
                     ) {
                         toolbar.addSelectionToInput()
+                        toolbar.hide()
+                    }
+                }
+                // [T-quote-reply] "Quote" — wraps the selection in a Markdown
+                // blockquote and drops it into the composer as a quote block
+                // (caret lands below it so the user types their question after
+                // the quoted excerpt). Same availability rule as Add-to-input:
+                // any selection, hidden when the host has no composer sink.
+                if (toolbar.canQuoteInput) {
+                    ToolbarDivider()
+                    ToolbarButton(
+                        label = stringResource(R.string.selection_quote),
+                    ) {
+                        toolbar.quoteSelectionToInput()
                         toolbar.hide()
                     }
                 }

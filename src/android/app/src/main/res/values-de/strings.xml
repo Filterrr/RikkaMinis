@@ -610,6 +610,10 @@
     <string name="provider_list_no_api_key">Kein API-Schlüssel</string>
     <string name="provider_list_disabled">Deaktiviert</string>
     <string name="provider_list_favorites">Favoriten</string>
+    <string name="provider_list_sync_all">Alle Anbieter synchronisieren</string>
+    <string name="provider_list_sync_all_success">Alle %1$d Anbieter synchronisiert.</string>
+    <string name="provider_list_sync_partial">Synchronisierung abgeschlossen — %1$d synchronisiert, %2$d ohne Schlüssel, %3$d fehlgeschlagen.</string>
+    <string name="provider_list_sync_failed_generic">Synchronisierung fehlgeschlagen. Verbindung prüfen und erneut versuchen.</string>
     <string name="provider_set_favorite">Als Favorit festlegen</string>
     <string name="provider_unset_favorite">Aus Favoriten entfernen</string>
     <string name="provider_detail_export">Exportieren</string>
@@ -827,6 +831,22 @@
 
     <!-- T187 — user-bubble long-press Edit + Exit Edit + Clear Chat dialog -->
     <string name="chat_longpress_edit">Bearbeiten</string>
+    <string name="chat_longpress_quote">Zitieren</string>
+    <string name="chat_longpress_fork">Ab hier verzweigen</string>
+    <string name="chat_longpress_fork_desc">Unterhaltung ab dieser Nachricht in einer neuen Sitzung fortsetzen (die ursprüngliche Sitzung bleibt unverändert).</string>
+    <string name="fork_failed">Verzweigung fehlgeschlagen</string>
+    <string name="fork_scope_title">Diese Unterhaltung verzweigen</string>
+    <string name="fork_scope_desc">Wählen Sie, wie viel Verlauf der neue Zweig enthält.</string>
+    <string name="fork_badge_from_parent">Aus übergeordnetem Chat</string>
+    <string name="fork_delete_children_one">Diese Unterhaltung hat 1 Verzweigung. Sie bleibt erhalten.</string>
+    <string name="fork_delete_children_many">Diese Unterhaltung hat %1$d Verzweigungen. Sie bleiben erhalten.</string>
+    <string name="fork_scope_all">Gesamter Verlauf</string>
+    <string name="fork_scope_all_desc">Vollständige Kopie——der Zweig entspricht genau dieser Unterhaltung.</string>
+    <string name="fork_scope_last5">Letzte 5 Runden</string>
+    <string name="fork_scope_last5_desc">Leichter Zweig——nur die letzten 5 Runden und diese Nachricht.</string>
+    <string name="fork_failed_streaming">Läuft noch</string>
+    <string name="fork_failed_compacting">Warten Sie das Ende der Antwort ab, then verzweigen Sie erneut.</string>
+    <string name="fork_failed_empty">Kontext wird komprimiert</string>
     <string name="chat_edit_exit_button">Bearbeitung beenden</string>
     <string name="chat_clear_dialog_body">Alle Nachrichten dieser Sitzung entfernen? Dateien im Arbeitsbereich, Anhänge und Auslagerungen bleiben erhalten.</string>
     <string name="chat_clear_dialog_confirm">Löschen</string>
@@ -949,6 +969,7 @@
     <string name="sessionlist_welcome_step_done">Fertig</string>
     <!-- T-selection-add-to-input — Aktion im Auswahlmenü beim langen Drücken -->
     <string name="selection_add_to_chat_input">Zum Eingabefeld hinzufügen</string>
+    <string name="selection_quote">Zitieren</string>
     <!-- T-minis-textkit Auswahlmenü-Tasten -->
     <string name="selection_copy">Kopieren</string>
     <string name="selection_copy_markdown">Markdown kopieren</string>

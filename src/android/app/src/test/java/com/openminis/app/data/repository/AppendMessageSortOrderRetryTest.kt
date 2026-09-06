@@ -78,6 +78,11 @@ class AppendMessageSortOrderRetryTest {
         override suspend fun searchSessions(pattern: String): List<ChatSessionEntity> = emptyList()
         override suspend fun loadMessages(sessionId: String): List<MessageEntity> = emptyList()
         override suspend fun messagesLast(sessionId: String, limit: Int): List<MessageEntity> = emptyList()
+        // [T-message-fork] New abstract member on ChatDao — fakes must stub it.
+        override suspend fun messagesUpTo(sessionId: String, maxSortOrder: Int): List<MessageEntity> = emptyList()
+        // [T-message-fork-polish] Lineage queries — unused in these tests.
+        override suspend fun forkChildrenOf(fromSessionId: String): List<ChatSessionEntity> = emptyList()
+        override suspend fun allForkedSessions(): List<ChatSessionEntity> = emptyList()
         override fun observeMessages(sessionId: String): Flow<List<MessageEntity>> = emptyFlow()
         override suspend fun loadUserMessagesSince(since: Long, limit: Int): List<MessageEntity> = emptyList()
         override suspend fun deleteMessages(sessionId: String) {}

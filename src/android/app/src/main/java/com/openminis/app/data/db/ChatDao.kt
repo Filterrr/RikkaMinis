@@ -112,6 +112,23 @@ interface ChatDao {
     @Query("SELECT * FROM messages WHERE session_id = :sessionId ORDER BY sort_order DESC LIMIT :limit")
     suspend fun messagesLast(sessionId: String, limit: Int): List<MessageEntity>
 
+    // [T-message-fork] Rows at or before a fork point, ascending. Drives the
+    // fork-from-message copy: the new session receives these rows (re-id'd)
+    // so its history matches the original conversation up to and including
+    // the fork anchor turn.
+    @Query("SELECT * FROM messages WHERE session_id = :sessionId AND sort_order <= :maxSortOrder ORDER BY sort_order ASC")
+    suspend fun messagesUpTo(sessionId: String, maxSortOrder: Int): List<MessageEntity>
+
+    // [T-message-fork-polish] Fork lineage: all sessions forked FROM the given
+    // session (the `source` column carries "fork:<fromSid>:<anchorMessageId>").
+    // The LIKE pattern must escape wildcards — session ids are UUIDs, so a
+    // literal match on the prefix plus the separator is safe in practice.
+    @Query("SELECT * FROM sessions WHERE source LIKE 'fork:' || :fromSessionId || ':%' ORDER BY created_at ASC")
+    suspend fun forkChildrenOf(fromSessionId: String): List<ChatSessionEntity>
+
+    @Query("SELECT * FROM sessions WHERE source LIKE 'fork:%' ORDER BY updated_at DESC")
+    suspend fun allForkedSessions(): List<ChatSessionEntity>
+
     @Query("SELECT * FROM messages WHERE session_id = :sessionId ORDER BY sort_order ASC")
     fun observeMessages(sessionId: String): Flow<List<MessageEntity>>
 

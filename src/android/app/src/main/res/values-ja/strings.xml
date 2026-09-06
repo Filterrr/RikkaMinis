@@ -610,6 +610,10 @@
     <string name="provider_list_no_api_key">APIキーなし</string>
     <string name="provider_list_disabled">無効</string>
     <string name="provider_list_favorites">お気に入り</string>
+    <string name="provider_list_sync_all">すべてのプロバイダーを同期</string>
+    <string name="provider_list_sync_all_success">%1$d 件のプロバイダーをすべて同期しました。</string>
+    <string name="provider_list_sync_partial">同期完了 — 成功 %1$d 件、キーなし %2$d 件、失敗 %3$d 件。</string>
+    <string name="provider_list_sync_failed_generic">同期に失敗しました。接続を確認して再試行してください。</string>
     <string name="provider_set_favorite">お気に入りに追加</string>
     <string name="provider_unset_favorite">お気に入りから削除</string>
     <string name="provider_detail_export">エクスポート</string>
@@ -827,6 +831,22 @@
 
     <!-- T187 — user-bubble long-press Edit + Exit Edit + Clear Chat dialog -->
     <string name="chat_longpress_edit">編集</string>
+    <string name="chat_longpress_quote">引用</string>
+    <string name="chat_longpress_fork">ここから分岐</string>
+    <string name="chat_longpress_fork_desc">このメッセージを分岐点に、新しいセッションで会話を続けます（元のセッションは変更されません）。</string>
+    <string name="fork_failed">分岐の作成に失敗しました</string>
+    <string name="fork_scope_title">この会話を分岐</string>
+    <string name="fork_scope_desc">新しい分岐が運ぶ履歴の範囲を選択します。</string>
+    <string name="fork_badge_from_parent">親の会話から</string>
+    <string name="fork_delete_children_one">この会話には1個の分岐があります。削除しても分岐は残ります。</string>
+    <string name="fork_delete_children_many">この会話には%1$d個の分岐があります。削除しても分岐は残ります。</string>
+    <string name="fork_scope_all">すべての履歴</string>
+    <string name="fork_scope_all_desc">完全なコピー——分岐はこの会話と完全に一致します。</string>
+    <string name="fork_scope_last5">最近の5ターン</string>
+    <string name="fork_scope_last5_desc">軽量分岐——最新5ターンとこのメッセージのみ。</string>
+    <string name="fork_failed_streaming">生成中です</string>
+    <string name="fork_failed_compacting">返信が完了してから分岐してください。</string>
+    <string name="fork_failed_empty">コンテキスト圧縮中</string>
     <string name="chat_edit_exit_button">編集モードを終了</string>
     <string name="chat_clear_dialog_body">このセッションのすべてのメッセージを削除しますか？ワークスペースのファイル、添付ファイル、オフロードは保持されます。</string>
     <string name="chat_clear_dialog_confirm">クリア</string>
@@ -962,6 +982,7 @@
     <string name="sessionlist_welcome_step_done">完了</string>
     <!-- T-selection-add-to-input — 長押し選択メニュー「入力欄に追加」 -->
     <string name="selection_add_to_chat_input">入力欄に追加</string>
+    <string name="selection_quote">引用</string>
     <!-- T-minis-textkit 選択メニューボタン -->
     <string name="selection_copy">コピー</string>
     <string name="selection_copy_markdown">Markdown をコピー</string>

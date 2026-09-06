@@ -242,6 +242,10 @@
     <string name="provider_list_no_api_key">無 API 金鑰</string>
     <string name="provider_list_disabled">已停用</string>
     <string name="provider_list_favorites">常用</string>
+    <string name="provider_list_sync_all">一鍵更新所有服務商</string>
+    <string name="provider_list_sync_all_success">已更新全部 %1$d 個服務商。</string>
+    <string name="provider_list_sync_partial">同步完成 — %1$d 個已更新，%2$d 個無密鑰，%3$d 個失敗。</string>
+    <string name="provider_list_sync_failed_generic">同步失敗，請檢查網路後重試。</string>
     <string name="provider_set_favorite">設為常用</string>
     <string name="provider_unset_favorite">取消常用</string>
     <string name="provider_detail_export">導出</string>
@@ -466,6 +470,22 @@
 
     <!-- T187 — user-bubble long-press Edit + Exit Edit + Clear Chat dialog -->
     <string name="chat_longpress_edit">編輯</string>
+    <string name="chat_longpress_quote">引用</string>
+    <string name="chat_longpress_fork">從此分支</string>
+    <string name="chat_longpress_fork_desc">以這則訊息為分叉點，在新會話中繼續對話（原始會話保持不變）。</string>
+    <string name="fork_failed">建立分支失敗</string>
+    <string name="fork_scope_title">分支此對話</string>
+    <string name="fork_scope_desc">選擇新分支攜帶多少歷史。</string>
+    <string name="fork_badge_from_parent">來自父對話</string>
+    <string name="fork_delete_children_one">此對話有 1 個分支，刪除後分支將保留。</string>
+    <string name="fork_delete_children_many">此對話有 %1$d 個分支，刪除後分支將保留。</string>
+    <string name="fork_scope_all">全部歷史</string>
+    <string name="fork_scope_all_desc">完整複製——分支與此對話完全一致。</string>
+    <string name="fork_scope_last5">最近 5 輪</string>
+    <string name="fork_scope_last5_desc">輕量分支——只帶最近 5 輪和這則訊息。</string>
+    <string name="fork_failed_streaming">仍在產生中</string>
+    <string name="fork_failed_compacting">等回覆結束後再分支。</string>
+    <string name="fork_failed_empty">正在壓縮上下文</string>
     <string name="chat_edit_exit_button">退出編輯</string>
     <string name="chat_clear_dialog_body">刪除此會話的所有訊息？工作區檔案、附件和卸載內容會保留。</string>
     <string name="chat_clear_dialog_confirm">清除</string>
@@ -707,6 +727,7 @@
     <string name="perm_a11y_system_disabled">未啟用</string>
     <!-- T-selection-add-to-input — 長按選擇選單「加到輸入框」動作 -->
     <string name="selection_add_to_chat_input">加入到輸入框</string>
+    <string name="selection_quote">引用</string>
     <!-- T-minis-textkit 選擇選單按鈕 -->
     <string name="selection_copy">複製</string>
     <string name="selection_copy_markdown">複製 Markdown</string>

@@ -66,10 +66,12 @@ private const val CRITICAL_NATIVE_DYNAMIC_MB = 512L
 private const val LOCKED_NATIVE_DYNAMIC_MB = 1536L
 private const val APP_NATIVE_DYNAMIC_MB = 512L
 
-// [memory-dynamic-budget] 充裕时子进程 RSS 动态高水位（1024MB）。基线
-// 256MB 的闸是 `git fetch --unshallow` 类大命令中途被杀的直接原因——
+// [memory-dynamic-budget] 充裕时子进程 RSS 动态高水位（2048MB = 2G）。
+// 基线 256MB 的闸是 `git fetch --unshallow` 类大命令中途被杀的直接原因——
 // 子进程 RSS 是 git 内存的真正归属，不是 app native heap。
-private const val CHILD_RSS_DYNAMIC_MB = 1024L
+// [mem-limit-2g] 2026-09-06 用户要求把任务内存上限从 1024MB 提到 2G：
+// 充裕（MemAvailable ≥ MEM_AVAIL_AMPLE_MB）时子进程 RSS 高水位 = 2048MB。
+private const val CHILD_RSS_DYNAMIC_MB = 2048L
 
 // [memory-dynamic-budget] Heavy 命令全局串行闸超时。任何时刻最多 1 个
 // heavy 命令在跑（Semaphore(1)），防止多会话同时跑多个大任务把 memcg
@@ -1096,13 +1098,13 @@ internal fun internalDegradationPhase(nativeMB: Long, memAvailableMB: Long = 0L)
  * [memory-dynamic-budget] Dynamic high-water mark for PRoot *child* process
  * RSS — the signal that actually kills `git fetch --unshallow`-style large
  * commands (their memory lives in the child, not the app native heap).
- * Scaled to system MemAvailable: baseline 256MB when tight, up to 1536MB
- * when ample, so a large task can complete instead of being recycled
- * mid-run.
+ * Scaled to system MemAvailable: baseline 256MB when tight, up to 2048MB
+ * (2G, [mem-limit-2g]) when ample, so a large task can complete instead of
+ * being recycled mid-run.
  */
 internal fun childRssHighWaterMarkMB(memAvailableMB: Long): Long {
     return when {
-        memAvailableMB >= 4096L -> 1536L
+        memAvailableMB >= 4096L -> 2048L
         memAvailableMB >= MEM_AVAIL_AMPLE_MB -> CHILD_RSS_DYNAMIC_MB
         memAvailableMB >= 1024L -> 512L
         else -> NATIVE_HEAP_HIGH_WATER_MARK_MB

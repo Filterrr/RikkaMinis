@@ -729,6 +729,10 @@
     <string name="provider_list_no_api_key">无 API 密钥</string>
     <string name="provider_list_disabled">已停用</string>
     <string name="provider_list_favorites">常用</string>
+    <string name="provider_list_sync_all">一键更新所有服务商</string>
+    <string name="provider_list_sync_all_success">已更新全部 %1$d 个服务商。</string>
+    <string name="provider_list_sync_partial">同步完成 — %1$d 个已更新，%2$d 个无密钥，%3$d 个失败。</string>
+    <string name="provider_list_sync_failed_generic">同步失败，请检查网络后重试。</string>
     <string name="provider_set_favorite">设为常用</string>
     <string name="provider_unset_favorite">取消常用</string>
     <string name="provider_detail_export">导出</string>
@@ -950,6 +954,7 @@
     <string name="notif_task_failed_body">任务执行失败。点击打开聊天。</string>
     <!-- T-selection-add-to-input — 长按选择菜单"添加到输入框"动作 -->
     <string name="selection_add_to_chat_input">添加到输入框</string>
+    <string name="selection_quote">引用</string>
     <!-- T-minis-textkit 选择菜单按钮 -->
     <string name="selection_copy">复制</string>
     <string name="selection_copy_markdown">复制 Markdown</string>
@@ -1018,6 +1023,22 @@
 
     <!-- T187 — user-bubble long-press Edit + Exit Edit + Clear Chat dialog -->
     <string name="chat_longpress_edit">编辑</string>
+    <string name="chat_longpress_quote">引用</string>
+    <string name="chat_longpress_fork">从此分支</string>
+    <string name="chat_longpress_fork_desc">以这条消息为分叉点，在新会话中继续对话（原会话保持不变）。</string>
+    <string name="fork_failed">创建分支失败</string>
+    <string name="fork_scope_title">分支此对话</string>
+    <string name="fork_scope_desc">选择新分支携带多少历史。</string>
+    <string name="fork_badge_from_parent">来自父对话</string>
+    <string name="fork_delete_children_one">此对话有 1 个分支，删除后分支将保留。</string>
+    <string name="fork_delete_children_many">此对话有 %1$d 个分支，删除后分支将保留。</string>
+    <string name="fork_scope_all">全部历史</string>
+    <string name="fork_scope_all_desc">完整复制——分支与此对话完全一致。</string>
+    <string name="fork_scope_last5">最近 5 轮</string>
+    <string name="fork_scope_last5_desc">轻量分支——只带最近 5 轮和这条消息。</string>
+    <string name="fork_failed_streaming">仍在生成中</string>
+    <string name="fork_failed_compacting">等回复结束后再分支。</string>
+    <string name="fork_failed_empty">正在压缩上下文</string>
     <string name="chat_edit_exit_button">退出编辑</string>
     <string name="chat_clear_dialog_body">删除此会话的所有消息？工作区文件、附件和卸载内容会保留。</string>
     <string name="chat_clear_dialog_confirm">清除</string>

@@ -41,6 +41,26 @@ class PersistentShell(
 
     companion object {
         private const val TAG = "PersistentShell"
+
+        /**
+         * [hud-truthful-sampler] Resolve the OS pid of a [ProcessBuilder]-spawned
+         * child on Android. `java.lang.Process.pid()` (Java 9+) is NOT on the
+         * Android compile classpath, so read the private `pid` field every
+         * concrete Process impl keeps. Returns 0 when it can't be resolved.
+         * Shared with [TerminalSession]/[ShellExecutor] registration paths.
+         */
+        fun resolvePid(proc: Process): Int {
+            return try {
+                val f = proc.javaClass.declaredFields.firstOrNull { it.name == "pid" }
+                    ?: proc.javaClass.superclass?.declaredFields?.firstOrNull { it.name == "pid" }
+                if (f == null) return 0
+                f.isAccessible = true
+                (f.get(proc) as? Number)?.toInt() ?: return 0
+            } catch (_: Throwable) {
+                0
+            }
+        }
+
         // [P2-proot-native-leak] Poll cadence for the in-command PRoot child
         // RSS monitor. Cheap /proc read; every poll catches a mid-run OOM at
         // this granularity and lets ExecutionCoordinator recycle pre-crash.
@@ -54,6 +74,9 @@ class PersistentShell(
 
     @Volatile
     private var process: Process? = null
+
+    /** [hud-truthful-sampler] PRoot tracer PID of the live shell (0 = unknown). */
+    private var prootPid: Int = 0
 
     @Volatile
     private var stdinWriter: BufferedWriter? = null
@@ -119,17 +142,7 @@ class PersistentShell(
      * that every concrete Process impl keeps. Returns 0 if it can't be
      * resolved (caller then treats the shell as "no process to monitor").
      */
-    private fun processPid(proc: Process): Int {
-        return try {
-            val f = proc.javaClass.declaredFields.firstOrNull { it.name == "pid" }
-                ?: proc.javaClass.superclass?.declaredFields?.firstOrNull { it.name == "pid" }
-            if (f == null) return 0
-            f.isAccessible = true
-            (f.get(proc) as? Number)?.toInt() ?: return 0
-        } catch (_: Throwable) {
-            0
-        }
-    }
+    private fun processPid(proc: Process): Int = resolvePid(proc)
 
     private class CommandCallback(
         val marker: String,
@@ -260,6 +273,15 @@ class PersistentShell(
 
         val p = processBuilder.start()
         process = p
+        // [hud-truthful-sampler] Register the PRoot tracer PID so the live
+        // CPU/MEM HUD attributes guest CPU/RSS to the process that actually
+        // runs the workload (ptrace bills guest syscalls to this tracer).
+        prootPid = PersistentShell.resolvePid(p)
+        if (prootPid > 0) {
+            SandboxProcRegistry.register(prootPid)
+        } else {
+            Log.w(TAG, "Could not resolve PRoot tracer pid — HUD will under-report for this shell")
+        }
         stdinWriter = BufferedWriter(OutputStreamWriter(p.outputStream, StandardCharsets.UTF_8))
 
         // Start background reader thread
@@ -348,6 +370,14 @@ class PersistentShell(
         process = null
         stdinWriter = null
         Log.i(TAG, "Persistent shell process exited")
+
+        // [hud-truthful-sampler] The shell died outside stop() (OOM kill,
+        // --kill-on-exit cascade) — drop it from the HUD registry so the
+        // sampler doesn't keep probing a dead /proc entry.
+        if (prootPid > 0) {
+            SandboxProcRegistry.unregister(prootPid)
+            prootPid = 0
+        }
     }
 
     private fun feedLines(text: String, callback: (String) -> Unit) {
@@ -532,6 +562,11 @@ class PersistentShell(
      */
     fun stop() {
         generation++
+        // [hud-truthful-sampler] Drop the tracer from the HUD registry.
+        if (prootPid > 0) {
+            SandboxProcRegistry.unregister(prootPid)
+            prootPid = 0
+        }
         try { stdinWriter?.close() } catch (_: Exception) {}
         stdinWriter = null
         val proc = process

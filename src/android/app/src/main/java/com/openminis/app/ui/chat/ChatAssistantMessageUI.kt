@@ -235,6 +235,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.CallSplit
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
@@ -988,12 +989,17 @@ internal fun ToolCallRunGroup(
     onOpenDetail: (String) -> Unit = {},
     onRerunFromHere: (() -> Unit)? = null,
     onCopyDetails: (() -> Unit)? = null,
+    // [T-message-fork] Branch the conversation from this assistant turn.
+    // Null while streaming — forking mid-turn would copy partial state.
+    onFork: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val isRunning = group.isRunning
     // No tools → nothing to render (thinking no longer lives in this card;
     // it's a separate AssistantThinking row upstream).
     if (group.tools.isEmpty()) return
+    // [T-message-fork] Long-press menu state for the header branch action.
+    var showGroupMenu by remember { mutableStateOf(false) }
     // [T-android-run-group-manual] The card is collapsed by default and
     // never auto-expands, not even while running — the header itself IS the
     // live status (spinner + "Running N tools" / "Thinking…"), so an
@@ -1030,6 +1036,15 @@ internal fun ToolCallRunGroup(
                 .clip(RoundedCornerShape(14.dp))
                 .background(ChatColors.toolCapsuleBg, RoundedCornerShape(14.dp))
                 .border(0.5.dp, ChatColors.toolBorder, RoundedCornerShape(14.dp))
+                // [T-message-fork] Long-press the header → branch menu. Tap
+                // still toggles expansion; detectTapGestures lets both live
+                // on the same header without eating each other's events.
+                .pointerInput(onFork) {
+                    if (onFork == null) return@pointerInput
+                    detectTapGestures(
+                        onLongPress = { showGroupMenu = true },
+                    )
+                }
                 .clickable {
                     expanded = !expanded
                 }
@@ -1102,6 +1117,23 @@ internal fun ToolCallRunGroup(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(start = 22.dp),
+                    )
+                }
+            }
+
+            // [T-message-fork] Header long-press menu: branch the conversation
+            // from this assistant turn into a new session. Mirrors the pill
+            // menu style (MinisMenu + DropdownMenuItem + leading icon).
+            if (showGroupMenu && onFork != null) {
+                MinisMenu(
+                    expanded = true,
+                    onDismissRequest = { showGroupMenu = false },
+                    offset = androidx.compose.ui.unit.DpOffset(0.dp, 6.dp),
+                ) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.chat_longpress_fork)) },
+                        onClick = { showGroupMenu = false; onFork() },
+                        leadingIcon = { Icon(Icons.Default.CallSplit, contentDescription = null, modifier = Modifier.size(18.dp)) },
                     )
                 }
             }

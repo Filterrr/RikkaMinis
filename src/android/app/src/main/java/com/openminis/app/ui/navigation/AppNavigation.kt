@@ -610,6 +610,14 @@ fun AppNavigation(
                         popUpTo(navController.graph.startDestinationId) { inclusive = true }
                     }
                 },
+                // [T-message-fork-polish] Drawer lineage chip: land on the
+                // source session WITH the anchor message highlighted —
+                // focusMessageId drives the existing scroll + pulse machinery.
+                onMoveToSessionFocus = { targetId, focusMessageId ->
+                    navController.safeNavigate(Routes.chat(targetId, focusMessageId)) {
+                        popUpTo(navController.graph.startDestinationId) { inclusive = true }
+                    }
+                },
                 onBrowseChatFiles = {
                     navController.safeNavigate(Routes.chatFiles(sessionId))
                 },

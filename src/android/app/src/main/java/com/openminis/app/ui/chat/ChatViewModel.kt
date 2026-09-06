@@ -755,6 +755,39 @@ class ChatViewModel(
         setInputText(joined, caretOverride = joined.length)
     }
 
+    /**
+     * [T-quote-reply] Insert [quoted] (an already-formatted Markdown
+     * blockquote from QuoteTextFormatter) into the composer as a QUOTE
+     * BLOCK, positioned so the user types their new question *below* it.
+     *
+     * Layout rules:
+     *  - Empty composer → quote block + a blank line, caret at the very
+     *    end (right on the fresh input line).
+     *  - Non-empty composer → the existing text is preserved BELOW the
+     *    quote (the quote reads as "about this text ↑"), separated by a
+     *    blank line. The caret goes between the quote and the old text —
+     *    typing starts the new question; the user can also delete the old
+     *    text if it was a stray draft.
+     *
+     * Unlike [appendToInputText] (inline snippet append), this never joins
+     * onto the current line — a blockquote must start at column 0 to
+     * render. Multiple quotes concatenate as stacked quote blocks.
+     */
+    fun quoteIntoInput(quoted: String) {
+        if (quoted.isBlank()) return
+        val current = _inputText.value
+        val joined = if (current.isBlank()) {
+            "$quoted\n\n"
+        } else {
+            "$quoted\n\n$current"
+        }
+        // Caret sits right after the quote block's trailing blank line —
+        // on the fresh line where the user's question begins. When old
+        // text was preserved below, this is the seam between the two.
+        val caret = quoted.length + 2
+        setInputText(joined, caretOverride = caret)
+    }
+
     private val _isStreaming = MutableStateFlow(false)
     val isStreaming: StateFlow<Boolean> = _isStreaming.asStateFlow()
 
@@ -5246,6 +5279,133 @@ class ChatViewModel(
             AppLogger.info(TAG_STREAM, "✏️ cancelEdit")
         }
         _editingMessageId.value = null
+    }
+
+    /**
+     * [T-message-fork] Fork the conversation from [messageId] (inclusive):
+     * copy the source session's config + every message row at or before the
+     * anchor into a NEW session, leaving the original untouched. Returns the
+     * new session id, or null when the fork is not possible (streaming /
+     * compacting / anchor not found / DB write failed).
+     *
+     * Design notes (see the feat/message-fork commit message for the full
+     * rationale):
+     *  - COPY, not reference: messages rows are session-scoped by FK cascade;
+     *    compact markers, per-session skill/MCP overrides and on-disk tool
+     *    resources (minis-sessions/<sid>/) all key off the session id. A
+     *    cross-session row reference would corrupt every one of those paths.
+     *  - Zero schema change: lineage lives in the free-form `source` column
+     *    as "fork:<fromSid>:<anchorId>" (existing values: "shortcut", "share").
+     *  - The DB write is a single Room transaction (forkSessionAtomic); media
+     *    + sandbox file copies run AFTER commit — a file copy failure degrades
+     *    to a broken thumbnail, but a rolled-back fork would strand the user.
+     */
+    internal suspend fun forkFromMessage(messageId: String): ForkResult =
+        forkFromMessage(messageId, ForkScope.All)
+
+    /**
+     * Fork the conversation from [messageId] (inclusive) with a scope
+     * selector: [ForkScope.All] copies the whole history up to the anchor,
+     * [ForkScope.LastTurns] copies only the most recent [ForkScope.LastTurns.turns]
+     * user/assistant turns (the anchor's own turn always included). Scope
+     * EXISTS because a fork of a 300-turn session replicates its whole
+     * context weight; "branch from here with just the tail" is the common
+     * lightweight case.
+     */
+    internal suspend fun forkFromMessage(messageId: String, scope: ForkScope): ForkResult {
+        if (_isStreaming.value) return ForkResult.Streaming
+        if (_isCompacting.value) return ForkResult.Compacting
+        val anchor = _messages.value.firstOrNull { it.id == messageId } ?: return ForkResult.NothingToCopy
+
+        val fromSid = realSessionId
+        if (fromSid.isEmpty()) return ForkResult.NothingToCopy // draft with no rows
+
+        return withContext(Dispatchers.IO) {
+            try {
+                val sourceSession = chatRepository.getSession(fromSid)
+                    ?: return@withContext ForkResult.DbError("source session row missing")
+
+                // Resolve the anchor's real DB rows. Merged assistant bubbles
+                // carry several sourceDbIds; every one of them must be inside
+                // the copied range, so the cutoff is the MAX sort_order across
+                // all anchor source rows.
+                val anchorRows = anchor.sourceDbIds.mapNotNull { chatRepository.dao.getMessage(it) }
+                if (anchorRows.isEmpty()) return@withContext ForkResult.NothingToCopy
+                val cutoff = anchorRows.maxOf { it.sortOrder }
+
+                val rows = chatRepository.dao.messagesUpTo(fromSid, cutoff)
+                if (rows.isEmpty()) return@withContext ForkResult.NothingToCopy
+
+                // [T-message-fork-polish] Scope filter: LastTurns keeps the
+                // trailing N user/assistant turn boundaries (assistant rows
+                // count toward the turn they belong to; the anchor's rows are
+                // always kept). Applied AFTER the ≤cutoff read so the anchor
+                // inclusion guarantee holds regardless of scope.
+                val scopedRows = when (scope) {
+                    ForkScope.All -> rows
+                    is ForkScope.LastTurns -> {
+                        val turnStarts = rows.withIndex()
+                            .filter { it.value.role == "user" }
+                            .map { it.index }
+                        if (turnStarts.size <= scope.turns) rows
+                        else rows.drop(turnStarts[turnStarts.size - scope.turns])
+                    }
+                }
+                if (scopedRows.isEmpty()) return@withContext ForkResult.NothingToCopy
+
+                val forkSid = java.util.UUID.randomUUID().toString()
+                val copied = scopedRows.map { row ->
+                    row.copy(
+                        id = java.util.UUID.randomUUID().toString(),
+                        sessionId = forkSid,
+                        partsJson = ForkMapper.remapPartsJson(row.partsJson, fromSid, forkSid),
+                    )
+                }
+                // Compact markers fully inside the copied range duplicate over
+                // (the fork's model context must match the original's). Markers
+                // partially overlapping (kept-range extends past the anchor)
+                // are skipped: the fork retains the original rows the marker
+                // folded away only if their sort_order is ≤ cutoff, which the
+                // messagesUpTo query already guarantees — so a partial marker's
+                // boundary would mislead the fork's UI. Re-compact if needed.
+                val markers = chatRepository.dao.listCompactMarkers(fromSid)
+                    .filter { (it.uiBoundarySortOrder ?: it.firstKeptSortOrder) <= cutoff }
+                    .map { it.copy(id = java.util.UUID.randomUUID().toString(), sessionId = forkSid) }
+
+                chatRepository.forkSessionAtomic(
+                    source = sourceSession.copy(
+                        title = ForkMapper.forkedTitle(sourceSession.title),
+                        source = ForkMapper.forkSource(fromSid, messageId),
+                    ),
+                    forkSid = forkSid,
+                    rows = copied,
+                    markers = markers,
+                )
+
+                // Post-commit file copies (non-fatal). Media: filesDir/media/
+                // date/<sid>/…; sandbox resources: filesDir/minis-sessions/<sid>/.
+                runCatching {
+                    ForkMapper.copySessionMedia(
+                        mediaBaseDir = java.io.File(context.filesDir, "media"),
+                        fromSid = fromSid,
+                        toSid = forkSid,
+                    )
+                }
+                runCatching {
+                    ForkMapper.copySessionResourceDir(
+                        sessionsRoot = java.io.File(context.filesDir, "minis-sessions"),
+                        fromSid = fromSid,
+                        toSid = forkSid,
+                    )
+                }
+                AppLogger.info(TAG_STREAM, "🍴 fork sid=$forkSid from=$fromSid anchor=${messageId.take(8)} rows=${copied.size} markers=${markers.size}")
+                ForkResult.Success(forkSid)
+            } catch (t: Throwable) {
+                AppLogger.error(TAG_STREAM, "forkFromMessage failed: ${t.message}")
+                android.util.Log.w("ChatViewModel", "forkFromMessage: ${t.message}")
+                ForkResult.DbError(t.message ?: t.javaClass.simpleName)
+            }
+        }
     }
 
     /**
