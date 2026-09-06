@@ -36,7 +36,7 @@ import androidx.compose.material.icons.automirrored.filled.ListAlt
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ForkScopeSheet(
+internal fun ForkScopeSheet(
     onDismiss: () -> Unit,
     onScope: (ForkScope) -> Unit,
 ) {

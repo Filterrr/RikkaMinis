@@ -5300,7 +5300,7 @@ class ChatViewModel(
      *    + sandbox file copies run AFTER commit — a file copy failure degrades
      *    to a broken thumbnail, but a rolled-back fork would strand the user.
      */
-    suspend fun forkFromMessage(messageId: String): ForkResult =
+    internal suspend fun forkFromMessage(messageId: String): ForkResult =
         forkFromMessage(messageId, ForkScope.All)
 
     /**
@@ -5312,7 +5312,7 @@ class ChatViewModel(
      * context weight; "branch from here with just the tail" is the common
      * lightweight case.
      */
-    suspend fun forkFromMessage(messageId: String, scope: ForkScope): ForkResult {
+    internal suspend fun forkFromMessage(messageId: String, scope: ForkScope): ForkResult {
         if (_isStreaming.value) return ForkResult.Streaming
         if (_isCompacting.value) return ForkResult.Compacting
         val anchor = _messages.value.firstOrNull { it.id == messageId } ?: return ForkResult.NothingToCopy

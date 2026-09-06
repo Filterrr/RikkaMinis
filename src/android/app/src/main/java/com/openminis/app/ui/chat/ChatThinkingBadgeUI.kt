@@ -196,7 +196,7 @@ internal fun ThinkingLevelSheet(
 // [T-message-fork-polish] Typed fork-failure toast. Lives near the export
 // helper because both are small screen-level utilities shared by the sheet
 // callbacks hoisted in ChatScreen.
-private fun forkToast(context: android.content.Context, messageRes: Int) {
+internal fun forkToast(context: android.content.Context, messageRes: Int) {
     android.widget.Toast.makeText(
         context,
         context.getString(messageRes),
