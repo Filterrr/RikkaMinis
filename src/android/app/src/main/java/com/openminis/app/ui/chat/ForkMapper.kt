@@ -107,18 +107,26 @@ internal object ForkMapper {
             if (!dir.isDirectory) return@forEach
             val dst = File(File(sessionsRoot, toSid), subdir).apply { mkdirs() }
             dir.listFiles()?.forEach { child ->
-                if (runCatching {
-                        if (child.isDirectory) copyDirRecursive(child, File(dst, child.name))
-                        else child.copyTo(File(dst, child.name), overwrite = false).isSuccess
-                    }.getOrDefault(false)
-                ) copied++
+                val ok = runCatching {
+                    if (child.isDirectory) {
+                        copyDirRecursive(child, File(dst, child.name))
+                    } else {
+                        // copyTo returns the destination File (not a Result) —
+                        // success is verified by existence after the copy; I/O
+                        // failures throw and are caught by this runCatching.
+                        val dstFile = File(dst, child.name)
+                        child.copyTo(dstFile, overwrite = false)
+                        dstFile.exists()
+                    }
+                }.getOrDefault(false)
+                if (ok) copied++
             }
         }
         return copied
     }
 
     private fun copyDirRecursive(src: File, dst: File): Boolean {
-        if (src.isFile) return src.copyTo(dst, overwrite = false).isSuccess
+        if (src.isFile) return runCatching { src.copyTo(dst, overwrite = false); dst.exists() }.getOrDefault(false)
         dst.mkdirs()
         return src.listFiles()?.all { copyDirRecursive(it, File(dst, it.name)) } ?: true
     }
