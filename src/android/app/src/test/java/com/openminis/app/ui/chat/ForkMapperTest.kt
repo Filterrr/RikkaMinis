@@ -107,8 +107,12 @@ class ForkMapperTest {
         File(src, "unrelated/secret.txt").writeText("x")
 
         val copied = ForkMapper.copySessionResourceDir(root, "from-sid", "to-sid")
-        assertEquals(2, copied) // attachments/file.txt + the workspace dir entry
+        // Only attachments/file.txt is a copied ENTRY: the empty workspace dir
+        // has no children to copy (the destination workspace/ dir still gets
+        // created by mkdirs, but that's not an entry copy).
+        assertEquals(1, copied)
         assertTrue(File(root, "to-sid/attachments/file.txt").exists())
+        assertTrue(File(root, "to-sid/workspace").isDirectory) // shell dir exists
         assertFalse(File(root, "to-sid/unrelated").exists())
     }
 }
