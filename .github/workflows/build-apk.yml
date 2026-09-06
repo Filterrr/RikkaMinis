@@ -290,7 +290,7 @@ jobs:
         run: |
           APK=src/android/app/build/outputs/apk/release/app-release.apk
           ls -la "$APK"
-          unzip -l "$APK" | grep -E 'libproot\.so|proot-aarch64|ubuntu-base|ca-certificates_20240203
+          unzip -l "$APK" | grep -E 'libproot\.so|proot-aarch64|ubuntu-base|ca-certificates_20240203'
           EXPECTED=$(sha256sum src/android/app/src/main/jniLibs/arm64-v8a/libproot.so | cut -d' ' -f1)
           unzip -p "$APK" lib/arm64-v8a/libproot.so > /tmp/apk_libproot.so
           ACTUAL=$(sha256sum /tmp/apk_libproot.so | cut -d' ' -f1)
