@@ -5300,31 +5300,61 @@ class ChatViewModel(
      *    + sandbox file copies run AFTER commit — a file copy failure degrades
      *    to a broken thumbnail, but a rolled-back fork would strand the user.
      */
-    suspend fun forkFromMessage(messageId: String): String? {
-        if (_isStreaming.value) return null
-        if (_isCompacting.value) return null
-        val anchor = _messages.value.firstOrNull { it.id == messageId } ?: return null
+    internal suspend fun forkFromMessage(messageId: String): ForkResult =
+        forkFromMessage(messageId, ForkScope.All)
+
+    /**
+     * Fork the conversation from [messageId] (inclusive) with a scope
+     * selector: [ForkScope.All] copies the whole history up to the anchor,
+     * [ForkScope.LastTurns] copies only the most recent [ForkScope.LastTurns.turns]
+     * user/assistant turns (the anchor's own turn always included). Scope
+     * EXISTS because a fork of a 300-turn session replicates its whole
+     * context weight; "branch from here with just the tail" is the common
+     * lightweight case.
+     */
+    internal suspend fun forkFromMessage(messageId: String, scope: ForkScope): ForkResult {
+        if (_isStreaming.value) return ForkResult.Streaming
+        if (_isCompacting.value) return ForkResult.Compacting
+        val anchor = _messages.value.firstOrNull { it.id == messageId } ?: return ForkResult.NothingToCopy
 
         val fromSid = realSessionId
-        if (fromSid.isEmpty()) return null // draft with no rows — nothing to fork
+        if (fromSid.isEmpty()) return ForkResult.NothingToCopy // draft with no rows
 
         return withContext(Dispatchers.IO) {
             try {
-                val sourceSession = chatRepository.getSession(fromSid) ?: return@withContext null
+                val sourceSession = chatRepository.getSession(fromSid)
+                    ?: return@withContext ForkResult.DbError("source session row missing")
 
                 // Resolve the anchor's real DB rows. Merged assistant bubbles
                 // carry several sourceDbIds; every one of them must be inside
                 // the copied range, so the cutoff is the MAX sort_order across
                 // all anchor source rows.
                 val anchorRows = anchor.sourceDbIds.mapNotNull { chatRepository.dao.getMessage(it) }
-                if (anchorRows.isEmpty()) return@withContext null
+                if (anchorRows.isEmpty()) return@withContext ForkResult.NothingToCopy
                 val cutoff = anchorRows.maxOf { it.sortOrder }
 
                 val rows = chatRepository.dao.messagesUpTo(fromSid, cutoff)
-                if (rows.isEmpty()) return@withContext null
+                if (rows.isEmpty()) return@withContext ForkResult.NothingToCopy
+
+                // [T-message-fork-polish] Scope filter: LastTurns keeps the
+                // trailing N user/assistant turn boundaries (assistant rows
+                // count toward the turn they belong to; the anchor's rows are
+                // always kept). Applied AFTER the ≤cutoff read so the anchor
+                // inclusion guarantee holds regardless of scope.
+                val scopedRows = when (scope) {
+                    ForkScope.All -> rows
+                    is ForkScope.LastTurns -> {
+                        val turnStarts = rows.withIndex()
+                            .filter { it.value.role == "user" }
+                            .map { it.index }
+                        if (turnStarts.size <= scope.turns) rows
+                        else rows.drop(turnStarts[turnStarts.size - scope.turns])
+                    }
+                }
+                if (scopedRows.isEmpty()) return@withContext ForkResult.NothingToCopy
 
                 val forkSid = java.util.UUID.randomUUID().toString()
-                val copied = rows.map { row ->
+                val copied = scopedRows.map { row ->
                     row.copy(
                         id = java.util.UUID.randomUUID().toString(),
                         sessionId = forkSid,
@@ -5369,11 +5399,11 @@ class ChatViewModel(
                     )
                 }
                 AppLogger.info(TAG_STREAM, "🍴 fork sid=$forkSid from=$fromSid anchor=${messageId.take(8)} rows=${copied.size} markers=${markers.size}")
-                forkSid
+                ForkResult.Success(forkSid)
             } catch (t: Throwable) {
                 AppLogger.error(TAG_STREAM, "forkFromMessage failed: ${t.message}")
                 android.util.Log.w("ChatViewModel", "forkFromMessage: ${t.message}")
-                null
+                ForkResult.DbError(t.message ?: t.javaClass.simpleName)
             }
         }
     }

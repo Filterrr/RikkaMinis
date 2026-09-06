@@ -63,6 +63,22 @@ internal object ForkMapper {
         "fork:$fromSid:$anchorMessageId"
 
     /**
+     * Parse a fork provenance marker back into its parts. Null for anything
+     * that isn't a fork marker ("shortcut", "share", null, corrupt values).
+     */
+    internal fun parseForkSource(source: String?): ForkLineage? {
+        if (source == null || !source.startsWith("fork:")) return null
+        val parts = source.split(":", limit = 3)
+        if (parts.size != 3) return null
+        val (tag, fromSid, anchorId) = parts
+        if (fromSid.isEmpty() || anchorId.isEmpty()) return null
+        return ForkLineage(fromSid = fromSid, anchorMessageId = anchorId)
+    }
+
+    /** Parsed fork lineage from the `source` column. */
+    internal data class ForkLineage(val fromSid: String, val anchorMessageId: String)
+
+    /**
      * Copy the media directory of [fromSid] into [toSid] inside [mediaBaseDir]
      * (filesDir/media). Walks every date dir; a missing source is a no-op
      * (text-only sessions have no media dir). Returns the number of files
