@@ -53,6 +53,19 @@ object PRootKernel {
     /** Custom environment variables injected into every proot command. */
     val customEnvironment: MutableMap<String, String> = mutableMapOf()
 
+    /**
+     * [T-fix-tmpdir-leak] Guest-side temp directory env, seeded into every
+     * proot child alongside [customEnvironment]. The keys are the POSIX
+     * variables Debian maintainer scripts and libcs honor — none of the
+     * host's temp paths are valid inside the rootfs.
+     */
+    val GUEST_TMP_ENV: Map<String, String> = mapOf(
+        "TMPDIR" to "/tmp",
+        "TMP" to "/tmp",
+        "TEMP" to "/tmp",
+        "TEMPDIR" to "/tmp",
+    )
+
     /** Bind mounts: Linux path -> host filesystem path. */
     val bindMounts: MutableMap<String, String> = linkedMapOf()
 
@@ -89,6 +102,22 @@ object PRootKernel {
 
         // Overlay assets/default_mount/ onto the rootfs on every boot so
         rootfsManager.applyDefaultMountOverlay()
+
+        // [T-ca-bootstrap] Idempotent CA-trust gate on the boot path. The
+        // offline bootstrap in installOfflineDebs() used to be skipped
+        // whenever the package FILES were present, even when its postinst
+        // had died midway (e.g. on the leaked host $TMPDIR: update-ca-
+        // certificates' `mktemp -p "${TMPDIR:-/tmp}"` fails under set -e) —
+        // dpkg kept the unpacked package but /etc/ssl/certs/ca-certificates
+        // .crt never materialized, and every later boot kept skipping. Gate
+        // on the trust bundle instead: missing bundle → reinstall the
+        // bundled debs offline; bundle present but incomplete (factory
+        // stub) → best-effort guest-side update-ca-certificates. Serialized
+        // on RootfsManager.aptMutex; a first-install heals synchronously
+        // (~seconds, local dpkg, no network) while later boots pay one
+        // stat. HTTPS sources stay broken if it still fails — mirrors the
+        // original non-fatal intent.
+        rootfsManager.ensureCaTrust()
 
         // Re-apply user mirror selections — the overlay above ships stock
         // config files (pip.conf, .npmrc, repositories) and would otherwise
@@ -136,6 +165,18 @@ object PRootKernel {
         // Set default PATH for Ubuntu Linux
         customEnvironment.putIfAbsent("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/bin")
         customEnvironment.putIfAbsent("HOME", "/root")
+
+        // [T-fix-tmpdir-leak] Sanitize the POSIX temp-dir variables. The
+        // Android zygote seeds the app process with TMPDIR=<app cache dir>
+        // (e.g. /data/user/0/com.openminis.app/cache) and ProcessBuilder
+        // environment() inherits it, so every proot child entered the guest
+        // with a $TMPDIR that does not exist inside the rootfs. Debian
+        // maintainer scripts die on it: update-ca-certificates (run by the
+        // ca-certificates postinst) does `mktemp -p "${TMPDIR:-/tmp}"` under
+        // `set -e`, which fails with "No such file or directory" and aborts
+        // the install. Overwrite with the guest's sticky-world /tmp —
+        // putIfAbsent keeps a deliberate user-level override intact.
+        GUEST_TMP_ENV.forEach { (key, value) -> customEnvironment.putIfAbsent(key, value) }
 
         // URL interception: seed $BROWSER directly into every process envp
         // so non-login shells (which never source /etc/profile.d/minis.sh)

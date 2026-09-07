@@ -826,7 +826,7 @@ class RootfsManager private constructor(private val context: Context) {
             Log.d(TAG, "[DpkgWorld] no snapshot file, nothing to restore")
             return@withContext true
         }
-        if (!File(rootfsDir, "etc/ssl/certs/ca-certificates.crt").exists()) {
+        if (!File(rootfsDir, CA_BUNDLE_PATH).exists()) {
             // No CA trust yet (offline bootstrap failed/absent): HTTPS mirrors
             // would fail verification and HTTP mirrors can't be guaranteed
             // either — queue everything for the strike-limited retry instead
@@ -990,6 +990,15 @@ class RootfsManager private constructor(private val context: Context) {
             "PROOT_TMP_DIR" to PRootKernel.getProotTmpDir(context).absolutePath,
             "LD_LIBRARY_PATH" to nativeLibDir.absolutePath,
         )
+        // [T-fix-tmpdir-leak] Guest-side temp dirs. ProcessBuilder merges
+        // the app process env (TMPDIR=<Android cache dir>) with loaderEnv;
+        // inside the rootfs that host path does not exist and Debian
+        // maintainer scripts (update-ca-certificates' `mktemp -p
+        // "${TMPDIR:-/tmp}"` under set -e) abort on it. Pin the guest paths
+        // explicitly — this covers the offline CA install, dpkg-world
+        // restore and apt-mark probes, which run outside
+        // PRootKernel.boot()'s customEnvironment seeding.
+        env.putAll(PRootKernel.GUEST_TMP_ENV)
         File(nativeLibDir, "libproot-loader.so").takeIf { it.exists() }?.let {
             env["PROOT_LOADER"] = it.absolutePath
         }
@@ -1090,21 +1099,36 @@ class RootfsManager private constructor(private val context: Context) {
     /**
      * Offline install of the CA bootstrap trio (ca-certificates, openssl,
      * libssl3t64) from assets/deb-offline/ via dpkg inside the guest.
-     * No network, no apt index, mirrors the old apk-offline pattern. Skipped
-     * silently when ca-certificates is already present (idempotent re-install
-     * on every fresh extraction; reset() re-runs it by construction).
+     * No network, no apt index, mirrors the old apk-offline pattern.
+     *
+     * [T-ca-bootstrap-heal] The old "already present" guard keyed on the
+     * package files — but a FAILED postinst (the leaked host $TMPDIR broke
+     * update-ca-certificates' mktemp under set -e) leaves the debs unpacked
+     * with NO trust bundle, and every later boot kept skipping. Now the
+     * skip requires the bundle itself to exist; dpkg -i over a half-
+     * configured package re-runs postinst and heals in place.
+     *
+     * Lock discipline: caller must hold [aptMutex] (the previous internal
+     * `aptMutex.withLock` deadlocked — this is invoked from
+     * [installIfNeededUnlocked], which already holds it, and Kotlin Mutex
+     * is non-reentrant). With the internal lock, the very first install
+     * hung forever; a force-kill left `.arch` written but no CA bundle,
+     * and every later boot took the `isInstalled` early-return — the
+     * bootstrap never ran again. That deadlock is the root cause of the
+     * "no CA certificates" reports.
      */
-    private suspend fun installOfflineDebs() = withContext(Dispatchers.IO) {
-        if (File(rootfsDir, "etc/ssl/certs/ca-certificates.crt").exists()) {
-            Log.d(TAG, "[CaBootstrap] ca-certificates already present, skip")
-            return@withContext
+    private suspend fun installOfflineDebs(): Boolean = withContext(Dispatchers.IO) {
+        if (File(rootfsDir, CA_BUNDLE_PATH).exists()) {
+            Log.d(TAG, "[CaBootstrap] ca-certificates trust bundle present, skip")
+            return@withContext true
         }
         if (!prootBinary.exists()) {
             Log.w(TAG, "[CaBootstrap] proot binary not available, skip")
-            return@withContext
+            return@withContext false
         }
         val debDir = File(rootfsDir, "tmp/deb-offline")
         debDir.mkdirs()
+        var installed = false
         try {
             val copied = mutableListOf<String>()
             for (name in OFFLINE_DEBS) {
@@ -1120,27 +1144,103 @@ class RootfsManager private constructor(private val context: Context) {
             }
             if (copied.size < OFFLINE_DEBS.size) {
                 Log.w(TAG, "[CaBootstrap] only ${copied.size}/${OFFLINE_DEBS.size} debs staged, skip install")
-                return@withContext
+                return@withContext false
             }
-            aptMutex.withLock {
-                val cmd = listOf(
-                    prootBinary.absolutePath, "-0", "--link2symlink", "--kill-on-exit",
-                    "-r", rootfsDir.absolutePath,
-                    "-b", "/dev", "-b", "/proc", "-b", "/sys", "-w", "/root",
-                    "/bin/sh", "-c",
-                    "DEBIAN_FRONTEND=noninteractive dpkg -i ${copied.joinToString(" ")}"
-                )
-                val r = runProotWithDeadline(cmd, prootLoaderEnv(), timeoutSec = 120)
-                Log.i(TAG, "[CaBootstrap] dpkg -i exit=${r.exitCode} output=${r.output.takeLast(300)}")
-                if (r.exitCode == 0) {
-                    Log.i(TAG, "[CaBootstrap] CA trust installed (${OFFLINE_DEBS.size} debs)")
-                } else {
-                    Log.w(TAG, "[CaBootstrap] offline CA install failed rc=${r.exitCode} — HTTPS sources stay broken until user installs ca-certificates")
-                }
+            // Caller holds aptMutex (see kdoc) — dpkg runs directly.
+            val cmd = listOf(
+                prootBinary.absolutePath, "-0", "--link2symlink", "--kill-on-exit",
+                "-r", rootfsDir.absolutePath,
+                "-b", "/dev", "-b", "/proc", "-b", "/sys", "-w", "/root",
+                "/bin/sh", "-c",
+                // [T-fix-tmpdir-leak] Defensive: the proot child's env is
+                // sanitized in prootLoaderEnv(), but the postinst shells
+                // out to update-ca-certificates whose mktemp targets
+                // ${TMPDIR:-/tmp} — pin TMPDIR inside the guest command
+                // too so the CA install never depends on caller env.
+                "TMPDIR=/tmp/ DEBIAN_FRONTEND=noninteractive dpkg -i ${copied.joinToString(" ")}"
+            )
+            val r = runProotWithDeadline(cmd, prootLoaderEnv(), timeoutSec = 120)
+            Log.i(TAG, "[CaBootstrap] dpkg -i exit=${r.exitCode} output=${r.output.takeLast(300)}")
+            if (r.exitCode == 0) {
+                Log.i(TAG, "[CaBootstrap] CA trust installed (${OFFLINE_DEBS.size} debs)")
+                installed = true
+            } else {
+                Log.w(TAG, "[CaBootstrap] offline CA install failed rc=${r.exitCode} — HTTPS sources stay broken until user installs ca-certificates")
             }
         } finally {
             debDir.deleteRecursively()
         }
+        installed
+    }
+
+    /**
+     * [T-ca-bootstrap-heal] Boot-time CA-trust gate. Cheap: at most one
+     * stat when the bundle is healthy. When the offline debs were unpacked
+     * but the trust bundle never got built (failed postinst — see
+     * [installOfflineDebs]), re-run the offline install, which re-executes
+     * the postinst over the half-configured package.
+     *
+     * When the bundle exists but is suspiciously small — the factory Ubuntu
+     * base image ships a stub with ~2 certificates — run
+     * update-ca-certificates inside the guest once (best-effort; usually
+     * no-op for a healthy install) so upgrades of the base image that lost
+     * the bundle self-heal too.
+     *
+     * Returns true when CA trust is present afterwards. Never throws;
+     * callers proceed even on false — restoreDpkgWorld() re-checks the
+     * bundle before any apt network traffic.
+     */
+    suspend fun ensureCaTrust(): Boolean = withContext(Dispatchers.IO) {
+        aptMutex.withLock { ensureCaTrustUnlocked() }
+    }
+
+    /**
+     * Lock-free core of [ensureCaTrust] — caller holds [aptMutex]. Two
+     * entry points: [PRootKernel.boot] runs it on the boot path (after
+     * installIfNeeded, no lock held), and installOfflineDebs keeps its
+     * caller-holds-lock contract for direct install-path use.
+     */
+    private suspend fun ensureCaTrustUnlocked(): Boolean {
+        val bundle = File(rootfsDir, CA_BUNDLE_PATH)
+        if (!isInstalled) return false
+        if (bundle.exists()) {
+            val certs = countTrustedCerts(bundle.readText())
+            if (certs >= MIN_EXPECTED_CA_CERTS) return true
+            Log.w(TAG, "[CaBootstrap] trust bundle thin ($certs certs < $MIN_EXPECTED_CA_CERTS) — regenerating inside guest")
+            val ok = runUpdateCaCertificates()
+            if (ok && countTrustedCerts(bundle.readText()) >= MIN_EXPECTED_CA_CERTS) return true
+            // Regeneration didn't take — fall through to the full offline
+            // reinstall below, which re-runs postinst unconditionally.
+        }
+        Log.i(TAG, "[CaBootstrap] trust bundle missing/unhealthy — offline (re)install")
+        val installed = try {
+            installOfflineDebs()
+        } catch (t: Throwable) {
+            Log.e(TAG, "[CaBootstrap] offline reinstall crashed", t)
+            false
+        }
+        return installed && File(rootfsDir, CA_BUNDLE_PATH).exists()
+    }
+
+    /**
+     * Run `update-ca-certificates` inside the guest (best-effort, ~seconds).
+     * Uses the same minimal proot invocation as the offline install; with
+     * --fresh omitted it only fills in what is missing.
+     */
+    private suspend fun runUpdateCaCertificates(): Boolean = withContext(Dispatchers.IO) {
+        if (!prootBinary.exists()) return@withContext false
+        val cmd = listOf(
+            prootBinary.absolutePath, "-0", "--link2symlink", "--kill-on-exit",
+            "-r", rootfsDir.absolutePath,
+            "-b", "/dev", "-b", "/proc", "-b", "/sys", "-w", "/root",
+            "/bin/sh", "-c",
+            "TMPDIR=/tmp/ update-ca-certificates"
+        )
+        val r = runProotWithDeadline(cmd, prootLoaderEnv(), timeoutSec = 120)
+        if (r.exitCode != 0) {
+            Log.w(TAG, "[CaBootstrap] update-ca-certificates exit=${r.exitCode} output=${r.output.takeLast(200)}")
+        }
+        r.exitCode == 0
     }
 
     /**
@@ -1510,6 +1610,34 @@ class RootfsManager private constructor(private val context: Context) {
             "openssl_3.0.13-0ubuntu3_arm64.deb",
             "ca-certificates_20240203_all.deb",
         )
+
+        /**
+         * [T-ca-bootstrap-heal] Guest path of the CA trust bundle. Presence
+         * (not just package-file presence) is what gates the offline
+         * bootstrap skip and the boot-time ensureCaTrust() gate — a failed
+         * postinst leaves the debs unpacked but no bundle, which must heal.
+         */
+        internal const val CA_BUNDLE_PATH = "etc/ssl/certs/ca-certificates.crt"
+
+        /**
+         * [T-ca-bootstrap-heal] Minimum PEM certificates a healthy trust
+         * bundle carries. The factory Ubuntu base image ships NO
+         * ca-certificates at all (verified against ubuntu-base 24.04.4:
+         * no /etc/ssl/certs/ca-certificates.crt in the tarball), so any
+         * bundle present came from our bootstrap (100+ certs) or a user
+         * install. The floor exists to catch a truncated/zeroed bundle
+         * from a killed update-ca-certificates run — treat a mid-write
+         * remnant (< 20 certs) as unhealthy and regenerate.
+         */
+        internal const val MIN_EXPECTED_CA_CERTS = 20
+
+        /**
+         * Count PEM certificates in a trust bundle. Pure function so the
+         * health heuristic is JVM-testable without an Android Context
+         * (mirrors [parseIntegrityManifest]).
+         */
+        internal fun countTrustedCerts(pem: String): Int =
+            pem.split("-----BEGIN CERTIFICATE-----").size - 1
 
         /**
          * Boot-time dpkg-world retry attempts before the queue is dropped.
