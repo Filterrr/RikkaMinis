@@ -3,6 +3,8 @@ package com.openminis.app.tools
 import com.openminis.app.data.model.AgentToolDefinition
 import com.openminis.app.data.model.AgentToolParam
 import org.json.JSONObject
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 
 /**
  * Minimal skill info required by sub-agent config parsing and prompt building.
@@ -107,6 +109,58 @@ object SubagentSkill {
     /** Default budget for sub-agents when the skill doesn't specify. */
     private const val DEFAULT_MAX_TURNS = 12
     private const val DEFAULT_MAX_OUTPUT_TOKENS = 4096
+
+    /**
+     * [T-subagent-runtime-preamble] Marker line the runtime prepends to the
+     * system prompt when [buildSystemPrompt] injects the runtime preamble.
+     * Tests (and any downstream consumer) can detect injected prompts via
+     * [SubagentResult.hasRuntimePreamble].
+     */
+    const val RUNTIME_PREAMBLE_MARKER = "[runtime context]"
+
+    /**
+     * Canonical final-report contract keys. [parseReportStatus] scans the
+     * report's tail for these keys (labelled "field:" at line start) so a
+     * report's declared outcome can decorate the prompt text the parent
+     * receives — the [A2] auto-annotation of partial/failed outcomes.
+     */
+    val REPORT_STATUS_KEYS: Set<String> = setOf("status", "结果状态", "状态")
+    val REPORT_FAILED_STATUS_TOKENS: Set<String> = setOf("failed", "失败")
+    val REPORT_PARTIAL_STATUS_TOKENS: Set<String> = setOf("partial", "部分完成", "未完成", "不完整")
+
+    /**
+     * [A2] Extract the sub-agent's self-declared report `status` from the
+     * final report text. Scans only the last [REPORT_SCAN_WINDOW] lines —
+     * the structured contract pins status to the report tail — and accepts
+     * a status line even when a nested "status" string appears first in
+     * prose above the contract block.
+     *
+     * Recognised shapes: `status: partial`, `- status: done`,
+     * `- status: partial (budget exhausted…)`, `结果状态：部分完成`.
+     * Returns null when no recognisable status line exists (prose reports,
+     * truncated output) — callers then fall back to runtime-derived state.
+     */
+    fun parseReportStatus(report: String): String? {
+        if (report.isBlank()) return null
+        val window = report.trimEnd().lines().takeLast(REPORT_SCAN_WINDOW)
+        for (raw in window.reversed()) {  // most recent self-assessment wins
+            val line = raw.trim()
+            if (line.isEmpty()) continue
+            val label = line.substringBefore(':').substringBefore('：').trim()
+                .removePrefix("-").removePrefix("*").trim().lowercase()
+            if (label !in REPORT_STATUS_KEYS) continue
+            val value = line.substringAfter(':').substringAfter('：').trim().lowercase()
+            val token = value.substringBefore('(').substringBefore('（').trim()
+            return when {
+                token in REPORT_FAILED_STATUS_TOKENS -> "failed"
+                token in REPORT_PARTIAL_STATUS_TOKENS -> "partial"
+                else -> null  // done / unknown / empty → no annotation
+            }
+        }
+        return null
+    }
+
+    private const val REPORT_SCAN_WINDOW = 10
 
     /** [T-subagent-parallel] Hard cap on concurrent sub-agents per chat. */
     const val MAX_PARALLEL_CAP = 4
@@ -312,31 +366,59 @@ object SubagentSkill {
      * Build the system prompt for a sub-agent from the skill body.
      * Strips frontmatter, returns the raw body text.
      * Falls back to the skill description when the body is only frontmatter.
+     *
+     * [T-subagent-runtime-preamble] When [runtimeContext] is non-null, a
+     * short preamble (marker + context + user task) is prepended to the
+     * body. This closes a real capability gap: the sub-agent previously had
+     * no idea of the current date/time or where its durable artifacts
+     * belong, and typically burned its first turn discovering both. The
+     * parameter is optional so existing callers (and exact-match prompt
+     * tests) keep their old behaviour by default.
      */
-    fun buildSystemPrompt(skill: SkillInfo): String {
+    fun buildSystemPrompt(skill: SkillInfo, runtimeContext: String? = null): String {
         val body = skill.body
-        if (body.isBlank()) return skill.description
-
-        val lines = body.lines()
-        if (lines.size >= 2 && lines[0].trim().startsWith("---")) {
-            val endIdx = lines.subList(1, lines.size)
-                .indexOfFirst { it.trim().startsWith("---") }
-                .takeIf { it >= 0 }
-                ?.plus(1)
-            if (endIdx != null) {
-                val contentLines = if (endIdx + 1 < lines.size) {
-                    lines.subList(endIdx + 1, lines.size)
+        val base = when {
+            body.isBlank() -> skill.description
+            else -> {
+                val lines = body.lines()
+                if (lines.size >= 2 && lines[0].trim().startsWith("---")) {
+                    val endIdx = lines.subList(1, lines.size)
+                        .indexOfFirst { it.trim().startsWith("---") }
+                        .takeIf { it >= 0 }
+                        ?.plus(1)
+                    if (endIdx != null) {
+                        val contentLines = if (endIdx + 1 < lines.size) {
+                            lines.subList(endIdx + 1, lines.size)
+                        } else {
+                            emptyList()
+                        }
+                        val content = contentLines.joinToString("\n").trim()
+                        if (content.isNotBlank()) content
+                        // Frontmatter-only skill (no body content) → fall back to description.
+                        else skill.description
+                    } else {
+                        body
+                    }
                 } else {
-                    emptyList()
+                    body
                 }
-                val content = contentLines.joinToString("\n").trim()
-                if (content.isNotBlank()) return content
-                // Frontmatter-only skill (no body content) → fall back to description.
-                return skill.description
             }
         }
-        return body
+        if (runtimeContext.isNullOrBlank()) return base
+        return "$RUNTIME_PREAMBLE_MARKER\n$runtimeContext\n\n# Task from the parent agent\n\n$base"
     }
+
+    /**
+     * [T-subagent-runtime-preamble] Runtime context line for [buildSystemPrompt]:
+     * current local date/time (the sub-agent previously had to spend a turn
+     * running `date` to learn what day it is) and the durable workspace
+     * root for artifacts. Pure function of [now] → JVM-testable.
+     */
+    fun buildRuntimeContext(now: LocalDateTime = LocalDateTime.now()): String =
+        "Current date/time: " + now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")) +
+            " (local time). Durable artifacts directory: /var/minis/workspace/ (persists " +
+            "across the session — write deliverables there, reference them by path)."
+
 
     // ── Helpers ──────────────────────────────────────────────────────────
 
