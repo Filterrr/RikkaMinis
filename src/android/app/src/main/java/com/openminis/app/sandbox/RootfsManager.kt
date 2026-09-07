@@ -1044,8 +1044,6 @@ class RootfsManager private constructor(private val context: Context) {
     /** Host-side retry list for pip packages that failed to restore. */
     val pipWorldFailedFile: File get() = File(context.filesDir, "pip-world-failed.txt")
 
-    private const val MAX_PIP_WORLD_RETRY_STRIKES = 3
-
     /**
      * Snapshot USER pip packages to the host side (filesDir/pip-world.txt)
      * as leaf package names (`pip list --not-required` minus the factory
@@ -1998,6 +1996,9 @@ class RootfsManager private constructor(private val context: Context) {
          * every startup with a doomed apt round-trip.
          */
         private const val MAX_DPKG_WORLD_RETRY_STRIKES = 3
+
+        /** [T-pip-world] Boot-retry cap for pip packages (see retryFailedPipWorld). */
+        private const val MAX_PIP_WORLD_RETRY_STRIKES = 3
 
         /**
          * Parse the line-based integrity manifest text ("rel/path=size" per
