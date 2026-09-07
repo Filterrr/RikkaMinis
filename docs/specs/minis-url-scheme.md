@@ -153,7 +153,7 @@ let linuxPath = "/var/minis/\(url.host!)\(url.path)"
 /var/minis/<namespace>/<path>  →  <dataPath>/var/minis/<namespace>/<path>
 ```
 
-Where `dataPath` = `~/Documents/alpine-rootfs/data/`.
+Where `dataPath` = `~/Documents/ubuntu-rootfs/data/`.
 
 ```swift
 func resolveHostPath(_ linuxPath: String) -> URL? {

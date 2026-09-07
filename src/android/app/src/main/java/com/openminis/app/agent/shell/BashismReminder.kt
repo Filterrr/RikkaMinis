@@ -2,7 +2,7 @@ package com.openminis.app.agent.shell
 
 /**
  * Builds the <system-reminder> appended after a sh tool-result when a script hit
- * bashism rules but ran under busybox sh (T-bash-on-demand §4.2). Isomorphic to
+ * bashism rules but ran under dash (T-bash-on-demand §4.2). Isomorphic to
  * iOS BashismReminder.swift. Script lines are untrusted, so they are sanitized
  * before embedding (M4).
  */
@@ -33,11 +33,11 @@ object BashismReminder {
         val sb = StringBuilder()
         sb.appendLine("<system-reminder>")
         if (installFailure != null) {
-            sb.appendLine("This command was executed by busybox sh (NOT bash), because bash installation failed: ${sanitize(installFailure)}.")
+            sb.appendLine("This command was executed by /bin/sh dash (NOT bash), because bash installation failed: ${sanitize(installFailure)}.")
         } else {
-            sb.appendLine("This command was executed by busybox sh (NOT bash).")
+            sb.appendLine("This command was executed by /bin/sh dash (NOT bash).")
         }
-        sb.appendLine("The script contains bash-only syntax that busybox sh handles incorrectly, which is")
+        sb.appendLine("The script contains bash-only syntax that dash handles incorrectly, which is")
         sb.appendLine("likely (part of) why it failed or produced a wrong result. Detected:")
         sb.appendLine()
         for (h in shown) {

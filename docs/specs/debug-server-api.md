@@ -4,7 +4,25 @@ MinisApp includes a built-in JSON-RPC 2.0 debug server (DEBUG builds only) for r
 
 ## Connection
 
-The server listens on **`http://localhost:8321`** and accepts only **POST** requests with `Content-Type: application/json`.
+The server listens on **`http://127.0.0.1:5321`** (Android: `DebugServer`,
+all interfaces with the loopback address reachable) and accepts only **POST**
+requests with `Content-Type: application/json`.
+
+### Authentication (Android)
+
+Every client — loopback included — must present the per-install debug token
+in the **`X-Minis-Token`** header. There is no loopback exemption: an
+on-device browser page can `fetch('http://127.0.0.1:5321/')` from any
+origin, so a token-free loopback would be a drive-by RPC surface (the
+contract is pinned by `DebugServerAuthTest`). Token comparison is
+constant-time and an empty expected token authorizes nobody.
+
+```bash
+curl -s http://127.0.0.1:5321/ \
+  -H "X-Minis-Token: $DEBUG_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{ "jsonrpc": "2.0", "id": 1, "method": "debug.appInfo" }'
+```
 
 ## Protocol
 
@@ -23,13 +41,15 @@ All requests follow the [JSON-RPC 2.0](https://www.jsonrpc.org/specification) sp
 
 ### `debug.viewTree`
 
-Dump the full UIKit view hierarchy starting from all connected windows.
+Dump the full View hierarchy of the current activity. A Compose-hosting
+View appends its merged **Compose semantics tree** under a `compose` child,
+so both worlds show up in one walk.
 
 **Params:**
 
 | Name       | Type  | Default | Description                        |
 |------------|-------|---------|------------------------------------|
-| `maxDepth` | `int` | `50`    | Maximum depth to recurse into subviews |
+| `maxDepth` | `int` | `50`    | Maximum depth to recurse (clamped 1..200) |
 
 **Response:**
 
@@ -37,18 +57,28 @@ Returns a tree (or array of trees for multiple windows). Each node:
 
 ```json
 {
-  "type": "UIView",
+  "type": "TextView",
   "address": "0x1234abcd",
-  "frame": { "x": 0, "y": 0, "w": 393, "h": 852 },
-  "identifier": "optional_accessibility_id",
+  "bounds": { "left": 0, "top": 0, "right": 393, "bottom": 852, "width": 393, "height": 852 },
+  "text": "optional TextView content",
+  "description": "optional contentDescription",
+  "compose": [ { "type": "SemanticsNode", "..." : "..." } ],
   "children": [ ... ]
 }
 ```
 
+Field notes: `type` is the Android `javaClass.simpleName` (e.g. `TextView`,
+`ComposeView`) — not `UIView`; `bounds` is `left/top/right/bottom` plus
+derived `width/height` in px, not an x/y/w/h frame; `address` is a per-walk
+hex token resolvable later by `debug.inspect` / `debug.highlight`.
+
 **Example:**
 
 ```bash
-curl -s http://localhost:8321 -d '{
+curl -s http://127.0.0.1:5321/ \
+  -H "X-Minis-Token: $DEBUG_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
   "jsonrpc": "2.0", "id": 1,
   "method": "debug.viewTree",
   "params": { "maxDepth": 3 }
@@ -59,26 +89,26 @@ curl -s http://localhost:8321 -d '{
 
 ### `debug.search`
 
-Search the view hierarchy by type name or accessibility identifier.
+Search the view + semantics tree by type name, text, or content description.
 
 **Params:**
 
 | Name      | Type     | Default | Description                                          |
 |-----------|----------|---------|------------------------------------------------------|
 | `keyword` | `string` | —       | **Required.** Case-insensitive substring to match    |
-| `scope`   | `string` | `"all"` | `"type"`, `"identifier"`, or `"all"` (both)          |
+| `scope`   | `string` | `"all"` | `"type"`, `"text"`, or `"all"` (both)                |
 
 **Response:**
 
-Array of matching views:
+Array of matching nodes (same node shape as `debug.viewTree`):
 
 ```json
 [
   {
-    "type": "UITextField",
+    "type": "EditText",
     "address": "0xabcd1234",
-    "frame": { "x": 12, "y": 700, "w": 369, "h": 44 },
-    "identifier": "chatInput"
+    "bounds": { "left": 12, "top": 700, "right": 381, "bottom": 744, "width": 369, "height": 44 },
+    "text": "Message"
   }
 ]
 ```
@@ -86,7 +116,10 @@ Array of matching views:
 **Example:**
 
 ```bash
-curl -s http://localhost:8321 -d '{
+curl -s http://127.0.0.1:5321/ \
+  -H "X-Minis-Token: $DEBUG_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
   "jsonrpc": "2.0", "id": 2,
   "method": "debug.search",
   "params": { "keyword": "TextField", "scope": "type" }
@@ -97,7 +130,10 @@ curl -s http://localhost:8321 -d '{
 
 ### `debug.inspect`
 
-Get detailed properties of a specific view by its memory address.
+Get detailed properties of a specific view by its address token. Android
+returns the same node record as `viewTree` (`type` / `bounds` / `text` /
+`description` / `compose` / `children`); the iOS-era constraint dump in the
+example below predates the Android implementation.
 
 **Params:**
 
@@ -135,7 +171,7 @@ Get detailed properties of a specific view by its memory address.
 **Example:**
 
 ```bash
-curl -s http://localhost:8321 -d '{
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{
   "jsonrpc": "2.0", "id": 3,
   "method": "debug.inspect",
   "params": { "address": "0x1234abcd" }
@@ -167,7 +203,7 @@ Returns `{ "ok": false }` if the view was not found.
 **Example:**
 
 ```bash
-curl -s http://localhost:8321 -d '{
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{
   "jsonrpc": "2.0", "id": 4,
   "method": "debug.highlight",
   "params": { "address": "0x1234abcd", "color": "blue", "duration": 3 }
@@ -199,7 +235,7 @@ When `last` is `true`, returns the single most recent trace object, or `{ "trace
 **Example:**
 
 ```bash
-curl -s http://localhost:8321 -d '{
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{
   "jsonrpc": "2.0", "id": 5,
   "method": "debug.agentTrace",
   "params": { "last": true }
@@ -236,7 +272,7 @@ When `recursive` is `true`, directory entries include a `children` array.
 **Example:**
 
 ```bash
-curl -s http://localhost:8321 -d '{
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{
   "jsonrpc": "2.0", "id": 6,
   "method": "debug.ls",
   "params": { "path": "/var/minis", "recursive": true, "maxDepth": 2 }
@@ -273,7 +309,7 @@ Binary files (or when `base64` is `true`) return `"encoding": "base64"` with bas
 **Example:**
 
 ```bash
-curl -s http://localhost:8321 -d '{
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{
   "jsonrpc": "2.0", "id": 7,
   "method": "debug.readFile",
   "params": { "path": "/etc/hostname" }
@@ -294,8 +330,8 @@ Get app paths and disk usage information.
 {
   "documentsPath": "/path/to/Documents",
   "libraryPath": "/path/to/Library",
-  "dataPath": "/path/to/alpine-rootfs/data",
-  "rootfsPath": "/path/to/Documents/alpine-rootfs",
+  "dataPath": "/path/to/ubuntu-rootfs/data",
+  "rootfsPath": "/path/to/Documents/ubuntu-rootfs",
   "bundlePath": "/path/to/Minis.app",
   "diskUsage": {
     "documents": 12345678,
@@ -308,7 +344,7 @@ Get app paths and disk usage information.
 **Example:**
 
 ```bash
-curl -s http://localhost:8321 -d '{
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{
   "jsonrpc": "2.0", "id": 8,
   "method": "debug.appInfo",
   "params": {}
@@ -342,7 +378,7 @@ Capture a PNG screenshot of the entire app screen.
 
 ```bash
 # Capture and save screenshot
-curl -s http://localhost:8321 -d '{
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{
   "jsonrpc": "2.0", "id": 1,
   "method": "debug.screenshot",
   "params": { "scale": 2 }
@@ -416,21 +452,21 @@ Notes:
 
 ```bash
 # Get all recent LLM requests
-curl -s http://localhost:8321 -d '{
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{
   "jsonrpc": "2.0", "id": 9,
   "method": "debug.llmRequests",
   "params": {}
 }' | python3 -m json.tool
 
 # Get only the last 2 requests
-curl -s http://localhost:8321 -d '{
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{
   "jsonrpc": "2.0", "id": 10,
   "method": "debug.llmRequests",
   "params": { "last": 2 }
 }' | python3 -m json.tool
 
 # Get formatted text (same as Copy Requests clipboard output)
-curl -s http://localhost:8321 -d '{
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{
   "jsonrpc": "2.0", "id": 11,
   "method": "debug.llmRequests",
   "params": { "formatted": true }
@@ -449,7 +485,9 @@ Per project convention, the RPC handlers are **thin wrappers** over a provider-m
 
 Shared conventions:
 
-- **Provider types** are the enum in `ProviderTypes.swift`: `openAI`, `anthropic`, `gemini`, `antigravity`, `openRouter`, `openAIResponses`. Use `provider.types` to discover at runtime what each type accepts (field schema, credential options, OAuth support).
+- **Provider types** are the Android provider enum (`openAI`, `anthropic`,
+  `gemini`, `antigravity`, `openRouter`, `openAIResponses`). Use
+  `provider.types` to discover at runtime what each type accepts (field schema, credential options, OAuth support).
 - **Credential material** (API keys, OAuth tokens) is **write-only** — never returned by any list/get method. `provider.instances.create` and `provider.instances.update` accept it; everything else treats it as opaque. This matches how the UI handles credentials: you can overwrite, never reveal.
 - **Instance IDs** are stable UUIDs. **Model entry IDs** are the UUIDs surfaced by `chat.models.list` and the in-app picker. Everything IDs stays consistent across surfaces.
 - **Persistence side effects**: every mutation writes through `ProviderConfigStore` (which persists to `config.json` and triggers iCloud sync) in the same transaction as the Keychain write, so a failed Keychain write rolls back the instance add — no orphaned entries.
@@ -590,7 +628,7 @@ Add a new provider instance. Required fields vary by `providerType` — consult 
 **Example — add a DeepSeek custom-base OpenAI-compatible instance:**
 
 ```bash
-curl -s http://localhost:8321 -d '{
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{
   "jsonrpc": "2.0", "id": 1,
   "method": "provider.instances.create",
   "params": {
@@ -1028,7 +1066,7 @@ List recent chat sessions with metadata (same source as the Shortcuts "List Sess
 **Example:**
 
 ```bash
-curl -s http://localhost:8321 -d '{
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{
   "jsonrpc": "2.0", "id": 1,
   "method": "chat.sessions.list",
   "params": { "limit": 20 }
@@ -1118,7 +1156,7 @@ List messages in a session in chronological order. Mirrors what the session UI r
 **Example:**
 
 ```bash
-curl -s http://localhost:8321 -d '{
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{
   "jsonrpc": "2.0", "id": 2,
   "method": "chat.messages.list",
   "params": { "sessionId": "6D0F…", "limit": 50, "includeReasoning": true }
@@ -1223,7 +1261,7 @@ Field notes:
 **Example — pick the first reasoning-capable entry and send to it:**
 
 ```bash
-entry_id=$(curl -s http://localhost:8321 -d '{
+entry_id=$(curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{
   "jsonrpc":"2.0","id":1,"method":"chat.models.list","params":{}
 }' | python3 -c "
 import json,sys
@@ -1233,7 +1271,7 @@ for e in r['entries']:
         print(e['id']); break
 ")
 
-curl -s http://localhost:8321 -d "{
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d "{
   \"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"chat.prompt\",
   \"params\":{\"prompt\":\"Explain the halting problem.\",\"modelEntryId\":\"$entry_id\",\"wait\":true}
 }" | python3 -m json.tool
@@ -1279,7 +1317,7 @@ Model-override semantics: if exactly one of `modelEntryId` / `modelGroupId` is s
 **Example — new session with image attachment, wait for result:**
 
 ```bash
-curl -s http://localhost:8321 -d "{
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d "{
   \"jsonrpc\": \"2.0\", \"id\": 3,
   \"method\": \"chat.prompt\",
   \"params\": {
@@ -1293,7 +1331,7 @@ curl -s http://localhost:8321 -d "{
 **Example — continue an existing session, async:**
 
 ```bash
-curl -s http://localhost:8321 -d '{
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{
   "jsonrpc": "2.0", "id": 4,
   "method": "chat.prompt",
   "params": { "sessionId": "6D0F…", "prompt": "Now translate it to French." }
@@ -1337,7 +1375,7 @@ Returns `{ "error": { "code": -32602, "message": "Session has no user messages" 
 **Example — retry with a different model to A/B compare outputs:**
 
 ```bash
-curl -s http://localhost:8321 -d '{
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{
   "jsonrpc": "2.0", "id": 5,
   "method": "chat.retry",
   "params": {
@@ -1381,7 +1419,7 @@ Poll a session's live status. Equivalent to `GetSessionStatusIntent` — useful 
 
 ```bash
 while true; do
-  state=$(curl -s http://localhost:8321 -d '{
+  state=$(curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{
     "jsonrpc":"2.0","id":1,"method":"chat.session.status",
     "params":{"sessionId":"6D0F…"}}' | python3 -c "import json,sys;print(json.load(sys.stdin)['result']['isRunning'])")
   [ "$state" = "False" ] && break
@@ -1455,7 +1493,7 @@ List all log files and current logging status.
 **Example:**
 
 ```bash
-curl -s http://localhost:8321 -d '{
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{
   "jsonrpc": "2.0", "id": 1,
   "method": "debug.logs.list",
   "params": {}
@@ -1493,14 +1531,14 @@ If the file is larger than `limit`, the response includes `"truncated": true`. U
 
 ```bash
 # Read today's log
-curl -s http://localhost:8321 -d '{
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{
   "jsonrpc": "2.0", "id": 2,
   "method": "debug.logs.read",
   "params": { "name": "minis-2026-03-07.log" }
 }' | python3 -m json.tool
 
 # Read last 10KB of a log file
-curl -s http://localhost:8321 -d '{
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{
   "jsonrpc": "2.0", "id": 3,
   "method": "debug.logs.read",
   "params": { "name": "minis-2026-03-06.log", "offset": 92400, "limit": 10240 }
@@ -1529,14 +1567,14 @@ Enable or disable log collection at runtime.
 
 ```bash
 # Enable logging
-curl -s http://localhost:8321 -d '{
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{
   "jsonrpc": "2.0", "id": 4,
   "method": "debug.logs.setEnabled",
   "params": { "enabled": true }
 }' | python3 -m json.tool
 
 # Disable logging
-curl -s http://localhost:8321 -d '{
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{
   "jsonrpc": "2.0", "id": 5,
   "method": "debug.logs.setEnabled",
   "params": { "enabled": false }
@@ -1574,7 +1612,7 @@ List all open browser tabs.
 **Example:**
 
 ```bash
-curl -s http://localhost:8321 -d '{
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{
   "jsonrpc": "2.0", "id": 1,
   "method": "debug.browser.listTabs",
   "params": {}
@@ -1618,7 +1656,7 @@ Get detailed page information for a tab including URL, title, viewport dimension
 **Example:**
 
 ```bash
-curl -s http://localhost:8321 -d '{
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{
   "jsonrpc": "2.0", "id": 2,
   "method": "debug.browser.pageInfo",
   "params": {}
@@ -1649,7 +1687,7 @@ The result value matches whatever the JavaScript expression evaluates to (string
 **Example:**
 
 ```bash
-curl -s http://localhost:8321 -d '{
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{
   "jsonrpc": "2.0", "id": 3,
   "method": "debug.browser.executeJS",
   "params": { "script": "document.title" }
@@ -1675,7 +1713,7 @@ Returns the full JSON result from the `getReadable` JavaScript extraction, inclu
 **Example:**
 
 ```bash
-curl -s http://localhost:8321 -d '{
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{
   "jsonrpc": "2.0", "id": 4,
   "method": "debug.browser.getReadable",
   "params": {}
@@ -1702,7 +1740,7 @@ Returns the full JSON result from the `getText` JavaScript extraction, including
 **Example:**
 
 ```bash
-curl -s http://localhost:8321 -d '{
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{
   "jsonrpc": "2.0", "id": 5,
   "method": "debug.browser.getText",
   "params": { "selector": "article" }
@@ -1735,7 +1773,7 @@ Capture a PNG screenshot of a tab's WKWebView.
 
 ```bash
 # Save screenshot to file
-curl -s http://localhost:8321 -d '{
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{
   "jsonrpc": "2.0", "id": 6,
   "method": "debug.browser.screenshot",
   "params": {}
@@ -1772,38 +1810,38 @@ print('Saved screenshot.png')
 
 ```bash
 # 1. Get the full view tree (depth-limited)
-curl -s localhost:8321 -d '{"jsonrpc":"2.0","id":1,"method":"debug.viewTree","params":{"maxDepth":3}}' | python3 -m json.tool
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{"jsonrpc":"2.0","id":1,"method":"debug.viewTree","params":{"maxDepth":3}}' | python3 -m json.tool
 
 # 2. Search for a specific view type
-curl -s localhost:8321 -d '{"jsonrpc":"2.0","id":2,"method":"debug.search","params":{"keyword":"ScrollView"}}' | python3 -m json.tool
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{"jsonrpc":"2.0","id":2,"method":"debug.search","params":{"keyword":"ScrollView"}}' | python3 -m json.tool
 
 # 3. Inspect a view by address (from step 1 or 2)
-curl -s localhost:8321 -d '{"jsonrpc":"2.0","id":3,"method":"debug.inspect","params":{"address":"0x1234abcd"}}' | python3 -m json.tool
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{"jsonrpc":"2.0","id":3,"method":"debug.inspect","params":{"address":"0x1234abcd"}}' | python3 -m json.tool
 
 # 4. Highlight it on screen
-curl -s localhost:8321 -d '{"jsonrpc":"2.0","id":4,"method":"debug.highlight","params":{"address":"0x1234abcd","color":"green"}}' | python3 -m json.tool
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{"jsonrpc":"2.0","id":4,"method":"debug.highlight","params":{"address":"0x1234abcd","color":"green"}}' | python3 -m json.tool
 
 # 5. List browser tabs
-curl -s localhost:8321 -d '{"jsonrpc":"2.0","id":5,"method":"debug.browser.listTabs","params":{}}' | python3 -m json.tool
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{"jsonrpc":"2.0","id":5,"method":"debug.browser.listTabs","params":{}}' | python3 -m json.tool
 
 # 6. Execute JS in the active browser tab
-curl -s localhost:8321 -d '{"jsonrpc":"2.0","id":6,"method":"debug.browser.executeJS","params":{"script":"document.title"}}' | python3 -m json.tool
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{"jsonrpc":"2.0","id":6,"method":"debug.browser.executeJS","params":{"script":"document.title"}}' | python3 -m json.tool
 
 # 7. Get readable content from the active tab
-curl -s localhost:8321 -d '{"jsonrpc":"2.0","id":7,"method":"debug.browser.getReadable","params":{}}' | python3 -m json.tool
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{"jsonrpc":"2.0","id":7,"method":"debug.browser.getReadable","params":{}}' | python3 -m json.tool
 
 # 8. Get recent LLM requests
-curl -s localhost:8321 -d '{"jsonrpc":"2.0","id":8,"method":"debug.llmRequests","params":{}}' | python3 -m json.tool
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{"jsonrpc":"2.0","id":8,"method":"debug.llmRequests","params":{}}' | python3 -m json.tool
 
 # 9. List log files
-curl -s localhost:8321 -d '{"jsonrpc":"2.0","id":9,"method":"debug.logs.list","params":{}}' | python3 -m json.tool
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{"jsonrpc":"2.0","id":9,"method":"debug.logs.list","params":{}}' | python3 -m json.tool
 
 # 10. Read a log file
-curl -s localhost:8321 -d '{"jsonrpc":"2.0","id":10,"method":"debug.logs.read","params":{"name":"minis-2026-03-07.log"}}' | python3 -m json.tool
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{"jsonrpc":"2.0","id":10,"method":"debug.logs.read","params":{"name":"minis-2026-03-07.log"}}' | python3 -m json.tool
 
 # 11. Enable/disable log collection
-curl -s localhost:8321 -d '{"jsonrpc":"2.0","id":11,"method":"debug.logs.setEnabled","params":{"enabled":true}}' | python3 -m json.tool
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{"jsonrpc":"2.0","id":11,"method":"debug.logs.setEnabled","params":{"enabled":true}}' | python3 -m json.tool
 
 # 12. Capture app screenshot
-curl -s localhost:8321 -d '{"jsonrpc":"2.0","id":12,"method":"debug.screenshot","params":{"scale":2}}' | python3 -c "import json,sys,base64;r=json.load(sys.stdin);open('screenshot.png','wb').write(base64.b64decode(r['result']['base64']))"
+curl -s http://127.0.0.1:5321/ -H "X-Minis-Token: $DEBUG_TOKEN" -d '{"jsonrpc":"2.0","id":12,"method":"debug.screenshot","params":{"scale":2}}' | python3 -c "import json,sys,base64;r=json.load(sys.stdin);open('screenshot.png','wb').write(base64.b64decode(r['result']['base64']))"
 ```

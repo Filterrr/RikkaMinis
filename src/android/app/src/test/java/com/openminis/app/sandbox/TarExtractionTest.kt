@@ -88,21 +88,21 @@ class TarExtractionTest {
 
     @Test
     fun `extractTar skips root-dir entry and keeps extracting`() {
-        // Real alpine-minirootfs archives open with a "./" root-directory
+        // Legacy (Alpine) minirootfs archives open with a "./" root-directory
         // entry. Normalizing "./" away yields an empty name — extraction must
         // skip that entry and continue, not abort the whole archive (which
         // used to produce an empty 98KB rootfs on every install/reset/repair).
         val tar = buildTar {
             addDirectory("./")
-            addFile("bin/busybox", "busybox-binary")
-            addFile("etc/os-release", "ID=alpine")
+            addFile("bin/sh", "shell-binary")
+            addFile("etc/os-release", "ID=ubuntu")
         }
 
         extractTarHelper(ByteArrayInputStream(tar), targetDir)
 
-        assertTrue("Entries after ./ must still be extracted", File(targetDir, "bin/busybox").exists())
-        assertEquals("busybox-binary", File(targetDir, "bin/busybox").readText())
-        assertEquals("ID=alpine", File(targetDir, "etc/os-release").readText())
+        assertTrue("Entries after ./ must still be extracted", File(targetDir, "bin/sh").exists())
+        assertEquals("shell-binary", File(targetDir, "bin/sh").readText())
+        assertEquals("ID=ubuntu", File(targetDir, "etc/os-release").readText())
     }
 
     @Test

@@ -111,7 +111,7 @@ fun StorageManagementScreen(
                 // and followed symlinked dirs (e.g. default-jvm), overstating
                 // the "Terminal Shell" row by ~50%+.
                 val report = com.openminis.app.sandbox.RootfsUsageScanner.scan(
-                    File(context.filesDir, "alpine-rootfs"),
+                    File(context.filesDir, "ubuntu-rootfs"),
                     com.openminis.app.sandbox.RootfsUsageScanner.androidStat(),
                 )
                 shellSize = report.totalBytes

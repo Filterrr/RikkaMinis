@@ -51,7 +51,7 @@
     { "name": "substring-and-replace", "script": "echo \"${path:0:4}\" \"${name/l/L}\"", "expect": [] },
     { "name": "let-builtin", "script": "let x=1+2", "expect": [] },
     { "name": "grep-bash-arg", "script": "grep bash /etc/passwd", "expect": [] },
-    { "name": "apk-add-bash-arg", "script": "apk add bash", "expect": [] },
+    { "name": "apt-install-bash-arg", "script": "apt-get install bash", "expect": [] },
     { "name": "echo-bash-string", "script": "echo \"please install bash later\"", "expect": [] },
     { "name": "plain-heredoc", "script": "cat << EOF\nhello world\nEOF", "expect": [] },
     { "name": "quoted-delim-heredoc", "script": "cat <<'EOF'\n$not_expanded\nEOF", "expect": [] },

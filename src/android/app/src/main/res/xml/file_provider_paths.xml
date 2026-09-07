@@ -17,7 +17,7 @@
     <cache-path name="share" path="share/" />
     <!-- PRoot rootfs — expose so inline video/audio cards can hand the host
          file to the system player via ACTION_VIEW. -->
-    <files-path name="rootfs" path="alpine-rootfs/" />
+    <files-path name="rootfs" path="ubuntu-rootfs/" />
     <!-- Per-session attachments/workspace/etc. where agent downloads land. -->
     <files-path name="sessions" path="minis-sessions/" />
     <files-path name="global" path="minis-global/" />

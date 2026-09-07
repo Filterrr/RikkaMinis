@@ -5,7 +5,11 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.util.Log
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -14,6 +18,7 @@ import java.io.File
 import java.io.FilterInputStream
 import java.io.InputStream
 import java.nio.charset.Charset
+import java.nio.file.Files
 import java.util.zip.GZIPInputStream
 
 /**
@@ -40,56 +45,71 @@ sealed class RootfsInstallState {
  * The install marker (`.arch`) only proves extraction happened — it says
  * nothing about whether the files the runtime actually needs survived. A
  * silent_kill mid-write (HyperOS memory pressure kills the app while a file
- * write or apk operation is half-done) leaves the rootfs with a valid marker
+ * write or apt operation is half-done) leaves the rootfs with a valid marker
  * but missing/corrupt binaries — the classic symptom is the terminal dying
  * with `'/bin/bash' not found` while the app still reports "installed".
  *
  * Each check is a single stat() — cheap enough to run on every boot.
  */
 data class RootfsHealth(
-    /** /bin/bash — interactive terminal shell (readline-based). */
+    /** /usr/bin/bash — interactive terminal shell (readline-based). */
     val bash: Boolean,
-    /** /bin/sh — busybox ash fallback (symlink → /bin/busybox, apk-managed). */
+    /** /bin/sh — dash (symlink → /usr/bin/dash, the Debian /bin/sh). */
     val sh: Boolean,
-    /** /lib/ld-musl-aarch64.so.1 — dynamic loader every ELF needs. */
+    /** /lib/ld-linux-aarch64.so.1 — glibc loader every ELF needs. */
     val libc: Boolean,
-    /** /usr/lib/libreadline.so.8 — bash's line editing (symlink to .so.8.2). */
-    val libreadline: Boolean,
-    /** /usr/lib/libncursesw.so.6 — readline's terminal rendering. */
-    val libncursesw: Boolean,
-    /** /sbin/apk — package manager, needed for in-place auto-repair. */
-    val apk: Boolean,
-    /** /lib/apk/db/installed — apk's package database. */
-    val apkDatabase: Boolean,
+    /** /lib/aarch64-linux-gnu/libc.so.6 — glibc itself (bash's hard dep). */
+    val glibc: Boolean,
+    /** /usr/bin/apt-get — package manager, needed for in-place auto-repair. */
+    val aptGet: Boolean,
+    /** /var/lib/dpkg/status — dpkg's package database. */
+    val dpkgDatabase: Boolean,
+    /**
+     * True when the integrity manifest itself is damaged (exists but
+     * unparsable). The size contract cannot be verified, so the rootfs must
+     * be treated as suspect — [healthy] is forced false so autoRepair runs.
+     * Only the factory-state manifest is affected; absent manifest (legacy
+     * installs) does NOT set this.
+     */
+    val manifestCorrupt: Boolean = false,
 ) {
     /** Everything needed for the sandbox to function. */
     val healthy: Boolean
-        get() = bash && sh && libc && apk && apkDatabase
+        get() = bash && sh && libc && glibc && aptGet && dpkgDatabase && !manifestCorrupt
 
     /** Everything needed for an interactive bash terminal. */
     val terminalOk: Boolean
-        get() = bash && libc && libreadline && libncursesw
+        get() = bash && libc && glibc
 
     /** Human-readable list of missing paths (empty when fully healthy). */
     val missing: List<String>
         get() = buildList {
-            if (!bash) add("/bin/bash")
+            if (!bash) add("/usr/bin/bash")
             if (!sh) add("/bin/sh")
-            if (!libc) add("/lib/ld-musl-aarch64.so.1")
-            if (!libreadline) add("/usr/lib/libreadline.so.8")
-            if (!libncursesw) add("/usr/lib/libncursesw.so.6")
-            if (!apk) add("/sbin/apk")
-            if (!apkDatabase) add("/lib/apk/db/installed")
+            if (!libc) add("/lib/ld-linux-aarch64.so.1")
+            if (!glibc) add("/lib/aarch64-linux-gnu/libc.so.6")
+            if (!aptGet) add("/usr/bin/apt-get")
+            if (!dpkgDatabase) add("/var/lib/dpkg/status")
         }
 }
 
 /**
- * Manages Alpine Linux rootfs installation and PRoot binary extraction.
+ * Manages Ubuntu Base rootfs installation and PRoot binary extraction.
  * Corresponds to iOS RootfsManager.swift.
  */
 class RootfsManager private constructor(private val context: Context) {
 
-    val rootfsDir: File = File(context.filesDir, "alpine-rootfs")
+    /**
+     * Serializes every apt/dpkg mutation path OWNED BY RootfsManager
+     * (dpkg-world restore, boot retry, auto-repair, user-initiated reset) so
+     * two such transactions can never race on /var/lib/dpkg/. This is an
+     * IN-PROCESS lock: a user-typed `apt-get install` inside the shell runs
+     * outside it and can still contend — dpkg's own file lock will surface
+     * that as a loud lock-frontend error, which is the correct attribution.
+     */
+    private val aptMutex = Mutex()
+
+    val rootfsDir: File = File(context.filesDir, "ubuntu-rootfs")
     val prootBinary: File = File(context.applicationInfo.nativeLibraryDir, "libproot.so")
 
     private val archFile: File get() = File(rootfsDir, ".arch")
@@ -111,16 +131,25 @@ class RootfsManager private constructor(private val context: Context) {
     val installState: StateFlow<RootfsInstallState> = _installState.asStateFlow()
 
     /**
-     * Install Alpine rootfs from assets if not already present.
-     * Extracts alpine-minirootfs.tar.gz using manual POSIX tar parsing.
+     * Install the Ubuntu Base rootfs from assets if not already present.
+     * Extracts ubuntu-base.tar.gz using manual POSIX tar parsing.
      * Progress is published to [installState] (Preparing → Extracting(f) →
      * Finalizing → Installed / Failed).
      */
     suspend fun installIfNeeded() = withContext(Dispatchers.IO) {
+        aptMutex.withLock { installIfNeededUnlocked() }
+    }
+
+    /**
+     * Core install — caller must hold [aptMutex]. The extraction itself
+     * touches no dpkg state, but the trailing dpkg-world restore runs apt
+     * and must not overlap another mutation.
+     */
+    private suspend fun installIfNeededUnlocked() {
         if (isInstalled) {
             Log.d(TAG, "Rootfs already installed at $rootfsDir")
             _installState.value = RootfsInstallState.Installed
-            return@withContext
+            return
         }
 
         try {
@@ -130,7 +159,7 @@ class RootfsManager private constructor(private val context: Context) {
             // corrupt rootfs when storage runs out mid-extract (a silent_kill
             // situation that otherwise only surfaces on the next boot as
             // "installed but broken"). Conservative estimate: compressed asset
-            // × 4 (observed Alpine minirootfs expansion) + 64 MiB margin.
+            // × 4 (observed Ubuntu base expansion) + 64 MiB margin.
             val spaceGateAssetName = try {
                 context.assets.open(ROOTFS_ASSET).close()
                 ROOTFS_ASSET
@@ -149,11 +178,11 @@ class RootfsManager private constructor(private val context: Context) {
                 _installState.value = RootfsInstallState.Failed(
                     context.getString(R.string.rootfs_insufficient_space, neededMB, freeMB)
                 )
-                return@withContext
+                return
             }
 
             _installState.value = RootfsInstallState.Preparing
-            Log.i(TAG, "Installing Alpine rootfs...")
+            Log.i(TAG, "Installing Ubuntu rootfs...")
 
             // Clean up any partial install
             if (rootfsDir.exists()) {
@@ -202,8 +231,10 @@ class RootfsManager private constructor(private val context: Context) {
             archFile.writeText(ARCH)
 
             // Write integrity manifest so verifyIntegrity can detect
-            // partial/corrupt files on subsequent boots.
-            writeIntegrityManifest()
+            // partial/corrupt files on subsequent boots. FAILS the install
+            // when unwritable — a rootfs without a trustworthy manifest must
+            // not be reported Installed (fail-closed).
+            writeIntegrityManifestOrThrow()
 
             // Pre-create /var/minis directories. Mirrors iOS
             // RootfsManager.swift:76-80 (attachments/offloads/workspace/skills/
@@ -230,12 +261,50 @@ class RootfsManager private constructor(private val context: Context) {
                 .putBoolean("rootfs.freshInstall", true)
                 .apply()
 
-            // [Refactor-apk-world] A fresh extraction ships only the factory
+            // [Refactor-dpkg-world] A fresh extraction ships only the factory
             // packages. Re-apply the host-side snapshot of user packages
-            // (recorded by dumpApkWorld) so a reset / rebuild doesn't wipe
-            // what the user installed. Skip is cheap (no snapshot = no-op);
-            // failures are queued for retryFailedApkWorld on next boot.
-            restoreApkWorld()
+            // (recorded by dumpDpkgWorld) so a reset / rebuild doesn't wipe
+            // what the user installed.
+            //
+            // DEFERRED, not inline: an apt round-trip (update + batched
+            // install) can take a minute+ on a slow mirror and would stall
+            // the FIRST shell on a fresh install. The deferred run below
+            // serializes on aptMutex with every other mutation; failures
+            // land in the retry queue and are reconciled on a later boot
+            // (strike-limited). A failure here never bricks the sandbox.
+            // Gate on EITHER snapshot: a user who only ever pip-installed
+            // must still get the pip restore on a fresh extraction.
+            if (apkWorldFile.exists() || pipWorldFile.exists()) {
+                CoroutineScope(Dispatchers.IO).launch {
+                    aptMutex.withLock {
+                        runCatching { restoreDpkgWorldUnlocked() }
+                            .onFailure { t -> Log.e(TAG, "[DpkgWorld] deferred restore crashed", t) }
+                    }
+                    // [T-pip-world] Same deferred-restore contract for user
+                    // pip packages: one batched install off the boot path.
+                    // Own lock acquisition (sequential with the dpkg one —
+                    // Kotlin Mutex is non-reentrant, so never nest them).
+                    aptMutex.withLock {
+                        runCatching { restorePipWorldUnlocked() }
+                            .onFailure { t -> Log.e(TAG, "[PipWorld] deferred restore crashed", t) }
+                    }
+                }
+            }
+
+            // [T-ca-bootstrap] The Ubuntu base rootfs ships NO ca-certificates:
+            // every HTTPS source fails TLS verification on the very first apt
+            // run (chicken-and-egg — you cannot apt-get install the certs over
+            // the TLS transport you cannot verify). Bundled debs close the gap
+            // offline, BEFORE anything else needs the network; dpkg needs no
+            // network for a local install.
+            installOfflineDebs()
+
+            // [T-ubuntu-migration] One-time cleanup of the legacy Alpine
+            // rootfs from pre-migration installs. Runs only AFTER the Ubuntu
+            // rootfs is fully extracted, verified, and overlaid — a low-disk
+            // device never loses the old rootfs before the new one works.
+            // /var/minis/* data is host-side (bind-mounted) and unaffected.
+            cleanupLegacyAlpineRootfs()
 
             Log.i(TAG, "Rootfs installation complete")
             _installState.value = RootfsInstallState.Installed
@@ -272,9 +341,9 @@ class RootfsManager private constructor(private val context: Context) {
      * Snapshot which critical rootfs files are present, executable, and
      * match their expected sizes from the integrity manifest.
      *
-     * Cheap (7 stat calls), safe to call on every boot. See [RootfsHealth]
+     * Cheap (6 stat calls), safe to call on every boot. See [RootfsHealth]
      * for the rationale — a silent_kill can leave `.arch` valid but bash
-     * (or its readline/ncurses symlinks) missing.
+     * (or the glibc loader) missing.
      *
      * When `.integrity_manifest` exists, each file's size is verified against
      * the recorded value — a file that exists but has the wrong size (e.g.
@@ -287,6 +356,18 @@ class RootfsManager private constructor(private val context: Context) {
      * that predate this feature.
      */
     fun verifyIntegrity(): RootfsHealth {
+        // Fail-closed contract, strict schema: a manifest that exists must
+        // parse AND cover EXACTLY the expected key set (all present, no
+        // unknown keys). A partially-truncated manifest (first 2 of 6 lines
+        // survive) would otherwise be silently accepted. Absent manifest
+        // (legacy installs) stays existence-only.
+        val manifestCorrupt = if (!integrityManifest.exists()) {
+            false
+        } else {
+            val parsed = runCatching { parseIntegrityManifest(integrityManifest.readText()) }
+                .getOrElse { emptyMap() }
+            parsed.keys != MANIFEST_KEYS
+        }
         val expectedSizes = readIntegrityManifest()
 
         fun exists(rel: String): Boolean {
@@ -299,16 +380,62 @@ class RootfsManager private constructor(private val context: Context) {
             if (!f.exists() || !f.canExecute()) return false
             return integritySizePasses(rel, f.length(), expectedSizes)
         }
+        // ELF sanity for dpkg-managed binaries: existence alone accepted a
+        // truncated/corrupted bash (size != factory, so the size check was
+        // deliberately disabled for apt-managed paths). A 4-byte ELF magic
+        // probe catches the common silent-kill truncation without false
+        // positives across apt upgrades (ELF magic never changes).
+        fun elfOk(rel: String): Boolean {
+            val f = File(rootfsDir, rel)
+            if (!f.exists() || f.length() < 4) return false
+            return try {
+                java.io.RandomAccessFile(f, "r").use { raf ->
+                    val magic = ByteArray(4)
+                    raf.readFully(magic)
+                    // 0x7F 'E' 'L' 'F'
+                    magic[0] == 0x7F.toByte() && magic[1] == 'E'.code.toByte() &&
+                        magic[2] == 'L'.code.toByte() && magic[3] == 'F'.code.toByte()
+                }
+            } catch (_: Exception) {
+                false
+            }
+        }
 
-        return RootfsHealth(
-            bash = exists("bin/bash"),
+        val health = RootfsHealth(
+            bash = elfOk("usr/bin/bash"),
             sh = exists("bin/sh"),
-            libc = exists("lib/ld-musl-aarch64.so.1"),
-            libreadline = exists("usr/lib/libreadline.so.8"),
-            libncursesw = exists("usr/lib/libncursesw.so.6"),
-            apk = executable("sbin/apk"),
-            apkDatabase = exists("lib/apk/db/installed"),
+            libc = elfOk("lib/ld-linux-aarch64.so.1"),
+            glibc = elfOk("lib/aarch64-linux-gnu/libc.so.6"),
+            aptGet = elfOk("usr/bin/apt-get") && File(rootfsDir, "usr/bin/apt-get").canExecute(),
+            dpkgDatabase = dpkgDatabaseOk(),
+            manifestCorrupt = manifestCorrupt,
         )
+        if (manifestCorrupt) {
+            Log.w(TAG, "[Integrity] manifest corrupt — reporting rootfs suspect so repair runs")
+        }
+        return health
+    }
+
+    /**
+     * dpkg database health: the status file must exist AND parse to at least
+     * one installed package block. A truncated `var/lib/dpkg/status` (0
+     * bytes / no valid blocks) would otherwise pass the existence-only check
+     * and keep [RootfsHealth.healthy] true while every apt operation fails.
+     * Same host-side file read as [dumpDpkgWorld]; costs one parse of an
+     * ~90 KB file on the failure path only (healthy boots short-circuit on
+     * the earlier stat checks... not exactly — order follows the data-class
+     * construction, so the parse runs every boot; acceptable: a 91-package
+     * parse is sub-millisecond on device).
+     */
+    private fun dpkgDatabaseOk(): Boolean {
+        val db = File(rootfsDir, "var/lib/dpkg/status")
+        if (!db.exists()) return false
+        return try {
+            parseDpkgStatus(db.readText()).isNotEmpty()
+        } catch (t: Exception) {
+            Log.w(TAG, "[Integrity] dpkg status unreadable: ${t.message}")
+            false
+        }
     }
 
     /**
@@ -337,35 +464,54 @@ class RootfsManager private constructor(private val context: Context) {
      * will see `.arch` present but manifest absent, enabling a more thorough
      * integrity check.
      */
-    private fun writeIntegrityManifest() {
-        val criticalPaths = listOf(
-            "bin/bash", "bin/sh", "lib/ld-musl-aarch64.so.1",
-            "usr/lib/libreadline.so.8", "usr/lib/libncursesw.so.6",
-            "sbin/apk", "lib/apk/db/installed",
-        )
+    private fun writeIntegrityManifestOrThrow() {
+        val criticalPaths = MANIFEST_KEYS.toList()
+        // Atomic write (temp + fsync + rename): a silent_kill mid-write must
+        // leave either the old manifest or a complete new one — never a
+        // truncated one that would read as corrupt on the next boot.
+        val tmp = File(rootfsDir, ".integrity_manifest.tmp")
         try {
             val lines = criticalPaths.map { rel ->
                 val f = File(rootfsDir, rel)
                 val size = if (f.exists()) f.length() else 0L
                 "$rel=$size"
             }
-            integrityManifest.writeText(lines.joinToString("\n") + "\n")
+            tmp.writeText(lines.joinToString("\n") + "\n")
+            java.io.FileOutputStream(tmp).channel.force(true)
+            if (!tmp.renameTo(integrityManifest)) {
+                // rename can fail across odd filesystems; fall back to copy+delete
+                tmp.copyTo(integrityManifest, overwrite = true)
+                tmp.delete()
+            }
             Log.i(TAG, "[Integrity] Manifest written with ${lines.size} entries")
         } catch (e: Exception) {
-            Log.w(TAG, "[Integrity] Failed to write manifest: ${e.message}")
+            tmp.delete()
+            // Fail-closed: a fresh install whose manifest cannot be written
+            // must NOT be reported Installed with no manifest — the next
+            // boot would treat it as a legacy install and skip verification.
+            throw IllegalStateException("integrity manifest write failed", e)
+        }
+    }
+
+    /** Best-effort variant used by autoRepair regeneration (best effort with logging). */
+    private fun writeIntegrityManifest() {
+        try {
+            writeIntegrityManifestOrThrow()
+        } catch (e: Exception) {
+            Log.w(TAG, "[Integrity] manifest regeneration failed: ${e.message}")
         }
     }
 
     /**
      * Attempt to repair a broken rootfs in place, least-to-most destructive:
      *
-     *  1. `apk fix --no-cache` — restore missing/corrupt files owned by
-     *     installed packages (readline/ncursesw symlinks, bash, …). Uses the
-     *     local apk database; no network needed when `.apk` files are cached.
-     *  2. `apk add --no-cache bash readline ncurses` — belt-and-braces for
-     *     the terminal's dynamic-linking chain.
+     *  1. `dpkg --configure -a` + `apt-get -f install` + reinstall of the
+     *     terminal's linking chain (bash, libc6) inside the guest via proot.
+     *     Uses the local dpkg database; needs network for the reinstall step.
+     *  2. Targeted restore of factory files from the bundled asset — no
+     *     network, no user-package loss (see [restoreCriticalFromAssets]).
      *  3. Full [reset] — delete + re-extract from the bundled asset. Last
-     *     resort (wipes user-installed packages), only when apk is unusable.
+     *     resort (wipes user-installed packages), only when dpkg is unusable.
      *
      * Returns true when the rootfs is healthy after the attempt.
      */
@@ -377,18 +523,28 @@ class RootfsManager private constructor(private val context: Context) {
         }
         Log.w(TAG, "[Repair] rootfs damaged, missing: ${initial.missing}")
 
-        // Stage 1+2: apk repair inside the guest via proot, so it operates on
-        // the real rootfs with the user's mirror config intact.
+        // Stage 1: dpkg repair inside the guest via proot, so it operates on
+        // the real rootfs with the user's mirror config intact. `apt-get -y
+        // install` of already-installed packages is a no-op when intact and
+        // reinstalls them from the archive when files were lost. `DEBIAN_
+        // FRONTEND=noninteractive` + the shipped policy-rc.d keep maintainer
+        // scripts quiet inside the sandbox.
         val prootFile = prootBinary
-        if (prootFile.exists() && initial.apk) {
-            val repairCmd = listOf(
+        if (prootFile.exists() && initial.aptGet) {
+            // Serialized against dpkg-world restore/retry: auto-repair can run
+            // at any boot, including one where a background retry is still in
+            // flight — two dpkg transactions on the same db must never race.
+            aptMutex.withLock {
+                val repairCmd = listOf(
                 prootFile.absolutePath,
                 "-0", "--link2symlink", "--kill-on-exit",
                 "-r", rootfsDir.absolutePath,
                 "-b", "/dev", "-b", "/proc", "-b", "/sys",
                 "-w", "/root",
                 "/bin/sh", "-c",
-                "/sbin/apk fix --no-cache ; /sbin/apk add --no-cache bash readline ncurses ; true"
+                "dpkg --configure -a ; " +
+                    "DEBIAN_FRONTEND=noninteractive apt-get install -y -f bash libc6 ; " +
+                    "dpkg --configure -a ; true"
             )
             // PROOT_LOADER[_32] MUST point at the standalone loaders in
             // nativeLibraryDir — proot's embedded-loader fallback writes to
@@ -396,83 +552,80 @@ class RootfsManager private constructor(private val context: Context) {
             // deps/build_proot.sh). Without these, proot aborts in ~20ms
             // with status=1 and no output, and the repair silently no-ops.
             // PATH is set explicitly too — ProcessBuilder inherits the app
-            // process env (Android PATH), so a bare `apk` would be
-            // `apk: not found` (exit 127) inside the guest.
+            // process env (Android PATH), so a bare `apt-get` would be
+            // `not found` (exit 127) inside the guest.
             val loaderEnv = prootLoaderEnv()
 
-            runCatching {
-                val p = ProcessBuilder(repairCmd)
-                    .redirectErrorStream(true)
-                    .apply { environment().putAll(loaderEnv) }
-                    .start()
-                val output = p.inputStream.readBytes().toString(Charset.forName("UTF-8"))
-                val code = p.waitFor()
-                Log.i(TAG, "[Repair] apk repair exit=$code output=${output.takeLast(500)}")
-            }.onFailure { t ->
-                Log.e(TAG, "[Repair] apk repair process failed", t)
+                runCatching {
+                    val r = runProotWithDeadline(repairCmd, loaderEnv, timeoutSec = 900)
+                    Log.i(TAG, "[Repair] dpkg/apt repair exit=${r.exitCode} output=${r.output.takeLast(500)}")
+                }.onFailure { t ->
+                    Log.e(TAG, "[Repair] dpkg/apt repair process failed", t)
+                }
             }
         }
 
         val after = verifyIntegrity()
         if (after.healthy) {
-            Log.i(TAG, "[Repair] rootfs healthy after apk repair")
+            Log.i(TAG, "[Repair] rootfs healthy after dpkg/apt repair")
             return@withContext true
         }
 
-        // Stage 2.5: targeted restore of factory files from the bundled
+        // Stage 2: targeted restore of factory files from the bundled
         // asset — no network, no user-package loss. This closes the hole
-        // where apk itself was fine (so Stage 3's database guard would NOT
-        // fire) but `apk fix` failed because the network was down: without
-        // it, a broken bash stayed broken forever until a manual reset.
-        // Only factory files safe to overwrite are restored; the apk
-        // database (user package records) is deliberately untouched.
+        // where apt itself was fine (so Stage 3's database guard would NOT
+        // fire) but the reinstall failed because the network was down:
+        // without it, a broken bash stayed broken forever until a manual
+        // reset. Only factory files safe to overwrite are restored; the
+        // dpkg database (user package records) is deliberately untouched.
         val restored = restoreCriticalFromAssets()
         if (restored) {
             Log.i(TAG, "[Repair] rootfs healthy after targeted asset restore")
             return@withContext true
         }
 
-        // Stage 2.6: offline install of bash/readline/ncurses from bundled
-        // APK files (assets/apk-offline/). These packages are NOT in the
-        // factory minirootfs (Stage 2.5 can't restore them), and `apk add`
-        // fails when the network is down. The bundled APK files cover the
-        // gap without requiring network access. Stage 2.5 must have restored
-        // busybox (/bin/sh) first, so proot can run inside the guest.
-        Log.i(TAG, "[Repair] Stage 2.6: offline install of extra packages")
-        installOfflinePackages()
-        val afterOffline = verifyIntegrity()
-        if (afterOffline.healthy) {
-            Log.i(TAG, "[Repair] rootfs healthy after offline package install")
-            return@withContext true
-        }
-
-        // Stage 3: last resort — full reset. Only when the apk *database*
-        // (user package records) is unusable: an apk binary that Stage 2.5
+        // Stage 3: last resort — full reset. Only when the dpkg *database*
+        // (user package records) is unusable: an apt-get that Stage 2
         // could not fix is not in the safe-restore set either, so it resets
         // too. A healthy database with a still-broken bash is NOT reset —
         // wiping user packages over a few missing binaries is worse than
         // leaving the terminal broken for a manual retry.
-        if (!verifyIntegrity().apkDatabase) {
-            Log.w(TAG, "[Repair] apk database unusable, falling back to full reset")
+        if (!verifyIntegrity().dpkgDatabase) {
+            Log.w(TAG, "[Repair] dpkg database unusable, falling back to full reset")
             runCatching { reset() }
         }
 
         val final = verifyIntegrity()
         Log.i(TAG, "[Repair] final health: ${final.missing.ifEmpty { listOf("OK") }}")
+        // NOTE: healthy already folds in !manifestCorrupt, so the repair-
+        // succeeded condition must check the ENTITY checks directly, not
+        // healthy. The earlier `final.healthy && final.manifestCorrupt` was a
+        // contradiction (always false) → the corrupt manifest never got
+        // regenerated → autoRepair re-ran every boot (repair loop).
+        val entitiesOk = final.bash && final.sh && final.libc && final.glibc &&
+            final.aptGet && final.dpkgDatabase
+        if (final.manifestCorrupt && entitiesOk) {
+            // All critical files verify clean; only the manifest metadata is
+            // damaged. Regenerate it from the live rootfs so the corrupt-
+            // manifest flag doesn't re-trigger repair every boot.
+            writeIntegrityManifest()
+            return@withContext verifyIntegrity().healthy
+        }
         final.healthy
     }
 
     /**
      * Restore the rootfs's critical system files from the bundled asset tar,
      * without wiping user-installed packages. Only factory files that are
-     * safe to overwrite are restored (bash/busybox/sh, musl loader, readline,
-     * ncursesw, apk binary); the apk database (`lib/apk/db/installed`, which
-     * holds user package records) is deliberately excluded — if it is broken
-     * the caller must fall back to a full reset. Network-independent, so it
-     * also covers the "apk fix failed because the proxy is down" case.
+     * safe to overwrite are restored (bash, dash/sh, the glibc loader +
+     * libc.so.6, apt-get/dpkg binaries); the dpkg database
+     * (`var/lib/dpkg/status`, which holds user package records) is
+     * deliberately excluded — if it is broken the caller must fall back to a
+     * full reset. Network-independent, so it also covers the "apt-get failed
+     * because the proxy is down" case.
      *
      * Returns true when every non-database critical path is healthy after
-     * the restore (the apk database is ignored — restoring it would discard
+     * the restore (the dpkg database is ignored — restoring it would discard
      * user package records).
      */
     suspend fun restoreCriticalFromAssets(): Boolean = withContext(Dispatchers.IO) {
@@ -487,13 +640,13 @@ class RootfsManager private constructor(private val context: Context) {
                 val tarInput = if (assetName.endsWith(".gz")) GZIPInputStream(raw) else raw
                 extractTar(tarInput, rootfsDir, onlyPrefixes = CRITICAL_RESTORE_PREFIXES)
             }
-            // Some Android filesystems reject the tar's absolute `/bin/busybox`
-            // symlink target during targeted extraction. Recreate the Alpine
+            // Some Android filesystems reject the tar's absolute `/bin/dash`
+            // symlink target during targeted extraction. Recreate the Debian
             // canonical relative link explicitly; it remains inside the rootfs
             // under both ordinary File checks and PRoot's guest root.
-            ensureBusyboxShellSymlink(rootfsDir)
+            ensureDashShellSymlink(rootfsDir)
             val h = verifyIntegrity()
-            val nonDbOk = h.bash && h.sh && h.libc && h.libreadline && h.libncursesw && h.apk
+            val nonDbOk = h.bash && h.sh && h.libc && h.glibc && h.aptGet
             if (nonDbOk) {
                 Log.i(TAG, "[Repair] targeted restore OK")
             } else {
@@ -506,220 +659,620 @@ class RootfsManager private constructor(private val context: Context) {
         }
     }
 
+    // ── Dpkg world snapshot (user-package persistence) ─────────────────────
+    //
+    // The factory Ubuntu base rootfs ships 91 packages but no user packages —
+    // everything a user `apt-get install`s lives only inside the rootfs. A
+    // full rebuild (manual reset, or [autoRepair]'s Stage 3 after an unusable
+    // dpkg database) wipes it all. The snapshot makes user packages a
+    // recoverable state: [dumpDpkgWorld] persists `name=version` to the host
+    // side on every boot, and [restoreDpkgWorld] re-applies it right after a
+    // fresh extraction inside [installIfNeeded].
+
+    /** Host-side snapshot of installed packages (`name=version` per line). */
+    val apkWorldFile: File get() = File(context.filesDir, "dpkg-world.txt")
+
+    /** Host-side retry list for packages that failed to restore. */
+    val apkWorldFailedFile: File get() = File(context.filesDir, "dpkg-world-failed.txt")
+
     /**
-     * Install bash, readline, and ncurses from bundled APK files
-     * (assets/apk-offline/) via proot, without network access.
-     * These packages are NOT in the factory minirootfs (Stage 2.5 can't
-     * restore them), and `apk add` fails when the network is down.
-     * The bundled APK files cover the gap without requiring network access.
-     * Stage 2.5 must have restored busybox (/bin/sh) first, so proot runs.
+     * Snapshot USER-installed packages to the host side
+     * (filesDir/dpkg-world.txt) as plain package NAMES — one `apt-get
+     * install` line, no version pins.
      *
-     * Called from [autoRepair] Stage 2.6 after factory file restoration.
+     * Deliberately NOT a full `dpkg status` dump: the factory Ubuntu base
+     * rootfs ships ~91 packages, and snapshotting all of them pinned to
+     * exact versions would (a) save system packages the next extraction
+     * provides anyway, and (b) break on the first bundled-rootfs point
+     * update — apt would try to reinstall old versions of base packages
+     * that no longer exist in the archive, failing the whole batch.
+     *
+     * Instead: `apt-mark showmanual` inside the guest lists explicitly
+     * installed packages; subtracting the factory baseline leaves exactly
+     * what the USER asked for. Version-less names reinstall from whatever
+     * the current archive provides — the same semantics as the snapshot's
+     * purpose (persist user intent across rebuilds).
+     *
+     * A restorable snapshot is only meaningful when the rootfs is in its
+     * final state, so callers invoke this AFTER any auto-repair
+     * (PRootKernel.boot) or right before a wipe ([reset]).
      */
-    private suspend fun installOfflinePackages(): Boolean = withContext(Dispatchers.IO) {
-        if (!prootBinary.exists()) {
-            Log.w(TAG, "[OfflinePackages] proot binary not available")
-            return@withContext false
+    suspend fun dumpDpkgWorld() = withContext(Dispatchers.IO) {
+        aptMutex.withLock { dumpDpkgWorldLocked() }
+    }
+
+    /**
+     * Core dump implementation — caller must hold [aptMutex] (or be a path
+     * that provably holds no competing apt transaction). Split from
+     * [dumpDpkgWorld] so `reset()` can snapshot while already holding the
+     * lock across the whole wipe+reinstall (Kotlin Mutex is non-reentrant).
+     */
+    private suspend fun dumpDpkgWorldLocked() {
+        val db = File(rootfsDir, "var/lib/dpkg/status")
+        if (!db.exists()) {
+            Log.d(TAG, "[DpkgWorld] dpkg db not present — rootfs not installed, skip dump")
+            return
         }
-        val apkDir = File(rootfsDir, "tmp/apk-offline")
-        apkDir.mkdirs()
+        if (!prootBinary.exists()) {
+            Log.w(TAG, "[DpkgWorld] proot binary not available, skip dump")
+            return
+        }
         try {
-            val apkFiles = mutableListOf<String>()
-            for (apkName in OFFLINE_PACKAGES) {
-                try {
-                    context.assets.open("apk-offline/$apkName").use { src ->
-                        val dst = File(apkDir, apkName)
-                        dst.outputStream().use { dstStream -> src.copyTo(dstStream) }
-                        apkFiles.add(dst.absolutePath)
-                    }
-                } catch (_: java.io.FileNotFoundException) {
-                    Log.w(TAG, "[OfflinePackages] asset not found: apk-offline/$apkName")
-                }
+            val manual = runAptMarkShowManualUnlocked()
+            if (manual == null) {
+                Log.w(TAG, "[DpkgWorld] apt-mark showmanual failed — keeping previous snapshot")
+                return
             }
-            if (apkFiles.isEmpty()) {
-                Log.w(TAG, "[OfflinePackages] no APK files to install")
-                return@withContext false
+            // Guard: the probe is only meaningful when dpkg's database is
+            // sane. Count INSTALLED blocks in dpkg status (NOT manual size —
+            // a user can legitimately drop manual size below the baseline
+            // via apt-mark auto, and that must still produce a fresh dump).
+            // A collapse below ~60% of the factory count means a broken
+            // probe/guest, not user intent — keep the previous snapshot.
+            val statusInstalled = parseDpkgStatus(db.readText()).size
+            if (statusInstalled < FACTORY_MANUAL_BASELINE.size * 6 / 10) {
+                Log.w(TAG, "[DpkgWorld] dpkg status has only $statusInstalled installed packages — broken guest, keeping previous snapshot")
+                return
             }
+            val userPkgs = manual.subtract(FACTORY_MANUAL_BASELINE).sorted()
+            if (userPkgs.isEmpty()) {
+                Log.i(TAG, "[DpkgWorld] no user-installed packages (manual=${manual.size}, all factory) — snapshot cleared")
+                // Overwrite with an explicit empty snapshot instead of
+                // deleting: any concurrent restore that re-reads the file
+                // sees a well-formed empty list, not a missing file (missing
+                // reads as "no snapshot" legacy semantics).
+                apkWorldFile.writeText(
+                    "# dpkg-world snapshot — user package names, one per line, written by RootfsManager.dumpDpkgWorld()\n"
+                )
+                return
+            }
+            apkWorldFile.writeText(formatDpkgWorld(userPkgs))
+            Log.i(TAG, "[DpkgWorld] snapshot ${userPkgs.size} user package(s) -> ${apkWorldFile.name}: ${userPkgs.take(8).joinToString()}")
+        } catch (t: Exception) {
+            Log.w(TAG, "[DpkgWorld] dump failed: ${t.message}")
+        }
+    }
+
+    /**
+     * Factory `apt-mark showmanual` baseline of the bundled Ubuntu base
+     * rootfs (24.04.4 arm64). User packages = showmanual minus this set.
+     *
+     * Kept as a hard-coded set rather than a manifest file: it changes only
+     * when the bundled rootfs asset changes, and a tiny drift (a package
+     * promoted to manual by a base-image update) degrades gracefully — that
+     * package is just never snapshotted as "user" because apt installs it
+     * as a dependency anyway.
+     */
+    private val FACTORY_MANUAL_BASELINE = setOf(
+        "apt", "apt-utils", "base-files", "base-passwd", "bash", "bsdutils",
+        "coreutils", "dash", "debconf", "debianutils", "diffutils", "dpkg",
+        "e2fsprogs", "findutils", "gcc-14-base", "gpgv", "grep", "gzip",
+        "hostname", "init-system-helpers", "libacl1", "libapt-pkg6.0t64",
+        "libattr1", "libaudit-common", "libaudit1", "libbase-files",
+        "libblkid1", "libbsd0", "libbz2-1.0", "libc-bin", "libcom-err2",
+        "libcrypt1", "libdebconfclient0", "libexpat1", "libext2fs2t64",
+        "libffi8", "libgcc-s1", "libgcrypt20", "libgmp10", "libgnutls30t64",
+        "libgpg-error0", "libhogweed6t64", "libidn2-0", "liblz4-1",
+        "liblzma5", "libmd0", "libmount1", "libnettle8t64", "libnghttp2-14",
+        "libp11-kit0", "libpam-modules", "libpam-modules-bin", "libpam-runtime",
+        "libpam0g", "libproc2-0", "libpsl5t64", "libseccomp2", "libselinux1",
+        "libsemanage-common", "libsemanage2", "libsepol2", "libsmartcols1",
+        "libss2", "libssl3t64", "libstdc++6", "libtasn1-6", "libtinfo6",
+        "libudev1", "libunistring5", "libuuid1", "libxxhash0", "libzstd1",
+        "login", "logsave", "lsb-base", "mawk", "mount", "ncurses-base",
+        "ncurses-bin", "p11-kit", "passwd", "procps", "sed", "sensible-utils",
+        "sysvinit-utils", "tar", "ubuntu-keyring", "ucf", "util-linux",
+        "zlib1g",
+    )
+
+    /**
+     * Run `apt-mark showmanual` inside the guest via proot and return the
+     * package-name list, or null when the probe failed (proot missing,
+     * apt-mark unavailable, non-zero exit). No network involved.
+     */
+    private suspend fun runAptMarkShowManual(): Set<String>? = withContext(Dispatchers.IO) {
+        aptMutex.withLock { runAptMarkShowManualUnlocked() }
+    }
+
+    /** Lock-free core of [runAptMarkShowManual] — caller holds [aptMutex]. */
+    private suspend fun runAptMarkShowManualUnlocked(): Set<String>? {
+        return runCatching {
             val cmd = listOf(
                 prootBinary.absolutePath, "-0", "--link2symlink", "--kill-on-exit",
                 "-r", rootfsDir.absolutePath,
                 "-b", "/dev", "-b", "/proc", "-b", "/sys", "-w", "/root",
-                "-b", "${apkDir.absolutePath}:/tmp/apk-offline",
-                "/bin/sh", "-c",
-                // Absolute apk path + explicit PATH: the app-process PATH
-                // (Android's) is what proot children inherit, so a bare
-                // `apk` used to be `apk: not found` (exit 127) here. The
-                // trailing `; true` ALSO masked every real failure by
-                // forcing exit 0 — remove it so failures surface.
-                "/sbin/apk add --allow-untrusted /tmp/apk-offline/*.apk"
+                "/bin/sh", "-c", "/usr/bin/apt-mark showmanual"
             )
-            val loaderEnv = prootLoaderEnv()
-            runCatching {
-                val p = ProcessBuilder(cmd)
-                    .redirectErrorStream(true)
-                    .apply { environment().putAll(loaderEnv) }
-                    .start()
-                val output = p.inputStream.readBytes().toString(Charset.forName("UTF-8"))
-                val finished = p.waitFor(120, java.util.concurrent.TimeUnit.SECONDS)
-                val exitCode = if (finished) p.exitValue() else -1
-                if (p.isAlive) p.destroyForcibly()
-                Log.i(TAG, "[OfflinePackages] apk add exit=$exitCode output=${output.takeLast(500)}")
-                exitCode == 0
-            }.onFailure { t ->
-                Log.e(TAG, "[OfflinePackages] process failed", t)
-                false
-            }.getOrDefault(false)
-        } catch (t: Exception) {
-            Log.e(TAG, "[OfflinePackages] failed", t)
-            false
-        } finally {
-            apkDir.deleteRecursively()
-        }
-    }
-
-    // ── Apk world snapshot (user-package persistence) ─────────────────────
-    //
-    // The factory minirootfs ships no bash/readline/ncurses and no user
-    // packages — everything a user `apk add`s lives only inside the rootfs.
-    // A full rebuild (manual reset, or [autoRepair]'s Stage 3 after an
-    // unusable apk database) wipes it all. The snapshot makes user packages
-    // a recoverable state: [dumpApkWorld] persists `name=version` to the
-    // host side on every boot, and [restoreApkWorld] re-applies it right
-    // after a fresh extraction inside [installIfNeeded].
-
-    /** Host-side snapshot of installed packages (`name=version` per line). */
-    val apkWorldFile: File get() = File(context.filesDir, "apk-world.txt")
-
-    /** Host-side retry list for packages that failed to restore. */
-    val apkWorldFailedFile: File get() = File(context.filesDir, "apk-world-failed.txt")
-
-    /**
-     * Snapshot the currently installed packages to the host side
-     * (filesDir/apk-world.txt). Reads Alpine's `lib/apk/db/installed`
-     * directly on the host filesystem — no proot involved, cheap enough to
-     * run on every boot. A restorable snapshot is only meaningful when the
-     * rootfs is in its final state, so callers invoke this AFTER any
-     * auto-repair (PRootKernel.boot) or right before a wipe ([reset]).
-     */
-    suspend fun dumpApkWorld() = withContext(Dispatchers.IO) {
-        val db = File(rootfsDir, "lib/apk/db/installed")
-        if (!db.exists()) {
-            Log.d(TAG, "[ApkWorld] apk db not present — rootfs not installed, skip dump")
-            return@withContext
-        }
-        try {
-            val packages = parseApkDbInstalled(db.readText())
-            // Guard: an unreadable/corrupt apk db parses to an empty list.
-            // The factory rootfs always ships packages, so an empty parse
-            // means the db is broken (the classic pre-Stage-3-reset state) —
-            // overwriting the snapshot with it would erase user packages on
-            // the next restore. Keep the previous snapshot instead.
-            if (packages.isEmpty()) {
-                Log.w(TAG, "[ApkWorld] apk db unreadable (${db.length()} bytes, 0 packages) — keeping previous snapshot")
-                return@withContext
+            val r = runProotWithDeadline(cmd, prootLoaderEnv(), timeoutSec = 60)
+            if (r.exitCode != 0) {
+                Log.w(TAG, "[DpkgWorld] apt-mark showmanual exit=${r.exitCode} output=${r.output.takeLast(200)}")
+                return@runCatching null
             }
-            apkWorldFile.writeText(formatApkWorld(packages))
-            Log.i(TAG, "[ApkWorld] snapshot ${packages.size} packages -> ${apkWorldFile.name}")
-        } catch (t: Exception) {
-            Log.w(TAG, "[ApkWorld] dump failed: ${t.message}")
-        }
+            r.output.lineSequence()
+                .map { it.trim() }
+                .filter { it.isNotEmpty() && !it.startsWith('#') }
+                .toSet()
+        }.getOrNull()
     }
 
     /**
-     * Re-apply the snapshot after a fresh extraction: `apk add name=version`
-     * for every recorded package (order preserved), skipping the offline
-     * trio (bash/readline/ncurses) which the bundled-APK Stage 2.6 path
-     * guarantees on every rebuild.
+     * Re-apply the snapshot after a fresh extraction: one
+     * `apt-get update` + ONE batched `apt-get install -y <names...>`.
+     * Names only — no version pins (see [dumpDpkgWorld]).
      *
-     * Failure (offline, repo issue, pruned version) is NON-blocking: the
-     * failed list is persisted to [apkWorldFailedFile] for the next boot's
-     * [retryFailedApkWorld], and the rootfs stays usable — a missing user
-     * package just surfaces as "not installed".
+     * Needs network (apt has no offline install), which is why failures are
+     * non-blocking: when the batch fails, apt's own per-package diagnostics
+     * are parsed to re-queue ONLY the packages it could not satisfy (a
+     * package gone from the archive must not poison unrelated ones), and
+     * the rootfs stays usable — a missing user package just surfaces as
+     * "not installed".
      */
-    suspend fun restoreApkWorld(): Boolean = withContext(Dispatchers.IO) {
+    suspend fun restoreDpkgWorld(): Boolean = withContext(Dispatchers.IO) {
+        aptMutex.withLock { restoreDpkgWorldUnlocked() }
+    }
+
+    /** Lock-free core of [restoreDpkgWorld] — caller holds [aptMutex]. */
+    private suspend fun restoreDpkgWorldUnlocked(): Boolean = withContext(Dispatchers.IO) {
         if (!apkWorldFile.exists()) {
-            Log.d(TAG, "[ApkWorld] no snapshot file, nothing to restore")
+            Log.d(TAG, "[DpkgWorld] no snapshot file, nothing to restore")
             return@withContext true
         }
-        val packages = try {
-            parseApkWorld(apkWorldFile.readText())
-        } catch (t: Exception) {
-            Log.e(TAG, "[ApkWorld] failed to read snapshot, skip restore", t)
+        if (!File(rootfsDir, CA_BUNDLE_PATH).exists()) {
+            // No CA trust yet (offline bootstrap failed/absent): HTTPS mirrors
+            // would fail verification and HTTP mirrors can't be guaranteed
+            // either — queue everything for the strike-limited retry instead
+            // of burning a doomed apt round-trip now.
+            val names = parseDpkgWorld(apkWorldFile.readText())
+            Log.w(TAG, "[DpkgWorld] CA trust missing — deferring ${names.size} package(s) to retry queue")
+            if (names.isNotEmpty()) writeDpkgWorldFailed(names)
             return@withContext false
         }
-        val targets = excludeOfflinePackages(packages)
-        if (targets.isEmpty()) {
-            Log.i(TAG, "[ApkWorld] snapshot holds only offline-trio packages, nothing to restore")
+        val names = try {
+            parseDpkgWorld(apkWorldFile.readText())
+        } catch (t: Exception) {
+            Log.e(TAG, "[DpkgWorld] failed to read snapshot, skip restore", t)
+            return@withContext false
+        }
+        if (names.isEmpty()) {
+            Log.i(TAG, "[DpkgWorld] snapshot empty, nothing to restore")
             return@withContext true
         }
-        val args = targets.map { "${it.name}=${it.version}" }
-        Log.i(TAG, "[ApkWorld] restoring ${args.size} packages: ${args.take(6).joinToString()}")
-        val code = runApkAddInGuest(args)
-        if (code == 0) {
-            Log.i(TAG, "[ApkWorld] restore OK (${args.size} packages)")
+        Log.i(TAG, "[DpkgWorld] restoring ${names.size} package(s): ${names.take(8).joinToString()}")
+        val result = runAptInstallInGuest(names)
+        if (result.exitCode == 0) {
+            Log.i(TAG, "[DpkgWorld] restore OK (${names.size} packages)")
             try { apkWorldFailedFile.delete() } catch (_: Exception) {}
             return@withContext true
         }
-        writeApkWorldFailed(args)
-        Log.w(TAG, "[ApkWorld] restore failed (exit=$code) — ${args.size} pkg(s) queued for retry")
+        val failed = extractFailedPackages(result.output, names)
+        if (failed.isEmpty()) {
+            Log.w(TAG, "[DpkgWorld] restore failed (exit=${result.exitCode}) — whole batch queued for retry")
+            writeDpkgWorldFailed(names)
+        } else {
+            Log.w(TAG, "[DpkgWorld] restore partial (exit=${result.exitCode}) — ${failed.size} pkg(s) queued: ${failed.take(8).joinToString()}")
+            writeDpkgWorldFailed(failed)
+        }
         false
     }
 
     /**
-     * Retry the previously-failed packages at boot time, one by one
-     * (the list is usually small). Runs with the user's mirror config
-     * already applied, so packages that failed against the factory repos
-     * get a second chance. Clears the retry list on full success.
+     * Parse apt's error output for packages that actually failed. Patterns:
+     *   `E: Unable to locate package <name>`
+     *   `E: Package '<name>' has no installation candidate`
+     *   `E: Version '<v>' for '<name>' was not found` (legacy snapshots)
+     * Falls back to the whole batch when nothing recognizable is found —
+     * a total network failure should retry everything, not silently drop
+     * packages.
      */
-    suspend fun retryFailedApkWorld(): Boolean = withContext(Dispatchers.IO) {
+    private fun extractFailedPackages(output: String, requested: List<String>): List<String> {
+        val failed = mutableSetOf<String>()
+        // (pattern, group index of the package name within the match)
+        val patterns = listOf(
+            Regex("""Unable to locate package (\S+)""") to 1,
+            Regex("""Package '([^']+)' has no installation candidate""") to 1,
+            Regex("""Version '[^']*' for '([^']*)' was not found""") to 1,
+            Regex("""'?([A-Za-z0-9+.:-]+)'? (?:is not|but it is not) (?:installable|going to be installed)""") to 1,
+            Regex("""Depends: (\S+) but it is not (?:installable|going to be installed)""") to 1,
+        )
+        for (line in output.lines()) {
+            for ((re, group) in patterns) {
+                re.find(line)?.let { m ->
+                    val pkg = m.groupValues[group]
+                    if (pkg.isNotEmpty()) failed.add(pkg)
+                }
+            }
+        }
+        val known = failed.filter { it in requested.toSet() }
+        return if (known.isEmpty()) requested else known
+    }
+
+    /**
+     * Retry previously-failed packages. One `apt-get update` + ONE batched
+     * install — never per-package update loops on the boot path. Names only
+     * (legacy `name=version` lines are accepted and stripped of the pin).
+     * Retries carry a strike counter: after [MAX_DPKG_WORLD_RETRY_STRIKES]
+     * failed boot attempts the list is dropped and a manual
+     * `apt-get install <pkg>` inside the sandbox takes over. Clears the
+     * retry list on full success.
+     */
+    suspend fun retryFailedDpkgWorld(): Boolean = withContext(Dispatchers.IO) {
+        aptMutex.withLock { retryFailedDpkgWorldUnlocked() }
+    }
+
+    /**
+     * Lock-free core of [retryFailedDpkgWorld] — caller holds [aptMutex].
+     * Deliberately called OFF the critical boot path (PRootKernel.boot
+     * launches it on IO): a slow-mirror batch must not delay first shell.
+     */
+    private suspend fun retryFailedDpkgWorldUnlocked(): Boolean = withContext(Dispatchers.IO) {
         if (!apkWorldFailedFile.exists()) return@withContext true
-        val args = try {
+        val names = try {
             apkWorldFailedFile.readLines()
-                .map { it.trim() }
-                .filter { it.isNotEmpty() && !it.startsWith("#") && '=' in it }
+                .map { it.trim().substringBefore('=') }
+                .filter { it.isNotEmpty() && !it.startsWith("#") }
         } catch (t: Exception) {
-            Log.w(TAG, "[ApkWorld] failed to read retry list", t)
+            Log.w(TAG, "[DpkgWorld] failed to read retry list", t)
             return@withContext false
         }
-        if (args.isEmpty()) {
+        if (names.isEmpty()) {
             try { apkWorldFailedFile.delete() } catch (_: Exception) {}
             return@withContext true
         }
-        Log.i(TAG, "[ApkWorld] retrying ${args.size} previously-failed package(s)")
-        var allOk = true
-        val stillFailed = mutableListOf<String>()
-        for (arg in args) {
-            val code = runApkAddInGuest(listOf(arg))
-            if (code == 0) {
-                Log.i(TAG, "[ApkWorld] retry OK: $arg")
-            } else {
-                allOk = false
-                stillFailed.add(arg)
+
+        // [T-mirror-fallback] Self-heal the apt source before spending a
+        // retry strike on it: if the configured mirror is unreachable, this
+        // probes the fallback chain (TUNA → USTC → Aliyun → … → official)
+        // and rewrites minis.sources to the first mirror that passes a real
+        // `apt-get update`. Cheap when the current mirror is healthy (one
+        // HTTP probe, no switch); a no-op when /usr/local/bin/minis-mirror
+        // is absent (older rootfs). Without this, a dead mirror burns
+        // through all retry strikes on network errors before ever being
+        // replaced.
+        try {
+            val mirrorBin = File(rootfsDir, "usr/local/bin/minis-mirror")
+            if (mirrorBin.exists()) {
+                val probe = runProotWithDeadline(
+                    listOf(
+                        prootBinary.absolutePath, "-0", "--link2symlink", "--kill-on-exit",
+                        "-r", rootfsDir.absolutePath,
+                        "-b", "/dev", "-b", "/proc", "-b", "/sys", "-w", "/root",
+                        "/bin/sh", "-c", "/usr/local/bin/minis-mirror auto"
+                    ),
+                    prootLoaderEnv(),
+                    timeoutSec = 180,
+                )
+                Log.i(TAG, "[MirrorFallback] auto probe exit=${probe.exitCode} out=${probe.output.takeLast(200)}")
             }
+        } catch (t: Throwable) {
+            Log.w(TAG, "[MirrorFallback] minis-mirror auto failed (non-fatal): ${t.message}")
         }
-        if (stillFailed.isEmpty()) {
+
+        val prefs = context.getSharedPreferences("dpkg_world_retry", Context.MODE_PRIVATE)
+        val strikes = prefs.getInt("strikes", 0)
+        if (strikes >= MAX_DPKG_WORLD_RETRY_STRIKES) {
+            Log.w(TAG, "[DpkgWorld] retry list dropped after $strikes failed boot attempts — install manually: apt-get install ${names.joinToString(" ")}")
             try { apkWorldFailedFile.delete() } catch (_: Exception) {}
-            Log.i(TAG, "[ApkWorld] retry fully succeeded")
-        } else {
-            writeApkWorldFailed(stillFailed)
-            Log.w(TAG, "[ApkWorld] ${stillFailed.size} package(s) still failing: ${stillFailed.take(5).joinToString()}")
+            prefs.edit().remove("strikes").apply()
+            return@withContext true
         }
-        allOk
+
+        Log.i(TAG, "[DpkgWorld] retrying ${names.size} package(s) (strike ${strikes + 1}/$MAX_DPKG_WORLD_RETRY_STRIKES): ${names.take(8).joinToString()}")
+        val result = runAptInstallInGuest(names)
+        if (result.exitCode == 0) {
+            try { apkWorldFailedFile.delete() } catch (_: Exception) {}
+            prefs.edit().remove("strikes").apply()
+            Log.i(TAG, "[DpkgWorld] retry fully succeeded")
+            return@withContext true
+        }
+
+        val failed = extractFailedPackages(result.output, names)
+        if (failed.isEmpty()) {
+            // Network-level failure: keep everything, count the strike.
+            writeDpkgWorldFailed(names)
+        } else {
+            writeDpkgWorldFailed(failed)
+        }
+        prefs.edit().putInt("strikes", strikes + 1).apply()
+        Log.w(TAG, "[DpkgWorld] retry failed (exit=${result.exitCode}) — ${failed.size} pkg(s) remain queued")
+        false
     }
 
     /** Persist a failed `name=version` list for the next boot's retry. */
-    private fun writeApkWorldFailed(args: List<String>) {
+    private fun writeDpkgWorldFailed(args: List<String>) {
         try {
             apkWorldFailedFile.writeText(
                 buildString {
-                    appendLine("# apk-world retry list — packages that failed to restore")
+                    appendLine("# dpkg-world retry list — packages that failed to restore")
                     args.forEach { appendLine(it) }
                 }
             )
         } catch (t: Exception) {
-            Log.w(TAG, "[ApkWorld] failed to write retry list: ${t.message}")
+            Log.w(TAG, "[DpkgWorld] failed to write retry list: ${t.message}")
         }
     }
+
+    // ── pip-world ([T-pip-world]) ─────────────────────────────────────────────
+    //
+    // Same recoverable-state pattern as dpkg-world, for USER pip packages.
+    // The Ubuntu Base rootfs ships python3 with an EMPTY /usr/local — every
+    // pip package on a device is user intent, and a reset/rebuild/reinstall
+    // used to wipe it silently. Rootfs reset/restore paths now snapshot
+    // before the wipe and re-install after a fresh extraction, serialized on
+    // aptMutex like every other guest mutation.
+    //
+    // Design notes:
+    //  * pip has no `apt-mark showmanual` equivalent that separates user
+    //    installs from base dependencies, so the snapshot uses pip's leaf
+    //    packages (`pip list --not-required` — packages nothing else depends
+    //    on) minus a tiny FACTORY baseline (pip/setuptools/wheel — the base
+    //    image ships nothing in /usr/local, but the leaf list includes pip
+    //    itself). Reinstalling leaves is sufficient: pip pulls their
+    //    dependencies from the current archive, same name-only semantics
+    //    as dpkg-world (persist intent, not pins).
+    //  * `pip list --not-required` reads ALL site paths (default resolution:
+    //    /usr/local/.../dist-packages AND /usr/lib/python3/dist-packages).
+    //    Do NOT use `--path` — it restricts to one location and misses
+    //    user packages (verified on-device).
+    //  * Restore runs `pip install --ignore-installed -r` so the factory
+    //    pip/wheel baseline never blocks a snapshot that includes an older
+    //    pip; `-r -` reads the requirement list from stdin, one name per
+    //    line, tolerating `pkg==ver` pins from foreign environments.
+
+    /** Host-side snapshot of user pip packages (leaf names, one per line). */
+    val pipWorldFile: File get() = File(context.filesDir, "pip-world.txt")
+
+    /** Host-side retry list for pip packages that failed to restore. */
+    val pipWorldFailedFile: File get() = File(context.filesDir, "pip-world-failed.txt")
+
+    /**
+     * Snapshot USER pip packages to the host side (filesDir/pip-world.txt)
+     * as leaf package names (`pip list --not-required` minus the factory
+     * baseline). Best-effort: a failed probe keeps the previous snapshot.
+     * Serialized on [aptMutex] like every other guest mutation.
+     */
+    suspend fun dumpPipWorld(): Boolean = withContext(Dispatchers.IO) {
+        aptMutex.withLock { dumpPipWorldLocked() }
+    }
+
+    /** Lock-free core of [dumpPipWorld] — caller holds [aptMutex]. */
+    private suspend fun dumpPipWorldLocked(): Boolean {
+        if (!prootBinary.exists()) {
+            Log.w(TAG, "[PipWorld] proot binary not available, skip dump")
+            return false
+        }
+        if (!File(rootfsDir, "usr/bin/python3").exists()) {
+            // Not a failure — the factory rootfs variant may lack python.
+            Log.d(TAG, "[PipWorld] no python3 in rootfs, skip dump")
+            return false
+        }
+        val leaves = try {
+            runPipLeavesUnlocked()
+        } catch (t: Exception) {
+            Log.w(TAG, "[PipWorld] leaf probe crashed: ${t.message}")
+            null
+        }
+        if (leaves == null) {
+            Log.w(TAG, "[PipWorld] leaf probe failed — keeping previous snapshot")
+            return false
+        }
+        val userPkgs = leaves.subtract(FACTORY_PIP_BASELINE).sorted()
+        return try {
+            if (userPkgs.isEmpty()) {
+                pipWorldFile.writeText(PIP_WORLD_HEADER)
+                Log.i(TAG, "[PipWorld] no user pip packages — snapshot cleared")
+            } else {
+                pipWorldFile.writeText(PIP_WORLD_HEADER + userPkgs.joinToString("\n") + "\n")
+                Log.i(TAG, "[PipWorld] snapshot ${userPkgs.size} user pip package(s) -> ${pipWorldFile.name}: ${userPkgs.take(8).joinToString()}")
+            }
+            true
+        } catch (t: Exception) {
+            Log.w(TAG, "[PipWorld] failed to write snapshot: ${t.message}")
+            false
+        }
+    }
+
+    /**
+     * Run the leaf probe inside the guest: `pip list --not-required` from
+     * python3 -m pip (no dependency on a `pip` binary being on PATH).
+     * Returns the leaf names (no versions) or null on failure.
+     */
+    private suspend fun runPipLeavesUnlocked(): Set<String>? {
+        val r = runProotWithDeadline(
+            listOf(
+                prootBinary.absolutePath, "-0", "--link2symlink", "--kill-on-exit",
+                "-r", rootfsDir.absolutePath,
+                "-b", "/dev", "-b", "/proc", "-b", "/sys", "-w", "/root",
+                "/bin/sh", "-c",
+                "python3 -m pip list --not-required --format=freeze --disable-pip-version-check 2>/dev/null"
+            ),
+            prootLoaderEnv(),
+            timeoutSec = 120,
+        )
+        if (r.exitCode != 0) {
+            Log.w(TAG, "[PipWorld] pip list exit=${r.exitCode} output=${r.output.takeLast(200)}")
+            return null
+        }
+        return r.output.lineSequence()
+            .map { it.trim().substringBefore("==").trim() }
+            .filter { it.isNotEmpty() && !it.startsWith('#') }
+            .toSet()
+    }
+
+    /**
+     * Re-install the pip snapshot after a fresh extraction: ONE batched
+     * `pip install -r -` fed from stdin. Failures are non-blocking: the
+     * failed names land in the pip-world retry queue and are reconciled on
+     * a later boot (strike-limited), mirroring dpkg-world. Non-blocking for
+     * boot — the sandbox is fully usable while pip restore runs.
+     */
+    suspend fun restorePipWorld(): Boolean = withContext(Dispatchers.IO) {
+        aptMutex.withLock { restorePipWorldUnlocked() }
+    }
+
+    /** Lock-free core of [restorePipWorld] — caller holds [aptMutex]. */
+    private suspend fun restorePipWorldUnlocked(): Boolean {
+        if (!pipWorldFile.exists()) {
+            Log.d(TAG, "[PipWorld] no snapshot file, nothing to restore")
+            return true
+        }
+        val names = try {
+            parsePipWorld(pipWorldFile.readText())
+        } catch (t: Exception) {
+            Log.e(TAG, "[PipWorld] failed to read snapshot, skip restore", t)
+            return false
+        }
+        if (names.isEmpty()) {
+            Log.i(TAG, "[PipWorld] snapshot empty, nothing to restore")
+            return true
+        }
+        Log.i(TAG, "[PipWorld] restoring ${names.size} pip package(s): ${names.take(8).joinToString()}")
+        val ok = runPipInstallUnlocked(names)
+        if (ok) {
+            Log.i(TAG, "[PipWorld] restore OK (${names.size} packages)")
+            try { pipWorldFailedFile.delete() } catch (_: Exception) {}
+            return true
+        }
+        // pip's resolver fails the whole batch on any unsatisfiable pin, and
+        // its error output names packages in an unparsable way compared to
+        // apt's structured errors — queue the whole batch for retry instead
+        // of guessing which subset failed.
+        Log.w(TAG, "[PipWorld] restore failed — whole batch queued for retry")
+        writePipWorldFailed(names)
+        return false
+    }
+
+    /**
+     * Retry previously-failed pip packages on the boot path. One batched
+     * install; after [MAX_PIP_WORLD_RETRY_STRIKES] failed boot attempts the
+     * list is dropped and a manual `pip install <pkg>` inside the sandbox
+     * takes over. Clears the retry list on full success.
+     */
+    suspend fun retryFailedPipWorld(): Boolean = withContext(Dispatchers.IO) {
+        aptMutex.withLock { retryFailedPipWorldUnlocked() }
+    }
+
+    /** Lock-free core of [retryFailedPipWorld] — caller holds [aptMutex]. */
+    private suspend fun retryFailedPipWorldUnlocked(): Boolean {
+        if (!pipWorldFailedFile.exists()) return true
+        val names = try {
+            pipWorldFailedFile.readLines()
+                .map { it.trim().substringBefore('=') }
+                .filter { it.isNotEmpty() && !it.startsWith("#") }
+        } catch (t: Exception) {
+            Log.w(TAG, "[PipWorld] failed to read retry list", t)
+            return false
+        }
+        if (names.isEmpty()) {
+            try { pipWorldFailedFile.delete() } catch (_: Exception) {}
+            return true
+        }
+        val prefs = context.getSharedPreferences("pip_world_retry", Context.MODE_PRIVATE)
+        val strikes = prefs.getInt("strikes", 0)
+        if (strikes >= MAX_PIP_WORLD_RETRY_STRIKES) {
+            Log.w(TAG, "[PipWorld] retry list dropped after $strikes failed boot attempts — install manually: pip install ${names.joinToString(" ")}")
+            try { pipWorldFailedFile.delete() } catch (_: Exception) {}
+            prefs.edit().remove("strikes").apply()
+            return true
+        }
+        Log.i(TAG, "[PipWorld] retrying ${names.size} package(s) (strike ${strikes + 1}/$MAX_PIP_WORLD_RETRY_STRIKES): ${names.take(8).joinToString()}")
+        val ok = runPipInstallUnlocked(names)
+        if (ok) {
+            try { pipWorldFailedFile.delete() } catch (_: Exception) {}
+            prefs.edit().remove("strikes").apply()
+            Log.i(TAG, "[PipWorld] retry fully succeeded")
+            return true
+        }
+        prefs.edit().putInt("strikes", strikes + 1).apply()
+        Log.w(TAG, "[PipWorld] retry failed — strike ${strikes + 1}/$MAX_PIP_WORLD_RETRY_STRIKES")
+        return false
+    }
+
+    /**
+     * One batched `pip install` inside the guest. `--ignore-installed`
+     * downgrades nothing and never uninstalls; `-r -` reads requirements
+     * from stdin (one `name` or `name==ver` per line). Uses the same
+     * minimal proot invocation as the leaf probe; 15 min cap (pip wheels
+     * can be big — torch is ~2 GB — and this runs OFF the boot path).
+     */
+    private suspend fun runPipInstallUnlocked(names: List<String>): Boolean {
+        if (!prootBinary.exists()) return false
+        // Stage the requirement list inside the rootfs — pip reads it from
+        // the guest filesystem (stdin redirection through proot is flaky
+        // with the deadline runner's process pipeline).
+        val reqFile = File(rootfsDir, "tmp/pip-world-requirements.txt")
+        try {
+            reqFile.parentFile?.mkdirs()
+            reqFile.writeText(names.joinToString("\n") + "\n")
+        } catch (t: Exception) {
+            Log.w(TAG, "[PipWorld] failed to stage requirements: ${t.message}")
+            return false
+        }
+        val r = try {
+            runProotWithDeadline(
+                listOf(
+                    prootBinary.absolutePath, "-0", "--link2symlink", "--kill-on-exit",
+                    "-r", rootfsDir.absolutePath,
+                    "-b", "/dev", "-b", "/proc", "-b", "/sys", "-w", "/root",
+                    "/bin/sh", "-c",
+                    "python3 -m pip install --ignore-installed --disable-pip-version-check --no-input -r /tmp/pip-world-requirements.txt"
+                ),
+                prootLoaderEnv(),
+                timeoutSec = 900,
+            )
+        } finally {
+            try { reqFile.delete() } catch (_: Exception) {}
+        }
+        if (r.exitCode != 0) {
+            Log.w(TAG, "[PipWorld] pip install exit=${r.exitCode} output=${r.output.takeLast(300)}")
+        }
+        return r.exitCode == 0
+    }
+
+    private fun writePipWorldFailed(args: List<String>) {
+        try {
+            pipWorldFailedFile.writeText(
+                buildString {
+                    appendLine("# pip-world retry list — packages that failed to restore")
+                    args.forEach { appendLine(it) }
+                }
+            )
+        } catch (t: Exception) {
+            Log.w(TAG, "[PipWorld] failed to write retry list: ${t.message}")
+        }
+    }
+
+    /**
+     * Factory pip baseline of the bundled Ubuntu base rootfs. The base
+     * image ships /usr/lib/python3/dist-packages with ONLY pip+wheel (and
+     * setuptools via the python3-venv-ish layer); pip's leaf list always
+     * includes pip itself and usually wheel — subtract so they are never
+     * mistaken for user intent.
+     */
+    private val FACTORY_PIP_BASELINE = setOf("pip", "setuptools", "wheel")
+
+    /** First line written into every pip-world snapshot file. */
+    private val PIP_WORLD_HEADER =
+        "# pip-world snapshot — user pip leaf package names, one per line, written by RootfsManager.dumpPipWorld()\n"
 
     /**
      * Loader env for every proot child process. MUST include:
@@ -727,18 +1280,27 @@ class RootfsManager private constructor(private val context: Context) {
      *    (proot's embedded-loader fallback writes to PROOT_TMP_DIR and
      *    fails under Android noexec — without these proot aborts ~20ms in
      *    with status=1 and no output)
-     *  - `PATH` → the ALPINE guest PATH. ProcessBuilder inherits the app
+     *  - `PATH` → the Ubuntu guest PATH. ProcessBuilder inherits the app
      *    process env, whose PATH is Android's (`/sbin:/vendor/bin:...`) —
-     *    the guest `/bin/sh` then can't find `apk` (exit 127). This was
-     *    the real reason both Stage 2.6 and the apk-world restore silently
-     *    failed on device: `apk: not found` inside proot.
+     *    the guest `/bin/sh` then can't find `apt-get` (exit 127). This was
+     *    the real reason the old apk-world restore silently failed on
+     *    device: `apk: not found` inside proot.
      */
     private fun prootLoaderEnv(): Map<String, String> {
         val env = mutableMapOf(
-            "PATH" to ALPINE_PATH,
+            "PATH" to UBUNTU_PATH,
             "PROOT_TMP_DIR" to PRootKernel.getProotTmpDir(context).absolutePath,
             "LD_LIBRARY_PATH" to nativeLibDir.absolutePath,
         )
+        // [T-fix-tmpdir-leak] Guest-side temp dirs. ProcessBuilder merges
+        // the app process env (TMPDIR=<Android cache dir>) with loaderEnv;
+        // inside the rootfs that host path does not exist and Debian
+        // maintainer scripts (update-ca-certificates' `mktemp -p
+        // "${TMPDIR:-/tmp}"` under set -e) abort on it. Pin the guest paths
+        // explicitly — this covers the offline CA install, dpkg-world
+        // restore and apt-mark probes, which run outside
+        // PRootKernel.boot()'s customEnvironment seeding.
+        env.putAll(PRootKernel.GUEST_TMP_ENV)
         File(nativeLibDir, "libproot-loader.so").takeIf { it.exists() }?.let {
             env["PROOT_LOADER"] = it.absolutePath
         }
@@ -748,42 +1310,305 @@ class RootfsManager private constructor(private val context: Context) {
         return env
     }
 
+    /** Result of one guest apt run: exit code + merged output for parsing. */
+    data class AptResult(val exitCode: Int, val output: String)
+
     /**
-     * Run `apk add --no-cache <name>=<version>...` inside the guest via
-     * proot. Shares the loader-env boilerplate with [installOfflinePackages].
-     * Returns the apk exit code (0 = all installed), or -1 on process
-     * failure / timeout.
+     * Run a proot child with a real wall-clock deadline. The naive
+     * `readBytes(); waitFor(timeout)` pattern never reaches the timeout:
+     * readBytes() blocks on stream EOF, which only arrives when the child
+     * exits — a hung apt hangs the dump/restore forever. Here the output is
+     * consumed on a separate thread and the waiter enforces the deadline;
+     * on expiry the child (and the proot tracer via --kill-on-exit) is
+     * destroyed.
      */
-    private suspend fun runApkAddInGuest(pkgArgs: List<String>): Int = withContext(Dispatchers.IO) {
+    private fun runProotWithDeadline(
+        cmd: List<String>,
+        loaderEnv: Map<String, String>,
+        timeoutSec: Long,
+    ): AptResult {
+        val p = ProcessBuilder(cmd)
+            .redirectErrorStream(true)
+            .apply { environment().putAll(loaderEnv) }
+            .start()
+        val outputFuture = java.util.concurrent.CompletableFuture.supplyAsync {
+            try {
+                p.inputStream.readBytes().toString(Charset.forName("UTF-8"))
+            } catch (_: Exception) {
+                ""
+            }
+        }
+        val finished = p.waitFor(timeoutSec, java.util.concurrent.TimeUnit.SECONDS)
+        val code: Int
+        if (finished) {
+            code = p.exitValue()
+        } else {
+            p.destroyForcibly()
+            code = -1
+            Log.w(TAG, "[Proot] child timed out after ${timeoutSec}s, killed: ${cmd.takeLast(3)}")
+        }
+        val output = try {
+            outputFuture.get(10, java.util.concurrent.TimeUnit.SECONDS)
+        } catch (_: Exception) {
+            // Reader thread may still be draining the (now closed) pipe —
+            // cancel it so the common-pool thread is not parked on a stream
+            // that will never EOF.
+            outputFuture.cancel(true)
+            ""
+        }
+        return AptResult(code, output)
+    }
+
+    /**
+     * Run `apt-get update` (once) then `apt-get install -y <names...>` inside
+     * the guest via proot. apt's index is a cache, not a database, so it
+     * never survives the extraction this runs after — but it must run exactly
+     * once per invocation, never once per package.
+     * Returns an [AptResult]; exitCode -1 means process failure / timeout.
+     */
+    /**
+     * Run the batched apt install. NOT self-locking: every call site
+     * (restore/retry unlocked cores) already holds [aptMutex], and Kotlin's
+     * Mutex is non-reentrant — locking here would self-deadlock.
+     */
+    private suspend fun runAptInstallInGuest(pkgNames: List<String>): AptResult = withContext(Dispatchers.IO) {
         if (!prootBinary.exists()) {
-            Log.w(TAG, "[ApkWorld] proot binary not available")
-            return@withContext -1
+            Log.w(TAG, "[DpkgWorld] proot binary not available")
+            return@withContext AptResult(-1, "")
+        }
+        val script = buildString {
+            append("DEBIAN_FRONTEND=noninteractive apt-get update -qq ; ")
+            append("DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ")
+            append(pkgNames.joinToString(" "))
         }
         val cmd = listOf(
             prootBinary.absolutePath, "-0", "--link2symlink", "--kill-on-exit",
             "-r", rootfsDir.absolutePath,
             "-b", "/dev", "-b", "/proc", "-b", "/sys", "-w", "/root",
             "/bin/sh", "-c",
-            // Absolute path: the guest PATH is only guaranteed inside a
-            // session shell, not in proot children (see prootLoaderEnv).
-            "/sbin/apk add --no-cache ${pkgArgs.joinToString(" ")}"
+            script
         )
-        val loaderEnv = prootLoaderEnv()
         runCatching {
-            val p = ProcessBuilder(cmd)
-                .redirectErrorStream(true)
-                .apply { environment().putAll(loaderEnv) }
-                .start()
-            val output = p.inputStream.readBytes().toString(Charset.forName("UTF-8"))
-            val finished = p.waitFor(180, java.util.concurrent.TimeUnit.SECONDS)
-            val code = if (finished) p.exitValue() else -1
-            if (p.isAlive) p.destroyForcibly()
-            Log.i(TAG, "[ApkWorld] apk add exit=$code pkgs=${pkgArgs.size} output=${output.takeLast(400)}")
-            code
+            val r = runProotWithDeadline(cmd, prootLoaderEnv(), timeoutSec = 600)
+            Log.i(TAG, "[DpkgWorld] apt install exit=${r.exitCode} pkgs=${pkgNames.size} output=${r.output.takeLast(400)}")
+            r
         }.onFailure { t ->
-            Log.e(TAG, "[ApkWorld] apk add process failed", t)
-            -1
-        }.getOrDefault(-1)
+            Log.e(TAG, "[DpkgWorld] apt install process failed", t)
+            AptResult(-1, "")
+        }.getOrDefault(AptResult(-1, ""))
+    }
+
+    /**
+     * Offline install of the CA bootstrap trio (ca-certificates, openssl,
+     * libssl3t64) from assets/deb-offline/ via dpkg inside the guest.
+     * No network, no apt index, mirrors the old apk-offline pattern.
+     *
+     * [T-ca-bootstrap-heal] The old "already present" guard keyed on the
+     * package files — but a FAILED postinst (the leaked host $TMPDIR broke
+     * update-ca-certificates' mktemp under set -e) leaves the debs unpacked
+     * with NO trust bundle, and every later boot kept skipping. Now the
+     * skip requires the bundle itself to exist; dpkg -i over a half-
+     * configured package re-runs postinst and heals in place.
+     *
+     * Lock discipline: caller must hold [aptMutex] (the previous internal
+     * `aptMutex.withLock` deadlocked — this is invoked from
+     * [installIfNeededUnlocked], which already holds it, and Kotlin Mutex
+     * is non-reentrant). With the internal lock, the very first install
+     * hung forever; a force-kill left `.arch` written but no CA bundle,
+     * and every later boot took the `isInstalled` early-return — the
+     * bootstrap never ran again. That deadlock is the root cause of the
+     * "no CA certificates" reports.
+     */
+    private suspend fun installOfflineDebs(): Boolean = withContext(Dispatchers.IO) {
+        if (File(rootfsDir, CA_BUNDLE_PATH).exists()) {
+            Log.d(TAG, "[CaBootstrap] ca-certificates trust bundle present, skip")
+            return@withContext true
+        }
+        if (!prootBinary.exists()) {
+            Log.w(TAG, "[CaBootstrap] proot binary not available, skip")
+            return@withContext false
+        }
+        val debDir = File(rootfsDir, "tmp/deb-offline")
+        debDir.mkdirs()
+        var installed = false
+        try {
+            val copied = mutableListOf<String>()
+            for (name in OFFLINE_DEBS) {
+                try {
+                    context.assets.open("deb-offline/$name").use { input ->
+                        val dst = File(debDir, name)
+                        dst.outputStream().use { output -> input.copyTo(output) }
+                        copied.add("/tmp/deb-offline/$name")
+                    }
+                } catch (_: java.io.FileNotFoundException) {
+                    Log.w(TAG, "[CaBootstrap] asset missing: deb-offline/$name")
+                }
+            }
+            if (copied.size < OFFLINE_DEBS.size) {
+                Log.w(TAG, "[CaBootstrap] only ${copied.size}/${OFFLINE_DEBS.size} debs staged, skip install")
+                return@withContext false
+            }
+            // Caller holds aptMutex (see kdoc) — dpkg runs directly.
+            val cmd = listOf(
+                prootBinary.absolutePath, "-0", "--link2symlink", "--kill-on-exit",
+                "-r", rootfsDir.absolutePath,
+                "-b", "/dev", "-b", "/proc", "-b", "/sys", "-w", "/root",
+                "/bin/sh", "-c",
+                // [T-fix-tmpdir-leak] Defensive: the proot child's env is
+                // sanitized in prootLoaderEnv(), but the postinst shells
+                // out to update-ca-certificates whose mktemp targets
+                // ${TMPDIR:-/tmp} — pin TMPDIR inside the guest command
+                // too so the CA install never depends on caller env.
+                "TMPDIR=/tmp/ DEBIAN_FRONTEND=noninteractive dpkg -i ${copied.joinToString(" ")}"
+            )
+            val r = runProotWithDeadline(cmd, prootLoaderEnv(), timeoutSec = 120)
+            Log.i(TAG, "[CaBootstrap] dpkg -i exit=${r.exitCode} output=${r.output.takeLast(300)}")
+            if (r.exitCode == 0) {
+                Log.i(TAG, "[CaBootstrap] CA trust installed (${OFFLINE_DEBS.size} debs)")
+                installed = true
+            } else {
+                Log.w(TAG, "[CaBootstrap] offline CA install failed rc=${r.exitCode} — HTTPS sources stay broken until user installs ca-certificates")
+            }
+        } finally {
+            debDir.deleteRecursively()
+        }
+        installed
+    }
+
+    /**
+     * [T-ca-bootstrap-heal] Boot-time CA-trust gate. Cheap: at most one
+     * stat when the bundle is healthy. When the offline debs were unpacked
+     * but the trust bundle never got built (failed postinst — see
+     * [installOfflineDebs]), re-run the offline install, which re-executes
+     * the postinst over the half-configured package.
+     *
+     * When the bundle exists but is suspiciously small — the factory Ubuntu
+     * base image ships a stub with ~2 certificates — run
+     * update-ca-certificates inside the guest once (best-effort; usually
+     * no-op for a healthy install) so upgrades of the base image that lost
+     * the bundle self-heal too.
+     *
+     * Returns true when CA trust is present afterwards. Never throws;
+     * callers proceed even on false — restoreDpkgWorld() re-checks the
+     * bundle before any apt network traffic.
+     */
+    suspend fun ensureCaTrust(): Boolean = withContext(Dispatchers.IO) {
+        aptMutex.withLock { ensureCaTrustUnlocked() }
+    }
+
+    /**
+     * Lock-free core of [ensureCaTrust] — caller holds [aptMutex]. Two
+     * entry points: [PRootKernel.boot] runs it on the boot path (after
+     * installIfNeeded, no lock held), and installOfflineDebs keeps its
+     * caller-holds-lock contract for direct install-path use.
+     */
+    private suspend fun ensureCaTrustUnlocked(): Boolean {
+        val bundle = File(rootfsDir, CA_BUNDLE_PATH)
+        if (!isInstalled) return false
+        if (bundle.exists()) {
+            val certs = countTrustedCerts(bundle.readText())
+            if (certs >= MIN_EXPECTED_CA_CERTS) return true
+            Log.w(TAG, "[CaBootstrap] trust bundle thin ($certs certs < $MIN_EXPECTED_CA_CERTS) — regenerating inside guest")
+            val ok = runUpdateCaCertificates()
+            if (ok && countTrustedCerts(bundle.readText()) >= MIN_EXPECTED_CA_CERTS) return true
+            // Regeneration didn't take — fall through to the full offline
+            // reinstall below, which re-runs postinst unconditionally.
+        }
+        Log.i(TAG, "[CaBootstrap] trust bundle missing/unhealthy — offline (re)install")
+        val installed = try {
+            installOfflineDebs()
+        } catch (t: Throwable) {
+            Log.e(TAG, "[CaBootstrap] offline reinstall crashed", t)
+            false
+        }
+        return installed && File(rootfsDir, CA_BUNDLE_PATH).exists()
+    }
+
+    /**
+     * Run `update-ca-certificates` inside the guest (best-effort, ~seconds).
+     * Uses the same minimal proot invocation as the offline install; with
+     * --fresh omitted it only fills in what is missing.
+     */
+    private suspend fun runUpdateCaCertificates(): Boolean = withContext(Dispatchers.IO) {
+        if (!prootBinary.exists()) return@withContext false
+        val cmd = listOf(
+            prootBinary.absolutePath, "-0", "--link2symlink", "--kill-on-exit",
+            "-r", rootfsDir.absolutePath,
+            "-b", "/dev", "-b", "/proc", "-b", "/sys", "-w", "/root",
+            "/bin/sh", "-c",
+            "TMPDIR=/tmp/ update-ca-certificates"
+        )
+        val r = runProotWithDeadline(cmd, prootLoaderEnv(), timeoutSec = 120)
+        if (r.exitCode != 0) {
+            Log.w(TAG, "[CaBootstrap] update-ca-certificates exit=${r.exitCode} output=${r.output.takeLast(200)}")
+        }
+        r.exitCode == 0
+    }
+
+    /**
+     * [T-tz-consistency] Point /etc/localtime at the device zone so guest
+     * file mtimes, journal-less logs and anything else that reads localtime
+     * agree with the TZ env var injected by PRootKernel.posixTz().
+     *
+     * Why: PRootKernel injects `TZ=LCL-8` (POSIX format, host device zone)
+     * into every process — but the factory Ubuntu Base rootfs ships
+     * /etc/localtime -> Etc/UTC. Date formatting (java.time-style libs,
+     * `ls -l`, python datetime.astimezone()) follows TZ, while file
+     * timestamps and anything consulting /etc/localtime directly followed
+     * UTC — an 8-hour split-brain on a UTC+8 device (observed live).
+     *
+     * How: the Ubuntu Base rootfs ships /usr/share/zoneinfo (tzdata
+     * directory present even without the tzdata deb), so this is a pure
+     * copy — no tzdata apt install needed. When the zone file is missing
+     * (unusual zone id) we leave UTC in place: a consistent UTC beats a
+     * wrong local zone. Runs on the boot path after applyDefaultMountOverlay,
+     * idempotent (skips when the symlink already targets the right zone).
+     */
+    suspend fun applyHostTimezone() = withContext(Dispatchers.IO) {
+        if (!isInstalled) return@withContext
+        val zoneId = java.util.TimeZone.getDefault().toZoneId().id
+        try {
+            val localtime = File(rootfsDir, "etc/localtime")
+            val target = File(rootfsDir, "usr/share/zoneinfo/$zoneId")
+            if (!target.exists()) {
+                Log.w(TAG, "[TzSync] zoneinfo missing for '$zoneId' — keeping UTC")
+                return@withContext
+            }
+            // Match Debian's setup: /etc/localtime is a relative symlink
+            // into the zoneinfo tree. Absolute targets break under proot.
+            val want = "../usr/share/zoneinfo/$zoneId"
+            val current = runCatching {
+                Files.readSymbolicLink(localtime.toPath()).toString()
+            }.getOrNull()
+            if (current == want) return@withContext
+            localtime.delete()
+            Files.createSymbolicLink(
+                localtime.toPath(),
+                File(want).toPath(),
+            )
+            Log.i(TAG, "[TzSync] /etc/localtime -> $want (device zone $zoneId)")
+        } catch (t: Throwable) {
+            Log.w(TAG, "[TzSync] failed to align /etc/localtime with $zoneId: ${t.message}")
+        }
+    }
+
+    /**
+     * Delete the legacy `filesDir/alpine-rootfs` left behind by pre-Ubuntu
+     * installs. Called only from the success tail of [installIfNeeded], so a
+     * failed/mid-install run never removes the old rootfs before the new one
+     * is usable. Failed cleanup is logged, non-fatal — storage reclaim also
+     * happens through Settings → Storage.
+     */
+    private fun cleanupLegacyAlpineRootfs() {
+        val legacy = File(context.filesDir, "alpine-rootfs")
+        if (!legacy.exists()) return
+        try {
+            val freedMb = legacy.walkBottomUp().filter { it.isFile }.sumOf { it.length() } / (1024L * 1024L)
+            legacy.deleteRecursively()
+            Log.i(TAG, "[Migration] legacy alpine-rootfs removed (~${freedMb} MiB freed)")
+        } catch (t: Throwable) {
+            Log.w(TAG, "[Migration] legacy alpine-rootfs cleanup failed: ${t.message}")
+        }
     }
 
     /**
@@ -806,12 +1631,21 @@ class RootfsManager private constructor(private val context: Context) {
     }
 
     suspend fun reset(): Unit = withContext(Dispatchers.IO) {
-        // [Refactor-apk-world] Snapshot user packages BEFORE the wipe — the
-        // boot path also dumps, but a manual reset can happen mid-session
-        // between boots, so dump here too as the authoritative last state.
-        dumpApkWorld()
-        rootfsDir.deleteRecursively()
-        installIfNeeded()
+        // The whole wipe+reinstall runs under the apt mutex: a background
+        // boot retry firing mid-reset would install into a rootfs that is
+        // about to be deleted (or resurrect files under a half-built dpkg
+        // db). Kotlin Mutex is non-reentrant, so the install path exposes
+        // locked-core variants instead of re-acquiring.
+        aptMutex.withLock {
+            // Snapshot user packages BEFORE the wipe — a manual reset can
+            // happen mid-session between boots, so dump here too as the
+            // authoritative last state. pip-world gets the same treatment:
+            // a wipe must not silently erase user pip packages.
+            dumpDpkgWorldLocked()
+            dumpPipWorldLocked()
+            rootfsDir.deleteRecursively()
+            installIfNeededUnlocked()
+        }
     }
 
     /**
@@ -835,7 +1669,7 @@ class RootfsManager private constructor(private val context: Context) {
 
     /**
      * Read system DNS servers and search domains from ConnectivityManager,
-     * then write resolv.conf into the Alpine rootfs.
+     * then write resolv.conf into the Ubuntu rootfs.
      * Mirrors iOS ISHKernel.configureDns / refreshDns.
      * Falls back to 8.8.8.8 / 8.8.4.4 if no system DNS available.
      */
@@ -929,7 +1763,7 @@ class RootfsManager private constructor(private val context: Context) {
         }
 
         // Mirror iOS removeExternallyManagedMarker() — drop PEP 668 marker so
-        // `pip install` Just Works inside this embedded Alpine rootfs even
+        // `pip install` Just Works inside this embedded Ubuntu rootfs even
         // when the shipped pip.conf isn't being read (e.g. pip invoked with
         // --isolated or via a venv). Safe: this is a single-tenant sandbox.
         val markerRemoved = removeExternallyManagedMarker()
@@ -1084,18 +1918,19 @@ class RootfsManager private constructor(private val context: Context) {
     companion object {
         private const val TAG = "RootfsManager"
         private const val ARCH = "aarch64"
-        private const val ROOTFS_ASSET = "alpine-minirootfs.tar.gz"
-        private const val ROOTFS_ASSET_TAR = "alpine-minirootfs.tar"
+        private const val ROOTFS_ASSET = "ubuntu-base.tar.gz"
+        private const val ROOTFS_ASSET_TAR = "ubuntu-base.tar"
         /**
          * Worst-case expansion factor for the compressed rootfs asset.
-         * Alpine minirootfs compresses to roughly 1/3–1/4 of its extracted
-         * size, so `compressed × ROOTFS_EXPANSION_FACTOR` is a conservative
-         * estimate of the space extraction will actually need.
+         * Ubuntu base compresses to roughly 1/3–1/4 of its extracted size
+         * (29.9 MB → 105 MB measured on 24.04.4 arm64), so
+         * `compressed × ROOTFS_EXPANSION_FACTOR` is a conservative estimate
+         * of the space extraction will actually need.
          */
         private const val ROOTFS_EXPANSION_FACTOR = 4L
         /**
          * Extra margin (MiB) kept above the estimated extracted size so a
-         * half-full disk still has room for the apk world snapshot, integrity
+         * half-full disk still has room for the dpkg world snapshot, integrity
          * manifest and the first boot's package operations.
          */
         private const val ROOTFS_SPACE_MARGIN_MB = 64L
@@ -1115,11 +1950,55 @@ class RootfsManager private constructor(private val context: Context) {
         }
         private const val PROOT_ASSET = "proot-aarch64"
         private const val DEFAULT_MOUNT_ASSET = "default_mount"
-        private val OFFLINE_PACKAGES = listOf(
-            "bash-5.2.37-r0.apk",
-            "readline-8.2.13-r0.apk",
-            "ncurses-6.5_p20241006-r3.apk",
+
+        /**
+         * Offline CA bootstrap debs (assets/deb-offline/), installed via
+         * dpkg on every fresh extraction. SHA256s verified against the
+         * noble archive manifest at packaging time.
+         */
+        private val OFFLINE_DEBS = listOf(
+            "libssl3t64_3.0.13-0ubuntu3_arm64.deb",
+            "openssl_3.0.13-0ubuntu3_arm64.deb",
+            "ca-certificates_20240203_all.deb",
         )
+
+        /**
+         * [T-ca-bootstrap-heal] Guest path of the CA trust bundle. Presence
+         * (not just package-file presence) is what gates the offline
+         * bootstrap skip and the boot-time ensureCaTrust() gate — a failed
+         * postinst leaves the debs unpacked but no bundle, which must heal.
+         */
+        internal const val CA_BUNDLE_PATH = "etc/ssl/certs/ca-certificates.crt"
+
+        /**
+         * [T-ca-bootstrap-heal] Minimum PEM certificates a healthy trust
+         * bundle carries. The factory Ubuntu base image ships NO
+         * ca-certificates at all (verified against ubuntu-base 24.04.4:
+         * no /etc/ssl/certs/ca-certificates.crt in the tarball), so any
+         * bundle present came from our bootstrap (100+ certs) or a user
+         * install. The floor exists to catch a truncated/zeroed bundle
+         * from a killed update-ca-certificates run — treat a mid-write
+         * remnant (< 20 certs) as unhealthy and regenerate.
+         */
+        internal const val MIN_EXPECTED_CA_CERTS = 20
+
+        /**
+         * Count PEM certificates in a trust bundle. Pure function so the
+         * health heuristic is JVM-testable without an Android Context
+         * (mirrors [parseIntegrityManifest]).
+         */
+        internal fun countTrustedCerts(pem: String): Int =
+            pem.split("-----BEGIN CERTIFICATE-----").size - 1
+
+        /**
+         * Boot-time dpkg-world retry attempts before the queue is dropped.
+         * Prevents a permanently-unsatisfiable package list from taxing
+         * every startup with a doomed apt round-trip.
+         */
+        private const val MAX_DPKG_WORLD_RETRY_STRIKES = 3
+
+        /** [T-pip-world] Boot-retry cap for pip packages (see retryFailedPipWorld). */
+        private const val MAX_PIP_WORLD_RETRY_STRIKES = 3
 
         /**
          * Parse the line-based integrity manifest text ("rel/path=size" per
@@ -1210,7 +2089,7 @@ internal fun extractTar(
         val rawName = if (prefix.isNotEmpty()) "$prefix/$name" else name
         // GNU/bsd tar archives commonly prefix entries with "./" — normalize
         // it away so onlyPrefixes matching and extraction paths are
-        // consistent with the on-disk rootfs layout (bin/bash, sbin/apk, ...).
+        // consistent with the on-disk rootfs layout (usr/bin/bash, usr/bin/dpkg, ...).
         var fullName = rawName
         while (fullName.startsWith("./")) fullName = fullName.removePrefix("./")
 
@@ -1229,8 +2108,22 @@ internal fun extractTar(
             }
             continue
         }
-        val outFile = File(targetDir, fullName)
-        val isTarget = onlyPrefixes == null || onlyPrefixes.any { fullName.startsWith(it) }
+        val outFile = safeTarEntryFile(targetDir, fullName)
+        val isTarget = outFile != null && (
+            onlyPrefixes == null ||
+                // Two prefix flavors: a trailing '/' means a DIRECTORY prefix
+                // ("usr/bin/apt/" matches only under it), anything else is a
+                // STRING prefix ("usr/bin/apt" matches apt-get, "lib/ld-"
+                // matches the loader chain) — but must not swallow sibling
+                // names ("usr/bin/apt" alone does not match "usr/bin/aptitude"
+                // … it does match "usr/bin/apt-get"; that string-prefix
+                // behavior is exactly what the symlink-chain restore relies
+                // on, so only directory prefixes get the slash anchor).
+                onlyPrefixes.any { p ->
+                    p.endsWith("/") && (fullName.startsWith(p) || fullName == p.trimEnd('/')) ||
+                        !p.endsWith("/") && fullName.startsWith(p)
+                }
+        )
 
         when (typeFlag) {
             '5', 'D' -> {
@@ -1255,17 +2148,37 @@ internal fun extractTar(
             '0', '\u0000' -> {
                 if (isTarget) {
                     // Regular file (type '0' or null/legacy)
-                    outFile.parentFile?.mkdirs()
+                    // Materialize the REAL parent: when an ancestor is a
+                    // vetted symlink into the rootfs, plain mkdirs no-ops on
+                    // the link path and the write would FNF. This resolves
+                    // the chain and creates the real directory.
+                    materializeRealParent(rootfsDirForExtract(targetDir), outFile)
+                    var complete = true
                     outFile.outputStream().use { output ->
                         var remaining = size
                         val buf = ByteArray(8192)
                         while (remaining > 0) {
                             val toRead = minOf(buf.size.toLong(), remaining).toInt()
                             val n = input.read(buf, 0, toRead)
-                            if (n < 0) break
+                            if (n < 0) {
+                                // Archive truncated mid-entry: a silent break
+                                // here materialized half-written files and
+                                // still reported extraction success. Fail the
+                                // whole extraction instead — the caller treats
+                                // it as a failed install (re-extract / repair)
+                                // rather than booting a corrupt rootfs.
+                                complete = false
+                                break
+                            }
                             output.write(buf, 0, n)
                             remaining -= n
                         }
+                    }
+                    if (!complete) {
+                        outFile.delete()
+                        throw java.io.EOFException(
+                            "tar stream ended inside entry '$fullName' (${size} bytes declared)"
+                        )
                     }
                     // Preserve executable permission from tar header
                     if (mode and 0b001_001_001 != 0) {
@@ -1283,12 +2196,16 @@ internal fun extractTar(
                 continue // Already consumed data + padding
             }
             '1' -> {
-                // Hard link — create a copy
+                // Hard link — create a copy. linkName gets the same
+                // containment check as regular entry names: a link that
+                // points outside the target dir is skipped, not materialized.
                 if (isTarget) {
-                    outFile.parentFile?.mkdirs()
-                    val linkTarget = File(targetDir, linkName)
-                    if (linkTarget.exists()) {
+                    val linkTarget = safeTarEntryFile(targetDir, linkName)
+                    if (linkTarget != null && linkTarget.exists()) {
+                        outFile.parentFile?.mkdirs()
                         linkTarget.copyTo(outFile, overwrite = true)
+                    } else {
+                        Log.w("RootfsManager", "Skipped hardlink with unsafe/missing target: $fullName -> $linkName")
                     }
                 }
             }
@@ -1301,6 +2218,97 @@ internal fun extractTar(
             val blocks = (size + 511) / 512 * 512
             skipFully(input, blocks)
         }
+    }
+}
+
+/**
+ * Resolve a tar entry name against [targetDir] with path containment: the
+ * normalized canonical path MUST stay inside the target directory. Blocks
+ * `../` traversal, absolute names, and symlink-escape names. Returns null
+ * (caller skips the entry) instead of throwing, so a single hostile entry
+ * cannot abort the whole extraction.
+ */
+internal fun safeTarEntryFile(targetDir: File, fullName: String): File? {
+    if (fullName.isEmpty() || fullName.startsWith("/")) return null
+    val rootPath = try {
+        targetDir.canonicalFile.toPath()
+    } catch (_: Exception) {
+        return null
+    }
+    val resolved = try {
+        rootPath.resolve(fullName).normalize()
+    } catch (_: Exception) {
+        return null
+    }
+    if (!resolved.startsWith(rootPath)) return null
+    // Lexical containment passed. Second layer: walk the EXISTING ancestor
+    // chain and reject when any real component is a symlink pointing outside
+    // the rootfs (a previously-extracted entry could be `evil -> /outside`,
+    // and a later `evil/pwned` would lexically pass while the actual write
+    // followed the symlink out). Components not yet on disk are created by
+    // this extraction as real directories — nothing to resolve.
+    // NOTE: subpath indexes are relative to the ABSOLUTE path root, so the
+    // component range starts at rootPath.nameCount — iterating from 0 walked
+    // the /tmp/... parents and broke out immediately, silently disabling the
+    // entire symlink check (audit round 3 regression).
+    try {
+        var cur = rootPath
+        for (i in rootPath.nameCount until resolved.nameCount) {
+            cur = cur.resolve(resolved.getName(i))
+            if (!java.nio.file.Files.exists(cur)) break
+            if (java.nio.file.Files.isSymbolicLink(cur)) {
+                val target = java.nio.file.Files.readSymbolicLink(cur)
+                val abs = if (target.isAbsolute) target else cur.parent.resolve(target).normalize()
+                if (!abs.startsWith(rootPath)) return null
+            }
+        }
+    } catch (_: Exception) {
+        return null
+    }
+    return resolved.toFile()
+}
+
+/**
+ * Materialize the REAL parent directory of [outFile], resolving any
+ * vetted symlinks along the way ([safeTarEntryFile] has already verified
+ * every link stays inside the rootfs). Used before the regular-file write:
+ * Files.createDirectories cannot cross a symlink whose target does not
+ * exist yet (FileAlreadyExistsException / NoSuchFileException), but the
+ * write itself needs the resolved directory to exist.
+ *
+ * Returns the resolved real parent, or null when the chain cannot be
+ * materialized inside the rootfs.
+ */
+/** extractTar works on any target dir; the "rootfs" for containment IS the target dir. */
+private fun rootfsDirForExtract(targetDir: File): File = targetDir
+
+internal fun materializeRealParent(rootDir: File, outFile: File): File? {
+    return try {
+        val rootPath = rootDir.canonicalFile.toPath()
+        val outPath = outFile.toPath()
+        var cur = rootPath
+        var changed = false
+        for (i in rootPath.nameCount until outPath.nameCount - 1) {   // exclude the file itself
+            cur = cur.resolve(outPath.getName(i))
+            if (java.nio.file.Files.isSymbolicLink(cur)) {
+                val target = java.nio.file.Files.readSymbolicLink(cur)
+                val abs = if (target.isAbsolute) target else cur.parent.resolve(target).normalize()
+                if (!abs.startsWith(rootPath)) return null
+                cur = abs
+                changed = true
+            }
+        }
+        if (changed) {
+            java.nio.file.Files.createDirectories(cur)
+            cur.toFile()
+        } else {
+            // No symlinks in the chain — plain mkdirs already handled it.
+            outFile.parentFile?.mkdirs()
+            outFile.parentFile
+        }
+    } catch (t: Exception) {
+        Log.w("RootfsManager", "materializeRealParent failed for ${outFile.path}: ${t.message}")
+        null
     }
 }
 
@@ -1337,28 +2345,37 @@ internal fun skipFully(input: InputStream, count: Long) {
 
 
 /**
- * Paths managed by apk (installed/upgraded at runtime, or grown by it —
- * the apk database). Their on-disk size legitimately differs from the
+ * Paths managed by apt/dpkg (installed/upgraded at runtime, or grown by them
+ * — the dpkg database). Their on-disk size legitimately differs from the
  * factory snapshot after any package change, so [verifyIntegrity] must only
  * check existence for them. Asserting the factory size made a freshly
- * `apk add`-ed bash (size != 0) look "missing" and a grown apk db look
- * "unusable" — which pushed autoRepair into a full-reset loop on EVERY boot
- * (2026-08-13). `/bin/sh` is a symlink to `/bin/busybox`, so it inherits
- * busybox's runtime size changes too — it was the last dynamic path still
- * size-asserted, causing a false `missing=[/bin/sh]` on every boot after a
- * busybox upgrade (fixed 2026-08-15).
+ * `apt-get install`-ed bash (size != 0) look "missing" and a grown dpkg db
+ * look "unusable" — the same class of false positive the Alpine build hit
+ * with apk upgrades (2026-08-13/15). `/bin/sh` is a symlink to
+ * `/usr/bin/dash`, so it inherits dash's runtime size changes too.
  */
-internal val DYNAMIC_INTEGRITY_PATHS = setOf(
-    "bin/bash",
+/** The exact key set a valid integrity manifest must contain. */
+internal val MANIFEST_KEYS = setOf(
+    "usr/bin/bash",
     "bin/sh",
-    "usr/lib/libreadline.so.8",
-    "usr/lib/libncursesw.so.6",
-    "lib/apk/db/installed",
+    "lib/ld-linux-aarch64.so.1",
+    "lib/aarch64-linux-gnu/libc.so.6",
+    "usr/bin/apt-get",
+    "var/lib/dpkg/status",
+)
+
+internal val DYNAMIC_INTEGRITY_PATHS = setOf(
+    "usr/bin/bash",
+    "bin/sh",
+    "lib/ld-linux-aarch64.so.1",
+    "lib/aarch64-linux-gnu/libc.so.6",
+    "usr/bin/apt-get",
+    "var/lib/dpkg/status",
 )
 
 /**
  * Decide whether a path passes the manifest size check. Dynamic
- * (apk-managed) paths and paths absent from the manifest are existence-only;
+ * (dpkg-managed) paths and paths absent from the manifest are existence-only;
  * everything else must match the factory snapshot size (catches truncation).
  * Pure so the boot contract is JVM-testable without an Android Context
  * ([RootfsHealthTest]).
@@ -1375,85 +2392,85 @@ internal fun integritySizePasses(
 
 /**
  * Factory files that are safe to restore over a damaged rootfs without
- * wiping user-installed packages. Prefix-matched so symlink chains
- * (e.g. libreadline.so.8 -> libreadline.so.8.x) are restored together with
- * their targets. The apk database (lib/apk/db/installed) is deliberately
- * excluded — it holds user package records and can only be rebuilt by a
- * full reset.
+ * wiping user-installed packages. Prefix-matched so multiarch paths
+ * (lib/ld-linux-aarch64.so.1 -> usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1
+ * and libc.so.6) are restored together with their targets. The dpkg database
+ * (var/lib/dpkg/status) is deliberately excluded — it holds user package
+ * records and can only be rebuilt by a full reset.
  */
 internal val CRITICAL_RESTORE_PREFIXES = setOf(
-    "bin/bash",
+    "usr/bin/bash",
+    "usr/bin/dash",
     "bin/sh",
-    "bin/busybox",
-    "lib/ld-musl-",
-    "usr/lib/libreadline",
-    "usr/lib/libncurses",
-    "sbin/apk",
+    "lib/ld-linux-",
+    "usr/lib/aarch64-linux-gnu/libc.",
+    "usr/bin/apt-get",
+    "usr/bin/dpkg",
+    "usr/bin/apt",
+    "usr/lib/apt/",
+    "usr/lib/dpkg/",
 )
 
-internal fun ensureBusyboxShellSymlink(rootfsDir: File): Boolean {
+internal fun ensureDashShellSymlink(rootfsDir: File): Boolean {
     val binDir = File(rootfsDir, "bin")
     val shell = File(binDir, "sh").toPath()
-    val busybox = File(binDir, "busybox")
+    val dash = File(rootfsDir, "usr/bin/dash")
     if (java.nio.file.Files.exists(shell)) return true
-    if (!busybox.exists()) return false
+    if (!dash.exists()) return false
     return try {
         binDir.mkdirs()
         if (java.nio.file.Files.exists(shell, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
             java.nio.file.Files.delete(shell)
         }
-        java.nio.file.Files.createSymbolicLink(shell, java.nio.file.Paths.get("busybox"))
+        java.nio.file.Files.createSymbolicLink(shell, java.nio.file.Paths.get("/usr/bin/dash"))
         java.nio.file.Files.exists(shell)
     } catch (t: Exception) {
-        Log.w("RootfsManager", "Failed to rebuild bin/sh -> busybox", t)
+        Log.w("RootfsManager", "Failed to rebuild bin/sh -> /usr/bin/dash", t)
         false
     }
 }
 
-// ── Apk world snapshot — pure functions (JVM-testable) ─────────────────
+// ── Dpkg world snapshot — pure functions (JVM-testable) ─────────────────
 
 /**
- * Package names guaranteed by the offline-install path
- * (assets/apk-offline/ via [RootfsManager.installOfflinePackages],
- * autoRepair Stage 2.6). The snapshot restore skips them: they are
- * re-installed from bundled APK files on every rebuild anyway.
- * File-level (private top-level) so [excludeOfflinePackages] can use it
- * without an Android Context.
- */
-private val OFFLINE_PACKAGE_NAMES = setOf("bash", "readline", "ncurses")
-
-/**
- * The Alpine guest PATH, matching what PRootKernel sets for session shells.
+ * The Ubuntu guest PATH, matching what PRootKernel sets for session shells.
  * proot child processes inherit the app process env (Android PATH:
  * /sbin:/vendor/bin:/system/sbin:...) — without an explicit override,
- * `/bin/sh -c "apk ..."` fails with `apk: not found` (exit 127).
+ * `/bin/sh -c "apt-get ..."` fails with `not found` (exit 127).
  */
-private const val ALPINE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/bin"
+private const val UBUNTU_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/bin"
 
 /**
- * A package name + version pair as recorded in Alpine's apk database.
- * Canonical form for `apk add <name>=<version>`.
+ * A package name + version pair as recorded in dpkg's status database.
+ * Canonical form for `apt-get install <name>=<version>` (epoch-qualified
+ * versions like `2:8.3` are accepted verbatim by apt).
  */
 data class ApkPackage(val name: String, val version: String)
 
 /**
- * Parse Alpine's `/lib/apk/db/installed` (read host-side — no proot needed)
- * into ordered (name, version) pairs. Each package is a block of
- * `KEY:value` lines terminated by a blank line; the name lives under `P:`,
- * the version under `V:` (apk writes P before V in every block). Blocks
- * missing either field are skipped; a trailing block without a closing
- * blank line is still captured.
+ * Parse dpkg's `/var/lib/dpkg/status` (read host-side — no proot needed)
+ * into ordered (name, version) pairs. Used by the [RootfsHealth] database
+ * check (at least one valid block) and by [parseDpkgWorld] consumers of
+ * legacy `name=version` snapshots. Each package is a block of
+ * `Key: value` lines terminated by a blank line; the name lives under
+ * `Package:`, the version under `Version:`. Status blocks whose third
+ * field (`state`) is `config-files` / `not-installed` are skipped — the
+ * package was removed and must not be restored. Blocks missing either
+ * field are skipped; a trailing block without a closing blank line is
+ * still captured.
  */
-internal fun parseApkDbInstalled(text: String): List<ApkPackage> {
+internal fun parseDpkgStatus(text: String): List<ApkPackage> {
     val result = mutableListOf<ApkPackage>()
     var name: String? = null
     var version: String? = null
+    var installed = true
     fun flush() {
         val n = name
         val v = version
-        if (n != null && v != null) result.add(ApkPackage(n, v))
+        if (n != null && v != null && installed) result.add(ApkPackage(n, v))
         name = null
         version = null
+        installed = true
     }
     for (line in text.lines()) {
         val t = line.trim()
@@ -1462,8 +2479,16 @@ internal fun parseApkDbInstalled(text: String): List<ApkPackage> {
             continue
         }
         when {
-            t.startsWith("P:") -> name = t.substring(2).trim()
-            t.startsWith("V:") -> version = t.substring(2).trim()
+            t.startsWith("Package:") -> name = t.substringAfter(':').trim()
+            t.startsWith("Version:") -> version = t.substringAfter(':').trim()
+            t.startsWith("Status:") -> {
+                // dpkg Status: "<want> <flag> <state>" — e.g. "install ok
+                // installed", "install ok half-configured" (still counts as
+                // installed), "deinstall ok config-files" / "purge ok
+                // not-installed" (removed — must NOT be restored).
+                val state = t.substringAfter(':').trim().split(' ').getOrElse(2) { "" }
+                installed = state != "config-files" && state != "not-installed"
+            }
         }
     }
     flush()
@@ -1471,41 +2496,49 @@ internal fun parseApkDbInstalled(text: String): List<ApkPackage> {
 }
 
 /**
- * Serialize packages as one `name=version` line each, with a header
- * comment (parseable back by [parseApkWorld]).
+ * Serialize user package NAMES (no versions — restore re-resolves from the
+ * current archive) as one name per line, with a header comment parseable
+ * back by [parseDpkgWorld].
  */
-internal fun formatApkWorld(packages: List<ApkPackage>): String =
+internal fun formatDpkgWorld(names: List<String>): String =
     buildString {
-        appendLine("# apk-world snapshot — `<name>=<version>` per line, written by RootfsManager.dumpApkWorld()")
-        for (p in packages) appendLine("${p.name}=${p.version}")
+        appendLine("# dpkg-world snapshot — user package names, one per line, written by RootfsManager.dumpDpkgWorld()")
+        for (n in names) appendLine(n)
     }
 
 /**
- * Parse an apk-world snapshot (or retry list) back into packages.
- * Tolerates blank lines, `#` comments, and malformed lines (skipped).
+ * Parse a dpkg-world snapshot (or retry list) back into package names.
+ * Current format: bare names. Legacy `name=version` lines (written by the
+ * pre-migration exact-pin implementation) are accepted and the pin is
+ * stripped, so old snapshots restore as name-only installs. Tolerates
+ * blank lines, `#` comments, and malformed lines (skipped).
  */
-internal fun parseApkWorld(text: String): List<ApkPackage> {
-    val result = mutableListOf<ApkPackage>()
+internal fun parseDpkgWorld(text: String): List<String> {
+    val result = mutableListOf<String>()
     for (line in text.lines()) {
         val t = line.trim()
         if (t.isEmpty() || t.startsWith("#")) continue
-        val eq = t.indexOf('=')
-        if (eq <= 0) continue
-        val name = t.substring(0, eq).trim()
-        val version = t.substring(eq + 1).trim()
-        if (name.isNotEmpty() && version.isNotEmpty()) {
-            result.add(ApkPackage(name, version))
-        }
+        val name = t.substringBefore('=').trim()
+        if (name.isNotEmpty()) result.add(name)
     }
     return result
 }
 
 /**
- * Drop the offline trio (bash/readline/ncurses) from a snapshot before
- * restoring: [RootfsManager.installOfflinePackages] (autoRepair Stage 2.6)
- * re-installs them from bundled APK files on every rebuild — no network,
- * always the same version — so the snapshot restore must not touch them
- * (no duplicate work, no surprise version downgrades).
+ * Parse a pip-world snapshot (or retry list) back into package names.
+ * Bare names are the current format; `name==version` / `name=version` pins
+ * (e.g. from a foreign `pip freeze`) are accepted and stripped so restores
+ * resolve from the current archive — same intent-not-pins semantics as
+ * [parseDpkgWorld]. Tolerates blank lines, `#` comments, and requirement
+ * markers like `-r other.txt` / `--index-url ...` (skipped).
  */
-internal fun excludeOfflinePackages(packages: List<ApkPackage>): List<ApkPackage> =
-    packages.filterNot { it.name in OFFLINE_PACKAGE_NAMES }
+internal fun parsePipWorld(text: String): List<String> {
+    val result = mutableListOf<String>()
+    for (line in text.lines()) {
+        val t = line.trim()
+        if (t.isEmpty() || t.startsWith("#") || t.startsWith("-")) continue
+        val name = t.substringBefore("==").substringBefore('=').trim()
+        if (name.isNotEmpty() && name.matches(Regex("[A-Za-z0-9._-]+"))) result.add(name)
+    }
+    return result
+}

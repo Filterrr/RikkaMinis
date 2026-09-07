@@ -1038,7 +1038,7 @@ class DebugRPCHandler(private val context: Context) {
     /**
      * Direct invocation of [com.openminis.app.sandbox.offload.ModelUseOffloadHandler]
      * for e2e harnesses. Mirrors [handleShizukuExec]; lets callers exercise the
-     * `minis-model-use` CLI without going through a real Alpine shell prompt.
+     * `minis-model-use` CLI without going through a real Ubuntu shell prompt.
      * DEBUG-only.
      */
     private fun handleModelUseExec(params: JSONObject): JSONObject {
@@ -1091,7 +1091,7 @@ class DebugRPCHandler(private val context: Context) {
      * [com.openminis.app.sandbox.offload.SessionsOffloadHandler] for e2e
      * harnesses. Mirrors [handleModelUseExec]; lets callers exercise the
      * `minis-sessions-cli` CLI (list / search / messages, incl. --full)
-     * without going through a real Alpine shell prompt. DEBUG-only.
+     * without going through a real Ubuntu shell prompt. DEBUG-only.
      */
     private fun handleSessionsExec(params: JSONObject): JSONObject {
         val argvTail: List<String> = when {

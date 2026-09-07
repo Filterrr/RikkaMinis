@@ -24,7 +24,7 @@ The divergence is intentionally small, so conflicts stay manageable:
 | `src/android/app/build.gradle.kts` | CMake/`externalNativeBuild` disabled, packaging options, version fields | **Likely** — the one file to watch |
 | `.github/workflows/build-apk.yml` | Added by this fork | No — upstream has no such file |
 | `src/android/app/src/main/jniLibs/arm64-v8a/*.so` | Vendored official binaries (pty_bridge, crash_handler, jieba, c++_shared, datastore, androidx.graphics.path) | No — upstream does not commit these |
-| `src/android/app/src/main/assets/alpine-minirootfs.tar` | Vendored official asset | No — same reason |
+| `src/android/app/src/main/assets/ubuntu-base.tar.gz` | Vendored official asset | No — same reason |
 | `.gitignore` | Un-ignores the vendored binaries | Minor, easy to resolve |
 | `scripts/sync_official_binaries.sh` | Added by this fork | No |
 | iOS sources | Deleted | Deletions may reappear; re-delete |

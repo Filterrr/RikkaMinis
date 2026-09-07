@@ -13,9 +13,10 @@ import org.junit.Test
  */
 class RootfsDiskGuardTest {
 
-    // 8.4 MiB compressed asset (matches bundled alpine-minirootfs.tar).
-    private val ASSET = 8_468_480L
-    // Estimated extracted size: 8_468_480 × 4 = 33_873_920; + 64 MiB margin.
+    // 29.9 MB compressed asset (matches bundled ubuntu-base.tar.gz, 24.04.4 arm64).
+    private val ASSET = 29_870_567L
+    // Estimated extracted size: 29_870_567 × 4 = 119_482_268; + 64 MiB margin
+    // (measured real expansion is 29.9 → 105 MB ≈ 3.5×, so ×4 stays conservative).
     private val MARGIN = 64L * 1024L * 1024L
     private val REQUIRED = ASSET * 4L + MARGIN
 
@@ -32,7 +33,7 @@ class RootfsDiskGuardTest {
     @Test
     fun `zero-length asset only needs the margin`() {
         // A 0-byte asset has nothing to extract, but installation still does
-        // real work (integrity manifest, apk world snapshot, first-boot
+        // real work (integrity manifest, dpkg world snapshot, first-boot
         // package ops), so the 64 MiB margin applies by itself.
         assertTrue(RootfsManager.hasEnoughSpaceForRootfs(MARGIN, 0))
         assertFalse(RootfsManager.hasEnoughSpaceForRootfs(MARGIN - 1, 0))

@@ -480,7 +480,7 @@ object SystemPromptBuilder {
      * Android chat hits this line.
      */
     private const val IDENTITY_TEMPLATE =
-        "You are {name}, a capable AI assistant running on an Android device with a fully functional Linux sandbox (Alpine Linux via PRoot, aarch64). "
+        "You are {name}, a capable AI assistant running on an Android device with a fully functional Linux sandbox (Ubuntu 24.04 via PRoot, aarch64). "
 
     /**
      * Render the identity sentence (template + name) and optionally

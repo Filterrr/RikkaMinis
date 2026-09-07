@@ -17,7 +17,7 @@ echo "╚═══════════════════════�
 echo ""
 
 # --- 1. Four-way sync check ---
-echo "━━━ [1/3] Four-way sync check ━━━"
+echo "━━━ [1/5] Four-way sync check ━━━"
 if python3 scripts/scan/four_way_sync_check.py "$ROOT"; then
     PASS=$((PASS + 1))
     echo ""
@@ -30,7 +30,7 @@ fi
 # --- 2. i18n consistency ---
 #   - Orphan keys (in code but not in strings.xml) = HARD FAIL
 #   - Missing translations = WARNING only (known legacy from upstream)
-echo "━━━ [2/3] i18n consistency check ━━━"
+echo "━━━ [2/5] i18n consistency check ━━━"
 python3 -c "
 import re, os, sys
 root = '$ROOT'
@@ -87,6 +87,19 @@ fi
 # entry point directly — only :modelservice (ModelExecutionService) owns them.
 echo "━━━ [4/4] Provider process-boundary guard ━━━"
 if python3 scripts/scan/provider_boundary_guard.py "$ROOT"; then
+    PASS=$((PASS + 1))
+    echo ""
+else
+    RC=1
+    FAIL=$((FAIL + 1))
+    echo ""
+fi
+
+# --- 5. Kotlin const val placement (compile-error gate) ---
+# `const val` inside a plain class body is a compile error that previously
+# slipped through when a PR's check ran only the scan jobs (no compile).
+echo "━━━ [5/5] Kotlin const val placement ━━━"
+if python3 scripts/scan/kotlin_const_val_check.py "$ROOT"; then
     PASS=$((PASS + 1))
     echo ""
 else

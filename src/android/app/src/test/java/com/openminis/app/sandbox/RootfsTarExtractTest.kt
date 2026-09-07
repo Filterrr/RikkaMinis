@@ -100,35 +100,194 @@ class RootfsTarExtractTest {
     }
 
     @Test
-    fun `prefix matches versioned symlink chain together`() {
+    fun `prefix matches symlink chain together`() {
+        // Ubuntu shape: /lib -> usr/lib, ld-linux symlink chain lives under
+        // usr/lib/aarch64-linux-gnu/. Both link + target must be restored.
         extract(
             listOf(
-                tarEntry("usr/lib/libreadline.so.8.2", "ELF-readline".toByteArray()),
+                tarEntry("usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1", "ELF-LOADER".toByteArray()),
                 tarEntry(
-                    "usr/lib/libreadline.so.8",
+                    "lib/ld-linux-aarch64.so.1",
                     typeflag = '2',
-                    linkName = "libreadline.so.8.2",
+                    linkName = "usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1",
                 ),
             ),
-            prefixes = setOf("usr/lib/libreadline"),
+            prefixes = setOf("lib/ld-linux-", "usr/lib/aarch64-linux-gnu/"),
         )
-        val link = tmp.root.resolve("usr/lib/libreadline.so.8")
+        val link = tmp.root.resolve("lib/ld-linux-aarch64.so.1")
         assertTrue("symlink must exist", Files.isSymbolicLink(link.toPath()))
-        assertEquals("libreadline.so.8.2", Files.readSymbolicLink(link.toPath()).toString())
-        assertFile("usr/lib/libreadline.so.8.2", "ELF-readline")
+        assertEquals("usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1", Files.readSymbolicLink(link.toPath()).toString())
+        assertFile("usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1", "ELF-LOADER")
     }
 
     @Test
     fun `symlink target restored when both are under the prefix`() {
         extract(
             listOf(
-                tarEntry("bin/busybox", "BUSYBOX".toByteArray()),
-                tarEntry("bin/sh", typeflag = '2', linkName = "bin/busybox"),
+                tarEntry("usr/bin/dash", "DASH".toByteArray()),
+                tarEntry("bin/sh", typeflag = '2', linkName = "usr/bin/dash"),
             ),
-            prefixes = setOf("bin/"),
+            prefixes = setOf("bin/", "usr/bin/dash"),
         )
         assertTrue(Files.isSymbolicLink(tmp.root.resolve("bin/sh").toPath()))
-        assertFile("bin/busybox", "BUSYBOX")
+        assertFile("usr/bin/dash", "DASH")
+    }
+
+    @Test
+    fun `ubuntu tar dir-symlink entries materialize and do not clobber`() {
+        // The real Ubuntu archive ships bin -> usr/bin, sbin -> usr/sbin,
+        // lib -> usr/lib as directory symlinks (typeflag '2'). extractTar
+        // must materialize them as symlinks and keep going.
+        extract(
+            listOf(
+                tarEntry("usr/bin/inner", "INNER".toByteArray()),
+                tarEntry("bin", typeflag = '2', linkName = "usr/bin"),
+                tarEntry("bin/inner", "OVERWRITTEN-FILE-VIA-LINK".toByteArray()),
+            ),
+            prefixes = setOf("usr/bin/", "bin"),
+        )
+        val link = tmp.root.resolve("bin").toPath()
+        assertTrue("bin must be a symlink", Files.isSymbolicLink(link))
+        assertEquals("usr/bin", Files.readSymbolicLink(link).toString())
+        assertFile("usr/bin/inner", "OVERWRITTEN-FILE-VIA-LINK")
+    }
+
+    @Test
+    fun `truncated archive fails instead of writing partial files`() {
+        // Header DECLARES 4096 bytes but the stream only carries 100: the
+        // read loop must hit EOF, fail the extraction (EOFException), and
+        // leave no partial file behind — silent half-files booted a corrupt
+        // rootfs. (Construct the entry manually: tarEntry would pad the
+        // full declared size into the stream and the truncation would never
+        // happen.)
+        val header = tarEntry("usr/bin/truncated", content = ByteArray(100))
+        // Rewrite the declared size field (offset 124, 12 bytes octal) to
+        // 00000004000 octal = 4096, larger than the 100 bytes actually present.
+        val bytes2 = header.copyOf()
+        System.arraycopy("00000004000\u0000".toByteArray(Charsets.US_ASCII), 0, bytes2, 124, 12)
+        // Recompute checksum after the size edit: zero the field, sum, write.
+        java.util.Arrays.fill(bytes2, 148, 156, ' '.code.toByte())
+        var sum = 0
+        for (b in bytes2.sliceArray(0 until 512)) sum += b.toInt() and 0xFF
+        val chk = String.format("%06o", sum).toByteArray(Charsets.US_ASCII) + "\u0000 ".toByteArray(Charsets.US_ASCII)
+        System.arraycopy(chk, 0, bytes2, 148, 8)
+
+        val stream = bytes2 + ByteArray(1024) // no more content beyond the 100 bytes
+        val ex = try {
+            extractTar(java.io.ByteArrayInputStream(stream), tmp.root, null)
+            null
+        } catch (e: java.io.EOFException) {
+            e
+        }
+        assertTrue("expected EOFException, got $ex", ex != null)
+        assertFalse("partial file must not remain", tmp.root.resolve("usr/bin/truncated").exists())
+    }
+
+    @Test
+    fun `path traversal entries are rejected`() {
+        // Hostile archive: ../ escape must be skipped, not materialized.
+        extract(
+            listOf(
+                tarEntry("usr/bin/ok", "OK".toByteArray()),
+                tarEntry("../../etc/evil", "PWNED".toByteArray()),
+            ),
+            prefixes = setOf("usr/bin/", "etc"),
+        )
+        assertFile("usr/bin/ok", "OK")
+        assertFalse("traversal entry must not escape", tmp.root.resolve("../../etc/evil").exists())
+        // Nothing landed outside the temp root (canonical containment).
+        val parent = tmp.root.parentFile
+        parent.listFiles()?.filter { it.name.startsWith("evil") || it.name == "etc" && it !in tmp.root.listFiles().toList() }
+            ?.let { for (f in it) assertFalse("no spill: ${f.absolutePath}", f.exists() && f.absolutePath.startsWith(tmp.root.absolutePath).not()) }
+    }
+
+    @Test
+    fun `ancestor walk covers symlinked parents inside and outside the root`() {
+        // Regression for audit round 3: the walk indexed subpath from 0 (the
+        // absolute /tmp/... root) so it broke out on the first component and
+        // NEVER checked symlinks. With the index fixed:
+        extract(listOf(tarEntry("usr/bin/ok", "OK".toByteArray())), prefixes = setOf("usr/bin/"))
+        val base = tmp.root.resolve("usr/bin")
+
+        // evil -> /tmp (absolute escape) must be refused.
+        java.nio.file.Files.createSymbolicLink(base.resolve("evil").toPath(), java.nio.file.Paths.get("/tmp"))
+        extract(listOf(tarEntry("usr/bin/evil/x", "X".toByteArray())), prefixes = setOf("usr/bin/"))
+        assertFalse(
+            "absolute-escape symlink must be refused",
+            java.nio.file.Files.exists(base.resolve("evil/x").toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS),
+        )
+
+        // rel -> ../rel-target (inside root) must pass; file lands at the
+        // symlink-resolved location INSIDE the tree.
+        java.nio.file.Files.createSymbolicLink(base.resolve("rel").toPath(), java.nio.file.Paths.get("../rel-target"))
+        extract(listOf(tarEntry("usr/bin/rel/y", "Y".toByteArray())), prefixes = setOf("usr/bin/"))
+        assertTrue(
+            "inside-root symlink writes must pass through",
+            java.nio.file.Files.exists(tmp.root.resolve("usr/rel-target/y").toPath()),
+        )
+    }
+
+    @Test
+    fun `pre-existing inside-rootfs symlink to outside is refused for writes`() {
+        // Extract a benign file, then plant evil -> /tmp (outside), then try
+        // to write THROUGH it. safeTarEntryFile must refuse the second entry.
+        extract(
+            listOf(tarEntry("usr/bin/ok", "OK".toByteArray())),
+            prefixes = setOf("usr/bin/"),
+        )
+        // Plant the symlink manually (as a prior malicious extraction would have).
+        val evil = tmp.root.resolve("usr/bin/evil").toPath()
+        java.nio.file.Files.createSymbolicLink(evil, java.nio.file.Paths.get("/tmp"))
+
+        // Now an entry that writes through the symlink: usr/bin/evil/pwned.
+        // The containment walk refuses the entry (its ancestor usr/bin/evil
+        // is a symlink pointing outside), so nothing is written and
+        // extractTar completes normally — refusal is silent, not an I/O
+        // error. Assert only INSIDE the runner-managed temp root: probing
+        // the shared /tmp is flaky on CI runners.
+        extract(
+            listOf(tarEntry("usr/bin/evil/pwned", "PWNED".toByteArray())),
+            prefixes = setOf("usr/bin/"),
+        )
+        // NOFOLLOW on the FINAL component: evil itself points at /tmp, so a
+        // plain Files.exists would follow it and (if the CI runner happens
+        // to have /tmp/pwned) false-fail. The property under test is that no
+        // REGULAR FILE named pwned was materialized inside the tree.
+        assertFalse(
+            "symlink escape must be refused (no file materialized through evil)",
+            java.nio.file.Files.exists(
+                tmp.root.resolve("usr/bin/evil/pwned").toPath(),
+                java.nio.file.LinkOption.NOFOLLOW_LINKS,
+            ),
+        )
+    }
+
+    @Test
+    fun `hardlink with traversal target is skipped`() {
+        extract(
+            listOf(
+                tarEntry("usr/bin/test", "COREUTILS-TEST".toByteArray()),
+                tarEntry("usr/bin/evil-link", typeflag = '1', linkName = "../../../etc/passwd"),
+            ),
+            prefixes = setOf("usr/bin/"),
+        )
+        assertFile("usr/bin/test", "COREUTILS-TEST")
+        assertFalse("unsafe hardlink must not be materialized", tmp.root.resolve("usr/bin/evil-link").exists())
+    }
+
+    @Test
+    fun `hardlink entries are materialized as file copies`() {
+        // Ubuntu ships real hardlinks (e.g. /usr/bin/[ vs /usr/bin/test).
+        // extractTar copies the target content (typeflag '1' path).
+        extract(
+            listOf(
+                tarEntry("usr/bin/test", "COREUTILS-TEST".toByteArray()),
+                tarEntry("usr/bin/[", typeflag = '1', linkName = "usr/bin/test"),
+            ),
+            prefixes = setOf("usr/bin/"),
+        )
+        assertFile("usr/bin/test", "COREUTILS-TEST")
+        assertFile("usr/bin/[", "COREUTILS-TEST")
     }
 
     @Test
@@ -157,33 +316,34 @@ class RootfsTarExtractTest {
     }
 
     @Test
-    fun `dot-slash prefixed entries match onlyPrefixes like the real archive`() {
-        // alpine-minirootfs.tar stores every entry with a "./" prefix
-        // ("./bin/bash", "./sbin/apk", ...). Regression for the targeted
-        // restore silently extracting nothing.
+    fun `dot-slash prefixed entries match onlyPrefixes like legacy archives`() {
+        // Alpine minirootfs archives stored every entry with a "./" prefix
+        // ("./bin/bash", ...). Ubuntu doesn't prefix, but the normalization
+        // must keep working — regression for the targeted restore silently
+        // extracting nothing.
         val entries = listOf(
-            tarEntry("./bin/bash", "#!/bin/bash\n".toByteArray()),
-            tarEntry("./sbin/apk", "APK-BIN".toByteArray()),
-            tarEntry("./usr/lib/libreadline.so.8", "READLINE".toByteArray()),
+            tarEntry("./usr/bin/bash", "#!/bin/bash\n".toByteArray()),
+            tarEntry("./usr/bin/dpkg", "DPKG-BIN".toByteArray()),
+            tarEntry("./usr/bin/apt-get", "APT-BIN".toByteArray()),
             tarEntry("./etc/ignored", "skip".toByteArray()),
         )
-        extract(entries, setOf("bin/bash", "sbin/apk", "usr/lib/libreadline"))
-        assertFile("bin/bash", "#!/bin/bash\n")
-        assertFile("sbin/apk", "APK-BIN")
-        assertFile("usr/lib/libreadline.so.8", "READLINE")
+        extract(entries, setOf("usr/bin/bash", "usr/bin/dpkg", "usr/bin/apt-get"))
+        assertFile("usr/bin/bash", "#!/bin/bash\n")
+        assertFile("usr/bin/dpkg", "DPKG-BIN")
+        assertFile("usr/bin/apt-get", "APT-BIN")
         assertFalse(tmp.root.resolve("etc/ignored").exists())
     }
 
     @Test
-    fun `dot-slash prefixed symlink chain restores sh pointing at busybox`() {
+    fun `dot-slash prefixed symlink chain restores sh pointing at dash`() {
         val entries = listOf(
-            tarEntry("./bin/busybox", "BUSYBOX-BIN".toByteArray()),
-            tarEntry("./bin/sh", typeflag = '2', linkName = "/bin/busybox"),
+            tarEntry("./usr/bin/dash", "DASH-BIN".toByteArray()),
+            tarEntry("./bin/sh", typeflag = '2', linkName = "/usr/bin/dash"),
         )
-        extract(entries, setOf("bin/sh", "bin/busybox"))
-        assertFile("bin/busybox", "BUSYBOX-BIN")
+        extract(entries, setOf("bin/sh", "usr/bin/dash"))
+        assertFile("usr/bin/dash", "DASH-BIN")
         val link = tmp.root.resolve("bin/sh").toPath()
         assertTrue("missing symlink bin/sh", Files.isSymbolicLink(link))
-        assertEquals("/bin/busybox", Files.readSymbolicLink(link).toString())
+        assertEquals("/usr/bin/dash", Files.readSymbolicLink(link).toString())
     }
 }

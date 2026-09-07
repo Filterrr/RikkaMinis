@@ -164,7 +164,7 @@ class BrowserUseOffloadHandler(private val app: MinisApp) : NativeOffloadHandler
             if (tokens.isNotEmpty()) obj.put("keywords", JSONArray(tokens))
         }
         // set_cookies: a JSON array of cookie objects. Either inline via
-        // --cookies '<json>' or, to dodge busybox-ash shell mangling of the
+        // --cookies '<json>' or, to dodge POSIX-shell mangling of the
         // JSON's quotes / braces / colons, from a file via --cookies-file <path>
         // (mirrors `minis-config set --file`). Parse failures throw so the
         // handler surfaces an explicit invalid_args error instead of silently

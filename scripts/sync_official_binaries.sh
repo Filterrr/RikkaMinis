@@ -52,7 +52,7 @@ libminis_crash_handler.so
 libpty_bridge.so
 "
 ASSET_FILES="
-alpine-minirootfs.tar
+ubuntu-base.tar.gz
 "
 
 auth_header() {
@@ -63,7 +63,7 @@ auth_header() {
   fi
 }
 
-# Explicit template: BusyBox mktemp (Alpine) needs one, unlike GNU coreutils.
+# Explicit template: some mktemp implementations (BusyBox) need one, unlike GNU coreutils.
 # Also don't trust TMPDIR — some sandboxes export a path that doesn't exist.
 TMP_BASE="${TMPDIR:-/tmp}"
 [ -d "$TMP_BASE" ] && [ -w "$TMP_BASE" ] || TMP_BASE=/tmp

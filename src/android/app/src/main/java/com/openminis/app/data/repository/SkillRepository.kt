@@ -85,12 +85,12 @@ class SkillRepository(private val context: Context) {
     }
 
     /**
-     * Decoded `requirements.json` of a skill: the runtime deps (apk/pip)
+     * Decoded `requirements.json` of a skill: the runtime deps (apt/pip)
      * and the mapping of deployment tier → capability description, per
      * env var. See `loadSkillRequirements()`.
      */
     data class SkillRequirements(
-        val apk: List<String> = emptyList(),
+        val apt: List<String> = emptyList(),
         val pip: List<String> = emptyList(),
         val env: Map<String, String> = emptyMap(),
         val tiers: Map<String, String> = emptyMap(),
@@ -1334,7 +1334,13 @@ class SkillRepository(private val context: Context) {
             if (!reqFile.exists()) return null
             val json = JSONObject(reqFile.readText())
             SkillRequirements(
-                apk = json.optJSONArray("apk")?.let { arr ->
+                // [T-ubuntu-sandbox] Preferred key is "apt" (the sandbox is
+                // Ubuntu Base 24.04 since the feat/ubuntu-sandbox rootfs
+                // migration). Legacy skills may still declare "apk" — the
+                // Alpine-world vocabulary this fork shipped before the
+                // migration — so fall back to it rather than silently
+                // dropping the declared deps.
+                apt = (json.optJSONArray("apt") ?: json.optJSONArray("apk"))?.let { arr ->
                     (0 until arr.length()).map { arr.getString(it) }
                 } ?: emptyList(),
                 pip = json.optJSONArray("pip")?.let { arr ->

@@ -77,10 +77,10 @@ class RootfsManagerInstrumentedTest {
 
     @Test
     fun installIfNeededExtractsRootfsFromAssets() = runBlocking {
-        // This test requires alpine-minirootfs.tar.gz in assets.
+        // This test requires ubuntu-base.tar.gz in assets.
         // Skip if not present (CI or pre-asset-download)
-        if (!hasAsset("alpine-minirootfs.tar.gz")) {
-            println("SKIP: alpine-minirootfs.tar.gz not in assets")
+        if (!hasAsset("ubuntu-base.tar.gz")) {
+            println("SKIP: ubuntu-base.tar.gz not in assets")
             return@runBlocking
         }
 
@@ -111,8 +111,8 @@ class RootfsManagerInstrumentedTest {
 
     @Test
     fun installIfNeededIsIdempotent() = runBlocking {
-        if (!hasAsset("alpine-minirootfs.tar.gz")) {
-            println("SKIP: alpine-minirootfs.tar.gz not in assets")
+        if (!hasAsset("ubuntu-base.tar.gz")) {
+            println("SKIP: ubuntu-base.tar.gz not in assets")
             return@runBlocking
         }
 
@@ -130,8 +130,8 @@ class RootfsManagerInstrumentedTest {
 
     @Test
     fun installIfNeededCleansPartialInstall() = runBlocking {
-        if (!hasAsset("alpine-minirootfs.tar.gz")) {
-            println("SKIP: alpine-minirootfs.tar.gz not in assets")
+        if (!hasAsset("ubuntu-base.tar.gz")) {
+            println("SKIP: ubuntu-base.tar.gz not in assets")
             return@runBlocking
         }
 
@@ -213,8 +213,8 @@ class RootfsManagerInstrumentedTest {
 
     @Test
     fun resetDeletesAndReinstalls() = runBlocking {
-        if (!hasAsset("alpine-minirootfs.tar.gz")) {
-            println("SKIP: alpine-minirootfs.tar.gz not in assets")
+        if (!hasAsset("ubuntu-base.tar.gz")) {
+            println("SKIP: ubuntu-base.tar.gz not in assets")
             return@runBlocking
         }
 

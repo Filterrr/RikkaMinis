@@ -85,6 +85,29 @@ SHA-256  FC:0C:40:0D:B7:7E:C1:81:A3:35:18:C2:E8:13:6A:AE
   引擎（JitPack 依赖）：PTY 生命周期、ANSI/CSI/OSC 解析、TUI 兼容性、
   键盘与文本选择全部交给上游引擎处理。输出经两层截断（PersistentShell
   层 128KB + 终端消毒层 50KB），防止海量输出刷爆界面。
+- **apt 镜像自动回退。** 沙箱内置 `minis-mirror` CLI（default_mount，
+  Ubuntu 化配套）：8 个 Ubuntu-ports 镜像的探测排名、`set/reset/status`
+  手动管理，`auto` 子命令对当前源失联时逐个回退并以真实 `apt-get update`
+  验证（apt 退出码为 0 的"W: Failed to fetch"假成功也会被识别），
+  `set` 失败自动回滚旧源。boot 时的 dpkg-world 重试路径在花掉重试次数
+  之前先跑一次镜像自愈，死镜像不再白白烧光 strike。
+- **沙箱时区一致性。** Ubuntu Base rootfs 出厂 /etc/localtime 指向 UTC，
+  而宿主注入 TZ=本地时区——UTC+8 设备上 `date` 显示 +08 而 `ls -l` 的
+  mtime 是 UTC，相差 8 小时。boot 序列新增 `applyHostTimezone()`：把
+  /etc/localtime 指到设备 zone（纯 zoneinfo 符号链接，无需装 tzdata），
+  幂等且失败不致命。
+- **ubuntu-companion 技能。** 随 APK 内置的沙箱运维搭档：`check_env.sh`
+  一键体检（工具缺失/镜像/时区/网络，JSON 输出）、apt 失败自愈步骤、
+  常用包按需安装速查与 proot 环境差异清单（无 init、ICMP 禁用、
+  $BROWSER 接管、dash 语义等）。
+- **pip-world 快照。** dpkg-world 的缺角补齐：rootfs 重置/重建此前只
+  保护 apt 包，用户 `pip install` 的包会被静默清空。现在 boot/重置路径
+  以叶子包（`pip list --not-required` − 出厂基线）为粒度快照到宿主侧，
+  新装后一次性批量恢复，失败进 strike-limited 重试队列——语义与
+  dpkg-world 完全一致（保意图，不钉版本）。
+- **全局文本选择入口。** 在任意 App 划选文字，系统菜单出现
+  "RikkaMinis"（ACTION_PROCESS_TEXT）→ 选区作为内联文本进入聊天输入框，
+  走标准 PendingShare 管道。
 - **提供商置顶。** 提供商列表支持将常用提供商固定到顶部的「常用」专区，行尾菜单一键设/取消常用。
 - **记忆页管理改进。** 记忆页文件列表支持「查看更多」展开/收起。
 - **提供商一键更新。** 管理提供商页面右上角新增同步按钮：并行强制刷新所有已启用服务商的模型列表
@@ -109,8 +132,8 @@ SHA-256  FC:0C:40:0D:B7:7E:C1:81:A3:35:18:C2:E8:13:6A:AE
 ### 构建与发布改动
 
 - **proot 从源码构建。** 沙箱引擎来自 `deps/proot` 子模块 + `deps/build_proot.sh`
-  + vendored 的 `deps/talloc`，在 CI 中用 NDK r28 编译。Alpine rootfs
-  （`alpine-minirootfs.tar`，8.5 MB）作为预置资产随仓库提交，运行时由
+  + vendored 的 `deps/talloc`，在 CI 中用 NDK r28 编译。Ubuntu Base rootfs
+  （`ubuntu-base.tar.gz`，约 30 MB）作为预置资产随仓库提交，运行时由
   `RootfsManager` 解包——proot 二进制本身不提交，完全可复现。
 - **其他原生库保持 vendored。** `libpty_bridge.so`、`libminis_crash_handler.so`
   和 `libjieba_jni.so` 按原样提交。
@@ -118,8 +141,11 @@ SHA-256  FC:0C:40:0D:B7:7E:C1:81:A3:35:18:C2:E8:13:6A:AE
 - **iOS 源码已移除。** `src/ios/` 已删除；本树仅限 Android。
 - **自动发布。** 成功构建会把 APK 发布到 `android-latest` release。
 - **平台技能打进资产包。** `semantic-memory`、`github-ops`、
-  `cloudflare-fullright-ops`、`skill-creator` 四个技能（含脚本）随 APK
-  一起打包在 `assets/skills/`，安装即自带，无需手动安装。
+  `cloudflare-fullright-ops`、`skill-creator`、`ubuntu-companion` 五个技能
+  （含脚本）随 APK 一起打包在 `assets/skills/`，安装即自带，无需手动安装。
+- **requirements.json 词汇随 Ubuntu 化迁移。** 技能依赖清单的首选键从
+  Alpine 的 `apk` 改为 `apt`（解析器向后兼容旧 `apk` 键），内置技能的包名
+  同步换为 Debian 等价物（如 `py3-pip` → `python3-pip`）。
 - **集成状态动态注入 system prompt。** 每个内置技能带一份 `requirements.json`
   声明它需要的环境变量，运行时按「哪些配置了」推导能力等级，把结论作为
   `[IntegrationStatus]` 日志输出 + 「内置集成」表格注入系统提示词。
@@ -205,7 +231,7 @@ token 只用于这些显式请求的鉴权。
 | | |
 |---|---|
 | **自带模型** | Claude、GPT、Gemini 及其他提供方，使用你自己的 API 密钥或账号登录。 |
-| **真正的 Linux Shell** | 设备上运行沙箱化的 Alpine Linux 环境——智能体可以安装软件包、运行脚本、操作真实文件。 |
+| **真正的 Linux Shell** | 设备上运行沙箱化的 Ubuntu 24.04 Linux 环境——智能体可以安装软件包、运行脚本、操作真实文件。 |
 | **设备集成** | 日历、联系人、剪贴板、定位、媒体、闹钟、通知等，作为工具开放给智能体。 |
 | **浏览器自动化** | 智能体可以代表你浏览并操作网页。 |
 | **技能与记忆** | 可扩展技能 + 跨会话的持久记忆。完整技能包与记忆文件包含在本地备份中。 |
@@ -289,7 +315,7 @@ git rebase upstream/main               # 不要 merge
 src/android/      Android 应用（Kotlin / Compose）
   app/src/main/jniLibs/arm64-v8a/   原生库（jieba、pty bridge、crash handler）；
                                     libproot.so 是 CI 构建产物，非 vendored
-  app/src/main/assets/              Alpine minirootfs + 内置平台技能（skills/）
+  app/src/main/assets/              Ubuntu Base rootfs + 内置平台技能（skills/）
 src/shared/       与上游 iOS 树共享的资源（bashism 规则）
 deps/             proot 源码（子模块）+ build_proot.sh（NDK r28 构建）
 docs/             同步流程与接口规范
@@ -310,7 +336,7 @@ RikkaMinis 建立在大量开源工作之上——完整清单见
 **沙箱** — [PRoot](https://github.com/termux/proot)（GPLv2），Android 沙箱的用户态
 chroot，经由 [OpenMinis 的 fork](https://github.com/OpenMinis/proot)；
 **[talloc](https://talloc.samba.org)**（LGPLv3+）是其底层；
-**[Alpine Linux](https://alpinelinux.org)** — 沙箱启动所用的 minirootfs。
+**[Ubuntu Base](https://ubuntu.com/download/server)** — 沙箱启动所用的 rootfs（glibc + apt/dpkg）。
 
 **文本与渲染** — [cppjieba](https://github.com/yanyiwu/cppjieba)（MIT）、
 [KaTeX](https://katex.org)（MIT）。
