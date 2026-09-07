@@ -272,11 +272,21 @@ class RootfsManager private constructor(private val context: Context) {
             // serializes on aptMutex with every other mutation; failures
             // land in the retry queue and are reconciled on a later boot
             // (strike-limited). A failure here never bricks the sandbox.
-            if (apkWorldFile.exists()) {
+            // Gate on EITHER snapshot: a user who only ever pip-installed
+            // must still get the pip restore on a fresh extraction.
+            if (apkWorldFile.exists() || pipWorldFile.exists()) {
                 CoroutineScope(Dispatchers.IO).launch {
                     aptMutex.withLock {
                         runCatching { restoreDpkgWorldUnlocked() }
                             .onFailure { t -> Log.e(TAG, "[DpkgWorld] deferred restore crashed", t) }
+                    }
+                    // [T-pip-world] Same deferred-restore contract for user
+                    // pip packages: one batched install off the boot path.
+                    // Own lock acquisition (sequential with the dpkg one —
+                    // Kotlin Mutex is non-reentrant, so never nest them).
+                    aptMutex.withLock {
+                        runCatching { restorePipWorldUnlocked() }
+                            .onFailure { t -> Log.e(TAG, "[PipWorld] deferred restore crashed", t) }
                     }
                 }
             }
@@ -1001,6 +1011,271 @@ class RootfsManager private constructor(private val context: Context) {
         }
     }
 
+    // ── pip-world ([T-pip-world]) ─────────────────────────────────────────────
+    //
+    // Same recoverable-state pattern as dpkg-world, for USER pip packages.
+    // The Ubuntu Base rootfs ships python3 with an EMPTY /usr/local — every
+    // pip package on a device is user intent, and a reset/rebuild/reinstall
+    // used to wipe it silently. Rootfs reset/restore paths now snapshot
+    // before the wipe and re-install after a fresh extraction, serialized on
+    // aptMutex like every other guest mutation.
+    //
+    // Design notes:
+    //  * pip has no `apt-mark showmanual` equivalent that separates user
+    //    installs from base dependencies, so the snapshot uses pip's leaf
+    //    packages (`pip list --not-required` — packages nothing else depends
+    //    on) minus a tiny FACTORY baseline (pip/setuptools/wheel — the base
+    //    image ships nothing in /usr/local, but the leaf list includes pip
+    //    itself). Reinstalling leaves is sufficient: pip pulls their
+    //    dependencies from the current archive, same name-only semantics
+    //    as dpkg-world (persist intent, not pins).
+    //  * `pip list --not-required` reads ALL site paths (default resolution:
+    //    /usr/local/.../dist-packages AND /usr/lib/python3/dist-packages).
+    //    Do NOT use `--path` — it restricts to one location and misses
+    //    user packages (verified on-device).
+    //  * Restore runs `pip install --ignore-installed -r` so the factory
+    //    pip/wheel baseline never blocks a snapshot that includes an older
+    //    pip; `-r -` reads the requirement list from stdin, one name per
+    //    line, tolerating `pkg==ver` pins from foreign environments.
+
+    /** Host-side snapshot of user pip packages (leaf names, one per line). */
+    val pipWorldFile: File get() = File(context.filesDir, "pip-world.txt")
+
+    /** Host-side retry list for pip packages that failed to restore. */
+    val pipWorldFailedFile: File get() = File(context.filesDir, "pip-world-failed.txt")
+
+    private const val MAX_PIP_WORLD_RETRY_STRIKES = 3
+
+    /**
+     * Snapshot USER pip packages to the host side (filesDir/pip-world.txt)
+     * as leaf package names (`pip list --not-required` minus the factory
+     * baseline). Best-effort: a failed probe keeps the previous snapshot.
+     * Serialized on [aptMutex] like every other guest mutation.
+     */
+    suspend fun dumpPipWorld(): Boolean = withContext(Dispatchers.IO) {
+        aptMutex.withLock { dumpPipWorldLocked() }
+    }
+
+    /** Lock-free core of [dumpPipWorld] — caller holds [aptMutex]. */
+    private suspend fun dumpPipWorldLocked(): Boolean {
+        if (!prootBinary.exists()) {
+            Log.w(TAG, "[PipWorld] proot binary not available, skip dump")
+            return false
+        }
+        if (!File(rootfsDir, "usr/bin/python3").exists()) {
+            // Not a failure — the factory rootfs variant may lack python.
+            Log.d(TAG, "[PipWorld] no python3 in rootfs, skip dump")
+            return false
+        }
+        val leaves = try {
+            runPipLeavesUnlocked()
+        } catch (t: Exception) {
+            Log.w(TAG, "[PipWorld] leaf probe crashed: ${t.message}")
+            null
+        }
+        if (leaves == null) {
+            Log.w(TAG, "[PipWorld] leaf probe failed — keeping previous snapshot")
+            return false
+        }
+        val userPkgs = leaves.subtract(FACTORY_PIP_BASELINE).sorted()
+        return try {
+            if (userPkgs.isEmpty()) {
+                pipWorldFile.writeText(PIP_WORLD_HEADER)
+                Log.i(TAG, "[PipWorld] no user pip packages — snapshot cleared")
+            } else {
+                pipWorldFile.writeText(PIP_WORLD_HEADER + userPkgs.joinToString("\n") + "\n")
+                Log.i(TAG, "[PipWorld] snapshot ${userPkgs.size} user pip package(s) -> ${pipWorldFile.name}: ${userPkgs.take(8).joinToString()}")
+            }
+            true
+        } catch (t: Exception) {
+            Log.w(TAG, "[PipWorld] failed to write snapshot: ${t.message}")
+            false
+        }
+    }
+
+    /**
+     * Run the leaf probe inside the guest: `pip list --not-required` from
+     * python3 -m pip (no dependency on a `pip` binary being on PATH).
+     * Returns the leaf names (no versions) or null on failure.
+     */
+    private suspend fun runPipLeavesUnlocked(): Set<String>? {
+        val r = runProotWithDeadline(
+            listOf(
+                prootBinary.absolutePath, "-0", "--link2symlink", "--kill-on-exit",
+                "-r", rootfsDir.absolutePath,
+                "-b", "/dev", "-b", "/proc", "-b", "/sys", "-w", "/root",
+                "/bin/sh", "-c",
+                "python3 -m pip list --not-required --format=freeze --disable-pip-version-check 2>/dev/null"
+            ),
+            prootLoaderEnv(),
+            timeoutSec = 120,
+        )
+        if (r.exitCode != 0) {
+            Log.w(TAG, "[PipWorld] pip list exit=${r.exitCode} output=${r.output.takeLast(200)}")
+            return null
+        }
+        return r.output.lineSequence()
+            .map { it.trim().substringBefore("==").trim() }
+            .filter { it.isNotEmpty() && !it.startsWith('#') }
+            .toSet()
+    }
+
+    /**
+     * Re-install the pip snapshot after a fresh extraction: ONE batched
+     * `pip install -r -` fed from stdin. Failures are non-blocking: the
+     * failed names land in the pip-world retry queue and are reconciled on
+     * a later boot (strike-limited), mirroring dpkg-world. Non-blocking for
+     * boot — the sandbox is fully usable while pip restore runs.
+     */
+    suspend fun restorePipWorld(): Boolean = withContext(Dispatchers.IO) {
+        aptMutex.withLock { restorePipWorldUnlocked() }
+    }
+
+    /** Lock-free core of [restorePipWorld] — caller holds [aptMutex]. */
+    private suspend fun restorePipWorldUnlocked(): Boolean {
+        if (!pipWorldFile.exists()) {
+            Log.d(TAG, "[PipWorld] no snapshot file, nothing to restore")
+            return true
+        }
+        val names = try {
+            parsePipWorld(pipWorldFile.readText())
+        } catch (t: Exception) {
+            Log.e(TAG, "[PipWorld] failed to read snapshot, skip restore", t)
+            return false
+        }
+        if (names.isEmpty()) {
+            Log.i(TAG, "[PipWorld] snapshot empty, nothing to restore")
+            return true
+        }
+        Log.i(TAG, "[PipWorld] restoring ${names.size} pip package(s): ${names.take(8).joinToString()}")
+        val ok = runPipInstallUnlocked(names)
+        if (ok) {
+            Log.i(TAG, "[PipWorld] restore OK (${names.size} packages)")
+            try { pipWorldFailedFile.delete() } catch (_: Exception) {}
+            return true
+        }
+        // pip's resolver fails the whole batch on any unsatisfiable pin, and
+        // its error output names packages in an unparsable way compared to
+        // apt's structured errors — queue the whole batch for retry instead
+        // of guessing which subset failed.
+        Log.w(TAG, "[PipWorld] restore failed — whole batch queued for retry")
+        writePipWorldFailed(names)
+        return false
+    }
+
+    /**
+     * Retry previously-failed pip packages on the boot path. One batched
+     * install; after [MAX_PIP_WORLD_RETRY_STRIKES] failed boot attempts the
+     * list is dropped and a manual `pip install <pkg>` inside the sandbox
+     * takes over. Clears the retry list on full success.
+     */
+    suspend fun retryFailedPipWorld(): Boolean = withContext(Dispatchers.IO) {
+        aptMutex.withLock { retryFailedPipWorldUnlocked() }
+    }
+
+    /** Lock-free core of [retryFailedPipWorld] — caller holds [aptMutex]. */
+    private suspend fun retryFailedPipWorldUnlocked(): Boolean {
+        if (!pipWorldFailedFile.exists()) return true
+        val names = try {
+            pipWorldFailedFile.readLines()
+                .map { it.trim().substringBefore('=') }
+                .filter { it.isNotEmpty() && !it.startsWith("#") }
+        } catch (t: Exception) {
+            Log.w(TAG, "[PipWorld] failed to read retry list", t)
+            return false
+        }
+        if (names.isEmpty()) {
+            try { pipWorldFailedFile.delete() } catch (_: Exception) {}
+            return true
+        }
+        val prefs = context.getSharedPreferences("pip_world_retry", Context.MODE_PRIVATE)
+        val strikes = prefs.getInt("strikes", 0)
+        if (strikes >= MAX_PIP_WORLD_RETRY_STRIKES) {
+            Log.w(TAG, "[PipWorld] retry list dropped after $strikes failed boot attempts — install manually: pip install ${names.joinToString(" ")}")
+            try { pipWorldFailedFile.delete() } catch (_: Exception) {}
+            prefs.edit().remove("strikes").apply()
+            return true
+        }
+        Log.i(TAG, "[PipWorld] retrying ${names.size} package(s) (strike ${strikes + 1}/$MAX_PIP_WORLD_RETRY_STRIKES): ${names.take(8).joinToString()}")
+        val ok = runPipInstallUnlocked(names)
+        if (ok) {
+            try { pipWorldFailedFile.delete() } catch (_: Exception) {}
+            prefs.edit().remove("strikes").apply()
+            Log.i(TAG, "[PipWorld] retry fully succeeded")
+            return true
+        }
+        prefs.edit().putInt("strikes", strikes + 1).apply()
+        Log.w(TAG, "[PipWorld] retry failed — strike ${strikes + 1}/$MAX_PIP_WORLD_RETRY_STRIKES")
+        return false
+    }
+
+    /**
+     * One batched `pip install` inside the guest. `--ignore-installed`
+     * downgrades nothing and never uninstalls; `-r -` reads requirements
+     * from stdin (one `name` or `name==ver` per line). Uses the same
+     * minimal proot invocation as the leaf probe; 15 min cap (pip wheels
+     * can be big — torch is ~2 GB — and this runs OFF the boot path).
+     */
+    private suspend fun runPipInstallUnlocked(names: List<String>): Boolean {
+        if (!prootBinary.exists()) return false
+        // Stage the requirement list inside the rootfs — pip reads it from
+        // the guest filesystem (stdin redirection through proot is flaky
+        // with the deadline runner's process pipeline).
+        val reqFile = File(rootfsDir, "tmp/pip-world-requirements.txt")
+        try {
+            reqFile.parentFile?.mkdirs()
+            reqFile.writeText(names.joinToString("\n") + "\n")
+        } catch (t: Exception) {
+            Log.w(TAG, "[PipWorld] failed to stage requirements: ${t.message}")
+            return false
+        }
+        val r = try {
+            runProotWithDeadline(
+                listOf(
+                    prootBinary.absolutePath, "-0", "--link2symlink", "--kill-on-exit",
+                    "-r", rootfsDir.absolutePath,
+                    "-b", "/dev", "-b", "/proc", "-b", "/sys", "-w", "/root",
+                    "/bin/sh", "-c",
+                    "python3 -m pip install --ignore-installed --disable-pip-version-check --no-input -r /tmp/pip-world-requirements.txt"
+                ),
+                prootLoaderEnv(),
+                timeoutSec = 900,
+            )
+        } finally {
+            try { reqFile.delete() } catch (_: Exception) {}
+        }
+        if (r.exitCode != 0) {
+            Log.w(TAG, "[PipWorld] pip install exit=${r.exitCode} output=${r.output.takeLast(300)}")
+        }
+        return r.exitCode == 0
+    }
+
+    private fun writePipWorldFailed(args: List<String>) {
+        try {
+            pipWorldFailedFile.writeText(
+                buildString {
+                    appendLine("# pip-world retry list — packages that failed to restore")
+                    args.forEach { appendLine(it) }
+                }
+            )
+        } catch (t: Exception) {
+            Log.w(TAG, "[PipWorld] failed to write retry list: ${t.message}")
+        }
+    }
+
+    /**
+     * Factory pip baseline of the bundled Ubuntu base rootfs. The base
+     * image ships /usr/lib/python3/dist-packages with ONLY pip+wheel (and
+     * setuptools via the python3-venv-ish layer); pip's leaf list always
+     * includes pip itself and usually wheel — subtract so they are never
+     * mistaken for user intent.
+     */
+    private val FACTORY_PIP_BASELINE = setOf("pip", "setuptools", "wheel")
+
+    /** First line written into every pip-world snapshot file. */
+    private val PIP_WORLD_HEADER =
+        "# pip-world snapshot — user pip leaf package names, one per line, written by RootfsManager.dumpPipWorld()\n"
+
     /**
      * Loader env for every proot child process. MUST include:
      *  - `PROOT_LOADER[_32]` → standalone loaders in nativeLibraryDir
@@ -1366,8 +1641,10 @@ class RootfsManager private constructor(private val context: Context) {
         aptMutex.withLock {
             // Snapshot user packages BEFORE the wipe — a manual reset can
             // happen mid-session between boots, so dump here too as the
-            // authoritative last state.
+            // authoritative last state. pip-world gets the same treatment:
+            // a wipe must not silently erase user pip packages.
             dumpDpkgWorldLocked()
+            dumpPipWorldLocked()
             rootfsDir.deleteRecursively()
             installIfNeededUnlocked()
         }
@@ -2242,6 +2519,25 @@ internal fun parseDpkgWorld(text: String): List<String> {
         if (t.isEmpty() || t.startsWith("#")) continue
         val name = t.substringBefore('=').trim()
         if (name.isNotEmpty()) result.add(name)
+    }
+    return result
+}
+
+/**
+ * Parse a pip-world snapshot (or retry list) back into package names.
+ * Bare names are the current format; `name==version` / `name=version` pins
+ * (e.g. from a foreign `pip freeze`) are accepted and stripped so restores
+ * resolve from the current archive — same intent-not-pins semantics as
+ * [parseDpkgWorld]. Tolerates blank lines, `#` comments, and requirement
+ * markers like `-r other.txt` / `--index-url ...` (skipped).
+ */
+internal fun parsePipWorld(text: String): List<String> {
+    val result = mutableListOf<String>()
+    for (line in text.lines()) {
+        val t = line.trim()
+        if (t.isEmpty() || t.startsWith("#") || t.startsWith("-")) continue
+        val name = t.substringBefore("==").substringBefore('=').trim()
+        if (name.isNotEmpty() && name.matches(Regex("[A-Za-z0-9._-]+"))) result.add(name)
     }
     return result
 }

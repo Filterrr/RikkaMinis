@@ -13,9 +13,9 @@ import java.io.File
 import java.util.UUID
 
 /**
- * Activity that handles ACTION_SEND / ACTION_SEND_MULTIPLE / ACTION_VIEW
- * intents. Mirrors iOS ShareExtension/ShareViewModel.swift wire format
- * (`{items: [{kind, value}], timestamp}`) so a future cross-platform
+ * Activity that handles ACTION_SEND / ACTION_SEND_MULTIPLE / ACTION_VIEW /
+ * ACTION_PROCESS_TEXT intents. Mirrors iOS ShareExtension/ShareViewModel.swift
+ * wire format (`{items: [{kind, value}], timestamp}`) so a future cross-platform
  * sync (if it ever lands) reads the same `PendingShare` JSON.
  *
  * Producer-side behavior:
@@ -88,12 +88,35 @@ class ShareReceiverActivity : ComponentActivity() {
                 Intent.ACTION_SEND -> handleSingleSend(intent, items)
                 Intent.ACTION_SEND_MULTIPLE -> handleMultipleSend(intent, items)
                 Intent.ACTION_VIEW -> handleView(intent, items)
+                // [T-process-text] Global text-selection entry: any app's
+                // text-selection toolbar shows "RikkaMinis" and hands the
+                // selected span over in EXTRA_PROCESS_TEXT. Always inline
+                // text — selections are bounded by what a user can drag a
+                // handle over, far below the attachment threshold.
+                Intent.ACTION_PROCESS_TEXT -> handleProcessText(intent, items)
                 else -> AppLogger.warning(TAG, "unhandled action: ${intent?.action}")
             }
         } catch (e: Throwable) {
             AppLogger.error(TAG, "extraction failed: ${e.message}")
         }
         return items
+    }
+
+    /**
+     * [T-process-text] ACTION_PROCESS_TEXT payload. The system puts the
+     * selection in EXTRA_PROCESS_TEXT (CharSequence); EXTRA_PROCESS_TEXT_READONLY
+     * tells whether the source app accepts edits back — we never write text
+     * back (the flow is "send to the agent"), so read-only sources work the
+     * same as editable ones.
+     */
+    private fun handleProcessText(intent: Intent, out: MutableList<PendingShare.Item>) {
+        val text = intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.toString()?.takeIf { it.isNotBlank() }
+            ?: run {
+                AppLogger.info(TAG, "PROCESS_TEXT with empty selection — nothing to share")
+                return
+            }
+        AppLogger.info(TAG, "PROCESS_TEXT: ${text.length} chars from selection")
+        out += PendingShare.Item(PendingShare.Item.Kind.INLINE_TEXT, text)
     }
 
     /**
