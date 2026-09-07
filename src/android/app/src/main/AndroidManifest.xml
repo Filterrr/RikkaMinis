@@ -221,6 +221,16 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="*/*" />
             </intent-filter>
+            <!-- [T-process-text] Global text-selection entry: "RikkaMinis"
+                 appears in every app's text-selection toolbar. The payload
+                 is the selected span in EXTRA_PROCESS_TEXT; the activity
+                 funnels it into the standard PendingShare inline-text path
+                 (composer prefill), so the agent sees it as pasted text. -->
+            <intent-filter>
+                <action android:name="android.intent.action.PROCESS_TEXT" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.SEND_MULTIPLE" />
                 <category android:name="android.intent.category.DEFAULT" />

@@ -146,6 +146,13 @@ object PRootKernel {
             rootfsManager.retryFailedDpkgWorld()
         }
 
+        // [T-pip-world] Same strike-limited retry for user pip packages that
+        // failed to restore after a rebuild. OFF the boot path, serialized
+        // on RootfsManager.aptMutex (public suspend wrapper takes the lock).
+        CoroutineScope(Dispatchers.IO).launch {
+            rootfsManager.retryFailedPipWorld()
+        }
+
         // [Refactor-dpkg-world] Snapshot user-installed packages to the host
         // side. The dump and the background retry above are both serialized
         // by RootfsManager.aptMutex, so they can never interleave dpkg
@@ -155,6 +162,11 @@ object PRootKernel {
         // A later full rebuild (manual reset or Stage-3 reinstall) restores
         // from this snapshot.
         rootfsManager.dumpDpkgWorld()
+
+        // [T-pip-world] Snapshot user pip packages to the host side with the
+        // same boot-dump cadence (and the same non-blocking contract — the
+        // dump is one pip list round-trip, ~1s inside the guest).
+        rootfsManager.dumpPipWorld()
 
         // LD_LIBRARY_PATH for the extracted native libs. talloc used to be
         // staged here under a versioned name; deps/build_proot.sh now links it
