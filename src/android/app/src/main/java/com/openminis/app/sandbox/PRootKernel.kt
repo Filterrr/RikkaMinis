@@ -119,6 +119,14 @@ object PRootKernel {
         // original non-fatal intent.
         rootfsManager.ensureCaTrust()
 
+        // [T-tz-consistency] Point the guest's /etc/localtime at the device
+        // zone so file mtimes and localtime readers agree with the TZ env
+        // var injected below (posixTz). Before this, a UTC+8 device showed
+        // `date` in +08 but `ls -l` / mtime math in UTC — an 8-hour
+        // split-brain for anything comparing wall clock to file timestamps.
+        // Idempotent, cheap (one symlink read), non-fatal on failure.
+        rootfsManager.applyHostTimezone()
+
         // Re-apply user mirror selections — the overlay above ships stock
         // config files (pip.conf, .npmrc, repositories) and would otherwise
         // revert user-chosen mirrors on every boot. Mirrors iOS ordering in

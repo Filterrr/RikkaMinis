@@ -1,5 +1,5 @@
 {
-  "apk": ["git", "curl", "openssh"],
+  "apt": ["git", "curl", "openssh-client"],
   "pip": [],
   "env": {
     "GITHUB_TOKEN": "Tier 2 - 推送代码、触发 CI、管理 PR/issue"

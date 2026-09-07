@@ -1,5 +1,5 @@
 {
-  "apk": ["curl"],
+  "apt": ["curl"],
   "pip": [],
   "env": {
     "CF_API_TOKEN": "Tier 2 - 部署 Worker、管理 KV/R2"

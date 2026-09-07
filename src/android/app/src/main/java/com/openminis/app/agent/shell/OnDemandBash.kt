@@ -14,7 +14,7 @@ import java.net.URL
  * (T-bash-on-demand §2/§3, F2/M5). Isomorphic to iOS OnDemandBash.swift:
  *   - tri-state availability cache (unavailable has a 10-min TTL; available
  *     self-heals on a later 127),
- *   - host-side 5s network precheck before running apk (F2),
+ *   - host-side 5s network precheck before installing bash (F2),
  *   - persistent failure backoff (24h / 3-strikes) via SharedPreferences (F2),
  *   - one install attempt per process launch.
  *
@@ -99,7 +99,7 @@ object OnDemandBash {
             clearFailure(context)
             availability = Availability.Available
             // A SUCCESSFUL install re-arms the per-launch guard (M5 self-heal:
-            // if the user later apk-del's bash this session, one fresh reinstall
+            // if the user later apt-removes bash this session, one fresh reinstall
             // is still allowed). The guard only blocks repeated FAILING installs.
             attemptedInstallThisLaunch = false
             Log.i(TAG, "bash installed OK")

@@ -18,6 +18,7 @@ import java.io.File
 import java.io.FilterInputStream
 import java.io.InputStream
 import java.nio.charset.Charset
+import java.nio.file.Files
 import java.util.zip.GZIPInputStream
 
 /**
@@ -928,6 +929,34 @@ class RootfsManager private constructor(private val context: Context) {
             return@withContext true
         }
 
+        // [T-mirror-fallback] Self-heal the apt source before spending a
+        // retry strike on it: if the configured mirror is unreachable, this
+        // probes the fallback chain (TUNA → USTC → Aliyun → … → official)
+        // and rewrites minis.sources to the first mirror that passes a real
+        // `apt-get update`. Cheap when the current mirror is healthy (one
+        // HTTP probe, no switch); a no-op when /usr/local/bin/minis-mirror
+        // is absent (older rootfs). Without this, a dead mirror burns
+        // through all retry strikes on network errors before ever being
+        // replaced.
+        try {
+            val mirrorBin = File(rootfsDir, "usr/local/bin/minis-mirror")
+            if (mirrorBin.exists()) {
+                val probe = runProotWithDeadline(
+                    listOf(
+                        prootBinary.absolutePath, "-0", "--link2symlink", "--kill-on-exit",
+                        "-r", rootfsDir.absolutePath,
+                        "-b", "/dev", "-b", "/proc", "-b", "/sys", "-w", "/root",
+                        "/bin/sh", "-c", "/usr/local/bin/minis-mirror auto"
+                    ),
+                    prootLoaderEnv(),
+                    timeoutSec = 180,
+                )
+                Log.i(TAG, "[MirrorFallback] auto probe exit=${probe.exitCode} out=${probe.output.takeLast(200)}")
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "[MirrorFallback] minis-mirror auto failed (non-fatal): ${t.message}")
+        }
+
         val prefs = context.getSharedPreferences("dpkg_world_retry", Context.MODE_PRIVATE)
         val strikes = prefs.getInt("strikes", 0)
         if (strikes >= MAX_DPKG_WORLD_RETRY_STRIKES) {
@@ -1241,6 +1270,53 @@ class RootfsManager private constructor(private val context: Context) {
             Log.w(TAG, "[CaBootstrap] update-ca-certificates exit=${r.exitCode} output=${r.output.takeLast(200)}")
         }
         r.exitCode == 0
+    }
+
+    /**
+     * [T-tz-consistency] Point /etc/localtime at the device zone so guest
+     * file mtimes, journal-less logs and anything else that reads localtime
+     * agree with the TZ env var injected by PRootKernel.posixTz().
+     *
+     * Why: PRootKernel injects `TZ=LCL-8` (POSIX format, host device zone)
+     * into every process — but the factory Ubuntu Base rootfs ships
+     * /etc/localtime -> Etc/UTC. Date formatting (java.time-style libs,
+     * `ls -l`, python datetime.astimezone()) follows TZ, while file
+     * timestamps and anything consulting /etc/localtime directly followed
+     * UTC — an 8-hour split-brain on a UTC+8 device (observed live).
+     *
+     * How: the Ubuntu Base rootfs ships /usr/share/zoneinfo (tzdata
+     * directory present even without the tzdata deb), so this is a pure
+     * copy — no tzdata apt install needed. When the zone file is missing
+     * (unusual zone id) we leave UTC in place: a consistent UTC beats a
+     * wrong local zone. Runs on the boot path after applyDefaultMountOverlay,
+     * idempotent (skips when the symlink already targets the right zone).
+     */
+    suspend fun applyHostTimezone() = withContext(Dispatchers.IO) {
+        if (!isInstalled) return@withContext
+        val zoneId = java.util.TimeZone.getDefault().toZoneId().id
+        try {
+            val localtime = File(rootfsDir, "etc/localtime")
+            val target = File(rootfsDir, "usr/share/zoneinfo/$zoneId")
+            if (!target.exists()) {
+                Log.w(TAG, "[TzSync] zoneinfo missing for '$zoneId' — keeping UTC")
+                return@withContext
+            }
+            // Match Debian's setup: /etc/localtime is a relative symlink
+            // into the zoneinfo tree. Absolute targets break under proot.
+            val want = "../usr/share/zoneinfo/$zoneId"
+            val current = runCatching {
+                Files.readSymbolicLink(localtime.toPath()).toString()
+            }.getOrNull()
+            if (current == want) return@withContext
+            localtime.delete()
+            Files.createSymbolicLink(
+                localtime.toPath(),
+                File(want).toPath(),
+            )
+            Log.i(TAG, "[TzSync] /etc/localtime -> $want (device zone $zoneId)")
+        } catch (t: Throwable) {
+            Log.w(TAG, "[TzSync] failed to align /etc/localtime with $zoneId: ${t.message}")
+        }
     }
 
     /**

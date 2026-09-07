@@ -1,5 +1,5 @@
 {
-  "apk": ["python3", "py3-pip", "py3-numpy"],
+  "apt": ["python3", "python3-pip", "python3-numpy"],
   "pip": ["sentence-transformers"],
   "env": {
     "HF_TOKEN": "Tier 2 - 写入经验到 Dataset（Tier 0/1 搜索不需要）"
