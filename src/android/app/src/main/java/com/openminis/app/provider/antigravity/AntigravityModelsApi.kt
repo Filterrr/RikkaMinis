@@ -97,15 +97,40 @@ object AntigravityModelsApi {
         val modelsField = json.opt("models") ?: return emptyList()
         val out = mutableListOf<LLMModel>()
 
+        // [T-antigravity-models-filter] The raw catalog mixes real chat models
+        // with IDE-internal plumbing: `chat_*` probes (isInternal=true,
+        // MODEL_CHAT_* enums), `tab_*` / `tab_jump_*` / `command` previews
+        // (MODEL_PLACEHOLDER_* enums), `-tiered` routing aliases, and
+        // deprecated entries (deprecatedModelIds). None of them accept the
+        // standard generateContent chat path — filter them so the provider's
+        // model list only shows usable models. Mirrors CLIProxyAPI, which
+        // uses the /models endpoint for capability hints only and serves its
+        // own curated list (verified against the live catalog 2026-09).
+        val deprecated = json.optJSONObject("deprecatedModelIds")?.let { dep ->
+            val keys = mutableListOf<String>()
+            val it = dep.keys()
+            while (it.hasNext()) keys.add(it.next())
+            keys.toSet()
+        } ?: emptySet()
+
+        fun isInternalId(id: String): Boolean =
+            id.startsWith("chat_") || id.startsWith("tab_") || id.startsWith("command") ||
+                id.endsWith("-tiered") || id in deprecated
+
+        fun isUsable(meta: JSONObject): Boolean =
+            !meta.optBoolean("isInternal", false) &&
+                (meta.has("displayName") || meta.has("supportsImages") || meta.has("supportsThinking"))
+
         when (modelsField) {
             is JSONObject -> {
                 // Dict format: key = model id, value = metadata object.
                 val keys = modelsField.keys()
                 while (keys.hasNext()) {
                     val id = keys.next()
-                    val meta = modelsField.optJSONObject(id)
-                    val displayName = meta?.optString("displayName", id) ?: id
-                    out.add(LLMModel(id = id, displayName = displayName, provider = "Antigravity"))
+                    if (isInternalId(id)) continue
+                    val meta = modelsField.optJSONObject(id) ?: continue
+                    if (!isUsable(meta)) continue
+                    out.add(modelFromMeta(id, meta))
                 }
             }
             is JSONArray -> {
@@ -113,12 +138,48 @@ object AntigravityModelsApi {
                 for (i in 0 until modelsField.length()) {
                     val obj = modelsField.optJSONObject(i) ?: continue
                     val id = obj.optString("name").ifEmpty { obj.optString("id") }
-                    if (id.isEmpty()) continue
-                    val displayName = obj.optString("displayName", id)
-                    out.add(LLMModel(id = id, displayName = displayName, provider = "Antigravity"))
+                    if (id.isEmpty() || isInternalId(id)) continue
+                    if (!isUsable(obj)) continue
+                    out.add(modelFromMeta(id, obj))
                 }
             }
         }
         return out
     }
+
+    /**
+     * Build an [LLMModel] from one catalog entry, carrying the upstream
+     * capability flags into the model's metadata slots (models.dev enrichment
+     * still wins where it has data — applyDevData only overrides non-null).
+     */
+    private fun modelFromMeta(id: String, meta: JSONObject): LLMModel {
+        val serverName = meta.optString("displayName", id).ifEmpty { id }
+        return LLMModel(
+            id = id,
+            displayName = saneDisplayName(id, serverName),
+            provider = "Antigravity",
+            contextWindow = meta.optInt("maxTokens", 0).takeIf { it > 0 },
+            maxOutputTokens = meta.optInt("maxOutputTokens", 0).takeIf { it > 0 },
+            supportsReasoning = meta.optBoolean("supportsThinking", false).takeIf { it },
+            inputModalities = if (meta.optBoolean("supportsImages", false)) listOf("text", "image") else null,
+        )
+    }
+
+    /**
+     * The catalog's displayNames can go STALE relative to the id: the live
+     * API returned `gemini-2.5-flash` with displayName "Gemini 3.1 Flash
+     * Lite" (2026-09), colliding with the real 3.1 Flash Lite entry. When
+     * the version family in the display name contradicts the id's family
+     * (neither is a prefix of the other), fall back to the id-based
+     * heuristic formatter — the id is the load-bearing truth.
+     */
+    private fun saneDisplayName(id: String, serverName: String): String {
+        val idFamily = VERSION_FAMILY.find(id)?.groupValues?.get(1)
+        val dnFamily = VERSION_FAMILY.find(serverName)?.groupValues?.get(1)
+        if (idFamily == null || dnFamily == null) return serverName
+        val consistent = dnFamily.startsWith(idFamily) || idFamily.startsWith(dnFamily)
+        return if (consistent) serverName else LLMModel.modelDisplayName(fromId = id)
+    }
+
+    private val VERSION_FAMILY = Regex("""(\d+(?:\.\d+)*)""")
 }
