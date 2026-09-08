@@ -34,6 +34,16 @@ data class SubagentResult(
     val artifacts: List<String> = emptyList(),
     /** Error detail when [status] is [Status.FAILED]. */
     val error: String? = null,
+    /**
+     * [A2] The sub-agent's self-declared report status, parsed from the
+     * report tail by [SubagentSkill.parseReportStatus]: "partial", "failed",
+     * or null (declared done / no structured contract / prose report).
+     * Runtime [status] stays SUCCESS — the model DID finish its loop —
+     * while the declared outcome is surfaced as an automatic prompt-text
+     * annotation so the parent can decide to follow up without re-reading
+     * the full report.
+     */
+    val declaredStatus: String? = null,
 ) {
     enum class Status { SUCCESS, FAILED }
 
@@ -58,6 +68,7 @@ data class SubagentResult(
         }
         status == Status.SUCCESS -> buildString {
             append("Sub-agent '$skillName' completed in $turns turn(s).")
+            declaredStatusAnnotation()?.let { append(it) }
             if (artifacts.isNotEmpty()) {
                 append("\nArtifacts written: ")
                 append(artifacts.joinToString(", "))
@@ -90,5 +101,26 @@ data class SubagentResult(
             stoppedEarly -> "STOPPED_FIRST_TURN"
             else -> "SUCCESS"
         }
+
+        /**
+         * [T-subagent-runtime-preamble] True when [systemPrompt] carries the
+         * runtime preamble injected by [SubagentSkill.buildSystemPrompt].
+         */
+        fun hasRuntimePreamble(systemPrompt: String): Boolean =
+            systemPrompt.startsWith(SubagentSkill.RUNTIME_PREAMBLE_MARKER)
+    }
+
+    /**
+     * [A2] Prompt-text annotation for a SUCCESS run whose own report declares
+     * a degraded outcome (partial / failed). Rendered directly under the
+     * header line so the parent sees it before the report body.
+     */
+    private fun declaredStatusAnnotation(): String? = when (declaredStatus) {
+        "partial" -> "\n⚠️ The sub-agent's report declares status: partial — " +
+            "it did NOT complete the task as specified. Check its `gaps` field " +
+            "and the journaled artifacts before relying on this result."
+        "failed" -> "\n⚠️ The sub-agent's report declares status: failed — " +
+            "treat this result as an error report, not a deliverable."
+        else -> null
     }
 }

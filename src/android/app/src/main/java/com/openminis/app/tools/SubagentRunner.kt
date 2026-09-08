@@ -345,7 +345,14 @@ class SubagentRunner(
         provider: com.openminis.app.provider.LLMProvider,
         subagentTools: List<AgentToolDefinition>,
     ): ToolExecutionResult {
-        val systemPrompt = SubagentSkill.buildSystemPrompt(skill)
+        // [T-subagent-runtime-preamble] Inject a short runtime preamble
+        // (current date/time + durable workspace root) ahead of the skill
+        // body. Sub-agents run without any shell-derived context and used
+        // to burn their first turn discovering what day it is.
+        val systemPrompt = SubagentSkill.buildSystemPrompt(
+            skill,
+            runtimeContext = SubagentSkill.buildRuntimeContext(),
+        )
         val history = mutableListOf(LLMMessage(role = LLMMessage.Role.USER, content = query))
 
         val resultSb = StringBuilder()
@@ -506,6 +513,7 @@ class SubagentRunner(
                     val result = SubagentResult(
                         status = SubagentResult.Status.SUCCESS,
                         report = partial,
+                        declaredStatus = SubagentSkill.parseReportStatus(partial),
                         turns = turns,
                         maxTurns = config.maxTurns,
                         skillId = skill.id,
@@ -574,6 +582,7 @@ class SubagentRunner(
         val result = SubagentResult(
             status = SubagentResult.Status.SUCCESS,
             report = finalText,
+            declaredStatus = SubagentSkill.parseReportStatus(finalText),
             turns = turns,
             maxTurns = config.maxTurns,
             skillId = skill.id,
