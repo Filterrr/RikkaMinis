@@ -95,6 +95,17 @@ object ProviderFactory {
                     basePath = base,
                 )
             }
+            ProviderType.antigravity -> {
+                // [T-antigravity-provider] The apiKey slot carries either the
+                // OAuth token-bundle JSON (normal login path — the provider
+                // unwraps and auto-refreshes it) or a pasted static bearer.
+                AntigravityProvider(
+                    storedCredential = apiKey,
+                    model = model,
+                    appContext = context,
+                    instanceId = instance.id,
+                )
+            }
         }).also { provider ->
             provider.instanceContext = instance
             // [OPT7-conn-warmup] Every provider build is a "user is heading
@@ -117,5 +128,6 @@ object ProviderFactory {
         ProviderType.openRouter -> "https://openrouter.ai/api/v1"
         ProviderType.xAI -> "https://api.x.ai/v1"
         ProviderType.kimiCode -> KimiConstants.CODING_API_BASE + "/v1"
+        ProviderType.antigravity -> "https://daily-cloudcode-pa.sandbox.googleapis.com"
     }
 }

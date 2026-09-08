@@ -71,5 +71,6 @@ object ProviderAccents {
     val openRouter = Color(0xFF00BCD4) // cyan
     val xAI = Color(0xFFFF7043)        // orange — Grok brand
     val kimiCode = Color(0xFF5C6BC0)   // indigo — Kimi accent
+    val antigravity = Color(0xFF00897B) // teal — Antigravity (Cloud Code) accent
     val fallback = Color(0xFF8E8E93)   // gray
 }

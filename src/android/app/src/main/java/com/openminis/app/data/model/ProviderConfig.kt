@@ -15,7 +15,12 @@ enum class ProviderType(val displayName: String) {
     // [T-kimi-oauth] Kimi Code (Coding Plan) — RFC 8628 device-code OAuth,
     // OpenAI-compatible upstream at api.kimi.com/coding/v1. DB round-trip is
     // name-based (ProviderCredential.valueOf), so appending is migration-safe.
-    kimiCode("Kimi Code");
+    kimiCode("Kimi Code"),
+    // [T-antigravity-provider] Antigravity (Google Cloud Code Assist) — Google
+    // OAuth via the IDE's installed client, Gemini-format envelope over
+    // v1internal:generateContent. Appended at the end: enum round-trips by
+    // NAME (kotlinx.serialization), so appending never corrupts persisted data.
+    antigravity("Antigravity");
 
     val builtInModels: List<LLMModel>
         get() = when (this) {
@@ -25,6 +30,7 @@ enum class ProviderType(val displayName: String) {
             openRouter -> LLMModel.allOpenRouter
             xAI -> LLMModel.allXAI
             kimiCode -> LLMModel.allKimi
+            antigravity -> LLMModel.allAntigravity
         }
 }
 

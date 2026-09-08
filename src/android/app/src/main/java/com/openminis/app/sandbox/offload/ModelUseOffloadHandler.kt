@@ -1410,7 +1410,9 @@ class ModelUseOffloadHandler(
             """.trimIndent()
             // xAI (Grok) / Kimi Coding have no image-output models in the
             // current catalog — fall through to empty hint like Anthropic.
-            ProviderType.anthropic, ProviderType.xAI, ProviderType.kimiCode, null -> ""
+            // [T-antigravity-provider] Cloud Code serves chat only — same.
+            ProviderType.anthropic, ProviderType.xAI, ProviderType.kimiCode,
+            ProviderType.antigravity, null -> ""
         }
     }
 

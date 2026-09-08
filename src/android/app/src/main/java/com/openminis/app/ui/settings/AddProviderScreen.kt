@@ -80,6 +80,10 @@ import java.util.UUID
 import com.openminis.app.ui.components.MinisButton
 import com.openminis.app.ui.components.RowLabel
 import com.openminis.app.ui.components.SectionTextField
+import androidx.compose.runtime.DisposableEffect
+import com.openminis.app.provider.antigravity.AntigravityLoginManager
+import com.openminis.app.provider.antigravity.AntigravityOAuthStore
+import com.openminis.app.mcp.oauth.OAuthCallbackServer
 
 private enum class AddProviderStep {
     CHOOSE_TYPE,
@@ -134,6 +138,7 @@ private val providerDisplayOrder = listOf(
     ProviderType.gemini,
     ProviderType.xAI,
     ProviderType.kimiCode,
+    ProviderType.antigravity,
     ProviderType.openRouter,
 )
 
@@ -146,6 +151,8 @@ private fun providerIcon(type: ProviderType): Pair<ImageVector, Color> = when (t
     ProviderType.xAI -> Icons.Default.FlashOn to ProviderAccents.xAI               // orange — Grok visual cue
     // [T-kimi-oauth] Indigo — matches iOS's Kimi accent.
     ProviderType.kimiCode -> Icons.Default.Terminal to ProviderAccents.kimiCode
+    // [T-antigravity-provider] Teal — matches the Antigravity IDE brand.
+    ProviderType.antigravity -> Icons.Default.Cloud to ProviderAccents.antigravity
 }
 
 // -- Step 1: Choose Provider Type --
@@ -172,6 +179,7 @@ private fun ChooseProviderScreen(
                     ProviderType.openRouter -> "OpenRouter"
                     ProviderType.xAI -> "xAI (Grok)"
                     ProviderType.kimiCode -> "Kimi Code"
+                    ProviderType.antigravity -> "Antigravity (Google)"
                 }
                 // Describe which vendors each protocol supports, rather than a
                 // raw built-in model count.
@@ -182,6 +190,7 @@ private fun ChooseProviderScreen(
                     ProviderType.openRouter -> R.string.add_provider_subtitle_openrouter
                     ProviderType.xAI -> R.string.add_provider_subtitle_xai
                     ProviderType.kimiCode -> R.string.add_provider_subtitle_kimi
+                    ProviderType.antigravity -> R.string.add_provider_subtitle_antigravity
                 }
                 val (icon, iconColor) = providerIcon(type)
                 SettingsRow(
@@ -278,6 +287,22 @@ private fun ConfigureProviderScreen(
             onCustomBaseURLChange = { customBaseURL = it },
             providerRepository = providerRepository,
             onSaved = onSaved,
+            oauthStatus = oauthStatus,
+            oauthCredential = oauthCredential,
+            onOAuthStart = {
+                if (oauthServer == null) {
+                    oauthStatus = "等待 Google 授权…"
+                    oauthServer = AntigravityLoginManager.startLogin(appContext) { result ->
+                        oauthServer = null
+                        if (result != null) {
+                            oauthCredential = result.credential
+                            oauthStatus = "登录成功" + (result.email?.let { " · $it" } ?: "")
+                        } else {
+                            oauthStatus = "登录失败，请重试"
+                        }
+                    }
+                }
+            },
         )
 
         Spacer(Modifier.height(24.dp))
@@ -294,6 +319,10 @@ private fun ColumnScope.ApiKeyConfigSection(
     onCustomBaseURLChange: (String) -> Unit,
     providerRepository: ProviderRepository,
     onSaved: () -> Unit,
+    // [T-antigravity-provider] Google OAuth login state (antigravity only).
+    oauthStatus: String? = null,
+    oauthCredential: String? = null,
+    onOAuthStart: () -> Unit = {},
 ) {
     // [T-provider-save-refresh] The post-save model refresh MUST survive the
     // navigation away from this screen. rememberCoroutineScope() would cancel
@@ -303,6 +332,16 @@ private fun ColumnScope.ApiKeyConfigSection(
     // WebDAV backup transfer in BackupSettingsScreen).
     val appContext = LocalContext.current.applicationContext
     var showApiKeyPlaintext by remember { mutableStateOf(false) }
+    // [T-antigravity-provider] OAuth login state. oauthCredential holds the
+    // serialized token bundle from a completed Google login; when set it IS
+    // the credential saved into the apiKey slot (the provider unwraps it).
+    var oauthStatus by remember { mutableStateOf<String?>(null) }
+    var oauthCredential by remember { mutableStateOf<String?>(null) }
+    var oauthServer by remember { mutableStateOf<OAuthCallbackServer?>(null) }
+    // Stop the loopback listener when the screen goes away mid-login.
+    DisposableEffect(Unit) {
+        onDispose { oauthServer?.stop() }
+    }
     // /v1 is appended automatically for all non-Gemini providers (Gemini uses
     // v1beta full-path URLs). effectiveBaseURL already guards against double-append.
     val appendV1Suffix = providerType != ProviderType.gemini
@@ -310,6 +349,7 @@ private fun ColumnScope.ApiKeyConfigSection(
     var useResponsesAPI by remember { mutableStateOf(false) }
 
     // ── Credential ──────────────────────────────────────────────────────
+    // [T-antigravity-provider] Antigravity: Google OAuth 登录按钮替代手填 key。
     val keyPlaceholder = when (providerType) {
         ProviderType.anthropic -> "sk-ant-..."
         ProviderType.openAI -> "sk-..."
@@ -317,28 +357,68 @@ private fun ColumnScope.ApiKeyConfigSection(
         ProviderType.openRouter -> "sk-or-..."
         ProviderType.xAI -> "xai-..."
         ProviderType.kimiCode -> "sk-..."
+        ProviderType.antigravity -> "Google 登录后自动填充"
     }
-    SettingsSection(
-        header = stringResource(R.string.add_provider_credential),
-        footer = stringResource(R.string.add_provider_your_key_is_stored_securely_in_encrypted),
-    ) {
-        SettingsCardBlock {
-            RowLabel(text = stringResource(R.string.provider_list_api_key))
-            SectionTextField(
-                value = apiKey,
-                onValueChange = onApiKeyChange,
-                placeholder = keyPlaceholder,
-                singleLine = true,
-                visualTransformation = if (showApiKeyPlaintext) VisualTransformation.None else PasswordVisualTransformation(),
-                trailingIcon = {
-                    IconButton(onClick = { showApiKeyPlaintext = !showApiKeyPlaintext }) {
+    if (providerType == ProviderType.antigravity) {
+        SettingsSection(
+            header = "Google 账号",
+            footer = "使用与 Antigravity IDE 相同的 Google OAuth 流程授权。凭据保存在本机加密存储中。",
+        ) {
+            SettingsCardBlock {
+                if (oauthCredential == null) {
+                    MinisButton(
+                        onClick = onOAuthStart,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("使用 Google 登录")
+                    }
+                } else {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
-                            if (showApiKeyPlaintext) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                            contentDescription = if (showApiKeyPlaintext) "Hide" else "Show",
+                            Icons.Default.CheckCircle,
+                            contentDescription = null,
+                            tint = ProviderAccents.antigravity,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            oauthStatus ?: "登录成功",
+                            style = MaterialTheme.typography.bodyMedium,
                         )
                     }
-                },
-            )
+                }
+                if (oauthCredential == null && oauthStatus != null) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        oauthStatus,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    } else {
+        SettingsSection(
+            header = stringResource(R.string.add_provider_credential),
+            footer = stringResource(R.string.add_provider_your_key_is_stored_securely_in_encrypted),
+        ) {
+            SettingsCardBlock {
+                RowLabel(text = stringResource(R.string.provider_list_api_key))
+                SectionTextField(
+                    value = apiKey,
+                    onValueChange = onApiKeyChange,
+                    placeholder = keyPlaceholder,
+                    singleLine = true,
+                    visualTransformation = if (showApiKeyPlaintext) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { showApiKeyPlaintext = !showApiKeyPlaintext }) {
+                            Icon(
+                                if (showApiKeyPlaintext) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = if (showApiKeyPlaintext) "Hide" else "Show",
+                            )
+                        }
+                    },
+                )
+            }
         }
     }
 
@@ -409,23 +489,36 @@ private fun ColumnScope.ApiKeyConfigSection(
         }
     }
 
-    // ── Save button (outside any section — terminal action) ────────────
-    Spacer(Modifier.height(20.dp))
-    MinisButton(
-        onClick = {
-            val trimmedBase = customBaseURL.trim()
-            val instance = ProviderInstance(
-                id = UUID.randomUUID().toString(),
-                label = label.ifBlank { providerType.displayName },
-                providerType = providerType,
-                credentialType = ProviderCredential.apiKey,
-                customBaseURL = trimmedBase.ifEmpty { null },
-                appendV1Suffix = appendV1Suffix,
-                // Only OpenAI-family providers expose the Responses API toggle.
-                useResponsesAPI = providerType == ProviderType.openAI && useResponsesAPI,
-            )
-            providerRepository.addInstance(instance)
-            providerRepository.saveApiKey(instance.id, apiKey.trim())
+        // ── Save button (outside any section — terminal action) ────────────
+        Spacer(Modifier.height(20.dp))
+        // [T-antigravity-provider] antigravity saves the OAuth credential
+        // bundle (or a manually pasted token) instead of a typed API key.
+        val effectiveCredential = if (providerType == ProviderType.antigravity) {
+            oauthCredential ?: apiKey.trim().ifEmpty { null }
+        } else {
+            apiKey.trim().ifEmpty { null }
+        }
+        MinisButton(
+            onClick = {
+                val trimmedBase = customBaseURL.trim()
+                val instance = ProviderInstance(
+                    id = UUID.randomUUID().toString(),
+                    label = label.ifBlank { providerType.displayName },
+                    providerType = providerType,
+                    credentialType = ProviderCredential.apiKey,
+                    customBaseURL = trimmedBase.ifEmpty { null },
+                    appendV1Suffix = appendV1Suffix,
+                    // Only OpenAI-family providers expose the Responses API toggle.
+                    useResponsesAPI = providerType == ProviderType.openAI && useResponsesAPI,
+                )
+                providerRepository.addInstance(instance)
+                // [T-antigravity-provider] carry the credential — the OAuth
+                // token bundle for antigravity, the raw key for everyone else.
+                effectiveCredential?.let { providerRepository.saveApiKey(instance.id, it) }
+                // Migrate discovered project/base-URL meta onto the real instance.
+                if (providerType == ProviderType.antigravity) {
+                    AntigravityOAuthStore.migrateMeta(appContext, AntigravityLoginManager.PENDING_INSTANCE_ID, instance.id)
+                }
             // Auto-refresh models in background (fetches from API or falls back to models.dev).
             // Launched on the app-scoped scope so the fetch survives this screen's disposal.
             // forceRefresh=true bypasses the 7-day ProviderModelsCache so a brand-new provider
@@ -457,7 +550,9 @@ private fun ColumnScope.ApiKeyConfigSection(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp),
-        enabled = apiKey.isNotBlank(),
+        // [T-antigravity-provider] OAuth path: credential lives in
+        // oauthCredential, not the apiKey field — gate on the resolved value.
+        enabled = effectiveCredential != null,
     ) {
         Text(stringResource(R.string.provider_list_add_provider))
     }

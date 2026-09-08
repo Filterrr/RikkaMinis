@@ -405,5 +405,6 @@ fun providerDotColor(providerType: ProviderType?): Color = when (providerType) {
     ProviderType.openRouter -> ProviderAccents.openRouter
     ProviderType.xAI -> ProviderAccents.xAI
     ProviderType.kimiCode -> ProviderAccents.kimiCode // indigo — Kimi accent
+    ProviderType.antigravity -> ProviderAccents.antigravity // teal — Antigravity accent
     null -> ProviderAccents.fallback
 }

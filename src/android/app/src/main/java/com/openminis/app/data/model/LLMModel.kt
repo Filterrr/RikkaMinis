@@ -161,7 +161,17 @@ data class LLMModel(
 
         val allKimi = listOf(kimiK3, kimiK2)
 
-        val allModels = allAnthropic + allGemini + allOpenAI + allOpenRouter + allXAI + allKimi
+        // [T-antigravity-provider] Antigravity built-in fallback — deliberately
+        // minimal: the live catalog replaces these on the first successful
+        // refreshModels (v1internal:fetchAvailableModels). Two anchors only —
+        // one Claude, one Gemini — so a fresh instance is usable before the
+        // fetch runs. Verified present in the live Cloud Code catalog 2026-09.
+        val antigravityClaudeSonnet = LLMModel("claude-sonnet-4-6", "Claude Sonnet 4.6", "Antigravity", supportsReasoning = true)
+        val antigravityGeminiPro = LLMModel("gemini-3.1-pro-low", "Gemini 3.1 Pro (Low)", "Antigravity", supportsReasoning = true)
+
+        val allAntigravity = listOf(antigravityClaudeSonnet, antigravityGeminiPro)
+
+        val allModels = allAnthropic + allGemini + allOpenAI + allOpenRouter + allXAI + allKimi + allAntigravity
 
         /**
          * Heuristic display-name formatter for API model ids.

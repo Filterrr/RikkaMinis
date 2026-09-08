@@ -60,6 +60,8 @@ internal object ProviderDebugMethods {
             put("oauthFlow", when (type) {
                 ProviderType.anthropic -> "claude"
                 ProviderType.openAI -> "codex"
+                // [T-antigravity-provider] Google OAuth via the loopback callback.
+                ProviderType.antigravity -> "antigravity"
                 else -> JSONObject.NULL
             })
             put("defaultBaseURL", defaultBaseURL(type))
@@ -76,6 +78,7 @@ internal object ProviderDebugMethods {
         ProviderType.openRouter -> "https://openrouter.ai/api/v1"
         ProviderType.xAI -> "https://api.x.ai/v1"
         ProviderType.kimiCode -> "https://api.kimi.com/coding/v1"
+        ProviderType.antigravity -> "https://daily-cloudcode-pa.sandbox.googleapis.com"
     }
 
     fun instancesList(context: Context, params: JSONObject): JSONObject {
