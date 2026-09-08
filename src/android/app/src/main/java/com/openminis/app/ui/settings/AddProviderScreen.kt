@@ -253,6 +253,17 @@ private fun ConfigureProviderScreen(
     }
     var apiKey by remember { mutableStateOf("") }
     var customBaseURL by remember { mutableStateOf("") }
+    // [T-antigravity-provider] OAuth login state lives in the CALLER (this
+    // function) so both the onOAuthStart lambda below and the save button in
+    // ApiKeyConfigSection (via params) see the same state.
+    val appContext = LocalContext.current.applicationContext
+    var oauthStatus by remember { mutableStateOf<String?>(null) }
+    var oauthCredential by remember { mutableStateOf<String?>(null) }
+    var oauthServer by remember { mutableStateOf<OAuthCallbackServer?>(null) }
+    // Stop the loopback listener when the screen goes away mid-login.
+    DisposableEffect(Unit) {
+        onDispose { oauthServer?.stop() }
+    }
 
     SettingsScaffold(
         title = stringResource(R.string.add_provider_configure_provider, providerType.displayName),
@@ -332,16 +343,6 @@ private fun ColumnScope.ApiKeyConfigSection(
     // WebDAV backup transfer in BackupSettingsScreen).
     val appContext = LocalContext.current.applicationContext
     var showApiKeyPlaintext by remember { mutableStateOf(false) }
-    // [T-antigravity-provider] OAuth login state. oauthCredential holds the
-    // serialized token bundle from a completed Google login; when set it IS
-    // the credential saved into the apiKey slot (the provider unwraps it).
-    var oauthStatus by remember { mutableStateOf<String?>(null) }
-    var oauthCredential by remember { mutableStateOf<String?>(null) }
-    var oauthServer by remember { mutableStateOf<OAuthCallbackServer?>(null) }
-    // Stop the loopback listener when the screen goes away mid-login.
-    DisposableEffect(Unit) {
-        onDispose { oauthServer?.stop() }
-    }
     // /v1 is appended automatically for all non-Gemini providers (Gemini uses
     // v1beta full-path URLs). effectiveBaseURL already guards against double-append.
     val appendV1Suffix = providerType != ProviderType.gemini
@@ -389,7 +390,7 @@ private fun ColumnScope.ApiKeyConfigSection(
                 if (oauthCredential == null && oauthStatus != null) {
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        oauthStatus,
+                        oauthStatus ?: "",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
