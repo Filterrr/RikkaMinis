@@ -246,6 +246,83 @@ class SubagentSkillTest {
         val skill = makeSkill("Plain instructions without frontmatter.")
         assertEquals("Plain instructions without frontmatter.", SubagentSkill.buildSystemPrompt(skill))
     }
+
+    // ── [A2] parseReportStatus ───────────────────────────────────────────
+
+    @Test
+    fun `parseReportStatus detects partial in structured contract tail`() {
+        val report = """
+            Working on it, gathering sources.
+            status: partial
+            key_findings: found 2 of 3 versions (github releases api)
+            gaps: third vendor unreachable
+            artifacts: /var/minis/workspace/out.csv
+        """.trimIndent()
+        assertEquals("partial", SubagentSkill.parseReportStatus(report))
+    }
+
+    @Test
+    fun `parseReportStatus detects failed with parenthetical`() {
+        val report = "status: failed (no provider context)"
+        assertEquals("failed", SubagentSkill.parseReportStatus(report))
+    }
+
+    @Test
+    fun `parseReportStatus accepts list marker and fullwidth colon`() {
+        assertEquals("partial", SubagentSkill.parseReportStatus("- status: 部分完成"))
+        assertEquals("partial", SubagentSkill.parseReportStatus("状态：partial"))
+    }
+
+    @Test
+    fun `parseReportStatus scans tail window so prose status does not win`() {
+        val prose = "status: this run tracks progress status across all vendors"
+        val tail = "\n\nstatus: done\nkey_findings: ok (anchor)\ngaps: none\nartifacts: none"
+        assertNull(SubagentSkill.parseReportStatus(prose + tail))
+    }
+
+    @Test
+    fun `parseReportStatus returns null for prose or done reports`() {
+        assertNull(SubagentSkill.parseReportStatus("I could not find any releases."))
+        assertNull(SubagentSkill.parseReportStatus(""))
+        assertNull(SubagentSkill.parseReportStatus("status: done\nkey_findings: ok (a)"))
+    }
+
+    @Test
+    fun `parseReportStatus picks the last status line in window`() {
+        val report = "status: partial\nkey_findings: x (a)\ngaps: y\nartifacts: none\n\nstatus: done"
+        assertNull(SubagentSkill.parseReportStatus(report))
+    }
+
+    // ── [A3] runtime preamble ────────────────────────────────────────────
+
+    @Test
+    fun `runtime preamble is off by default`() {
+        val skill = makeSkill("Body instructions.")
+        val prompt = SubagentSkill.buildSystemPrompt(skill)
+        assertFalse(SubagentResult.hasRuntimePreamble(prompt))
+        assertEquals("Body instructions.", prompt)
+    }
+
+    @Test
+    fun `runtime preamble prepends marker context and task heading`() {
+        val skill = makeSkill("Body instructions.")
+        val ctx = SubagentSkill.buildRuntimeContext(LocalDateTime.of(2026, 9, 8, 10, 30))
+        val prompt = SubagentSkill.buildSystemPrompt(skill, runtimeContext = ctx)
+        assertTrue(SubagentResult.hasRuntimePreamble(prompt))
+        assertTrue(prompt.contains("Current date/time: 2026-09-08 10:30"))
+        assertTrue(prompt.contains("/var/minis/workspace/"))
+        assertTrue(prompt.contains("# Task from the parent agent"))
+        assertTrue(prompt.trimEnd().endsWith("Body instructions."))
+    }
+
+    @Test
+    fun `runtime preamble wraps description fallback for blank body`() {
+        val skill = TestSkill(description = "Fallback description", body = "")
+        val ctx = SubagentSkill.buildRuntimeContext(LocalDateTime.of(2026, 9, 8, 0, 0))
+        val prompt = SubagentSkill.buildSystemPrompt(skill, runtimeContext = ctx)
+        assertTrue(SubagentResult.hasRuntimePreamble(prompt))
+        assertTrue(prompt.contains("Fallback description"))
+    }
 }
 // ── [T-subagent-fm] preserved-frontmatter parsing ────────────────────────
 
@@ -323,82 +400,5 @@ class SubagentFrontmatterPreservationTest {
         )
         val prompt = SubagentSkill.buildSystemPrompt(skill)
         assertEquals("Report discipline: data first.", prompt)
-    }
-
-    // ── [A2] parseReportStatus ───────────────────────────────────────────
-
-    @Test
-    fun `parseReportStatus detects partial in structured contract tail`() {
-        val report = """
-            Working on it, gathering sources.
-            status: partial
-            key_findings: found 2 of 3 versions (github releases api)
-            gaps: third vendor unreachable
-            artifacts: /var/minis/workspace/out.csv
-        """.trimIndent()
-        assertEquals("partial", SubagentSkill.parseReportStatus(report))
-    }
-
-    @Test
-    fun `parseReportStatus detects failed with parenthetical`() {
-        val report = "status: failed (no provider context)"
-        assertEquals("failed", SubagentSkill.parseReportStatus(report))
-    }
-
-    @Test
-    fun `parseReportStatus accepts list marker and fullwidth colon`() {
-        assertEquals("partial", SubagentSkill.parseReportStatus("- status: 部分完成"))
-        assertEquals("partial", SubagentSkill.parseReportStatus("状态：partial"))
-    }
-
-    @Test
-    fun `parseReportStatus scans tail window so prose status does not win`() {
-        val prose = "status: this run tracks progress status across all vendors"
-        val tail = "\n\nstatus: done\nkey_findings: ok (anchor)\ngaps: none\nartifacts: none"
-        assertNull(SubagentSkill.parseReportStatus(prose + tail))
-    }
-
-    @Test
-    fun `parseReportStatus returns null for prose or done reports`() {
-        assertNull(SubagentSkill.parseReportStatus("I could not find any releases."))
-        assertNull(SubagentSkill.parseReportStatus(""))
-        assertNull(SubagentSkill.parseReportStatus("status: done\nkey_findings: ok (a)"))
-    }
-
-    @Test
-    fun `parseReportStatus picks the last status line in window`() {
-        val report = "status: partial\nkey_findings: x (a)\ngaps: y\nartifacts: none\n\nstatus: done"
-        assertNull(SubagentSkill.parseReportStatus(report))
-    }
-
-    // ── [A3] runtime preamble ────────────────────────────────────────────
-
-    @Test
-    fun `runtime preamble is off by default`() {
-        val skill = makeSkill("Body instructions.")
-        val prompt = SubagentSkill.buildSystemPrompt(skill)
-        assertFalse(SubagentResult.hasRuntimePreamble(prompt))
-        assertEquals("Body instructions.", prompt)
-    }
-
-    @Test
-    fun `runtime preamble prepends marker context and task heading`() {
-        val skill = makeSkill("Body instructions.")
-        val ctx = SubagentSkill.buildRuntimeContext(LocalDateTime.of(2026, 9, 8, 10, 30))
-        val prompt = SubagentSkill.buildSystemPrompt(skill, runtimeContext = ctx)
-        assertTrue(SubagentResult.hasRuntimePreamble(prompt))
-        assertTrue(prompt.contains("Current date/time: 2026-09-08 10:30"))
-        assertTrue(prompt.contains("/var/minis/workspace/"))
-        assertTrue(prompt.contains("# Task from the parent agent"))
-        assertTrue(prompt.trimEnd().endsWith("Body instructions."))
-    }
-
-    @Test
-    fun `runtime preamble wraps description fallback for blank body`() {
-        val skill = TestSkill(description = "Fallback description", body = "")
-        val ctx = SubagentSkill.buildRuntimeContext(LocalDateTime.of(2026, 9, 8, 0, 0))
-        val prompt = SubagentSkill.buildSystemPrompt(skill, runtimeContext = ctx)
-        assertTrue(SubagentResult.hasRuntimePreamble(prompt))
-        assertTrue(prompt.contains("Fallback description"))
     }
 }
