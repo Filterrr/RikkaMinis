@@ -406,6 +406,16 @@ class BrowserUseManager(
                     }
                     return true
                 }
+                // [OPT-external-domain-router] Domains whose TLS is broken
+                // under common VPN/clash rule sets (top.baidu.com →
+                // ERR_CONNECTION_CLOSED inside WebView) open in the user's
+                // real browser instead — reachable there, dead in WebView.
+                if (com.openminis.app.browser.ExternalAppRouter.shouldRouteExternally(urlStr)) {
+                    if (urlStr != null) {
+                        com.openminis.app.browser.ExternalAppRouter.openExternally(view.context, urlStr)
+                    }
+                    return true
+                }
                 // T134: route intent://, market://, tel:, mailto:, … out
                 // of the WebView so they reach the matching app instead of
                 // surfacing as ERR_UNKNOWN_URL_SCHEME.
@@ -668,6 +678,24 @@ class BrowserUseManager(
 
         var normalized = urlString
         if (!normalized.contains("://")) normalized = "https://$normalized"
+
+        // [OPT-external-domain-router] Agent navigation to an external-list
+        // domain: hand off to the user's real browser and return an explicit
+        // result so the LLM knows the page content is NOT readable here and
+        // it should tell the user to look at the opened app/tab instead of
+        // retrying (a retry would just hit the same WebView TLS reset).
+        if (com.openminis.app.browser.ExternalAppRouter.shouldRouteExternally(normalized)) {
+            withContext(Dispatchers.Main) {
+                com.openminis.app.browser.ExternalAppRouter.openExternally(
+                    webView.context, normalized,
+                )
+            }
+            return BrowserActionResult(
+                text = "Opened $normalized in the user's external browser (this domain is excluded from the in-app WebView — its TLS is blocked under some VPN/proxy rule sets). " +
+                    "You CANNOT read this page's content via browser_use; ask the user to check the opened browser/tab and report back.",
+                success = true,
+            )
+        }
 
         val deferred = CompletableDeferred<Unit>()
         navigationDeferred = deferred
@@ -1357,6 +1385,20 @@ class BrowserUseManager(
     fun loadURL(urlString: String) {
         var normalized = urlString
         if (!normalized.contains("://")) normalized = "https://$normalized"
+        // [OPT-external-domain-router] loadURL does NOT trigger
+        // shouldOverrideUrlLoading for the initial navigation, so an
+        // external-list URL typed into the URL bar (or navigated by the
+        // agent) would hit the WebView directly and show its TLS error.
+        // Hand off before touching the WebView — mirrors the T136 pattern
+        // used for intent:// schemes.
+        if (com.openminis.app.browser.ExternalAppRouter.shouldRouteExternally(normalized)) {
+            _currentURL.value = normalized
+            _isLoading.value = false
+            com.openminis.app.browser.ExternalAppRouter.openExternally(
+                webView.context, normalized,
+            )
+            return
+        }
         _isLoading.value = true
         webView.loadUrl(normalized)
     }
