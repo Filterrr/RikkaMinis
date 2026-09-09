@@ -139,21 +139,62 @@ object BrowserUseJS {
 
     fun getReadable(): String = """
         (function() {
+            // [OPT-browser-readable] Score candidate containers by text
+            // density instead of taking the first selector hit. The old
+            // fixed list matched wide wrappers ('.content', '#content') and
+            // fed nav/sidebar/recommended-rails to the model. Now: pick the
+            // block with the best (text length × link-text ratio) score,
+            // then strip obvious boilerplate (nav/header/footer/aside and
+            // common class patterns) inside it before serializing.
+            function score(el) {
+                var text = (el.innerText || '').trim();
+                if (text.length < 80) return 0;
+                var anchors = el.querySelectorAll('a');
+                var anchorChars = 0;
+                for (var i = 0; i < anchors.length; i++) {
+                    anchorChars += (anchors[i].innerText || '').length;
+                }
+                // Link-dense blocks are nav/index pages, not articles.
+                var linkRatio = text.length ? anchorChars / text.length : 1;
+                if (linkRatio > 0.6) return 0;
+                return text.length * (1 - linkRatio);
+            }
             var candidateSelectors = [
                 'article', '[role="main"]', 'main', '.post-content',
                 '.article-body', '.entry-content', '#content', '.content'
             ];
-            var el = null;
-            var matchedSelector = null;
+            var best = null, bestScore = 0, matchedSelector = null;
+            var seen = [];
             for (var i = 0; i < candidateSelectors.length; i++) {
                 var found = document.querySelector(candidateSelectors[i]);
-                if (found && window.getComputedStyle(found).display !== 'none' && (found.innerText || '').length > 0) {
-                    el = found; matchedSelector = candidateSelectors[i]; break;
+                if (!found || seen.indexOf(found) !== -1) continue;
+                seen.push(found);
+                if (window.getComputedStyle(found).display === 'none') continue;
+                var s = score(found);
+                if (s > bestScore) { best = found; bestScore = s; matchedSelector = candidateSelectors[i]; }
+            }
+            // Fallback: densest direct child of body (catches pages with no
+            // semantic markers), then body itself.
+            if (!best && document.body) {
+                var children = document.body.children;
+                for (var j = 0; j < children.length; j++) {
+                    var s2 = score(children[j]);
+                    if (s2 > bestScore) { best = children[j]; bestScore = s2; matchedSelector = 'body>' + (children[j].tagName||'').toLowerCase(); }
                 }
             }
-            if (!el) { el = document.body; matchedSelector = 'document.body (fallback)'; }
+            if (!best) { best = document.body; matchedSelector = 'document.body (fallback)'; }
+            // Strip boilerplate INSIDE the winner: structural roles, common
+            // class-name patterns, and script/style. display:none check so
+            // we don't nuke content that happens to carry a 'nav' class.
+            var doomed = best.querySelectorAll('nav,header,footer,aside,script,style,noscript,[role="navigation"],[role="banner"],[role="complementary"],.sidebar,.breadcrumb,.pagination,.share-buttons,.related-posts,.recommended,.advert,.ad-container,.comments');
+            for (var k = 0; k < doomed.length; k++) {
+                var d = doomed[k];
+                if (d === best) continue;
+                if (d.contains(best)) continue;
+                d.remove();
+            }
             var title = document.title || '';
-            var innerTextVal = el.innerText || '';
+            var innerTextVal = best.innerText || '';
             var text = innerTextVal.replace(/\s+/g, ' ').trim().substring(0, 15000);
             return JSON.stringify({title: title, text: text, length: text.length, source: matchedSelector});
         })()

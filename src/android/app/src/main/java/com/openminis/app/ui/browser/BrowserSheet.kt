@@ -257,7 +257,7 @@ fun BrowserSheet(
                             keyboardActions = KeyboardActions(onGo = {
                                 val trimmed = urlInput.trim()
                                 if (trimmed.isNotEmpty()) {
-                                    val normalized = normalizeURLInput(trimmed)
+                                    val normalized = normalizeURLInput(trimmed, context)
                                     selectedTab?.manager?.loadURL(normalized)
                                     urlInput = normalized
                                 }
@@ -624,12 +624,17 @@ private fun AgentBrowsingOverlay(accent: Color, onTakeover: () -> Unit) {
     }
 }
 
-/** Normalize URL input: search terms → Google search, bare domains → https:// prefix. */
-private fun normalizeURLInput(input: String): String {
+/** Normalize URL input: search terms → configured search engine, bare domains → https:// prefix. */
+private fun normalizeURLInput(input: String, context: android.content.Context): String {
     val trimmed = input.trim()
     if (trimmed.contains("://")) return trimmed
     if (trimmed.contains(' ') || !trimmed.contains('.')) {
-        return "https://www.google.com/search?q=${java.net.URLEncoder.encode(trimmed, "UTF-8")}"
+        // [OPT-browser-search-config] Engine is user-selectable (Browser
+        // Settings → Search Engine); Baidu default for CN reachability.
+        // Malformed/missing template falls back to Baidu rather than
+        // wedging the URL bar.
+        return com.openminis.app.browser.BrowserSearchPrefs.buildSearchUrl(context, trimmed)
+            ?: "https://www.baidu.com/s?wd=${java.net.URLEncoder.encode(trimmed, "UTF-8")}"
     }
     return "https://$trimmed"
 }

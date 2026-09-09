@@ -166,6 +166,15 @@ class BrowserUseManager(
     /** Callback for window.open / target="_blank" — TabPool hooks this. */
     var onNewWindow: ((Message) -> Unit)? = null
 
+    /**
+     * [OPT-browser-renderer-recovery] Invoked when the WebView's renderer
+     * process crashes or is killed by the OOM killer. The pool destroys and
+     * recreates the hosting tab (a crashed renderer cannot be re-attached —
+     * WebView keeps rendering nothing). Carries the URL the dead tab was on
+     * so the recreated tab can reload it.
+     */
+    var onRenderProcessGone: ((goneUrl: String?) -> Unit)? = null
+
     /** Callback for window.close — TabPool hooks this. */
     var onCloseWindow: (() -> Unit)? = null
 
@@ -441,6 +450,26 @@ class BrowserUseManager(
                     navigationDeferred?.complete(Unit)
                     navigationDeferred = null
                 }
+            }
+
+            // [OPT-browser-renderer-recovery] A crashed / OOM-killed renderer
+            // leaves the tab permanently blank; without this the agent retries
+            // get_text forever against a dead surface. Hand the event to the
+            // pool (destroy + recreate the tab) and return true so the app
+            // itself is NOT killed (WebView kills the app when the callback
+            // returns false). Platform signature (API 26+):
+            // (WebView, android.webkit.WebViewRenderProcess).
+            override fun onRenderProcessGone(
+                view: WebView,
+                detail: android.webkit.WebViewRenderProcess?,
+            ): Boolean {
+                val reason = when {
+                    detail == null -> "unknown"
+                    else -> "renderer gone"
+                }
+                Log.e(TAG, "renderer gone ($reason) for ${view.url?.take(120)}")
+                onRenderProcessGone?.invoke(view.url)
+                return true
             }
 
             override fun shouldInterceptRequest(
@@ -1737,8 +1766,8 @@ class BrowserUseManager(
             MIN_DOM_STABLE_TIMEOUT_MS, MAX_DOM_STABLE_TIMEOUT_MS,
         )
         val pollInterval = 200L
-        var lastSize = -1L
         var stable = false
+        var lastWindowMutations = -1L
         val deadline = System.currentTimeMillis() + budget
         // [T-android-domstable-min-budget] C5 fast path: a document that has
         // already finished loading (readyState === 'complete') is almost
@@ -1769,25 +1798,60 @@ class BrowserUseManager(
                 )
             }
             // Fast path inconclusive (DOM still mutating post-load, or body
-            // still empty) — fall through to the normal polling loop with
-            // lastSize untouched so its stability criterion stays exactly
-            // as before.
+            // still empty) — fall through to the polling loop unchanged.
         }
+        // [OPT-browser-mutation-stable] Poll a MutationObserver COUNTER
+        // instead of body.innerHTML length. innerHTML length is
+        // equality-based and blind to same-length mutations (carousel slide
+        // swaps, canvas-driven apps, equal-size text updates) — it reported
+        // "stable" while the page kept changing, so the agent read stale
+        // content with no signal. The observer counts childList +
+        // characterData + subtree mutations (attributes excluded: loader
+        // spinners toggle classes forever and would never stabilize). Each
+        // poll reads-and-resets the counter — ONE cheap round-trip instead
+        // of serializing the whole body — and the criterion becomes "zero
+        // mutations in N consecutive windows" instead of "same size as the
+        // previous window".
+        //
+        // The observer is per-document state (window.__minisDomObs); a SPA
+        // route change that replaces <body> content does NOT remove it
+        // (observers observe document.documentElement). A full navigation
+        // gets a fresh document, so the next wait re-arms cleanly.
+        val observerJs = """
+            (function(){
+                try {
+                    if (window.__minisDomObs === undefined) {
+                        window.__minisDomObs = 0;
+                        var obs = new MutationObserver(function(muts){
+                            window.__minisDomObs += muts.length;
+                        });
+                        obs.observe(document.documentElement, {childList:true, characterData:true, subtree:true});
+                    }
+                    var n = window.__minisDomObs;
+                    window.__minisDomObs = 0;
+                    return String(n);
+                } catch(e) { return '-1'; }
+            })()
+        """.trimIndent()
+        val stableWindowsNeeded = 2
+        var stableWindows = 0
         while (System.currentTimeMillis() < deadline) {
-            val raw = evaluateJavascript(
-                "(function(){try{return (document.body&&document.body.innerHTML.length)||0;}catch(e){return -1;}})()"
-            )
-            val size = raw.toLongOrNull() ?: -1L
-            if (size == lastSize && size >= 0) { stable = true; break }
-            lastSize = size
             delay(pollInterval)
+            val mutations = evaluateJavascript(observerJs).toLongOrNull() ?: -1L
+            if (mutations == 0L) {
+                stableWindows++
+                if (stableWindows >= stableWindowsNeeded) { stable = true; break }
+            } else {
+                stableWindows = 0
+                lastWindowMutations = mutations
+            }
         }
         val elapsed = budget - (deadline - System.currentTimeMillis())
         return if (stable) {
-            BrowserActionResult(text = "DOM stable after ${elapsed}ms (body length=$lastSize)")
+            BrowserActionResult(text = "DOM stable after ${elapsed}ms (2 consecutive 200ms windows with zero DOM mutations)")
         } else {
             BrowserActionResult(
-                text = "DOM did not stabilize within ${budget}ms (last body length=$lastSize)",
+                text = "DOM did not stabilize within ${budget}ms ($lastWindowMutations mutations in the last 200ms window)",
                 success = false,
             )
         }

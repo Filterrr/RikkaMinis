@@ -182,6 +182,10 @@
     <string name="browser_history_action">歷史</string>
     <string name="browser_close_tab">關閉分頁</string>
     <string name="browser_search_placeholder">搜尋或輸入網址</string>
+    <string name="browser_settings_search_engine">搜尋引擎</string>
+    <string name="browser_settings_search_engine_desc">網址列與智慧代理的 web_search 工具共用此項，變更立即生效。</string>
+    <string name="browser_settings_search_custom_label">自訂搜尋 URL 範本</string>
+    <string name="browser_settings_search_custom_hint">覆蓋上方引擎設定。範本須包含 %s（查詢詞經 URL 編碼後填入），如 https://example.com/search?q=%s</string>
     <string name="browser_no_tab_open">沒有開啟的分頁</string>
     <string name="browser_enter_url_hint">請在上方輸入網址開始瀏覽</string>
     <string name="browser_nav_back">後退</string>

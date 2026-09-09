@@ -20,6 +20,10 @@ object AgentTools {
         // attempt those calls. Mirrors the iOS gate at
         // AIChatViewModel.makeAgentTools(memoryEnabled:).
         memoryEnabled: Boolean = true,
+        // [OPT-browser-websearch-tool] Supplies the current search-engine
+        // hint for web_search's description. Default keeps the registry
+        // Context-free; ChatViewModel passes an Android-backed provider.
+        searchHintProvider: () -> String = { "Search engine: app default" },
     ): List<AgentToolDefinition> = buildList {
         add(shellExecuteDefinition())
         add(FileReadTool.definition())
@@ -29,6 +33,13 @@ object AgentTools {
             add(ReadImageTool.definition())
         }
         add(browserUseDefinition())
+        // [OPT-browser-websearch-tool] One-shot search: navigate to the
+        // configured engine with the query, wait for DOM stability, extract
+        // readable text — replaces the 3-round-trip navigate →
+        // wait_for_dom_stable → get_readable dance and makes the model use
+        // the SAME engine the user configured (was: model-hardcoded google,
+        // unreachable without a proxy in CN).
+        add(webSearchDefinition(searchHintProvider))
         // [T7-subagent] spawn_agent: skill = independent sub-agent instance.
         // Always exposed — the sub-agent's own tool set is filtered inside
         // SubagentSkill.buildFilteredTools (spawn_agent itself is FORBIDDEN
@@ -68,6 +79,31 @@ object AgentTools {
     )
 
     // Aligned with iOS AIChatViewModel.swift browser_use definition
+
+    /**
+     * [OPT-browser-websearch-tool] Compact search tool. The engine template
+     * comes from BrowserSearchPrefs via [searchHintProvider] at request-build
+     * time — the description tells the model exactly which engine and URL
+     * shape to expect, so it never has to guess (and can fall back to
+     * browser_use for engine-specific operators like site:). The provider
+     * keeps this registry Context-free.
+     */
+    private fun webSearchDefinition(searchHintProvider: () -> String): AgentToolDefinition =
+        AgentToolDefinition(
+            name = "web_search",
+            description = "Search the web. Performs the query on the app's configured search engine in one step " +
+                "(navigate + wait for render + extract readable results) and returns the result page text. " +
+                searchHintProvider() + ". " +
+                "For advanced engine operators (site:, filetype:) or to interact with the results page further, " +
+                "use browser_use with action=navigate instead.",
+            parameters = mapOf(
+                "tool_title" to AgentToolParam("string", "A concise 5-10 word summary of what this search does. Use the same language as the user."),
+                "query" to AgentToolParam("string", "The search query. Use the user's language for best results."),
+            ),
+            required = listOf("tool_title", "query"),
+            propertyOrdering = listOf("tool_title", "query"),
+        )
+
     private fun browserUseDefinition(): AgentToolDefinition = AgentToolDefinition(
         name = "browser_use",
         description = "Control a web browser with up to 3 tabs. " +

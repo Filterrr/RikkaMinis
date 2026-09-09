@@ -25,6 +25,8 @@ import com.openminis.app.agent.runtime.ProviderAttemptOutcome
 import com.openminis.app.agent.Level
 import com.openminis.app.agent.ToolLoopDetector
 import com.openminis.app.browser.BrowserActionInput
+import com.openminis.app.browser.BrowserAction
+import com.openminis.app.browser.BrowserSearchPrefs
 import com.openminis.app.browser.BrowserTabPool
 import com.openminis.app.data.db.MessageEntity
 import androidx.compose.material.icons.Icons
@@ -1076,7 +1078,17 @@ class ChatViewModel(
      * fixed list of definition objects, no I/O.
      */
     private val agentTools: List<AgentToolDefinition>
-        get() = AgentTools.makeAgentTools(memoryEnabled = _memoryEnabled.value)
+        get() = AgentTools.makeAgentTools(
+            memoryEnabled = _memoryEnabled.value,
+            // [OPT-browser-websearch-tool] Embed the CURRENT engine/template
+            // in the schema so the model's web_search calls (and its mental
+            // model of "how search works here") always match the user's
+            // setting. Recomputed per read — a settings change applies on
+            // the next request with no restart.
+            searchHintProvider = {
+                com.openminis.app.browser.BrowserSearchPrefs.agentHint(context)
+            },
+        )
 
     /**
      * Per-session loop detector. Reset alongside [agentHistory] whenever the
@@ -9291,6 +9303,7 @@ class ChatViewModel(
                 ReadImageTool.NAME -> ReadImageTool.execute(argsJson, activeSessionId, context)
                 "shell_execute" -> executeShellCommand(argsJson, toolId, toolBlocks, assistantId, currentText)
                 "browser_use" -> executeBrowserUseTool(argsJson)
+                "web_search" -> executeWebSearchTool(argsJson)
                 "memory_write" -> executeMemoryWriteTool(argsJson)
                 "memory_get" -> executeMemoryGetTool(argsJson)
                 "memory_rollup" -> executeMemoryRollupTool()
@@ -9864,8 +9877,64 @@ class ChatViewModel(
         }
     }
 
-    private suspend fun executeBrowserUseTool(argsJson: String): ToolExecutionResult {
-        val input = BrowserActionInput.parse(argsJson)
+    /**
+     * [OPT-browser-websearch-tool] One-shot web search on the app's
+     * configured engine. Composite of navigate → wait_for_dom_stable →
+     * get_readable over the pool, in a single tool call (the schema tells
+     * the model which engine will be hit — see AgentTools.webSearchDefinition).
+     *
+     * Tab handling: runs on the agent's normal pool path (execute() with a
+     * tab-less navigate, which follows opensNewPage fan-out semantics), so
+     * concurrent searches use separate tabs exactly like explicit
+     * browser_use calls. The DOM-wait budget is modest (4s) — search result
+     * pages are server-rendered and light; a slow engine still returns
+     * whatever text is available rather than failing.
+     */
+    private suspend fun executeWebSearchTool(argsJson: String): ToolExecutionResult {
+        val args = try { JSONObject(argsJson) } catch (_: Exception) { JSONObject() }
+        val query = args.optString("query", "").trim()
+        if (query.isEmpty()) {
+            return ToolExecutionResult("Error: web_search requires a non-empty 'query'", false)
+        }
+        val searchUrl = BrowserSearchPrefs.buildSearchUrl(context, query)
+            ?: return ToolExecutionResult("Error: no valid search engine template configured", false)
+
+        val navigateResult = browserTabPool.execute(
+            BrowserActionInput(
+                action = BrowserAction.NAVIGATE,
+                url = searchUrl,
+            )
+        )
+        if (!navigateResult.success) {
+            return ToolExecutionResult("Search navigation failed: ${navigateResult.text}", false)
+        }
+        // Result pages are server-rendered; give the SPA-ish ones a short
+        // stabilization window but never block the whole budget.
+        val domResult = browserTabPool.execute(
+            BrowserActionInput(
+                action = BrowserAction.WAIT_FOR_DOM_STABLE,
+                timeoutMs = 4_000,
+            )
+        )
+        val readable = browserTabPool.execute(
+            BrowserActionInput(
+                action = BrowserAction.GET_READABLE,
+            )
+        )
+        val body = readable.text.takeIf { it.isNotBlank() } ?: domResult.text
+        val header = "Search results for \"$query\" (engine: ${BrowserSearchPrefs.effective(context).displayName})\n" +
+            "URL: $searchUrl\n\n"
+        // Bound like browser_use results (64 KiB) — same rationale: nothing
+        // past that is useful in context, and huge SERP pages are common.
+        val maxChars = 64 * 1024
+        val output = (header + body).let {
+            if (it.length > maxChars) it.take(maxChars) + "\n\n…[truncated — use browser_use get_text with a selector to read specific results]"
+            else it
+        }
+        return ToolExecutionResult(output, readable.success)
+    }
+
+    private suspend fun executeBrowserUseTool(argsJson: String): ToolExecutionResult {        val input = BrowserActionInput.parse(argsJson)
             ?: return ToolExecutionResult("Error: Invalid browser_use input", false)
 
         return try {

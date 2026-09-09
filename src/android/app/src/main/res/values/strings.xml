@@ -453,6 +453,10 @@
     <string name="browser_history_action">History</string>
     <string name="browser_close_tab">Close tab</string>
     <string name="browser_search_placeholder">Search or enter URL</string>
+    <string name="browser_settings_search_engine">Search Engine</string>
+    <string name="browser_settings_search_engine_desc">Used by the URL bar and the agent\'s web_search tool. Applies immediately.</string>
+    <string name="browser_settings_search_custom_label">Custom search URL template</string>
+    <string name="browser_settings_search_custom_hint">Override the engine above. Must contain %s where the URL-encoded query goes, e.g. https://example.com/search?q=%s</string>
     <string name="browser_no_tab_open">No browser tab open</string>
     <string name="browser_enter_url_hint">Enter a URL above to start browsing</string>
     <string name="browser_nav_back">Back</string>

@@ -665,6 +665,10 @@
     <string name="browser_history_action">历史</string>
     <string name="browser_close_tab">关闭标签页</string>
     <string name="browser_search_placeholder">搜索或输入网址</string>
+    <string name="browser_settings_search_engine">搜索引擎</string>
+    <string name="browser_settings_search_engine_desc">地址栏和智能体的 web_search 工具共用此项，更改立即生效。</string>
+    <string name="browser_settings_search_custom_label">自定义搜索 URL 模板</string>
+    <string name="browser_settings_search_custom_hint">覆盖上方引擎设置。模板须包含 %s（查询词经 URL 编码后填入），如 https://example.com/search?q=%s</string>
     <string name="browser_no_tab_open">没有打开的标签页</string>
     <string name="browser_enter_url_hint">请在上方输入网址开始浏览</string>
     <string name="browser_nav_back">后退</string>

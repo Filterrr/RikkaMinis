@@ -221,6 +221,81 @@ fun BrowserSettingsSheet(
             HorizontalDivider()
             Spacer(Modifier.height(16.dp))
 
+            // ── Search Engine ([OPT-browser-search-config]) ──
+            // Drives BOTH consumers: the URL bar's search-terms path and the
+            // agent's web_search tool (the tool description embeds the
+            // current template, so a change here applies on the next
+            // request without restart).
+            val savedEngineId = remember { 
+                com.openminis.app.browser.BrowserSearchPrefs.effective(context).id 
+            }
+            var selectedEngineId by remember { mutableStateOf(savedEngineId) }
+            var customTemplate by remember {
+                mutableStateOf(com.openminis.app.browser.BrowserSearchPrefs.customTemplate(context) ?: "")
+            }
+
+            Text(
+                stringResource(R.string.browser_settings_search_engine),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                stringResource(R.string.browser_settings_search_engine_desc),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            for (engine in com.openminis.app.browser.BrowserSearchPrefs.engines) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RadioButton(
+                        selected = selectedEngineId == engine.id,
+                        onClick = {
+                            selectedEngineId = engine.id
+                            com.openminis.app.browser.BrowserSearchPrefs.setEngine(context, engine.id)
+                            AppLogger.info("BrowserSettings", "search engine → ${engine.id}")
+                        },
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(engine.displayName, style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            engine.note,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            OutlinedTextField(
+                value = customTemplate,
+                onValueChange = { customTemplate = it },
+                label = { Text(stringResource(R.string.browser_settings_search_custom_label)) },
+                placeholder = { Text("https://example.com/search?q=%s") },
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                stringResource(R.string.browser_settings_search_custom_hint),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            MinisTextButton(onClick = {
+                com.openminis.app.browser.BrowserSearchPrefs.setCustomTemplate(context, customTemplate)
+                AppLogger.info("BrowserSettings", "custom search template → ${customTemplate.take(80)}")
+            }) {
+                Text(stringResource(R.string.browser_settings_apply))
+            }
+
+            Spacer(Modifier.height(20.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(16.dp))
+
             // ── Web Viewport (mirrors iOS BrowserManagementView.viewportSection) ──
             ViewportSection(
                 tabPool = tabPool,
