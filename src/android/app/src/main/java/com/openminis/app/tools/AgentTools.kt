@@ -20,6 +20,10 @@ object AgentTools {
         // attempt those calls. Mirrors the iOS gate at
         // AIChatViewModel.makeAgentTools(memoryEnabled:).
         memoryEnabled: Boolean = true,
+        // [OPT-browser-websearch-tool] Supplies the current search-engine
+        // hint for web_search's description. Default keeps the registry
+        // Context-free; ChatViewModel passes an Android-backed provider.
+        searchHintProvider: () -> String = { "Search engine: app default" },
     ): List<AgentToolDefinition> = buildList {
         add(shellExecuteDefinition())
         add(FileReadTool.definition())
@@ -29,6 +33,17 @@ object AgentTools {
             add(ReadImageTool.definition())
         }
         add(browserUseDefinition())
+        // [T-todo-tool] Task-list maintenance: the agent rewrites its plan
+        // via todo_write; the chat top bar shows a floating badge with the
+        // pending count (tap → list).
+        add(todoWriteDefinition())
+        // [OPT-browser-websearch-tool] One-shot search: navigate to the
+        // configured engine with the query, wait for DOM stability, extract
+        // readable text — replaces the 3-round-trip navigate →
+        // wait_for_dom_stable → get_readable dance and makes the model use
+        // the SAME engine the user configured (was: model-hardcoded google,
+        // unreachable without a proxy in CN).
+        add(webSearchDefinition(searchHintProvider))
         // [T7-subagent] spawn_agent: skill = independent sub-agent instance.
         // Always exposed — the sub-agent's own tool set is filtered inside
         // SubagentSkill.buildFilteredTools (spawn_agent itself is FORBIDDEN
@@ -68,6 +83,48 @@ object AgentTools {
     )
 
     // Aligned with iOS AIChatViewModel.swift browser_use definition
+
+    /**
+     * [T-todo-tool] Task-list maintenance, Claude Code TodoWrite semantics:
+     * every call REPLACES the whole list. The top-bar badge renders
+     * pending/total; the sheet renders the full list with status icons.
+     */
+    private fun todoWriteDefinition(): AgentToolDefinition = AgentToolDefinition(
+        name = "todo_write",
+        description = "Maintain a task list (todo list) for the current session. Each call REPLACES the entire list — always send the complete updated list, not a delta. Use it to: (1) show the user the plan for multi-step work, (2) track progress through complex tasks (mark items in_progress before starting, completed when done). Keep 3-7 items, each a short imperative phrase. Skip it for single-step questions. " +
+            "Statuses: pending (not started) / in_progress (actively working — at most ONE item) / completed (done).",
+        parameters = mapOf(
+            "tool_title" to AgentToolParam("string", "A concise 5-10 word summary of what this task-list update does. Use the same language as the user."),
+            "todos" to AgentToolParam("array", "The COMPLETE task list, replacing the previous one. Each item: {\"content\": str, \"status\": \"pending\" | \"in_progress\" | \"completed\"}."),
+        ),
+        required = listOf("tool_title", "todos"),
+        propertyOrdering = listOf("tool_title", "todos"),
+    )
+
+    /**
+     * [OPT-browser-websearch-tool] Compact search tool. The engine template
+     * comes from BrowserSearchPrefs via [searchHintProvider] at request-build
+     * time — the description tells the model exactly which engine and URL
+     * shape to expect, so it never has to guess (and can fall back to
+     * browser_use for engine-specific operators like site:). The provider
+     * keeps this registry Context-free.
+     */
+    private fun webSearchDefinition(searchHintProvider: () -> String): AgentToolDefinition =
+        AgentToolDefinition(
+            name = "web_search",
+            description = "Search the web. Performs the query on the app's configured search engine in one step " +
+                "(navigate + wait for render + extract readable results) and returns the result page text. " +
+                searchHintProvider() + ". " +
+                "For advanced engine operators (site:, filetype:) or to interact with the results page further, " +
+                "use browser_use with action=navigate instead.",
+            parameters = mapOf(
+                "tool_title" to AgentToolParam("string", "A concise 5-10 word summary of what this search does. Use the same language as the user."),
+                "query" to AgentToolParam("string", "The search query. Use the user's language for best results."),
+            ),
+            required = listOf("tool_title", "query"),
+            propertyOrdering = listOf("tool_title", "query"),
+        )
+
     private fun browserUseDefinition(): AgentToolDefinition = AgentToolDefinition(
         name = "browser_use",
         description = "Control a web browser with up to 3 tabs. " +

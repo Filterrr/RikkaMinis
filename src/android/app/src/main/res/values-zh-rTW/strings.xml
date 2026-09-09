@@ -182,6 +182,10 @@
     <string name="browser_history_action">歷史</string>
     <string name="browser_close_tab">關閉分頁</string>
     <string name="browser_search_placeholder">搜尋或輸入網址</string>
+    <string name="browser_settings_search_engine">搜尋引擎</string>
+    <string name="browser_settings_search_engine_desc">網址列與智慧代理的 web_search 工具共用此項，變更立即生效。</string>
+    <string name="browser_settings_search_custom_label">自訂搜尋 URL 範本</string>
+    <string name="browser_settings_search_custom_hint">覆蓋上方引擎設定。範本須包含 %s（查詢詞經 URL 編碼後填入），如 https://example.com/search?q=%s</string>
     <string name="browser_no_tab_open">沒有開啟的分頁</string>
     <string name="browser_enter_url_hint">請在上方輸入網址開始瀏覽</string>
     <string name="browser_nav_back">後退</string>
@@ -1458,6 +1462,20 @@
     <string name="provider_detail_http_endpoint_warning">⚠ 該端點使用未加密的 HTTP。發往其中的 API 金鑰、訊息和工具結果可被網路中的任何人讀取。僅對可信的本地伺服器使用 HTTP。</string>
     <string name="provider_detail_custom_user_agent">自定義 User-Agent</string>
     <string name="provider_detail_custom_user_agent_placeholder">留空使用預設值</string>
+    <string name="provider_detail_proxy">代理（僅此提供者）</string>
+    <string name="provider_detail_proxy_placeholder">http://127.0.0.1:7890 — 留空跟隨應用預設</string>
+    <string name="provider_detail_proxy_invalid">格式應為 http://host:port（僅支援 HTTP 代理）。修復前此值將被忽略。</string>
+    <string name="settings_network_title">網路</string>
+    <string name="settings_network_subtitle">DNS over HTTPS</string>
+    <string name="todo_badge_label">任務摘要</string>
+    <string name="todo_sheet_title">任務列表</string>
+    <string name="todo_sheet_empty">暫無任務。助理會在多步驟工作中維護此列表。</string>
+    <string name="settings_network_doh_header">DNS over HTTPS</string>
+    <string name="settings_network_doh_footer">透過加密 DNS 解析 API 網域——降低直連時首延遲的波動。localhost 一律略過。</string>
+    <string name="settings_network_doh_toggle">啟用 DoH</string>
+    <string name="settings_network_doh_toggle_subtitle">對所有 LLM 用戶端的下一次網域解析生效</string>
+    <string name="settings_network_doh_url">DoH 伺服器位址</string>
+    <string name="settings_network_doh_invalid">必須是 https:// 開頭的 RFC 8484 dns-query 端點。修復前 DoH 保持關閉。</string>
     <string name="add_provider_endpoint_anthropic_hint">按原樣使用官方 Anthropic 端點。對於第三方 Anthropic 相容服務（如 Mimo），基礎 URL 可能需要路徑字尾，如 "/anthropic" — 請查閱提供商文件。URL 會被原樣使用並追加 "/v1/messages"。</string>
     <string name="modeldetail_video_output">影片輸出</string>
     <string name="model_group_detail_session_defaults">會話預設值</string>

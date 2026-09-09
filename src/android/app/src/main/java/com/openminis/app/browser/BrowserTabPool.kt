@@ -923,6 +923,31 @@ class BrowserTabPool(private val context: Context) : ComponentCallbacks2 {
         // Setup window.open / close handlers
         manager.onNewWindow = { resultMsg -> handleNewWindow(resultMsg) }
         manager.onCloseWindow = { handleCloseWindow(manager) }
+        // [OPT-browser-renderer-recovery] Renderer crashed / OOM-killed: the
+        // tab can never render again, so destroy it and recreate a fresh tab
+        // at the same URL. Serialized on the eviction scope (main-thread
+        // WebView APIs; destroyTab mutates the tab list). The recreated tab
+        // re-navigates to the dead tab's URL, so the agent's next action
+        // simply retries — surfaced via the tab list, no special action.
+        manager.onRenderProcessGone = { goneUrl ->
+            Log.w(TAG, "recovering tab after renderer gone: ${goneUrl?.take(120)}")
+            evictionScope.launch {
+                withContext(Dispatchers.Main) {
+                    val tabs = _tabs.value.toMutableList()
+                    val dead = tabs.firstOrNull { it.manager === manager } ?: return@withContext
+                    destroyTab(tabs, dead)
+                    val fresh = createTab(tabs, goneUrl?.takeIf { it.startsWith("http") || it.startsWith("minis") })
+                    if (fresh != null && fresh.needsInitialBlankPage) {
+                        fresh.needsInitialBlankPage = false
+                        fresh.manager.loadBlankPage()
+                    }
+                    _tabs.value = tabs
+                    if (_selectedTabId.value == dead.id) {
+                        fresh?.let { _selectedTabId.value = it.id }
+                    }
+                }
+            }
+        }
         wireDownloadHandlers(manager)
 
         val tab = Tab(id = id, manager = manager)

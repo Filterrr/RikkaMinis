@@ -90,8 +90,19 @@ object ConnectionWarmer {
         // Use a bare client that SHARES the LLM connection pool (OkHttp
         // explicitly supports sharing pools across clients). No auth headers,
         // short timeouts — this must never delay or outlive its purpose.
+        //
+        // [FIX-doh-warmup-route] The DNS resolver MUST mirror the real
+        // provider clients: OkHttp pool reuse is route-keyed and the route
+        // includes the resolved IP. With DoH on, the real clients resolve
+        // via buildDns() (which may return different CDN edge IPs than the
+        // system resolver); a warmup that resolved via system DNS would
+        // populate the pool with connections the real request can never
+        // reuse — silently nullifying the warmup whenever DoH is enabled.
+        // buildDns() reads sharedDohDns at lookup time, so the warmup
+        // always agrees with the real request's resolution.
         val client = OkHttpClient.Builder()
             .connectionPool(NetworkMonitor.sharedLLMConnectionPool)
+            .dns(NetworkMonitor.buildDns())
             .connectTimeout(5_000L, java.util.concurrent.TimeUnit.MILLISECONDS)
             .readTimeout(5_000L, java.util.concurrent.TimeUnit.MILLISECONDS)
             .writeTimeout(5_000L, java.util.concurrent.TimeUnit.MILLISECONDS)

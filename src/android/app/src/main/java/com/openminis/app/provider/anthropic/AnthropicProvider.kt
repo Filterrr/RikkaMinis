@@ -93,6 +93,9 @@ class AnthropicProvider(
         // [T-android-stale-conn-retry-hang] Shared pool — see NetworkMonitor.
         // Network-transition eviction must reach provider connections.
         .connectionPool(com.openminis.app.network.NetworkMonitor.sharedLLMConnectionPool)
+        // [OPT-restore-doh] Shared DoH resolver when enabled in settings (null =
+        // system DNS). Localhost names always bypass DoH.
+        .dns(com.openminis.app.network.NetworkMonitor.buildDns())
         // [OPT6-request-gzip] Anthropic's official endpoint accepts gzipped
         // JSON bodies; custom bases are relays → opt out (raw bodies).
         .addInterceptor(

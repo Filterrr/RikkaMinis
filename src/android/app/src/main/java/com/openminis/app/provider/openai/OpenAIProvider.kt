@@ -502,6 +502,9 @@ class OpenAIProvider constructor(
         // a per-client pool was never evicted, and a dead h2 tunnel through
         // a local proxy got reused on every retry (silent infinite hang).
         .connectionPool(com.openminis.app.network.NetworkMonitor.sharedLLMConnectionPool)
+        // [OPT-restore-doh] Shared DoH resolver when enabled in settings (null =
+        // system DNS). Localhost names always bypass DoH.
+        .dns(com.openminis.app.network.NetworkMonitor.buildDns())
         .eventListenerFactory { OkHttpNetTraceListener() }
         // [OPT6-request-gzip] Compress large JSON request bodies (agent loops
         // ship 100s of KB of tool output). Route-gated: official OpenAI hosts

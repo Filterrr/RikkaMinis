@@ -38,6 +38,17 @@ class BrowserHistoryStore private constructor(private val context: Context) {
 
     private val entries = mutableListOf<Entry>()
 
+    /**
+     * [OPT-browser-history-io] Single-threaded executor for disk writes.
+     * Single thread guarantees FIFO ordering (a burst of navigations can't
+     * race two concurrent saves) and keeps serialization+I/O off whatever
+     * thread record() was called from (main, in onPageFinished). Daemon:
+     * must never block process exit.
+     */
+    private val saveExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "browser-history-save").apply { isDaemon = true }
+    }
+
     init {
         load()
     }
@@ -47,12 +58,20 @@ class BrowserHistoryStore private constructor(private val context: Context) {
         // Deduplicate consecutive visits to same URL
         if (entries.lastOrNull()?.url == url) return
 
-        entries.add(Entry(url = url, title = title))
-        pruneOld()
-        save()
+        // [OPT-browser-history-io] record() is called from onPageFinished on
+        // the MAIN thread — a synchronous file write here stalled every
+        // navigation by one disk round-trip. The in-memory mutation stays on
+        // the calling thread (entries is guarded below), only the JSON
+        // serialization + write moves to the single-threaded save executor.
+        // Single thread = writes land in order, no lock needed for the file.
+        synchronized(entries) {
+            entries.add(Entry(url = url, title = title))
+            pruneOld()
+        }
+        saveExecutor.execute { save() }
     }
 
-    fun getEntries(): List<Entry> = entries.sortedByDescending { it.timestamp }
+    fun getEntries(): List<Entry> = synchronized(entries) { entries.sortedByDescending { it.timestamp } }
 
     fun search(query: String): List<Entry> {
         if (query.isBlank()) return getEntries()
@@ -84,12 +103,12 @@ class BrowserHistoryStore private constructor(private val context: Context) {
     }
 
     /** Get unique domains from history (for cookie domain listing). */
-    fun uniqueDomains(): List<String> {
-        return entries.map { it.domain }.filter { it.isNotEmpty() }.distinct().sorted()
+    fun uniqueDomains(): List<String> = synchronized(entries) {
+        entries.map { it.domain }.filter { it.isNotEmpty() }.distinct().sorted()
     }
 
     fun clear() {
-        entries.clear()
+        synchronized(entries) { entries.clear() }
         save()
     }
 
@@ -100,9 +119,10 @@ class BrowserHistoryStore private constructor(private val context: Context) {
 
     private fun save() {
         try {
+            val snapshot: List<Entry> = synchronized(entries) { entries.toList() }
             val file = File(context.filesDir, FILENAME)
             val array = JSONArray()
-            for (entry in entries) {
+            for (entry in snapshot) {
                 val obj = JSONObject()
                 obj.put("id", entry.id)
                 obj.put("url", entry.url)

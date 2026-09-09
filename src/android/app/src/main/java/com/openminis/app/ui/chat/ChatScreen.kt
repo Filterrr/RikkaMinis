@@ -657,6 +657,9 @@ fun ChatScreen(
     // are high-frequency actions the user wants immune to the "hide empty
     // menu" collapse.
     var showInputHistorySheet by remember { mutableStateOf(false) }
+    // [T-todo-tool] Task-list sheet — opened from the top-bar badge.
+    var showTodoSheet by remember { mutableStateOf(false) }
+    val sessionTodo by com.openminis.app.tools.TodoStore.todo.collectAsState()
     // [T-input-history] Focus-jump target and highlight anchor. Hoisted from
     // inside the Scaffold content lambda so the top-bar "input history" button
     // (rendered before the content lambda) can write pendingFocusId and
@@ -2288,6 +2291,14 @@ fun ChatScreen(
                             )
                         }
                     }
+                    // [T-todo-tool] Floating task-summary badge (hidden when
+                    // the agent hasn't written a list this session). Sits
+                    // before the overflow "..." so it reads as live status,
+                    // not a menu entry.
+                    TodoBadge(
+                        todo = sessionTodo,
+                        onClick = { showTodoSheet = true },
+                    )
                     // [T-chat-menu-empty] The "..." button is only worth
                     // rendering when it has at least one entry to show. If
                     // every customizable entry is off AND no model-conditional
@@ -4652,6 +4663,14 @@ fun ChatScreen(
                 pendingFocusId = messageId
             },
             onDismiss = { showInputHistorySheet = false },
+        )
+    }
+
+    // [T-todo-tool] Session task list — tap the top-bar badge to open.
+    if (showTodoSheet) {
+        TodoSheet(
+            todo = sessionTodo,
+            onDismiss = { showTodoSheet = false },
         )
     }
 

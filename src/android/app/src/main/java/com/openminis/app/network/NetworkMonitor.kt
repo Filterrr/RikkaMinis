@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import okhttp3.Dns
 import okhttp3.OkHttpClient
 
 /**
@@ -46,6 +47,75 @@ class NetworkMonitor {
         val sharedLLMConnectionPool = okhttp3.ConnectionPool(
             5, 5, java.util.concurrent.TimeUnit.MINUTES,
         )
+
+        /**
+         * [OPT-restore-doh] Shared DoH Dns for every LLM client, or null when
+         * the feature is off / the URL is malformed. Bootstrap lookups for
+         * the DoH endpoint itself go through the SYSTEM resolver
+         * (okhttp-dnsoverhttps default Dns) — no chicken-and-egg wedge; worst
+         * case the bootstrap inherits plaintext-DNS behaviour and DoH adds
+         * nothing. Restored from the TTFB pack (593d056), DoH-only slice.
+         */
+        @Volatile
+        var sharedDohDns: Dns? = null
+            private set
+
+        /**
+         * (Re)build the shared DoH resolver from current NetworkSettings.
+         * No-op when DoH is disabled or the URL is unparsable — callers then
+         * keep the system DNS. Building the object is cheap (network happens
+         * lazily per lookup on client threads).
+         */
+        fun refreshDoh() {
+            val template = NetworkSettings.dohTemplateUrl()
+            sharedDohDns = if (template == null) null else try {
+                okhttp3.dnsoverhttps.DnsOverHttps.Builder()
+                    .client(
+                        OkHttpClient.Builder()
+                            // Bootstrap + DoH queries are tiny; don't let a
+                            // wedged DoH server outlive the call budget.
+                            .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+                            .readTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+                            .build()
+                    )
+                    // Bootstrap (resolving the DoH endpoint's own host) uses
+                    // the system resolver by default — no chicken-and-egg
+                    // wedge; worst case the bootstrap inherits plaintext-DNS
+                    // behaviour and DoH adds nothing.
+                    .url(template)
+                    .build()
+            } catch (_: IllegalArgumentException) {
+                null
+            }
+        }
+
+        /**
+         * [OPT-restore-doh] Combine the shared DoH resolver (when enabled)
+         * with a loopback safety net: DoH must NEVER be used to resolve
+         * loopback names — a local relay referenced by hostname would be
+         * leaked to the remote DoH server, which cannot answer it.
+         * Everything else rides DoH; a DoH lookup failure surfaces as a
+         * retryable UnknownHostException exactly like a failed system lookup.
+         *
+         * Reads the CURRENT resolver at lookup time (not client-build time)
+         * so toggling DoH in settings applies to already-built clients on
+         * their next lookup. The loopback check is STRING-based — resolving
+         * via InetAddress.getByName() first would perform a system DNS
+         * lookup, the exact path DoH exists to bypass; "localhost" is
+         * special-cased in getByName (no network I/O).
+         */
+        fun buildDns(): Dns {
+            return object : Dns {
+                override fun lookup(hostname: String): List<java.net.InetAddress> {
+                    val doh = sharedDohDns
+                    return if (hostname == "localhost" || hostname.endsWith(".localhost")) {
+                        listOf(java.net.InetAddress.getByName(hostname))
+                    } else {
+                        doh?.lookup(hostname) ?: Dns.SYSTEM.lookup(hostname)
+                    }
+                }
+            }
+        }
     }
 
     private val _status = MutableStateFlow(NetworkStatus.DISCONNECTED)

@@ -665,6 +665,10 @@
     <string name="browser_history_action">历史</string>
     <string name="browser_close_tab">关闭标签页</string>
     <string name="browser_search_placeholder">搜索或输入网址</string>
+    <string name="browser_settings_search_engine">搜索引擎</string>
+    <string name="browser_settings_search_engine_desc">地址栏和智能体的 web_search 工具共用此项，更改立即生效。</string>
+    <string name="browser_settings_search_custom_label">自定义搜索 URL 模板</string>
+    <string name="browser_settings_search_custom_hint">覆盖上方引擎设置。模板须包含 %s（查询词经 URL 编码后填入），如 https://example.com/search?q=%s</string>
     <string name="browser_no_tab_open">没有打开的标签页</string>
     <string name="browser_enter_url_hint">请在上方输入网址开始浏览</string>
     <string name="browser_nav_back">后退</string>
@@ -744,6 +748,20 @@
     <string name="provider_detail_http_endpoint_warning">⚠ 该端点使用未加密的 HTTP。发往其中的 API 密钥、消息和工具结果可被网络中的任何人读取。仅对可信的本地服务器使用 HTTP。</string>
     <string name="provider_detail_custom_user_agent">自定义 User-Agent</string>
     <string name="provider_detail_custom_user_agent_placeholder">留空使用默认值</string>
+    <string name="provider_detail_proxy">代理（仅此提供商）</string>
+    <string name="provider_detail_proxy_placeholder">http://127.0.0.1:7890 — 留空跟随应用默认</string>
+    <string name="provider_detail_proxy_invalid">格式应为 http://host:port（仅支持 HTTP 代理）。修复前此值将被忽略。</string>
+    <string name="settings_network_title">网络</string>
+    <string name="settings_network_subtitle">DNS over HTTPS</string>
+    <string name="todo_badge_label">任务摘要</string>
+    <string name="todo_sheet_title">任务列表</string>
+    <string name="todo_sheet_empty">暂无任务。助手会在多步骤工作中维护此列表。</string>
+    <string name="settings_network_doh_header">DNS over HTTPS</string>
+    <string name="settings_network_doh_footer">通过加密 DNS 解析 API 域名——降低直连时首字节延迟的波动。localhost 始终绕过。</string>
+    <string name="settings_network_doh_toggle">启用 DoH</string>
+    <string name="settings_network_doh_toggle_subtitle">对所有 LLM 客户端的下一次域名解析生效</string>
+    <string name="settings_network_doh_url">DoH 服务器地址</string>
+    <string name="settings_network_doh_invalid">必须是 https:// 开头的 RFC 8484 dns-query 端点。修复前 DoH 保持关闭。</string>
     <string name="provider_detail_api_format">API Format</string>
     <string name="provider_detail_chat_completions">Chat Completions</string>
     <string name="provider_detail_responses_api">Responses API</string>

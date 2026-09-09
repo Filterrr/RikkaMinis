@@ -166,6 +166,15 @@ class BrowserUseManager(
     /** Callback for window.open / target="_blank" — TabPool hooks this. */
     var onNewWindow: ((Message) -> Unit)? = null
 
+    /**
+     * [OPT-browser-renderer-recovery] Invoked when the WebView's renderer
+     * process crashes or is killed by the OOM killer. The pool destroys and
+     * recreates the hosting tab (a crashed renderer cannot be re-attached —
+     * WebView keeps rendering nothing). Carries the URL the dead tab was on
+     * so the recreated tab can reload it.
+     */
+    var onRenderProcessGone: ((goneUrl: String?) -> Unit)? = null
+
     /** Callback for window.close — TabPool hooks this. */
     var onCloseWindow: (() -> Unit)? = null
 
@@ -397,6 +406,16 @@ class BrowserUseManager(
                     }
                     return true
                 }
+                // [OPT-external-domain-router] Domains whose TLS is broken
+                // under common VPN/clash rule sets (top.baidu.com →
+                // ERR_CONNECTION_CLOSED inside WebView) open in the user's
+                // real browser instead — reachable there, dead in WebView.
+                if (com.openminis.app.browser.ExternalAppRouter.shouldRouteExternally(urlStr)) {
+                    if (urlStr != null) {
+                        com.openminis.app.browser.ExternalAppRouter.openExternally(view.context, urlStr)
+                    }
+                    return true
+                }
                 // T134: route intent://, market://, tel:, mailto:, … out
                 // of the WebView so they reach the matching app instead of
                 // surfacing as ERR_UNKNOWN_URL_SCHEME.
@@ -441,6 +460,24 @@ class BrowserUseManager(
                     navigationDeferred?.complete(Unit)
                     navigationDeferred = null
                 }
+            }
+
+            // [OPT-browser-renderer-recovery] A crashed / OOM-killed renderer
+            // leaves the tab permanently blank; without this the agent retries
+            // get_text forever against a dead surface. Hand the event to the
+            // pool (destroy + recreate the tab) and return true so the app
+            // itself is NOT killed (WebView kills the app when the callback
+            // returns false). Platform signature (API 26+):
+            // (WebView, android.webkit.RenderProcessGoneDetail) —
+            // detail.didCrash() distinguishes crash vs OOM kill.
+            override fun onRenderProcessGone(
+                view: WebView,
+                detail: android.webkit.RenderProcessGoneDetail,
+            ): Boolean {
+                val reason = if (detail.didCrash()) "crashed" else "OOM-killed"
+                Log.e(TAG, "renderer gone ($reason) for ${view.url?.take(120)}")
+                onRenderProcessGone?.invoke(view.url)
+                return true
             }
 
             override fun shouldInterceptRequest(
@@ -641,6 +678,24 @@ class BrowserUseManager(
 
         var normalized = urlString
         if (!normalized.contains("://")) normalized = "https://$normalized"
+
+        // [OPT-external-domain-router] Agent navigation to an external-list
+        // domain: hand off to the user's real browser and return an explicit
+        // result so the LLM knows the page content is NOT readable here and
+        // it should tell the user to look at the opened app/tab instead of
+        // retrying (a retry would just hit the same WebView TLS reset).
+        if (com.openminis.app.browser.ExternalAppRouter.shouldRouteExternally(normalized)) {
+            withContext(Dispatchers.Main) {
+                com.openminis.app.browser.ExternalAppRouter.openExternally(
+                    webView.context, normalized,
+                )
+            }
+            return BrowserActionResult(
+                text = "Opened $normalized in the user's external browser (this domain is excluded from the in-app WebView — its TLS is blocked under some VPN/proxy rule sets). " +
+                    "You CANNOT read this page's content via browser_use; ask the user to check the opened browser/tab and report back.",
+                success = true,
+            )
+        }
 
         val deferred = CompletableDeferred<Unit>()
         navigationDeferred = deferred
@@ -1330,6 +1385,20 @@ class BrowserUseManager(
     fun loadURL(urlString: String) {
         var normalized = urlString
         if (!normalized.contains("://")) normalized = "https://$normalized"
+        // [OPT-external-domain-router] loadURL does NOT trigger
+        // shouldOverrideUrlLoading for the initial navigation, so an
+        // external-list URL typed into the URL bar (or navigated by the
+        // agent) would hit the WebView directly and show its TLS error.
+        // Hand off before touching the WebView — mirrors the T136 pattern
+        // used for intent:// schemes.
+        if (com.openminis.app.browser.ExternalAppRouter.shouldRouteExternally(normalized)) {
+            _currentURL.value = normalized
+            _isLoading.value = false
+            com.openminis.app.browser.ExternalAppRouter.openExternally(
+                webView.context, normalized,
+            )
+            return
+        }
         _isLoading.value = true
         webView.loadUrl(normalized)
     }
@@ -1737,8 +1806,8 @@ class BrowserUseManager(
             MIN_DOM_STABLE_TIMEOUT_MS, MAX_DOM_STABLE_TIMEOUT_MS,
         )
         val pollInterval = 200L
-        var lastSize = -1L
         var stable = false
+        var lastWindowMutations = -1L
         val deadline = System.currentTimeMillis() + budget
         // [T-android-domstable-min-budget] C5 fast path: a document that has
         // already finished loading (readyState === 'complete') is almost
@@ -1769,25 +1838,60 @@ class BrowserUseManager(
                 )
             }
             // Fast path inconclusive (DOM still mutating post-load, or body
-            // still empty) — fall through to the normal polling loop with
-            // lastSize untouched so its stability criterion stays exactly
-            // as before.
+            // still empty) — fall through to the polling loop unchanged.
         }
+        // [OPT-browser-mutation-stable] Poll a MutationObserver COUNTER
+        // instead of body.innerHTML length. innerHTML length is
+        // equality-based and blind to same-length mutations (carousel slide
+        // swaps, canvas-driven apps, equal-size text updates) — it reported
+        // "stable" while the page kept changing, so the agent read stale
+        // content with no signal. The observer counts childList +
+        // characterData + subtree mutations (attributes excluded: loader
+        // spinners toggle classes forever and would never stabilize). Each
+        // poll reads-and-resets the counter — ONE cheap round-trip instead
+        // of serializing the whole body — and the criterion becomes "zero
+        // mutations in N consecutive windows" instead of "same size as the
+        // previous window".
+        //
+        // The observer is per-document state (window.__minisDomObs); a SPA
+        // route change that replaces <body> content does NOT remove it
+        // (observers observe document.documentElement). A full navigation
+        // gets a fresh document, so the next wait re-arms cleanly.
+        val observerJs = """
+            (function(){
+                try {
+                    if (window.__minisDomObs === undefined) {
+                        window.__minisDomObs = 0;
+                        var obs = new MutationObserver(function(muts){
+                            window.__minisDomObs += muts.length;
+                        });
+                        obs.observe(document.documentElement, {childList:true, characterData:true, subtree:true});
+                    }
+                    var n = window.__minisDomObs;
+                    window.__minisDomObs = 0;
+                    return String(n);
+                } catch(e) { return '-1'; }
+            })()
+        """.trimIndent()
+        val stableWindowsNeeded = 2
+        var stableWindows = 0
         while (System.currentTimeMillis() < deadline) {
-            val raw = evaluateJavascript(
-                "(function(){try{return (document.body&&document.body.innerHTML.length)||0;}catch(e){return -1;}})()"
-            )
-            val size = raw.toLongOrNull() ?: -1L
-            if (size == lastSize && size >= 0) { stable = true; break }
-            lastSize = size
             delay(pollInterval)
+            val mutations = evaluateJavascript(observerJs).toLongOrNull() ?: -1L
+            if (mutations == 0L) {
+                stableWindows++
+                if (stableWindows >= stableWindowsNeeded) { stable = true; break }
+            } else {
+                stableWindows = 0
+                lastWindowMutations = mutations
+            }
         }
         val elapsed = budget - (deadline - System.currentTimeMillis())
         return if (stable) {
-            BrowserActionResult(text = "DOM stable after ${elapsed}ms (body length=$lastSize)")
+            BrowserActionResult(text = "DOM stable after ${elapsed}ms (2 consecutive 200ms windows with zero DOM mutations)")
         } else {
             BrowserActionResult(
-                text = "DOM did not stabilize within ${budget}ms (last body length=$lastSize)",
+                text = "DOM did not stabilize within ${budget}ms ($lastWindowMutations mutations in the last 200ms window)",
                 success = false,
             )
         }

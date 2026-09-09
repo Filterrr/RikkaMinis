@@ -25,6 +25,8 @@ import com.openminis.app.agent.runtime.ProviderAttemptOutcome
 import com.openminis.app.agent.Level
 import com.openminis.app.agent.ToolLoopDetector
 import com.openminis.app.browser.BrowserActionInput
+import com.openminis.app.browser.BrowserAction
+import com.openminis.app.browser.BrowserSearchPrefs
 import com.openminis.app.browser.BrowserTabPool
 import com.openminis.app.data.db.MessageEntity
 import androidx.compose.material.icons.Icons
@@ -1076,7 +1078,17 @@ class ChatViewModel(
      * fixed list of definition objects, no I/O.
      */
     private val agentTools: List<AgentToolDefinition>
-        get() = AgentTools.makeAgentTools(memoryEnabled = _memoryEnabled.value)
+        get() = AgentTools.makeAgentTools(
+            memoryEnabled = _memoryEnabled.value,
+            // [OPT-browser-websearch-tool] Embed the CURRENT engine/template
+            // in the schema so the model's web_search calls (and its mental
+            // model of "how search works here") always match the user's
+            // setting. Recomputed per read — a settings change applies on
+            // the next request with no restart.
+            searchHintProvider = {
+                com.openminis.app.browser.BrowserSearchPrefs.agentHint(context)
+            },
+        )
 
     /**
      * Per-session loop detector. Reset alongside [agentHistory] whenever the
@@ -3504,6 +3516,10 @@ class ChatViewModel(
             // re-enters the session and everything is resolved via the real
             // id. See debug report 2026-04-21 (TikTok Chinese filename).
             migrateDraftResources(fromDraft = sessionId, toReal = session.id)
+            // [T-todo-tool] Session switch → drop the previous session's
+            // task list so the top-bar badge doesn't leak stale items into
+            // the new conversation.
+            com.openminis.app.tools.TodoStore.clearForSession(session.id)
             // [T-android-session-skill-override-init-timing] Re-point any
             // session_skill_overrides / mcp_session_overrides rows written
             // pre-first-message (against `__new__<uuid>`) onto the real
@@ -9291,6 +9307,8 @@ class ChatViewModel(
                 ReadImageTool.NAME -> ReadImageTool.execute(argsJson, activeSessionId, context)
                 "shell_execute" -> executeShellCommand(argsJson, toolId, toolBlocks, assistantId, currentText)
                 "browser_use" -> executeBrowserUseTool(argsJson)
+                "web_search" -> executeWebSearchTool(argsJson)
+                "todo_write" -> executeTodoWriteTool(argsJson)
                 "memory_write" -> executeMemoryWriteTool(argsJson)
                 "memory_get" -> executeMemoryGetTool(argsJson)
                 "memory_rollup" -> executeMemoryRollupTool()
@@ -9862,6 +9880,134 @@ class ChatViewModel(
                 releasedBy = AgentTraceRecorder.RELEASED_FINALIZE,
             )
         }
+    }
+
+    /**
+     * [OPT-browser-websearch-tool] One-shot web search on the app's
+     * configured engine. Composite of navigate → wait_for_dom_stable →
+     * get_readable over the pool, in a single tool call (the schema tells
+     * the model which engine will be hit — see AgentTools.webSearchDefinition).
+     *
+     * Tab handling: runs on the agent's normal pool path (execute() with a
+     * tab-less navigate, which follows opensNewPage fan-out semantics), so
+     * concurrent searches use separate tabs exactly like explicit
+     * browser_use calls. The DOM-wait budget is modest (4s) — search result
+     * pages are server-rendered and light; a slow engine still returns
+     * whatever text is available rather than failing.
+     */
+    private suspend fun executeWebSearchTool(argsJson: String): ToolExecutionResult {
+        val args = try { JSONObject(argsJson) } catch (_: Exception) { JSONObject() }
+        val query = args.optString("query", "").trim()
+        if (query.isEmpty()) {
+            return ToolExecutionResult("Error: web_search requires a non-empty 'query'", false)
+        }
+        val searchUrl = BrowserSearchPrefs.buildSearchUrl(context, query)
+            ?: return ToolExecutionResult("Error: no valid search engine template configured", false)
+
+        val navigateResult = browserTabPool.execute(
+            BrowserActionInput(
+                action = BrowserAction.NAVIGATE,
+                url = searchUrl,
+            )
+        )
+        if (!navigateResult.success) {
+            return ToolExecutionResult("Search navigation failed: ${navigateResult.text}", false)
+        }
+        // Result pages are server-rendered; give the SPA-ish ones a short
+        // stabilization window but never block the whole budget.
+        val domResult = browserTabPool.execute(
+            BrowserActionInput(
+                action = BrowserAction.WAIT_FOR_DOM_STABLE,
+                timeoutMs = 4_000,
+            )
+        )
+        val readable = browserTabPool.execute(
+            BrowserActionInput(
+                action = BrowserAction.GET_READABLE,
+            )
+        )
+        val body = readable.text.takeIf { it.isNotBlank() } ?: domResult.text
+        val header = "Search results for \"$query\" (engine: ${BrowserSearchPrefs.effective(context).displayName})\n" +
+            "URL: $searchUrl\n\n"
+        // Bound like browser_use results (64 KiB) — same rationale: nothing
+        // past that is useful in context, and huge SERP pages are common.
+        val maxChars = 64 * 1024
+        val output = (header + body).let {
+            if (it.length > maxChars) it.take(maxChars) + "\n\n…[truncated — use browser_use get_text with a selector to read specific results]"
+            else it
+        }
+        return ToolExecutionResult(output, readable.success)
+    }
+
+    /**
+     * [T-todo-tool] todo_write executor. Claude Code TodoWrite semantics:
+     * the `todos` array REPLACES the whole list. Parsed leniently —
+     * non-conforming status strings clamp to pending, empty list = clear
+     * the board. Storage is the process-wide [TodoStore] (session-keyed);
+     * the top-bar badge and sheet read it reactively.
+     */
+    private fun executeTodoWriteTool(argsJson: String): ToolExecutionResult {
+        val args = try { JSONObject(argsJson) } catch (_: Exception) { JSONObject() }
+        // [FIX-todo-args-shape] Models frequently stringify the array (a
+        // known quirk with array-of-object params on some providers):
+        // `todos` arrives as a STRING containing JSON instead of a real
+        // JSONArray. Accept both shapes, plus a single bare object (wrap
+        // it). If nothing parses, echo the raw payload in the error so the
+        // next attempt self-corrects.
+        val items = ArrayList<com.openminis.app.tools.TodoStore.TodoItem>()
+        fun parseItem(o: JSONObject?) {
+            val obj = o ?: return
+            val content = obj.optString("content", "").trim()
+            if (content.isEmpty()) return
+            val status = when (obj.optString("status", "pending").lowercase()) {
+                "in_progress", "in-progress", "inprogress" -> com.openminis.app.tools.TodoStore.Status.in_progress
+                "completed", "complete", "done" -> com.openminis.app.tools.TodoStore.Status.completed
+                else -> com.openminis.app.tools.TodoStore.Status.pending
+            }
+            items.add(com.openminis.app.tools.TodoStore.TodoItem(content, status))
+        }
+        val rawTodos = args.opt("todos")
+        when {
+            rawTodos is org.json.JSONArray -> {
+                for (i in 0 until rawTodos.length()) {
+                    parseItem(
+                        rawTodos.optJSONObject(i)
+                            // Element stringified: "\"{...}\"" or "{...}"
+                            ?: runCatching { org.json.JSONObject(rawTodos.optString(i)) }.getOrNull()
+                    )
+                }
+            }
+            rawTodos is String -> {
+                // Stringified array — the common failure shape.
+                val parsed = runCatching { org.json.JSONArray(rawTodos) }.getOrNull()
+                if (parsed != null) {
+                    for (i in 0 until parsed.length()) {
+                        parseItem(parsed.optJSONObject(i))
+                    }
+                } else {
+                    // Maybe a stringified single object.
+                    parseItem(runCatching { org.json.JSONObject(rawTodos) }.getOrNull())
+                }
+            }
+            rawTodos is JSONObject -> parseItem(rawTodos)
+        }
+        if (items.isEmpty()) {
+            val raw = rawTodos?.toString()?.take(200) ?: "<missing>"
+            return ToolExecutionResult(
+                "Error: todo_write could not parse 'todos' (expected [{content,status}]). Raw payload: $raw. " +
+                    "Re-send todos as a proper JSON array of objects.",
+                false,
+            )
+        }
+        // The VM's sessionId IS the authoritative current session (the
+        // executor runs inside that VM) — no repository lookup needed.
+        com.openminis.app.tools.TodoStore.write(sessionId, items)
+        val done = items.count { it.status == com.openminis.app.tools.TodoStore.Status.completed }
+        return ToolExecutionResult(
+            output = "Task list updated: ${items.size} item(s), $done completed, " +
+                "${items.size - done} pending/in-progress.",
+            success = true,
+        )
     }
 
     private suspend fun executeBrowserUseTool(argsJson: String): ToolExecutionResult {
@@ -10600,6 +10746,7 @@ Available tools:
 - file_write: Create new files or overwrite existing files (faster than echo/tee).
 - file_edit: Edit existing files with exact string replacement (old_string → new_string). Preferred over file_write for modifications — always file_read first.
 - browser_use: Web browsing (navigate, screenshot, click, type, get_text, scroll, scroll_and_collect, get_readable, get_backbone, fetch, etc.). Starts with a desktop Chrome user agent. Use screenshot to see the page.
+- todo_write: Maintain the session task list shown in the chat top bar. REPLACE the whole list each call with [{"content","status"}] (pending/in_progress/completed). Write it BEFORE starting multi-step work (plan of 3-7 items), mark the current item in_progress (max one) as you go, and completed when done. Skip it for single-step tasks. The user sees the summary badge at the top of the chat.
   当 browser_use 触达 Google 登录 / OAuth 页（accounts.google.com、signin.google.com、myaccount.google.com、oauth2.googleapis.com 等）或网页返回 "disallowed_useragent" / 403 包含 "browser is not secure" 字样时，**不要重试或尝试登录** — Google 永久禁止 in-app WebView 完成登录，重试只会浪费 turn。改为告诉用户："此页面需要在系统 Chrome 完成登录" 并给出可点击的 Markdown link [在 Chrome 中打开](https://accounts.google.com/...)。点该 link 时 app 会跳出 Custom Tab；用户在 Chrome 完成操作后，请他**把所需结果（邮件正文 / 文档摘要 / 表格数据）粘贴回 chat**，你再继续帮他处理。这是 Android 平台限制，不是 bug.${toolListMemoryBullets}
 - spawn_agent: Spawn a sub-agent (副 agent) to execute a delegated sub-task with its own context, system prompt, and budget. The sub-agent is a skill marked `subagent: true` (e.g. the built-in `general-agent`) and has the SAME tool capabilities as you — shell, browser, file read/write/edit — minus spawning further agents and memory. Use it when a sub-task is complex and self-contained (deep research, large codebase exploration, multi-step file processing, focused investigation). Rules:
   * The task message (`query`) must be self-contained — the sub-agent cannot see this conversation. Include the goal, constraints, relevant file paths, and what the final report should contain.
@@ -12400,6 +12547,7 @@ Environment variables:
         "memory_write" -> "Write Memory"
         "memory_get" -> "Read Memory"
         "web_search" -> "Search Web"
+        "todo_write" -> "Update Tasks"
         else -> toolName
             .split('_')
             .filter { it.isNotEmpty() }
