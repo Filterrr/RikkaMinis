@@ -9948,21 +9948,56 @@ class ChatViewModel(
      */
     private fun executeTodoWriteTool(argsJson: String): ToolExecutionResult {
         val args = try { JSONObject(argsJson) } catch (_: Exception) { JSONObject() }
-        val arr = args.optJSONArray("todos")
-        if (arr == null) {
-            return ToolExecutionResult("Error: todo_write requires a 'todos' array", false)
-        }
-        val items = ArrayList<com.openminis.app.tools.TodoStore.TodoItem>(arr.length())
-        for (i in 0 until arr.length()) {
-            val o = arr.optJSONObject(i) ?: continue
-            val content = o.optString("content", "").trim()
-            if (content.isEmpty()) continue
-            val status = when (o.optString("status", "pending").lowercase()) {
+        // [FIX-todo-args-shape] Models frequently stringify the array (a
+        // known quirk with array-of-object params on some providers):
+        // `todos` arrives as a STRING containing JSON instead of a real
+        // JSONArray. Accept both shapes, plus a single bare object (wrap
+        // it). If nothing parses, echo the raw payload in the error so the
+        // next attempt self-corrects.
+        val items = ArrayList<com.openminis.app.tools.TodoStore.TodoItem>()
+        fun parseItem(o: JSONObject?) {
+            val obj = o ?: return
+            val content = obj.optString("content", "").trim()
+            if (content.isEmpty()) return
+            val status = when (obj.optString("status", "pending").lowercase()) {
                 "in_progress", "in-progress", "inprogress" -> com.openminis.app.tools.TodoStore.Status.in_progress
                 "completed", "complete", "done" -> com.openminis.app.tools.TodoStore.Status.completed
                 else -> com.openminis.app.tools.TodoStore.Status.pending
             }
             items.add(com.openminis.app.tools.TodoStore.TodoItem(content, status))
+        }
+        val rawTodos = args.opt("todos")
+        when {
+            rawTodos is org.json.JSONArray -> {
+                for (i in 0 until rawTodos.length()) {
+                    parseItem(
+                        rawTodos.optJSONObject(i)
+                            // Element stringified: "\"{...}\"" or "{...}"
+                            ?: runCatching { org.json.JSONObject(rawTodos.optString(i)) }.getOrNull()
+                    )
+                }
+            }
+            rawTodos is String -> {
+                // Stringified array — the common failure shape.
+                val parsed = runCatching { org.json.JSONArray(rawTodos) }.getOrNull()
+                if (parsed != null) {
+                    for (i in 0 until parsed.length()) {
+                        parseItem(parsed.optJSONObject(i))
+                    }
+                } else {
+                    // Maybe a stringified single object.
+                    parseItem(runCatching { org.json.JSONObject(rawTodos) }.getOrNull())
+                }
+            }
+            rawTodos is JSONObject -> parseItem(rawTodos)
+        }
+        if (items.isEmpty()) {
+            val raw = rawTodos?.toString()?.take(200) ?: "<missing>"
+            return ToolExecutionResult(
+                "Error: todo_write could not parse 'todos' (expected [{content,status}]). Raw payload: $raw. " +
+                    "Re-send todos as a proper JSON array of objects.",
+                false,
+            )
         }
         // The VM's sessionId IS the authoritative current session (the
         // executor runs inside that VM) — no repository lookup needed.
@@ -9975,7 +10010,8 @@ class ChatViewModel(
         )
     }
 
-    private suspend fun executeBrowserUseTool(argsJson: String): ToolExecutionResult {        val input = BrowserActionInput.parse(argsJson)
+    private suspend fun executeBrowserUseTool(argsJson: String): ToolExecutionResult {
+        val input = BrowserActionInput.parse(argsJson)
             ?: return ToolExecutionResult("Error: Invalid browser_use input", false)
 
         return try {
