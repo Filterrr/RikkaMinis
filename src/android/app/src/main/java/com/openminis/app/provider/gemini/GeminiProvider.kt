@@ -56,6 +56,9 @@ class GeminiProvider(
         // [T-android-stale-conn-retry-hang] Shared pool — see NetworkMonitor.
         // Network-transition eviction must reach provider connections.
         .connectionPool(com.openminis.app.network.NetworkMonitor.sharedLLMConnectionPool)
+        // [OPT-restore-doh] Shared DoH resolver when enabled in settings (null =
+        // system DNS). Localhost names always bypass DoH.
+        .dns(com.openminis.app.network.NetworkMonitor.buildDns())
         // [OPT6-request-gzip] Generative Language API accepts gzipped JSON
         // request bodies; custom bases (proxies) → opt out (raw bodies).
         // [FIX-audit-P2-whitelist] Exact Google API host (the former

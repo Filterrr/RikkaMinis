@@ -1,0 +1,101 @@
+package com.openminis.app.ui.settings
+
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
+import com.openminis.app.R
+import com.openminis.app.logging.AppLogger
+import com.openminis.app.network.NetworkSettings
+import com.openminis.app.ui.components.SectionTextField
+
+/**
+ * [OPT-restore-doh] Network settings screen — DoH only.
+ *
+ * (The former proxy sections and pool-capacity knob were removed with the
+ * proxy system revert 2867abc and stay removed.)
+ *
+ * Toggling applies on the next lookup (buildDns reads the current resolver
+ * at lookup time); malformed URLs are stored but inert — dohTemplateUrl()
+ * returns null and clients keep the system DNS.
+ */
+@Composable
+fun NetworkSettingsScreen(
+    onBack: () -> Unit,
+) {
+    val context = LocalContext.current
+
+    var dohEnabled by rememberSaveable { mutableStateOf(NetworkSettings.dohEnabled) }
+    var dohUrl by rememberSaveable { mutableStateOf(NetworkSettings.dohUrl) }
+
+    SettingsScaffold(
+        title = stringResource(R.string.settings_network_title),
+        onBack = onBack,
+    ) {
+        // ─── DNS over HTTPS ─────────────────────────────────────────
+        SettingsSection(
+            header = stringResource(R.string.settings_network_doh_header),
+            footer = stringResource(R.string.settings_network_doh_footer),
+        ) {
+            SettingsCardBlock {
+                SettingsSwitchRow(
+                    title = stringResource(R.string.settings_network_doh_toggle),
+                    subtitle = stringResource(R.string.settings_network_doh_toggle_subtitle),
+                    checked = dohEnabled,
+                    onCheckedChange = { enabled ->
+                        dohEnabled = enabled
+                        NetworkSettings.setDoh(context, enabled, dohUrl)
+                        AppLogger.info(TAG, "DoH ${if (enabled) "enabled" else "disabled"} url=$dohUrl")
+                    },
+                    showDivider = dohEnabled,
+                )
+                if (dohEnabled) {
+                    Column(modifier = Modifier.padding(vertical = 8.dp)) {
+                        Text(
+                            text = stringResource(R.string.settings_network_doh_url),
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        SectionTextField(
+                            value = dohUrl,
+                            onValueChange = { dohUrl = it },
+                            singleLine = true,
+                            placeholder = "https://dns.alidns.com/dns-query",
+                            fieldModifier = Modifier
+                                .onFocusChanged { focusState ->
+                                    if (!focusState.isFocused) {
+                                        NetworkSettings.setDoh(context, dohEnabled, dohUrl)
+                                    }
+                                },
+                        )
+                        // Malformed / non-https URL: stored but inert —
+                        // dohTemplateUrl() returns null and every client
+                        // keeps the system DNS until it's fixed.
+                        if (NetworkSettings.dohTemplateUrl() == null) {
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                text = stringResource(R.string.settings_network_doh_invalid),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private const val TAG = "NetworkSettings"
