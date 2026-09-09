@@ -378,65 +378,55 @@ class AntigravityProvider(
     }
 
     /**
-     * Thinking config — behaviour aligned with CLIProxyAPI's Go core after
-     * live probes against the daily endpoint (2026-09):
-     *
-     * - OFF → omit thinkingConfig ENTIRELY for every family. The server's
-     *   per-family defaults are correct (Gemini-3 applies its default level,
-     *   2.5 Pro its default budget), and thinking-mandatory models like
-     *   gpt-oss-120b-medium think by default and REJECT synthetic values:
-     *   `thinkingBudget: 0` → 400 "Budget 0 is invalid. This model only
-     *   works in thinking mode", `-1` and `thinkingLevel` → 400 too. The
-     *   old iOS-derived "minimal/low/0 on OFF" behaviour was the root cause.
-     * - Claude → never send thinkingConfig (Cloud Code handles Anthropic
-     *   thinking natively; the anthropic-beta header covers interleaved).
-     * - Gemini 3.x → thinkingLevel strings + includeThoughts.
-     * - Gemini 2.5 → thinkingBudget mappings + includeThoughts.
-     * - Unknown families (gpt-oss, …) → omit; server default thinking is
-     *   the only thing they accept.
+     * Thinking config — ported from iOS AntigravityProvider. Claude models
+     * take NO thinkingConfig (Cloud Code routes them to Anthropic-native
+     * handling); Gemini 3.x uses thinkingLevel strings; 2.5 uses budgets.
      */
     private fun thinkingConfig(level: ThinkingLevel): JSONObject? {
         val id = model.id.lowercase()
-        if (!level.isEnabled) return null
         if (id.contains("claude")) return null
         if (id.contains("gemini-3")) {
             return JSONObject().apply {
-                put("thinkingLevel", when (level) {
-                    ThinkingLevel.LOW -> "low"
-                    ThinkingLevel.MEDIUM -> "medium"
-                    ThinkingLevel.HIGH, ThinkingLevel.XHIGH,
-                    ThinkingLevel.MAX, ThinkingLevel.ULTRA -> "high"
-                    else -> "low"
-                })
-                put("includeThoughts", true)
+                if (!level.isEnabled) {
+                    put("thinkingLevel", if (id.contains("flash")) "minimal" else "low")
+                } else {
+                    put("thinkingLevel", when (level) {
+                        ThinkingLevel.LOW -> "low"
+                        ThinkingLevel.MEDIUM -> "medium"
+                        ThinkingLevel.HIGH, ThinkingLevel.XHIGH,
+                        ThinkingLevel.MAX, ThinkingLevel.ULTRA -> "high"
+                        else -> "minimal"
+                    })
+                    put("includeThoughts", true)
+                }
             }
         }
         if (id.contains("2.5-pro")) {
             return JSONObject().apply {
                 put("thinkingBudget", when (level) {
+                    ThinkingLevel.OFF -> 128
                     ThinkingLevel.LOW -> 2048
                     ThinkingLevel.MEDIUM -> 8192
                     ThinkingLevel.HIGH -> 16384
                     ThinkingLevel.XHIGH, ThinkingLevel.MAX, ThinkingLevel.ULTRA -> 32768
-                    else -> 2048
                 })
-                put("includeThoughts", true)
+                if (level.isEnabled) put("includeThoughts", true)
             }
         }
         if (id.contains("2.5-flash") && !id.contains("lite")) {
             return JSONObject().apply {
                 put("thinkingBudget", when (level) {
+                    ThinkingLevel.OFF -> 0
                     ThinkingLevel.LOW -> 1024
                     ThinkingLevel.MEDIUM -> 4096
                     ThinkingLevel.HIGH -> 8192
                     ThinkingLevel.XHIGH, ThinkingLevel.MAX, ThinkingLevel.ULTRA -> 16384
-                    else -> 1024
                 })
-                put("includeThoughts", true)
+                if (level.isEnabled) put("includeThoughts", true)
             }
         }
-        // gpt-oss / unknown: server-side default thinking only.
-        return null
+        if (id.contains("2.5-flash-lite")) return null
+        return JSONObject().put("thinkingBudget", 0)
     }
 
     /** Antigravity Cloud Code envelope around the Gemini-format inner body. */
