@@ -1555,7 +1555,6 @@
     <!-- [T-android-voice-correction] Consent + correction UI -->
     <string name="voice_provider_system">System</string>
     <string name="add_provider_subtitle_kimi">Kimi Coding Plan — sign in with your Kimi account</string>
-    <string name="add_provider_subtitle_antigravity">Antigravity — sign in with your Google account (Cloud Code)</string>
     <string name="kimi_login_title">Sign in with Kimi Code</string>
     <string name="kimi_login_instructions">Open the verification page and enter this code to authorize RikkaMinis:</string>
     <string name="kimi_login_copy_code">Copy code</string>

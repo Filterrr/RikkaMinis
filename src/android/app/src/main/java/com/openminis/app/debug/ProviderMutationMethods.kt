@@ -205,7 +205,6 @@ internal object ProviderMutationMethods {
             ProviderType.openRouter -> "https://openrouter.ai/api/v1"
             ProviderType.xAI -> "https://api.x.ai/v1"
             ProviderType.kimiCode -> "https://api.kimi.com/coding/v1"
-            ProviderType.antigravity -> "https://daily-cloudcode-pa.sandbox.googleapis.com"
         }
         val probeURL = when (instance.providerType) {
             ProviderType.anthropic -> "$baseURL/v1/models"
@@ -216,8 +215,6 @@ internal object ProviderMutationMethods {
             ProviderType.xAI -> if (baseURL.endsWith("/v1")) "$baseURL/models" else "$baseURL/v1/models"
             // Kimi Coding: OpenAI-compatible /models under /coding/v1.
             ProviderType.kimiCode -> if (baseURL.endsWith("/v1")) "$baseURL/models" else "$baseURL/v1/models"
-            // Antigravity: Cloud Code catalog behind the v1internal prefix.
-            ProviderType.antigravity -> "$baseURL/v1internal:fetchAvailableModels"
         }
         val client = okhttp3.OkHttpClient.Builder()
             .connectTimeout(timeoutMs.toLong(), java.util.concurrent.TimeUnit.MILLISECONDS)
@@ -236,13 +233,6 @@ internal object ProviderMutationMethods {
             ProviderType.xAI -> if (!key.isNullOrEmpty()) builder.header("Authorization", "Bearer $key")
             // Kimi Coding: OpenAI-compat bearer (OAuth access token or key).
             ProviderType.kimiCode -> if (!key.isNullOrEmpty()) builder.header("Authorization", "Bearer $key")
-            // Antigravity: Bearer over Cloud Code; unwrap the token-bundle JSON
-            // into its raw access token first.
-            ProviderType.antigravity -> run {
-                val bearer = key
-                    ?.let { com.openminis.app.provider.antigravity.AntigravityOAuthStore.parse(it)?.accessToken ?: it }
-                if (!bearer.isNullOrEmpty()) builder.header("Authorization", "Bearer $bearer")
-            }
         }
         val start = System.currentTimeMillis()
         try {

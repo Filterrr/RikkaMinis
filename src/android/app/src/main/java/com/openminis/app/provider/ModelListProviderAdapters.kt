@@ -7,8 +7,6 @@ import com.openminis.app.data.model.ProviderType
 import com.openminis.app.data.repository.ModelListProvider
 import com.openminis.app.data.repository.ModelListProviderRegistry
 import com.openminis.app.provider.anthropic.AnthropicModelsApi
-import com.openminis.app.provider.antigravity.AntigravityModelsApi
-import com.openminis.app.provider.antigravity.AntigravityOAuthStore
 import com.openminis.app.provider.gemini.GeminiModelsApi
 import com.openminis.app.provider.openai.OpenAIModelsApi
 import com.openminis.app.provider.openrouter.OpenRouterModelsApi
@@ -123,33 +121,6 @@ private object KimiModelListAdapter : ModelListProvider {
     }
 }
 
-private object AntigravityModelListAdapter : ModelListProvider {
-    override suspend fun fetchModels(
-        apiKey: String?,
-        instance: ProviderInstance,
-        thirdParty: Boolean,
-        forceRefresh: Boolean,
-    ): List<LLMModel> {
-        // [T-antigravity-provider] The apiKey slot holds the OAuth token
-        // bundle JSON — unwrap the raw access token (it is already fresh:
-        // refreshModels is always called through the provider factory path
-        // that guarantees a usable credential) and hit fetchAvailableModels.
-        val token = apiKey
-            ?.let { AntigravityOAuthStore.parse(it)?.accessToken ?: apiKey }
-            ?: return emptyList()
-        // Custom base (native-protocol proxy) goes in raw — effectiveBaseURL
-        // would append /v1 and double-prefix v1internal.
-        val baseURL = instance.customBaseURL?.trim()?.trimEnd('/')
-            ?.ifEmpty { null }
-            ?: AntigravityOAuthStore.DEFAULT_BASE_URL
-        return AntigravityModelsApi.fetchModels(
-            accessToken = token,
-            baseURL = baseURL,
-            forceRefresh = forceRefresh,
-        )
-    }
-}
-
 /**
  * Register all built-in model-list providers. Called once at app
  * startup (see MinisApp / ProviderRepository init path).
@@ -161,5 +132,4 @@ fun registerModelListProviders() {
     ModelListProviderRegistry.register(ProviderType.openRouter, OpenRouterModelListAdapter)
     ModelListProviderRegistry.register(ProviderType.xAI, XAIModelListAdapter)
     ModelListProviderRegistry.register(ProviderType.kimiCode, KimiModelListAdapter)
-    ModelListProviderRegistry.register(ProviderType.antigravity, AntigravityModelListAdapter)
 }
