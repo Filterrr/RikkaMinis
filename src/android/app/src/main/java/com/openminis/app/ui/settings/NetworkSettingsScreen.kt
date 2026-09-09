@@ -76,7 +76,21 @@ fun NetworkSettingsScreen(
                             fieldModifier = Modifier
                                 .onFocusChanged { focusState ->
                                     if (!focusState.isFocused) {
-                                        NetworkSettings.setDoh(context, dohEnabled, dohUrl)
+                                        // FIX(pr32-bug3): blanking the field used
+                                        // to commit the empty string, which
+                                        // setDoh() "helpfully" resets to the
+                                        // DEFAULT DoH URL — silently wiping the
+                                        // user's stored custom endpoint. Treat a
+                                        // blank field as "not edited": snap back
+                                        // to the stored value instead of
+                                        // committing. Non-blank edits commit as
+                                        // before (setDoh still validates).
+                                        if (dohUrl.isBlank()) {
+                                            dohUrl = NetworkSettings.dohUrl
+                                            AppLogger.info(TAG, "DoH url blank on blur — kept stored value")
+                                        } else {
+                                            NetworkSettings.setDoh(context, dohEnabled, dohUrl)
+                                        }
                                     }
                                 },
                         )
