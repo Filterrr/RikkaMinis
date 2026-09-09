@@ -93,8 +93,6 @@ object VoiceProviderFactory {
 
             // [T-kimi-oauth] Kimi Coding Plan serves no voice models.
             ProviderType.kimiCode -> null
-            // [T-antigravity-provider] Cloud Code serves no voice models.
-            ProviderType.antigravity -> null
         }
     }
 

@@ -1434,7 +1434,6 @@
     <!-- [T-android-voice-correction] Consent + correction UI -->
     <string name="voice_provider_system">系统</string>
     <string name="add_provider_subtitle_kimi">Kimi Coding Plan — 使用 Kimi 账号登录</string>
-    <string name="add_provider_subtitle_antigravity">Antigravity — 使用 Google 账号登录（Cloud Code）</string>
     <string name="kimi_login_title">使用 Kimi Code 登录</string>
     <string name="kimi_login_instructions">打开验证页面并输入以下代码以授权 RikkaMinis:</string>
     <string name="kimi_login_copy_code">复制代码</string>
