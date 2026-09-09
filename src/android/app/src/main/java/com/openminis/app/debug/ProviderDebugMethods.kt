@@ -101,6 +101,7 @@ internal object ProviderDebugMethods {
                 put("imageEndpointMode", inst.imageEndpointMode.name)
                 put("imageEndpointResolved", inst.imageEndpointResolved?.name ?: JSONObject.NULL)
                 put("customUserAgent", inst.customUserAgent ?: JSONObject.NULL)
+                put("proxyUrl", inst.proxyUrl ?: JSONObject.NULL)
                 put("createdAt", inst.createdAt)
                 put("hasCredential", hasKey)
                 put("modelEntryCount", entryCount)

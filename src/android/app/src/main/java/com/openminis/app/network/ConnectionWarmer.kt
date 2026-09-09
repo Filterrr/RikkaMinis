@@ -90,18 +90,25 @@ object ConnectionWarmer {
         // Use a bare client that SHARES the LLM connection pool (OkHttp
         // explicitly supports sharing pools across clients). No auth headers,
         // short timeouts — this must never delay or outlive its purpose.
-        val client = OkHttpClient.Builder()
+        //
+        // [OPT-proxy] Proxy resolution MUST mirror the real provider clients:
+        // OkHttp route equality includes the proxy, so a warmup that ignores
+        // an app-level proxy would populate the pool with a DIRECT connection
+        // the real request can never reuse. resolveProxy(null) = app-level
+        // proxy only (instance-level overrides are applied by the provider
+        // client builders, and ProviderFactory passes the same URL here).
+        val clientBuilder = OkHttpClient.Builder()
             .connectionPool(NetworkMonitor.sharedLLMConnectionPool)
             .connectTimeout(5_000L, java.util.concurrent.TimeUnit.MILLISECONDS)
             .readTimeout(5_000L, java.util.concurrent.TimeUnit.MILLISECONDS)
             .writeTimeout(5_000L, java.util.concurrent.TimeUnit.MILLISECONDS)
-            .build()
+        NetworkMonitor.resolveProxy(null)?.let { clientBuilder.proxy(it) }
 
         val headRequest = okhttp3.Request.Builder()
             .url(headUrl)
             .method("HEAD", null)
             .build()
-        val call = client.newCall(headRequest)
+        val call = clientBuilder.build().newCall(headRequest)
         call.enqueue(object : okhttp3.Callback {
             override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
                 // Connection is now pooled regardless of status (401/404 fine).
@@ -118,5 +125,15 @@ object ConnectionWarmer {
                 Log.d(TAG, "warm skipped origin=$origin: ${e.javaClass.simpleName}")
             }
         })
+    }
+
+    /**
+     * [OPT-rewarm] Fire-and-forget origin bookkeeping for post-transition
+     * re-warming. Called by ProviderFactory next to warm() — every origin the
+     * user is heading toward is worth re-arming after a network flap. No-ops
+     * on malformed URLs (same tolerance as warm()).
+     */
+    fun noteForRewarm(baseUrl: String?) {
+        NetworkMonitor.noteOrigin(baseUrl)
     }
 }

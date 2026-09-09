@@ -273,6 +273,9 @@ dependencies {
     // OkHttp
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.squareup.okhttp3:okhttp-sse:4.12.0")
+    // [OPT-doh] DNS-over-HTTPS resolver shared by all LLM provider clients
+    // (toggled in Settings → Network). Same 4.12.0 train as okhttp core.
+    implementation("com.squareup.okhttp3:okhttp-dnsoverhttps:4.12.0")
 
     // Kotlinx Serialization
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")

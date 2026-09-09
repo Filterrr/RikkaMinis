@@ -37,5 +37,6 @@ fun providerRouteChanged(a: ProviderInstance, b: ProviderInstance): Boolean {
         a.useResponsesAPI != b.useResponsesAPI ||
         a.azureMode != b.azureMode ||
         a.customUserAgent != b.customUserAgent ||
-        a.imageEndpointMode != b.imageEndpointMode
+        a.imageEndpointMode != b.imageEndpointMode ||
+        a.proxyUrl != b.proxyUrl
 }

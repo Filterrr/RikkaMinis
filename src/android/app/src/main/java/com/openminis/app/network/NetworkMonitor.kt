@@ -14,6 +14,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import okhttp3.Dns
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 
 /**
@@ -42,10 +44,151 @@ class NetworkMonitor {
          * socket to localhost survives network flaps, so the pool kept
          * handing the dead h2 tunnel to every retry — requests wrote into it
          * and hung forever waiting for response headers.
+         *
+         * [OPT-pool-capacity] Capacity is live-tunable via NetworkSettings
+         * (default 5 was sized before the MULTI_SESSION perf scenario —
+         * 5 parallel streaming sessions each pin a connection, and a 5-conn
+         * idle ceiling evicts a connection another session is about to
+         * reuse). Writes swap this @Volatile reference; clients built
+         * before the change keep the old pool until they're rebuilt (the
+         * route-change collector rebuilds them on the next live edit).
          */
-        val sharedLLMConnectionPool = okhttp3.ConnectionPool(
-            5, 5, java.util.concurrent.TimeUnit.MINUTES,
+        @Volatile
+        var sharedLLMConnectionPool: okhttp3.ConnectionPool = newSharedPool()
+
+        private fun newSharedPool(): okhttp3.ConnectionPool = okhttp3.ConnectionPool(
+            NetworkSettings.llmMaxIdleConnections, 5, java.util.concurrent.TimeUnit.MINUTES,
         )
+
+        /**
+         * [OPT-rewarm] Ring of the provider origins most recently seen by
+         * [noteOrigin] (ProviderFactory warms these at build time). Used to
+         * re-warm connections AFTER a network transition — the first real
+         * request on a fresh network otherwise pays full DNS+TCP+TLS(+proxy
+         * tunnel) again, right when the user is most likely to send.
+         * Bounded, deduplicated, thread-safe.
+         */
+        private val recentOrigins = ArrayDeque<String>()
+
+        /** Record an origin for post-transition re-warming. Fire-and-forget. */
+        fun noteOrigin(baseUrl: String?) {
+            val url = baseUrl ?: return
+            val httpUrl = try {
+                url.trim().toHttpUrl()
+            } catch (_: IllegalArgumentException) {
+                return
+            }
+            val origin = "${httpUrl.scheme}://${httpUrl.host}:${httpUrl.port}"
+            synchronized(recentOrigins) {
+                recentOrigins.remove(origin)
+                recentOrigins.addLast(origin)
+                while (recentOrigins.size > MAX_RECENT_ORIGINS) recentOrigins.removeFirst()
+            }
+        }
+
+        private const val MAX_RECENT_ORIGINS = 6
+
+        /**
+         * [OPT-doh] Shared DoH Dns for every LLM client, or null when the
+         * feature is off / the URL is malformed. Bootstrap lookups for the
+         * DoH endpoint itself go through the SYSTEM resolver (okhttp-dnsoverhttps
+         * default Dns) — no chicken-and-egg wedge; worst case the bootstrap
+         * inherits plaintext-DNS behaviour and DoH adds nothing.
+         */
+        @Volatile
+        var sharedDohDns: Dns? = null
+            private set
+
+        /**
+         * (Re)build the shared DoH resolver from current NetworkSettings.
+         * No-op when DoH is disabled or the URL is unparsable — callers then
+         * keep the system DNS. Run on the app main thread at startup and on
+         * settings writes; building the object is cheap (network happens
+         * lazily per lookup on client threads).
+         */
+        fun refreshDoh() {
+            val template = NetworkSettings.dohTemplateUrl()
+            sharedDohDns = if (template == null) null else try {
+                okhttp3.dnsoverhttps.DnsOverHttps.Builder()
+                    .client(
+                        OkHttpClient.Builder()
+                            // Bootstrap + DoH queries are tiny; don't let a
+                            // wedged DoH server outlive the call budget.
+                            .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+                            .readTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+                            .build()
+                    )
+                    // Bootstrap (resolving the DoH endpoint's own host) uses
+                    // the system resolver by default — no chicken-and-egg
+                    // wedge; worst case the bootstrap inherits plaintext-DNS
+                    // behaviour and DoH adds nothing.
+                    .url(template)
+                    .build()
+            } catch (_: IllegalArgumentException) {
+                null
+            }
+        }
+
+        /**
+         * [OPT-proxy] Resolve the proxy for an instance: instance-level
+         * override first (per-provider relay config), then the app-level
+         * NetworkSettings proxy, then system default (null = OkHttp's own
+         * ProxySelector, which honors the Android system proxy). Malformed
+         * input falls through to the next source rather than failing the
+         * request — a typo in one instance's proxy must not take the whole
+         * provider down.
+         */
+        fun resolveProxy(instanceProxyUrl: String?): java.net.Proxy? {
+            instanceProxyUrl?.trim()?.takeIf { it.isNotEmpty() }?.let { raw ->
+                NetworkSettings.parseProxyUrl(raw)?.let { return it }
+            }
+            return NetworkSettings.appProxy()
+        }
+
+        /**
+         * [OPT-rewarm] Post-transition warm targets, snapshot under lock.
+         * Most-recent-first for a natural priority order.
+         */
+        private fun recentOriginsSnapshot(): List<String> = synchronized(recentOrigins) {
+            recentOrigins.toList().asReversed()
+        }
+
+        /**
+         * NetworkSettings wrote a value — recompute the derived pieces. The
+         * pool object is replaced (existing clients keep the old one until
+         * rebuilt); DoH resolver is rebuilt. Fire-and-forget from UI.
+         */
+        fun onNetworkSettingsChanged() {
+            sharedLLMConnectionPool = newSharedPool()
+            refreshDoh()
+        }
+
+        /**
+         * [OPT-doh] Combine the shared DoH resolver (when enabled) with a
+         * loopback safety net: DoH must NEVER be used to resolve loopback
+         * names — a local relay referenced by hostname would be leaked to
+         * the remote DoH server, which cannot answer it. Everything else
+         * rides DoH; a DoH lookup failure surfaces as a retryable
+         * UnknownHostException exactly like a failed system lookup.
+         *
+         * NOTE: the loopback check is STRING-based. Resolving via
+         * InetAddress.getByName() first would perform a system DNS lookup —
+         * the exact path DoH exists to bypass. "localhost" is special-cased
+         * in getByName (no network I/O), so the fallback stays local.
+         */
+        fun buildDns(): Dns {
+            return Dns { hostname ->
+                // Read the CURRENT resolver at lookup time (not client-build
+                // time) so toggling DoH in settings applies to already-built
+                // clients on their next lookup.
+                val doh = sharedDohDns
+                if (hostname == "localhost" || hostname.endsWith(".localhost")) {
+                    listOf(java.net.InetAddress.getByName(hostname))
+                } else {
+                    doh?.lookup(hostname) ?: Dns.SYSTEM.lookup(hostname)
+                }
+            }
+        }
     }
 
     private val _status = MutableStateFlow(NetworkStatus.DISCONNECTED)
@@ -96,6 +239,10 @@ class NetworkMonitor {
         // callback is async and can lag by hundreds of ms on cold start.
         refreshSandboxDns("initial")
 
+        // [OPT-rewarm] Make sure settings are loaded even if MinisApp.startup
+        // ordering ever changes — NetworkSettings.load is idempotent.
+        NetworkSettings.load(context)
+
         val request = NetworkRequest.Builder()
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .build()
@@ -108,6 +255,16 @@ class NetworkMonitor {
                 if (previousStatus == NetworkStatus.DISCONNECTED) {
                     Log.d(TAG, "Network transition: DISCONNECTED -> CONNECTED")
                     evictConnectionPool()
+                    // [OPT-rewarm] Re-arm connections to the origins the user
+                    // was actually using before the transition. The first real
+                    // request on a fresh network otherwise pays full
+                    // DNS+TCP+TLS(+proxy tunnel) — exactly when the user is
+                    // most likely to send. Debounced per origin by the warmer;
+                    // failure re-arms after its short 8s window, so a flap
+                    // that lands mid-warmup still recovers on the next send.
+                    for (origin in recentOriginsSnapshot()) {
+                        ConnectionWarmer.warm(origin)
+                    }
                 }
                 // Always refresh sandbox DNS on availability — an interface
                 // swap (Wi-Fi → cellular) can fire onAvailable without a

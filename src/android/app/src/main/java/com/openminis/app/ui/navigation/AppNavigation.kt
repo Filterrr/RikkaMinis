@@ -56,6 +56,7 @@ import com.openminis.app.ui.settings.EnvironmentVariablesScreen
 import com.openminis.app.ui.settings.AppearanceScreen
 import com.openminis.app.ui.settings.ChatMenuSettingsScreen
 import com.openminis.app.ui.settings.SettingsScreen
+import com.openminis.app.ui.settings.NetworkSettingsScreen
 import com.openminis.app.ui.settings.SystemPermissionsScreen
 import com.openminis.app.ui.settings.SessionStorageDetailScreen
 import com.openminis.app.ui.settings.SkillDetailScreen
@@ -202,6 +203,8 @@ object Routes {
     const val LOGS = "logs"
     const val LOG_DETAIL = "log_detail/{fileName}"
     const val APPEARANCE = "appearance"
+    /** [OPT-doh/OPT-proxy] Network settings (DoH / app proxy / pool size). */
+    const val NETWORK_SETTINGS = "network_settings"
     const val CHAT_MENU = "appearance/chat_menu"
     const val BACKGROUND = "background"
     const val ONBOARDING_MODELS = "onboarding_models"
@@ -661,6 +664,7 @@ fun AppNavigation(
                 onPermissionsClick = { navController.safeNavigate(Routes.PERMISSIONS) },
                 onUsageClick = { navController.safeNavigate(Routes.USAGE_STATS) },
                 onAppearanceClick = { navController.safeNavigate(Routes.APPEARANCE) },
+                onNetworkClick = { navController.safeNavigate(Routes.NETWORK_SETTINGS) },
                 onBackgroundClick = { navController.safeNavigate(Routes.BACKGROUND) },
                 onLogsClick = { navController.safeNavigate(Routes.LOGS) },
                 onMountedFoldersClick = { navController.safeNavigate(Routes.MOUNTED_FOLDERS) },
@@ -1260,6 +1264,14 @@ fun AppNavigation(
             UsageStatsScreen(
                 chatDao = chatRepository.dao,
                 providerConfig = providerRepository.config.value,
+                onBack = { navController.safePopBackStack() },
+            )
+        }
+
+        // [OPT-doh/OPT-proxy] Network settings — DoH, app-level proxy,
+        // shared-pool idle capacity.
+        composable(Routes.NETWORK_SETTINGS) {
+            NetworkSettingsScreen(
                 onBack = { navController.safePopBackStack() },
             )
         }

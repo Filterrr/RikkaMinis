@@ -265,6 +265,14 @@ class OpenAIProvider constructor(
      * which is wrong for Azure's deployments-path routing.
      */
     private val azureBase: String? = null,
+    /**
+     * [OPT-proxy] Per-instance proxy override ("http://host:port"). null →
+     * app-level proxy (NetworkSettings) → system default. Resolved through
+     * [NetworkMonitor.resolveProxy] so the warmup client and this client
+     * always agree on the route (OkHttp route equality includes the proxy —
+     * a mismatch would make the pooled warmup connection unusable).
+     */
+    private val proxyUrl: String? = null,
 ) : LLMProvider {
     override val name = "OpenAI"
     override var instanceContext: com.openminis.app.data.model.ProviderInstance? = null
@@ -502,7 +510,17 @@ class OpenAIProvider constructor(
         // a per-client pool was never evicted, and a dead h2 tunnel through
         // a local proxy got reused on every retry (silent infinite hang).
         .connectionPool(com.openminis.app.network.NetworkMonitor.sharedLLMConnectionPool)
-        .eventListenerFactory { OkHttpNetTraceListener() }
+        // [OPT-doh] Shared DoH resolver when enabled in settings (null =
+        // system DNS). Localhost names always bypass DoH — a local relay must
+        // never leak its hostname to the remote resolver.
+        .dns(com.openminis.app.network.NetworkMonitor.buildDns())
+        // [OPT-proxy] Per-instance → app-level → system default. createUnresolved
+        // keeps hostname resolution on the proxy's side of the tunnel.
+        .apply {
+            com.openminis.app.network.NetworkMonitor.resolveProxy(proxyUrl)
+                ?.let { proxy(it) }
+        }
+        .eventListenerFactory { com.openminis.app.network.OkHttpNetTraceListener() }
         // [OPT6-request-gzip] Compress large JSON request bodies (agent loops
         // ship 100s of KB of tool output). Route-gated: official OpenAI hosts
         // accept gzip; unknown relays are opted OUT by default (a relay that
@@ -2870,219 +2888,12 @@ class OpenAIProvider constructor(
 
 /**
  * [T-android-openai-codex-timeout]
- * Network-leg trace listener for OpenAIProvider's OkHttpClient. Logs every
- * OkHttp call lifecycle event with timestamps so a future SocketTimeout
- * report can be triaged to a specific leg:
- *
- *   - dnsStart / dnsEnd          : was the host resolvable, how long
- *   - proxySelect{Start,End}     : which proxy (or DIRECT) routed this
- *   - connectStart / -End / -Failed : TCP connect to proxy or origin
- *   - secureConnect{Start,End}   : TLS handshake duration + cipher / alpn
- *   - connectionAcquired/Released: which physical connection served the
- *                                  call — repeated calls reusing the
- *                                  same Connection identityHash mean
- *                                  the OkHttp pool is recycling, useful
- *                                  for spotting "stale-proxy-mid-stream"
- *   - requestHeaders/BodyEnd     : when the request was fully sent
- *   - responseHeadersStart/End   : time to first server byte (the TFB
- *                                  number tells us whether the proxy
- *                                  was slow vs. the origin)
- *   - responseBodyStart/End      : SSE stream lifecycle — `End` firing
- *                                  with a SocketTimeout root cause is
- *                                  the classic "mid-stream silence" case
- *   - callFailed                 : terminal — pairs the failure to the
- *                                  earliest leg that completed cleanly
- *
- * One instance per call (the factory in OpenAIProvider). Holds a
- * monotonic start timestamp so all log lines carry a relative offset
- * from callStart.
+ * Network-leg trace listener — PROMOTED to
+ * [com.openminis.app.network.OkHttpNetTraceListener] so Anthropic and Gemini
+ * clients log the same milestones. Retained here as a private typealias so
+ * existing references inside this file keep compiling.
  */
-private class OkHttpNetTraceListener : EventListener() {
-    private val tag = "OkHttpNetTrace"
-    private val t0 = System.nanoTime()
-    private fun ms(): Long = (System.nanoTime() - t0) / 1_000_000L
-    private fun callTag(call: Call): String {
-        val id = System.identityHashCode(call).toString(16)
-        return "call#$id"
-    }
-
-    override fun callStart(call: Call) {
-        com.openminis.app.logging.AppLogger.info(
-            tag,
-            "[${callTag(call)}] +${ms()}ms callStart url=${call.request().url}"
-        )
-    }
-
-    override fun proxySelectStart(call: Call, url: HttpUrl) {
-        com.openminis.app.logging.AppLogger.info(
-            tag,
-            "[${callTag(call)}] +${ms()}ms proxySelectStart host=${url.host}"
-        )
-    }
-
-    override fun proxySelectEnd(call: Call, url: HttpUrl, proxies: List<Proxy>) {
-        com.openminis.app.logging.AppLogger.info(
-            tag,
-            "[${callTag(call)}] +${ms()}ms proxySelectEnd host=${url.host} chain=${proxies.joinToString(",") { it.toString() }}"
-        )
-    }
-
-    override fun dnsStart(call: Call, domainName: String) {
-        com.openminis.app.logging.AppLogger.info(
-            tag,
-            "[${callTag(call)}] +${ms()}ms dnsStart host=$domainName"
-        )
-    }
-
-    override fun dnsEnd(call: Call, domainName: String, inetAddressList: List<InetAddress>) {
-        com.openminis.app.logging.AppLogger.info(
-            tag,
-            "[${callTag(call)}] +${ms()}ms dnsEnd host=$domainName resolved=${inetAddressList.size} addrs=${inetAddressList.take(3).joinToString(",") { it.hostAddress ?: "?" }}"
-        )
-    }
-
-    override fun connectStart(call: Call, inetSocketAddress: InetSocketAddress, proxy: Proxy) {
-        com.openminis.app.logging.AppLogger.info(
-            tag,
-            "[${callTag(call)}] +${ms()}ms connectStart target=$inetSocketAddress proxy=$proxy"
-        )
-    }
-
-    override fun secureConnectStart(call: Call) {
-        com.openminis.app.logging.AppLogger.info(
-            tag,
-            "[${callTag(call)}] +${ms()}ms tlsStart"
-        )
-    }
-
-    override fun secureConnectEnd(call: Call, handshake: Handshake?) {
-        com.openminis.app.logging.AppLogger.info(
-            tag,
-            "[${callTag(call)}] +${ms()}ms tlsEnd version=${handshake?.tlsVersion} cipher=${handshake?.cipherSuite}"
-        )
-    }
-
-    override fun connectEnd(
-        call: Call,
-        inetSocketAddress: InetSocketAddress,
-        proxy: Proxy,
-        protocol: Protocol?,
-    ) {
-        com.openminis.app.logging.AppLogger.info(
-            tag,
-            "[${callTag(call)}] +${ms()}ms connectEnd target=$inetSocketAddress proxy=$proxy proto=$protocol"
-        )
-    }
-
-    override fun connectFailed(
-        call: Call,
-        inetSocketAddress: InetSocketAddress,
-        proxy: Proxy,
-        protocol: Protocol?,
-        ioe: IOException,
-    ) {
-        com.openminis.app.logging.AppLogger.warning(
-            tag,
-            "[${callTag(call)}] +${ms()}ms connectFailed target=$inetSocketAddress proxy=$proxy proto=$protocol err=${ioe.javaClass.simpleName}:${ioe.message}"
-        )
-    }
-
-    override fun connectionAcquired(call: Call, connection: Connection) {
-        val conn = System.identityHashCode(connection).toString(16)
-        com.openminis.app.logging.AppLogger.info(
-            tag,
-            "[${callTag(call)}] +${ms()}ms connectionAcquired conn#$conn route=${connection.route()} proto=${connection.protocol()}"
-        )
-    }
-
-    override fun connectionReleased(call: Call, connection: Connection) {
-        val conn = System.identityHashCode(connection).toString(16)
-        com.openminis.app.logging.AppLogger.info(
-            tag,
-            "[${callTag(call)}] +${ms()}ms connectionReleased conn#$conn"
-        )
-    }
-
-    override fun requestHeadersStart(call: Call) {
-        com.openminis.app.logging.AppLogger.info(
-            tag,
-            "[${callTag(call)}] +${ms()}ms requestHeadersStart"
-        )
-    }
-
-    override fun requestHeadersEnd(call: Call, request: Request) {
-        com.openminis.app.logging.AppLogger.info(
-            tag,
-            "[${callTag(call)}] +${ms()}ms requestHeadersEnd"
-        )
-    }
-
-    override fun requestBodyStart(call: Call) {
-        com.openminis.app.logging.AppLogger.info(
-            tag,
-            "[${callTag(call)}] +${ms()}ms requestBodyStart"
-        )
-    }
-
-    override fun requestBodyEnd(call: Call, byteCount: Long) {
-        com.openminis.app.logging.AppLogger.info(
-            tag,
-            "[${callTag(call)}] +${ms()}ms requestBodyEnd bytes=$byteCount"
-        )
-    }
-
-    override fun responseHeadersStart(call: Call) {
-        com.openminis.app.logging.AppLogger.info(
-            tag,
-            "[${callTag(call)}] +${ms()}ms responseHeadersStart (server first byte)"
-        )
-    }
-
-    override fun responseHeadersEnd(call: Call, response: Response) {
-        com.openminis.app.logging.AppLogger.info(
-            tag,
-            "[${callTag(call)}] +${ms()}ms responseHeadersEnd status=${response.code} proto=${response.protocol}"
-        )
-    }
-
-    override fun responseBodyStart(call: Call) {
-        com.openminis.app.logging.AppLogger.info(
-            tag,
-            "[${callTag(call)}] +${ms()}ms responseBodyStart"
-        )
-    }
-
-    override fun responseBodyEnd(call: Call, byteCount: Long) {
-        com.openminis.app.logging.AppLogger.info(
-            tag,
-            "[${callTag(call)}] +${ms()}ms responseBodyEnd bytes=$byteCount"
-        )
-    }
-
-    override fun callEnd(call: Call) {
-        com.openminis.app.logging.AppLogger.info(
-            tag,
-            "[${callTag(call)}] +${ms()}ms callEnd"
-        )
-    }
-
-    override fun callFailed(call: Call, ioe: IOException) {
-        // The most diagnostic of all: pairs the failure with whatever
-        // milestone WAS reached before it. Read alongside the listener's
-        // earlier lines to localize the stall.
-        com.openminis.app.logging.AppLogger.warning(
-            tag,
-            "[${callTag(call)}] +${ms()}ms callFailed err=${ioe.javaClass.simpleName}:${ioe.message}"
-        )
-    }
-
-    override fun canceled(call: Call) {
-        com.openminis.app.logging.AppLogger.info(
-            tag,
-            "[${callTag(call)}] +${ms()}ms canceled"
-        )
-    }
-}
+private typealias OkHttpNetTraceListener = com.openminis.app.network.OkHttpNetTraceListener
 
 /**
  * [T-length-wall-prefill] Pure decision: does this OpenAI-compatible base URL

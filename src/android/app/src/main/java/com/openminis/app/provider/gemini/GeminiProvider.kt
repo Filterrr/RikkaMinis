@@ -40,6 +40,13 @@ class GeminiProvider(
     private val apiKey: String,
     override var model: LLMModel = LLMModel.gemini25Flash,
     private val basePath: String = "https://generativelanguage.googleapis.com/v1beta",
+    /**
+     * [OPT-proxy] Per-instance proxy override ("http://host:port"). null →
+     * app-level proxy (NetworkSettings) → system default. Resolved through
+     * [NetworkMonitor.resolveProxy] so the warmup client and this client
+     * always agree on the route.
+     */
+    private val proxyUrl: String? = null,
 ) : LLMProvider {
     override val name = "Google"
     override var instanceContext: com.openminis.app.data.model.ProviderInstance? = null
@@ -65,6 +72,16 @@ class GeminiProvider(
                 shouldCompress = { req -> req.url.host.lowercase() == "generativelanguage.googleapis.com" },
             )
         )
+        // [OPT-doh] Shared DoH resolver when enabled in settings (null =
+        // system DNS). Localhost names always bypass DoH.
+        .dns(com.openminis.app.network.NetworkMonitor.buildDns())
+        // [OPT-proxy] Per-instance → app-level → system default.
+        .apply {
+            com.openminis.app.network.NetworkMonitor.resolveProxy(proxyUrl)
+                ?.let { proxy(it) }
+        }
+        // [OPT-nettrace] Shared per-call network-leg tracer (was OpenAI-only).
+        .eventListenerFactory { com.openminis.app.network.OkHttpNetTraceListener() }
         .build()
 
     override suspend fun sendMessageClamped(

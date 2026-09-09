@@ -34,6 +34,7 @@ import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.NetworkCheck
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.AlertDialog
@@ -95,6 +96,9 @@ fun SettingsScreen(
     // OEM autostart guidance). Default no-op so older callers/tests
     // don't need to be retrofitted.
     onBackgroundClick: () -> Unit = {},
+    // [OPT-doh/OPT-proxy] Network settings entry (DoH / app proxy / pool).
+    // Default no-op for back-compat, mirroring the other optional entries.
+    onNetworkClick: () -> Unit = {},
 ) {
     val context = LocalContext.current
     Scaffold(
@@ -265,6 +269,16 @@ fun SettingsScreen(
                     title = stringResource(R.string.bg_section_header),
                     subtitle = stringResource(R.string.bg_section_subtitle),
                     onClick = onBackgroundClick,
+                    showDivider = true,
+                )
+                // [OPT-doh/OPT-proxy] Network — DoH, app-level proxy,
+                // shared-pool capacity.
+                SettingsItem(
+                    icon = Icons.Outlined.NetworkCheck,
+                    iconColor = Color(0xFF34C759),
+                    title = stringResource(R.string.settings_network_title),
+                    subtitle = stringResource(R.string.settings_network_subtitle),
+                    onClick = onNetworkClick,
                     showDivider = false,
                 )
             }

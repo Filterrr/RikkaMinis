@@ -2040,6 +2040,9 @@ class ProviderRepository(private val context: Context) {
             // when set; old/new readers without the key decode to null →
             // default UA. Field name matches iOS for cross-platform interop.
             instance.customUserAgent?.takeIf { it.isNotBlank() }?.let { put("customUserAgent", it) }
+            // [OPT-proxy] Additive, optional. Only written when set; old/new
+            // readers without the key decode to null → app-level/system proxy.
+            instance.proxyUrl?.takeIf { it.isNotBlank() }?.let { put("proxyUrl", it) }
             // [RC5 / P0-pinned + GH#68] Additive provider run-config fields.
             // These were previously NEVER written by the backup export, so a
             // config restore / device migration silently reset them to
@@ -2086,6 +2089,9 @@ class ProviderRepository(private val context: Context) {
         // [T-provider-custom-user-agent] Additive: old exports lack the key →
         // empty → null → default UA. Field name matches iOS.
         val customUserAgent = dict.optString("customUserAgent", "").ifEmpty { null }
+        // [OPT-proxy] Additive: old exports lack the key → empty → null →
+        // app-level/system proxy.
+        val proxyUrl = dict.optString("proxyUrl", "").ifEmpty { null }
         // [RC5 / P0-pinned + GH#68] Restore the run-config fields written by
         // [exportInstanceJSON]. Each defaults to the model's own default when
         // the key is absent (old backup) so nothing crashes and a legacy
@@ -2105,6 +2111,7 @@ class ProviderRepository(private val context: Context) {
             appendV1Suffix = appendV1,
             useResponsesAPI = useResponsesAPI,
             customUserAgent = customUserAgent,
+            proxyUrl = proxyUrl,
             isEnabled = rc.isEnabled,
             azureMode = rc.azureMode,
             imageEndpointMode = rc.imageEndpointMode,
