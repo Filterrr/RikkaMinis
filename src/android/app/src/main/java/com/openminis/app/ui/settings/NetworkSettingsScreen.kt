@@ -113,22 +113,6 @@ fun NetworkSettingsScreen(
             footer = stringResource(R.string.settings_network_proxy_footer),
         ) {
             SettingsCardBlock {
-                // [OPT-webview-proxy] Route WebView-based browsing through
-                // the proxy below too. Off = WebView follows the system
-                // proxy (original behaviour). Requires a parseable proxy
-                // URL to take effect; state is surfaced in the footer text.
-                var webviewProxyOn by rememberSaveable { mutableStateOf(NetworkSettings.webviewProxyEnabled) }
-                SettingsSwitchRow(
-                    title = stringResource(R.string.settings_network_webview_proxy_toggle),
-                    subtitle = stringResource(R.string.settings_network_webview_proxy_subtitle),
-                    checked = webviewProxyOn,
-                    onCheckedChange = { enabled ->
-                        webviewProxyOn = enabled
-                        NetworkSettings.setWebviewProxyEnabled(context, enabled)
-                        AppLogger.info(TAG, "WebView proxy ${if (enabled) "enabled" else "disabled"}")
-                    },
-                    showDivider = true,
-                )
                 Column(modifier = Modifier.padding(vertical = 8.dp)) {
                     Text(
                         text = stringResource(R.string.settings_network_proxy_url),

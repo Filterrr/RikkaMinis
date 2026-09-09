@@ -906,8 +906,6 @@
     <string name="settings_network_proxy_header">HTTP Proxy</string>
     <string name="settings_network_proxy_footer">Fallback for providers without their own proxy setting. Per-instance overrides win. Requires a client rebuild (any provider edit) to apply.</string>
     <string name="settings_network_proxy_url">Proxy URL</string>
-    <string name="settings_network_webview_proxy_toggle">Apply to browser (WebView)</string>
-    <string name="settings_network_webview_proxy_subtitle">Route in-app browser traffic through the proxy too. Off = follow the system proxy. Takes effect on open tabs immediately.</string>
     <string name="settings_network_pool_header">Connection Pool</string>
     <string name="settings_network_pool_footer">Idle connections kept alive across all LLM clients (5-minute keep-alive). Raise if you run many parallel streaming sessions.</string>
     <string name="settings_network_pool_idle">Max idle connections</string>
