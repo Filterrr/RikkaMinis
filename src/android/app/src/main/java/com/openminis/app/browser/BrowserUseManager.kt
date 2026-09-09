@@ -458,15 +458,13 @@ class BrowserUseManager(
             // pool (destroy + recreate the tab) and return true so the app
             // itself is NOT killed (WebView kills the app when the callback
             // returns false). Platform signature (API 26+):
-            // (WebView, android.webkit.WebViewRenderProcess).
+            // (WebView, android.webkit.RenderProcessGoneDetail) —
+            // detail.didCrash() distinguishes crash vs OOM kill.
             override fun onRenderProcessGone(
                 view: WebView,
-                detail: android.webkit.WebViewRenderProcess?,
+                detail: android.webkit.RenderProcessGoneDetail,
             ): Boolean {
-                val reason = when {
-                    detail == null -> "unknown"
-                    else -> "renderer gone"
-                }
+                val reason = if (detail.didCrash()) "crashed" else "OOM-killed"
                 Log.e(TAG, "renderer gone ($reason) for ${view.url?.take(120)}")
                 onRenderProcessGone?.invoke(view.url)
                 return true
