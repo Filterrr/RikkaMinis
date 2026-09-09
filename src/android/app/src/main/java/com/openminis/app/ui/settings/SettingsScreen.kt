@@ -268,15 +268,7 @@ fun SettingsScreen(
                     title = stringResource(R.string.bg_section_header),
                     subtitle = stringResource(R.string.bg_section_subtitle),
                     onClick = onBackgroundClick,
-                    showDivider = true,
-                )
-                SettingsItem(
-                    icon = Icons.Outlined.BatteryFull,
-                    iconColor = Color(0xFFFF9500),
-                    title = stringResource(R.string.bg_section_header),
-                    subtitle = stringResource(R.string.bg_section_subtitle),
-                    onClick = onBackgroundClick,
-                    showDivider = true,
+                    showDivider = false,
                 )
                 // [OPT-restore-doh] Network — DoH.
                 SettingsItem(

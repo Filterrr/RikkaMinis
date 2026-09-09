@@ -182,7 +182,13 @@ object BrowserUseJS {
                     if (s2 > bestScore) { best = children[j]; bestScore = s2; matchedSelector = 'body>' + (children[j].tagName||'').toLowerCase(); }
                 }
             }
-            if (!best) { best = document.body; matchedSelector = 'document.body (fallback)'; }
+            if (!best) {
+                // FIX(pr32-bug2): document.body is null on XML/quirk documents —
+                // fall through to <html> so `best` is never null and the
+                // innerText read below cannot throw.
+                best = document.body || document.documentElement;
+                matchedSelector = 'document.body (fallback)';
+            }
             // Strip boilerplate INSIDE the winner: structural roles, common
             // class-name patterns, and script/style. display:none check so
             // we don't nuke content that happens to carry a 'nav' class.
@@ -192,6 +198,20 @@ object BrowserUseJS {
                 if (d === best) continue;
                 if (d.contains(best)) continue;
                 d.remove();
+            }
+            // FIX(pr32-bug2): aggressive stripping can empty the winner (SPA
+            // shells whose entire body is a <nav> bar return bare `null`
+            // here, which derails evaluateAndReturn()'s JSON sniffing into a
+            // bogus "JavaScript execution failed"). Rescue: when nothing
+            // readable is left, re-read from body/documentElement so a
+            // structured {title,text,length,source} object is ALWAYS
+            // returned — even for genuinely empty pages (text stays '').
+            if (!(best.innerText || '').trim()) {
+                var rescue = document.body || document.documentElement;
+                if (rescue && (rescue.innerText || '').trim()) {
+                    best = rescue;
+                    matchedSelector += '+body-rescue';
+                }
             }
             var title = document.title || '';
             var innerTextVal = best.innerText || '';
