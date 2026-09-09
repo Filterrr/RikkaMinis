@@ -1476,6 +1476,8 @@
     <string name="settings_network_proxy_header">HTTP 代理</string>
     <string name="settings_network_proxy_footer">未單獨設定代理的提供者將使用此代理；單一提供者的設定優先。需重建用戶端（編輯任意提供者）後生效。</string>
     <string name="settings_network_proxy_url">代理位址</string>
+    <string name="settings_network_webview_proxy_toggle">套用至瀏覽器（WebView）</string>
+    <string name="settings_network_webview_proxy_subtitle">讓內建瀏覽器流量也走此代理。關閉時跟隨系統代理。已開啟的頁面立即生效。</string>
     <string name="settings_network_pool_header">連線池</string>
     <string name="settings_network_pool_footer">所有 LLM 用戶端共用的閒置連線數上限（5 分鐘保活）。並行串流工作階段較多時可調高。</string>
     <string name="settings_network_pool_idle">最大閒置連線數</string>
