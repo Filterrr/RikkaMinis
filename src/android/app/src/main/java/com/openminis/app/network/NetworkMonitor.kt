@@ -177,15 +177,19 @@ class NetworkMonitor {
          * in getByName (no network I/O), so the fallback stays local.
          */
         fun buildDns(): Dns {
-            return Dns { hostname ->
-                // Read the CURRENT resolver at lookup time (not client-build
-                // time) so toggling DoH in settings applies to already-built
-                // clients on their next lookup.
-                val doh = sharedDohDns
-                if (hostname == "localhost" || hostname.endsWith(".localhost")) {
-                    listOf(java.net.InetAddress.getByName(hostname))
-                } else {
-                    doh?.lookup(hostname) ?: Dns.SYSTEM.lookup(hostname)
+            // okhttp 4.x Dns is a plain Kotlin interface (no SAM conversion
+            // for `Dns { }` in Kotlin) — use an anonymous object.
+            return object : Dns {
+                override fun lookup(hostname: String): List<java.net.InetAddress> {
+                    // Read the CURRENT resolver at lookup time (not client-build
+                    // time) so toggling DoH in settings applies to already-built
+                    // clients on their next lookup.
+                    val doh = sharedDohDns
+                    return if (hostname == "localhost" || hostname.endsWith(".localhost")) {
+                        listOf(java.net.InetAddress.getByName(hostname))
+                    } else {
+                        doh?.lookup(hostname) ?: Dns.SYSTEM.lookup(hostname)
+                    }
                 }
             }
         }
