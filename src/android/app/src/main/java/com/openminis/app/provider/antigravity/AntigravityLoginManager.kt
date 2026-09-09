@@ -6,8 +6,6 @@ import android.net.Uri
 import android.util.Log
 import com.openminis.app.mcp.oauth.OAuthCallbackServer
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.GlobalScope
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -82,7 +80,7 @@ object AntigravityLoginManager {
             }
             kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
                 val result = exchange(code)
-                withContext(Dispatchers.Main) { onResult(result) }
+                kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(result) }
             }
         }
         server.start()

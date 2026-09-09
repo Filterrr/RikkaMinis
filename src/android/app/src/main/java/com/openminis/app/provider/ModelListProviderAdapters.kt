@@ -8,7 +8,6 @@ import com.openminis.app.data.repository.ModelListProvider
 import com.openminis.app.data.repository.ModelListProviderRegistry
 import com.openminis.app.provider.anthropic.AnthropicModelsApi
 import com.openminis.app.provider.antigravity.AntigravityModelsApi
-import com.openminis.app.provider.antigravity.AntigravityOAuthStore
 import com.openminis.app.provider.gemini.GeminiModelsApi
 import com.openminis.app.provider.openai.OpenAIModelsApi
 import com.openminis.app.provider.openrouter.OpenRouterModelsApi

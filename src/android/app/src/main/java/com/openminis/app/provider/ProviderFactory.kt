@@ -6,7 +6,6 @@ import com.openminis.app.data.model.ProviderInstance
 import com.openminis.app.data.model.ProviderType
 import com.openminis.app.network.ConnectionWarmer
 import com.openminis.app.provider.anthropic.AnthropicProvider
-import com.openminis.app.provider.antigravity.AntigravityProvider
 import com.openminis.app.provider.gemini.GeminiProvider
 import com.openminis.app.provider.openai.OpenAIProvider
 
