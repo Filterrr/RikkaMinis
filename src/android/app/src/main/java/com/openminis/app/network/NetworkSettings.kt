@@ -37,6 +37,7 @@ object NetworkSettings {
     private const val KEY_DOH_URL = "doh.url"
     private const val KEY_PROXY_URL = "proxy.url"
     private const val KEY_POOL_IDLE = "pool.max_idle"
+    private const val KEY_WEBVIEW_PROXY_ENABLED = "proxy.webview_enabled"
 
     private const val DEFAULT_DOH_URL = "https://dns.alidns.com/dns-query"
 
@@ -55,6 +56,19 @@ object NetworkSettings {
     @Volatile var proxyUrl: String = ""
         private set
 
+    /**
+     * [OPT-webview-proxy] When true, WebView-based browsing (browser tabs,
+     * minis:// previews' remote subresources) routes through [proxyUrl] via
+     * androidx.webkit ProxyController — overriding the Android system proxy
+     * for the in-app browser only. OkHttp LLM clients keep their own
+     * resolution chain (per-instance → app proxy → system). Off = WebView
+     * follows the system proxy as before. Default off: ProxyController's
+     * proxy rules apply process-wide to WebViews and a bad URL would black
+     * out ALL browsing, so the user must opt in explicitly.
+     */
+    @Volatile var webviewProxyEnabled: Boolean = false
+        private set
+
     @Volatile var llmMaxIdleConnections: Int = DEFAULT_POOL_IDLE
         private set
 
@@ -63,8 +77,10 @@ object NetworkSettings {
         dohEnabled = p.getBoolean(KEY_DOH_ENABLED, false)
         dohUrl = p.getString(KEY_DOH_URL, null)?.ifBlank { null } ?: DEFAULT_DOH_URL
         proxyUrl = p.getString(KEY_PROXY_URL, null)?.ifBlank { null } ?: ""
+        webviewProxyEnabled = p.getBoolean(KEY_WEBVIEW_PROXY_ENABLED, false)
         llmMaxIdleConnections = p.getInt(KEY_POOL_IDLE, DEFAULT_POOL_IDLE)
             .coerceIn(1, MAX_POOL_IDLE)
+        appContextRef = java.lang.ref.WeakReference(context.applicationContext)
     }
 
     fun setDoh(context: Context, enabled: Boolean, url: String?) {
@@ -82,7 +98,105 @@ object NetworkSettings {
         proxyUrl = url?.trim().takeUnless { it.isNullOrEmpty() } ?: ""
         prefs(context).edit().putString(KEY_PROXY_URL, proxyUrl).apply()
         NetworkMonitor.onNetworkSettingsChanged()
+        // WebView proxy rides the same URL — re-apply on change.
+        applyWebViewProxy()
     }
+
+    /**
+     * [OPT-webview-proxy] Toggle + apply. When enabling with no usable
+     * proxy URL, the toggle still persists (the switch reflects user
+     * intent) but the proxy rules are only installed when a URL parses —
+     * the settings screen surfaces that state.
+     */
+    fun setWebviewProxyEnabled(context: Context, enabled: Boolean) {
+        webviewProxyEnabled = enabled
+        prefs(context).edit().putBoolean(KEY_WEBVIEW_PROXY_ENABLED, enabled).apply()
+        applyWebViewProxy()
+    }
+
+    /**
+     * [OPT-webview-proxy] Push or clear WebView proxy rules via
+     * androidx.webkit ProxyController. Rules apply to ALL WebViews in the
+     * process (already-created ones included — no restart needed).
+     *
+     * Semantics:
+     *  - enabled + parseable app proxy → install "host:port" rule
+     *  - otherwise → clearProxyOverride (back to WebView's default =
+     *    system proxy). clearProxyOverride is also the correct call on
+     *    first boot when nothing was ever set.
+     *
+     * The ProxyController API is async (listenable future); failures are
+     * logged and swallowed — proxy config must never crash the app.
+     * Bypass rules: localhost/loopback always direct so local relays and
+     * minis:// interception tooling stay reachable.
+     */
+    fun applyWebViewProxy() {
+        val ctx = appContextRef?.get()
+        if (ctx == null) {
+            // Called before MinisApp created the settings store — nothing to
+            // apply yet; load() → MinisApp.startup will apply after init.
+            return
+        }
+        val mainExecutor = androidx.core.content.ContextCompat.getMainExecutor(ctx)
+        try {
+            val controller = androidx.webkit.ProxyController.getInstance()
+            val wantProxy = webviewProxyEnabled && proxyUrl.isNotBlank()
+            if (wantProxy) {
+                // ProxyController rules are "host:port" strings — reuse the
+                // parse-only part of parseProxyUrl without building a Proxy.
+                val rule = proxyRuleFromUrl(proxyUrl)
+                if (rule == null) {
+                    android.util.Log.w("NetworkSettings", "WebView proxy enabled but URL unparseable — keeping system proxy")
+                    controller.clearProxyOverride(mainExecutor) {
+                        android.util.Log.i("NetworkSettings", "WebView proxy override cleared (unparseable URL)")
+                    }
+                    return
+                }
+                controller.setProxyOverride(
+                    androidx.webkit.ProxyConfig.Builder()
+                        .addProxyRule(rule)
+                        .addBypassRule("localhost")
+                        .addBypassRule("127.0.0.1")
+                        .addBypassRule("<local>")
+                        .build(),
+                    mainExecutor
+                ) {
+                    android.util.Log.i("NetworkSettings", "WebView proxy override applied: $rule")
+                }
+            } else {
+                controller.clearProxyOverride(mainExecutor) {
+                    android.util.Log.i("NetworkSettings", "WebView proxy override cleared (system proxy)")
+                }
+            }
+        } catch (t: Throwable) {
+            // Old WebView versions without the proxy feature throw — system
+            // proxy continues to apply (original behaviour).
+            android.util.Log.w("NetworkSettings", "WebView proxy apply failed: ${t.message}")
+        }
+    }
+
+    /**
+     * Extract "host:port" from a user-entered proxy URL for ProxyController.
+     * Mirrors parseProxyUrl's accepted shapes; null when malformed.
+     */
+    private fun proxyRuleFromUrl(raw: String): String? {
+        val s = raw.trim()
+        if (s.isEmpty()) return null
+        val withoutScheme = when {
+            s.startsWith("http://", ignoreCase = true) -> s.substring(7)
+            s.startsWith("https://", ignoreCase = true) -> s.substring(8)
+            else -> s
+        }
+        val host = withoutScheme.substringBefore(':').trim()
+        val portPart = withoutScheme.substringAfter(':', missingDelimiterValue = "")
+            .substringBefore('/').trim()
+        val port = portPart.toIntOrNull() ?: return null
+        if (host.isEmpty() || port !in 1..65535) return null
+        return "$host:$port"
+    }
+
+    /** App context captured at load() so applyWebViewProxy is Context-free. */
+    @Volatile private var appContextRef: java.lang.ref.WeakReference<Context>? = null
 
     /**
      * Returns the validated pool capacity, or null when the input is not a

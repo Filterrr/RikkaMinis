@@ -431,6 +431,10 @@ class MinisApp : Application(), ImageLoaderFactory {
         // here is belt-and-suspenders for any future caller change.
         com.openminis.app.network.NetworkSettings.load(this)
         com.openminis.app.network.NetworkMonitor.refreshDoh()
+        // [OPT-webview-proxy] Re-install (or clear) WebView proxy rules from
+        // persisted settings — ProxyController rules do NOT survive process
+        // death, so every cold start must re-apply them.
+        com.openminis.app.network.NetworkSettings.applyWebViewProxy()
         networkMonitor.start(this)
 
         // Register global /var/minis/{memory,skills,shared} bind mounts up-front
