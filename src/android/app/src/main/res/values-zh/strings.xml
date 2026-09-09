@@ -760,10 +760,10 @@
     <string name="settings_network_doh_url">DoH 服务器地址</string>
     <string name="settings_network_doh_invalid">必须是 https:// 开头的 RFC 8484 dns-query 端点。修复前 DoH 保持关闭。</string>
     <string name="settings_network_proxy_header">HTTP 代理</string>
-    <string name="settings_network_proxy_footer">未单独设置代理的提供商将使用此代理；单个提供商的设置优先。需重建客户端（编辑任意提供商）后生效。</string>
+    <string name="settings_network_proxy_footer">总开关：关闭时全部跟随系统代理（LLM 与浏览器）；开启时 LLM 客户端与内置浏览器走下方代理地址，单个提供商的设置仍然优先。更改实时生效。</string>
     <string name="settings_network_proxy_url">代理地址</string>
-    <string name="settings_network_webview_proxy_toggle">应用到浏览器（WebView）</string>
-    <string name="settings_network_webview_proxy_subtitle">让内置浏览器流量也走此代理。关闭时跟随系统代理。已打开的页面立即生效。</string>
+    <string name="settings_network_proxy_toggle">使用自定义代理</string>
+    <string name="settings_network_proxy_toggle_subtitle">关：跟随系统代理 · 开：全部流量（LLM + 浏览器）走下方地址</string>
     <string name="settings_network_pool_header">连接池</string>
     <string name="settings_network_pool_footer">所有 LLM 客户端共享的空闲连接数上限（5 分钟保活）。并行流式会话较多时可调高。</string>
     <string name="settings_network_pool_idle">最大空闲连接数</string>

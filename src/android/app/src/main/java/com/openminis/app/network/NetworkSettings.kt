@@ -38,6 +38,7 @@ object NetworkSettings {
     private const val KEY_PROXY_URL = "proxy.url"
     private const val KEY_POOL_IDLE = "pool.max_idle"
     private const val KEY_WEBVIEW_PROXY_ENABLED = "proxy.webview_enabled"
+    private const val KEY_PROXY_ENABLED = "proxy.enabled"
 
     private const val DEFAULT_DOH_URL = "https://dns.alidns.com/dns-query"
 
@@ -57,16 +58,21 @@ object NetworkSettings {
         private set
 
     /**
-     * [OPT-webview-proxy] When true, WebView-based browsing (browser tabs,
-     * minis:// previews' remote subresources) routes through [proxyUrl] via
-     * androidx.webkit ProxyController — overriding the Android system proxy
-     * for the in-app browser only. OkHttp LLM clients keep their own
-     * resolution chain (per-instance → app proxy → system). Off = WebView
-     * follows the system proxy as before. Default off: ProxyController's
-     * proxy rules apply process-wide to WebViews and a bad URL would black
-     * out ALL browsing, so the user must opt in explicitly.
+     * [OPT-proxy-master-switch] Master switch for the app-configured proxy.
+     *
+     *  - OFF (default): EVERYTHING follows the Android system proxy —
+     *    OkHttp LLM clients use OkHttp's default ProxySelector, WebView
+     *    uses the system proxy. Zero custom proxy behaviour; this is the
+     *    pre-optimization-pack state.
+     *  - ON: LLM clients route through [proxyUrl] (unless an instance has
+     *    its own per-instance override), and WebView routes through it too
+     *    (the old webview-proxy toggle is folded into this switch — one
+     *    switch, one behaviour, no independent half-states).
+     *
+     * Toggling re-applies both surfaces live; the URL still needs to parse
+     * for the WebView rules to install (surfaced in settings).
      */
-    @Volatile var webviewProxyEnabled: Boolean = false
+    @Volatile var proxyEnabled: Boolean = false
         private set
 
     @Volatile var llmMaxIdleConnections: Int = DEFAULT_POOL_IDLE
@@ -77,7 +83,10 @@ object NetworkSettings {
         dohEnabled = p.getBoolean(KEY_DOH_ENABLED, false)
         dohUrl = p.getString(KEY_DOH_URL, null)?.ifBlank { null } ?: DEFAULT_DOH_URL
         proxyUrl = p.getString(KEY_PROXY_URL, null)?.ifBlank { null } ?: ""
-        webviewProxyEnabled = p.getBoolean(KEY_WEBVIEW_PROXY_ENABLED, false)
+        // [OPT-proxy-master-switch] Migrate: the old webview-only toggle
+        // (53d6057→8b1341c builds) folded into the master switch.
+        proxyEnabled = p.getBoolean(KEY_PROXY_ENABLED,
+            p.getBoolean(KEY_WEBVIEW_PROXY_ENABLED, false))
         llmMaxIdleConnections = p.getInt(KEY_POOL_IDLE, DEFAULT_POOL_IDLE)
             .coerceIn(1, MAX_POOL_IDLE)
         appContextRef = java.lang.ref.WeakReference(context.applicationContext)
@@ -98,19 +107,21 @@ object NetworkSettings {
         proxyUrl = url?.trim().takeUnless { it.isNullOrEmpty() } ?: ""
         prefs(context).edit().putString(KEY_PROXY_URL, proxyUrl).apply()
         NetworkMonitor.onNetworkSettingsChanged()
-        // WebView proxy rides the same URL — re-apply on change.
+        // Re-apply both surfaces (LLM clients rebuild on next request;
+        // WebView rules push immediately).
         applyWebViewProxy()
     }
 
     /**
-     * [OPT-webview-proxy] Toggle + apply. When enabling with no usable
-     * proxy URL, the toggle still persists (the switch reflects user
-     * intent) but the proxy rules are only installed when a URL parses —
-     * the settings screen surfaces that state.
+     * [OPT-proxy-master-switch] Toggle the master switch.
+     *  - ON: LLM clients + WebView route through [proxyUrl] (per-instance
+     *    overrides still win for their instance).
+     *  - OFF: everything back to the system proxy; WebView override cleared.
      */
-    fun setWebviewProxyEnabled(context: Context, enabled: Boolean) {
-        webviewProxyEnabled = enabled
-        prefs(context).edit().putBoolean(KEY_WEBVIEW_PROXY_ENABLED, enabled).apply()
+    fun setProxyEnabled(context: Context, enabled: Boolean) {
+        proxyEnabled = enabled
+        prefs(context).edit().putBoolean(KEY_PROXY_ENABLED, enabled).apply()
+        NetworkMonitor.onNetworkSettingsChanged()
         applyWebViewProxy()
     }
 
@@ -140,7 +151,7 @@ object NetworkSettings {
         val mainExecutor = androidx.core.content.ContextCompat.getMainExecutor(ctx)
         try {
             val controller = androidx.webkit.ProxyController.getInstance()
-            val wantProxy = webviewProxyEnabled && proxyUrl.isNotBlank()
+            val wantProxy = proxyEnabled && proxyUrl.isNotBlank()
             if (wantProxy) {
                 // ProxyController rules are "host:port" strings — reuse the
                 // parse-only part of parseProxyUrl without building a Proxy.

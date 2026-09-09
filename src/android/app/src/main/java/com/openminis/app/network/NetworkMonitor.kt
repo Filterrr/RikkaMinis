@@ -130,15 +130,18 @@ class NetworkMonitor {
         }
 
         /**
-         * [OPT-proxy] Resolve the proxy for an instance: instance-level
-         * override first (per-provider relay config), then the app-level
-         * NetworkSettings proxy, then system default (null = OkHttp's own
-         * ProxySelector, which honors the Android system proxy). Malformed
-         * input falls through to the next source rather than failing the
-         * request — a typo in one instance's proxy must not take the whole
-         * provider down.
+         * [OPT-proxy] Resolve the proxy for an LLM request, gated by the
+         * [OPT-proxy-master-switch]:
+         *  - switch OFF → null (OkHttp's default ProxySelector = system
+         *    proxy). Per-instance overrides are IGNORED too — one switch,
+         *    no half-on states.
+         *  - switch ON → instance-level override first, then the app-level
+         *    NetworkSettings proxy. Malformed input falls through to the
+         *    next source rather than failing the request — a typo in one
+         *    instance's proxy must not take the whole provider down.
          */
         fun resolveProxy(instanceProxyUrl: String?): java.net.Proxy? {
+            if (!NetworkSettings.proxyEnabled) return null
             instanceProxyUrl?.trim()?.takeIf { it.isNotEmpty() }?.let { raw ->
                 NetworkSettings.parseProxyUrl(raw)?.let { return it }
             }

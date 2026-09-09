@@ -904,10 +904,10 @@
     <string name="settings_network_doh_url">DoH server URL</string>
     <string name="settings_network_doh_invalid">Must be an https:// URL to an RFC 8484 dns-query endpoint. DoH stays off until fixed.</string>
     <string name="settings_network_proxy_header">HTTP Proxy</string>
-    <string name="settings_network_proxy_footer">Fallback for providers without their own proxy setting. Per-instance overrides win. Requires a client rebuild (any provider edit) to apply.</string>
+    <string name="settings_network_proxy_footer">Master switch: OFF = everything follows the system proxy (LLM clients and browser). ON = LLM clients and the in-app browser route through the URL below; per-provider overrides still win for their provider. Applies live.</string>
     <string name="settings_network_proxy_url">Proxy URL</string>
-    <string name="settings_network_webview_proxy_toggle">Apply to browser (WebView)</string>
-    <string name="settings_network_webview_proxy_subtitle">Route in-app browser traffic through the proxy too. Off = follow the system proxy. Takes effect on open tabs immediately.</string>
+    <string name="settings_network_proxy_toggle">Use configured proxy</string>
+    <string name="settings_network_proxy_toggle_subtitle">Off: system proxy · On: all traffic (LLM + browser) goes through the URL below</string>
     <string name="settings_network_pool_header">Connection Pool</string>
     <string name="settings_network_pool_footer">Idle connections kept alive across all LLM clients (5-minute keep-alive). Raise if you run many parallel streaming sessions.</string>
     <string name="settings_network_pool_idle">Max idle connections</string>
