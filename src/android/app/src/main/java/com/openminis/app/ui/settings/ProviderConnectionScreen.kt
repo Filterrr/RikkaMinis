@@ -67,7 +67,6 @@ fun ProviderConnectionScreen(
 
     var customBaseURL by rememberSaveable { mutableStateOf(instance.customBaseURL ?: "") }
     var customUserAgent by rememberSaveable { mutableStateOf(instance.customUserAgent ?: "") }
-    var proxyUrl by rememberSaveable { mutableStateOf(instance.proxyUrl ?: "") }
 
     fun saveBaseURLSettings() {
         // /v1 is appended automatically for all non-Gemini providers (Gemini
@@ -78,12 +77,11 @@ fun ProviderConnectionScreen(
                 customBaseURL = customBaseURL.ifBlank { null },
                 appendV1Suffix = appendV1,
                 customUserAgent = customUserAgent.ifBlank { null },
-                proxyUrl = proxyUrl.ifBlank { null },
             )
         )
         AppLogger.info(
             TAG,
-            "Saved base URL for ${instance.id}: url='${customBaseURL.ifBlank { "<default>" }}', appendV1=$appendV1, ua='${customUserAgent.ifBlank { "<default>" }}', proxy='${proxyUrl.ifBlank { "<default>" }}'",
+            "Saved base URL for ${instance.id}: url='${customBaseURL.ifBlank { "<default>" }}', appendV1=$appendV1, ua='${customUserAgent.ifBlank { "<default>" }}'",
         )
     }
 
@@ -178,39 +176,6 @@ fun ProviderConnectionScreen(
                                     .onFocusChanged { focusState ->
                                         if (!focusState.isFocused) saveBaseURLSettings()
                                     },
-                            )
-                        }
-                    }
-                    // [OPT-proxy] Per-instance proxy override. Blank = follow
-                    // the app-level proxy setting (Settings → Network), which
-                    // itself defaults to the system proxy. Malformed input is
-                    // tolerated at request time (falls back to the next
-                    // source) — flagged inline but never blocks saving.
-                    Column(modifier = Modifier.padding(vertical = 8.dp)) {
-                        Text(
-                            text = stringResource(R.string.provider_detail_proxy),
-                            style = MaterialTheme.typography.bodyLarge,
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        SectionTextField(
-                            value = proxyUrl,
-                            onValueChange = { proxyUrl = it },
-                            singleLine = true,
-                            placeholder = stringResource(R.string.provider_detail_proxy_placeholder),
-                            fieldModifier = Modifier
-                                .bringIntoViewOnFocus()
-                                .onFocusChanged { focusState ->
-                                    if (!focusState.isFocused) saveBaseURLSettings()
-                                },
-                        )
-                        if (proxyUrl.isNotBlank() &&
-                            com.openminis.app.network.NetworkSettings.parseProxyUrl(proxyUrl) == null
-                        ) {
-                            Spacer(Modifier.height(6.dp))
-                            Text(
-                                text = stringResource(R.string.provider_detail_proxy_invalid),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error,
                             )
                         }
                     }

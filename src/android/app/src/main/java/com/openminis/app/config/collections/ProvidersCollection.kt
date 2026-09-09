@@ -60,7 +60,6 @@ class ProvidersCollection(
             useResponsesAPI(forId),
             azureMode(forId),
             customUserAgent(forId),
-            proxyUrl(forId),
             apiKeyField(forId),
             // OAuth token stays fully hidden — the flow is browser-driven
             // and can't be expressed as a single value.
@@ -347,34 +346,6 @@ class ProvidersCollection(
                     throw ConfigError.InvalidValue("Custom User-Agent is only supported for third-party API-key providers. OAuth providers (Anthropic/Codex) use their own authentication UA and cannot be overridden.")
                 }
                 mutate(id) { it.copy(customUserAgent = s.ifEmpty { null }) }
-            },
-        )
-
-    /**
-     * [OPT-proxy] Per-instance HTTP proxy override. Cloned from
-     * [customUserAgent] in shape (live writer — takes effect on the next
-     * outbound call without a restart, since providerRouteChanged() includes
-     * proxyUrl and the collector rebuilds the cached provider). Malformed
-     * values are ACCEPTED and stored: resolveProxy() falls through to the
-     * app-level proxy at request time, so a typo degrades instead of
-     * wedging. Set to "" to revert to the app-level setting.
-     */
-    private fun proxyUrl(id: String): ConfigField =
-        ClosureField(
-            path = "providers.$id.proxyUrl",
-            displayName = "Proxy Override",
-            description = "HTTP proxy for this provider only (http://host:port). Empty = app-level proxy.",
-            valueSchema = ConfigSchema.Str(maxLength = 256),
-            risk = ConfigRisk.NORMAL,
-            revertable = true,
-            reader = {
-                val inst = repo.instance(id) ?: return@ClosureField ConfigValue.Null
-                ConfigValue.Str(inst.proxyUrl ?: "")
-            },
-            writer = { v ->
-                val s = (v as? ConfigValue.Str)?.value ?: throw ConfigError.TypeMismatch("string")
-                val inst = repo.instance(id) ?: throw ConfigError.InvalidValue("Provider not found")
-                mutate(id) { it.copy(proxyUrl = s.ifEmpty { null }) }
             },
         )
 

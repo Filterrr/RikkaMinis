@@ -38,8 +38,4 @@ data class ProviderInstanceEntity(
     // MIGRATION_3_4's ALTER TABLE backfills existing rows to "not pinned",
     // matching the entity default and the JSON model's `pinned = false`.
     @ColumnInfo(name = "pinned") val pinned: Int = 0,
-    // [OPT-proxy] Per-instance proxy override ("http://host:port"). Nullable
-    // TEXT; null → app-level proxy / system default. MIGRATION_7_8 adds the
-    // column so existing rows backfill to null.
-    @ColumnInfo(name = "proxy_url") val proxyUrl: String? = null,
 )

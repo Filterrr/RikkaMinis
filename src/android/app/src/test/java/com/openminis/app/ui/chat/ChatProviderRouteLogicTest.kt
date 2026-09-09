@@ -69,13 +69,6 @@ class ChatProviderRouteLogicTest {
         )
     }
 
-    @Test
-    fun proxyUrlChangeTriggers() {
-        // [OPT-proxy] Proxy is part of the OkHttp route — a change must
-        // rebuild the cached provider or the old proxy keeps serving.
-        assertTrue(providerRouteChanged(instance(), instance { copy(proxyUrl = "http://127.0.0.1:7890") }))
-    }
-
     // ── Non-route fields (must NOT trigger) ───────────────────────
 
     @Test

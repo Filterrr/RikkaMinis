@@ -94,8 +94,6 @@ fun ProviderConfig.toSnapshot(
             // [P0-pinned-providers] Persist the favorite flag so Room
             // round-trips don't snap pinned instances back to unpinned.
             pinned = if (inst.pinned) 1 else 0,
-            // [OPT-proxy] Persist the per-instance proxy override.
-            proxyUrl = inst.proxyUrl,
         )
     }
 
@@ -227,8 +225,6 @@ fun ProviderConfigSnapshot.toProviderConfig(jsonForBlobs: Json): ProviderConfig 
             },
             // [P0-pinned-providers] Restore the favorite flag on load.
             pinned = row.pinned != 0,
-            // [OPT-proxy] Restore the per-instance proxy override.
-            proxyUrl = row.proxyUrl,
         )
     }.toMutableList()
 

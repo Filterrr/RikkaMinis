@@ -47,13 +47,6 @@ class AnthropicProvider(
      * request. Only set for custom-base Anthropic-compat instances.
      */
     private val customUserAgent: String? = null,
-    /**
-     * [OPT-proxy] Per-instance proxy override ("http://host:port"). null →
-     * app-level proxy (NetworkSettings) → system default. Resolved through
-     * [NetworkMonitor.resolveProxy] so the warmup client and this client
-     * always agree on the route.
-     */
-    private val proxyUrl: String? = null,
 ) : LLMProvider {
     override val name = "Anthropic"
     override var instanceContext: com.openminis.app.data.model.ProviderInstance? = null
@@ -107,17 +100,6 @@ class AnthropicProvider(
                 shouldCompress = { req -> req.url.host.lowercase() == "api.anthropic.com" },
             )
         )
-        // [OPT-doh] Shared DoH resolver when enabled in settings (null =
-        // system DNS). Localhost names always bypass DoH.
-        .dns(com.openminis.app.network.NetworkMonitor.buildDns())
-        // [OPT-proxy] Per-instance → app-level → system default.
-        .apply {
-            com.openminis.app.network.NetworkMonitor.resolveProxy(proxyUrl)
-                ?.let { proxy(it) }
-        }
-        // [OPT-nettrace] Shared per-call network-leg tracer (was OpenAI-only —
-        // a "mid-stream silence" on this route was previously undiagnosable).
-        .eventListenerFactory { com.openminis.app.network.OkHttpNetTraceListener() }
         .build()
 
     override suspend fun sendMessageClamped(

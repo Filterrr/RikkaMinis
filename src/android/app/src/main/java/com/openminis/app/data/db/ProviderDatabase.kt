@@ -35,7 +35,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ProviderAgentLoopIdEntity::class,
         ProviderConfigMetaEntity::class,
     ],
-    version = 8,
+    version = 7,
     exportSchema = false,
 )
 abstract class ProviderDatabase : RoomDatabase() {
@@ -162,19 +162,6 @@ abstract class ProviderDatabase : RoomDatabase() {
             }
         }
 
-        /**
-         * [OPT-proxy] Add the per-instance proxy override column. Pure
-         * additive nullable TEXT ALTER so every existing provider row
-         * backfills to null (= app-level proxy / system default) — no data
-         * rewrite, no provider drop. Same shape as the [GH#68] /
-         * [P0-pinned-providers] additive migrations.
-         */
-        val MIGRATION_7_8 = object : Migration(7, 8) {
-            override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL("ALTER TABLE provider_instances ADD COLUMN proxy_url TEXT")
-            }
-        }
-
         fun getInstance(context: Context): ProviderDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -182,7 +169,7 @@ abstract class ProviderDatabase : RoomDatabase() {
                     ProviderDatabase::class.java,
                     "provider.db",
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                     .build()
                     .also { INSTANCE = it }
             }

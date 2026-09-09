@@ -210,15 +210,6 @@ data class ProviderInstance(
     // instances may be pinned at once. Boolean default false == old
     // persisted JSON stays valid (coerceInputValues covers missing field).
     var pinned: Boolean = false,
-    // [OPT-proxy] Optional per-instance proxy override, "host:port" or
-    // "http://host:port" (HTTP CONNECT proxy — the only type OkHttp's h2
-    // ping/TTFB watchdogs reason about; SOCKS is intentionally rejected by
-    // NetworkSettings.parseProxyUrl). null/blank → app-level proxy
-    // (NetworkSettings.proxyUrl) → system default. Takes effect on the next
-    // provider rebuild — providerRouteChanged() includes it, so live edits
-    // rebuild the cached provider without a process restart. Field name
-    // matches the iOS-side naming convention for cross-platform interop.
-    var proxyUrl: String? = null,
 ) {
     /** Returns the effective API base URL, applying v1 suffix if configured. */
     val effectiveBaseURL: String?

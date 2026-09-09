@@ -423,18 +423,6 @@ class MinisApp : Application(), ImageLoaderFactory {
         // The monitor writes /etc/resolv.conf immediately and on every
         // ConnectivityManager callback so shells inside the sandbox see fresh
         // DNS servers after Wi-Fi ↔ cellular swaps or VPN toggles.
-        //
-        // [OPT-doh/OPT-proxy/OPT-pool-capacity] Load persisted network
-        // settings BEFORE the monitor starts, then build the shared DoH
-        // resolver once up-front (later toggles rebuild it on write).
-        // start() is idempotent about NetworkSettings.load, so ordering
-        // here is belt-and-suspenders for any future caller change.
-        com.openminis.app.network.NetworkSettings.load(this)
-        com.openminis.app.network.NetworkMonitor.refreshDoh()
-        // [OPT-webview-proxy] Re-install (or clear) WebView proxy rules from
-        // persisted settings — ProxyController rules do NOT survive process
-        // death, so every cold start must re-apply them.
-        com.openminis.app.network.NetworkSettings.applyWebViewProxy()
         networkMonitor.start(this)
 
         // Register global /var/minis/{memory,skills,shared} bind mounts up-front

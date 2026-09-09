@@ -83,10 +83,6 @@ internal object ProviderMutationMethods {
             appendV1Suffix = appendV1Suffix,
             useResponsesAPI = useResponsesAPI,
             customUserAgent = customUserAgent,
-            // [OPT-proxy] Malformed input is accepted here and flagged at
-            // request time (resolveProxy falls through to the next source),
-            // so a typo can't block instance creation.
-            proxyUrl = params.optString("proxyUrl", "").ifEmpty { null },
         )
 
         // [T-provider-no-static-seed] addInstance no longer seeds anything —
@@ -144,14 +140,6 @@ internal object ProviderMutationMethods {
             }
         } else current.imageEndpointMode
 
-        // [OPT-proxy] Optional proxyUrl patch. Malformed values are stored
-        // (create-path parity) and fall through to the next proxy source at
-        // request time — the UI flags them inline.
-        val proxyUrl: String? = if (params.has("proxyUrl")) {
-            if (params.isNull("proxyUrl")) null
-            else params.optString("proxyUrl", "").ifEmpty { null }
-        } else current.proxyUrl
-
         val updated = current.copy(
             label = if (params.has("label")) params.optString("label", current.label) else current.label,
             customBaseURL = if (params.has("customBaseURL")) {
@@ -162,7 +150,6 @@ internal object ProviderMutationMethods {
             useResponsesAPI = if (params.has("useResponsesAPI")) params.optBoolean("useResponsesAPI", current.useResponsesAPI) else current.useResponsesAPI,
             isEnabled = if (params.has("isEnabled")) params.optBoolean("isEnabled", current.isEnabled) else current.isEnabled,
             customUserAgent = customUserAgent,
-            proxyUrl = proxyUrl,
             imageEndpointMode = imageEndpointMode,
             imageEndpointResolved = if (params.has("imageEndpointMode") && imageEndpointMode != ImageEndpointMode.auto) {
                 null

@@ -35,12 +35,12 @@ object ProviderFactory {
             ProviderType.anthropic -> {
                 // [T-provider-custom-user-agent] Only meaningful for custom-base
                 // (relay) instances; on the official direct path it's null.
-                if (basePath != null) AnthropicProvider(apiKey, model, basePath, customUserAgent = instance.customUserAgent, proxyUrl = instance.proxyUrl)
-                else AnthropicProvider(apiKey, model, proxyUrl = instance.proxyUrl)
+                if (basePath != null) AnthropicProvider(apiKey, model, basePath, customUserAgent = instance.customUserAgent)
+                else AnthropicProvider(apiKey, model)
             }
             ProviderType.gemini -> {
-                if (basePath != null) GeminiProvider(apiKey, model, basePath, proxyUrl = instance.proxyUrl)
-                else GeminiProvider(apiKey, model, proxyUrl = instance.proxyUrl)
+                if (basePath != null) GeminiProvider(apiKey, model, basePath)
+                else GeminiProvider(apiKey, model)
             }
             ProviderType.openAI -> {
                 val base = basePath ?: "https://api.openai.com/v1"
@@ -53,9 +53,6 @@ object ProviderFactory {
                     // /responses for custom-base OpenAI-compat relays; null
                     // on the official direct path.
                     customUserAgent = instance.customUserAgent,
-                    // [OPT-proxy] Per-instance proxy override (falls back to
-                    // the app-level proxy inside NetworkMonitor.resolveProxy).
-                    proxyUrl = instance.proxyUrl,
                     // [T-android-azure-openai] Azure auths with api-key +
                     // deployments-path URL. Pass the RAW customBaseURL (not
                     // the /v1-appended, query-stripped effectiveBaseURL) so
@@ -106,11 +103,9 @@ object ProviderFactory {
             // connection so the first send skips DNS+TCP+TLS — 1-3s saved on
             // cold start, more through a proxy. Debounced per host inside
             // the warmer; fire-and-forget, no credentials on the wire.
-            val warmUrl = instance.effectiveBaseURL ?: defaultBaseFor(instance.providerType)
-            ConnectionWarmer.warm(warmUrl)
-            // [OPT-rewarm] Book-keep the origin so NetworkMonitor can re-warm
-            // it after a connectivity transition (DISCONNECTED -> CONNECTED).
-            ConnectionWarmer.noteForRewarm(warmUrl)
+            ConnectionWarmer.warm(
+                instance.effectiveBaseURL ?: defaultBaseFor(instance.providerType),
+            )
         }
     }
 
