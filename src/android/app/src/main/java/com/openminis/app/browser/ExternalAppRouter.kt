@@ -62,7 +62,7 @@ object ExternalAppRouter {
         } catch (t: Throwable) {
             AppLogger.warning(TAG, "Custom Tab failed, falling back to ACTION_VIEW: ${t.message}")
             runCatching {
-                val intent = Intent(Intent.ACTION_VIEW, url)
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 context.startActivity(intent)
             }.onFailure {
