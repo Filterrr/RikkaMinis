@@ -898,6 +898,9 @@
     <string name="provider_detail_proxy_invalid">Format: http://host:port (HTTP proxy only). This value will be ignored until fixed.</string>
     <string name="settings_network_title">Network</string>
     <string name="settings_network_subtitle">DNS over HTTPS</string>
+    <string name="todo_badge_label">Task summary</string>
+    <string name="todo_sheet_title">Tasks</string>
+    <string name="todo_sheet_empty">No tasks yet. The assistant maintains this list for multi-step work.</string>
     <string name="settings_network_doh_header">DNS over HTTPS</string>
     <string name="settings_network_doh_footer">Resolves API hostnames over encrypted DNS — reduces first-byte latency variance on direct connections. Localhost names always bypass it.</string>
     <string name="settings_network_doh_toggle">Enable DoH</string>

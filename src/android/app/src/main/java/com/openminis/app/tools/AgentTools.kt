@@ -33,6 +33,10 @@ object AgentTools {
             add(ReadImageTool.definition())
         }
         add(browserUseDefinition())
+        // [T-todo-tool] Task-list maintenance: the agent rewrites its plan
+        // via todo_write; the chat top bar shows a floating badge with the
+        // pending count (tap → list).
+        add(todoWriteDefinition())
         // [OPT-browser-websearch-tool] One-shot search: navigate to the
         // configured engine with the query, wait for DOM stability, extract
         // readable text — replaces the 3-round-trip navigate →
@@ -79,6 +83,23 @@ object AgentTools {
     )
 
     // Aligned with iOS AIChatViewModel.swift browser_use definition
+
+    /**
+     * [T-todo-tool] Task-list maintenance, Claude Code TodoWrite semantics:
+     * every call REPLACES the whole list. The top-bar badge renders
+     * pending/total; the sheet renders the full list with status icons.
+     */
+    private fun todoWriteDefinition(): AgentToolDefinition = AgentToolDefinition(
+        name = "todo_write",
+        description = "Maintain a task list (todo list) for the current session. Each call REPLACES the entire list — always send the complete updated list, not a delta. Use it to: (1) show the user the plan for multi-step work, (2) track progress through complex tasks (mark items in_progress before starting, completed when done). Keep 3-7 items, each a short imperative phrase. Skip it for single-step questions. " +
+            "Statuses: pending (not started) / in_progress (actively working — at most ONE item) / completed (done).",
+        parameters = mapOf(
+            "tool_title" to AgentToolParam("string", "A concise 5-10 word summary of what this task-list update does. Use the same language as the user."),
+            "todos" to AgentToolParam("array", "The COMPLETE task list, replacing the previous one. Each item: {\"content\": str, \"status\": \"pending\" | \"in_progress\" | \"completed\"}."),
+        ),
+        required = listOf("tool_title", "todos"),
+        propertyOrdering = listOf("tool_title", "todos"),
+    )
 
     /**
      * [OPT-browser-websearch-tool] Compact search tool. The engine template

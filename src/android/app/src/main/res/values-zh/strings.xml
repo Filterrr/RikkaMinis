@@ -753,6 +753,9 @@
     <string name="provider_detail_proxy_invalid">格式应为 http://host:port（仅支持 HTTP 代理）。修复前此值将被忽略。</string>
     <string name="settings_network_title">网络</string>
     <string name="settings_network_subtitle">DNS over HTTPS</string>
+    <string name="todo_badge_label">任务摘要</string>
+    <string name="todo_sheet_title">任务列表</string>
+    <string name="todo_sheet_empty">暂无任务。助手会在多步骤工作中维护此列表。</string>
     <string name="settings_network_doh_header">DNS over HTTPS</string>
     <string name="settings_network_doh_footer">通过加密 DNS 解析 API 域名——降低直连时首字节延迟的波动。localhost 始终绕过。</string>
     <string name="settings_network_doh_toggle">启用 DoH</string>
