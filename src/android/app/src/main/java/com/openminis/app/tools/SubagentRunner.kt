@@ -499,6 +499,14 @@ class SubagentRunner(
                     ))
                 }
 
+                // [T-subagent-checkpoint] Persist a mid-run progress anchor
+                // after every completed turn. Process death never executes
+                // the terminal journal paths below (they live in return /
+                // exception handlers), so this per-turn write is the only
+                // recovery signal a killed run leaves behind. Best-effort —
+                // failures are swallowed inside the checkpoint writer.
+                SubagentRunCheckpoint.write(run, turns, text, context)
+
                 if (runUntil == SubagentSkill.RUN_UNTIL_TURN_COMPLETE) {
                     // [T-subagent-first-turn] Caller asked for a first-turn
                     // readout only — stop after turn 1's tools EXECUTED and
@@ -739,6 +747,11 @@ class SubagentRunner(
             artifacts = artifacts,
             context = context,
         )
+        // [T-subagent-checkpoint] Terminal state reached — the journal is
+        // now the durable record, so the mid-run checkpoint has served its
+        // purpose. Sweep it so a live run never leaves a stale .ckpt that
+        // recovery tooling would misread as an interrupted run.
+        SubagentRunCheckpoint.sweep(run.id, context, sessionId.ifEmpty { run.sessionId })
         // [T-subagent-orchestration] Surface the anchor in the registry so
         // the detail page + join results can point at it.
         if (!path.isNullOrEmpty()) registry.setJournalPath(run.id, path)

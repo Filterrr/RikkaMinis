@@ -456,6 +456,7 @@
     <string name="menu_compacting_in_progress">壓縮中…</string>
     <string name="chat_menu_thinking">思考強度</string>
     <string name="chat_menu_enhanced_cache">增強快取</string>
+    <string name="chat_menu_rollback_workspace">復原本輪工作區變更</string>
     <string name="chat_menu_fast_mode">啟用高速模式</string>
     <string name="chat_menu_slash_commands">斜線命令</string>
     <string name="enhanced_cache_dialog_body">增強快取會將 Anthropic 提示快取從 5 分鐘延長至 1 小時，在長對話中保持上下文，可能產生額外的快取寫入費用。是否開啟？</string>
@@ -1028,6 +1029,8 @@
     <string name="add_provider">新增 AI 服務商</string>
     <string name="appearance">外觀</string>
     <string name="no_sessions">暫無會話</string>
+    <string name="drawer_search_hint">搜尋對話…</string>
+    <string name="drawer_search_empty">無符合結果</string>
     <string name="no_providers">新增一個提供商以開始使用</string>
     <string name="send">傳送</string>
     <string name="type_message">輸入訊息…</string>
@@ -1404,6 +1407,14 @@
     <string name="storage_clear_confirm_text">這將刪除 %1$s 的檔案。此操作無法撤銷。</string>
     <string name="storage_clear_confirm_button">清除 %1$s</string>
     <string name="usage_title">用量</string>
+    <string name="provider_health_empty">還沒有記錄到模型呼叫。本次應用程式工作階段內首次呼叫後，這裡會顯示統計。</string>
+    <string name="action_cancel">取消</string>
+    <string name="provider_health_title">提供商健康</string>
+    <string name="provider_health_subtitle">每個模型的 TTFB P50/P95、成功率與最近失敗原因</string>
+    <string name="provider_health_success_rate">%d%% 成功</string>
+    <string name="provider_health_ttfb">TTFB %d/%d ms · %d 次呼叫</string>
+    <string name="provider_health_last_failure">最近失敗：%s</string>
+    <string name="provider_health_footer">記憶體中統計每個模型最近 20 次呼叫 —— 應用程式重新啟動後歸零。</string>
     <string name="usage_section_total">總用量</string>
     <string name="usage_label_total_input">總輸入（含快取）</string>
     <string name="usage_label_output">輸出 Token</string>
@@ -1594,6 +1605,9 @@
     <plurals name="bg_service_sessions">
         <item quantity="one">%d 個會話</item>
         <item quantity="other">%d 個會話</item>
+    </plurals>
+    <plurals name="drawer_search_result_count">
+        <item quantity="other">%d 筆符合</item>
     </plurals>
 
     <!-- Fix: minis:// 連結失效/檔案已清理時的提示，以及本地化的外部 scheme 攔截文案。 -->

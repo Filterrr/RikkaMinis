@@ -95,6 +95,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
@@ -2328,11 +2329,15 @@ fun ChatScreen(
                     val enhancedCacheOn by viewModel.enhancedCacheEnabled.collectAsState()
                     val showFastMode by viewModel.showFastModeToggle.collectAsState()
                     val fastModeOn by viewModel.fastModeEnabled.collectAsState()
+                    // [feat-workspace-snapshot] Rollback entry only appears
+                    // while the latest run actually left a restorable snapshot.
+                    val wsRollbackAvailable = remember { viewModel.hasWorkspaceSnapshot() }
                     val visibleMenuCount =
                         visibleCustomEntries.size +
                             (if (showEnhancedCache) 1 else 0) +
                             (if (showFastMode) 1 else 0) +
-                            (if (BuildConfig.DEBUG) 1 else 0)
+                            (if (BuildConfig.DEBUG) 1 else 0) +
+                            (if (wsRollbackAvailable) 1 else 0)
                     // Lone customizable entry (Terminal / Browser / Export / …)
                     // → direct button. Icon + label come from the same
                     // ChatActionCatalog the settings screen uses, so the
@@ -2652,6 +2657,24 @@ fun ChatScreen(
                             // one-time extra-billing confirmation. (These
                             // flags are collected above, next to the "..."
                             // visibility check.)
+                            if (wsRollbackAvailable) {
+                                // [feat-workspace-snapshot] Undo every
+                                // workspace file change made by the latest
+                                // run. Sits with the other destructive-adjacent
+                                // actions; confirm inside the VM — no extra
+                                // dialog — because the snapshot itself is the
+                                // undo guarantee.
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.chat_menu_rollback_workspace)) },
+                                    onClick = {
+                                        showChatMenu = false
+                                        viewModel.rollbackWorkspaceToRunSnapshot()
+                                    },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.Restore, contentDescription = null)
+                                    },
+                                )
+                            }
                             if (showEnhancedCache) {
                                 DropdownMenuItem(
                                     text = { Text(stringResource(R.string.chat_menu_enhanced_cache)) },

@@ -62,6 +62,17 @@ class BackgroundTaskNotifier(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    // [fix-vibrate-debounce] Session activity flickers: a long agent run
+    // with queued-message interrupts, sheet toggles or model-worker
+    // restarts can cross the active→inactive boundary several times in a
+    // row, and each crossing fired a full completion buzz — the "constant
+    // vibration" report. Debounce per session: at most one buzz every
+    // VIBRATE_COOLDOWN_MS (30s), keyed by session id. The tray
+    // notification path (backgrounded) is NOT debounced — that fires once
+    // per real completion and is user-dismissable.
+    private val lastVibrateAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val VIBRATE_COOLDOWN_MS = 30_000L
+
     private var completionSoundId: Int = 0
     private var soundPool: SoundPool? = null
 
@@ -102,7 +113,9 @@ class BackgroundTaskNotifier(
                     // completion. Driving the hardware vibrator directly
                     // with VibrationEffect is NOT subject to MIUI
                     // notification-channel suppression on Xiaomi ROMs.
-                    vibrateCompletion()
+                    // [fix-vibrate-debounce] Cooldown-gated so session
+                    // activity flicker can't machine-gun the vibrator.
+                    vibrateCompletion(sessionId)
                     return@launch
                 }
 
@@ -120,7 +133,9 @@ class BackgroundTaskNotifier(
                     context.getString(R.string.notif_task_completed_body)
                 }
                 postNotification(sessionId, title, body)
-                vibrateCompletion()
+                // Background tray path: one buzz per real, user-visible
+                // completion (no debounce — see [fix-vibrate-debounce]).
+                vibrateCompletion(sessionId, debounce = false)
             } catch (t: Throwable) {
                 AppLogger.warning(TAG, "notifyTaskCompleted failed: ${t.message}")
             }
@@ -242,8 +257,23 @@ class BackgroundTaskNotifier(
      * the caller's notification channel. Errors are swallowed so a vibrator
      * hiccup can never block the completion-notification path.
      */
-    private fun vibrateCompletion() {
+    private fun vibrateCompletion(sessionId: String? = null, debounce: Boolean = true) {
         try {
+            // [fix-vibrate-debounce] At most one buzz per session per
+            // cooldown window. putIfAbsent-style CAS keeps the first
+            // caller and rejects the flood behind it.
+            if (debounce && sessionId != null) {
+                val now = System.currentTimeMillis()
+                val last = lastVibrateAt[sessionId] ?: 0L
+                if (now - last < VIBRATE_COOLDOWN_MS) return
+                lastVibrateAt[sessionId] = now
+                // Opportunistic cleanup so the map can't grow unbounded
+                // across a very long session history.
+                if (lastVibrateAt.size > 64) {
+                    val cutoff = now - VIBRATE_COOLDOWN_MS * 4
+                    lastVibrateAt.entries.removeIf { it.value < cutoff }
+                }
+            }
             val vibrator =
                 ContextCompat.getSystemService(context, Vibrator::class.java) ?: return
             if (!vibrator.hasVibrator()) return

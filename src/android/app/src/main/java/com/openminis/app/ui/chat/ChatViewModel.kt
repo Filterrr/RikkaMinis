@@ -64,6 +64,7 @@ import com.openminis.app.agent.shell.BashismDetector
 import com.openminis.app.agent.shell.BashismReminder
 import com.openminis.app.agent.shell.OnDemandBash
 import com.openminis.app.sandbox.ExecutionCoordinator
+import com.openminis.app.sandbox.WorkspaceSnapshot
 import com.openminis.app.sandbox.PRootKernel
 import com.openminis.app.terminal.MinisOpenUrlBroker
 import com.openminis.app.terminal.MinisUrlMarker
@@ -103,6 +104,8 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.onCompletion
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.toList
@@ -1408,6 +1411,45 @@ class ChatViewModel(
      */
     fun setEnhancedCacheEnabled(enabled: Boolean) {
         _enhancedCacheEnabled.value = enabled
+    }
+
+    // ── [feat-workspace-snapshot] Run-level workspace rollback ──────────
+
+    /**
+     * True while the most recent run has a restorable workspace snapshot.
+     * Set at [runAgentLoop] entry (after the snapshot is taken); cleared
+     * by [rollbackWorkspaceToRunSnapshot] once consumed, and when the
+     * session's snapshots are dropped. The chat menu uses this to show or
+     * hide the rollback entry.
+     */
+    private val _workspaceSnapshotAvailable = MutableStateFlow(false)
+    val workspaceSnapshotAvailable: StateFlow<Boolean> = _workspaceSnapshotAvailable.asStateFlow()
+
+    /** Whether a rollback for this run's snapshot currently exists. */
+    fun hasWorkspaceSnapshot(): Boolean = WorkspaceSnapshot.latest(sessionId) != null
+
+    /**
+     * Undo every workspace file change made since the latest run snapshot
+     * was taken. Runs on IO; surfaces the result through [sessionToast]
+     * so the user gets direct feedback in the chat. No-op when there is
+     * nothing to roll back to.
+     */
+    fun rollbackWorkspaceToRunSnapshot() {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val summary = WorkspaceSnapshot.rollbackLatest(sessionId, context)
+            withContext(kotlinx.coroutines.Dispatchers.Main) {
+                if (summary != null) {
+                    _workspaceSnapshotAvailable.value = false
+                    sessionToast(summary)
+                } else {
+                    sessionToast("No workspace snapshot available for this run")
+                }
+            }
+        }
+    }
+
+    private fun sessionToast(message: String) {
+        android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_LONG).show()
     }
 
     /**
@@ -7077,6 +7119,15 @@ class ChatViewModel(
                 "no provider instance context for remote execution",
                 hadChunks = false,
             )
+        // [feat-provider-health] One health record per streamed attempt.
+        // TTFB is measured from now to the first chunk of any kind; success
+        // / failure is stamped when the flow terminates.
+        val healthAttempt = com.openminis.app.diagnostics.ProviderHealthTracker.begin(
+            modelId = provider.model.id,
+            modelDisplayName = provider.model.displayName,
+        )
+        val healthStartMs = android.os.SystemClock.elapsedRealtime()
+        var healthFirstChunkSeen = false
         AppLogger.info(
             TAG_STREAM,
             "chat stream offload -> :modelservice provider=${provider.name} model=${provider.model.id}",
@@ -7094,6 +7145,33 @@ class ChatViewModel(
             tools = tools,
             thinkingLevel = thinkingLevel,
         )
+            .onEach {
+                // [feat-provider-health] First chunk of any kind stops the
+                // TTFB clock exactly once.
+                if (!healthFirstChunkSeen) {
+                    healthFirstChunkSeen = true
+                    com.openminis.app.diagnostics.ProviderHealthTracker.recordFirstToken(
+                        healthAttempt,
+                        android.os.SystemClock.elapsedRealtime() - healthStartMs,
+                    )
+                }
+            }
+            .onCompletion { cause ->
+                if (cause == null) {
+                    com.openminis.app.diagnostics.ProviderHealthTracker.finish(
+                        healthAttempt, success = true,
+                        durationMs = android.os.SystemClock.elapsedRealtime() - healthStartMs,
+                    )
+                } else if (cause !is kotlinx.coroutines.CancellationException) {
+                    com.openminis.app.diagnostics.ProviderHealthTracker.finish(
+                        healthAttempt, success = false,
+                        failureReason = cause.message ?: cause.javaClass.simpleName,
+                        durationMs = android.os.SystemClock.elapsedRealtime() - healthStartMs,
+                    )
+                }
+                // Cancellation: user stop — recorded as neither success nor
+                // failure (not the provider's fault); drop the attempt.
+            }
     }
 
     private suspend fun runAgentLoop(
@@ -7112,6 +7190,13 @@ class ChatViewModel(
         // 预算只做观察（consume 并记录，不阻断），T7-C 再启用 enforced。
         val runId = java.util.UUID.randomUUID().toString()
         activeRunId = runId
+        // [feat-workspace-snapshot] Snapshot the workspace BEFORE this run
+        // can mutate anything. Runs on the IO dispatcher we're already on;
+        // null (empty/missing/oversized workspace) simply means "no
+        // rollback available", never an error. The result feeds the
+        // chat-menu rollback entry via _workspaceSnapshotAvailable.
+        val wsSnapshotTaken = WorkspaceSnapshot.snapshotBeforeRun(activeSessionId, runId, context) != null
+        _workspaceSnapshotAvailable.value = wsSnapshotTaken
         val observeBudget = AgentExecutionBudget(
             startedAtMonotonicMs = SystemClock.elapsedRealtime(),
             deadlineMonotonicMs = SystemClock.elapsedRealtime() + T7_OBSERVE_DEADLINE_MS,
