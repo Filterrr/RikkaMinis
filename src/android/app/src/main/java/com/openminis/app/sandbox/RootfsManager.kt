@@ -1705,11 +1705,24 @@ class RootfsManager private constructor(private val context: Context) {
             Log.w(TAG, "[DNS] Failed to read system DNS: ${e.message}")
         }
 
-        // Fallback to public DNS if no system servers were found
-        if (!resolvConf.contains("nameserver")) {
-            Log.i(TAG, "[DNS] no system DNS — using fallback: 8.8.8.8, 8.8.4.4")
-            resolvConf.append("nameserver 8.8.8.8\n")
-            resolvConf.append("nameserver 8.8.4.4\n")
+        // [P1-4-resolv-resilience] Always append ONE public fallback server
+        // at the END of the list (system servers keep priority). Previously
+        // the fallback only fired when the system returned ZERO servers — a
+        // single system DNS turning into a black hole then stalled every
+        // sandbox resolution with no recourse. Appended (not prepended), so
+        // normal traffic never detours through the public resolver.
+        if (!resolvConf.contains("223.5.5.5")) {
+            resolvConf.append("nameserver 223.5.5.5\n")
+            Log.i(TAG, "[DNS] appended AliDNS fallback resolver 223.5.5.5")
+        }
+
+        // [P1-4-resolv-resilience] Tighten glibc's resolver retry posture.
+        // Defaults are timeout:5 attempts:2 → up to 10s of dead waiting per
+        // lookup when the first nameserver black-holes. timeout:1 attempts:2
+        // caps that at ~2s per server and lets the resolver rotate to the
+        // next entry (including the appended fallback above) quickly.
+        if (!resolvConf.contains("options ")) {
+            resolvConf.append("options timeout:1 attempts:2\n")
         }
 
         try {

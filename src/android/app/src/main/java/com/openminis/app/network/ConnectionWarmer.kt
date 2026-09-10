@@ -32,6 +32,24 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * Privacy note: the HEAD carries NO credentials, no body, no user data —
  * just a bare request to the API origin.
+ *
+ * [OPT7-warm-reconnect] Network-recovery re-warm: [NetworkMonitor] evicts
+ * the shared pool on every network transition, which silently nullifies any
+ * earlier warmup — yet the old code left the 60s success-debounce stamp in
+ * place, so the next `warm()` call inside the window was dropped and the
+ * first request after a Wi-Fi→cellular swap paid the full cold-connect cost.
+ * [onNetworkChanged] now (1) clears all debounce stamps and (2) re-warms the
+ * most recently warmed origins so the recovery path re-arms the pool before
+ * the user's next send. NetworkMonitor fires it on DISCONNECTED → CONNECTED
+ * (and on interface swaps — see its onAvailable handler).
+ *
+ * [P1-6-warm-client-reuse] The per-warm `OkHttpClient.Builder().build()` is
+ * gone: one lazily-built client is reused for every warmup. Safe because the
+ * route-relevant inputs (shared pool, DoH resolver) are resolved at LOOKUP
+ * time — `NetworkMonitor.buildDns()` reads `sharedDohDns` per lookup and the
+ * pool reference is a process-wide singleton — so a cached client always
+ * agrees with the real request's routing. The builder allocation only ever
+ * happened per warmup call before; now it happens once per process.
  */
 object ConnectionWarmer {
 
@@ -49,29 +67,48 @@ object ConnectionWarmer {
     private const val FAILURE_DEBOUNCE_MS = 8_000L
 
     /**
+     * How many distinct origins [onNetworkChanged] re-warms, most recent
+     * first. Provider switches are user-paced, so the realistic window
+     * between a network flap and the next send covers 2-3 origins at most;
+     * re-warming every origin ever seen would spray HEADs at stale hosts.
+     */
+    private const val REWARM_ORIGINS = 3
+
+    /**
      * Debounce key = "scheme://host:port" (origin), not bare host — the old
      * host-only key let https://api.example.com and https://api.example.com:8443
      * collapse into one bucket, suppressing the 8443 warmup entirely. Keys
-     * and values are per-origin now.
+     * and values are per-origin now. Insertion order = warmth recency
+     * (ConcurrentHashMap is unordered, so recency is tracked separately in
+     * [recentOrigins]).
      */
     private val lastWarmedAtMs = ConcurrentHashMap<String, AtomicLong>()
 
+    /** Recently warmed origins, newest first — the [onNetworkChanged] set. */
+    private val recentOrigins = ArrayDeque<String>()
+
     /**
-     * Fire-and-forget warmup. Safe to call from any thread, any frequency —
-     * internally debounced. [baseUrl] is the provider base URL (origin is
-     * what matters; path/query are stripped).
+     * [P1-6-warm-client-reuse] One client per process. Shares the LLM
+     * connection pool so warmed connections land where real requests can
+     * reuse them; the DNS wrapper re-reads the CURRENT shared DoH resolver
+     * on every lookup, so DoH toggles apply without rebuilding this client.
      */
+    private val warmClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectionPool(NetworkMonitor.sharedLLMConnectionPool)
+            .dns(NetworkMonitor.buildDns())
+            .connectTimeout(5_000L, java.util.concurrent.TimeUnit.MILLISECONDS)
+            .readTimeout(5_000L, java.util.concurrent.TimeUnit.MILLISECONDS)
+            .writeTimeout(5_000L, java.util.concurrent.TimeUnit.MILLISECONDS)
+            .build()
+    }
+
+    /** Fire-and-forget warmup. Safe to call from any thread, any frequency —
+     *  internally debounced. [baseUrl] is the provider base URL (origin is
+     *  what matters; path/query are stripped). */
+    @JvmStatic
     fun warm(baseUrl: String?) {
-        val url = baseUrl ?: return
-        val httpUrl = try {
-            url.trim().toHttpUrl()
-        } catch (_: IllegalArgumentException) {
-            return // user-typed / malformed base — ignore
-        }
-        // OkHttp's port is already the effective port (default substituted),
-        // so origin is scheme://host:port verbatim.
-        val origin = "${httpUrl.scheme}://${httpUrl.host}:${httpUrl.port}"
-        if (httpUrl.host.isBlank()) return
+        val origin = originOf(baseUrl) ?: return
 
         val now = System.currentTimeMillis()
         val stamp = lastWarmedAtMs.getOrPut(origin) { AtomicLong(0L) }
@@ -80,42 +117,76 @@ object ConnectionWarmer {
         if (now - last < DEBOUNCE_MS) return
         if (!stamp.compareAndSet(last, now)) return
 
-        val headUrl = httpUrl.newBuilder()
-            .scheme(httpUrl.scheme)     // preserve http/https as configured
-            .encodedPath("/")
-            .query(null)
-            .fragment(null)
-            .build()
+        rememberOrigin(origin)
+        enqueueWarm(origin)
+    }
 
-        // Use a bare client that SHARES the LLM connection pool (OkHttp
-        // explicitly supports sharing pools across clients). No auth headers,
-        // short timeouts — this must never delay or outlive its purpose.
-        //
-        // [FIX-doh-warmup-route] The DNS resolver MUST mirror the real
-        // provider clients: OkHttp pool reuse is route-keyed and the route
-        // includes the resolved IP. With DoH on, the real clients resolve
-        // via buildDns() (which may return different CDN edge IPs than the
-        // system resolver); a warmup that resolved via system DNS would
-        // populate the pool with connections the real request can never
-        // reuse — silently nullifying the warmup whenever DoH is enabled.
-        // buildDns() reads sharedDohDns at lookup time, so the warmup
-        // always agrees with the real request's resolution.
-        val client = OkHttpClient.Builder()
-            .connectionPool(NetworkMonitor.sharedLLMConnectionPool)
-            .dns(NetworkMonitor.buildDns())
-            .connectTimeout(5_000L, java.util.concurrent.TimeUnit.MILLISECONDS)
-            .readTimeout(5_000L, java.util.concurrent.TimeUnit.MILLISECONDS)
-            .writeTimeout(5_000L, java.util.concurrent.TimeUnit.MILLISECONDS)
-            .build()
+    /**
+     * [OPT7-warm-reconnect] Network transition hook, called by
+     * [NetworkMonitor] when connectivity returns (or the interface swaps).
+     * Clears every debounce stamp — the pool was just evicted, so ANY origin
+     * is worth re-warming regardless of when it was last warmed — then
+     * re-warms the most recent [REWARM_ORIGINS] origins immediately.
+     */
+    @JvmStatic
+    fun onNetworkChanged() {
+        if (recentOrigins.isEmpty() && lastWarmedAtMs.isEmpty()) return
+        lastWarmedAtMs.clear()
+        // Snapshot under the deque's monitor; ArrayDeque is not thread-safe.
+        val targets = synchronized(recentOrigins) {
+            recentOrigins.take(REWARM_ORIGINS)
+        }
+        Log.d(TAG, "network changed — re-warming ${targets.size} recent origin(s)")
+        targets.forEach { enqueueWarm(it) }
+    }
 
+    /** Normalize a base URL to its warmable origin, or null to skip. */
+    private fun originOf(baseUrl: String?): String? {
+        val url = baseUrl ?: return null
+        val httpUrl = try {
+            url.trim().toHttpUrl()
+        } catch (_: IllegalArgumentException) {
+            return null // user-typed / malformed base — ignore
+        }
+        if (httpUrl.host.isBlank()) return null
+        // OkHttp's port is already the effective port (default substituted),
+        // so origin is scheme://host:port verbatim.
+        return "${httpUrl.scheme}://${httpUrl.host}:${httpUrl.port}"
+    }
+
+    /** Track recency (newest first, deduplicated, bounded). */
+    private fun rememberOrigin(origin: String) {
+        synchronized(recentOrigins) {
+            recentOrigins.remove(origin)
+            recentOrigins.addFirst(origin)
+            while (recentOrigins.size > REWARM_ORIGINS * 2) recentOrigins.removeLast()
+        }
+    }
+
+    /**
+     * Issue the HEAD request for [origin] (origin string → URL rebuilt here
+     * so both [warm] and [onNetworkChanged] share one enqueue path).
+     */
+    private fun enqueueWarm(origin: String) {
+        val headUrl = try {
+            origin.toHttpUrl().newBuilder()
+                .encodedPath("/")
+                .query(null)
+                .fragment(null)
+                .build()
+        } catch (_: IllegalArgumentException) {
+            return
+        }
+
+        // No auth headers, short timeouts — this must never delay or outlive
+        // its purpose. The connection is pooled regardless of response status
+        // (401/404 fine).
         val headRequest = okhttp3.Request.Builder()
             .url(headUrl)
             .method("HEAD", null)
             .build()
-        val call = client.newCall(headRequest)
-        call.enqueue(object : okhttp3.Callback {
+        warmClient.newCall(headRequest).enqueue(object : okhttp3.Callback {
             override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
-                // Connection is now pooled regardless of status (401/404 fine).
                 response.close()
                 Log.d(TAG, "warm connection pooled origin=$origin status=${response.code}")
             }
@@ -125,7 +196,7 @@ object ConnectionWarmer {
                 // next warm() call is eligible after the SHORT failure window
                 // — a DNS hiccup must not silence warmups for a full minute
                 // right as the network recovers.
-                stamp.set(0L)
+                lastWarmedAtMs[origin]?.set(0L)
                 Log.d(TAG, "warm skipped origin=$origin: ${e.javaClass.simpleName}")
             }
         })
