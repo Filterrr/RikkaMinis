@@ -7,6 +7,8 @@
     <string name="add_provider">KI-Anbieter hinzufügen</string>
     <string name="appearance">Erscheinungsbild</string>
     <string name="no_sessions">Noch keine Unterhaltungen</string>
+    <string name="drawer_search_hint">Unterhaltungen suchen…</string>
+    <string name="drawer_search_empty">Keine Treffer</string>
     <string name="no_providers">Füge einen Anbieter hinzu, um loszulegen</string>
     <string name="send">Senden</string>
     <string name="type_message">Nachricht eingeben…</string>
@@ -70,6 +72,10 @@
     <plurals name="bg_service_sessions">
         <item quantity="one">%d Sitzung</item>
         <item quantity="other">%d Sitzungen</item>
+    </plurals>
+    <plurals name="drawer_search_result_count">
+        <item quantity="one">%d Treffer</item>
+        <item quantity="other">%d Treffer</item>
     </plurals>
     <string name="battery_opt_section_title">Akkuoptimierung</string>
     <string name="battery_opt_section_footer">Wenn ausgenommen, schickt Android die App während einer Aufgabe nicht in den Schlaf. Wird bei jeder Rückkehr zu diesem Bildschirm erneut geprüft.</string>
@@ -394,6 +400,14 @@
     <string name="storage_reclaim_confirm_text">Dies löscht dauerhaft %1$d verwaiste Einträge (%2$s) aus gelöschten Sitzungen. Andere Unterhaltungen sind nicht betroffen. Dies kann nicht rückgängig gemacht werden.</string>
     <string name="storage_reclaim_confirm_button">Freigeben</string>
     <string name="usage_title">Verbrauch</string>
+    <string name="provider_health_empty">Noch keine Anbieter-Aufrufe aufgezeichnet. Statistiken erscheinen nach dem ersten Aufruf in dieser App-Sitzung.</string>
+    <string name="action_cancel">Abbrechen</string>
+    <string name="provider_health_title">Anbieter-Gesundheit</string>
+    <string name="provider_health_subtitle">TTFB P50/P95, Erfolgsquote und letzter Fehler pro Modell</string>
+    <string name="provider_health_success_rate">%d%% ok</string>
+    <string name="provider_health_ttfb">TTFB %d/%d ms · %d Aufrufe</string>
+    <string name="provider_health_last_failure">Letzter Fehler: %s</string>
+    <string name="provider_health_footer">In-Memory-Statistik der letzten 20 Aufrufe pro Modell — wird beim Neustart zurückgesetzt.</string>
     <string name="usage_section_total">Gesamtverbrauch</string>
     <string name="usage_filter_all">Gesamt</string>
     <string name="usage_filter_7d">Letzte 7 Tage</string>
@@ -813,6 +827,7 @@
     <string name="menu_compacting_in_progress">Wird komprimiert…</string>
     <string name="chat_menu_thinking">Denkstufe</string>
     <string name="chat_menu_enhanced_cache">Erweiterter Cache</string>
+    <string name="chat_menu_rollback_workspace">Workspace-Änderungen zurücksetzen</string>
     <string name="chat_menu_fast_mode">Schnellmodus aktivieren</string>
     <string name="chat_menu_slash_commands">Slash-Befehle</string>
     <string name="enhanced_cache_dialog_body">Der erweiterte Cache verlängert den Prompt-Cache von Anthropic von 5 Minuten auf 1 Stunde und hält den Kontext bei langen Sitzungen bereit. Dies kann zusätzliche Cache-Schreibkosten verursachen. Aktivieren?</string>

@@ -7,6 +7,8 @@
     <string name="add_provider">添加 AI 服务商</string>
     <string name="appearance">外观</string>
     <string name="no_sessions">暂无会话</string>
+    <string name="drawer_search_hint">搜索会话…</string>
+    <string name="drawer_search_empty">无匹配结果</string>
     <string name="no_providers">添加一个提供商以开始使用</string>
     <string name="send">发送</string>
     <string name="type_message">输入消息…</string>
@@ -82,6 +84,9 @@
     <plurals name="bg_service_sessions">
         <item quantity="one">%d 个会话</item>
         <item quantity="other">%d 个会话</item>
+    </plurals>
+    <plurals name="drawer_search_result_count">
+        <item quantity="other">%d 条匹配</item>
     </plurals>
     <string name="battery_opt_section_title">电池优化</string>
     <string name="battery_opt_section_footer">豁免后，Android 不会在任务执行中让应用进入休眠。每次返回此页面会重新检查。</string>
@@ -485,6 +490,14 @@
     <string name="storage_reclaim_confirm_text">这将永久删除已删除会话遗留的 %1$d 个残留项（%2$s）。其余对话不受影响。此操作无法撤销。</string>
     <string name="storage_reclaim_confirm_button">回收</string>
     <string name="usage_title">用量</string>
+    <string name="provider_health_empty">还没有记录到模型调用。本次应用会话内首次调用后，这里会显示统计。</string>
+    <string name="action_cancel">取消</string>
+    <string name="provider_health_title">提供商健康</string>
+    <string name="provider_health_subtitle">每个模型的 TTFB P50/P95、成功率与最近失败原因</string>
+    <string name="provider_health_success_rate">%d%% 成功</string>
+    <string name="provider_health_ttfb">TTFB %d/%d ms · %d 次调用</string>
+    <string name="provider_health_last_failure">最近失败：%s</string>
+    <string name="provider_health_footer">内存中统计每个模型最近 20 次调用 —— 应用进程重启后清零。</string>
     <string name="usage_section_total">总用量</string>
     <string name="usage_filter_all">所有时间</string>
     <string name="usage_filter_7d">近 7 天</string>
@@ -1020,6 +1033,7 @@
     <string name="menu_compacting_in_progress">正在压缩…</string>
     <string name="chat_menu_thinking">思考强度</string>
     <string name="chat_menu_enhanced_cache">增强缓存</string>
+    <string name="chat_menu_rollback_workspace">回滚本轮工作区改动</string>
     <string name="chat_menu_fast_mode">启用高速模式</string>
     <string name="chat_menu_slash_commands">斜杠命令</string>
     <string name="enhanced_cache_dialog_body">增强缓存将 Anthropic 提示缓存从 5 分钟延长到 1 小时，在长会话中保持上下文，可能产生额外的缓存写入费用。是否开启？</string>

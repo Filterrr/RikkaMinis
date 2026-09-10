@@ -200,6 +200,8 @@ object Routes {
     /** T323: System Permissions (Accessibility service status, etc.). */
     const val SYSTEM_PERMISSIONS = "system_permissions"
     const val USAGE_STATS = "usage_stats"
+    /** [feat-provider-health] Provider Health panel (per-model TTFB/success). */
+    const val PROVIDER_HEALTH = "provider_health"
     const val LOGS = "logs"
     const val LOG_DETAIL = "log_detail/{fileName}"
     const val APPEARANCE = "appearance"
@@ -664,6 +666,7 @@ fun AppNavigation(
                 onSoulClick = { navController.safeNavigate(Routes.SOUL) },
                 onPermissionsClick = { navController.safeNavigate(Routes.PERMISSIONS) },
                 onUsageClick = { navController.safeNavigate(Routes.USAGE_STATS) },
+                onProviderHealthClick = { navController.safeNavigate(Routes.PROVIDER_HEALTH) },
                 onAppearanceClick = { navController.safeNavigate(Routes.APPEARANCE) },
                 onNetworkClick = { navController.safeNavigate(Routes.NETWORK_SETTINGS) },
                 onBackgroundClick = { navController.safeNavigate(Routes.BACKGROUND) },
@@ -1265,6 +1268,13 @@ fun AppNavigation(
             UsageStatsScreen(
                 chatDao = chatRepository.dao,
                 providerConfig = providerRepository.config.value,
+                onBack = { navController.safePopBackStack() },
+            )
+        }
+
+        // [feat-provider-health] Per-model TTFB / success-rate panel.
+        composable(Routes.PROVIDER_HEALTH) {
+            ProviderHealthScreen(
                 onBack = { navController.safePopBackStack() },
             )
         }

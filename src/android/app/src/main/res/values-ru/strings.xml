@@ -7,6 +7,8 @@
     <string name="add_provider">Добавить провайдера</string>
     <string name="appearance">Внешний вид</string>
     <string name="no_sessions">Пока нет разговоров</string>
+    <string name="drawer_search_hint">Поиск по чатам…</string>
+    <string name="drawer_search_empty">Нет совпадений</string>
     <string name="no_providers">Добавьте провайдера, чтобы начать</string>
     <string name="send">Отправить</string>
     <string name="type_message">Введите сообщение…</string>
@@ -83,6 +85,12 @@
         <item quantity="few">%d сессии</item>
         <item quantity="many">%d сессий</item>
         <item quantity="other">%d сессии</item>
+    </plurals>
+    <plurals name="drawer_search_result_count">
+        <item quantity="one">%d совпадение</item>
+        <item quantity="few">%d совпадения</item>
+        <item quantity="many">%d совпадений</item>
+        <item quantity="other">%d совпадения</item>
     </plurals>
     <string name="battery_opt_section_title">Оптимизация батареи</string>
     <string name="battery_opt_section_footer">При исключении Android не будет усыплять приложение во время выполнения задачи. Проверяется заново при каждом возврате на этот экран.</string>
@@ -634,6 +642,14 @@
     <string name="storage_reclaim_confirm_text">Будет безвозвратно удалено %1$d осиротевших элементов (%2$s) из удалённых сессий. Остальные диалоги не затрагиваются. Это действие нельзя отменить.</string>
     <string name="storage_reclaim_confirm_button">Освободить</string>
     <string name="usage_title">Использование</string>
+    <string name="provider_health_empty">Вызовы моделей ещё не записаны. Статистика появится после первого вызова в этой сессии приложения.</string>
+    <string name="action_cancel">Отмена</string>
+    <string name="provider_health_title">Состояние провайдеров</string>
+    <string name="provider_health_subtitle">TTFB P50/P95, доля успеха и последняя ошибка по моделям</string>
+    <string name="provider_health_success_rate">%d%% успешно</string>
+    <string name="provider_health_ttfb">TTFB %d/%d мс · %d вызовов</string>
+    <string name="provider_health_last_failure">Последняя ошибка: %s</string>
+    <string name="provider_health_footer">Статистика последних 20 вызовов на модель в памяти — сбрасывается при перезапуске приложения.</string>
     <string name="usage_section_total">Всего использовано</string>
     <string name="usage_filter_all">Всё время</string>
     <string name="usage_filter_7d">Последние 7 дней</string>
@@ -928,6 +944,7 @@
     <string name="menu_compacting_in_progress">Сжатие…</string>
     <string name="chat_menu_thinking">Уровень мышления</string>
     <string name="chat_menu_enhanced_cache">Расширенный кэш</string>
+    <string name="chat_menu_rollback_workspace">Откатить изменения рабочей области</string>
     <string name="chat_menu_fast_mode">Включить быстрый режим</string>
     <string name="chat_menu_slash_commands">Слэш-команды</string>
     <string name="enhanced_cache_dialog_body">Расширенный кэш продлевает кэш промптов Anthropic с 5 минут до 1 часа, сохраняя контекст в длинных сессиях. Это может привести к дополнительной плате за запись в кэш. Включить?</string>

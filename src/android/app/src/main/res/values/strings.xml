@@ -7,6 +7,8 @@
     <string name="add_provider">Add Provider</string>
     <string name="appearance">Appearance</string>
     <string name="no_sessions">No conversations yet</string>
+    <string name="drawer_search_hint">Search conversations…</string>
+    <string name="drawer_search_empty">No matches</string>
     <string name="no_providers">Add a provider to get started</string>
     <string name="send">Send</string>
     <string name="type_message">Type a message…</string>
@@ -103,6 +105,10 @@
     <plurals name="bg_service_sessions">
         <item quantity="one">%d session</item>
         <item quantity="other">%d sessions</item>
+    </plurals>
+    <plurals name="drawer_search_result_count">
+        <item quantity="one">%d match</item>
+        <item quantity="other">%d matches</item>
     </plurals>
     <string name="battery_opt_section_title">Battery optimisation</string>
     <string name="battery_opt_section_footer">When exempted, Android won\'t put the app to sleep mid-task. Re-checked on each return to this screen.</string>
@@ -795,6 +801,14 @@
     <string name="storage_reclaim_confirm_text">This will permanently delete %1$d orphaned item(s) (%2$s) left over from deleted sessions. The remaining conversations are not affected. This cannot be undone.</string>
     <string name="storage_reclaim_confirm_button">Reclaim</string>
     <string name="usage_title">Usage</string>
+    <string name="provider_health_empty">No provider attempts recorded yet. Stats appear after the first model call in this app session.</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="provider_health_title">Provider Health</string>
+    <string name="provider_health_subtitle">TTFB P50/P95, success rate and last failure per model</string>
+    <string name="provider_health_success_rate">%d%% ok</string>
+    <string name="provider_health_ttfb">TTFB %d/%d ms · %d attempts</string>
+    <string name="provider_health_last_failure">Last failure: %s</string>
+    <string name="provider_health_footer">In-memory stats for the last 20 attempts per model — resets when the app process restarts.</string>
     <string name="usage_section_total">Total Usage</string>
     <string name="usage_filter_all">All Time</string>
     <string name="usage_filter_7d">Last 7 Days</string>
@@ -1178,6 +1192,7 @@
     <string name="menu_compacting_in_progress">Compressing…</string>
     <string name="chat_menu_thinking">Thinking Level</string>
     <string name="chat_menu_enhanced_cache">Enhanced Cache</string>
+    <string name="chat_menu_rollback_workspace">Roll back workspace changes</string>
     <string name="chat_menu_fast_mode">Enable Fast Mode</string>
     <string name="chat_menu_slash_commands">Slash Commands</string>
     <string name="enhanced_cache_dialog_body">Enhanced Cache extends Anthropic\'s prompt cache from 5 minutes to 1 hour, keeping context warm for longer sessions. This may add extra cache-write charges. Enable it?</string>

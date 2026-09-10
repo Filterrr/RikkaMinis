@@ -22,8 +22,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.filled.CallSplit
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -111,6 +113,28 @@ fun ChatHistoryDrawer(
     val sessions by chatRepository.observeSessions()
         .collectAsState(initial = emptyList())
 
+    // [feat-drawer-search] Search box above the list. Empty query = the
+    // normal grouped view; non-empty = a flat, relevance-ordered result
+    // list straight off ChatDao.searchSessions (title OR body LIKE match,
+    // Room indices make it cheap at this scale). Debounce lives in the
+    // LaunchedEffect below (150ms) so each keystroke doesn't hammer the DB.
+    var searchQuery by remember { mutableStateOf("") }
+    var searchResults by remember { mutableStateOf<List<ChatSessionEntity>>(emptyList()) }
+    var searchActive by remember { mutableStateOf(false) }
+    LaunchedEffect(searchQuery) {
+        if (searchQuery.isBlank()) {
+            searchActive = false
+            searchResults = emptyList()
+        } else {
+            kotlinx.coroutines.delay(150)
+            val q = searchQuery.trim()
+            searchResults = runCatching {
+                chatRepository.searchSessions("%$q%")
+            }.getOrDefault(emptyList())
+            searchActive = true
+        }
+    }
+
     // [P0-1-drawer-title-visibility] Visibility must not depend on the
     // auto-generated title: a session that has real messages has to be
     // findable even while its title is still pending (or after title
@@ -144,6 +168,48 @@ fun ChatHistoryDrawer(
                     modifier = Modifier.weight(1f),
                 )
             }
+
+            // [feat-drawer-search] Search field between the header and the
+            // draft row. Uses OutlinedTextField (single line, compact) so
+            // IME composition behaves; the clear affordance resets to the
+            // grouped view.
+            androidx.compose.material3.OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                singleLine = true,
+                placeholder = {
+                    Text(
+                        text = stringResource(R.string.drawer_search_hint),
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                },
+                trailingIcon = {
+                    if (searchQuery.isNotEmpty()) {
+                        IconButton(onClick = { searchQuery = "" }) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = stringResource(R.string.action_cancel),
+                                modifier = Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 4.dp),
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp),
+                shape = RoundedCornerShape(12.dp),
+            )
 
             // [composer-draft-v1] Persistent unsent-draft entry. Click resumes
             // the draft session; long-press discards it. Shown above the
@@ -201,7 +267,41 @@ fun ChatHistoryDrawer(
                 )
             }
 
-            if (visibleSessions.isEmpty()) {
+            if (searchActive) {
+                // [feat-drawer-search] Flat result list, most recently
+                // updated first (DAO orders by s.updated_at DESC). Header
+                // states the match count so empty results are unambiguous.
+                LazyColumn(modifier = Modifier.weight(1f)) {
+                    item(key = "search-header") {
+                        Text(
+                            text = androidx.compose.ui.res.pluralStringResource(
+                                R.plurals.drawer_search_result_count,
+                                searchResults.size,
+                                searchResults.size,
+                            ),
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 6.dp, bottom = 2.dp),
+                        )
+                    }
+                    items(searchResults, key = { it.id }) { session ->
+                        val lineage = remember(session.source) {
+                            ForkMapper.parseForkSource(session.source)
+                        }
+                        DrawerSessionRow(
+                            session = session,
+                            selected = session.id == currentSessionId,
+                            onClick = { onSessionClick(session.id) },
+                            onLongClick = { deleteTarget = session },
+                            isPinned = session.pinnedAt != null,
+                            onTogglePin = { onPinSession(session.id) },
+                            forkLineage = lineage,
+                            onOpenForkParent = onOpenForkParent,
+                        )
+                    }
+                    item { Spacer(modifier = Modifier.height(8.dp)) }
+                }
+            } else if (visibleSessions.isEmpty()) {
                 Box(
                     modifier = Modifier
                         .weight(1f)

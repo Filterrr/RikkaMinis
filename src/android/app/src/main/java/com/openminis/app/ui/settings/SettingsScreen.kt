@@ -26,6 +26,7 @@ import androidx.compose.material.icons.outlined.Backup
 import androidx.compose.material.icons.outlined.BatteryFull
 import androidx.compose.material.icons.outlined.Dashboard
 import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.MonitorHeart
 import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.FolderShared
@@ -83,6 +84,8 @@ fun SettingsScreen(
     onSoulClick: () -> Unit = {},
     onPermissionsClick: () -> Unit = {},
     onUsageClick: () -> Unit = {},
+    // [feat-provider-health] Provider Health panel entry.
+    onProviderHealthClick: () -> Unit = {},
     onAppearanceClick: () -> Unit = {},
     onLogsClick: () -> Unit = {},
     onBackupClick: () -> Unit = {},
@@ -143,6 +146,13 @@ fun SettingsScreen(
                     title = stringResource(R.string.settings_token_usage),
                     subtitle = stringResource(R.string.settings_token_usage_subtitle),
                     onClick = onUsageClick,
+                )
+                SettingsItem(
+                    icon = Icons.Outlined.MonitorHeart,
+                    iconColor = ChatColors.link,
+                    title = stringResource(R.string.provider_health_title),
+                    subtitle = stringResource(R.string.provider_health_subtitle),
+                    onClick = onProviderHealthClick,
                     showDivider = false,
                 )
             }

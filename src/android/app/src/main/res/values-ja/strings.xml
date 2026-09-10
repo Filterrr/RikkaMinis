@@ -7,6 +7,8 @@
     <string name="add_provider">AIプロバイダーを追加</string>
     <string name="appearance">外観</string>
     <string name="no_sessions">まだ会話がありません</string>
+    <string name="drawer_search_hint">会話を検索…</string>
+    <string name="drawer_search_empty">一致なし</string>
     <string name="no_providers">プロバイダーを追加してはじめましょう</string>
     <string name="send">送信</string>
     <string name="type_message">メッセージを入力…</string>
@@ -70,6 +72,9 @@
     <plurals name="bg_service_sessions">
         <item quantity="one">%d セッション</item>
         <item quantity="other">%d セッション</item>
+    </plurals>
+    <plurals name="drawer_search_result_count">
+        <item quantity="other">%d 件一致</item>
     </plurals>
     <string name="battery_opt_section_title">電池の最適化</string>
     <string name="battery_opt_section_footer">除外設定にすると、Android はタスク実行中にアプリをスリープさせません。この画面に戻るたびに再確認します。</string>
@@ -394,6 +399,14 @@
     <string name="storage_reclaim_confirm_text">削除済みセッションに残された孤立項目 %1$d 件（%2$s）を完全に削除します。他の会話には影響しません。この操作は元に戻せません。</string>
     <string name="storage_reclaim_confirm_button">回収</string>
     <string name="usage_title">使用量</string>
+    <string name="provider_health_empty">まだモデル呼び出しが記録されていません。このアプリのセッションで最初の呼び出し後に統計が表示されます。</string>
+    <string name="action_cancel">キャンセル</string>
+    <string name="provider_health_title">プロバイダー健康状態</string>
+    <string name="provider_health_subtitle">モデルごとの TTFB P50/P95・成功率・最新の失敗理由</string>
+    <string name="provider_health_success_rate">%d%% 成功</string>
+    <string name="provider_health_ttfb">TTFB %d/%d ms · %d 回</string>
+    <string name="provider_health_last_failure">最新の失敗: %s</string>
+    <string name="provider_health_footer">モデルごとに直近 20 回の呼び出しをメモリ内で統計 —— プロセス再起動でリセットされます。</string>
     <string name="usage_section_total">合計使用量</string>
     <string name="usage_filter_all">全期間</string>
     <string name="usage_filter_7d">過去7日間</string>
@@ -813,6 +826,7 @@
     <string name="menu_compacting_in_progress">圧縮中…</string>
     <string name="chat_menu_thinking">思考レベル</string>
     <string name="chat_menu_enhanced_cache">拡張キャッシュ</string>
+    <string name="chat_menu_rollback_workspace">ワークスペースの変更を元に戻す</string>
     <string name="chat_menu_fast_mode">高速モードを有効化</string>
     <string name="chat_menu_slash_commands">スラッシュコマンド</string>
     <string name="enhanced_cache_dialog_body">拡張キャッシュは Anthropic のプロンプトキャッシュを 5 分から 1 時間に延長し、長いセッションでコンテキストを保持します。追加のキャッシュ書き込み料金が発生する場合があります。有効にしますか？</string>
