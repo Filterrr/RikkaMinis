@@ -68,6 +68,8 @@ class GeminiProvider(
                 shouldCompress = { req -> req.url.host.lowercase() == "generativelanguage.googleapis.com" },
             )
         )
+        // [P2-9-brotli] Transparent Brotli response decoding (see OpenAIProvider).
+        .addInterceptor(okhttp3.brotli.BrotliInterceptor)
         .build()
 
     override suspend fun sendMessageClamped(

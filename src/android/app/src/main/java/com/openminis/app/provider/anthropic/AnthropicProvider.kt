@@ -103,6 +103,8 @@ class AnthropicProvider(
                 shouldCompress = { req -> req.url.host.lowercase() == "api.anthropic.com" },
             )
         )
+        // [P2-9-brotli] Transparent Brotli response decoding (see OpenAIProvider).
+        .addInterceptor(okhttp3.brotli.BrotliInterceptor)
         .build()
 
     override suspend fun sendMessageClamped(

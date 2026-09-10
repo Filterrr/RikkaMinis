@@ -515,6 +515,10 @@ class OpenAIProvider constructor(
                 shouldCompress = { req -> gzipEligibleHost(req.url.host) },
             )
         )
+        // [P2-9-brotli] Transparent Brotli response decoding — official
+        // endpoints and large registries (models.dev) advertise br; SSE
+        // streams are never compressed so streaming is untouched.
+        .addInterceptor(okhttp3.brotli.BrotliInterceptor)
         .build()
 
     /**
