@@ -87,7 +87,7 @@ object WorkspaceSnapshot {
             var count = 0
             val files = root.walkTopDown()
                 .onEnter { dir -> dir.name != ".subagent" } // journal/ckpt churn — exclude
-                .filter { it.isFile && !it.isSymbolicLink }
+                .filter { it.isFile && !java.nio.file.Files.isSymbolicLink(it.toPath()) }
                 .onEach { total += it.length(); count++ }
                 .toList()
             if (count == 0) return null
@@ -189,7 +189,7 @@ object WorkspaceSnapshot {
         runCatching {
             val dir = snapshotDir(sessionId, context)
             val zips = dir.listFiles { f -> f.isFile && f.name.endsWith(".zip") }
-                ?.sortedBy { it.lastModified() } ?: return
+                ?.sortedBy { it.lastModified() }?.toMutableList() ?: return
             while (zips.size > MAX_SNAPSHOTS_PER_SESSION) {
                 val victim = zips.removeAt(0)
                 val staleRun = latestSnapshot[sessionId]?.runId

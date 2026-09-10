@@ -62,6 +62,7 @@ import com.openminis.app.ui.settings.SessionStorageDetailScreen
 import com.openminis.app.ui.settings.SkillDetailScreen
 import com.openminis.app.ui.settings.StorageManagementScreen
 import com.openminis.app.ui.settings.SkillFileViewerScreen
+import com.openminis.app.ui.settings.ProviderHealthScreen
 import com.openminis.app.ui.settings.UsageStatsScreen
 import com.openminis.app.ui.settings.MinisSkillsBrowserScreen
 import com.openminis.app.ui.settings.MountDetailScreen
