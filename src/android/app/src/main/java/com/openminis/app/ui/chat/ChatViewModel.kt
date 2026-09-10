@@ -135,6 +135,9 @@ class ChatViewModel(
 
     companion object {
         internal const val TAG = "ChatViewModel"
+
+        /** [R1-fallback-warm] How many fallback origins to pre-warm when the chain is built. */
+        private const val FALLBACK_WARM_COUNT = 2
         // [T-preflight-tool-title-nonblocking] Fields kept in each tool's
         // `required` list (so the schema keeps nudging the model to emit them —
         // tool_title drives the live pill header) but which must NOT block the
@@ -4674,11 +4677,6 @@ class ChatViewModel(
             }
         }
         return result
-    }
-
-    /** [R1-fallback-warm] How many fallback origins to pre-warm when the chain is built. */
-    private companion object {
-        const val FALLBACK_WARM_COUNT = 2
     }
 
     /**
