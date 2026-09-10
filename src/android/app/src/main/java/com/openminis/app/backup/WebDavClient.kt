@@ -107,6 +107,12 @@ class WebDavClient(
             .connectTimeout(20, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .writeTimeout(60, TimeUnit.SECONDS)
+            // [P0-3-shared-pool] Shared LLM pool + shared DoH resolver so the
+            // sync path gets (1) DoH consistency with every other network
+            // client and (2) network-transition pool eviction — previously a
+            // WebDAV push onto a dead connection hung until its 60s timeout.
+            .connectionPool(com.openminis.app.network.NetworkMonitor.sharedLLMConnectionPool)
+            .dns(com.openminis.app.network.NetworkMonitor.buildDns())
             .build()
     }
 
