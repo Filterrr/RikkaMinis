@@ -7128,9 +7128,23 @@ class ChatViewModel(
         )
         val healthStartMs = android.os.SystemClock.elapsedRealtime()
         var healthFirstChunkSeen = false
+        // [feat2-adaptive-ttfb-budget] Feed this model's own TTFB history
+        // back into the worker's first-chunk watchdog. Route default keeps
+        // the proven generation backstop for thin history; the adaptive
+        // budget only moves within [15s, 120s].
+        val adaptiveBudgetMs = run {
+            val history = com.openminis.app.diagnostics.ProviderHealthTracker
+                .AdaptiveTtfbBudget.recordedTtfbs(provider.model.id)
+            com.openminis.app.diagnostics.ProviderHealthTracker
+                .AdaptiveTtfbBudget.budgetMs(
+                    history,
+                    com.openminis.app.sandbox.offload.FirstChunkTimeoutPolicy
+                        .GENERATION_TIMEOUT_SEC * 1000L,
+                )
+        }
         AppLogger.info(
             TAG_STREAM,
-            "chat stream offload -> :modelservice provider=${provider.name} model=${provider.model.id}",
+            "chat stream offload -> :modelservice provider=${provider.name} model=${provider.model.id} firstChunkBudgetMs=$adaptiveBudgetMs",
         )
         // Single gateway path — no in-process fallback exists by design.
         return ProviderExecutionGateway.stream(
@@ -7144,6 +7158,7 @@ class ChatViewModel(
             imageParts = imageParts,
             tools = tools,
             thinkingLevel = thinkingLevel,
+            firstChunkBudgetMs = adaptiveBudgetMs,
         )
             .onEach {
                 // [feat-provider-health] First chunk of any kind stops the
@@ -8040,6 +8055,20 @@ class ChatViewModel(
                             // (Retry-After can be minutes); countdown var
                             // stays Long to match.
                             for (remaining in delaySec downTo 1L) {
+                                // [P0-2-offline-retry-hold] Don't burn the
+                                // countdown (or, downstream, the attempt
+                                // budget) into a dead network: while the
+                                // device is offline the second is held in
+                                // place (bounded, so a wedged monitor can't
+                                // wedge the stream) and resumes when
+                                // connectivity returns.
+                                com.openminis.app.network.OfflineRetryHold.awaitConnected(
+                                    isOffline = {
+                                        (context.applicationContext as? com.openminis.app.MinisApp)
+                                            ?.networkMonitor?.status?.value ==
+                                            com.openminis.app.network.NetworkMonitor.NetworkStatus.DISCONNECTED
+                                    },
+                                )
                                 _autoRetryCountdown.value = remaining.toInt()
                                 kotlinx.coroutines.delay(1000)
                             }
