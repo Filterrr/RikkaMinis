@@ -15,6 +15,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -29,8 +30,6 @@ import kotlinx.coroutines.withContext
 import com.openminis.app.R
 import com.openminis.app.logging.AppLogger
 import com.openminis.app.network.NetworkSettings
-import com.openminis.app.ui.components.SettingsCardBlock
-import com.openminis.app.ui.components.SettingsRow
 import com.openminis.app.ui.components.SectionTextField
 
 /**
@@ -119,6 +118,7 @@ fun NetworkSettingsScreen(
                         Spacer(Modifier.height(6.dp))
                         com.openminis.app.network.DoHBootstrap.PRESETS.forEach { preset ->
                             val selected = dohUrl.equals(preset.url, ignoreCase = true)
+                            val latency: Long? = testLatencyMs[preset.id]
                             SettingsRow(
                                 title = preset.label,
                                 subtitle = preset.url,
@@ -126,13 +126,10 @@ fun NetworkSettingsScreen(
                                 showDivider = true,
                                 trailing = {
                                     Text(
-                                        text = when {
-                                            testLatencyMs[preset.id] == null -> ""
-                                            else -> "${testLatencyMs[preset.id]}ms"
-                                        },
+                                        text = if (latency == null) "" else "${latency}ms",
                                         style = MaterialTheme.typography.bodySmall,
                                         fontFamily = FontFamily.Monospace,
-                                        color = if ((testLatencyMs[preset.id] ?: Long.MAX_VALUE) < 300)
+                                        color = if (latency != null && latency < 300)
                                             MaterialTheme.colorScheme.primary
                                         else MaterialTheme.colorScheme.onSurfaceVariant,
                                     )

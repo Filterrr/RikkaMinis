@@ -58,7 +58,6 @@ import com.openminis.app.ui.settings.ChatMenuSettingsScreen
 import com.openminis.app.ui.settings.SettingsScreen
 import com.openminis.app.ui.settings.NetworkSettingsScreen
 import com.openminis.app.ui.settings.NetworkDiagnosticsScreen
-import com.openminis.app.provider.ProviderType
 import com.openminis.app.ui.settings.SystemPermissionsScreen
 import com.openminis.app.ui.settings.SessionStorageDetailScreen
 import com.openminis.app.ui.settings.SkillDetailScreen

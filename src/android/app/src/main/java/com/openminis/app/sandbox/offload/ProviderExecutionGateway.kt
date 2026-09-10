@@ -91,6 +91,7 @@ object ProviderExecutionGateway {
         tools: List<AgentToolDefinition> = emptyList(),
         thinkingLevel: ThinkingLevel = ThinkingLevel.OFF,
         streaming: Boolean = false,
+        firstChunkBudgetMs: Long? = null,
     ): String = ModelExecutionDispatcher.buildRequestJson(
         instance = instance,
         model = model,
@@ -104,6 +105,7 @@ object ProviderExecutionGateway {
         tools = tools,
         thinkingLevel = thinkingLevel,
         streaming = streaming,
+        firstChunkBudgetMs = firstChunkBudgetMs,
     )
 
     /**

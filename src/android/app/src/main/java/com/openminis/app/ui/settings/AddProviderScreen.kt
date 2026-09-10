@@ -126,6 +126,7 @@ fun AddProviderScreen(
             providerRepository = providerRepository,
             onBack = handleBack,
             onSaved = onSaved,
+            initialBaseUrl = initialBaseUrl,
         )
     }
 }
@@ -214,6 +215,8 @@ private fun ConfigureProviderScreen(
     providerRepository: ProviderRepository,
     onBack: () -> Unit,
     onSaved: () -> Unit,
+    // [feat3-lan-discovery] Optional base URL pre-fill (LAN scan pick).
+    initialBaseUrl: String? = null,
 ) {
     // Compute default label with auto-increment (e.g. "OpenAI", "OpenAI 2", ...)
     val config by providerRepository.config.collectAsState()
