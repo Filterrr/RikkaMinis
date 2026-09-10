@@ -91,6 +91,9 @@ fun AddProviderScreen(
     providerRepository: ProviderRepository,
     onBack: () -> Unit,
     onSaved: () -> Unit,
+    // [feat3-lan-discovery] Optional base URL pre-fill (LAN scan pick).
+    // Consumed once: the state initializer reads it on first composition.
+    initialBaseUrl: String? = null,
 ) {
     var step by remember { mutableStateOf(AddProviderStep.CHOOSE_TYPE) }
     var selectedType by remember { mutableStateOf<ProviderType?>(null) }
@@ -243,7 +246,8 @@ private fun ConfigureProviderScreen(
         if (!labelEdited) label = defaultLabel
     }
     var apiKey by remember { mutableStateOf("") }
-    var customBaseURL by remember { mutableStateOf("") }
+    // [feat3-lan-discovery] Seed the base URL from a LAN-scan pick (if any).
+    var customBaseURL by remember { mutableStateOf(initialBaseUrl ?: "") }
 
     SettingsScaffold(
         title = stringResource(R.string.add_provider_configure_provider, providerType.displayName),
