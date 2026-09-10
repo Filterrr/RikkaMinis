@@ -20,8 +20,10 @@ class ProviderHealthTrackerTest {
     @Test
     fun `success rate and percentiles are computed per model`() {
         val t = freshTracker()
-        // m1: 4 successes (ttfb 100,200,300,400) + 1 failure
-        repeat(4) { i ->
+        // m1: 5 successes (ttfb 100..500) + 1 failure → rate 5/6.
+        // Percentile convention (nearest-rank, ceil): P50 of [100..500] = 300,
+        // P95 = ceil(4*0.95)=4 → 500.
+        repeat(5) { i ->
             var a = t.begin("m1", "Model m1")
             a = t.recordFirstToken(a, 100L * (i + 1))
             t.finish(a, success = true, durationMs = 1000)
@@ -31,9 +33,9 @@ class ProviderHealthTrackerTest {
         val snap = t.snapshot()
         assertEquals(1, snap.size)
         val m1 = snap.first()
-        assertEquals(0.8, m1.successRate, 0.0001)
-        assertEquals(200L, m1.ttfbP50Ms)
-        assertEquals(400L, m1.ttfbP95Ms)
+        assertEquals(5.0 / 6.0, m1.successRate, 0.0001)
+        assertEquals(300L, m1.ttfbP50Ms)
+        assertEquals(500L, m1.ttfbP95Ms)
         assertEquals("429", m1.lastFailureReason)
     }
 
