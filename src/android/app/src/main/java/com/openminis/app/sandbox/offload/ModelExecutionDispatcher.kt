@@ -65,6 +65,7 @@ object ModelExecutionDispatcher {
         tools: List<AgentToolDefinition> = emptyList(),
         thinkingLevel: ThinkingLevel = ThinkingLevel.OFF,
         streaming: Boolean = false,
+        firstChunkBudgetMs: Long? = null,
     ): String {
         return JSONObject().apply {
             put("instance_id", instance.id)
@@ -192,6 +193,14 @@ object ModelExecutionDispatcher {
             }
             if (thinkingLevel != ThinkingLevel.OFF) put("thinking_level", thinkingLevel.name)
             if (streaming) put("streaming", true)
+            // [feat2-adaptive-ttfb-budget] Optional client-computed first-chunk
+            // budget override. The MAIN process owns ProviderHealthTracker, so
+            // the adaptive budget is computed there (ChatViewModel) and shipped
+            // to :modelservice inside the request JSON. Null/absent → the
+            // worker falls back to FirstChunkTimeoutPolicy's generation
+            // backstop — the wire format stays backward-compatible with older
+            // clients and request builders.
+            firstChunkBudgetMs?.let { put("first_chunk_budget_ms", it) }
         }.toString()
     }
 

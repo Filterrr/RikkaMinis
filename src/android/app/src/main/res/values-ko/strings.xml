@@ -1302,4 +1302,26 @@
     <string name="webpreview_blocked_scheme">외부 앱으로 연결되는 링크를 차단했습니다.</string>
     <string name="model_stream_fgs_channel">모델 스트리밍</string>
     <string name="model_stream_fgs_generating">답변 생성 중…</string>
+    <!-- [feat-network-pack] 네트워크 진단 / DoH 프리셋 / LAN 검색 / 장애 구분 -->
+    <string name="network_diag_title">네트워크 진단</string>
+    <string name="network_diag_footer">각 제공자 엔드포인트를 단계별로 측정합니다: DNS·TCP·TLS·첫 바이트 시간으로 지연이나 장애 위치를 파악합니다.</string>
+    <string name="network_diag_entry_title">연결 진단 실행</string>
+    <string name="network_diag_entry_subtitle">제공자별 DNS / TCP / TLS / 첫 바이트 측정</string>
+    <string name="network_diag_probe_all">전체 재측정</string>
+    <string name="network_diag_retest">재테스트</string>
+    <string name="network_diag_probing">측정 중\u2026</string>
+    <string name="network_diag_legs">dns %1$s \u00b7 tcp %2$s \u00b7 tls %3$s \u00b7 첫 바이트 %4$s</string>
+    <string name="network_diag_empty">구성된 제공자 엔드포인트가 없습니다.</string>
+    <string name="settings_network_doh_presets">빠른 선택</string>
+    <string name="settings_network_doh_test">지연 시간 테스트</string>
+    <string name="lan_scan_title">LAN 모델 서버</string>
+    <string name="lan_scan_subtitle">이 Wi-Fi에서 Ollama·LM Studio·llama.cpp·vLLM 서버를 검색합니다.</string>
+    <string name="lan_scan_scanning">검색 중\u2026</string>
+    <string name="lan_scan_empty">모델 서버를 찾지 못했습니다. 서버가 같은 Wi-Fi에 있고 연결을 허용하는지 확인하세요.</string>
+    <string name="lan_scan_add">추가</string>
+    <string name="fault_layer_prefix">장애 계층:</string>
+    <string name="fault_layer_connection">연결 (기기 ↔ 엔드포인트 — 네트워크/VPN/프록시 확인)</string>
+    <string name="fault_layer_service">서비스 (엔드포인트 응답하지만 오류 — 릴레이/제공자 문제)</string>
+    <string name="fault_layer_credentials">자격 증명 (키가 무효이거나 한도 소진)</string>
+    <string name="fault_layer_unclear">판별 불가 (일치하는 시그니처 없음)</string>
 </resources>

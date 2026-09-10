@@ -273,6 +273,11 @@ dependencies {
     // OkHttp
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.squareup.okhttp3:okhttp-sse:4.12.0")
+    // [P2-9-brotli] Brotli response decoding for non-SSE JSON endpoints
+    // (models.dev registry, GitHub releases, /v1/models listings): 15-20%
+    // smaller than gzip, transparent via the interceptor. SSE streams are
+    // unaffected (servers never compress event streams).
+    implementation("com.squareup.okhttp3:okhttp-brotli:4.12.0")
     // [OPT-restore-doh] DNS-over-HTTPS resolver shared by all LLM provider clients
     // (toggled in Settings > Network). Same 4.12.0 train as okhttp core.
     implementation("com.squareup.okhttp3:okhttp-dnsoverhttps:4.12.0")

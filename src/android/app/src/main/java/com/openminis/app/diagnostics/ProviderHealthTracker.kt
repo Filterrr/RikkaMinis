@@ -106,4 +106,63 @@ object ProviderHealthTracker {
         val idx = ((sorted.size - 1) * p).let { kotlin.math.ceil(it).toInt() }.coerceIn(0, sorted.size - 1)
         return sorted[idx]
     }
+
+    /**
+     * [feat2-adaptive-ttfb-budget] Rolling first-chunk budget for a model
+     * route, derived from THIS model's own recorded TTFB history.
+     *
+     * Why: the fixed 30-minute generation backstop is the safety net, but
+     * the CLIENT-side worker-liveness classification and the user-visible
+     * "still waiting" experience are calibrated to a one-size budget. A
+     * relay whose historical first chunk lands at 35-60s gets flagged
+     * wedged too early; a direct endpoint that always answers in 6s keeps
+     * users staring at a dead-looking spinner for a wall-clock 30s watchdog
+     * designed for the slowest possible route. Feeding the observed P95
+     * back into the budget makes both routes feel right without touching
+     * the generation backstop.
+     *
+     * Contract (mirrors FirstChunkTimeoutPolicy's pure-decision style):
+     *   - Budget = clamp(P95 * ADAPTIVE_HEADROOM, FLOOR_MS, CEILING_MS).
+     *   - Needs >= MIN_SAMPLES recorded TTFBs before adapting — below that
+     *     the answer is the route default ([routeDefaultMs]) so a single
+     *     cold-start outlier can't stretch the budget.
+     *   - Successful attempts only; failures carry no TTFB.
+     *
+     * Runs in the MAIN process (ProviderHealthTracker lives here); the value
+     * rides the request JSON to :modelservice via
+     * ModelExecutionDispatcher.buildRequestJson("first_chunk_budget_ms").
+     */
+    object AdaptiveTtfbBudget {
+
+        /** Minimum recorded successful TTFBs before adapting. */
+        const val MIN_SAMPLES = 3
+
+        /** Headroom over the observed P95 (relay jitter, cold caches). */
+        const val HEADROOM = 1.6
+
+        /** Never below this — protects against a suspiciously fast history. */
+        const val FLOOR_MS = 15_000L
+
+        /** Never above the route's static budget — adaptation only widens
+         *  or modestly tightens within the proven-safe envelope. */
+        const val CEILING_MS = 120_000L
+
+        /**
+         * Compute the budget, or [routeDefaultMs] when history is thin.
+         * Pure function of (history, routeDefaultMs) — JVM-testable.
+         */
+        fun budgetMs(history: List<Long>, routeDefaultMs: Long): Long {
+            if (history.size < MIN_SAMPLES) return routeDefaultMs
+            val p95 = percentile(history.sorted(), 0.95) ?: return routeDefaultMs
+            return (p95 * HEADROOM).toLong().coerceIn(FLOOR_MS, CEILING_MS)
+        }
+
+        /** All successful TTFBs recorded for [modelId], oldest first. */
+        fun recordedTtfbs(modelId: String): List<Long> {
+            val q = history[modelId] ?: return emptyList()
+            return synchronized(q) { q.toList() }
+                .filter { it.success && it.ttfbMs != null }
+                .map { it.ttfbMs!! }
+        }
+    }
 }

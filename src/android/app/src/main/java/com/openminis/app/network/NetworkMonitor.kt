@@ -43,18 +43,27 @@ class NetworkMonitor {
          * socket to localhost survives network flaps, so the pool kept
          * handing the dead h2 tunnel to every retry — requests wrote into it
          * and hung forever waiting for response headers.
+         *
+         * [P2-9-pool-capacity] idle 5 → 10. Concurrent subagents + the main
+         * session + provider fallback each open their own h2 connection; at
+         * idle=5 the newest warm connection kept evicting the one the next
+         * turn needed, re-paying handshakes. 10 keeps every plausible
+         * concurrent route warm without meaningful memory cost (idle
+         * sockets are cheap; keep-alive unchanged at 5 min).
          */
         val sharedLLMConnectionPool = okhttp3.ConnectionPool(
-            5, 5, java.util.concurrent.TimeUnit.MINUTES,
+            10, 5, java.util.concurrent.TimeUnit.MINUTES,
         )
 
         /**
          * [OPT-restore-doh] Shared DoH Dns for every LLM client, or null when
          * the feature is off / the URL is malformed. Bootstrap lookups for
-         * the DoH endpoint itself go through the SYSTEM resolver
-         * (okhttp-dnsoverhttps default Dns) — no chicken-and-egg wedge; worst
-         * case the bootstrap inherits plaintext-DNS behaviour and DoH adds
-         * nothing. Restored from the TTFB pack (593d056), DoH-only slice.
+         * the DoH endpoint itself are PINNED to known IPs of the well-known
+         * public resolvers via [DoHBootstrap.pinResolver] — no chicken-and-egg
+         * wedge, and DoH now works even on networks where plaintext DNS is
+         * hijacked/blocked (the exact networks DoH exists for). Unpinned
+         * (custom) DoH URLs keep the system resolver for their bootstrap.
+         * Restored from the TTFB pack (593d056), DoH-only slice.
          */
         @Volatile
         var sharedDohDns: Dns? = null
@@ -65,11 +74,16 @@ class NetworkMonitor {
          * No-op when DoH is disabled or the URL is unparsable — callers then
          * keep the system DNS. Building the object is cheap (network happens
          * lazily per lookup on client threads).
+         *
+         * [P1-5-doh-bootstrap] Known public endpoints get a pinned bootstrap
+         * resolver built from [DoHBootstrap.pinnedIps] — their IPs are stable
+         * and published by the operators, so resolving them over plaintext
+         * DNS first defeats the purpose of DoH on hijacked networks.
          */
         fun refreshDoh() {
             val template = NetworkSettings.dohTemplateUrl()
             sharedDohDns = if (template == null) null else try {
-                okhttp3.dnsoverhttps.DnsOverHttps.Builder()
+                val builder = okhttp3.dnsoverhttps.DnsOverHttps.Builder()
                     .client(
                         OkHttpClient.Builder()
                             // Bootstrap + DoH queries are tiny; don't let a
@@ -78,12 +92,9 @@ class NetworkMonitor {
                             .readTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
                             .build()
                     )
-                    // Bootstrap (resolving the DoH endpoint's own host) uses
-                    // the system resolver by default — no chicken-and-egg
-                    // wedge; worst case the bootstrap inherits plaintext-DNS
-                    // behaviour and DoH adds nothing.
                     .url(template)
-                    .build()
+                DoHBootstrap.pinnedIps(template)?.let { builder.bootstrapDnsHosts(*it) }
+                builder.build()
             } catch (_: IllegalArgumentException) {
                 null
             }
@@ -178,6 +189,11 @@ class NetworkMonitor {
                 if (previousStatus == NetworkStatus.DISCONNECTED) {
                     Log.d(TAG, "Network transition: DISCONNECTED -> CONNECTED")
                     evictConnectionPool()
+                    // [OPT7-warm-reconnect] The pool was just emptied — ask
+                    // ConnectionWarmer to re-arm the most recently used
+                    // provider origins so the user's next send skips the
+                    // cold DNS+TCP+TLS path. Fire-and-forget.
+                    ConnectionWarmer.onNetworkChanged()
                 }
                 // Always refresh sandbox DNS on availability — an interface
                 // swap (Wi-Fi → cellular) can fire onAvailable without a

@@ -1615,4 +1615,26 @@
     <string name="webpreview_blocked_scheme">已攔截指向外部應用的連結。</string>
     <string name="model_stream_fgs_channel">模型串流傳輸</string>
     <string name="model_stream_fgs_generating">正在產生回覆…</string>
+    <!-- [feat-network-pack] 網路診斷 / DoH 預設 / 區域網路探索 / 故障歸屬 -->
+    <string name="network_diag_title">網路診斷</string>
+    <string name="network_diag_footer">對每個服務商端點做分段探測：DNS、TCP、TLS 與首位元組耗時，定位延遲或故障所在環節。</string>
+    <string name="network_diag_entry_title">執行連線診斷</string>
+    <string name="network_diag_entry_subtitle">測量每個服務商的 DNS / TCP / TLS / 首位元組</string>
+    <string name="network_diag_probe_all">全部重測</string>
+    <string name="network_diag_retest">重測</string>
+    <string name="network_diag_probing">探測中\u2026</string>
+    <string name="network_diag_legs">dns %1$s \u00b7 tcp %2$s \u00b7 tls %3$s \u00b7 首位元組 %4$s</string>
+    <string name="network_diag_empty">尚未設定任何服務商端點。</string>
+    <string name="settings_network_doh_presets">快速選擇</string>
+    <string name="settings_network_doh_test">測試延遲</string>
+    <string name="lan_scan_title">區域網路模型伺服器</string>
+    <string name="lan_scan_subtitle">正在掃描目前 Wi-Fi 中的 Ollama、LM Studio、llama.cpp 與 vLLM 伺服器。</string>
+    <string name="lan_scan_scanning">掃描中\u2026</string>
+    <string name="lan_scan_empty">未發現模型伺服器。請確認伺服器與手機在同一 Wi-Fi 網路且允許連線。</string>
+    <string name="lan_scan_add">新增</string>
+    <string name="fault_layer_prefix">故障環節：</string>
+    <string name="fault_layer_connection">連線（本機 ↔ 端點——檢查網路/VPN/代理）</string>
+    <string name="fault_layer_service">服務（端點存活但出錯——中繼/服務商問題）</string>
+    <string name="fault_layer_credentials">憑證（金鑰無效或額度耗盡）</string>
+    <string name="fault_layer_unclear">無法判定（無符合特徵）</string>
 </resources>

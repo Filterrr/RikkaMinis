@@ -110,8 +110,7 @@ object ProviderFactory {
     }
 
     /** [OPT7-conn-warmup] Default origin for instances with no custom base. */
-    private fun defaultBaseFor(type: ProviderType): String = when (type) {
-        ProviderType.anthropic -> "https://api.anthropic.com"
+    private fun defaultBaseFor(type: ProviderType): String = when (type) {        ProviderType.anthropic -> "https://api.anthropic.com"
         ProviderType.gemini -> "https://generativelanguage.googleapis.com/v1beta"
         ProviderType.openAI -> "https://api.openai.com/v1"
         ProviderType.openRouter -> "https://openrouter.ai/api/v1"

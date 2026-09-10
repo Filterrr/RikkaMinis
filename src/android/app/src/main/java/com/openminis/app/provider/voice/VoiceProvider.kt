@@ -38,6 +38,14 @@ open class VoiceProvider(
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(120, TimeUnit.SECONDS)
             .writeTimeout(120, TimeUnit.SECONDS)
+            // [P0-3-shared-pool] Ride the app-wide LLM connection pool and
+            // the shared DoH resolver: (1) DoH settings now cover voice
+            // traffic like every other LLM route; (2) NetworkMonitor's
+            // network-transition eviction reaches these sockets too — a
+            // voice upload left dangling on a dead h2 tunnel used to hang
+            // out its full 120s read timeout after a Wi-Fi↔cellular swap.
+            .connectionPool(com.openminis.app.network.NetworkMonitor.sharedLLMConnectionPool)
+            .dns(com.openminis.app.network.NetworkMonitor.buildDns())
             .build()
 
         /**

@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.outlined.VpnKey
+import androidx.compose.material.icons.outlined.Radar
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -35,6 +36,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -46,6 +48,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.stringResource
@@ -66,6 +69,9 @@ fun ProviderListScreen(
     onBack: () -> Unit,
     onAddProvider: () -> Unit,
     onProviderClick: (String) -> Unit,
+    // [feat3-lan-discovery] "Add this LAN server as a provider": navigates
+    // to ADD_PROVIDER; the picked base URL rides the nav shared state.
+    onAddProviderWithLanPick: (String) -> Unit = { onAddProvider() },
 ) {
     val config by providerRepository.config.collectAsState()
     val instances = config.instances
@@ -92,6 +98,12 @@ fun ProviderListScreen(
     }
 
     var showMenu by remember { mutableStateOf(false) }
+    // [feat3-lan-discovery] Controls the LAN scan bottom sheet.
+    var lanScanOpen by remember { mutableStateOf(false) }
+    // [feat3-lan-discovery] Base URL picked from the LAN scan → passed to
+    // the provider-detail screen as the pre-filled custom base for a NEW
+    // OpenAI-compatible instance.
+    var lanPickedBaseUrl by remember { mutableStateOf<String?>(null) }
 
     // [provider-list-sync-all] One-tap force refresh of every enabled provider,
     // straight from the top bar. isSyncing shows a spinner in place of the icon
@@ -333,6 +345,24 @@ fun ProviderListScreen(
                     Text(stringResource(R.string.provider_list_add_provider), style = MaterialTheme.typography.bodyLarge)
                 }
                 HorizontalDivider(modifier = Modifier.padding(horizontal = 20.dp))
+                // [feat3-lan-discovery] Scan the LAN for Ollama / LM Studio /
+                // vLLM / llama.cpp servers and offer them as ready-made
+                // OpenAI-compatible providers.
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            showMenu = false
+                            lanScanOpen = true
+                        }
+                        .padding(horizontal = 20.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Outlined.Radar, contentDescription = null, modifier = Modifier.size(22.dp))
+                    Spacer(Modifier.width(16.dp))
+                    Text(stringResource(R.string.lan_scan_title), style = MaterialTheme.typography.bodyLarge)
+                }
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 20.dp))
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -354,6 +384,114 @@ fun ProviderListScreen(
                     Text(stringResource(R.string.provider_list_import_provider), style = MaterialTheme.typography.bodyLarge)
                 }
             }
+        }
+    }
+
+    // [feat3-lan-discovery] LAN model-server scan sheet: NSD browse + /24
+    // port sweep, results offered as ready-made OpenAI-compatible provider
+    // base URLs (one tap → ProviderDetailScreen with the base pre-filled
+    // via the shared draft mechanism).
+    if (lanScanOpen) {
+        LanScanSheet(
+            onDismiss = { lanScanOpen = false },
+            onPick = { candidate ->
+                lanScanOpen = false
+                // [feat3-lan-discovery] Hand the picked base URL to the
+                // add-provider screen via the shared nav state; one-shot
+                // consumption there (state initializer reads it once).
+                lanPickedBaseUrl = candidate.baseUrl
+                onAddProviderWithLanPick(candidate.baseUrl)
+            },
+        )
+    }
+}
+
+/**
+ * [feat3-lan-discovery] Bottom sheet running [LanModelDiscovery.discover]
+ * once per open. Lists candidates with source (mDNS/port-scan) and lets the
+ * user add one as a new OpenAI-compatible provider. Empty state explains
+ * that servers must be on the same Wi-Fi and reachable.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LanScanSheet(
+    onDismiss: () -> Unit,
+    onPick: (com.openminis.app.network.LanModelDiscovery.Candidate) -> Unit,
+) {
+    val context = LocalContext.current
+    var scanning by remember { mutableStateOf(true) }
+    var candidates by remember {
+        mutableStateOf<List<com.openminis.app.network.LanModelDiscovery.Candidate>>(emptyList())
+    }
+
+    LaunchedEffect(Unit) {
+        scanning = true
+        candidates = com.openminis.app.network.LanModelDiscovery.discover(context)
+        scanning = false
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
+            Text(
+                text = stringResource(R.string.lan_scan_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = stringResource(R.string.lan_scan_subtitle),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(12.dp))
+            if (scanning) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 24.dp),
+                    horizontalArrangement = Arrangement.Center,
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                    Spacer(Modifier.width(12.dp))
+                    Text(stringResource(R.string.lan_scan_scanning))
+                }
+            } else if (candidates.isEmpty()) {
+                Text(
+                    text = stringResource(R.string.lan_scan_empty),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 24.dp),
+                )
+            } else {
+                candidates.forEach { c ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onPick(c) }
+                            .padding(vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(c.name, style = MaterialTheme.typography.bodyLarge)
+                            Text(
+                                text = "${c.baseUrl}  ·  ${c.source}",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Icon(
+                            Icons.Default.Add,
+                            contentDescription = stringResource(R.string.lan_scan_add),
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    HorizontalDivider()
+                }
+            }
+            Spacer(Modifier.height(24.dp))
         }
     }
 }

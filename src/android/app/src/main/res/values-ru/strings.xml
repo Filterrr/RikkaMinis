@@ -1461,4 +1461,26 @@
     <string name="webpreview_blocked_scheme">Ссылка на внешнее приложение заблокирована.</string>
     <string name="model_stream_fgs_channel">Потоковая передача модели</string>
     <string name="model_stream_fgs_generating">Генерация ответа…</string>
+    <!-- [feat-network-pack] Сетевая диагностика / Пресеты DoH / Поиск в LAN / Отнесение сбоя -->
+    <string name="network_diag_title">Диагностика сети</string>
+    <string name="network_diag_footer">Поэтапное измерение каждого эндпоинта: время DNS, TCP, TLS и первого байта показывает, где возникает задержка или сбой.</string>
+    <string name="network_diag_entry_title">Запустить диагностику</string>
+    <string name="network_diag_entry_subtitle">Измерить DNS / TCP / TLS / первый байт по провайдерам</string>
+    <string name="network_diag_probe_all">Проверить все</string>
+    <string name="network_diag_retest">Повторить</string>
+    <string name="network_diag_probing">Проверка\u2026</string>
+    <string name="network_diag_legs">dns %1$s \u00b7 tcp %2$s \u00b7 tls %3$s \u00b7 первый байт %4$s</string>
+    <string name="network_diag_empty">Эндпоинты провайдеров ещё не настроены.</string>
+    <string name="settings_network_doh_presets">Быстрый выбор</string>
+    <string name="settings_network_doh_test">Проверить задержку</string>
+    <string name="lan_scan_title">Серверы моделей в LAN</string>
+    <string name="lan_scan_subtitle">Поиск серверов Ollama, LM Studio, llama.cpp и vLLM в этой Wi-Fi-сети.</string>
+    <string name="lan_scan_scanning">Поиск\u2026</string>
+    <string name="lan_scan_empty">Серверы моделей не найдены. Убедитесь, что сервер работает в той же Wi-Fi-сети и разрешает подключения.</string>
+    <string name="lan_scan_add">Добавить</string>
+    <string name="fault_layer_prefix">Уровень сбоя:</string>
+    <string name="fault_layer_connection">Соединение (устройство ↔ эндпоинт — проверьте сеть/VPN/прокси)</string>
+    <string name="fault_layer_service">Сервис (эндпоинт отвечает, но с ошибкой — проблема реле/провайдера)</string>
+    <string name="fault_layer_credentials">Учётные данные (ключ недействителен или квота исчерпана)</string>
+    <string name="fault_layer_unclear">Неясно (нет совпадающих признаков)</string>
 </resources>

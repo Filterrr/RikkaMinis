@@ -265,6 +265,11 @@ class MinisApp : Application(), ImageLoaderFactory {
         // Runs before ExecutionCoordinator.init / NativeOffloadServer.start.
         com.openminis.app.data.ConcurrencyPrefs.prime(this)
 
+        // [P2-9-conditional-etag] FilesDir-backed ETag store for the
+        // update checker's conditional GETs (304 → UpToDate without
+        // re-downloading the releases JSON). Must run before any check().
+        com.openminis.app.data.UpdateChecker.initNetwork(this)
+
         // T283: install NDK signal handler for native crashes (SIGSEGV/
         // SIGABRT/SIGBUS/SIGFPE/SIGILL/SIGSYS). Writes a one-shot text
         // report to filesDir/logs/native-crash-<stamp>.log before re-raising

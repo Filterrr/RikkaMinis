@@ -82,10 +82,52 @@ object UpdateChecker {
         data class Error(val message: String) : DownloadResult()
     }
 
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .build()
+    private val client: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
+            // [P2-9-conditional-etag] Persistent conditional requests for the
+            // releases listing: the interceptor stores the response ETag and
+            // replays it as If-None-Match; GitHub answers 304 (empty body)
+            // so a re-check costs ~0 bytes instead of re-pulling the full
+            // release JSON. WebDAV already used the same pattern
+            // (If-Match/If-None-Match) — this lifts it onto the update path.
+            .addInterceptor(com.openminis.app.network.ConditionalGetInterceptor(UpdateEtagStore))
+            .build()
+    }
+
+    /**
+     * [P2-9-conditional-etag] One-time wiring for the ETag store (needs a
+     * Context to reach filesDir). Called from MinisApp.onCreate — before any
+     * update check can run (check() is debug-RPC-triggered only).
+     */
+    fun initNetwork(context: android.content.Context) {
+        UpdateEtagStore.init(context)
+    }
+
+    /** filesDir-backed If-None-Match persistence for the releases listing. */
+    internal object UpdateEtagStore : com.openminis.app.network.EtagStore {
+        @Volatile private var dir: java.io.File? = null
+
+        fun init(context: android.content.Context) {
+            dir = java.io.File(context.applicationContext.filesDir, "net-etags").apply { mkdirs() }
+        }
+
+        override fun get(urlKey: String): String? {
+            val d = dir ?: return null
+            return runCatching {
+                java.io.File(d, urlKey.hashCode().toString(16) + ".etag")
+                    .takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.isNotEmpty() }
+            }.getOrNull()
+        }
+
+        override fun put(urlKey: String, etag: String) {
+            val d = dir ?: return
+            runCatching {
+                java.io.File(d, urlKey.hashCode().toString(16) + ".etag").writeText(etag)
+            }
+        }
+    }
 
     /**
      * Hit `repos/{owner}/{repo}/releases` (the list endpoint, NOT
@@ -112,6 +154,14 @@ object UpdateChecker {
                 .build()
             client.newCall(req).execute().use { resp ->
                 AppLogger.info(TAG, "HTTP ${resp.code}")
+                // [P2-9-conditional-etag] 304 was synthesized into a 200 with
+                // an empty body + marker header by ConditionalGetInterceptor:
+                // the release list is byte-identical to last check → UpToDate
+                // without re-parsing (or re-downloading) anything.
+                if (resp.header("X-Minis-Not-Modified") == "1") {
+                    AppLogger.info(TAG, "releases 304 Not Modified → UpToDate (etag)")
+                    return@withContext CheckResult.UpToDate
+                }
                 if (resp.code == 404) {
                     return@withContext CheckResult.NoReleaseAvailable
                 }
