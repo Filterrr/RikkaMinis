@@ -1,5 +1,6 @@
 package com.openminis.app.network
 
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -15,7 +16,7 @@ class ConnectionWarmerKeyingTest {
     private fun origin(raw: String): String? {
         // Mirror of ConnectionWarmer.originOf's parsing core.
         val httpUrl = try {
-            okhttp3.HttpUrl.Companion.toHttpUrl(raw)
+            raw.toHttpUrl()
         } catch (_: IllegalArgumentException) {
             return null
         }
