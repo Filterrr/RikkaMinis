@@ -50,6 +50,14 @@ object ChatStreamOffloadHandler {
     private const val FALLBACK_POLL_INTERVAL_MS = 500L
 
     /**
+     * [R2-first-chunk-cadence] Fast poll tick used ONLY before the first
+     * chunk arrives, when the fallback poll is the delivery path. A file
+     * length() stat per tick is negligible; 80ms caps the added first-chunk
+     * UI latency at ~40ms average instead of ~250ms.
+     */
+    private const val FIRST_CHUNK_POLL_INTERVAL_MS = 80L
+
+    /**
      * [OPT5-fileobserver] Watch stream.jsonl for MODIFies and forward each
      * event as a wake signal into a rendezvous channel the poll loop waits
      * on. inotify on Android fires MODIFY once per write burst, so the
@@ -364,7 +372,19 @@ object ChatStreamOffloadHandler {
                         // started watching. Correctness is unchanged — the loop
                         // always reads to EOF and the byte-offset protocol is
                         // untouched; only the WAKE cadence changed.
-                        watcher.awaitChange(FALLBACK_POLL_INTERVAL_MS)
+                        //
+                        // [R2-first-chunk-cadence] On devices where the fallback
+                        // poll IS the delivery path (OEM inotify drops under
+                        // FUSE), the 500ms tick lands squarely on the user's
+                        // most latency-sensitive moment: the wait between the
+                        // worker reaching HTTP and the first chunk appearing in
+                        // the UI (adds ~250ms average). While NO chunk has been
+                        // seen yet, poll fast (80ms — a length() stat, cheap);
+                        // after the first chunk, stream cadence matters far less
+                        // than steady-state cost, so drop back to the 500ms tick.
+                        val tickMs = if (emittedChunks) FALLBACK_POLL_INTERVAL_MS
+                                     else FIRST_CHUNK_POLL_INTERVAL_MS
+                        watcher.awaitChange(tickMs)
                     }
                 } finally {
                     watcher.stop()

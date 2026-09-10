@@ -379,6 +379,17 @@ class ModelUseOffloadHandler(
             imageParts = imageParts,
             inputJson = inputText,
             outputExt = outputExt,
+            // [R4-budget-parity] Non-streaming model-use calls get the same
+            // adaptive first-chunk budget as chat streams — a slow relay
+            // otherwise times out here at the route-static generation
+            // backstop while chat on the SAME route gets the widened budget.
+            firstChunkBudgetMs = com.openminis.app.diagnostics.ProviderHealthTracker
+                .AdaptiveTtfbBudget.budgetMs(
+                    com.openminis.app.diagnostics.ProviderHealthTracker
+                        .AdaptiveTtfbBudget.recordedTtfbs(entry.model.id),
+                    com.openminis.app.sandbox.offload.FirstChunkTimeoutPolicy
+                        .GENERATION_TIMEOUT_SEC * 1000L,
+                ),
         )
         val remoteResult = runBlocking { ModelExecutionDispatcher.dispatch(context, remoteRequestJson) }
         if (remoteResult != null) {

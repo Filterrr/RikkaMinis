@@ -131,6 +131,7 @@ object ProviderExecutionGateway {
         outputExt: String? = null,
         tools: List<AgentToolDefinition> = emptyList(),
         thinkingLevel: ThinkingLevel = ThinkingLevel.OFF,
+        firstChunkBudgetMs: Long? = null,
     ): SendResult {
         val requestJson = buildRequest(
             instance = instance,
@@ -145,6 +146,7 @@ object ProviderExecutionGateway {
             tools = tools,
             thinkingLevel = thinkingLevel,
             streaming = false,
+            firstChunkBudgetMs = firstChunkBudgetMs,
         )
         val raw = ModelExecutionDispatcher.dispatch(context, requestJson)
             ?: return SendResult.Unavailable("model service dispatch failed or timed out")
@@ -272,6 +274,15 @@ object ProviderExecutionGateway {
             imageParts = emptyList(),
             inputJson = genInput,
             outputExt = "png",
+            // [R4-budget-parity] Image generation queues server-side for a
+            // long time; same adaptive budget treatment as chat.
+            firstChunkBudgetMs = com.openminis.app.diagnostics.ProviderHealthTracker
+                .AdaptiveTtfbBudget.budgetMs(
+                    com.openminis.app.diagnostics.ProviderHealthTracker
+                        .AdaptiveTtfbBudget.recordedTtfbs(model.id),
+                    com.openminis.app.sandbox.offload.FirstChunkTimeoutPolicy
+                        .GENERATION_TIMEOUT_SEC * 1000L,
+                ),
         )
     }
 }

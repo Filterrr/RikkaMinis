@@ -3784,6 +3784,15 @@ class ChatViewModel(
                 }
             }
 
+            // [R3-startup-warm] Session restore just resolved the provider —
+            // its origin got warmed via ProviderFactory.create. Warm the
+            // default group's OTHER healthy members too (bounded), so the
+            // first fallback after a dead primary doesn't pay the full
+            // cold-connect. The user is reading history at this point;
+            // network idle time is free warmup budget. Errors are swallowed
+            // by the warmer (fire-and-forget HEAD).
+            warmGroupFallbackOrigins()
+
             // [T-HANG-DIAG] measure DB load + transform separately so a long
             // load on one stage is obvious in the trace.
             //
@@ -4652,7 +4661,53 @@ class ChatViewModel(
             } catch (_: Exception) { continue }
             result.add(FallbackCandidate(p, entryId))
         }
+        // [R1-fallback-warm] The chain was just built BECAUSE the primary is
+        // failing — from here, every added millisecond of DNS+TCP+TLS on the
+        // first fallback member stacks onto the failure the user already
+        // watched. Warm each candidate's origin now (ProviderFactory.create
+        // already warmed the PRIMARY at build time; this closes the gap for
+        // the fallback origins). Debounced inside ConnectionWarmer, so
+        // building the chain repeatedly across retries costs nothing.
+        result.take(FALLBACK_WARM_COUNT).forEach { candidate ->
+            candidate.provider.instanceContext?.effectiveBaseURL?.let { base ->
+                com.openminis.app.network.ConnectionWarmer.warm(base)
+            }
+        }
         return result
+    }
+
+    /** [R1-fallback-warm] How many fallback origins to pre-warm when the chain is built. */
+    private companion object {
+        const val FALLBACK_WARM_COUNT = 2
+    }
+
+    /**
+     * [R3-startup-warm] Warm the origins of the selected group's first few
+     * HEALTHY members other than the currently active one. Called after
+     * session restore resolves the primary (whose own origin was already
+     * warmed at ProviderFactory.create) — turning the user's reading time
+     * into fallback warmup. No-op when no group is bound (single-entry
+     * sessions have nothing to fall back to).
+     */
+    private fun warmGroupFallbackOrigins() {
+        val groupId = _selectedGroupId.value ?: return
+        val config = providerRepository.config.value
+        val group = config.modelGroups.find { it.id == groupId } ?: return
+        val activeId = _activeEntryId.value
+        var warmed = 0
+        for (entryId in group.memberEntryIds) {
+            if (warmed >= FALLBACK_WARM_COUNT) break
+            if (entryId == activeId) continue
+            if (!groupRouter.isUsable(entryId)) continue
+            val entry = config.modelEntries.find { it.id == entryId } ?: continue
+            val instance = config.instances.find { it.id == entry.providerInstanceId } ?: continue
+            if (!instance.isEnabled) continue
+            // Cheap connectivity pre-arm only — full provider construction
+            // (credential decrypt, model wiring) stays lazy at fallback time.
+            val base = instance.effectiveBaseURL ?: continue
+            com.openminis.app.network.ConnectionWarmer.warm(base)
+            warmed++
+        }
     }
 
     /**
