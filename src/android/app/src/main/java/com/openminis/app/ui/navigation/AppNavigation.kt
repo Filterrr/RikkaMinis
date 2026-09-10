@@ -57,6 +57,8 @@ import com.openminis.app.ui.settings.AppearanceScreen
 import com.openminis.app.ui.settings.ChatMenuSettingsScreen
 import com.openminis.app.ui.settings.SettingsScreen
 import com.openminis.app.ui.settings.NetworkSettingsScreen
+import com.openminis.app.ui.settings.NetworkDiagnosticsScreen
+import com.openminis.app.provider.ProviderType
 import com.openminis.app.ui.settings.SystemPermissionsScreen
 import com.openminis.app.ui.settings.SessionStorageDetailScreen
 import com.openminis.app.ui.settings.SkillDetailScreen
@@ -208,6 +210,8 @@ object Routes {
     const val APPEARANCE = "appearance"
     /** [OPT-restore-doh] Network settings (DoH). */
     const val NETWORK_SETTINGS = "network_settings"
+    /** [feat1-network-diagnostics] Staged per-origin network probe panel. */
+    const val NETWORK_DIAGNOSTICS = "network_diagnostics"
     /** [OPT-doh/OPT-proxy] Network settings (DoH / app proxy / pool size). */
     const val CHAT_MENU = "appearance/chat_menu"
     const val BACKGROUND = "background"
@@ -782,6 +786,12 @@ fun AppNavigation(
                 onProviderClick = { instanceId ->
                     navController.safeNavigate(Routes.providerDetail(instanceId))
                 },
+                // [feat3-lan-discovery] Stash the picked URL, then navigate.
+                onAddProviderWithLanPick = { baseUrl ->
+                    navController.currentBackStackEntry
+                        ?.savedStateHandle?.set("lan_pick_base_url", baseUrl)
+                    navController.safeNavigate(Routes.ADD_PROVIDER)
+                },
             )
         }
 
@@ -790,6 +800,11 @@ fun AppNavigation(
                 providerRepository = providerRepository,
                 onBack = { navController.safePopBackStack() },
                 onSaved = { navController.safePopBackStack() },
+                // [feat3-lan-discovery] Arrive with a LAN-scan-picked base.
+                initialBaseUrl = navController.currentBackStackEntry
+                    ?.savedStateHandle?.get<String>("lan_pick_base_url")
+                    ?: navController.previousBackStackEntry
+                        ?.savedStateHandle?.get<String>("lan_pick_base_url"),
             )
         }
 
@@ -1284,6 +1299,18 @@ fun AppNavigation(
         composable(Routes.NETWORK_SETTINGS) {
             NetworkSettingsScreen(
                 onBack = { navController.safePopBackStack() },
+                onDiagnosticsClick = { navController.safeNavigate(Routes.NETWORK_DIAGNOSTICS) },
+            )
+        }
+
+        // [feat1-network-diagnostics] Staged per-origin probe panel.
+        composable(Routes.NETWORK_DIAGNOSTICS) {
+            val baseUrls = providerRepository.config.value.instances
+                .mapNotNull { it.effectiveBaseURL }
+                .plus(defaultProbeOrigins())
+            NetworkDiagnosticsScreen(
+                providerBaseUrls = baseUrls,
+                onBack = { navController.safePopBackStack() },
             )
         }
 
@@ -1335,3 +1362,18 @@ fun AppNavigation(
 
     }
 }
+
+/**
+ * [feat1-network-diagnostics] The default endpoint of each provider type —
+ * always probed in the diagnostics panel even when no instance overrides
+ * its base URL (an instance on the default base contributes its default
+ * origin here). Mirrors ProviderFactory.defaultBaseFor.
+ */
+private fun defaultProbeOrigins(): List<String> = listOf(
+    "https://api.anthropic.com",
+    "https://api.openai.com/v1",
+    "https://generativelanguage.googleapis.com/v1beta",
+    "https://openrouter.ai/api/v1",
+    "https://api.x.ai/v1",
+    "https://api.deepseek.com/v1",
+)
