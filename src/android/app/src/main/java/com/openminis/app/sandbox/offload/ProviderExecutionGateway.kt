@@ -217,6 +217,7 @@ object ProviderExecutionGateway {
         thinkingLevel: ThinkingLevel = ThinkingLevel.OFF,
         inputJson: String = "",
         outputExt: String? = null,
+        firstChunkBudgetMs: Long? = null,
     ): Flow<LLMStreamChunk> {
         val requestJson = buildRequest(
             instance = instance,
@@ -231,6 +232,7 @@ object ProviderExecutionGateway {
             tools = tools,
             thinkingLevel = thinkingLevel,
             streaming = true,
+            firstChunkBudgetMs = firstChunkBudgetMs,
         )
         return ChatStreamOffloadHandler.stream(context, requestJson, thinkingLevel.isEnabled)
     }

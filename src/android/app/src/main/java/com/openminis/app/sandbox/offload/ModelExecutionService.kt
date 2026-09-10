@@ -1261,10 +1261,21 @@ class ModelExecutionService : Service() {
                 // generation path (Codex is silent 2:50–3:10 WITHOUT reasoning and
                 // with NO keep-alive bytes). Keying the budget on the thinking
                 // feature flag re-exposed non-thinking long writes to 45s kills.
-                val firstChunkTimeoutMs =
-                    FirstChunkTimeoutPolicy.decideGenerationTimeoutSec(
-                        customBaseURL = instance.customBaseURL,
-                    ) * 1000L
+                //
+                // [feat2-adaptive-ttfb-budget] The MAIN process may override the
+                // budget per request via first_chunk_budget_ms — computed from
+                // ProviderHealthTracker's rolling per-model TTFB P95 (see
+                // AdaptiveTtfbBudget). Clamped here so a corrupt or hostile
+                // value can neither insta-kill the stream nor outlive the
+                // generation backstop. Absent → unchanged behaviour.
+                val firstChunkTimeoutMs = run {
+                    val backstopMs =
+                        FirstChunkTimeoutPolicy.decideGenerationTimeoutSec(
+                            customBaseURL = instance.customBaseURL,
+                        ) * 1000L
+                    val adaptive = req.optLong("first_chunk_budget_ms", -1L)
+                    if (adaptive in 10_000L..backstopMs) adaptive else backstopMs
+                }
                 val first = withTimeoutOrNull(firstChunkTimeoutMs) {
                     // Pre-check cancel before starting the cold flow: the main
                     // process may have cancelled while we built the provider.

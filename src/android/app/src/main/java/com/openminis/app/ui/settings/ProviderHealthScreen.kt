@@ -106,6 +106,30 @@ fun ProviderHealthScreen(
                 )
                 health.lastFailureReason?.let { reason ->
                     Spacer(modifier = Modifier.height(2.dp))
+                    // [feat5-fault-attribution] Layer the failure: whose
+                    // fault was it likely — connection (check VPN/network),
+                    // service (relay/provider's problem), or credentials
+                    // (fix keys)? Translates the raw error string for the
+                    // user instead of showing only the exception text.
+                    val attribution = com.openminis.app.diagnostics.FaultAttribution.attribute(reason)
+                    Text(
+                        text = stringResource(R.string.fault_layer_prefix) + " " +
+                            stringResource(
+                                when (attribution.layer) {
+                                    com.openminis.app.diagnostics.FaultAttribution.Layer.CONNECTION -> R.string.fault_layer_connection
+                                    com.openminis.app.diagnostics.FaultAttribution.Layer.SERVICE -> R.string.fault_layer_service
+                                    com.openminis.app.diagnostics.FaultAttribution.Layer.CREDENTIALS -> R.string.fault_layer_credentials
+                                    com.openminis.app.diagnostics.FaultAttribution.Layer.UNCLEAR -> R.string.fault_layer_unclear
+                                },
+                            ),
+                        fontSize = 12.sp,
+                        color = when (attribution.layer) {
+                            com.openminis.app.diagnostics.FaultAttribution.Layer.CONNECTION -> MaterialTheme.colorScheme.tertiary
+                            com.openminis.app.diagnostics.FaultAttribution.Layer.SERVICE -> MaterialTheme.colorScheme.error
+                            com.openminis.app.diagnostics.FaultAttribution.Layer.CREDENTIALS -> MaterialTheme.colorScheme.error
+                            com.openminis.app.diagnostics.FaultAttribution.Layer.UNCLEAR -> MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
                     Text(
                         text = stringResource(R.string.provider_health_last_failure, reason.take(120)),
                         fontSize = 12.sp,
