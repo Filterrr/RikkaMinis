@@ -4439,18 +4439,6 @@ fun ChatScreen(
                     },
                 )
             }
-            // [T-todo-live-card] "完成一项划一项" live task banner between
-            // the message list and the composer. Inline (not an overlay) so
-            // it never fights the FloatingToolStatusBar bottom-reserve math
-            // — it shifts the composer up instead of covering messages.
-            // Same reactive source as the top-bar badge (TodoStore.todo);
-            // completed items render strikethrough the moment the agent
-            // marks them done.
-            TodoLiveCard(
-                todo = sessionTodo,
-                isStreaming = isStreaming,
-                modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 2.dp),
-            )
             ChatInputArea(
                 viewModel = viewModel,
                 sessionId = sessionId,

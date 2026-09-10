@@ -10005,7 +10005,10 @@ class ChatViewModel(
         val done = items.count { it.status == com.openminis.app.tools.TodoStore.Status.completed }
         return ToolExecutionResult(
             output = "Task list updated: ${items.size} item(s), $done completed, " +
-                "${items.size - done} pending/in-progress.",
+                "${items.size - done} pending/in-progress. Reminder: update this list again " +
+                "IMMEDIATELY each time an item finishes (mark it completed and set the next " +
+                "item in_progress in the same call) — do not batch status updates at the end " +
+                "of the turn.",
             success = true,
         )
     }
