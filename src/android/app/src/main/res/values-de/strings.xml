@@ -1304,4 +1304,26 @@
     <string name="webpreview_blocked_scheme">Link zu externer App blockiert.</string>
     <string name="model_stream_fgs_channel">Modell-Streaming</string>
     <string name="model_stream_fgs_generating">Antwort wird generiert…</string>
+    <!-- [feat-network-pack] Netzwerk-Diagnose / DoH-Presets / LAN-Erkennung / Fehlerzuordnung -->
+    <string name="network_diag_title">Netzwerkdiagnose</string>
+    <string name="network_diag_footer">Stufenweise Messung jedes Anbieter-Endpunkts: DNS-, TCP-, TLS- und First-Byte-Zeiten zeigen, wo Latenz oder Fehler liegt.</string>
+    <string name="network_diag_entry_title">Verbindungsdiagnose starten</string>
+    <string name="network_diag_entry_subtitle">DNS / TCP / TLS / First Byte je Anbieter messen</string>
+    <string name="network_diag_probe_all">Alle testen</string>
+    <string name="network_diag_retest">Erneut testen</string>
+    <string name="network_diag_probing">Teste\u2026</string>
+    <string name="network_diag_legs">dns %1$s \u00b7 tcp %2$s \u00b7 tls %3$s \u00b7 First Byte %4$s</string>
+    <string name="network_diag_empty">Noch keine Anbieter-Endpunkte konfiguriert.</string>
+    <string name="settings_network_doh_presets">Schnellauswahl</string>
+    <string name="settings_network_doh_test">Latenz testen</string>
+    <string name="lan_scan_title">Modellserver im LAN</string>
+    <string name="lan_scan_subtitle">Suche in diesem WLAN nach Ollama-, LM Studio-, llama.cpp- und vLLM-Servern.</string>
+    <string name="lan_scan_scanning">Suche\u2026</string>
+    <string name="lan_scan_empty">Keine Modellserver gefunden. Stelle sicher, dass der Server im selben WLAN laeuft und Verbindungen erlaubt.</string>
+    <string name="lan_scan_add">Hinzufuegen</string>
+    <string name="fault_layer_prefix">Fehlerebene:</string>
+    <string name="fault_layer_connection">Verbindung (Geraet ↔ Endpunkt — Netzwerk/VPN/Proxy pruefen)</string>
+    <string name="fault_layer_service">Dienst (Endpunkt antwortet, aber fehlerhaft — Relay/Anbieter-Problem)</string>
+    <string name="fault_layer_credentials">Zugangsdaten (Schluessel ungueltig oder Kontingent aufgebraucht)</string>
+    <string name="fault_layer_unclear">Unklar (keine passende Signatur)</string>
 </resources>

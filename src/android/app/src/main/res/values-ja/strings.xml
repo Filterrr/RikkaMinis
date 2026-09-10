@@ -1310,4 +1310,26 @@
     <string name="webpreview_blocked_scheme">外部アプリへのリンクをブロックしました。</string>
     <string name="model_stream_fgs_channel">モデルストリーミング</string>
     <string name="model_stream_fgs_generating">返信を生成中…</string>
+    <!-- [feat-network-pack] ネットワーク診断 / DoHプリセット / LAN探索 / 障害切り分け -->
+    <string name="network_diag_title">ネットワーク診断</string>
+    <string name="network_diag_footer">各プロバイダーエンドポイントを段階的に計測：DNS・TCP・TLS・最初の1バイトの時間から、遅延や障害の位置を特定します。</string>
+    <string name="network_diag_entry_title">接続診断を実行</string>
+    <string name="network_diag_entry_subtitle">プロバイダーごとに DNS / TCP / TLS / 初回バイトを計測</string>
+    <string name="network_diag_probe_all">すべて再計測</string>
+    <string name="network_diag_retest">再テスト</string>
+    <string name="network_diag_probing">計測中\u2026</string>
+    <string name="network_diag_legs">dns %1$s \u00b7 tcp %2$s \u00b7 tls %3$s \u00b7 初回バイト %4$s</string>
+    <string name="network_diag_empty">設定済みのプロバイダーエンドポイントがありません。</string>
+    <string name="settings_network_doh_presets">クイック選択</string>
+    <string name="settings_network_doh_test">レイテンシをテスト</string>
+    <string name="lan_scan_title">LAN内モデルサーバー</string>
+    <string name="lan_scan_subtitle">このWi-Fi上のOllama・LM Studio・llama.cpp・vLLMサーバーを検索しています。</string>
+    <string name="lan_scan_scanning">検索中\u2026</string>
+    <string name="lan_scan_empty">モデルサーバーが見つかりません。サーバーが同じWi-Fi上で動作し、接続を許可しているか確認してください。</string>
+    <string name="lan_scan_add">追加</string>
+    <string name="fault_layer_prefix">障害箇所：</string>
+    <string name="fault_layer_connection">接続（端末 ↔ エンドポイント — ネットワーク/VPN/プロキシを確認）</string>
+    <string name="fault_layer_service">サービス（エンドポイントは応答するがエラー — リレー/プロバイダー側の問題）</string>
+    <string name="fault_layer_credentials">認証情報（キーが無効またはクォータ超過）</string>
+    <string name="fault_layer_unclear">判定不能（一致するシグネチャなし）</string>
 </resources>

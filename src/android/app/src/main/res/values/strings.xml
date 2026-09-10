@@ -1712,4 +1712,26 @@
          a properly localized external-scheme guard message. -->
     <string name="chat_link_file_missing">This file is no longer available.</string>
     <string name="webpreview_blocked_scheme">Blocked link to external app.</string>
+    <!-- [feat-network-pack] Network diagnostics / DoH presets / LAN discovery / fault attribution -->
+    <string name="network_diag_title">Network Diagnostics</string>
+    <string name="network_diag_footer">Staged probe of each provider endpoint: DNS, TCP, TLS and first-byte timings show where latency or failure sits.</string>
+    <string name="network_diag_entry_title">Run connection diagnostics</string>
+    <string name="network_diag_entry_subtitle">Measure DNS / TCP / TLS / first byte per provider</string>
+    <string name="network_diag_probe_all">Probe all</string>
+    <string name="network_diag_retest">Re-test</string>
+    <string name="network_diag_probing">Probing\u2026</string>
+    <string name="network_diag_legs">dns %1$s \u00b7 tcp %2$s \u00b7 tls %3$s \u00b7 first byte %4$s</string>
+    <string name="network_diag_empty">No provider endpoints configured yet.</string>
+    <string name="settings_network_doh_presets">Quick pick</string>
+    <string name="settings_network_doh_test">Test latency</string>
+    <string name="lan_scan_title">LAN model servers</string>
+    <string name="lan_scan_subtitle">Scanning this Wi-Fi for Ollama, LM Studio, llama.cpp and vLLM servers.</string>
+    <string name="lan_scan_scanning">Scanning\u2026</string>
+    <string name="lan_scan_empty">No model servers found. Make sure the server runs on this Wi-Fi network and allows connections.</string>
+    <string name="lan_scan_add">Add</string>
+    <string name="fault_layer_prefix">Fault layer:</string>
+    <string name="fault_layer_connection">Connection (this device \u2194 endpoint \u2014 check network/VPN/proxy)</string>
+    <string name="fault_layer_service">Service (endpoint alive but failing \u2014 relay/provider issue)</string>
+    <string name="fault_layer_credentials">Credentials (key invalid or quota exhausted)</string>
+    <string name="fault_layer_unclear">Unclear (no matching signature)</string>
 </resources>
