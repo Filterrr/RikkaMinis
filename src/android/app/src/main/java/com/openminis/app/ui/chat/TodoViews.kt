@@ -112,11 +112,24 @@ fun TodoSheet(
                     modifier = Modifier.weight(1f),
                 )
                 if (todo.items.isNotEmpty()) {
-                    Text(
-                        text = "${todo.items.count { it.status == TodoStore.Status.completed }}/${todo.totalCount}",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(
+                            text = "${todo.items.count { it.status == TodoStore.Status.completed }}/${todo.totalCount}",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        // Last-write timestamp (the moment the last item got
+                        // struck through) — same instant the badge count
+                        // updates; epoch 0 (fresh store) renders nothing.
+                        if (todo.updatedAtMs > 0L) {
+                            Text(
+                                text = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
+                                    .format(java.util.Date(todo.updatedAtMs)),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = ChatColors.secondaryText,
+                            )
+                        }
+                    }
                 }
             }
             Spacer(Modifier.height(14.dp))
