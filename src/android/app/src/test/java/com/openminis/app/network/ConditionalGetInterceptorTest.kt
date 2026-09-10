@@ -63,8 +63,11 @@ class ConditionalGetInterceptorTest {
         assertEquals("1", r2.header("X-Minis-Not-Modified"))
         assertEquals("", r2.body!!.string())
 
-        val recorded = server.takeRequest()
-        assertEquals("\"v1\"", recorded.getHeader("If-None-Match"))
+        // takeRequest() returns requests in arrival order: the first one
+        // carried no If-None-Match (cold store); the SECOND one must.
+        server.takeRequest()
+        val second = server.takeRequest()
+        assertEquals("\"v1\"", second.getHeader("If-None-Match"))
     }
 
     @Test
