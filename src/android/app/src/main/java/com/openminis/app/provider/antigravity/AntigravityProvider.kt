@@ -352,10 +352,10 @@ class AntigravityProvider(
                 }
 
                 val functionCalls = extractFunctionCalls(chunk)
-                for ((fcName, fcArgs) in functionCalls) {
+                for ((fcName, fcArgs, fcSignature) in functionCalls) {
                     val toolId = "antigravity_${System.nanoTime()}"
                     send(LLMStreamChunk.ToolUseStart(toolId, fcName))
-                    send(LLMStreamChunk.ToolCallComplete(toolId, fcName, fcArgs))
+                    send(LLMStreamChunk.ToolCallComplete(toolId, fcName, fcArgs, fcSignature))
                 }
 
                 extractUsage(chunk)?.let { usage ->
@@ -454,6 +454,23 @@ class AntigravityProvider(
 
     // ── Gemini-format payload builder (same wire shape as GeminiProvider) ──
 
+    // ── Test seams (internal; production code never calls these) ──
+
+    internal fun extractFunctionCallsForTest(json: JSONObject) = extractFunctionCalls(json)
+
+    internal fun buildRequestForTest(
+        messages: List<LLMMessage>,
+        thinkingLevel: ThinkingLevel = ThinkingLevel.OFF,
+    ): JSONObject = buildRequestBody(
+        messages = messages,
+        systemPrompt = null,
+        maxTokens = 1024,
+        temperature = null,
+        imageParts = emptyList(),
+        tools = emptyList(),
+        thinkingLevel = thinkingLevel,
+    )
+
     private fun buildRequestBody(
         messages: List<LLMMessage>,
         systemPrompt: String?,
@@ -488,10 +505,17 @@ class AntigravityProvider(
                         }
                         is AgentContentPart.ToolUse -> {
                             parts.put(JSONObject().apply {
-                                put("functionCall", JSONObject().apply {
+                                val functionCall = JSONObject().apply {
                                     put("name", part.name)
                                     put("args", part.input)
-                                })
+                                }
+                                // [fix-antigravity-thought-signature] Echo the
+                                // signature verbatim on the same part — Google
+                                // validates it against the original response.
+                                part.thoughtSignature?.takeIf { it.isNotEmpty() }?.let {
+                                    functionCall.put("thoughtSignature", it)
+                                }
+                                put("functionCall", functionCall)
                             })
                         }
                         is AgentContentPart.ToolResult -> {
@@ -649,19 +673,36 @@ class AntigravityProvider(
         return out
     }
 
-    private fun extractFunctionCalls(json: JSONObject): List<Pair<String, JSONObject>> {
+    /**
+     * [fix-antigravity-thought-signature] functionCall parts carry a part-level
+     * `thoughtSignature` (camelCase; legacy snake_case tolerated like upstream's
+     * normalizePart). It MUST round-trip: the next request's history re-emits
+     * it on the same functionCall part, or Google 400s with "Function call is
+     * missing a thought_signature in functionCall parts".
+     */
+    private fun extractFunctionCalls(json: JSONObject): List<Triple<String, JSONObject, String?>> {
         val candidates = json.optJSONArray("candidates") ?: return emptyList()
         val first = candidates.optJSONObject(0) ?: return emptyList()
         val content = first.optJSONObject("content") ?: return emptyList()
         val parts = content.optJSONArray("parts") ?: return emptyList()
 
-        val calls = mutableListOf<Pair<String, JSONObject>>()
+        val calls = mutableListOf<Triple<String, JSONObject, String?>>()
         for (i in 0 until parts.length()) {
             val part = parts.optJSONObject(i) ?: continue
             val fc = part.optJSONObject("functionCall") ?: continue
             val name = fc.safeOptString("name", "")
             val args = fc.optJSONObject("args") ?: JSONObject()
-            if (name.isNotEmpty()) calls.add(name to args)
+            if (name.isNotEmpty()) {
+                calls.add(
+                    Triple(
+                        name,
+                        args,
+                        part.safeOptString("thoughtSignature", "")
+                            .ifEmpty { part.safeOptString("thought_signature", "") }
+                            .ifEmpty { null },
+                    ),
+                )
+            }
         }
         return calls
     }

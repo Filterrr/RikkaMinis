@@ -120,6 +120,14 @@ object ModelExecutionDispatcher {
                                                     put("toolUseId", part.id)
                                                     put("name", part.name)
                                                     put("arguments", part.input ?: JSONObject())
+                                                    // [fix-antigravity-thought-signature]
+                                                    // Opaque signature must survive the
+                                                    // process hop — the worker rebuilds
+                                                    // the request history and Google
+                                                    // 400s on functionCall parts without it.
+                                                    part.thoughtSignature?.takeIf { it.isNotEmpty() }?.let {
+                                                        put("thoughtSignature", it)
+                                                    }
                                                 }
                                                 is AgentContentPart.ToolResult -> {
                                                     put("kind", "toolresult")

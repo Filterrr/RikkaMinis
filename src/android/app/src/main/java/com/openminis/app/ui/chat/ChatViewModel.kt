@@ -7398,6 +7398,9 @@ class ChatViewModel(
 
         // Accumulate tool inputs across all turns (so persist includes all, not just current turn)
         val allToolInputs = mutableMapOf<String, String>()
+        // [fix-antigravity-thought-signature] toolUseId -> opaque signature;
+        // cleared alongside allToolInputs on conversation switch.
+        val allToolSignatures = mutableMapOf<String, String>()
 
         // Add placeholder assistant message (once). Mark as awaiting so the
         // "Minis is thinking" indicator shows during the initial request gap
@@ -7572,7 +7575,7 @@ class ChatViewModel(
             var turnTruncated = false
             var lastUsage: LLMUsage? = null
             val maxTokens = dynamicMaxTokens(provider, lastContextTokens)
-            val toolCalls = mutableListOf<Triple<String, String, JSONObject>>() // id, name, args
+            val toolCalls = mutableListOf<ToolCallRecord>() // id, name, args, thoughtSignature
 
             // [T-dedupe-toolcallid 03fbcbfd] Per-turn dedupe of tool_call_id.
             // Some upstream OpenAI-compatible gateways occasionally emit
@@ -7926,7 +7929,7 @@ class ChatViewModel(
                         // same value (matches the rename applied at start).
                         val toolCompleteId = dedupeToolCompleteId(chunk.id)
                         android.util.Log.d("ToolChain[VM]", "[turn=$turn] ToolCallComplete id=$toolCompleteId name=${chunk.name} args=${chunk.args.toString().take(300)}")
-                        toolCalls.add(Triple(toolCompleteId, chunk.name, chunk.args))
+                        toolCalls.add(ToolCallRecord(toolCompleteId, chunk.name, chunk.args, chunk.thoughtSignature))
                         val idx = allToolBlocks.indexOfFirst { it.id == toolCompleteId }
                         if (idx >= 0) {
                             val providedTitle = chunk.args.optString("tool_title", "").takeIf { it.isNotEmpty() }
@@ -8476,13 +8479,17 @@ class ChatViewModel(
             if (turnText.isNotEmpty()) {
                 assistantParts.add(AgentContentPart.Text(turnText))
             }
-            for ((id, name, args) in toolCalls) {
-                assistantParts.add(AgentContentPart.ToolUse(id, name, args))
+            for ((id, name, args, signature) in toolCalls) {
+                assistantParts.add(AgentContentPart.ToolUse(id, name, args, signature))
             }
 
             // Map toolUseId -> input JSON string for persistence (accumulated across turns)
-            toolCalls.forEach { (id, _, args) -> allToolInputs[id] = args.toString() }
+            toolCalls.forEach { (id, _, args, _) -> allToolInputs[id] = args.toString() }
+            toolCalls.forEach { (id, _, _, signature) ->
+                if (signature != null) allToolSignatures[id] = signature
+            }
             val toolInputMap = allToolInputs
+            val toolSignatureMap = allToolSignatures
             // Prefer the opaque blob from LLMStreamChunk.ReasoningContent when the
             // provider emitted one — that path preserves empty strings (DeepSeek V4
             // `reasoning_content: ""` on non-thinking turns). Fall back to the
@@ -8638,7 +8645,7 @@ class ChatViewModel(
                 withContext(Dispatchers.Main) {
                     updateAssistantMessage(assistantId, accumulatedText, false, allToolBlocks)
                 }
-                val turnParts = buildTurnParts(allToolBlocks, turnStartBlockIndex, toolInputMap)
+                val turnParts = buildTurnParts(allToolBlocks, turnStartBlockIndex, toolInputMap, toolSignatureMap)
                 val blockMeta = allToolBlocks.filter { it.kind == "tool_use" }.associateBy { it.id }
                 persistAssistantTurn(
                     turnParts, lastUsage, turnReasoningContent, blockMeta,
@@ -8767,7 +8774,7 @@ class ChatViewModel(
             // the list reflects exactly what the model just emitted. Mirrors
             // iOS overlaying the live VM's last message over the DB value.
             run {
-                val livePreviewParts = buildTurnParts(allToolBlocks, turnStartBlockIndex, toolInputMap)
+                val livePreviewParts = buildTurnParts(allToolBlocks, turnStartBlockIndex, toolInputMap, toolSignatureMap)
                 val liveMeta = allToolBlocks.filter { it.kind == "tool_use" }.associateBy { it.id }
                 if (livePreviewParts.isNotEmpty()) {
                     chatRepository.updateSessionPreview(
@@ -8825,7 +8832,7 @@ class ChatViewModel(
             // balanced and the model is told not to re-issue. Cross-turn
             // duplicates remain ToolLoopDetector's job (10-warn / 20-block).
             val sameTurnFingerprints = mutableMapOf<String, String>()
-            for ((id, name, args) in toolCalls) {
+            for ((id, name, args, _) in toolCalls) {
                 // [T-android-tool-dedupe] Same-turn dedupe check FIRST —
                 // identical calls are dropped before any preflight, tool
                 // status flip, or loop-detector bookkeeping runs.
@@ -9162,7 +9169,7 @@ class ChatViewModel(
             // hang between tool-END and the next REQ can be attributed to the
             // persist phase vs the next-turn dispatch.
             android.util.Log.i("ChatVMStream", "runAgentLoop turn=$turn persist-begin blocks=${allToolBlocks.size}")
-            val turnParts = buildTurnParts(allToolBlocks, turnStartBlockIndex, toolInputMap)
+            val turnParts = buildTurnParts(allToolBlocks, turnStartBlockIndex, toolInputMap, toolSignatureMap)
             val blockMeta = allToolBlocks.filter { it.kind == "tool_use" }.associateBy { it.id }
             val assistantDbId = persistAssistantTurn(
                 turnParts, lastUsage, turnReasoningContent, blockMeta,
@@ -9254,6 +9261,7 @@ class ChatViewModel(
                     accumulatedText = ""
                     allToolBlocks.clear()
                     allToolInputs.clear()
+                    allToolSignatures.clear()
                     toolInputChunkRings.clear()
                     _canResume.value = false
                     continue
@@ -10616,11 +10624,12 @@ class ChatViewModel(
         allToolBlocks: List<AssistantBlock>,
         turnStartBlockIndex: Int,
         toolCallInputs: Map<String, String>,
+        toolCallSignatures: Map<String, String> = emptyMap(),
     ): List<AgentContentPart> =
         // RC3: delegate to the top-level pure builder (production-used) so the
         // turn-persistence semantics are directly JVM-testable and cannot drift
         // from its tests. See F-T01-01 acceptance invariant.
-        buildTurnPartsPure(allToolBlocks, turnStartBlockIndex, toolCallInputs)
+        buildTurnPartsPure(allToolBlocks, turnStartBlockIndex, toolCallInputs, toolCallSignatures)
 
     /**
      * Persist a single agent turn: the ordered list of AgentContentParts produced
@@ -10662,7 +10671,12 @@ class ChatViewModel(
                     val desc = meta?.toolTitle ?: ""
                     val pageURL = meta?.browserURL ?: ""
                     val imgPath = meta?.imageFilePath ?: ""
-                    append("""{"type":"toolUse","value":{"toolUseId":${escapeJson(part.id)},"name":${escapeJson(name)},"input":${escapeJson(inputStr)},"description":${escapeJson(desc)},"pageURL":${escapeJson(pageURL)},"imageFilePath":${escapeJson(imgPath)},"thoughtSignature":null}}""")
+                    // [fix-antigravity-thought-signature] Persist the opaque
+                    // signature so session reloads keep echoing it; empty →
+                    // null to keep legacy rows byte-compatible.
+                    val signature = part.thoughtSignature.orEmpty()
+                    val signatureJson = if (signature.isEmpty()) "null" else escapeJson(signature)
+                    append("""{"type":"toolUse","value":{"toolUseId":${escapeJson(part.id)},"name":${escapeJson(name)},"input":${escapeJson(inputStr)},"description":${escapeJson(desc)},"pageURL":${escapeJson(pageURL)},"imageFilePath":${escapeJson(imgPath)},"thoughtSignature":$signatureJson}}""")
                 }
                 else -> { /* tool_result is persisted via persistToolResultMessage */ }
             }
@@ -12607,6 +12621,7 @@ Environment variables:
                             id = part.id,
                             name = part.name,
                             input = inputJson,
+                            thoughtSignature = part.thoughtSignature,
                         ))
                     }
                     is ParsedPart.ToolResult -> {
@@ -12806,6 +12821,16 @@ internal fun rollbackTurnBlocksTo(
     return true
 }
 
+// [fix-antigravity-thought-signature] Turn-scoped tool call record: the
+// Gemini-family thoughtSignature rides alongside id/name/args so the
+// assistant history re-emits it on the next request.
+internal data class ToolCallRecord(
+    val id: String,
+    val name: String,
+    val args: JSONObject,
+    val thoughtSignature: String? = null,
+)
+
 /**
  * RC3: Pure builder for a turn's persisted `AgentContentPart` list, walking the
  * slice of `allToolBlocks` that belongs to the current turn (from
@@ -12825,6 +12850,7 @@ internal fun buildTurnPartsPure(
     allToolBlocks: List<AssistantBlock>,
     turnStartBlockIndex: Int,
     toolCallInputs: Map<String, String>,
+    toolCallSignatures: Map<String, String> = emptyMap(),
 ): List<AgentContentPart> {
     if (turnStartBlockIndex >= allToolBlocks.size) return emptyList()
     val out = mutableListOf<AgentContentPart>()
@@ -12839,7 +12865,7 @@ internal fun buildTurnPartsPure(
                 if (name.isBlank()) continue
                 val inputStr = toolCallInputs[block.id] ?: "{}"
                 val inputJson = try { JSONObject(inputStr) } catch (_: Exception) { JSONObject() }
-                out.add(AgentContentPart.ToolUse(block.id, name, inputJson))
+                out.add(AgentContentPart.ToolUse(block.id, name, inputJson, toolCallSignatures[block.id]))
             }
             // "thinking" / "info" → not persisted in parts
             else -> { /* skip */ }

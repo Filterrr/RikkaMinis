@@ -1540,7 +1540,18 @@ class ModelExecutionService : Service() {
                         val id = getString(p, "toolUseId").ifBlank { getString(p, "id") }
                         val name = getString(p, "name")
                         val arguments = p.optJSONObject("arguments") ?: JSONObject()
-                        parts.add(com.openminis.app.data.model.AgentContentPart.ToolUse(id = id, name = name, input = arguments))
+                        // [fix-antigravity-thought-signature] Round-trip the
+                        // opaque signature into the rebuilt part so the
+                        // provider's request builder re-emits it on the
+                        // functionCall part (v1internal hard-requires it).
+                        parts.add(
+                            com.openminis.app.data.model.AgentContentPart.ToolUse(
+                                id = id,
+                                name = name,
+                                input = arguments,
+                                thoughtSignature = getString(p, "thoughtSignature").ifEmpty { null },
+                            ),
+                        )
                     }
                     "toolresult" -> {
                         val id = getString(p, "toolUseId").ifBlank { getString(p, "id") }

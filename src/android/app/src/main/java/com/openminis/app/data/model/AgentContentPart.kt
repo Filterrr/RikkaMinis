@@ -14,6 +14,13 @@ sealed class AgentContentPart {
         val id: String,
         val name: String,
         val input: JSONObject,
+        /**
+         * [fix-antigravity-thought-signature] Opaque Gemini-family signature
+         * returned alongside the functionCall part. Re-emitted verbatim on
+         * the same functionCall part in the next request's history — Google
+         * 400s ("missing a thought_signature") without it on Antigravity.
+         */
+        val thoughtSignature: String? = null,
     ) : AgentContentPart()
 
     data class ToolResult(

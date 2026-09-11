@@ -185,10 +185,10 @@ class GeminiProvider(
 
                 // Extract function calls from streaming response
                 val functionCalls = extractFunctionCalls(json)
-                for ((fcName, fcArgs) in functionCalls) {
+                for ((fcName, fcArgs, fcSignature) in functionCalls) {
                     val toolId = "gemini_${System.nanoTime()}"
                     send(LLMStreamChunk.ToolUseStart(toolId, fcName))
-                    send(LLMStreamChunk.ToolCallComplete(toolId, fcName, fcArgs))
+                    send(LLMStreamChunk.ToolCallComplete(toolId, fcName, fcArgs, fcSignature))
                 }
 
                 extractUsage(json)?.let { usage ->
@@ -261,10 +261,14 @@ class GeminiProvider(
                         }
                         is AgentContentPart.ToolUse -> {
                             parts.put(JSONObject().apply {
-                                put("functionCall", JSONObject().apply {
+                                val functionCall = JSONObject().apply {
                                     put("name", part.name)
                                     put("args", part.input)
-                                })
+                                }
+                                part.thoughtSignature?.takeIf { it.isNotEmpty() }?.let {
+                                    functionCall.put("thoughtSignature", it)
+                                }
+                                put("functionCall", functionCall)
                             })
                         }
                         is AgentContentPart.ToolResult -> {
@@ -489,19 +493,29 @@ class GeminiProvider(
         return out
     }
 
-    private fun extractFunctionCalls(json: JSONObject): List<Pair<String, JSONObject>> {
+    private fun extractFunctionCalls(json: JSONObject): List<Triple<String, JSONObject, String?>> {
         val candidates = json.optJSONArray("candidates") ?: return emptyList()
         val first = candidates.optJSONObject(0) ?: return emptyList()
         val content = first.optJSONObject("content") ?: return emptyList()
         val parts = content.optJSONArray("parts") ?: return emptyList()
 
-        val calls = mutableListOf<Pair<String, JSONObject>>()
+        val calls = mutableListOf<Triple<String, JSONObject, String?>>()
         for (i in 0 until parts.length()) {
             val part = parts.getJSONObject(i)
             val fc = part.optJSONObject("functionCall") ?: continue
             val name = fc.safeOptString("name", "")
             val args = fc.optJSONObject("args") ?: JSONObject()
-            if (name.isNotEmpty()) calls.add(name to args)
+            if (name.isNotEmpty()) {
+                calls.add(
+                    Triple(
+                        name,
+                        args,
+                        part.safeOptString("thoughtSignature", "")
+                            .ifEmpty { part.safeOptString("thought_signature", "") }
+                            .ifEmpty { null },
+                    ),
+                )
+            }
         }
         return calls
     }
