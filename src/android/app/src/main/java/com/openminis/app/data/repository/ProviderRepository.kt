@@ -29,6 +29,8 @@ import com.openminis.app.data.model.hasVoiceModality
 import com.openminis.app.data.model.isVoiceTemplateSeedShape
 import com.openminis.app.data.model.withInferredVoiceModality
 import com.openminis.app.provider.registerModelListProviders
+import com.openminis.app.provider.initAntigravityAdapter
+import com.openminis.app.provider.antigravity.AntigravityCredentialStore
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -86,6 +88,12 @@ class ProviderRepository(private val context: Context) {
         ProviderDatabase.getInstance(context).providerConfigDao()
 
     companion object {
+        /**
+         * [T-antigravity-oauth] Marker stored in apikey_<id> for OAuth-backed
+         * antigravity instances; the real tokens live in AntigravityCredentialStore.
+         */
+        const val ANTIGRAVITY_OAUTH_MARKER = "antigravity:oauth"
+
         /**
          * Per-instance model-cache TTL. Matches iOS's daily calendar-day
          * refresh window (24h rolling here — simpler than calendar-day math
@@ -233,6 +241,7 @@ class ProviderRepository(private val context: Context) {
         // data layer never imports provider implementations directly.
         // Idempotent (last-registration-wins per type).
         registerModelListProviders()
+        initAntigravityAdapter(context)
         loadScope.launch {
             val loaded = loadConfig()
             synchronized(configLock) {
@@ -1909,12 +1918,54 @@ class ProviderRepository(private val context: Context) {
         encryptedPrefs.edit().putString("apikey_$instanceId", key).commit()
     }
 
+    /** Scope for fire-and-forget token refreshes triggered from main-thread loads. */
+    private val tokenRefreshScope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.Dispatchers.IO + kotlinx.coroutines.SupervisorJob(),
+    )
+
     fun loadApiKey(instanceId: String): String? {
-        return encryptedPrefs.getString("apikey_$instanceId", null)
+        val raw = encryptedPrefs.getString("apikey_$instanceId", null)
+        // [T-antigravity-oauth] Antigravity instances store only a MARKER in
+        // apikey_<id> ("antigravity:oauth"); the live access token + refresh
+        // token live in AntigravityCredentialStore (encrypted, upstream
+        // metadata-parity). loadApiKey therefore resolves to a VALID access
+        // token: on background threads the refresh runs inline (single-flighted
+        // by the store's Mutex); on main we return the possibly-stale token
+        // and kick an async refresh so the next call picks the fresh one up.
+        if (raw == ANTIGRAVITY_OAUTH_MARKER) {
+            return resolveAntigravityToken(instanceId)
+        }
+        return raw
+    }
+
+    private fun resolveAntigravityToken(instanceId: String): String? {
+        val onMain = android.os.Looper.myLooper() == android.os.Looper.getMainLooper()
+        return if (onMain) {
+            val tokens = AntigravityCredentialStore.loadTokens(context, instanceId)
+            if (tokens == null) {
+                null
+            } else if (AntigravityCredentialStore.isExpired(context, instanceId) && tokens.refreshToken.isNotEmpty()) {
+                // Fire-and-forget refresh; callers this turn may still see 401,
+                // the error copy tells the user to retry.
+                tokenRefreshScope.launch {
+                    AntigravityCredentialStore.validAccessToken(context, instanceId)
+                }
+                tokens.accessToken
+            } else {
+                tokens.accessToken
+            }
+        } else {
+            kotlinx.coroutines.runBlocking {
+                AntigravityCredentialStore.validAccessToken(context, instanceId)
+            }
+        }
     }
 
     fun deleteApiKey(instanceId: String) {
         encryptedPrefs.edit().remove("apikey_$instanceId").commit()
+        // [T-antigravity-oauth] Drop OAuth material too — deleting the
+        // credential on an OAuth instance must log the account out.
+        AntigravityCredentialStore.clear(context, instanceId)
     }
 
     // -- Import / Export --

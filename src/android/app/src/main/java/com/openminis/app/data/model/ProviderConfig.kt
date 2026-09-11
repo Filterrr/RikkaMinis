@@ -15,7 +15,12 @@ enum class ProviderType(val displayName: String) {
     // [T-kimi-oauth] Kimi Code (Coding Plan) — RFC 8628 device-code OAuth,
     // OpenAI-compatible upstream at api.kimi.com/coding/v1. DB round-trip is
     // name-based (ProviderCredential.valueOf), so appending is migration-safe.
-    kimiCode("Kimi Code");
+    kimiCode("Kimi Code"),
+    // [T-antigravity-oauth] Google Antigravity — OAuth2 (loopback redirect,
+    // port 51121) via AntigravityOAuth, upstream protocol ported 1:1 from
+    // CLIProxyAPI internal/auth/antigravity. Appended last: name-based
+    // (de)serialization keeps existing persisted configs intact.
+    antigravity("Antigravity");
 
     val builtInModels: List<LLMModel>
         get() = when (this) {
@@ -25,6 +30,9 @@ enum class ProviderType(val displayName: String) {
             openRouter -> LLMModel.allOpenRouter
             xAI -> LLMModel.allXAI
             kimiCode -> LLMModel.allKimi
+            // [T-antigravity-oauth] Pre-login placeholder catalog; replaced by
+            // the live fetchAvailableModels call after OAuth completes.
+            antigravity -> com.openminis.app.provider.antigravity.AntigravityOAuth.FALLBACK_MODELS
         }
 }
 

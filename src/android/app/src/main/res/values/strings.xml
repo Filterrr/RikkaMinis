@@ -1734,4 +1734,21 @@
     <string name="fault_layer_service">Service (endpoint alive but failing \u2014 relay/provider issue)</string>
     <string name="fault_layer_credentials">Credentials (key invalid or quota exhausted)</string>
     <string name="fault_layer_unclear">Unclear (no matching signature)</string>
+    <string name="antigravity_oauth_section_header">Antigravity Sign-in</string>
+    <string name="antigravity_oauth_section_footer">Tap "Sign in" and the browser selected above opens. After you approve with your Google account the flow returns automatically. Session state and tokens are kept in on-device encrypted storage.</string>
+    <string name="antigravity_oauth_browser_label">Browser for sign-in</string>
+    <string name="antigravity_browser_system">System browser</string>
+    <string name="antigravity_browser_in_app">In-app browser</string>
+    <string name="antigravity_oauth_login">Sign in</string>
+    <string name="antigravity_oauth_relogin">Sign in again</string>
+    <string name="antigravity_oauth_waiting">Waiting for the authorization callback (up to 5 min)…</string>
+    <string name="antigravity_oauth_done">Signed in: %1$s</string>
+    <string name="antigravity_oauth_cancelled">Sign-in cancelled</string>
+    <string name="antigravity_oauth_logout">Sign out</string>
+    <string name="antigravity_project_prefix">Project: </string>
+    <string name="antigravity_expires_prefix">Expires </string>
+    <string name="antigravity_oauth_notice_title">Antigravity uses Google account OAuth</string>
+    <string name="antigravity_oauth_notice_body">This provider does not take an API key. After saving, open "API &amp; Connection" and tap Sign in to authorize with your Google account.</string>
+    <string name="add_provider_subtitle_antigravity">Google Antigravity — OAuth sign-in with your Google account, full Claude / Gemini lineup</string>
+    <string name="antigravity_oauth_notice_footer">No API key needed: after saving, tap "Sign in" on the API &amp; Connection page to authorize with Google. The model list refreshes automatically.</string>
 </resources>

@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Diamond
+import androidx.compose.material.icons.filled.RocketLaunch
 import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Terminal
@@ -138,6 +139,7 @@ private val providerDisplayOrder = listOf(
     ProviderType.gemini,
     ProviderType.xAI,
     ProviderType.kimiCode,
+    ProviderType.antigravity,
     ProviderType.openRouter,
 )
 
@@ -150,6 +152,8 @@ private fun providerIcon(type: ProviderType): Pair<ImageVector, Color> = when (t
     ProviderType.xAI -> Icons.Default.FlashOn to ProviderAccents.xAI               // orange — Grok visual cue
     // [T-kimi-oauth] Indigo — matches iOS's Kimi accent.
     ProviderType.kimiCode -> Icons.Default.Terminal to ProviderAccents.kimiCode
+    // [T-antigravity-oauth] Rocket — Antigravity brand visual cue.
+    ProviderType.antigravity -> Icons.Default.RocketLaunch to ProviderAccents.antigravity
 }
 
 // -- Step 1: Choose Provider Type --
@@ -176,6 +180,7 @@ private fun ChooseProviderScreen(
                     ProviderType.openRouter -> "OpenRouter"
                     ProviderType.xAI -> "xAI (Grok)"
                     ProviderType.kimiCode -> "Kimi Code"
+                    ProviderType.antigravity -> "Antigravity"
                 }
                 // Describe which vendors each protocol supports, rather than a
                 // raw built-in model count.
@@ -186,6 +191,7 @@ private fun ChooseProviderScreen(
                     ProviderType.openRouter -> R.string.add_provider_subtitle_openrouter
                     ProviderType.xAI -> R.string.add_provider_subtitle_xai
                     ProviderType.kimiCode -> R.string.add_provider_subtitle_kimi
+                    ProviderType.antigravity -> R.string.add_provider_subtitle_antigravity
                 }
                 val (icon, iconColor) = providerIcon(type)
                 SettingsRow(
@@ -312,7 +318,9 @@ private fun ColumnScope.ApiKeyConfigSection(
     var showApiKeyPlaintext by remember { mutableStateOf(false) }
     // /v1 is appended automatically for all non-Gemini providers (Gemini uses
     // v1beta full-path URLs). effectiveBaseURL already guards against double-append.
-    val appendV1Suffix = providerType != ProviderType.gemini
+    // [T-antigravity-oauth] Antigravity uses full-origin URLs (/v1internal:*)
+    // — same no-append rule as Gemini.
+    val appendV1Suffix = providerType != ProviderType.gemini && providerType != ProviderType.antigravity
     // OpenAI API Format: false = Chat Completions, true = Responses API
     var useResponsesAPI by remember { mutableStateOf(false) }
 
@@ -324,28 +332,49 @@ private fun ColumnScope.ApiKeyConfigSection(
         ProviderType.openRouter -> "sk-or-..."
         ProviderType.xAI -> "xai-..."
         ProviderType.kimiCode -> "sk-..."
+        ProviderType.antigravity -> "OAuth 登录后自动获取"
     }
-    SettingsSection(
-        header = stringResource(R.string.add_provider_credential),
-        footer = stringResource(R.string.add_provider_your_key_is_stored_securely_in_encrypted),
-    ) {
-        SettingsCardBlock {
-            RowLabel(text = stringResource(R.string.provider_list_api_key))
-            SectionTextField(
-                value = apiKey,
-                onValueChange = onApiKeyChange,
-                placeholder = keyPlaceholder,
-                singleLine = true,
-                visualTransformation = if (showApiKeyPlaintext) VisualTransformation.None else PasswordVisualTransformation(),
-                trailingIcon = {
-                    IconButton(onClick = { showApiKeyPlaintext = !showApiKeyPlaintext }) {
-                        Icon(
-                            if (showApiKeyPlaintext) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                            contentDescription = if (showApiKeyPlaintext) "Hide" else "Show",
-                        )
-                    }
-                },
-            )
+    // [T-antigravity-oauth] Antigravity is OAuth-ONLY: no API key field.
+    // The credential section becomes a notice pointing at the in-app login
+    // (ProviderConnectionScreen owns the actual 开始登录 button, since the
+    // browser handoff + loopback listener live there for re-login too).
+    if (providerType == ProviderType.antigravity) {
+        SettingsSection(
+            header = stringResource(R.string.add_provider_credential),
+            footer = stringResource(R.string.antigravity_oauth_notice_footer),
+        ) {
+            SettingsCardBlock {
+                RowLabel(text = stringResource(R.string.antigravity_oauth_notice_title))
+                Text(
+                    text = stringResource(R.string.antigravity_oauth_notice_body),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
+        }
+    } else {
+        SettingsSection(
+            header = stringResource(R.string.add_provider_credential),
+            footer = stringResource(R.string.add_provider_your_key_is_stored_securely_in_encrypted),
+        ) {
+            SettingsCardBlock {
+                RowLabel(text = stringResource(R.string.provider_list_api_key))
+                SectionTextField(
+                    value = apiKey,
+                    onValueChange = onApiKeyChange,
+                    placeholder = keyPlaceholder,
+                    singleLine = true,
+                    visualTransformation = if (showApiKeyPlaintext) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { showApiKeyPlaintext = !showApiKeyPlaintext }) {
+                            Icon(
+                                if (showApiKeyPlaintext) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = if (showApiKeyPlaintext) "Hide" else "Show",
+                            )
+                        }
+                    },
+                )
+            }
         }
     }
 
@@ -355,6 +384,8 @@ private fun ColumnScope.ApiKeyConfigSection(
             ProviderType.gemini -> "https://generativelanguage.googleapis.com/v1beta"
             ProviderType.anthropic -> "https://api.anthropic.com"
             ProviderType.openAI -> "https://api.openai.com"
+            // Antigravity uses the full-origin upstream (no /v1 appending).
+            ProviderType.antigravity -> com.openminis.app.provider.antigravity.AntigravityOAuth.DAILY_API_ENDPOINT
             else -> "https://api.example.com"
         }
         // T-mimo-anthropic-endpoint-android: Anthropic third-party
@@ -432,7 +463,14 @@ private fun ColumnScope.ApiKeyConfigSection(
                 useResponsesAPI = providerType == ProviderType.openAI && useResponsesAPI,
             )
             providerRepository.addInstance(instance)
-            providerRepository.saveApiKey(instance.id, apiKey.trim())
+            // [T-antigravity-oauth] OAuth-only providers are saved with a
+            // marker instead of a blank key, so refreshModels() sees a
+            // credential and the store resolver kicks in.
+            if (providerType == ProviderType.antigravity) {
+                providerRepository.saveApiKey(instance.id, ProviderRepository.ANTIGRAVITY_OAUTH_MARKER)
+            } else {
+                providerRepository.saveApiKey(instance.id, apiKey.trim())
+            }
             // Auto-refresh models in background (fetches from API or falls back to models.dev).
             // Launched on the app-scoped scope so the fetch survives this screen's disposal.
             // forceRefresh=true bypasses the 7-day ProviderModelsCache so a brand-new provider
@@ -464,7 +502,7 @@ private fun ColumnScope.ApiKeyConfigSection(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp),
-        enabled = apiKey.isNotBlank(),
+        enabled = providerType == ProviderType.antigravity || apiKey.isNotBlank(),
     ) {
         Text(stringResource(R.string.provider_list_add_provider))
     }

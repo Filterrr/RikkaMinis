@@ -1419,9 +1419,10 @@ class ModelUseOffloadHandler(
                 Explicit-envelope example:
                   {"messages":[{"role":"user","content":"<prompt>"}],"extra_body":{"image":"<url-or-data-uri>","seed":42},"extra_headers":{"X-Custom":"1"},"endpoint_path":"/api/v3/images/generations"}
             """.trimIndent()
-            // xAI (Grok) / Kimi Coding have no image-output models in the
-            // current catalog — fall through to empty hint like Anthropic.
-            ProviderType.anthropic, ProviderType.xAI, ProviderType.kimiCode, null -> ""
+            // xAI (Grok) / Kimi Coding / Antigravity have no image-output
+            // models in the current catalog — fall through to empty hint
+            // like Anthropic.
+            ProviderType.anthropic, ProviderType.xAI, ProviderType.kimiCode, ProviderType.antigravity, null -> ""
         }
     }
 

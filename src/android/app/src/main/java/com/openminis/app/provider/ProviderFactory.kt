@@ -6,6 +6,9 @@ import com.openminis.app.data.model.ProviderInstance
 import com.openminis.app.data.model.ProviderType
 import com.openminis.app.network.ConnectionWarmer
 import com.openminis.app.provider.anthropic.AnthropicProvider
+import com.openminis.app.provider.antigravity.AntigravityCredentialStore
+import com.openminis.app.provider.antigravity.AntigravityOAuth
+import com.openminis.app.provider.antigravity.AntigravityProvider
 import com.openminis.app.provider.gemini.GeminiProvider
 import com.openminis.app.provider.openai.OpenAIProvider
 
@@ -95,6 +98,24 @@ object ProviderFactory {
                     basePath = base,
                 )
             }
+            ProviderType.antigravity -> {
+                // [T-antigravity-oauth] `apiKey` slot carries the OAuth access
+                // token — resolved by callers via
+                // AntigravityCredentialStore.validAccessToken() (auto-refresh).
+                // Custom base = full upstream origin (no /v1 appending);
+                // default mirrors upstream resolveAntigravityRequestBaseURL.
+                // Project id rides through the encrypted store (keyed by
+                // instance id) when the provider carries one.
+                val storeProjectId = context?.let {
+                    AntigravityCredentialStore.loadProjectId(it, instance.id)
+                }
+                AntigravityProvider(
+                    accessToken = apiKey,
+                    model = model,
+                    basePath = basePath ?: AntigravityOAuth.DAILY_API_ENDPOINT,
+                    projectId = storeProjectId,
+                )
+            }
         }).also { provider ->
             provider.instanceContext = instance
             // [OPT7-conn-warmup] Every provider build is a "user is heading
@@ -110,11 +131,14 @@ object ProviderFactory {
     }
 
     /** [OPT7-conn-warmup] Default origin for instances with no custom base. */
-    private fun defaultBaseFor(type: ProviderType): String = when (type) {        ProviderType.anthropic -> "https://api.anthropic.com"
+    private fun defaultBaseFor(type: ProviderType): String = when (type) {
+        ProviderType.anthropic -> "https://api.anthropic.com"
         ProviderType.gemini -> "https://generativelanguage.googleapis.com/v1beta"
         ProviderType.openAI -> "https://api.openai.com/v1"
         ProviderType.openRouter -> "https://openrouter.ai/api/v1"
         ProviderType.xAI -> "https://api.x.ai/v1"
         ProviderType.kimiCode -> KimiConstants.CODING_API_BASE + "/v1"
+        // [T-antigravity-oauth] Upstream default (resolveAntigravityRequestBaseURL).
+        ProviderType.antigravity -> AntigravityOAuth.DAILY_API_ENDPOINT
     }
 }
