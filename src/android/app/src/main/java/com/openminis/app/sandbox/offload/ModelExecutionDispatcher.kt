@@ -194,6 +194,15 @@ object ModelExecutionDispatcher {
                                             put("type", v.type)
                                             put("description", v.description)
                                             v.enumValues?.takeIf { it.isNotEmpty() }?.let { put("enum", JSONArray(it)) }
+                                            // [fix-antigravity-v1internal-items] Keep the
+                                            // recursive items schema across the process
+                                            // boundary — the worker rebuilds
+                                            // AgentToolParam via AgentToolSchema.fromJson,
+                                            // and Antigravity's v1internal rejects ARRAY
+                                            // params without items (400 missing field).
+                                            // Lowercase JSON-Schema shape; fromJson
+                                            // round-trips it back into toGeminiJson().
+                                            v.items?.let { put("items", it.toJson()) }
                                         })
                                     }
                                 })
