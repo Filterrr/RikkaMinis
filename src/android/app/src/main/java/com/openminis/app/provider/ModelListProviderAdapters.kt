@@ -1,5 +1,6 @@
 package com.openminis.app.provider
 
+import android.content.Context
 import com.openminis.app.provider.KimiConstants
 import com.openminis.app.provider.antigravity.AntigravityCredentialStore
 import com.openminis.app.provider.antigravity.AntigravityModelsApi
