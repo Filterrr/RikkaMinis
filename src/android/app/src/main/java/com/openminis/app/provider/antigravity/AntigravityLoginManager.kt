@@ -25,6 +25,9 @@ object AntigravityLoginManager {
     private const val TAG = "AntigravityLogin"
     private const val TIMEOUT_MS = 5 * 60 * 1000L
 
+    /** Sentinel state for callbacks that arrive without one (the caller-side state check treats null and this the same). */
+    private const val EMPTY_STATE = ""
+
     sealed class Result {
         /** Login succeeded; [email]/[projectId] may be null when the upstream call failed (both are best-effort). */
         data class Success(val email: String?, val projectId: String?) : Result()
@@ -65,7 +68,7 @@ object AntigravityLoginManager {
             withTimeoutOrNull(TIMEOUT_MS) {
                 suspendCancellableCoroutine { cont ->
                     server.onResult = { code, st ->
-                        if (cont.isActive) cont.resume(code to st)
+                        if (cont.isActive) cont.resume(code to (st ?: EMPTY_STATE))
                     }
                     server.onTimeoutTick = {
                         // No-op; the withTimeoutOrNull owns the deadline.

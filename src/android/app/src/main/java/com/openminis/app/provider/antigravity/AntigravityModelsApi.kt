@@ -71,6 +71,7 @@ object AntigravityModelsApi {
             JSONObject()
         }
 
+        val models = mutableListOf<LLMModel>()
         val bases = listOf(AntigravityOAuth.DAILY_API_ENDPOINT, AntigravityOAuth.API_ENDPOINT)
         for (base in bases) {
             val request = Request.Builder()
@@ -90,27 +91,21 @@ object AntigravityModelsApi {
                 continue
             }
 
-            val body = response.body?.string() ?: run {
-                response.close()
-                continue
-            }
+            try {
+                if (!response.isSuccessful) {
+                    AppLogger.warning(TAG, "fetchAvailableModels $base: HTTP ${response.code}")
+                    continue
+                }
 
-            if (!response.isSuccessful) {
-                AppLogger.warning(TAG, "fetchAvailableModels $base: HTTP ${response.code}")
+                val body = response.body?.string() ?: continue
+                val json = try { JSONObject(body) } catch (_: Exception) { continue }
+                models.addAll(parseModels(json))
+            } finally {
                 response.close()
-                continue
             }
-            response.close()
-
-            val json = try { JSONObject(body) } catch (_: Exception) { continue }
-            val models = try {
-                parseModels(json)
-            } catch (_: Exception) {
-                continue
-            }
-            if (models.isNotEmpty()) return models
+            if (models.isNotEmpty()) break
         }
-        return emptyList()
+        return models
     }
 
     /** Both upstream response shapes: {"models": {id: meta}} and {"models": [{name, displayName}]}. */

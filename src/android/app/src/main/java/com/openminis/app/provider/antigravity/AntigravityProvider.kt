@@ -225,7 +225,7 @@ class AntigravityProvider(
                 send(LLMStreamChunk.Finished(lastFinishReason ?: "end_turn"))
             }
         } catch (e: Exception) {
-            cancel("Stream error", mapError(e))
+            close(mapError(e))
         } finally {
             reader.close()
             response.close()

@@ -55,11 +55,11 @@ object AntigravityCredentialStore {
 
     private fun key(instanceId: String, field: String) = "$field::$instanceId"
 
-    fun loadTokens(context: Context, instanceId: String): Tokens? {
+    fun loadTokens(context: Context, instanceId: String): AntigravityOAuth.Tokens? {
         val p = prefs(context)
         val access = p.getString(key(instanceId, KEY_ACCESS), null) ?: return null
         if (access.isEmpty()) return null
-        return Tokens(
+        return AntigravityOAuth.Tokens(
             accessToken = access,
             refreshToken = p.getString(key(instanceId, KEY_REFRESH), null).orEmpty(),
             expiresIn = p.getLong(key(instanceId, KEY_EXPIRES_IN), 3600L),
@@ -76,7 +76,7 @@ object AntigravityCredentialStore {
     fun saveTokens(
         context: Context,
         instanceId: String,
-        tokens: Tokens,
+        tokens: AntigravityOAuth.Tokens,
         email: String?,
         projectId: String?,
     ) {
