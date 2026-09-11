@@ -530,10 +530,18 @@ class ModelExecutionService : Service() {
      *     missing_api_key instead of a doomed 401 round-trip).
      */
     private fun resolveWorkerApiKey(instance: com.openminis.app.data.model.ProviderInstance): String {
+        // [fix-encrypted-prefs-wipe-multiprocess] READ-ONLY access: the worker
+        // process must never trigger the self-healing wipe path — a cross-
+        // process Keystore mismatch used to DESTROY the app's credentials
+        // (freshly OAuthed tokens included) on the first read.
         val raw = try {
-            com.openminis.app.util.EncryptedPrefsFactory.safeCreate(this, "provider_secrets")
+            com.openminis.app.util.EncryptedPrefsFactory.safeCreateReadOnly(this, "provider_secrets")
                 .getString("apikey_${instance.id}", null)
-        } catch (_: Exception) { null } ?: return ""
+        } catch (_: Exception) { null }
+        if (raw == null) {
+            Log.w(TAG, "worker credential read empty for ${instance.providerType} instance ${instance.id.take(8)} (readOnly store miss)")
+            return ""
+        }
 
         if (raw != com.openminis.app.data.repository.ProviderRepository.ANTIGRAVITY_OAUTH_MARKER) {
             return raw
@@ -543,7 +551,8 @@ class ModelExecutionService : Service() {
                 com.openminis.app.provider.antigravity.AntigravityCredentialStore
                     .validAccessToken(this@ModelExecutionService, instance.id)
             } ?: ""
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.w(TAG, "worker antigravity token resolve failed: ${e.message}")
             ""
         }
     }
@@ -1011,9 +1020,10 @@ class ModelExecutionService : Service() {
             )
         }
 
-        // ── API key: read from EncryptedPrefs (same uid) ──
-        val apiKey = resolveWorkerApiKey(instance)
+        // ── API key: inline OAuth token first, EncryptedPrefs read-only fallback ──
+        val apiKey = req.optString("oauth_access_token", "").ifEmpty { resolveWorkerApiKey(instance) }
         if (apiKey.isEmpty()) {
+            Log.w(TAG, "missing credential: antigravity inline token absent AND prefs miss for ${instance.id.take(8)}")
             return JSONObject().apply {
                 put("error", "missing_api_key")
                 put("message", "No API key configured for ${instance.label}.")
@@ -1252,10 +1262,11 @@ class ModelExecutionService : Service() {
             val tools = parseToolsJson(req.optJSONArray("tools"))
             val thinkingLevel = safeEnum(getString(req, "thinking_level"), com.openminis.app.data.model.ThinkingLevel.OFF)
 
-            // ── API key: read from EncryptedPrefs (same uid) ──
-            val apiKey = resolveWorkerApiKey(instance)
+            // ── API key: inline OAuth token first, EncryptedPrefs read-only fallback ──
+            val apiKey = req.optString("oauth_access_token", "").ifEmpty { resolveWorkerApiKey(instance) }
             ModelExecutionRunLog.log(dir, android.os.Process.myPid(), ModelExecutionRunLog.Phase.REQUEST_PARSED, "streaming=true model=${model.id}", runId = runIdOf(dir))
             if (apiKey.isEmpty()) {
+                Log.w(TAG, "missing credential (stream): antigravity inline token absent AND prefs miss for ${instance.id.take(8)}")
                 appendLine(ChatStreamJsonl.errorLine("missing_api_key"))
                 writeResultAtomically(dir, JSONObject().apply {
                     put("error", "missing_api_key")

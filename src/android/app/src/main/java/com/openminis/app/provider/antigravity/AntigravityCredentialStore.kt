@@ -47,9 +47,31 @@ object AntigravityCredentialStore {
 
     private fun prefs(context: Context): SharedPreferences =
         prefsRef ?: synchronized(this) {
-            prefsRef ?: EncryptedPrefsFactory.safeCreate(context.applicationContext, FILE)
-                .also { prefsRef = it }
+            prefsRef ?: buildPrefs(context).also { prefsRef = it }
         }
+
+    /**
+     * [fix-encrypted-prefs-wipe-multiprocess] Process-aware store access.
+     * EncryptedSharedPreferences is single-process (per-process Android
+     * Keystore). In the :modelservice worker process create() cannot decrypt
+     * the app process's keyset — and the factory's old self-healing path
+     * responded to that by WIPING the store, destroying freshly OAuthed
+     * credentials. The worker therefore opens the store READ-ONLY (no wipe
+     * on failure, empty in-memory fallback) and resolves tokens through the
+     * inline oauth_access_token carried in the request JSON.
+     */
+    private fun buildPrefs(context: Context): SharedPreferences {
+        val appContext = context.applicationContext
+        val processName = com.openminis.app.provider.ProviderBoundary.currentProcessName()
+            ?: java.io.File("/proc/self/cmdline").readText().trim().trimEnd('\u0000')
+        val isMainProcess = processName == appContext.packageName
+        return if (isMainProcess) {
+            EncryptedPrefsFactory.safeCreate(appContext, FILE)
+        } else {
+            android.util.Log.i(TAG, "non-main process ('$processName') opens antigravity credential store READ-ONLY")
+            EncryptedPrefsFactory.safeCreateReadOnly(appContext, FILE)
+        }
+    }
 
     // -- key namespacing: one credential per provider instance --
 

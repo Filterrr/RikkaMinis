@@ -66,12 +66,25 @@ object ModelExecutionDispatcher {
         thinkingLevel: ThinkingLevel = ThinkingLevel.OFF,
         streaming: Boolean = false,
         firstChunkBudgetMs: Long? = null,
+        /**
+         * [fix-encrypted-prefs-wipe-multiprocess] Pre-resolved credential for
+         * OAuth-backed instances (Antigravity). The MAIN process resolves the
+         * access token (EncryptedPrefs + AntigravityCredentialStore both live
+         * in the app process) and hands it to the worker inline — the worker
+         * process can neither read EncryptedSharedPreferences (per-process
+         * AndroidKeystore) nor reach AntigravityCredentialStore's
+         * app-process-initialized encrypted prefs. Plain API keys still ride
+         * through the worker's own read of provider_secrets (same file, but
+         * the worker now opens it READ-ONLY, never wiping).
+         */
+        oauthAccessToken: String? = null,
     ): String {
         return JSONObject().apply {
             put("instance_id", instance.id)
             put("instance_label", instance.label)
             put("provider_type", instance.providerType.name)
             put("credential_type", instance.credentialType.name)
+            oauthAccessToken?.let { put("oauth_access_token", it) }
             instance.customBaseURL?.let { put("base_url", it) }
             put("append_v1", instance.appendV1Suffix)
             instance.customUserAgent?.let { put("user_agent", it) }

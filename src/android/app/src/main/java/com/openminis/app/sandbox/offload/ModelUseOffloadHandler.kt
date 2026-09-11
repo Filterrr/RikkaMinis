@@ -379,6 +379,21 @@ class ModelUseOffloadHandler(
             imageParts = imageParts,
             inputJson = inputText,
             outputExt = outputExt,
+            // [fix-encrypted-prefs-wipe-multiprocess] Resolve the OAuth
+            // credential HERE (app process) — the :modelservice worker cannot
+            // read EncryptedSharedPreferences (per-process AndroidKeystore;
+            // its old read path even WIPED the store on failure). API-key
+            // instances return null here and keep the worker's read-only
+            // prefs fallback.
+            oauthAccessToken = if (instance.providerType == com.openminis.app.data.model.ProviderType.antigravity) {
+                try {
+                    com.openminis.app.provider.antigravity.AntigravityCredentialStore
+                        .validAccessToken(context, instance.id)
+                } catch (t: Throwable) {
+                    Log.w(TAG, "inline antigravity credential resolve failed: ${t.message}")
+                    null
+                }
+            } else null,
             // [R4-budget-parity] Non-streaming model-use calls get the same
             // adaptive first-chunk budget as chat streams — a slow relay
             // otherwise times out here at the route-static generation

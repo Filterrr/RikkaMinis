@@ -92,6 +92,7 @@ object ProviderExecutionGateway {
         thinkingLevel: ThinkingLevel = ThinkingLevel.OFF,
         streaming: Boolean = false,
         firstChunkBudgetMs: Long? = null,
+        oauthAccessToken: String? = null,
     ): String = ModelExecutionDispatcher.buildRequestJson(
         instance = instance,
         model = model,
@@ -106,6 +107,7 @@ object ProviderExecutionGateway {
         thinkingLevel = thinkingLevel,
         streaming = streaming,
         firstChunkBudgetMs = firstChunkBudgetMs,
+        oauthAccessToken = oauthAccessToken,
     )
 
     /**
@@ -133,6 +135,14 @@ object ProviderExecutionGateway {
         thinkingLevel: ThinkingLevel = ThinkingLevel.OFF,
         firstChunkBudgetMs: Long? = null,
     ): SendResult {
+        // [fix-encrypted-prefs-wipe-multiprocess] Resolve OAuth credentials
+        // HERE, in the app process, before serializing the request. The
+        // worker (:modelservice) cannot read EncryptedSharedPreferences or
+        // AntigravityCredentialStore — per-process AndroidKeystore makes the
+        // worker's create() fail, and its old self-healing path then WIPED
+        // the store. The token rides inline in request.json (app-private
+        // cacheDir, same uid) instead.
+        val inlineCredential = resolveInlineCredential(context, instance)
         val requestJson = buildRequest(
             instance = instance,
             model = model,
@@ -147,10 +157,29 @@ object ProviderExecutionGateway {
             thinkingLevel = thinkingLevel,
             streaming = false,
             firstChunkBudgetMs = firstChunkBudgetMs,
+            oauthAccessToken = inlineCredential,
         )
         val raw = ModelExecutionDispatcher.dispatch(context, requestJson)
             ?: return SendResult.Unavailable("model service dispatch failed or timed out")
         return parseNonStreamingResult(raw)
+    }
+
+    /**
+     * App-process credential resolution for OAuth-backed provider instances.
+     * Returns the fresh access token to embed in the request JSON, or null
+     * when the instance is not OAuth-backed (API-key instances keep the
+     * worker's own read path) or no valid token exists (the worker will then
+     * surface the typed missing-credential error).
+     */
+    private fun resolveInlineCredential(context: Context, instance: ProviderInstance): String? {
+        if (instance.providerType != com.openminis.app.data.model.ProviderType.antigravity) return null
+        return try {
+            com.openminis.app.provider.antigravity.AntigravityCredentialStore
+                .validAccessToken(context, instance.id)
+        } catch (t: Throwable) {
+            android.util.Log.w("ProviderExecGateway", "inline antigravity credential resolve failed: ${t.message}")
+            null
+        }
     }
 
     /**
@@ -223,6 +252,9 @@ object ProviderExecutionGateway {
         outputExt: String? = null,
         firstChunkBudgetMs: Long? = null,
     ): Flow<LLMStreamChunk> {
+        // [fix-encrypted-prefs-wipe-multiprocess] Same app-process credential
+        // resolution as send() — the worker must never touch EncryptedPrefs.
+        val inlineCredential = resolveInlineCredential(context, instance)
         val requestJson = buildRequest(
             instance = instance,
             model = model,
@@ -237,6 +269,7 @@ object ProviderExecutionGateway {
             thinkingLevel = thinkingLevel,
             streaming = true,
             firstChunkBudgetMs = firstChunkBudgetMs,
+            oauthAccessToken = inlineCredential,
         )
         return ChatStreamOffloadHandler.stream(context, requestJson, thinkingLevel.isEnabled)
     }
