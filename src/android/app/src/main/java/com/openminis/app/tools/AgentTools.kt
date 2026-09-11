@@ -96,7 +96,23 @@ object AgentTools {
             "UPDATE CADENCE (mandatory): call todo_write AGAIN the moment an item's status changes — mark completed immediately after finishing that item, and mark the next one in_progress in the same call. Never batch status updates at the end of the turn or lump several items into one final call: the user's list view renders each completed item with a strikethrough in real time, and stale statuses break that live display. Batching updates is a correctness violation, not a style choice.",
         parameters = mapOf(
             "tool_title" to AgentToolParam("string", "A concise 5-10 word summary of what this task-list update does. Use the same language as the user."),
-            "todos" to AgentToolParam("array", "The COMPLETE task list, replacing the previous one. Each item: {\"content\": str, \"status\": \"pending\" | \"in_progress\" | \"completed\"}."),
+            "todos" to AgentToolParam(
+                "array",
+                "The COMPLETE task list, replacing the previous one. Each item: {\"content\": str, \"status\": \"pending\" | \"in_progress\" | \"completed\"}.",
+                items = AgentToolSchema(
+                    type = "object",
+                    properties = mapOf(
+                        "content" to AgentToolParam("string", "Short imperative phrase describing the task."),
+                        "status" to AgentToolParam(
+                            "string",
+                            "pending (not started) / in_progress (actively working, at most ONE) / completed (done).",
+                            enumValues = listOf("pending", "in_progress", "completed"),
+                        ),
+                    ),
+                    required = listOf("content", "status"),
+                    propertyOrdering = listOf("content", "status"),
+                ),
+            ),
         ),
         required = listOf("tool_title", "todos"),
         propertyOrdering = listOf("tool_title", "todos"),

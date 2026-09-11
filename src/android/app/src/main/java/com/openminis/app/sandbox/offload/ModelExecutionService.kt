@@ -1589,6 +1589,7 @@ class ModelExecutionService : Service() {
                         type = getString(v, "type"),
                         description = getString(v, "description"),
                         enumValues = v.optJSONArray("enum")?.let { e -> (0 until e.length()).map { e.getString(it) } },
+                        items = com.openminis.app.data.model.AgentToolSchema.fromJson(v.optJSONObject("items")),
                     )
                 }
             }
