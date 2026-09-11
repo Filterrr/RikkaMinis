@@ -126,6 +126,16 @@ object ProviderFactory {
                         }
                         id
                     },
+                    // [fix-antigravity-401-refresh-retry] 401 → rotate the
+                    // access token via the refresh_token and replay once
+                    // (upstream executor parity). validAccessToken is
+                    // single-flighted and returns null when the refresh
+                    // token itself is dead, in which case the provider
+                    // surfaces the honest re-login error.
+                    accessTokenRefresher = ctx@ {
+                        val appContext = context ?: return@ctx null
+                        AntigravityCredentialStore.validAccessToken(appContext, instance.id)
+                    },
                 )
             }
         }).also { provider ->

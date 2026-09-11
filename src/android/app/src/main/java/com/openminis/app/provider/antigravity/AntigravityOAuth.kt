@@ -63,10 +63,21 @@ object AntigravityOAuth {
     const val NODE_API_CLIENT_UA = "google-api-nodejs-client/10.3.0"
     const val GOOG_API_CLIENT_UA = "gl-node/22.21.1"
 
-    /** Antigravity user-facing models catalog (CLIProxyAPI registry). */
+    /**
+     * Antigravity user-facing models catalog — mirrors CLIProxyAPI
+     * `internal/registry/models/models.json` (key "antigravity") 1:1, so the
+     * pre-login / fetch-failure fallback list matches what the live
+     * `fetchAvailableModels` call returns. The previous catalog was missing
+     * the two Claude targets and `gemini-3.1-flash-image`, so a fallback
+     * rendered an incomplete model list (and users saw wrong/absent model
+     * IDs after a transient fetch failure).
+     */
     val FALLBACK_MODELS: List<LLMModel> = listOf(
+        LLMModel("claude-opus-4-6-thinking", "Claude Opus 4.6 (Thinking)", "Antigravity", contextWindow = 200_000, maxOutputTokens = 64_000, supportsReasoning = true),
+        LLMModel("claude-sonnet-4-6", "Claude Sonnet 4.6 (Thinking)", "Antigravity", contextWindow = 200_000, maxOutputTokens = 64_000, supportsReasoning = true),
         LLMModel("gemini-3-flash", "Gemini 3 Flash", "Antigravity", contextWindow = 1_048_576, maxOutputTokens = 65_536, supportsReasoning = true),
         LLMModel("gemini-3.1-flash-lite", "Gemini 3.1 Flash Lite", "Antigravity", contextWindow = 1_048_576, maxOutputTokens = 65_535, supportsReasoning = true),
+        LLMModel("gemini-3.1-flash-image", "Gemini 3.1 Flash Image", "Antigravity", contextWindow = 1_048_576, maxOutputTokens = 65_535, supportsReasoning = true),
         LLMModel("gemini-3.6-flash-high", "Gemini 3.6 Flash", "Antigravity", contextWindow = 1_048_576, maxOutputTokens = 65_536, supportsReasoning = true),
         LLMModel("gemini-3.7-flash-high", "Gemini 3.7 Flash", "Antigravity", contextWindow = 1_048_576, maxOutputTokens = 65_536, supportsReasoning = true),
         LLMModel("gemini-3.8-flash-high", "Gemini 3.8 Flash", "Antigravity", contextWindow = 1_048_576, maxOutputTokens = 65_536, supportsReasoning = true),

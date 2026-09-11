@@ -139,14 +139,31 @@ private object AntigravityModelListAdapter : ModelListProvider {
         thirdParty: Boolean,
         forceRefresh: Boolean,
     ): List<LLMModel> {
-        // [T-antigravity-oauth] `apiKey` slot carries the OAuth access token.
-        // Note: apiKey may be near-expiry; the token refresh path lives in
-        // ProviderRepository.loadApiKey (antigravity hook) so every caller —
-        // chat, debug probes, and this adapter — sees a fresh token.
-        if (apiKey == null) return emptyList()
+        // [T-antigravity-oauth] The `apiKey` slot normally carries the OAuth
+        // access token, pre-resolved (and refreshed) by
+        // ProviderRepository.loadApiKey. It can still be NEAR-EXPIRY by the
+        // time this call executes (e.g. a main-thread caller handed us the
+        // possibly-stale token while the async refresh raced us) —
+        // fetchAvailableModels then answers 401 and the model list silently
+        // comes back empty ("no models" UI). Re-resolve through
+        // AntigravityCredentialStore.validAccessToken() when possible: it
+        // transparently rotates an expired token via the refresh_token
+        // (single-flighted by the store's Mutex), mirroring the executor-side
+        // refresh upstream does before every API call.
         val context = appContextRef
+        val accessToken = if (context != null) {
+            // Store-backed resolution: transparently refreshes an expired
+            // token. A null here means the refresh token itself is dead —
+            // do NOT fall back to the possibly-stale `apiKey`, otherwise we
+            // ship a doomed 401 and the model list silently goes empty.
+            AntigravityCredentialStore.validAccessToken(context, instance.id)
+        } else {
+            // Adapter not initialized (tests / exotic call orders) — use the
+            // pre-resolved token handed in by the repository.
+            apiKey
+        } ?: return emptyList()
         return AntigravityModelsApi.fetchModels(
-            accessToken = apiKey,
+            accessToken = accessToken,
             projectId = context?.let { AntigravityCredentialStore.loadProjectId(it, instance.id) },
             context = context,
             forceRefresh = forceRefresh,

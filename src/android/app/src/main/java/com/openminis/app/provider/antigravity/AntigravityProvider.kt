@@ -77,6 +77,15 @@ class AntigravityProvider(
      * before the first request and once more on a 403.
      */
     private val projectIdRefresher: (suspend () -> String?)? = null,
+    /**
+     * [fix-antigravity-401-refresh-retry] Refreshes the access token via the
+     * stored refresh_token and returns the NEW access token (null on
+     * failure). Wired by ProviderFactory through
+     * AntigravityCredentialStore.validAccessToken so a 401 mid-conversation
+     * transparently rotates the token and retries once — mirroring the
+     * upstream executor instead of surfacing "登录已过期".
+     */
+    private val accessTokenRefresher: (suspend () -> String?)? = null,
 ) : LLMProvider {
 
     override val name = "Antigravity"
@@ -104,6 +113,19 @@ class AntigravityProvider(
     /** True after the one-shot project-id repair retry has been consumed. */
     @Volatile
     private var projectRepairTried = false
+
+    /**
+     * [fix-antigravity-401-refresh-retry] Upstream parity
+     * (antigravity_executor_auth.go): on a 401 the executor transparently
+     * rotates the access token via the refresh_token and retries once. The
+     * port used to surface the 401 directly as "Invalid API key: 登录已过期"
+     * even though a perfectly valid refresh token was on file.
+     */
+    private fun tokenRefresher(): (suspend () -> String?)? = accessTokenRefresher
+
+    /** True after the one-shot 401 refresh-retry has been consumed. */
+    @Volatile
+    private var authRetryTried = false
 
     /**
      * Upstream requires `project` in the envelope (buildRequest errors out
@@ -142,6 +164,38 @@ class AntigravityProvider(
         val responseBody = response.body?.string() ?: ""
 
         if (!response.isSuccessful) {
+            // [fix-antigravity-401-refresh-retry] One guarded retry: refresh
+            // the access token and replay the request once (upstream
+            // executor parity). Guarded by authRetryTried so it can't loop.
+            if (!authRetryTried && response.code == 401 && tokenRefresher() != null) {
+                authRetryTried = true
+                response.close()
+                val fresh = try { tokenRefresher()?.invoke() } catch (_: Exception) { null }
+                if (!fresh.isNullOrBlank()) {
+                    val retryRequest = request.newBuilder()
+                        .header("Authorization", "Bearer $fresh")
+                        .post(body.toString().toRequestBody("application/json".toMediaType()))
+                        .build()
+                    val retryResponse = client.newCall(retryRequest).execute()
+                    if (retryResponse.isSuccessful) {
+                        val retryText = retryResponse.body?.string() ?: ""
+                        val retryUnwrapped = try { JSONObject(retryText).optJSONObject("response") } catch (_: Exception) { null }
+                            ?: JSONObject()
+                        return@withContext LLMResponse(
+                            extractText(retryUnwrapped),
+                            extractFinishReason(retryUnwrapped) ?: "end_turn",
+                            extractUsage(retryUnwrapped),
+                            extractInlineMedia(retryUnwrapped),
+                        )
+                    }
+                    val retryErrBody = retryResponse.body?.string() ?: ""
+                    val retryAfterMs = parseRetryAfterMs(retryResponse.headers["Retry-After"], System.currentTimeMillis())
+                    val retryCode = retryResponse.code
+                    retryResponse.close()
+                    throw mapHttpError(retryCode, retryErrBody, retryAfterMs)
+                }
+                // Refresh failed → fall through to the honest error below.
+            }
             // One repair round: a missing/stale project id surfaces as a 4xx
             // with PROJECT/VERSION-style bodies upstream. Guarded by
             // projectRepairTried so a retry can never recurse.
@@ -206,32 +260,61 @@ class AntigravityProvider(
 
         var response = client.newCall(request).execute()
         if (!response.isSuccessful) {
-            // One repair round, same shape as the non-streaming path above.
-            val errorBody = response.body?.string() ?: ""
-            val projectish = errorBody.contains("project", ignoreCase = true) ||
-                errorBody.contains("VERSION_CHECK_FAILED", ignoreCase = true)
-            if (!projectRepairTried && projectish && projectIdRefresher != null &&
-                (response.code == 400 || response.code == 403)) {
-                projectRepairTried = true
+            // [fix-antigravity-401-refresh-retry] Same one-shot refresh+retry
+            // as the non-streaming path.
+            if (!authRetryTried && response.code == 401 && tokenRefresher() != null) {
+                authRetryTried = true
+                val staleBody = response.body?.string() ?: ""
                 response.close()
-                ensureProjectId(force = true)
-                val retryBody = envelope(buildRequestBody(messages, systemPrompt, maxTokens, temperature, imageParts, tools, thinkingLevel))
-                val retryRequest = request.newBuilder()
-                    .post(retryBody.toString().toRequestBody("application/json".toMediaType()))
-                    .build()
-                response = client.newCall(retryRequest).execute()
-                if (response.isSuccessful) {
-                    // fall through to stream consumption below
+                val fresh = try { tokenRefresher()?.invoke() } catch (_: Exception) { null }
+                if (!fresh.isNullOrBlank()) {
+                    val retryBody = envelope(buildRequestBody(messages, systemPrompt, maxTokens, temperature, imageParts, tools, thinkingLevel))
+                    val retryRequest = request.newBuilder()
+                        .header("Authorization", "Bearer $fresh")
+                        .post(retryBody.toString().toRequestBody("application/json".toMediaType()))
+                        .build()
+                    response = client.newCall(retryRequest).execute()
+                    if (response.isSuccessful) {
+                        // fall through to stream consumption below
+                    } else {
+                        val retryErrorBody = response.body?.string() ?: ""
+                        val retryAfterMs = parseRetryAfterMs(response.headers["Retry-After"], System.currentTimeMillis())
+                        response.close()
+                        throw mapHttpError(response.code, retryErrorBody, retryAfterMs)
+                    }
                 } else {
-                    val retryErrorBody = response.body?.string() ?: ""
+                    // Refresh failed → surface the stale-body error honestly.
                     val retryAfterMs = parseRetryAfterMs(response.headers["Retry-After"], System.currentTimeMillis())
-                    response.close()
-                    throw mapHttpError(response.code, retryErrorBody, retryAfterMs)
+                    throw mapHttpError(401, staleBody, retryAfterMs)
                 }
             } else {
-                val retryAfterMs = parseRetryAfterMs(response.headers["Retry-After"], System.currentTimeMillis())
-                response.close()
-                throw mapHttpError(response.code, errorBody, retryAfterMs)
+                val errorBody = response.body?.string() ?: ""
+                // One repair round, same shape as the non-streaming path above.
+                val projectish = errorBody.contains("project", ignoreCase = true) ||
+                    errorBody.contains("VERSION_CHECK_FAILED", ignoreCase = true)
+                if (!projectRepairTried && projectish && projectIdRefresher != null &&
+                    (response.code == 400 || response.code == 403)) {
+                    projectRepairTried = true
+                    response.close()
+                    ensureProjectId(force = true)
+                    val retryBody = envelope(buildRequestBody(messages, systemPrompt, maxTokens, temperature, imageParts, tools, thinkingLevel))
+                    val retryRequest = request.newBuilder()
+                        .post(retryBody.toString().toRequestBody("application/json".toMediaType()))
+                        .build()
+                    response = client.newCall(retryRequest).execute()
+                    if (response.isSuccessful) {
+                        // fall through to stream consumption below
+                    } else {
+                        val retryErrorBody = response.body?.string() ?: ""
+                        val retryAfterMs = parseRetryAfterMs(response.headers["Retry-After"], System.currentTimeMillis())
+                        response.close()
+                        throw mapHttpError(response.code, retryErrorBody, retryAfterMs)
+                    }
+                } else {
+                    val retryAfterMs = parseRetryAfterMs(response.headers["Retry-After"], System.currentTimeMillis())
+                    response.close()
+                    throw mapHttpError(response.code, errorBody, retryAfterMs)
+                }
             }
         }
 
@@ -602,7 +685,13 @@ class AntigravityProvider(
     }
 
     private fun mapHttpError(statusCode: Int, body: String, retryAfterMs: Long? = null): LLMError {
-        if (statusCode == 401) return LLMError.InvalidApiKey("Antigravity 登录已过期，请在 Provider 连接页重新登录")
+        if (statusCode == 401) {
+            // [fix-antigravity-401-refresh-retry] Reachable only after the
+            // refresh+retry round failed, i.e. the refresh token itself is
+            // dead (revoked / password change / >6h Google rotation grace).
+            // "重新登录" is then genuinely the only remedy.
+            return LLMError.InvalidApiKey("Antigravity 登录已过期，请在 Provider 连接页重新登录")
+        }
         if (statusCode == 403) {
             // 403 frequently means a missing/invalid project id rather than
             // an expired credential — surface the upstream detail either way.
