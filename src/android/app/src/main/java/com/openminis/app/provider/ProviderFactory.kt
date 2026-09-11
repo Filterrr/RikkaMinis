@@ -114,6 +114,18 @@ object ProviderFactory {
                     model = model,
                     basePath = basePath ?: AntigravityOAuth.DAILY_API_ENDPOINT,
                     projectId = storeProjectId,
+                    // Repair path: re-run loadCodeAssist/onboardUser and
+                    // persist, mirroring upstream PrepareRequestAuth.
+                    projectIdRefresher = ctx@ {
+                        val appContext = context ?: return@ctx null
+                        val token = AntigravityCredentialStore.validAccessToken(appContext, instance.id)
+                            ?: return@ctx null
+                        val id = AntigravityOAuth.fetchProjectId(token)
+                        if (!id.isNullOrBlank()) {
+                            AntigravityCredentialStore.updateProjectId(appContext, instance.id, id)
+                        }
+                        id
+                    },
                 )
             }
         }).also { provider ->

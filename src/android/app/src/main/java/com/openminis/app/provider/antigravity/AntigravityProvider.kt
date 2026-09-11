@@ -70,6 +70,13 @@ class AntigravityProvider(
     override var model: LLMModel = AntigravityOAuth.FALLBACK_MODELS.first(),
     private val basePath: String = AntigravityOAuth.DAILY_API_ENDPOINT,
     private val projectId: String? = null,
+    /**
+     * Re-discover the project id at send time (loadCodeAssist → onboardUser).
+     * Mirrors upstream PrepareRequestAuth: a credential without a project id
+     * must NOT ship (buildRequest refuses), so we lazily fetch/repair it
+     * before the first request and once more on a 403.
+     */
+    private val projectIdRefresher: (suspend () -> String?)? = null,
 ) : LLMProvider {
 
     override val name = "Antigravity"
@@ -90,6 +97,26 @@ class AntigravityProvider(
 
     private fun isClaudeModel(): Boolean = model.id.lowercase().contains("claude")
 
+    /** Runtime project id — constructor value first, lazily refreshed. */
+    @Volatile
+    private var resolvedProjectId: String? = projectId
+
+    /** True after the one-shot project-id repair retry has been consumed. */
+    @Volatile
+    private var projectRepairTried = false
+
+    /**
+     * Upstream requires `project` in the envelope (buildRequest errors out
+     * without one — see TestAntigravityBuildRequest missing-project case).
+     * Fetch via loadCodeAssist/onboardUser on first use or after loss.
+     */
+    private suspend fun ensureProjectId(force: Boolean = false) {
+        if (!force && !resolvedProjectId.isNullOrBlank()) return
+        val refresher = projectIdRefresher ?: return
+        val id = try { refresher() } catch (_: Exception) { null }
+        if (!id.isNullOrBlank()) resolvedProjectId = id
+    }
+
     override suspend fun sendMessageClamped(
         messages: List<LLMMessage>,
         systemPrompt: String?,
@@ -99,6 +126,7 @@ class AntigravityProvider(
         tools: List<AgentToolDefinition>,
         thinkingLevel: ThinkingLevel,
     ): LLMResponse = withContext(Dispatchers.IO) {
+        ensureProjectId()
         val inner = buildRequestBody(messages, systemPrompt, maxTokens, temperature, imageParts, tools, thinkingLevel)
         val body = envelope(inner)
         val url = "$basePath/v1internal:generateContent"
@@ -114,6 +142,18 @@ class AntigravityProvider(
         val responseBody = response.body?.string() ?: ""
 
         if (!response.isSuccessful) {
+            // One repair round: a missing/stale project id surfaces as a 4xx
+            // with PROJECT/VERSION-style bodies upstream. Guarded by
+            // projectRepairTried so a retry can never recurse.
+            val projectish = responseBody.contains("project", ignoreCase = true) ||
+                responseBody.contains("VERSION_CHECK_FAILED", ignoreCase = true)
+            if (!projectRepairTried && projectish && projectIdRefresher != null &&
+                (response.code == 400 || response.code == 403)) {
+                projectRepairTried = true
+                response.close()
+                ensureProjectId(force = true)
+                return@withContext sendMessageClamped(messages, systemPrompt, maxTokens, temperature, imageParts, tools, thinkingLevel)
+            }
             throw mapHttpError(
                 response.code,
                 responseBody,
@@ -152,6 +192,7 @@ class AntigravityProvider(
         tools: List<AgentToolDefinition>,
         thinkingLevel: ThinkingLevel,
     ): Flow<LLMStreamChunk> = callbackFlow {
+        ensureProjectId()
         val inner = buildRequestBody(messages, systemPrompt, maxTokens, temperature, imageParts, tools, thinkingLevel)
         val body = envelope(inner)
         val url = "$basePath/v1internal:streamGenerateContent?alt=sse"
@@ -163,12 +204,35 @@ class AntigravityProvider(
             .header("Content-Type", "application/json")
             .build()
 
-        val response = client.newCall(request).execute()
+        var response = client.newCall(request).execute()
         if (!response.isSuccessful) {
+            // One repair round, same shape as the non-streaming path above.
             val errorBody = response.body?.string() ?: ""
-            val retryAfterMs = parseRetryAfterMs(response.headers["Retry-After"], System.currentTimeMillis())
-            response.close()
-            throw mapHttpError(response.code, errorBody, retryAfterMs)
+            val projectish = errorBody.contains("project", ignoreCase = true) ||
+                errorBody.contains("VERSION_CHECK_FAILED", ignoreCase = true)
+            if (!projectRepairTried && projectish && projectIdRefresher != null &&
+                (response.code == 400 || response.code == 403)) {
+                projectRepairTried = true
+                response.close()
+                ensureProjectId(force = true)
+                val retryBody = envelope(buildRequestBody(messages, systemPrompt, maxTokens, temperature, imageParts, tools, thinkingLevel))
+                val retryRequest = request.newBuilder()
+                    .post(retryBody.toString().toRequestBody("application/json".toMediaType()))
+                    .build()
+                response = client.newCall(retryRequest).execute()
+                if (response.isSuccessful) {
+                    // fall through to stream consumption below
+                } else {
+                    val retryErrorBody = response.body?.string() ?: ""
+                    val retryAfterMs = parseRetryAfterMs(response.headers["Retry-After"], System.currentTimeMillis())
+                    response.close()
+                    throw mapHttpError(response.code, retryErrorBody, retryAfterMs)
+                }
+            } else {
+                val retryAfterMs = parseRetryAfterMs(response.headers["Retry-After"], System.currentTimeMillis())
+                response.close()
+                throw mapHttpError(response.code, errorBody, retryAfterMs)
+            }
         }
 
         val reader = BufferedReader(InputStreamReader(response.body!!.byteStream()))
@@ -247,14 +311,23 @@ class AntigravityProvider(
         out.put("model", model.id)
         out.put("userAgent", "antigravity")
         out.put("requestType", "agent")
-        if (!projectId.isNullOrBlank()) {
-            out.put("project", projectId)
+        val project = resolvedProjectId
+        if (!project.isNullOrBlank()) {
+            out.put("project", project)
         }
         out.put("requestId", "agent-" + UUID.randomUUID().toString())
 
         // maxOutputTokens: upstream deletes it for Gemini targets before send.
         if (!isClaudeModel()) {
             inner.optJSONObject("generationConfig")?.remove("maxOutputTokens")
+        } else if (inner.has("tools")) {
+            // Claude targets additionally pin function-calling mode (upstream:
+            // sjson.Set request.toolConfig.functionCallingConfig.mode=VALIDATED).
+            val toolConfig = inner.optJSONObject("toolConfig") ?: JSONObject()
+            val fcc = toolConfig.optJSONObject("functionCallingConfig") ?: JSONObject()
+            fcc.put("mode", "VALIDATED")
+            toolConfig.put("functionCallingConfig", fcc)
+            inner.put("toolConfig", toolConfig)
         }
 
         // Stable per-conversation sessionId: hash of the first user message's
@@ -529,7 +602,12 @@ class AntigravityProvider(
     }
 
     private fun mapHttpError(statusCode: Int, body: String, retryAfterMs: Long? = null): LLMError {
-        if (statusCode == 401 || statusCode == 403) return LLMError.InvalidApiKey("Antigravity 登录已过期，请在 Provider 连接页重新登录")
+        if (statusCode == 401) return LLMError.InvalidApiKey("Antigravity 登录已过期，请在 Provider 连接页重新登录")
+        if (statusCode == 403) {
+            // 403 frequently means a missing/invalid project id rather than
+            // an expired credential — surface the upstream detail either way.
+            return LLMError.InvalidApiKey("Antigravity 访问被拒：${body.take(300)}")
+        }
         if (statusCode == 429) return LLMError.RateLimited(retryAfterMs = retryAfterMs)
         val message = "Antigravity API error $statusCode: ${body.take(200)}"
         val transientCodes = setOf(500, 502, 503, 504, 529)

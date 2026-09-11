@@ -77,8 +77,13 @@ object AntigravityOAuth {
 
     // ── User-Agent reproduction (misc/antigravity_version.go) ──
 
-    /** Short runtime UA used by generate / userinfo / loadCodeAssist. */
-    fun requestUserAgent(): String = "antigravity/$FALLBACK_VERSION darwin/arm64"
+    /**
+     * Short runtime UA used by generate / userinfo / loadCodeAssist.
+     * Byte-exact upstream default: misc.AntigravityUserAgent() =
+     * `antigravity/hub/<version> darwin/arm64` (the `hub` segment is what
+     * cloudcode-pa's endpoint fingerprint expects).
+     */
+    fun requestUserAgent(): String = "antigravity/hub/$FALLBACK_VERSION darwin/arm64"
 
     /** Long control-plane UA used by onboardUser. */
     fun nodeUserAgent(): String = "${requestUserAgent()} $NODE_API_CLIENT_UA"
