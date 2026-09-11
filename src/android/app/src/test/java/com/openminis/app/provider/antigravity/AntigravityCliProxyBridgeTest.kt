@@ -16,8 +16,8 @@ import org.junit.Test
 /**
  * [T-antigravity-cli-bridge] Contract tests for the CLIProxyAPI management
  * bridge — the wire format EasyCLIProxyAPI speaks to its core
- * (src-tauri/src/management_api.rs) and the core answers with
- * (internal/api/handlers/management/*.go):
+ * (src-tauri/src/management_api.rs) and the core's management handlers
+ * answer with (Go: internal/api/handlers/management):
  *
  *  - GET  /v0/management/antigravity-auth-url?is_webui=true  (Bearer auth)
  *  - GET  /v0/management/get-auth-status?state=...           (Bearer auth)
