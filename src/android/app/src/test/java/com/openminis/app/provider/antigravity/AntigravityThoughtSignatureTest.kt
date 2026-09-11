@@ -127,6 +127,12 @@ class AntigravityThoughtSignatureTest {
         provider: AntigravityProvider,
         toolParts: List<AgentContentPart>,
     ): JSONObject {
+        // sanitizeToolPairing strips assistant tool_use blocks that are not
+        // answered by the immediately-following user message, so pair every
+        // tool_use with a matching tool_result to keep them in the payload.
+        val toolResults = toolParts.filterIsInstance<AgentContentPart.ToolUse>().map {
+            AgentContentPart.ToolResult(id = it.id, name = it.name, content = "ok")
+        }
         val messages = listOf(
             com.openminis.app.data.model.LLMMessage(
                 role = com.openminis.app.data.model.LLMMessage.Role.USER,
@@ -136,6 +142,11 @@ class AntigravityThoughtSignatureTest {
                 role = com.openminis.app.data.model.LLMMessage.Role.ASSISTANT,
                 content = "",
                 contentParts = toolParts,
+            ),
+            com.openminis.app.data.model.LLMMessage(
+                role = com.openminis.app.data.model.LLMMessage.Role.USER,
+                content = "",
+                contentParts = toolResults,
             ),
         )
         return provider.buildRequestForTest(messages)
