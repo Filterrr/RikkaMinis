@@ -179,7 +179,10 @@ class AntigravityCliProxyBridgeTest {
         server.enqueue(MockResponse().setBody("""{"files":[{"name":"a.json","type":"codex"}]}"""))
         val credential = AntigravityCliProxyBridge.fetchLatestAntigravityCredential(bridgeConfig())
         assertNull(credential)
-        server.takeRequest() // drain list request
+        // Drain the list request (explicit Unit: takeRequest() itself returns
+        // RecordedRequest, and a non-void @Test method fails class validation).
+        val drained = server.takeRequest()
+        assertNotNull(drained)
     }
 
     @Test
