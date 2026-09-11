@@ -3,6 +3,7 @@ package com.openminis.app.tools
 import com.openminis.app.browser.BrowserAction
 import com.openminis.app.data.model.AgentToolDefinition
 import com.openminis.app.data.model.AgentToolParam
+import com.openminis.app.data.model.AgentToolSchema
 
 /**
  * Central registry of all agent tool definitions.
