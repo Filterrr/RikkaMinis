@@ -1751,4 +1751,16 @@
     <string name="antigravity_oauth_notice_body">This provider does not take an API key. After saving, open "API &amp; Connection" and tap Sign in to authorize with your Google account.</string>
     <string name="add_provider_subtitle_antigravity">Google Antigravity — OAuth sign-in with your Google account, full Claude / Gemini lineup</string>
     <string name="antigravity_oauth_notice_footer">No API key needed: after saving, tap "Sign in" on the API &amp; Connection page to authorize with Google. The model list refreshes automatically.</string>
+    <string name="antigravity_bridge_title">Sign in via CLIProxyAPI core</string>
+    <string name="antigravity_bridge_subtitle">Delegates OAuth to a running CLIProxyAPI core (EasyCLIProxyAPI-compatible): the core completes the Google round-trip and this device mirrors the saved credential. Requires a plaintext management key.</string>
+    <string name="antigravity_bridge_expand">Configure</string>
+    <string name="antigravity_bridge_collapse">Hide</string>
+    <string name="antigravity_bridge_host_hint">Core host, e.g. 192.168.1.10 or 127.0.0.1</string>
+    <string name="antigravity_bridge_port_hint">Port (default 8317)</string>
+    <string name="antigravity_bridge_secret_hint">Management secret key (plaintext)</string>
+    <string name="antigravity_bridge_tls">Use HTTPS</string>
+    <string name="antigravity_bridge_invalid_config">Invalid host or port.</string>
+    <string name="antigravity_bridge_test">Save &amp; test</string>
+    <string name="antigravity_bridge_sync">Sync existing credential</string>
+    <string name="antigravity_bridge_login">Sign in via core (browser)</string>
 </resources>

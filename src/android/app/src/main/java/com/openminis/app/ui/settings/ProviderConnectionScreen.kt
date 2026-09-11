@@ -35,7 +35,9 @@ import com.openminis.app.data.model.ImageEndpointMode
 import com.openminis.app.data.model.ProviderType
 import com.openminis.app.data.repository.ProviderRepository
 import com.openminis.app.logging.AppLogger
+import com.openminis.app.provider.antigravity.AntigravityBridgeLoginManager
 import com.openminis.app.provider.antigravity.AntigravityBrowserLauncher
+import com.openminis.app.provider.antigravity.AntigravityCliProxyBridge
 import com.openminis.app.provider.antigravity.AntigravityCredentialStore
 import com.openminis.app.provider.antigravity.AntigravityLoginBrowser
 import com.openminis.app.provider.antigravity.AntigravityLoginManager
@@ -378,6 +380,19 @@ private fun AntigravityOAuthSection(
 
     LaunchedEffect(instanceId) { refreshStatus() }
 
+    // ── [T-antigravity-cli-bridge] EasyCLIProxyAPI bridge state ──
+    val bridgeConfig = remember { mutableStateOf(AntigravityCliProxyBridge.loadConfig(appContext)) }
+    var bridgeHost by rememberSaveable { mutableStateOf(bridgeConfig.value.host) }
+    var bridgePort by rememberSaveable {
+        mutableStateOf(if (bridgeConfig.value.port == AntigravityCliProxyBridge.DEFAULT_PORT) "" else bridgeConfig.value.port.toString())
+    }
+    var bridgeTls by rememberSaveable { mutableStateOf(bridgeConfig.value.tls) }
+    var bridgeSecret by rememberSaveable { mutableStateOf(bridgeConfig.value.secret) }
+    var bridgeExpanded by rememberSaveable { mutableStateOf(false) }
+    var bridgeTesting by remember { mutableStateOf(false) }
+    var bridgeTestMessage by remember { mutableStateOf<String?>(null) }
+    var bridgeSyncing by remember { mutableStateOf(false) }
+
     SettingsSection(
         header = stringResource(R.string.antigravity_oauth_section_header),
         footer = stringResource(R.string.antigravity_oauth_section_footer),
@@ -480,6 +495,208 @@ private fun AntigravityOAuthSection(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+        }
+
+        // ── [T-antigravity-cli-bridge] EasyCLIProxyAPI / CLIProxyAPI core
+        //    bridge — the project-2 OAuth flow, embedded. The core owns the
+        //    token round-trip (is_webui forwarder on :51121); this device
+        //    mirrors the resulting credential locally. ──
+        SettingsCardBlock {
+            Row(
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = stringResource(R.string.antigravity_bridge_title),
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.weight(1f),
+                )
+                androidx.compose.material3.TextButton(onClick = { bridgeExpanded = !bridgeExpanded }) {
+                    Text(
+                        stringResource(
+                            if (bridgeExpanded) R.string.antigravity_bridge_collapse
+                            else R.string.antigravity_bridge_expand,
+                        ),
+                    )
+                }
+            }
+            Text(
+                text = stringResource(R.string.antigravity_bridge_subtitle),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            if (bridgeExpanded) {
+                Spacer(Modifier.height(10.dp))
+                SectionTextField(
+                    value = bridgeHost,
+                    onValueChange = { bridgeHost = it },
+                    placeholder = stringResource(R.string.antigravity_bridge_host_hint),
+                    singleLine = true,
+                )
+                Spacer(Modifier.height(8.dp))
+                SectionTextField(
+                    value = bridgePort,
+                    onValueChange = { bridgePort = it.filter { ch -> ch.isDigit() } },
+                    placeholder = stringResource(R.string.antigravity_bridge_port_hint),
+                    singleLine = true,
+                )
+                Spacer(Modifier.height(8.dp))
+                SectionTextField(
+                    value = bridgeSecret,
+                    onValueChange = { bridgeSecret = it },
+                    placeholder = stringResource(R.string.antigravity_bridge_secret_hint),
+                    singleLine = true,
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    androidx.compose.material3.Checkbox(
+                        checked = bridgeTls,
+                        onCheckedChange = { bridgeTls = it },
+                    )
+                    Text(
+                        text = stringResource(R.string.antigravity_bridge_tls),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+
+                Spacer(Modifier.height(10.dp))
+                Row {
+                    MinisButton(
+                        onClick = {
+                            val parsed = AntigravityCliProxyBridge.Config.sanitize(
+                                bridgeHost, bridgePort.ifBlank { AntigravityCliProxyBridge.DEFAULT_PORT.toString() },
+                                bridgeTls, bridgeSecret,
+                            )
+                            if (parsed == null) {
+                                bridgeTestMessage = appContext.getString(R.string.antigravity_bridge_invalid_config)
+                                return@MinisButton
+                            }
+                            bridgeConfig.value = parsed
+                            AntigravityCliProxyBridge.saveConfig(appContext, parsed)
+                            bridgeTesting = true
+                            bridgeTestMessage = null
+                            scope.launch {
+                                val result = AntigravityCliProxyBridge.testConnection(parsed)
+                                bridgeTestMessage = result.message
+                                bridgeTesting = false
+                            }
+                        },
+                        enabled = !bridgeTesting && !bridgeSyncing,
+                    ) {
+                        Text(stringResource(R.string.antigravity_bridge_test))
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    MinisButton(
+                        onClick = {
+                            val parsed = AntigravityCliProxyBridge.Config.sanitize(
+                                bridgeHost, bridgePort.ifBlank { AntigravityCliProxyBridge.DEFAULT_PORT.toString() },
+                                bridgeTls, bridgeSecret,
+                            )
+                            if (parsed == null) {
+                                bridgeTestMessage = appContext.getString(R.string.antigravity_bridge_invalid_config)
+                                return@MinisButton
+                            }
+                            bridgeConfig.value = parsed
+                            AntigravityCliProxyBridge.saveConfig(appContext, parsed)
+                            bridgeSyncing = true
+                            bridgeTestMessage = null
+                            statusMessage = null
+                            scope.launch {
+                                val result = AntigravityBridgeLoginManager.finishBySync(
+                                    appContext, parsed, instanceId,
+                                )
+                                if (result is AntigravityBridgeLoginManager.Result.Success) {
+                                    statusMessage = appContext.getString(
+                                        R.string.antigravity_oauth_done,
+                                        result.email ?: "—",
+                                    )
+                                    val instance = providerRepository.instance(instanceId)
+                                    if (instance != null) {
+                                        providerRepository.refreshModels(instance, forceRefresh = true)
+                                    }
+                                } else if (result is AntigravityBridgeLoginManager.Result.Failed) {
+                                    statusMessage = result.message
+                                }
+                                bridgeSyncing = false
+                                refreshStatus()
+                            }
+                        },
+                        enabled = !bridgeTesting && !bridgeSyncing,
+                    ) {
+                        if (bridgeSyncing) {
+                            androidx.compose.material3.CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                            )
+                            Spacer(Modifier.width(8.dp))
+                        }
+                        Text(stringResource(R.string.antigravity_bridge_sync))
+                    }
+                }
+
+                // Full browser-mediated login through the core. Reuses the
+                // browser-choice segmented row above.
+                Spacer(Modifier.height(10.dp))
+                MinisButton(
+                    onClick = {
+                        val parsed = AntigravityCliProxyBridge.Config.sanitize(
+                            bridgeHost, bridgePort.ifBlank { AntigravityCliProxyBridge.DEFAULT_PORT.toString() },
+                            bridgeTls, bridgeSecret,
+                        )
+                        if (parsed == null) {
+                            bridgeTestMessage = appContext.getString(R.string.antigravity_bridge_invalid_config)
+                            return@MinisButton
+                        }
+                        bridgeConfig.value = parsed
+                        AntigravityCliProxyBridge.saveConfig(appContext, parsed)
+                        isLoggingIn = true
+                        statusMessage = null
+                        bridgeTestMessage = null
+                        scope.launch {
+                            val result = AntigravityBridgeLoginManager.login(
+                                context = appContext,
+                                config = parsed,
+                                browser = browserChoice,
+                                openBrowser = { url ->
+                                    AntigravityBrowserLauncher.open(appContext, url, browserChoice)
+                                },
+                                instanceId = instanceId,
+                            )
+                            when (result) {
+                                is AntigravityBridgeLoginManager.Result.Success -> {
+                                    statusMessage = appContext.getString(
+                                        R.string.antigravity_oauth_done,
+                                        result.email ?: "—",
+                                    )
+                                    val instance = providerRepository.instance(instanceId)
+                                    if (instance != null) {
+                                        providerRepository.refreshModels(instance, forceRefresh = true)
+                                    }
+                                }
+                                is AntigravityBridgeLoginManager.Result.Failed ->
+                                    statusMessage = result.message
+                                is AntigravityBridgeLoginManager.Result.Cancelled ->
+                                    statusMessage = appContext.getString(R.string.antigravity_oauth_cancelled)
+                            }
+                            isLoggingIn = false
+                            refreshStatus()
+                        }
+                    },
+                    enabled = !isLoggingIn && !bridgeSyncing,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(stringResource(R.string.antigravity_bridge_login))
+                }
+
+                bridgeTestMessage?.let { msg ->
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = msg,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
 

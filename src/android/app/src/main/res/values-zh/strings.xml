@@ -1677,4 +1677,16 @@
     <string name="antigravity_oauth_notice_body">此提供商不支持 API Key。保存后请在「API 与连接」页点击「开始登录」，使用 Google 账号完成授权。</string>
     <string name="add_provider_subtitle_antigravity">Google Antigravity — 使用 Google 账号 OAuth 登录，Claude / Gemini 全模型阵容</string>
     <string name="antigravity_oauth_notice_footer">无需粘贴 API Key：保存后在「API 与连接」页点击「开始登录」完成 Google 授权，模型列表将自动拉取。</string>
+    <string name="antigravity_bridge_title">经由 CLIProxyAPI 内核登录</string>
+    <string name="antigravity_bridge_subtitle">把 OAuth 流程委托给运行中的 CLIProxyAPI 内核（兼容 EasyCLIProxyAPI）：内核完成 Google 授权回环，本机同步其保存的凭证。需配置明文管理密钥。</string>
+    <string name="antigravity_bridge_expand">配置</string>
+    <string name="antigravity_bridge_collapse">收起</string>
+    <string name="antigravity_bridge_host_hint">内核地址，如 192.168.1.10 或 127.0.0.1</string>
+    <string name="antigravity_bridge_port_hint">端口（默认 8317）</string>
+    <string name="antigravity_bridge_secret_hint">管理密钥（明文）</string>
+    <string name="antigravity_bridge_tls">使用 HTTPS</string>
+    <string name="antigravity_bridge_invalid_config">地址或端口无效。</string>
+    <string name="antigravity_bridge_test">保存并测试</string>
+    <string name="antigravity_bridge_sync">同步已有凭证</string>
+    <string name="antigravity_bridge_login">经由内核登录（浏览器）</string>
 </resources>
