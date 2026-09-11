@@ -91,7 +91,10 @@ data class AgentToolParam(
         put("type", if (gemini) type.uppercase() else type)
         put("description", description)
         if (enumValues != null) put("enum", JSONArray(enumValues))
-        if (gemini && items != null) put("items", items.toGeminiJson())
+        // JSON Schema (OpenAI/Anthropic) and Gemini Schema alike: ARRAY nodes
+        // carry an items schema. v1internal hard-rejects its absence; the
+        // OpenAI/Anthropic emitters keep it for model-behaviour fidelity.
+        if (items != null) put("items", if (gemini) items.toGeminiJson() else items.toJson())
     }
 
     fun toJson(): JSONObject = JSONObject().apply { putCommon(gemini = false) }
