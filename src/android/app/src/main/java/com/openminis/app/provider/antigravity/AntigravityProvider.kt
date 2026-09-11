@@ -566,25 +566,32 @@ class AntigravityProvider(
 
     /**
      * Antigravity thinking config — request.generationConfig.thinkingConfig
-     * path with thinkingLevel strings (Antigravity Applier parity, simplified
-     * to the level format the Antigravity models accept).
+     * path with thinkingLevel strings (Antigravity Applier parity).
+     *
+     * [fix-antigravity-minimal-400] OFF → NO thinkingConfig at all (upstream
+     * ModeNone parity: "With the amount fully disabled … delete
+     * thinkingConfig"). The previous mapping sent `thinkingLevel: "minimal"`
+     * for flash targets, but per the upstream registry several Antigravity
+     * models (gemini-3.7-flash-high, gemini-3.8-flash-high, gemini-pro-agent,
+     * gemini-3.1-pro-low) support only low/medium/high and Google rejects
+     * minimal with 400 INVALID_ARGUMENT "Thinking level MINIMAL is not
+     * supported for this model". When the field is absent Google applies the
+     * model's default thinking behaviour.
+     *
+     * Per-model clamp: gemini-3.1-flash-image supports only minimal/high, so
+     * LOW/MEDIUM clamp to minimal there (registry parity).
      */
-    private fun buildThinkingConfig(level: ThinkingLevel): JSONObject? {
-        val modelId = model.id
-        val isFlash = modelId.contains("flash")
-        return when {
-            level == ThinkingLevel.OFF -> JSONObject().apply {
-                put("thinkingLevel", if (isFlash) "minimal" else "low")
-            }
-            else -> JSONObject().apply {
-                put("thinkingLevel", when (level) {
-                    ThinkingLevel.LOW -> "low"
-                    ThinkingLevel.MEDIUM -> "medium"
-                    ThinkingLevel.HIGH, ThinkingLevel.XHIGH, ThinkingLevel.MAX, ThinkingLevel.ULTRA -> "high"
-                    else -> "low"
-                })
-                put("includeThoughts", true)
-            }
+    internal fun buildThinkingConfig(level: ThinkingLevel): JSONObject? {
+        if (level == ThinkingLevel.OFF) return null
+        val imageOnly = model.id.lowercase().contains("flash-image")
+        return JSONObject().apply {
+            put("thinkingLevel", when (level) {
+                ThinkingLevel.LOW, ThinkingLevel.MEDIUM ->
+                    if (imageOnly) "minimal" else level.name.lowercase()
+                // HIGH / XHIGH / MAX / ULTRA all collapse to the top level.
+                else -> "high"
+            })
+            put("includeThoughts", true)
         }
     }
 
