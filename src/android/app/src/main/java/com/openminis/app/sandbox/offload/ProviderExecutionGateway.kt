@@ -9,6 +9,8 @@ import com.openminis.app.data.model.LLMStreamChunk
 import com.openminis.app.data.model.ProviderInstance
 import com.openminis.app.data.model.ThinkingLevel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -171,7 +173,7 @@ object ProviderExecutionGateway {
      * worker's own read path) or no valid token exists (the worker will then
      * surface the typed missing-credential error).
      */
-    private fun resolveInlineCredential(context: Context, instance: ProviderInstance): String? {
+    private suspend fun resolveInlineCredential(context: Context, instance: ProviderInstance): String? {
         if (instance.providerType != com.openminis.app.data.model.ProviderType.antigravity) return null
         return try {
             com.openminis.app.provider.antigravity.AntigravityCredentialStore
@@ -254,24 +256,28 @@ object ProviderExecutionGateway {
     ): Flow<LLMStreamChunk> {
         // [fix-encrypted-prefs-wipe-multiprocess] Same app-process credential
         // resolution as send() — the worker must never touch EncryptedPrefs.
-        val inlineCredential = resolveInlineCredential(context, instance)
-        val requestJson = buildRequest(
-            instance = instance,
-            model = model,
-            messages = messages,
-            systemPrompt = systemPrompt,
-            maxTokens = maxTokens,
-            temperature = temperature,
-            imageParts = imageParts,
-            inputJson = inputJson,
-            outputExt = outputExt,
-            tools = tools,
-            thinkingLevel = thinkingLevel,
-            streaming = true,
-            firstChunkBudgetMs = firstChunkBudgetMs,
-            oauthAccessToken = inlineCredential,
-        )
-        return ChatStreamOffloadHandler.stream(context, requestJson, thinkingLevel.isEnabled)
+        // The suspend resolve runs inside the flow builder (collection is
+        // always on a coroutine, so this is a legal suspend context).
+        return flow {
+            val inlineCredential = resolveInlineCredential(context, instance)
+            val requestJson = buildRequest(
+                instance = instance,
+                model = model,
+                messages = messages,
+                systemPrompt = systemPrompt,
+                maxTokens = maxTokens,
+                temperature = temperature,
+                imageParts = imageParts,
+                inputJson = inputJson,
+                outputExt = outputExt,
+                tools = tools,
+                thinkingLevel = thinkingLevel,
+                streaming = true,
+                firstChunkBudgetMs = firstChunkBudgetMs,
+                oauthAccessToken = inlineCredential,
+            )
+            emitAll(ChatStreamOffloadHandler.stream(context, requestJson, thinkingLevel.isEnabled))
+        }
     }
 
     /**

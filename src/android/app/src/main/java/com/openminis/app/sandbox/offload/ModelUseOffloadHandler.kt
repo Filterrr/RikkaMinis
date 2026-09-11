@@ -387,8 +387,13 @@ class ModelUseOffloadHandler(
             // prefs fallback.
             oauthAccessToken = if (instance.providerType == com.openminis.app.data.model.ProviderType.antigravity) {
                 try {
-                    com.openminis.app.provider.antigravity.AntigravityCredentialStore
-                        .validAccessToken(context, instance.id)
+                    // runBlocking is safe here: this handler is invoked off the
+                    // main thread by the offload server (same pattern as the
+                    // dispatch call below).
+                    kotlinx.coroutines.runBlocking {
+                        com.openminis.app.provider.antigravity.AntigravityCredentialStore
+                            .validAccessToken(context, instance.id)
+                    }
                 } catch (t: Throwable) {
                     Log.w(TAG, "inline antigravity credential resolve failed: ${t.message}")
                     null
