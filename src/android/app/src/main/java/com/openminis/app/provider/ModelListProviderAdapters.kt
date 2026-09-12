@@ -1,6 +1,9 @@
 package com.openminis.app.provider
 
+import android.content.Context
 import com.openminis.app.provider.KimiConstants
+import com.openminis.app.provider.antigravity.AntigravityCredentialStore
+import com.openminis.app.provider.antigravity.AntigravityModelsApi
 import com.openminis.app.data.model.LLMModel
 import com.openminis.app.data.model.ProviderInstance
 import com.openminis.app.data.model.ProviderType
@@ -121,6 +124,53 @@ private object KimiModelListAdapter : ModelListProvider {
     }
 }
 
+private object AntigravityModelListAdapter : ModelListProvider {
+    /** Application context, injected at startup via [initAntigravityAdapter]. */
+    @Volatile private var appContextRef: Context? = null
+
+    /** Called once at app startup next to registerModelListProviders(). */
+    fun init(context: Context) {
+        appContextRef = context.applicationContext
+    }
+
+    override suspend fun fetchModels(
+        apiKey: String?,
+        instance: ProviderInstance,
+        thirdParty: Boolean,
+        forceRefresh: Boolean,
+    ): List<LLMModel> {
+        // [T-antigravity-oauth] The `apiKey` slot normally carries the OAuth
+        // access token, pre-resolved (and refreshed) by
+        // ProviderRepository.loadApiKey. It can still be NEAR-EXPIRY by the
+        // time this call executes (e.g. a main-thread caller handed us the
+        // possibly-stale token while the async refresh raced us) —
+        // fetchAvailableModels then answers 401 and the model list silently
+        // comes back empty ("no models" UI). Re-resolve through
+        // AntigravityCredentialStore.validAccessToken() when possible: it
+        // transparently rotates an expired token via the refresh_token
+        // (single-flighted by the store's Mutex), mirroring the executor-side
+        // refresh upstream does before every API call.
+        val context = appContextRef
+        val accessToken = if (context != null) {
+            // Store-backed resolution: transparently refreshes an expired
+            // token. A null here means the refresh token itself is dead —
+            // do NOT fall back to the possibly-stale `apiKey`, otherwise we
+            // ship a doomed 401 and the model list silently goes empty.
+            AntigravityCredentialStore.validAccessToken(context, instance.id)
+        } else {
+            // Adapter not initialized (tests / exotic call orders) — use the
+            // pre-resolved token handed in by the repository.
+            apiKey
+        } ?: return emptyList()
+        return AntigravityModelsApi.fetchModels(
+            accessToken = accessToken,
+            projectId = context?.let { AntigravityCredentialStore.loadProjectId(it, instance.id) },
+            context = context,
+            forceRefresh = forceRefresh,
+        )
+    }
+}
+
 /**
  * Register all built-in model-list providers. Called once at app
  * startup (see MinisApp / ProviderRepository init path).
@@ -132,4 +182,10 @@ fun registerModelListProviders() {
     ModelListProviderRegistry.register(ProviderType.openRouter, OpenRouterModelListAdapter)
     ModelListProviderRegistry.register(ProviderType.xAI, XAIModelListAdapter)
     ModelListProviderRegistry.register(ProviderType.kimiCode, KimiModelListAdapter)
+    ModelListProviderRegistry.register(ProviderType.antigravity, AntigravityModelListAdapter)
+}
+
+/** Application-context injection for adapters that need one (called at startup). */
+fun initAntigravityAdapter(context: android.content.Context) {
+    AntigravityModelListAdapter.init(context)
 }

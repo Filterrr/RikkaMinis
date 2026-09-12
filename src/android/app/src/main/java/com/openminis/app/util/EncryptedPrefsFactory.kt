@@ -36,6 +36,33 @@ import java.security.KeyStore
 object EncryptedPrefsFactory {
     private const val TAG = "EncryptedPrefsFactory"
 
+    /**
+     * [fix-encrypted-prefs-wipe-multiprocess] Read-only access guard.
+     *
+     * EncryptedSharedPreferences is NOT multi-process safe: its Tink keyset
+     * lives in AndroidKeystore, which is PER-PROCESS on Android (each process
+     * gets its own key handle) and the androidx library documents single-
+     * process use only. When the :modelservice worker process tried to read
+     * the app process's encrypted store, the master key didn't match and
+     * create() threw — and the previous self-healing logic treated that as
+     * corruption and WIPED the encrypted XML + Tink keyset + Keystore alias,
+     * silently destroying every freshly OAuthed credential. This is exactly
+     * the "logged in fine, first test says missing_api_key" report: the
+     * worker's read deleted the tokens.
+     *
+     * Callers that only READ prefs (worker-side credential resolution) must
+     * pass [readOnly] = true. On a crypto failure in read-only mode the
+     * factory returns an empty in-memory store and — critically — does NOT
+     * wipe anything on disk; the app process's real store stays intact.
+     */
+    fun safeCreateReadOnly(context: Context, fileName: String): SharedPreferences =
+        try {
+            build(context, fileName)
+        } catch (t: Throwable) {
+            Log.w(TAG, "read-only create($fileName) failed (no wipe): ${t.message}")
+            InMemorySharedPreferences()
+        }
+
     fun safeCreate(context: Context, fileName: String): SharedPreferences {
         runCatching { return build(context, fileName) }
             .onFailure { Log.w(TAG, "first create($fileName) failed: ${it.message}") }
@@ -96,7 +123,7 @@ object EncryptedPrefsFactory {
  * work (users see "no credentials stored"), and the next launch retries
  * the encrypted path.
  */
-private class InMemorySharedPreferences : SharedPreferences {
+class InMemorySharedPreferences : SharedPreferences {
     private val values = mutableMapOf<String, Any?>()
 
     override fun getAll(): MutableMap<String, *> = HashMap(values)
@@ -113,7 +140,7 @@ private class InMemorySharedPreferences : SharedPreferences {
     override fun edit(): SharedPreferences.Editor = InMemoryEditor(values)
 }
 
-private class InMemoryEditor(
+class InMemoryEditor(
     private val values: MutableMap<String, Any?>,
 ) : SharedPreferences.Editor {
     private val staged = mutableMapOf<String, Any?>()

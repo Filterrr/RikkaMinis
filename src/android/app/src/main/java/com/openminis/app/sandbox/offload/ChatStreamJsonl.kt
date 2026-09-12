@@ -52,7 +52,15 @@ object ChatStreamJsonl {
         is LLMStreamChunk.ToolInputDelta -> JSONObject()
             .put("t", "tu_delta").put("id", chunk.id).put("v", chunk.accumulated).toString()
         is LLMStreamChunk.ToolCallComplete -> JSONObject()
-            .put("t", "tu_done").put("id", chunk.id).put("name", chunk.name).put("args", chunk.args).toString()
+            .put("t", "tu_done").put("id", chunk.id).put("name", chunk.name).put("args", chunk.args)
+            .let { obj ->
+                // [fix-antigravity-thought-signature] Optional field: absent on
+                // providers that don't emit signatures, so the wire format stays
+                // backward-compatible (decode defaults to null).
+                chunk.thoughtSignature?.takeIf { it.isNotEmpty() }?.let { obj.put("sig", it) }
+                obj
+            }
+            .toString()
         is LLMStreamChunk.Usage -> JSONObject()
             .put("t", "usage")
             .put("in", chunk.usage.inputTokens)
@@ -129,6 +137,7 @@ object ChatStreamJsonl {
                 obj.optString("id", ""),
                 obj.optString("name", ""),
                 obj.optJSONObject("args") ?: JSONObject(),
+                obj.optString("sig", "").ifEmpty { null },
             )
             "usage" -> LLMStreamChunk.Usage(
                 LLMUsage(

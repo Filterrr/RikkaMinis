@@ -1,10 +1,13 @@
 package com.openminis.app.ui.settings
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -24,6 +27,7 @@ import com.openminis.app.ui.util.bringIntoViewOnFocus
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 import com.openminis.app.R
@@ -31,6 +35,13 @@ import com.openminis.app.data.model.ImageEndpointMode
 import com.openminis.app.data.model.ProviderType
 import com.openminis.app.data.repository.ProviderRepository
 import com.openminis.app.logging.AppLogger
+import com.openminis.app.provider.antigravity.AntigravityBridgeLoginManager
+import com.openminis.app.provider.antigravity.AntigravityBrowserLauncher
+import com.openminis.app.provider.antigravity.AntigravityCliProxyBridge
+import com.openminis.app.provider.antigravity.AntigravityCredentialStore
+import com.openminis.app.provider.antigravity.AntigravityLoginBrowser
+import com.openminis.app.provider.antigravity.AntigravityLoginManager
+import com.openminis.app.ui.components.MinisButton
 import com.openminis.app.ui.components.SectionTextField
 
 private const val TAG = "ProviderConnection"
@@ -71,7 +82,9 @@ fun ProviderConnectionScreen(
     fun saveBaseURLSettings() {
         // /v1 is appended automatically for all non-Gemini providers (Gemini
         // uses v1beta full-path URLs). effectiveBaseURL guards double-append.
-        val appendV1 = instance.providerType != ProviderType.gemini
+        // [T-antigravity-oauth] Antigravity also rides full-origin URLs.
+        val appendV1 = instance.providerType != ProviderType.gemini &&
+            instance.providerType != ProviderType.antigravity
         providerRepository.updateInstance(
             instance.copy(
                 customBaseURL = customBaseURL.ifBlank { null },
@@ -90,33 +103,43 @@ fun ProviderConnectionScreen(
         onBack = onBack,
     ) {
         // ─── Credential / API Key ───────────────────────────────────
-        SettingsSection(
-            header = stringResource(R.string.provider_list_api_key),
-        ) {
-            SettingsCardBlock {
-                ApiKeyCredentialBlock(
-                    storedKey = storedKey,
-                    keyVisible = keyVisible,
-                    onToggleVisibility = { keyVisible = !keyVisible },
-                    isEditing = isEditingKey,
-                    editValue = editKeyValue,
-                    onEditValueChange = { editKeyValue = it },
-                    onBeginEdit = {
-                        isEditingKey = true
-                        editKeyValue = storedKey ?: ""
-                    },
-                    onCancelEdit = {
-                        isEditingKey = false
-                        editKeyValue = ""
-                        keyVisible = false
-                    },
-                    onSave = {
-                        providerRepository.saveApiKey(instanceId, editKeyValue)
-                        storedKey = editKeyValue
-                        AppLogger.info(TAG, "Saved API key for ${instance.id}")
-                        isEditingKey = false
-                    },
-                )
+        // [T-antigravity-oauth] Antigravity instances get the OAuth login
+        // section (browser picker + 开始登录 + account status) instead of
+        // the API-key editor. Every other type keeps the key editor.
+        if (instance.providerType == ProviderType.antigravity) {
+            AntigravityOAuthSection(
+                instanceId = instanceId,
+                providerRepository = providerRepository,
+            )
+        } else {
+            SettingsSection(
+                header = stringResource(R.string.provider_list_api_key),
+            ) {
+                SettingsCardBlock {
+                    ApiKeyCredentialBlock(
+                        storedKey = storedKey,
+                        keyVisible = keyVisible,
+                        onToggleVisibility = { keyVisible = !keyVisible },
+                        isEditing = isEditingKey,
+                        editValue = editKeyValue,
+                        onEditValueChange = { editKeyValue = it },
+                        onBeginEdit = {
+                            isEditingKey = true
+                            editKeyValue = storedKey ?: ""
+                        },
+                        onCancelEdit = {
+                            isEditingKey = false
+                            editKeyValue = ""
+                            keyVisible = false
+                        },
+                        onSave = {
+                            providerRepository.saveApiKey(instanceId, editKeyValue)
+                            storedKey = editKeyValue
+                            AppLogger.info(TAG, "Saved API key for ${instance.id}")
+                            isEditingKey = false
+                        },
+                    )
+                }
             }
         }
 
@@ -129,6 +152,8 @@ fun ProviderConnectionScreen(
                 ProviderType.gemini -> "https://generativelanguage.googleapis.com/v1beta"
                 ProviderType.anthropic -> "https://api.anthropic.com"
                 ProviderType.openAI -> "https://api.openai.com"
+                // [T-antigravity-oauth] Full-origin upstream default.
+                ProviderType.antigravity -> com.openminis.app.provider.antigravity.AntigravityOAuth.DAILY_API_ENDPOINT
                 else -> stringResource(R.string.provider_detail_https_api_example_placeholder)
             }
             SettingsSection(header = stringResource(R.string.provider_detail_custom_api_base)) {
@@ -297,6 +322,411 @@ fun ProviderConnectionScreen(
                         ) { Text(stringResource(R.string.provider_detail_image_endpoint_chat)) }
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * [T-antigravity-oauth] OAuth login section for Antigravity instances.
+ *
+ * UI contract (mirrors the CLIProxyAPI management flow):
+ *  1. A browser-choice segmented row — 系统浏览器（Chrome 标签页，默认） or
+ *     应用内浏览器 — persisted per instance in "antigravity_prefs".
+ *  2. A "开始登录" button. On tap: the loopback callback server binds
+ *     localhost:51121, the chosen browser opens Google's consent page, and
+ *     the flow awaits the redirect (≤5 min). Success stores access/refresh
+ *     tokens + email + project id in the encrypted credential store and
+ *     triggers a model-list refresh.
+ *  3. Status rows: logged-in email, project id, token expiry — plus a
+ *     退出登录 action that wipes the stored credential.
+ */
+@Composable
+private fun AntigravityOAuthSection(
+    instanceId: String,
+    providerRepository: ProviderRepository,
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val appContext = context.applicationContext
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val prefs = remember {
+        context.getSharedPreferences("antigravity_prefs", android.content.Context.MODE_PRIVATE)
+    }
+
+    var browserChoice by remember {
+        mutableStateOf(
+            prefs.getString("login_browser", AntigravityLoginBrowser.SYSTEM_BROWSER.name)
+                ?.let { runCatching { AntigravityLoginBrowser.valueOf(it) }.getOrNull() }
+                ?: AntigravityLoginBrowser.SYSTEM_BROWSER
+        )
+    }
+
+    var email by remember { mutableStateOf<String?>(null) }
+    var projectId by remember { mutableStateOf<String?>(null) }
+    var expiredText by remember { mutableStateOf<String?>(null) }
+    var isLoggingIn by remember { mutableStateOf(false) }
+    var statusMessage by remember { mutableStateOf<String?>(null) }
+
+    suspend fun refreshStatus() = withContext(Dispatchers.IO) {
+        val tokens = AntigravityCredentialStore.loadTokens(appContext, instanceId)
+        email = AntigravityCredentialStore.loadEmail(appContext, instanceId)
+        projectId = AntigravityCredentialStore.loadProjectId(appContext, instanceId)
+        expiredText = if (tokens == null) {
+            null
+        } else {
+            AntigravityCredentialStore.loadExpiredText(appContext, instanceId)
+        }
+    }
+
+    LaunchedEffect(instanceId) { refreshStatus() }
+
+    // ── [T-antigravity-cli-bridge] EasyCLIProxyAPI bridge state ──
+    val bridgeConfig = remember { mutableStateOf(AntigravityCliProxyBridge.loadConfig(appContext)) }
+    var bridgeHost by rememberSaveable { mutableStateOf(bridgeConfig.value.host) }
+    var bridgePort by rememberSaveable {
+        mutableStateOf(if (bridgeConfig.value.port == AntigravityCliProxyBridge.DEFAULT_PORT) "" else bridgeConfig.value.port.toString())
+    }
+    var bridgeTls by rememberSaveable { mutableStateOf(bridgeConfig.value.tls) }
+    var bridgeSecret by rememberSaveable { mutableStateOf(bridgeConfig.value.secret) }
+    var bridgeExpanded by rememberSaveable { mutableStateOf(false) }
+    var bridgeTesting by remember { mutableStateOf(false) }
+    var bridgeTestMessage by remember { mutableStateOf<String?>(null) }
+    var bridgeSyncing by remember { mutableStateOf(false) }
+
+    SettingsSection(
+        header = stringResource(R.string.antigravity_oauth_section_header),
+        footer = stringResource(R.string.antigravity_oauth_section_footer),
+    ) {
+        SettingsCardBlock {
+            // ── Browser choice ──
+            Text(
+                text = stringResource(R.string.antigravity_oauth_browser_label),
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            Spacer(Modifier.height(6.dp))
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                AntigravityLoginBrowser.entries.forEachIndexed { index, mode ->
+                    SegmentedButton(
+                        selected = browserChoice == mode,
+                        onClick = {
+                            browserChoice = mode
+                            prefs.edit().putString("login_browser", mode.name).apply()
+                        },
+                        shape = SegmentedButtonDefaults.itemShape(index = index, count = AntigravityLoginBrowser.entries.size),
+                    ) {
+                        Text(
+                            when (mode) {
+                                AntigravityLoginBrowser.SYSTEM_BROWSER -> stringResource(R.string.antigravity_browser_system)
+                                AntigravityLoginBrowser.IN_APP_BROWSER -> stringResource(R.string.antigravity_browser_in_app)
+                            },
+                            maxLines = 1,
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            // ── Login button / progress ──
+            if (isLoggingIn) {
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    androidx.compose.material3.CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.dp,
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        text = stringResource(R.string.antigravity_oauth_waiting),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            } else {
+                com.openminis.app.ui.components.MinisButton(
+                    onClick = {
+                        isLoggingIn = true
+                        statusMessage = null
+                        scope.launch {
+                            val result = AntigravityLoginManager.login(
+                                context = appContext,
+                                browser = browserChoice,
+                                openBrowser = { url ->
+                                    AntigravityBrowserLauncher.open(appContext, url, browserChoice)
+                                },
+                                instanceId = instanceId,
+                            )
+                            when (result) {
+                                is AntigravityLoginManager.Result.Success -> {
+                                    statusMessage = appContext.getString(
+                                        R.string.antigravity_oauth_done,
+                                        result.email ?: "—",
+                                    )
+                                    // Refresh the model list now that a
+                                    // credential exists (force: bypass cache).
+                                    val instance = providerRepository.instance(instanceId)
+                                    if (instance != null) {
+                                        providerRepository.refreshModels(instance, forceRefresh = true)
+                                    }
+                                }
+                                is AntigravityLoginManager.Result.Cancelled ->
+                                    statusMessage = appContext.getString(R.string.antigravity_oauth_cancelled)
+                                is AntigravityLoginManager.Result.Failed ->
+                                    statusMessage = result.message
+                            }
+                            isLoggingIn = false
+                            refreshStatus()
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        if (email == null) {
+                            stringResource(R.string.antigravity_oauth_login)
+                        } else {
+                            stringResource(R.string.antigravity_oauth_relogin)
+                        },
+                    )
+                }
+            }
+
+            statusMessage?.let { msg ->
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = msg,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        // ── [T-antigravity-cli-bridge] EasyCLIProxyAPI / CLIProxyAPI core
+        //    bridge — the project-2 OAuth flow, embedded. The core owns the
+        //    token round-trip (is_webui forwarder on :51121); this device
+        //    mirrors the resulting credential locally. ──
+        SettingsCardBlock {
+            Row(
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = stringResource(R.string.antigravity_bridge_title),
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.weight(1f),
+                )
+                androidx.compose.material3.TextButton(onClick = { bridgeExpanded = !bridgeExpanded }) {
+                    Text(
+                        stringResource(
+                            if (bridgeExpanded) R.string.antigravity_bridge_collapse
+                            else R.string.antigravity_bridge_expand,
+                        ),
+                    )
+                }
+            }
+            Text(
+                text = stringResource(R.string.antigravity_bridge_subtitle),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            if (bridgeExpanded) {
+                Spacer(Modifier.height(10.dp))
+                SectionTextField(
+                    value = bridgeHost,
+                    onValueChange = { bridgeHost = it },
+                    placeholder = stringResource(R.string.antigravity_bridge_host_hint),
+                    singleLine = true,
+                )
+                Spacer(Modifier.height(8.dp))
+                SectionTextField(
+                    value = bridgePort,
+                    onValueChange = { bridgePort = it.filter { ch -> ch.isDigit() } },
+                    placeholder = stringResource(R.string.antigravity_bridge_port_hint),
+                    singleLine = true,
+                )
+                Spacer(Modifier.height(8.dp))
+                SectionTextField(
+                    value = bridgeSecret,
+                    onValueChange = { bridgeSecret = it },
+                    placeholder = stringResource(R.string.antigravity_bridge_secret_hint),
+                    singleLine = true,
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    androidx.compose.material3.Checkbox(
+                        checked = bridgeTls,
+                        onCheckedChange = { bridgeTls = it },
+                    )
+                    Text(
+                        text = stringResource(R.string.antigravity_bridge_tls),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+
+                Spacer(Modifier.height(10.dp))
+                Row {
+                    MinisButton(
+                        onClick = {
+                            val parsed = AntigravityCliProxyBridge.Config.sanitize(
+                                bridgeHost, bridgePort.ifBlank { AntigravityCliProxyBridge.DEFAULT_PORT.toString() },
+                                bridgeTls, bridgeSecret,
+                            )
+                            if (parsed == null) {
+                                bridgeTestMessage = appContext.getString(R.string.antigravity_bridge_invalid_config)
+                                return@MinisButton
+                            }
+                            bridgeConfig.value = parsed
+                            AntigravityCliProxyBridge.saveConfig(appContext, parsed)
+                            bridgeTesting = true
+                            bridgeTestMessage = null
+                            scope.launch {
+                                val result = AntigravityCliProxyBridge.testConnection(parsed)
+                                bridgeTestMessage = result.message
+                                bridgeTesting = false
+                            }
+                        },
+                        enabled = !bridgeTesting && !bridgeSyncing,
+                    ) {
+                        Text(stringResource(R.string.antigravity_bridge_test))
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    MinisButton(
+                        onClick = {
+                            val parsed = AntigravityCliProxyBridge.Config.sanitize(
+                                bridgeHost, bridgePort.ifBlank { AntigravityCliProxyBridge.DEFAULT_PORT.toString() },
+                                bridgeTls, bridgeSecret,
+                            )
+                            if (parsed == null) {
+                                bridgeTestMessage = appContext.getString(R.string.antigravity_bridge_invalid_config)
+                                return@MinisButton
+                            }
+                            bridgeConfig.value = parsed
+                            AntigravityCliProxyBridge.saveConfig(appContext, parsed)
+                            bridgeSyncing = true
+                            bridgeTestMessage = null
+                            statusMessage = null
+                            scope.launch {
+                                val result = AntigravityBridgeLoginManager.finishBySync(
+                                    appContext, parsed, instanceId,
+                                )
+                                if (result is AntigravityBridgeLoginManager.Result.Success) {
+                                    statusMessage = appContext.getString(
+                                        R.string.antigravity_oauth_done,
+                                        result.email ?: "—",
+                                    )
+                                    val instance = providerRepository.instance(instanceId)
+                                    if (instance != null) {
+                                        providerRepository.refreshModels(instance, forceRefresh = true)
+                                    }
+                                } else if (result is AntigravityBridgeLoginManager.Result.Failed) {
+                                    statusMessage = result.message
+                                }
+                                bridgeSyncing = false
+                                refreshStatus()
+                            }
+                        },
+                        enabled = !bridgeTesting && !bridgeSyncing,
+                    ) {
+                        if (bridgeSyncing) {
+                            androidx.compose.material3.CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                            )
+                            Spacer(Modifier.width(8.dp))
+                        }
+                        Text(stringResource(R.string.antigravity_bridge_sync))
+                    }
+                }
+
+                // Full browser-mediated login through the core. Reuses the
+                // browser-choice segmented row above.
+                Spacer(Modifier.height(10.dp))
+                MinisButton(
+                    onClick = {
+                        val parsed = AntigravityCliProxyBridge.Config.sanitize(
+                            bridgeHost, bridgePort.ifBlank { AntigravityCliProxyBridge.DEFAULT_PORT.toString() },
+                            bridgeTls, bridgeSecret,
+                        )
+                        if (parsed == null) {
+                            bridgeTestMessage = appContext.getString(R.string.antigravity_bridge_invalid_config)
+                            return@MinisButton
+                        }
+                        bridgeConfig.value = parsed
+                        AntigravityCliProxyBridge.saveConfig(appContext, parsed)
+                        isLoggingIn = true
+                        statusMessage = null
+                        bridgeTestMessage = null
+                        scope.launch {
+                            val result = AntigravityBridgeLoginManager.login(
+                                context = appContext,
+                                config = parsed,
+                                browser = browserChoice,
+                                openBrowser = { url ->
+                                    AntigravityBrowserLauncher.open(appContext, url, browserChoice)
+                                },
+                                instanceId = instanceId,
+                            )
+                            when (result) {
+                                is AntigravityBridgeLoginManager.Result.Success -> {
+                                    statusMessage = appContext.getString(
+                                        R.string.antigravity_oauth_done,
+                                        result.email ?: "—",
+                                    )
+                                    val instance = providerRepository.instance(instanceId)
+                                    if (instance != null) {
+                                        providerRepository.refreshModels(instance, forceRefresh = true)
+                                    }
+                                }
+                                is AntigravityBridgeLoginManager.Result.Failed ->
+                                    statusMessage = result.message
+                                is AntigravityBridgeLoginManager.Result.Cancelled ->
+                                    statusMessage = appContext.getString(R.string.antigravity_oauth_cancelled)
+                            }
+                            isLoggingIn = false
+                            refreshStatus()
+                        }
+                    },
+                    enabled = !isLoggingIn && !bridgeSyncing,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(stringResource(R.string.antigravity_bridge_login))
+                }
+
+                bridgeTestMessage?.let { msg ->
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = msg,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+
+        // ── Account status + logout ──
+        if (email != null) {
+            SettingsCardBlock {
+                SettingsRow(
+                    title = email.orEmpty(),
+                    subtitle = listOfNotNull(
+                        projectId?.let { appContext.getString(R.string.antigravity_project_prefix) + it },
+                        expiredText?.let { appContext.getString(R.string.antigravity_expires_prefix) + it },
+                    ).joinToString(" · ").ifEmpty { null },
+                    showChevron = false,
+                    showDivider = false,
+                )
+                SettingsRow(
+                    title = stringResource(R.string.antigravity_oauth_logout),
+                    titleColor = MaterialTheme.colorScheme.error,
+                    onClick = {
+                        AntigravityCredentialStore.clear(appContext, instanceId)
+                        providerRepository.saveApiKey(instanceId, "")
+                        scope.launch {
+                            val instance = providerRepository.instance(instanceId)
+                            if (instance != null) providerRepository.refreshModels(instance, forceRefresh = true)
+                            refreshStatus()
+                        }
+                        AppLogger.info("AntigravityOAuth", "logged out instance $instanceId")
+                    },
+                    showDivider = false,
+                )
             }
         }
     }

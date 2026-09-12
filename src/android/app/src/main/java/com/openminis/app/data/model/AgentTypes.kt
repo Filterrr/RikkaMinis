@@ -43,7 +43,7 @@ sealed class AgentBlockStart {
 enum class AgentStopReason { END_TURN, TOOL_USE, MAX_TOKENS }
 
 data class ToolCallMetadata(
-    /** Gemini thought signature echoed back on the next turn. */
+    /** Gemini/Antigravity thought signature echoed back on the next turn. */
     val thoughtSignature: String? = null,
 )
 

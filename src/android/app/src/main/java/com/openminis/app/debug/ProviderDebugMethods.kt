@@ -76,6 +76,7 @@ internal object ProviderDebugMethods {
         ProviderType.openRouter -> "https://openrouter.ai/api/v1"
         ProviderType.xAI -> "https://api.x.ai/v1"
         ProviderType.kimiCode -> "https://api.kimi.com/coding/v1"
+        ProviderType.antigravity -> com.openminis.app.provider.antigravity.AntigravityOAuth.DAILY_API_ENDPOINT
     }
 
     fun instancesList(context: Context, params: JSONObject): JSONObject {

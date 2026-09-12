@@ -205,6 +205,8 @@ internal object ProviderMutationMethods {
             ProviderType.openRouter -> "https://openrouter.ai/api/v1"
             ProviderType.xAI -> "https://api.x.ai/v1"
             ProviderType.kimiCode -> "https://api.kimi.com/coding/v1"
+            // Full origin (no /v1) — antigravity paths are /v1internal:*.
+            ProviderType.antigravity -> com.openminis.app.provider.antigravity.AntigravityOAuth.DAILY_API_ENDPOINT
         }
         val probeURL = when (instance.providerType) {
             ProviderType.anthropic -> "$baseURL/v1/models"
@@ -215,6 +217,9 @@ internal object ProviderMutationMethods {
             ProviderType.xAI -> if (baseURL.endsWith("/v1")) "$baseURL/models" else "$baseURL/v1/models"
             // Kimi Coding: OpenAI-compatible /models under /coding/v1.
             ProviderType.kimiCode -> if (baseURL.endsWith("/v1")) "$baseURL/models" else "$baseURL/v1/models"
+            // Antigravity: POST-based fetchAvailableModels; GET probe not
+            // applicable — report the endpoint origin as reachable-or-not.
+            ProviderType.antigravity -> baseURL
         }
         val client = okhttp3.OkHttpClient.Builder()
             .connectTimeout(timeoutMs.toLong(), java.util.concurrent.TimeUnit.MILLISECONDS)
@@ -233,6 +238,8 @@ internal object ProviderMutationMethods {
             ProviderType.xAI -> if (!key.isNullOrEmpty()) builder.header("Authorization", "Bearer $key")
             // Kimi Coding: OpenAI-compat bearer (OAuth access token or key).
             ProviderType.kimiCode -> if (!key.isNullOrEmpty()) builder.header("Authorization", "Bearer $key")
+            // Antigravity: Bearer OAuth access token.
+            ProviderType.antigravity -> if (!key.isNullOrEmpty()) builder.header("Authorization", "Bearer $key")
         }
         val start = System.currentTimeMillis()
         try {

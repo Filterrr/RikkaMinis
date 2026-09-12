@@ -25,7 +25,19 @@ sealed class LLMStreamChunk {
     /** Tool use streaming events */
     data class ToolUseStart(val id: String, val name: String) : LLMStreamChunk()
     data class ToolInputDelta(val id: String, val accumulated: String) : LLMStreamChunk()
-    data class ToolCallComplete(val id: String, val name: String, val args: JSONObject) : LLMStreamChunk()
+    /**
+     * [fix-antigravity-thought-signature] `thoughtSignature` — the opaque
+     * per-part signature Gemini-family APIs (Antigravity v1internal included)
+     * attach to functionCall parts. Must round-trip: the next request's
+     * history re-emits it on the same functionCall part, or Google rejects
+     * the follow-up with 400 "Function call is missing a thought_signature".
+     */
+    data class ToolCallComplete(
+        val id: String,
+        val name: String,
+        val args: JSONObject,
+        val thoughtSignature: String? = null,
+    ) : LLMStreamChunk()
 
     /**
      * [T-codex-gpt-image2-oauth-android] A model-generated media attachment

@@ -379,6 +379,26 @@ class ModelUseOffloadHandler(
             imageParts = imageParts,
             inputJson = inputText,
             outputExt = outputExt,
+            // [fix-encrypted-prefs-wipe-multiprocess] Resolve the OAuth
+            // credential HERE (app process) — the :modelservice worker cannot
+            // read EncryptedSharedPreferences (per-process AndroidKeystore;
+            // its old read path even WIPED the store on failure). API-key
+            // instances return null here and keep the worker's read-only
+            // prefs fallback.
+            oauthAccessToken = if (instance.providerType == com.openminis.app.data.model.ProviderType.antigravity) {
+                try {
+                    // runBlocking is safe here: this handler is invoked off the
+                    // main thread by the offload server (same pattern as the
+                    // dispatch call below).
+                    kotlinx.coroutines.runBlocking {
+                        com.openminis.app.provider.antigravity.AntigravityCredentialStore
+                            .validAccessToken(context, instance.id)
+                    }
+                } catch (t: Throwable) {
+                    Log.w(TAG, "inline antigravity credential resolve failed: ${t.message}")
+                    null
+                }
+            } else null,
             // [R4-budget-parity] Non-streaming model-use calls get the same
             // adaptive first-chunk budget as chat streams — a slow relay
             // otherwise times out here at the route-static generation
@@ -1419,9 +1439,10 @@ class ModelUseOffloadHandler(
                 Explicit-envelope example:
                   {"messages":[{"role":"user","content":"<prompt>"}],"extra_body":{"image":"<url-or-data-uri>","seed":42},"extra_headers":{"X-Custom":"1"},"endpoint_path":"/api/v3/images/generations"}
             """.trimIndent()
-            // xAI (Grok) / Kimi Coding have no image-output models in the
-            // current catalog — fall through to empty hint like Anthropic.
-            ProviderType.anthropic, ProviderType.xAI, ProviderType.kimiCode, null -> ""
+            // xAI (Grok) / Kimi Coding / Antigravity have no image-output
+            // models in the current catalog — fall through to empty hint
+            // like Anthropic.
+            ProviderType.anthropic, ProviderType.xAI, ProviderType.kimiCode, ProviderType.antigravity, null -> ""
         }
     }
 

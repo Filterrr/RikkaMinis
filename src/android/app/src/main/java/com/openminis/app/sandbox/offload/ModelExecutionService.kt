@@ -507,6 +507,56 @@ class ModelExecutionService : Service() {
         return START_NOT_STICKY
     }
 
+    /**
+     * [fix-antigravity-oauth-marker] Worker-side credential resolver.
+     *
+     * This service runs in the separate `:modelservice` process and used to
+     * read `apikey_<instanceId>` from EncryptedPrefs directly. For OAuth-backed
+     * Antigravity instances that slot holds the literal MARKER string
+     * ("antigravity:oauth", see ProviderRepository.ANTIGRAVITY_OAUTH_MARKER) —
+     * the real access/refresh tokens live in AntigravityCredentialStore.
+     * Shipping the marker string as a Bearer token is a guaranteed 401, which
+     * the provider maps to "Invalid API key: Antigravity 登录已过期，请在
+     * Provider 连接页重新登录" and the sandbox surfaces as `model_use_failed`.
+     * A fresh login on the connection page never fixed it because every
+     * worker request still carried the marker string.
+     *
+     * Resolution order:
+     *  1. raw slot — returned verbatim UNLESS it is the OAuth marker;
+     *  2. marker → AntigravityCredentialStore.validAccessToken() (transparent
+     *     refresh; :modelservice is a background process, so the inline
+     *     refresh path is safe here — never the main thread);
+     *  3. store miss / refresh failure → empty string (caller reports
+     *     missing_api_key instead of a doomed 401 round-trip).
+     */
+    private fun resolveWorkerApiKey(instance: com.openminis.app.data.model.ProviderInstance): String {
+        // [fix-encrypted-prefs-wipe-multiprocess] READ-ONLY access: the worker
+        // process must never trigger the self-healing wipe path — a cross-
+        // process Keystore mismatch used to DESTROY the app's credentials
+        // (freshly OAuthed tokens included) on the first read.
+        val raw = try {
+            com.openminis.app.util.EncryptedPrefsFactory.safeCreateReadOnly(this, "provider_secrets")
+                .getString("apikey_${instance.id}", null)
+        } catch (_: Exception) { null }
+        if (raw == null) {
+            Log.w(TAG, "worker credential read empty for ${instance.providerType} instance ${instance.id.take(8)} (readOnly store miss)")
+            return ""
+        }
+
+        if (raw != com.openminis.app.data.repository.ProviderRepository.ANTIGRAVITY_OAUTH_MARKER) {
+            return raw
+        }
+        return try {
+            kotlinx.coroutines.runBlocking {
+                com.openminis.app.provider.antigravity.AntigravityCredentialStore
+                    .validAccessToken(this@ModelExecutionService, instance.id)
+            } ?: ""
+        } catch (e: Exception) {
+            Log.w(TAG, "worker antigravity token resolve failed: ${e.message}")
+            ""
+        }
+    }
+
     /** Extract the stable runId (the UUID embedded in the `run-<uuid>` dir name). */
     private fun runIdOf(dir: File): String? {
         val name = dir.name
@@ -970,12 +1020,10 @@ class ModelExecutionService : Service() {
             )
         }
 
-        // ── API key: read from EncryptedSharedPreferences (same uid) ──
-        val apiKey = try {
-            com.openminis.app.util.EncryptedPrefsFactory.safeCreate(this, "provider_secrets")
-                .getString("apikey_${instance.id}", null) ?: ""
-        } catch (_: Exception) { "" }
+        // ── API key: inline OAuth token first, EncryptedPrefs read-only fallback ──
+        val apiKey = req.optString("oauth_access_token", "").ifEmpty { resolveWorkerApiKey(instance) }
         if (apiKey.isEmpty()) {
+            Log.w(TAG, "missing credential: antigravity inline token absent AND prefs miss for ${instance.id.take(8)}")
             return JSONObject().apply {
                 put("error", "missing_api_key")
                 put("message", "No API key configured for ${instance.label}.")
@@ -1214,13 +1262,11 @@ class ModelExecutionService : Service() {
             val tools = parseToolsJson(req.optJSONArray("tools"))
             val thinkingLevel = safeEnum(getString(req, "thinking_level"), com.openminis.app.data.model.ThinkingLevel.OFF)
 
-            // ── API key: read from EncryptedSharedPreferences (same uid) ──
-            val apiKey = try {
-                com.openminis.app.util.EncryptedPrefsFactory.safeCreate(this, "provider_secrets")
-                    .getString("apikey_${instance.id}", null) ?: ""
-            } catch (_: Exception) { "" }
+            // ── API key: inline OAuth token first, EncryptedPrefs read-only fallback ──
+            val apiKey = req.optString("oauth_access_token", "").ifEmpty { resolveWorkerApiKey(instance) }
             ModelExecutionRunLog.log(dir, android.os.Process.myPid(), ModelExecutionRunLog.Phase.REQUEST_PARSED, "streaming=true model=${model.id}", runId = runIdOf(dir))
             if (apiKey.isEmpty()) {
+                Log.w(TAG, "missing credential (stream): antigravity inline token absent AND prefs miss for ${instance.id.take(8)}")
                 appendLine(ChatStreamJsonl.errorLine("missing_api_key"))
                 writeResultAtomically(dir, JSONObject().apply {
                     put("error", "missing_api_key")
@@ -1494,7 +1540,18 @@ class ModelExecutionService : Service() {
                         val id = getString(p, "toolUseId").ifBlank { getString(p, "id") }
                         val name = getString(p, "name")
                         val arguments = p.optJSONObject("arguments") ?: JSONObject()
-                        parts.add(com.openminis.app.data.model.AgentContentPart.ToolUse(id = id, name = name, input = arguments))
+                        // [fix-antigravity-thought-signature] Round-trip the
+                        // opaque signature into the rebuilt part so the
+                        // provider's request builder re-emits it on the
+                        // functionCall part (v1internal hard-requires it).
+                        parts.add(
+                            com.openminis.app.data.model.AgentContentPart.ToolUse(
+                                id = id,
+                                name = name,
+                                input = arguments,
+                                thoughtSignature = getString(p, "thoughtSignature").ifEmpty { null },
+                            ),
+                        )
                     }
                     "toolresult" -> {
                         val id = getString(p, "toolUseId").ifBlank { getString(p, "id") }
@@ -1543,6 +1600,7 @@ class ModelExecutionService : Service() {
                         type = getString(v, "type"),
                         description = getString(v, "description"),
                         enumValues = v.optJSONArray("enum")?.let { e -> (0 until e.length()).map { e.getString(it) } },
+                        items = com.openminis.app.data.model.AgentToolSchema.fromJson(v.optJSONObject("items")),
                     )
                 }
             }

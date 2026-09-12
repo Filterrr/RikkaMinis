@@ -18,6 +18,8 @@ sealed interface ParsedPart {
         val description: String,
         val pageURL: String?,
         val imageFilePath: String?,
+        /** [fix-antigravity-thought-signature] Persisted opaque signature (null on legacy rows). */
+        val thoughtSignature: String? = null,
     ) : ParsedPart
     data class ToolResult(
         val toolUseId: String,
@@ -71,6 +73,7 @@ fun tryParsePartsJson(partsJson: String): List<ParsedPart>? {
                         description = v.optString("description", ""),
                         pageURL = v.optString("pageURL", "").ifEmpty { null },
                         imageFilePath = v.optString("imageFilePath", "").ifEmpty { null },
+                        thoughtSignature = v.optString("thoughtSignature", "").ifEmpty { null },
                     )
                 }
                 "toolResult" -> {
