@@ -506,20 +506,32 @@ class AntigravityProvider(
                         is AgentContentPart.ToolUse -> {
                             parts.put(JSONObject().apply {
                                 val functionCall = JSONObject().apply {
+                                    // [fix-antigravity-claude-tool-id] The
+                                    // backend translates history into Claude
+                                    // protocol for claude-* models, where
+                                    // tool_use.id is Field required — pair it
+                                    // with functionResponse.id below.
+                                    if (isClaudeModel()) put("id", part.id)
                                     put("name", part.name)
                                     put("args", part.input)
                                 }
-                                // [fix-antigravity-thought-signature] Echo the
-                                // signature verbatim on the same part — Google
-                                // validates it against the original response.
-                                part.thoughtSignature?.takeIf { it.isNotEmpty() }?.let {
-                                    functionCall.put("thoughtSignature", it)
-                                }
                                 put("functionCall", functionCall)
+                                // [fix-antigravity-thought-signature-v2] PART
+                                // level, NOT inside functionCall — Google
+                                // proto-rejects unknown fields inside
+                                // function_call ("Unknown name
+                                // thoughtSignature ... Cannot find field").
+                                // Upstream normalizePart sets it on the part map.
+                                part.thoughtSignature?.takeIf { it.isNotEmpty() }?.let {
+                                    put("thoughtSignature", it)
+                                }
                             })
                         }
                         is AgentContentPart.ToolResult -> {
                             val responseObj = JSONObject()
+                            // [fix-antigravity-claude-tool-id] tool_result
+                            // needs the matching tool_use id for pairing.
+                            if (isClaudeModel()) responseObj.put("id", part.id)
                             responseObj.put("name", part.name)
                             val responseContent = JSONObject()
                             val safeContent = part.content.ifEmpty { " " }

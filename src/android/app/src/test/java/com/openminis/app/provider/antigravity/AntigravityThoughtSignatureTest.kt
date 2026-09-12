@@ -74,7 +74,7 @@ class AntigravityThoughtSignatureTest {
     }
 
     @Test
-    fun `history rebuild re-emits the signature on the functionCall part`() {
+    fun `history rebuild re-emits the signature at PART level`() {
         val part = AgentContentPart.ToolUse(
             id = "antigravity_1",
             name = "todo_write",
@@ -85,18 +85,70 @@ class AntigravityThoughtSignatureTest {
         val body = buildRequestWithHistory(provider, listOf(part))
         val contents = body.getJSONArray("contents")
         // Find the model-role content carrying the functionCall.
-        var emitted: JSONObject? = null
+        var emittedPart: JSONObject? = null
         for (i in 0 until contents.length()) {
             val content = contents.getJSONObject(i)
             if (content.optString("role") != "model") continue
             val parts = content.optJSONArray("parts") ?: continue
             for (j in 0 until parts.length()) {
-                val fc = parts.getJSONObject(j).optJSONObject("functionCall") ?: continue
-                if (fc.optString("name") == "todo_write") emitted = fc
+                if (parts.getJSONObject(j).optJSONObject("functionCall")
+                        ?.optString("name") == "todo_write") {
+                    emittedPart = parts.getJSONObject(j)
+                }
             }
         }
-        assertNotNull("functionCall part missing from rebuilt history", emitted)
-        assertEquals("SIG123", emitted!!.optString("thoughtSignature"))
+        assertNotNull("functionCall part missing from rebuilt history", emittedPart)
+        // PART level, sibling of functionCall — inside functionCall Google
+        // proto-rejects it ("Unknown name thoughtSignature").
+        assertEquals("SIG123", emittedPart!!.optString("thoughtSignature"))
+        assertFalse(emittedPart.getJSONObject("functionCall").has("thoughtSignature"))
+    }
+
+    @Test
+    fun `claude targets emit paired ids on functionCall and functionResponse`() {
+        val provider = provider("claude-opus-4-6-thinking")
+        val toolUse = AgentContentPart.ToolUse(
+            id = "antigravity_7",
+            name = "todo_write",
+            input = JSONObject().put("tool_title", "x"),
+        )
+        val toolResult = AgentContentPart.ToolResult(
+            id = "antigravity_7",
+            name = "todo_write",
+            content = "done",
+        )
+        val body = buildRequestWithHistory(provider, listOf(toolUse, toolResult))
+        val contents = body.getJSONArray("contents")
+        var callId: String? = null
+        var responseId: String? = null
+        for (i in 0 until contents.length()) {
+            val parts = contents.getJSONObject(i).optJSONArray("parts") ?: continue
+            for (j in 0 until parts.length()) {
+                val part = parts.getJSONObject(j)
+                part.optJSONObject("functionCall")?.let { callId = it.optString("id") }
+                part.optJSONObject("functionResponse")?.let { responseId = it.optString("id") }
+            }
+        }
+        assertEquals("antigravity_7", callId)
+        assertEquals("antigravity_7", responseId)
+    }
+
+    @Test
+    fun `gemini targets keep functionCall id-free`() {
+        val part = AgentContentPart.ToolUse(
+            id = "antigravity_8",
+            name = "todo_write",
+            input = JSONObject().put("tool_title", "y"),
+        )
+        val body = buildRequestWithHistory(provider("gemini-3-flash"), listOf(part))
+        val contents = body.getJSONArray("contents")
+        for (i in 0 until contents.length()) {
+            val parts = contents.getJSONObject(i).optJSONArray("parts") ?: continue
+            for (j in 0 until parts.length()) {
+                val fc = parts.getJSONObject(j).optJSONObject("functionCall") ?: continue
+                assertFalse(fc.has("id"))
+            }
+        }
     }
 
     @Test

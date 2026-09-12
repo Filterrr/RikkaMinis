@@ -261,14 +261,16 @@ class GeminiProvider(
                         }
                         is AgentContentPart.ToolUse -> {
                             parts.put(JSONObject().apply {
-                                val functionCall = JSONObject().apply {
+                                put("functionCall", JSONObject().apply {
                                     put("name", part.name)
                                     put("args", part.input)
-                                }
+                                })
+                                // [fix-antigravity-thought-signature-v2] Part
+                                // level — Gemini proto rejects unknown fields
+                                // inside function_call itself.
                                 part.thoughtSignature?.takeIf { it.isNotEmpty() }?.let {
-                                    functionCall.put("thoughtSignature", it)
+                                    put("thoughtSignature", it)
                                 }
-                                put("functionCall", functionCall)
                             })
                         }
                         is AgentContentPart.ToolResult -> {
