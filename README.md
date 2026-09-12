@@ -7,6 +7,7 @@
 **简体中文** · [English](README_EN.md)
 
 **你的私有、端侧 AI 智能体。**
+**→ [下载最新 APK](https://github.com/Filterrr/RikkaMinis/releases/tag/android-latest)**
 
 RikkaMinis 是一个个人专用的 **Android-only** 构建，杂交了两个项目：
 引擎与代码库来自 [OpenMinis](https://github.com/OpenMinis/OpenMinis)，
