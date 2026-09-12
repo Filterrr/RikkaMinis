@@ -767,6 +767,18 @@ class MinisApp : Application(), ImageLoaderFactory {
             },
         )
 
+        // [T-local-llm-gateway] Restore the local LLM gateway listener when the
+        // user left it enabled. The bind runs off the main thread and a port
+        // conflict is recorded in GatewayServer.lastError (surfaced in Settings)
+        // rather than thrown — a foreign process squatting the port must never
+        // break app launch.
+        com.openminis.app.gateway.GatewaySettings.load(this)
+        if (com.openminis.app.gateway.GatewaySettings.enabled) {
+            Thread {
+                com.openminis.app.gateway.GatewayServer.syncFromSettings(this, providerRepository)
+            }.apply { isDaemon = true; name = "minis-gateway-boot" }.start()
+        }
+
         // Debug server: only start in debug builds (NEVER in release)
         if (BuildConfig.DEBUG) {
             try {

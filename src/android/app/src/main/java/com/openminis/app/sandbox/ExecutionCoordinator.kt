@@ -934,6 +934,20 @@ object ExecutionCoordinator {
         }
         TerminalSession.broadcastProxy(env)
     }
+
+    /**
+     * [T-local-llm-gateway] Push the gateway endpoint block to every live shell
+     * after the user toggles the gateway in Settings, so a running session picks
+     * up OPENAI_BASE_URL / OLLAMA_HOST without a restart. No-op before boot.
+     */
+    suspend fun broadcastGatewayEnvChange() {
+        if (!PRootKernel.isBooted) return
+        val env = PRootKernel.updateGatewayEnv(appContext)
+        for ((_, shell) in shells) {
+            if (shell.isAlive) shell.applyEnvironment(env)
+        }
+        TerminalSession.broadcastProxy(env)
+    }
 }
 
 /**

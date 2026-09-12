@@ -36,6 +36,7 @@ import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.NetworkCheck
+import androidx.compose.material.icons.outlined.Router
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.AlertDialog
@@ -101,6 +102,8 @@ fun SettingsScreen(
     onBackgroundClick: () -> Unit = {},
     // [OPT-restore-doh] Network settings entry (DoH).
     onNetworkClick: () -> Unit = {},
+    // [T-local-llm-gateway] Local LLM gateway entry (multi-protocol endpoint).
+    onGatewayClick: () -> Unit = {},
 ) {
     val context = LocalContext.current
     Scaffold(
@@ -287,6 +290,16 @@ fun SettingsScreen(
                     title = stringResource(R.string.settings_network_title),
                     subtitle = stringResource(R.string.settings_network_subtitle),
                     onClick = onNetworkClick,
+                    showDivider = true,
+                )
+                // [T-local-llm-gateway] Serve the configured models to other
+                // apps/CLIs over an OpenAI/Anthropic/Gemini/Ollama endpoint.
+                SettingsItem(
+                    icon = Icons.Outlined.Router,
+                    iconColor = Color(0xFF5E5CE6),
+                    title = stringResource(R.string.settings_gateway_title),
+                    subtitle = stringResource(R.string.settings_gateway_subtitle),
+                    onClick = onGatewayClick,
                     showDivider = false,
                 )
             }

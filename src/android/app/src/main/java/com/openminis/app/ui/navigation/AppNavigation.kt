@@ -56,6 +56,7 @@ import com.openminis.app.ui.settings.EnvironmentVariablesScreen
 import com.openminis.app.ui.settings.AppearanceScreen
 import com.openminis.app.ui.settings.ChatMenuSettingsScreen
 import com.openminis.app.ui.settings.SettingsScreen
+import com.openminis.app.ui.settings.GatewaySettingsScreen
 import com.openminis.app.ui.settings.NetworkSettingsScreen
 import com.openminis.app.ui.settings.NetworkDiagnosticsScreen
 import com.openminis.app.ui.settings.SystemPermissionsScreen
@@ -209,6 +210,8 @@ object Routes {
     const val APPEARANCE = "appearance"
     /** [OPT-restore-doh] Network settings (DoH). */
     const val NETWORK_SETTINGS = "network_settings"
+    /** [T-local-llm-gateway] Local LLM gateway (multi-protocol localhost server). */
+    const val GATEWAY_SETTINGS = "gateway_settings"
     /** [feat1-network-diagnostics] Staged per-origin network probe panel. */
     const val NETWORK_DIAGNOSTICS = "network_diagnostics"
     /** [OPT-doh/OPT-proxy] Network settings (DoH / app proxy / pool size). */
@@ -673,6 +676,7 @@ fun AppNavigation(
                 onProviderHealthClick = { navController.safeNavigate(Routes.PROVIDER_HEALTH) },
                 onAppearanceClick = { navController.safeNavigate(Routes.APPEARANCE) },
                 onNetworkClick = { navController.safeNavigate(Routes.NETWORK_SETTINGS) },
+                onGatewayClick = { navController.safeNavigate(Routes.GATEWAY_SETTINGS) },
                 onBackgroundClick = { navController.safeNavigate(Routes.BACKGROUND) },
                 onLogsClick = { navController.safeNavigate(Routes.LOGS) },
                 onMountedFoldersClick = { navController.safeNavigate(Routes.MOUNTED_FOLDERS) },
@@ -1299,6 +1303,14 @@ fun AppNavigation(
             NetworkSettingsScreen(
                 onBack = { navController.safePopBackStack() },
                 onDiagnosticsClick = { navController.safeNavigate(Routes.NETWORK_DIAGNOSTICS) },
+            )
+        }
+
+        // [T-local-llm-gateway] Local LLM gateway settings + listener control.
+        composable(Routes.GATEWAY_SETTINGS) {
+            GatewaySettingsScreen(
+                providerRepository = providerRepository,
+                onBack = { navController.safePopBackStack() },
             )
         }
 

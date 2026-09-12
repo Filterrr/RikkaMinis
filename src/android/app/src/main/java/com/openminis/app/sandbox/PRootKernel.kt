@@ -250,6 +250,14 @@ object PRootKernel {
         // proxy toggles without a restart.
         customEnvironment.putAll(systemProxyEnv(context))
 
+        // [T-local-llm-gateway] Publish the local LLM gateway so on-device CLIs
+        // (ollama, openai-python, anthropic-sdk, litellm) point at the phone's
+        // own configured models with zero user setup. Empty strings when the
+        // gateway is off — same "unset by value" trick the proxy block uses, so
+        // toggling the gateway clears stale values in live shells without an
+        // `unset` round-trip.
+        customEnvironment.putAll(gatewayEnv(context))
+
         // Register global bind mounts so direct file I/O tools (file_read, file_edit)
         // can resolve /var/minis/{memory,skills,shared}/... (idempotent).
         registerGlobalBindMounts(context)
@@ -666,6 +674,45 @@ object PRootKernel {
             }
         }
         return out
+    }
+
+    /**
+     * Env-variable block for the [T-local-llm-gateway] loopback endpoint. Keys:
+     *
+     *   MINIS_GATEWAY_URL   base (http://127.0.0.1:<port>) — always the vendor-neutral one
+     *   MINIS_GATEWAY_KEY   token, empty when the gateway needs no auth
+     *   OLLAMA_HOST         what the ollama CLI reads
+     *   OPENAI_BASE_URL     + OPENAI_API_KEY for openai-compatible CLIs
+     *   ANTHROPIC_BASE_URL  + ANTHROPIC_API_KEY for claude-compatible CLIs
+     *
+     * All seven are written as a block and are empty when the gateway is off.
+     * No `no_proxy` juggling is needed: [PROXY_NO_PROXY] already lists
+     * localhost/127.0.0.1/::1 whenever a system proxy is active, so a proxied
+     * loopback request (which would 502 at the proxy) never happens.
+     */
+    fun gatewayEnv(context: Context): Map<String, String> {
+        val settings = com.openminis.app.gateway.GatewaySettings
+        val enabled = settings.enabled
+        val base = if (enabled) "http://127.0.0.1:${settings.port}" else ""
+        val token = if (enabled) settings.currentToken() else ""
+        val out = LinkedHashMap<String, String>()
+        out["MINIS_GATEWAY_URL"] = base
+        out["MINIS_GATEWAY_KEY"] = token
+        out["OLLAMA_HOST"] = base
+        out["OPENAI_BASE_URL"] = if (base.isEmpty()) "" else "$base/v1"
+        out["OPENAI_API_KEY"] = token
+        out["ANTHROPIC_BASE_URL"] = base
+        out["ANTHROPIC_API_KEY"] = token
+        return out
+    }
+
+    /** Recompute gateway env vars into customEnvironment (see [gatewayEnv]). */
+    fun updateGatewayEnv(context: Context): Map<String, String> {
+        val env = gatewayEnv(context)
+        customEnvironment.putAll(env)
+        val url = env["MINIS_GATEWAY_URL"].orEmpty()
+        Log.i(TAG, "Updated gateway env - ${if (url.isNotEmpty()) url else "cleared"}")
+        return env
     }
 
     /**
