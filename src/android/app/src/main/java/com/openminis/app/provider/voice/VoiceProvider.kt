@@ -45,6 +45,10 @@ open class VoiceProvider(
             // voice upload left dangling on a dead h2 tunnel used to hang
             // out its full 120s read timeout after a Wi-Fi↔cellular swap.
             .connectionPool(com.openminis.app.network.NetworkMonitor.sharedLLMConnectionPool)
+            // [T-llm-prefer-http11] Offer HTTP/1.1 before h2 — LLM routes go
+            // through local proxies where a wedged h2 tunnel hangs retries.
+            // See NetworkMonitor.LLM_PREFERRED_PROTOCOLS for the full rationale.
+            .protocols(com.openminis.app.network.NetworkMonitor.LLM_PREFERRED_PROTOCOLS)
             .dns(com.openminis.app.network.NetworkMonitor.buildDns())
             .build()
 

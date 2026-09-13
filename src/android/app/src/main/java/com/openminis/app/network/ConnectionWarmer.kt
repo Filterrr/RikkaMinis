@@ -96,6 +96,11 @@ object ConnectionWarmer {
     private val warmClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
             .connectionPool(NetworkMonitor.sharedLLMConnectionPool)
+            // [T-llm-prefer-http11] Must match the provider clients exactly:
+            // OkHttp only reuses a pooled connection when its negotiated
+            // protocol is in the caller's list, so warming with the default
+            // [h2, http/1.1] would produce sockets no LLM client can take.
+            .protocols(NetworkMonitor.LLM_PREFERRED_PROTOCOLS)
             .dns(NetworkMonitor.buildDns())
             .connectTimeout(5_000L, java.util.concurrent.TimeUnit.MILLISECONDS)
             .readTimeout(5_000L, java.util.concurrent.TimeUnit.MILLISECONDS)
