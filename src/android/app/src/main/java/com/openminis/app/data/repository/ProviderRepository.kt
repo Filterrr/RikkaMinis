@@ -122,6 +122,18 @@ class ProviderRepository(private val context: Context) {
         private const val KEY_LAST_USED_ENTRY = "lastUsedModelEntryId"
 
         /**
+         * [T-key-affinity] Prefs key holding the sticky-credential map.
+         *
+         * Entries are encoded `"entryId:index"`. Parsing uses the LAST colon
+         * (not the first) because a composite entry id is
+         * `"{instanceId}/{modelId}"` and model ids legitimately contain colons
+         * on some providers (OpenRouter style: `model:variant`). With a
+         * trailing-colon-digit id the split is still unambiguous: the index is
+         * appended last, so the rightmost colon always separates it.
+         */
+        private const val KEY_STICKY_KEYS = "stickyCredentialIndices"
+
+        /**
          * [T-android-provider-voice] Normalize a base URL for shadow-voice
          * cross-instance de-dup: lowercased, trailing "/" and "/v1" stripped.
          * Mirrors iOS ProviderConfigStore.normalizedShadowKey.
@@ -885,6 +897,50 @@ class ProviderRepository(private val context: Context) {
     fun lastUsedVisibleEntry(): ModelEntry? {
         val id = lastUsedEntryId ?: return null
         return allVisibleEntries().firstOrNull { it.id == id }
+    }
+
+    // ── [T-key-affinity] sticky credential memory ───────────────────────────
+
+    /**
+     * "Whoever worked last time works next time": entryId → the credential
+     * index that most recently served it successfully. Serialized as
+     * `"entryId:index"` strings in one prefs key
+     * ([encodeStickyKeyEntries] / [decodeStickyKeyEntries]).
+     *
+     * Persisted (not process-local) deliberately — a memory that dies with the
+     * app answers no future request, and the whole value of the feature is
+     * crossing restarts. Deliberately NOT a Room column: like
+     * [lastUsedEntryId], it is derived runtime state rather than user-owned
+     * configuration, so keeping it in prefs avoids a schema migration AND
+     * keeps it out of the backup / multi-device-sync document (see
+     * [T-key-affinity-sync-exclusion] below).
+     */
+    var stickyKeyIndices: Map<String, Int>
+        get() = decodeStickyKeyEntries(prefs.getStringSet(KEY_STICKY_KEYS, null))
+        set(value) {
+            val encoded = encodeStickyKeyEntries(value)
+            prefs.edit().apply {
+                if (encoded.isEmpty()) remove(KEY_STICKY_KEYS) else putStringSet(KEY_STICKY_KEYS, encoded)
+            }.apply()
+        }
+
+    /**
+     * [T-key-affinity-sync-exclusion] Persist one entry's sticky credential.
+     * Written on every successful turn and every rotation, so it is on a hot
+     * path — a full-map rebuild is fine (the map is small and bounded by the
+     * entry count), but it stays off the config-mutation lock because nothing
+     * else reads config-consistent state here.
+     */
+    fun rememberStickyKey(entryId: String, keyIndex: Int, keyCount: Int) {
+        // Scoped to multi-key instances — see [GroupRouter.rememberCredential].
+        if (keyCount <= 1) return
+        prefs.edit()
+            .putStringSet(
+                KEY_STICKY_KEYS,
+                stickyKeyIndices.toMutableMap().apply { put(entryId, keyIndex) }
+                    .map { (id, idx) -> "$id:$idx" }.toSet(),
+            )
+            .apply()
     }
 
     /**
@@ -1712,7 +1768,7 @@ class ProviderRepository(private val context: Context) {
         val config = _config.value
         val candidates = config.instances.filter { inst ->
             inst.isEnabled && hasVoiceModels(inst.id) && !isVoiceShadowDisabled(inst.id) &&
-                com.openminis.app.provider.voice.VoiceProviderFactory.supports(inst, loadApiKey(inst.id))
+                com.openminis.app.provider.voice.VoiceProviderFactory.supports(inst, loadAnyUsableApiKey(inst.id))
         }
         val byKey = candidates.groupBy { inst ->
             normalizedShadowKey(inst.customBaseURL).ifEmpty { "id:${inst.id}" }
@@ -1764,7 +1820,7 @@ class ProviderRepository(private val context: Context) {
         instance: ProviderInstance,
         forceRefresh: Boolean = false,
     ): ModelRefreshResult {
-        val apiKey = loadApiKey(instance.id)
+        val apiKey = loadAnyUsableApiKey(instance.id)
 
         android.util.Log.i("ProviderRepo", "refreshModels: id=${instance.id} type=${instance.providerType} credential=${instance.credentialType} hasKey=${apiKey != null} keyLen=${apiKey?.length ?: 0} baseURL=${instance.effectiveBaseURL} forceRefresh=$forceRefresh")
 
@@ -2028,6 +2084,36 @@ class ProviderRepository(private val context: Context) {
             edit.remove(apiKeySlot(instanceId, index))
         }
         edit.commit()
+    }
+
+    /**
+     * [T-key-affinity] Any credential that can serve a request right now: the
+     * remembered sticky one first (validated against key count + slot
+     * existence), else the first populated slot from 0 upward. Null only when
+     * the instance holds NO secret at all.
+     *
+     * Why this exists: [loadApiKey] reads slot 0 specifically, and
+     * [deleteApiKey] can leave an instance whose slot 0 is gone while later
+     * slots hold live keys — the sticky memory pointing at index 2 on a
+     * two-slot store is the other way to get there. Resolution / title / voice
+     * paths use this to mean "does this instance have a usable credential";
+     * they must NOT fail merely because the historical slot 0 is empty, or a
+     * user who deleted their primary key from a multi-key instance would see
+     * "Not logged in" next to keys that work fine.
+     */
+    fun loadAnyUsableApiKey(instanceId: String): String? {
+        val instance = instance(instanceId)
+        val count = instance?.credentialCount ?: 1
+        val sticky = stickyKeyIndices[instance?.id ?: instanceId]
+        if (sticky != null && sticky in 0 until count) {
+            loadApiKeyAt(instanceId, sticky)?.let { return it }
+        }
+        for (i in 0 until count) {
+            loadApiKeyAt(instanceId, i)?.takeIf { it.isNotBlank() }?.let { return it }
+        }
+        // Legacy fallback: an instance with no metadata list at all (older
+        // build / never configured) still answers through the index-0 slot.
+        return loadApiKey(instanceId)
     }
 
     /**
@@ -2746,7 +2832,42 @@ internal fun readRunConfigFields(dict: org.json.JSONObject): RunConfigSnapshot {
     )
 }
 
+/**
+ * [T-key-affinity] Encode the sticky-credential map for prefs. Pure so the
+ * colon-ambiguity contract below is unit-testable without Android.
+ *
+ * Format: one `"entryId:index"` string per entry. Entry ids are composite
+ * `"{instanceId}/{modelId}"` and model ids CAN contain colons (OpenRouter
+ * style `model:variant`), so the pair is split on the LAST colon: the index is
+ * always the appended final segment, so the rightmost colon always separates
+ * it. Decode round-trips ids like `inst/m:2` → `inst/m:2:1`.
+ */
+internal fun encodeStickyKeyEntries(entries: Map<String, Int>): Set<String> =
+    entries.filter { (id, index) -> id.isNotEmpty() && index >= 0 }
+        .map { (id, index) -> "$id:$index" }
+        .toSet()
+
+/**
+ * [T-key-affinity] Decode the persisted map. Anything that does not parse —
+ * no colon, empty id before it, non-numeric index — is dropped rather than
+ * throwing: prefs may carry data written by a future format, and a memory
+ * miss is a cheap fall-through to slot 0 while a crash on load would take the
+ * whole provider store with it.
+ */
+internal fun decodeStickyKeyEntries(raw: Set<String>?): Map<String, Int> {
+    if (raw == null) return emptyMap()
+    return raw.mapNotNull { entry ->
+        val sep = entry.lastIndexOf(':')
+        if (sep <= 0) return@mapNotNull null
+        val entryId = entry.substring(0, sep)
+        val index = entry.substring(sep + 1).toIntOrNull() ?: return@mapNotNull null
+        if (index < 0) return@mapNotNull null
+        entryId to index
+    }.toMap()
+}
+
 // ── [T-multi-api-key] credential metadata seam ───────────────────────────────
+
 //
 // Same shape as the run-config seam above: the export/import bodies live here
 // as pure functions so the multi-key round-trip is JVM-testable without an

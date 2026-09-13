@@ -143,6 +143,97 @@ class CredentialRotationTest {
         assertTrue(router.isEntryUsable("e", keyCount = 3))
     }
 
+    // ─── sticky credential memory ──────────────────────────────────────────
+
+    @Test fun preferredCredential_withoutMemory_isIndexZero() {
+        val router = routerAt { 0L }
+        assertEquals(0, router.preferredCredential("e", keyCount = 3))
+    }
+
+    @Test fun preferredCredential_returnsRememberedKey() {
+        val router = routerAt { 0L }
+        router.rememberCredential("e", keyIndex = 2, keyCount = 3)
+        // "Whoever worked last time works next time" — the whole feature.
+        assertEquals(2, router.preferredCredential("e", keyCount = 3))
+    }
+
+    @Test fun singleKeyInstance_neverRecordsMemory() {
+        val router = routerAt { 0L }
+        // Scoped per product decision: index 0 is the only choice a
+        // single-credential instance has, so a memory entry is pure storage
+        // noise and must never enter the persisted map.
+        router.rememberCredential("e", keyIndex = 0, keyCount = 1)
+        assertTrue(router.stickyKeysSnapshot().isEmpty())
+        assertEquals(0, router.preferredCredential("e", keyCount = 1))
+    }
+
+    @Test fun rememberedKeyOutOfRange_degradesToFirstUsable() {
+        val router = routerAt { 0L }
+        router.rememberCredential("e", keyIndex = 5, keyCount = 3)
+        // The user deleted keys since the memory was written (or a sync/restore
+        // changed the list). An out-of-range index must NOT be handed to the
+        // worker as a prefs slot — it would read a nonexistent secret and
+        // surface as missing_api_key.
+        assertEquals(0, router.preferredCredential("e", keyCount = 3))
+    }
+
+    @Test fun rememberedCoolingKey_isSkippedNotHonoured() {
+        var now = 1_000L
+        val router = routerAt { now }
+        router.rememberCredential("e", keyIndex = 2, keyCount = 3)
+        router.recordResult("e#2", RouteOutcome.RateLimited(retryAfterMs = 5_000L))
+        // Memory is a preference, not an obligation: honouring it past a 429
+        // would re-create the failure the rotation ladder exists to escape.
+        assertEquals(0, router.preferredCredential("e", keyCount = 3))
+        // After the window lapses the memory applies again — the key recovered.
+        now = 7_000L
+        assertEquals(2, router.preferredCredential("e", keyCount = 3))
+    }
+
+    @Test fun rememberedExhaustedKey_neverPreferred() {
+        val router = routerAt { 0L }
+        router.rememberCredential("e", keyIndex = 1, keyCount = 3)
+        router.recordResult("e#1", RouteOutcome.QuotaExhausted)
+        // Terminal: no clock advance revives it, so preference must move on.
+        assertEquals(0, router.preferredCredential("e", keyCount = 3))
+    }
+
+    @Test fun restoreFromPersistence_rehydratesPreference() {
+        val router = routerAt { 0L }
+        router.rememberCredential("e", keyIndex = 1, keyCount = 3)
+        val snapshot = router.stickyKeysSnapshot()
+        // Simulate an app restart: a fresh router hydrating prefs data.
+        val revived = routerAt { 0L }
+        revived.restoreStickyKeys(snapshot)
+        assertEquals(1, revived.preferredCredential("e", keyCount = 3))
+    }
+
+    @Test fun staleMemoryNeedsNoExplicitForget() {
+        val router = routerAt { 0L }
+        router.rememberCredential("e", keyIndex = 2, keyCount = 3)
+        // Every way a memory can go stale is re-validated at use time — the
+        // user deleting keys, or the remembered slot getting exhausted — so
+        // there is no "forget" call sites must remember to make. The two
+        // degradation paths above (out-of-range, exhausted) are the contract.
+        assertEquals(2, router.preferredCredential("e", keyCount = 3))
+        router.recordResult("e#2", RouteOutcome.QuotaExhausted)
+        assertEquals(0, router.preferredCredential("e", keyCount = 3))
+    }
+
+    @Test fun memoryMigratesOnRotation_noRepeatProbeOfDeadKey() {
+        val router = routerAt { 0L }
+        // Sequence: #0 worked (memory: 0) → next turn starts at 0 → 429 →
+        // rotation picks 1 → memory migrates to 1 → a turn AFTER that starts
+        // at 1 directly. The dead-then-parked key #0 is never re-probed.
+        router.rememberCredential("e", keyIndex = 0, keyCount = 2)
+        assertEquals(0, router.preferredCredential("e", keyCount = 2))
+        router.recordResult("e#0", RouteOutcome.RateLimited(retryAfterMs = 60_000L))
+        val next = router.rotateCredential("e", fromIndex = 0, keyCount = 2)
+        assertEquals(1, next)
+        next?.let { router.rememberCredential("e", it, keyCount = 2) }
+        assertEquals(1, router.preferredCredential("e", keyCount = 2))
+    }
+
     // ─── ordering ──────────────────────────────────────────────────────────
 
     @Test fun credentialOrder_singleKey_isTrivial() {

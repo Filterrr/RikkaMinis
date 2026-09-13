@@ -179,7 +179,7 @@ class ProviderSpeechRecognitionEngine(private val appContext: Context) : SpeechR
                 var lastError: Exception? = null
                 for ((instance, entry) in ordered) {
                     if (cancelled.get()) return@launch
-                    val provider = VoiceProviderFactory.make(instance, repo.loadApiKey(instance.id))
+                    val provider = VoiceProviderFactory.make(instance, repo.loadAnyUsableApiKey(instance.id))
                     if (provider == null) {
                         Log.w(TAG, "candidate ${instance.label} cannot serve voice input — skipping")
                         continue

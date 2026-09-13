@@ -443,7 +443,7 @@ private suspend fun performTest(
 
     val instance = providerRepository.instance(entry.providerInstanceId)
         ?: return@withContext failure("Provider instance not found.")
-    val apiKey = providerRepository.loadApiKey(instance.id)
+    val apiKey = providerRepository.loadAnyUsableApiKey(instance.id)
         ?: return@withContext failure("No API key configured for this provider.")
 
     // [T-android-provider-voice] Speech tests route through the VoiceProvider

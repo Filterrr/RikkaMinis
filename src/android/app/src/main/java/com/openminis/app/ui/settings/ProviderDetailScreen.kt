@@ -137,7 +137,7 @@ fun ProviderDetailScreen(
     // "API & Connection" row can show "sk-…4242" without a sub-screen hop.
     var storedKey by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(instanceId) {
-        storedKey = withContext(Dispatchers.IO) { providerRepository.loadApiKey(instanceId) }
+        storedKey = withContext(Dispatchers.IO) { providerRepository.loadAnyUsableApiKey(instanceId) }
     }
 
     // [T-provider-detail-visible-models] Manage All Models opens as a

@@ -1120,7 +1120,16 @@ class ChatViewModel(
      * Phase 2). Same pattern as ToolFailureHook: no Android deps, injectable
      * clock, unit-testable.
      */
-    private val groupRouter = com.openminis.app.data.routing.GroupRouter()
+    // [T-key-affinity] Hydrate the sticky-credential memory from prefs at
+    // construction: providerRepository's own prefs are already loaded by the
+    // time it reaches here, so this read is in-memory. preferredCredential
+    // re-validates every restored index against the live key count + health at
+    // use time, so a memory recorded before keys were deleted / before a
+    // downgrade simply degrades to the default slot — stale data cannot
+    // address a nonexistent secret.
+    private val groupRouter = com.openminis.app.data.routing.GroupRouter().also {
+        it.restoreStickyKeys(providerRepository.stickyKeyIndices)
+    }
 
     /**
      * T9: agent execution trace recorder. Side-channel only — records one
@@ -3407,7 +3416,7 @@ class ChatViewModel(
                 if (cachedProvider != null && cachedInstance != null) {
                     val freshInstance = providerRepository.instance(cachedInstance.id)
                     if (freshInstance != null && providerRouteChanged(cachedInstance, freshInstance)) {
-                        val freshKey = providerRepository.loadApiKey(freshInstance.id)
+                        val freshKey = providerRepository.loadAnyUsableApiKey(freshInstance.id)
                         if (freshKey != null) {
                             currentProvider = ProviderFactory.create(
                                 freshInstance,
@@ -3754,7 +3763,7 @@ class ChatViewModel(
                     _activeEntryId.value = entry.id
                     val instance = providerRepository.instance(entry.providerInstanceId)
                     if (instance != null) {
-                        val apiKey = providerRepository.loadApiKey(instance.id)
+                        val apiKey = providerRepository.loadAnyUsableApiKey(instance.id)
                         if (apiKey != null) {
                             currentProvider = ProviderFactory.create(instance, apiKey, entry.model, context)
                             _providerName.value = instance.label.ifEmpty { entry.model.provider }
@@ -4308,7 +4317,7 @@ class ChatViewModel(
                     val entryId = obj.optString("entryId").takeIf { it.isNotEmpty() } ?: return false
                     val entry = providerRepository.config.value.modelEntries.find { it.id == entryId } ?: return false
                     val instance = providerRepository.instance(entry.providerInstanceId) ?: return false
-                    val apiKey = providerRepository.loadApiKey(instance.id) ?: return false
+                    val apiKey = providerRepository.loadAnyUsableApiKey(instance.id) ?: return false
                     currentModel = entry.model
                     _modelName.value = entry.model.displayName
                     _providerName.value = instance.label.ifEmpty { entry.model.provider }
@@ -4361,13 +4370,29 @@ class ChatViewModel(
         }
         val targetEntry = enabledMembers.first { it.id == targetId }
         val instance = providerRepository.instance(targetEntry.providerInstanceId) ?: return false
-        val apiKey = providerRepository.loadApiKey(instance.id) ?: return false
+        // [T-key-affinity] Start on the credential that served this entry last
+        // — the memory is consulted at EVERY resolution point (turn start here,
+        // member switch in the fallback loop), so "last one that worked works
+        // next time" holds no matter how the member was reached. Falls back to
+        // the first usable index when nothing is remembered or the remembered
+        // key is no longer there / still cooling; single-key instances get 0,
+        // which is the only index they have — identical to the old code path.
+        // If the remembered slot's secret is gone (user deleted that key while
+        // its metadata row survived a sync/restore), fall back to the
+        // historical slot 0 rather than failing the resolution.
+        val startKeyIndex = groupRouter.preferredCredential(targetEntry.id, instance.credentialCount)
+        val apiKey = providerRepository.loadApiKeyAt(instance.id, startKeyIndex)
+            ?: providerRepository.loadApiKey(instance.id)
+            ?: return false
 
         currentModel = targetEntry.model
         _modelName.value = targetEntry.model.displayName
         _providerName.value = instance.label.ifEmpty { targetEntry.model.provider }
         _selectedGroupName.value = group.name
         _activeEntryId.value = targetEntry.id
+        // [T-key-affinity] The provider is built on the remembered credential;
+        // the streaming loop re-reads preferredCredential at the turn boundary
+        // so the cursor cannot drift between resolution and first request.
         currentProvider = ProviderFactory.create(instance, apiKey, targetEntry.model, context)
         return true
     }
@@ -4465,7 +4490,7 @@ class ChatViewModel(
         _modelName.value = entry.model.displayName
         _activeEntryId.value = entry.id
         _providerName.value = instance.label.ifEmpty { entry.model.provider }
-        val apiKey = providerRepository.loadApiKey(instance.id)
+        val apiKey = providerRepository.loadAnyUsableApiKey(instance.id)
         if (apiKey != null) {
             currentProvider = ProviderFactory.create(instance, apiKey, entry.model, context)
         }
@@ -4477,7 +4502,7 @@ class ChatViewModel(
         val config = providerRepository.config.value
         val entry = config.modelEntries.find { it.id == entryId } ?: return
         val instance = providerRepository.instance(entry.providerInstanceId) ?: return
-        val apiKey = providerRepository.loadApiKey(instance.id) ?: return
+        val apiKey = providerRepository.loadAnyUsableApiKey(instance.id) ?: return
 
         // Apply the new model's state + persisted binding. This runs in BOTH
         // the idle and the streaming cases (the streaming case additionally
@@ -4658,7 +4683,7 @@ class ChatViewModel(
             val entry = config.modelEntries.find { it.id == entryId } ?: continue
             val instance = config.instances.find { it.id == entry.providerInstanceId } ?: continue
             if (!instance.isEnabled) continue
-            val apiKey = providerRepository.loadApiKey(instance.id) ?: continue
+            val apiKey = providerRepository.loadAnyUsableApiKey(instance.id) ?: continue
             val p = try {
                 ProviderFactory.create(instance, apiKey, entry.model, context)
             } catch (_: Exception) { continue }
@@ -4728,7 +4753,7 @@ class ChatViewModel(
             val reason = when {
                 entry.isHidden -> "Hidden"
                 !instance.isEnabled -> "Disabled"
-                providerRepository.loadApiKey(instance.id) == null -> "Not logged in"
+                providerRepository.loadAnyUsableApiKey(instance.id) == null -> "Not logged in"
                 else -> continue
             }
             result.add("⚠️ ${entry.model.displayName} ($label): $reason")
@@ -7415,7 +7440,20 @@ class ChatViewModel(
         // `credentialIndex` is the index actually in use; `credentialAttempts`
         // bounds the rotation so a fully-spent instance cannot spin through
         // its keys forever on one turn.
-        var credentialIndex = 0
+        // [T-key-affinity] Seed the cursor from the sticky memory rather than
+        // blindly from 0: "whoever worked last time works next time". Re-
+        // validated here (not just at resolution) because the memory may have
+        // moved since — e.g. a previous turn in this same ViewModel rotated
+        // to key #1. preferredCredential degrades to the first usable index
+        // (0 for single-key instances), so this is behaviorally identical to
+        // the old `= 0` whenever no memory exists.
+        var credentialIndex = _activeEntryId.value?.let { id ->
+            val kc = providerRepository.config.value.modelEntries
+                .find { it.id == id }
+                ?.let { providerRepository.instance(it.providerInstanceId)?.credentialCount } ?: 1
+            groupRouter.preferredCredential(id, kc)
+        } ?: 0
+
         var credentialAttempts = 0
 
         // Accumulate tool inputs across all turns (so persist includes all, not just current turn)
@@ -8304,6 +8342,19 @@ class ChatViewModel(
                         val previousCredential = credentialIndex
                         credentialIndex = nextCredential
                         credentialAttempts++
+                        // [T-key-affinity] The memory MIGRATES to the key that
+                        // is about to serve. This is what keeps the sticky
+                        // preference from becoming a trap: without recording
+                        // here, the entry would keep remembering the key that
+                        // just died and every future request — across turns
+                        // AND restarts — would pay one doomed attempt before
+                        // rotation rescued it. Preferred key = last key that
+                        // actually worked, so a dead key costs exactly one
+                        // failure ever, not one per request.
+                        failedEntryForRotation?.let {
+                            groupRouter.rememberCredential(it, credentialIndex, credentialCount)
+                            providerRepository.rememberStickyKey(it, credentialIndex, credentialCount)
+                        }
                         // Same provider object, same model — only the worker's
                         // prefs slot changes. Nothing user-visible needs to
                         // update: the model capsule, active entry and provider
@@ -8424,7 +8475,19 @@ class ChatViewModel(
                         // after key #2 of A died, the first request to B would
                         // read B's third slot, or (for a single-key B) a slot
                         // that does not exist and surface as missing_api_key.
-                        credentialIndex = 0
+                        // [T-key-affinity] The reset starts from the NEW
+                        // member's remembered key when it has one (process-
+                        // local memory, restored from prefs at config load) —
+                        // "whoever worked last time works next time" is per-
+                        // entry, so switching members consults that member's
+                        // own history rather than blindly probing key #0.
+                        credentialIndex = next.entryId.let { newEntryId ->
+                            val newKeyCount = providerRepository.config.value.modelEntries
+                                .find { it.id == newEntryId }
+                                ?.let { providerRepository.instance(it.providerInstanceId)?.credentialCount }
+                                ?: 1
+                            groupRouter.preferredCredential(newEntryId, newKeyCount)
+                        }
                         credentialAttempts = 0
                         // Update top bar model info + active entry. (For a same-
                         // model endpoint recovery these are no-ops on the visible
@@ -8626,11 +8689,26 @@ class ChatViewModel(
             // EVERY sibling would erase the terminal Exhausted facts that the
             // user still needs to see. One key recovering says nothing about
             // its neighbours.
+            //
+            // [T-key-affinity] Success is ALSO the memory write: this is the
+            // "whoever worked last time works next time" signal itself. The
+            // rotation block records mid-turn; this is the authoritative stamp
+            // at the turn boundary, covering the common case where key #0 (or
+            // whichever the memory preferred) just worked. No-op for single-
+            // key instances by construction (rememberCredential guards on
+            // keyCount) — so the persisted map only ever describes genuine
+            // multi-key choices.
             _activeEntryId.value?.let { entryId ->
                 groupRouter.recordResult(
                     groupRouter.routeId(entryId, credentialIndex),
                     com.openminis.app.data.routing.RouteOutcome.Success,
                 )
+                val servedKeyCount = providerRepository.config.value.modelEntries
+                    .find { it.id == entryId }
+                    ?.let { providerRepository.instance(it.providerInstanceId)?.credentialCount }
+                    ?: 1
+                groupRouter.rememberCredential(entryId, credentialIndex, servedKeyCount)
+                providerRepository.rememberStickyKey(entryId, credentialIndex, servedKeyCount)
             }
 
             // T307: materialise the per-turn StringBuilder ONCE at the
@@ -11986,7 +12064,7 @@ Environment variables:
         // every member sits behind a disabled provider.
         val entry = providerRepository.resolveTitleSubEntry() ?: return null
         val instance = providerRepository.instance(entry.providerInstanceId) ?: return null
-        val apiKey = providerRepository.loadApiKey(instance.id) ?: return null
+        val apiKey = providerRepository.loadAnyUsableApiKey(instance.id) ?: return null
 
         return ProviderFactory.create(instance, apiKey, entry.model, context)
     }

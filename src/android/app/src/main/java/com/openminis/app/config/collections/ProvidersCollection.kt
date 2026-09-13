@@ -191,10 +191,11 @@ class ProvidersCollection(
     //
     // `$$ENV_NAME` references are resolved at WRITE TIME against the
     // env var store. We deliberately don't intercept reads at provider
-    // call time: doing so would mean rewriting 18+ `loadApiKey()` call
-    // sites and lose the "credential was already validated when set"
-    // invariant. A missing env var here surfaces immediately as an
-    // invalid_value error, rather than as a 401 deep inside a stream.
+    // call time: doing so would mean rewriting every `loadApiKey` /
+    // `loadAnyUsableApiKey` call site and lose the "credential was already
+    // validated when set" invariant. A missing env var here surfaces
+    // immediately as an invalid_value error, rather than as a 401 deep
+    // inside a stream.
     private val envRefRegex = Regex("^\\$\\$([A-Za-z_][A-Za-z0-9_]*)$")
 
     private fun resolveCredential(raw: String, fieldName: String): String {

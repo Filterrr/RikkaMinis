@@ -280,6 +280,85 @@ class GroupRouter(
         return null
     }
 
+    // ── sticky credential memory (T-key-affinity) ──────────────────────────
+
+    /**
+     * [T-key-affinity] entryId → the credential index that last served it
+     * successfully. Process-local here, persisted by the caller
+     * ([com.openminis.app.data.repository.ProviderRepository.stickyKeyIndices])
+     * so the memory survives an app restart — which is the entire point (the
+     * user's ask is "whoever worked last time works next time", and a memory
+     * that dies with the process answers no future request).
+     */
+    private val stickyKey = mutableMapOf<String, Int>()
+
+    /**
+     * Adopt a persisted memory map (app start). Values are taken as-is;
+     * [preferredCredential] re-validates them against the live credential
+     * count and health, so an index recorded before the user deleted keys
+     * degrades to the default rather than addressing a nonexistent slot.
+     */
+    fun restoreStickyKeys(entries: Map<String, Int>) {
+        stickyKey.clear()
+        stickyKey.putAll(entries)
+    }
+
+    /** Snapshot for persistence. */
+    fun stickyKeysSnapshot(): Map<String, Int> = stickyKey.toMap()
+
+    /**
+     * Record that credential [keyIndex] served [entryId] successfully, so the
+     * next request on this entry starts there.
+     *
+     * Called on turn success AND on every rotation. Recording the rotation is
+     * what makes the memory a *migrating* preference rather than a sticky trap
+     * that has to be cleared by hand: without it, a key that died a week ago
+     * would stay "preferred" forever, and every request would pay one doomed
+     * attempt before rotation found the working one.
+     */
+    fun rememberCredential(entryId: String, keyIndex: Int, keyCount: Int) {
+        // [T-key-affinity-single-key-noop] Single-credential instances record
+        // NOTHING. Index 0 is the only choice they have, so a memory entry
+        // carries zero information — and writing one would grow the persisted
+        // map (and the prefs blob it serializes to) by every plain provider
+        // the user ever touches, for no behavioural gain. The feature is
+        // scoped to instances that actually hold more than one key.
+        if (keyCount <= 1) return
+        stickyKey[entryId] = keyIndex
+    }
+
+    /**
+     * The credential index a NEW request on [entryId] should start with: the
+     * remembered one when it still exists and is usable, else index 0.
+     *
+     * Falls back to any usable sibling when the remembered key is cooling —
+     * the memory is a preference, not an obligation, and honouring it past a
+     * 429 would just re-create the failure the rotation ladder is designed to
+     * escape.
+     *
+     * There is deliberately no explicit "forget" path: every way a memory can
+     * go stale — index out of range after a deletion, the key parked by an
+     * exhaustion, a cooling window — is re-validated here at use time, so a
+     * stale record degrades to the first usable slot instead of needing to be
+     * erased by whoever changed the credential list.
+     */
+    fun preferredCredential(entryId: String, keyCount: Int): Int {
+        if (keyCount <= 1) return 0
+        val now = clock()
+        stickyKey[entryId]?.let { remembered ->
+            if (remembered in 0 until keyCount &&
+                (health[routeId(entryId, remembered)]?.isUsable(now) ?: true)
+            ) {
+                return remembered
+            }
+        }
+        // Memory absent or stale/unusable: take the first usable slot.
+        for (idx in 0 until keyCount) {
+            if (health[routeId(entryId, idx)]?.isUsable(now) ?: true) return idx
+        }
+        return 0
+    }
+
     /**
      * [T-multi-api-key] Order the credentials of one entry for a fresh request:
      * usable ones first (round-robin from [fromIndex], so load spreads), then

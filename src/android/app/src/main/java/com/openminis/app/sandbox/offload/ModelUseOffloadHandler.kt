@@ -262,7 +262,7 @@ class ModelUseOffloadHandler(
 
         // Build provider + call — runBlocking is acceptable here: this handler
         // is invoked off the main thread by the offload server.
-        val apiKey = providerRepository.loadApiKey(entry.providerInstanceId)
+        val apiKey = providerRepository.loadAnyUsableApiKey(entry.providerInstanceId)
             ?: return NativeOffloadResult(
                 2,
                 JSONObject().put("error", "missing_api_key")

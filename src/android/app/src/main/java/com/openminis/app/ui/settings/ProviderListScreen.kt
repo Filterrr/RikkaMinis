@@ -86,7 +86,7 @@ fun ProviderListScreen(
     // per instances change, not once per row per recomposition.
     val providerRows: List<ProviderRowData> = remember(instances) {
         instances.map { instance ->
-            val apiKey = providerRepository.loadApiKey(instance.id)
+            val apiKey = providerRepository.loadAnyUsableApiKey(instance.id)
             val isConfigured = !apiKey.isNullOrBlank()
             ProviderRowData(
                 instance = instance,
