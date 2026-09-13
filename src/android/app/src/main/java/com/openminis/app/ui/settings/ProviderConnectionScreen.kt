@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -21,6 +22,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import com.openminis.app.ui.util.bringIntoViewOnFocus
@@ -42,6 +44,7 @@ import com.openminis.app.provider.antigravity.AntigravityCredentialStore
 import com.openminis.app.provider.antigravity.AntigravityLoginBrowser
 import com.openminis.app.provider.antigravity.AntigravityLoginManager
 import com.openminis.app.ui.components.MinisButton
+import com.openminis.app.ui.components.MinisSmallTextButton
 import com.openminis.app.ui.components.SectionTextField
 
 private const val TAG = "ProviderConnection"
@@ -69,12 +72,23 @@ fun ProviderConnectionScreen(
     // current label so the page has context; connection params are the focus.
 
     var storedKey by remember { mutableStateOf<String?>(null) }
+    // [T-multi-api-key] All stored credentials of this instance, keyed by slot
+    // index. Loaded once here (not per-row) so the editor renders without N
+    // EncryptedSharedPreferences reads on every recomposition.
+    var storedKeys by remember { mutableStateOf<Map<Int, String?>>(emptyMap()) }
     LaunchedEffect(instanceId) {
-        storedKey = withContext(Dispatchers.IO) { providerRepository.loadApiKey(instanceId) }
+        storedKeys = withContext(Dispatchers.IO) {
+            providerRepository.loadApiKeys(instanceId).toMap()
+        }
+        storedKey = storedKeys[0]
     }
     var isEditingKey by remember { mutableStateOf(false) }
     var editKeyValue by remember { mutableStateOf("") }
     var keyVisible by remember { mutableStateOf(false) }
+    // [T-multi-api-key] Whether the multi-credential editor is expanded. The
+    // single-key field stays the default surface so a user with one key sees
+    // exactly the UI they had before this feature existed.
+    var showCredentialEditor by remember { mutableStateOf(false) }
 
     var customBaseURL by rememberSaveable { mutableStateOf(instance.customBaseURL ?: "") }
     var customUserAgent by rememberSaveable { mutableStateOf(instance.customUserAgent ?: "") }
@@ -133,12 +147,85 @@ fun ProviderConnectionScreen(
                             keyVisible = false
                         },
                         onSave = {
-                            providerRepository.saveApiKey(instanceId, editKeyValue)
+                            // [T-multi-api-key] The single-key field keeps writing
+                            // slot 0 — the historical location. Additional
+                            // credentials are managed by the editor below, so a
+                            // user who never opens it is unaffected.
+                            providerRepository.saveApiKeyAt(instanceId, 0, editKeyValue)
                             storedKey = editKeyValue
+                            storedKeys = storedKeys + (0 to editKeyValue)
                             AppLogger.info(TAG, "Saved API key for ${instance.id}")
                             isEditingKey = false
                         },
                     )
+                }
+
+                // [T-multi-api-key] Multi-credential management. Collapsed by
+                // default: an instance with one key needs none of it, and the
+                // section only appears for providers that actually use API keys
+                // (OAuth types take the branch above).
+                HorizontalDivider(
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                    color = MaterialTheme.colorScheme.outlineVariant,
+                )
+                SettingsCardBlock {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = stringResource(R.string.provider_credential_multi_title),
+                                style = MaterialTheme.typography.bodyLarge,
+                            )
+                            Text(
+                                text = stringResource(
+                                    R.string.provider_credential_multi_summary,
+                                    instance.credentials.size.coerceAtLeast(1),
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        MinisSmallTextButton(onClick = { showCredentialEditor = !showCredentialEditor }) {
+                            Text(
+                                stringResource(
+                                    if (showCredentialEditor) R.string.common_cancel
+                                    else R.string.provider_credential_manage,
+                                ),
+                            )
+                        }
+                    }
+                    if (showCredentialEditor) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        CredentialListEditor(
+                            metas = instance.credentials,
+                            storedKeys = storedKeys,
+                            onSave = { metas, drafts, previousCount ->
+                                // Order matters: persist the metadata FIRST so
+                                // the slot count the secrets are cleaned up
+                                // against is the one the user just confirmed.
+                                providerRepository.updateInstance(
+                                    instance.copy(credentials = metas.toMutableList()),
+                                )
+                                providerRepository.saveApiKeys(instanceId, drafts, previousCount)
+                                // Refresh the on-screen masked summaries
+                                // synchronously — the encrypted write is async,
+                                // so re-reading immediately would show the OLD
+                                // keys right after a save (the same
+                                // save-stale trap the single-key block fixes).
+                                storedKeys = drafts.mapIndexedNotNull { i, draft ->
+                                    (draft ?: storedKeys[i])?.let { i to it }
+                                }.toMap()
+                                storedKey = storedKeys[0]
+                                showCredentialEditor = false
+                                AppLogger.info(
+                                    TAG,
+                                    "Saved ${metas.size} credential(s) for ${instance.id}",
+                                )
+                            },
+                        )
+                    }
                 }
             }
         }

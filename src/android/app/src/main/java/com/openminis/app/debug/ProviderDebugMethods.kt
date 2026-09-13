@@ -86,7 +86,7 @@ internal object ProviderDebugMethods {
         val arr = JSONArray()
         for (inst in cfg.instances) {
             if (!includeDisabled && !inst.isEnabled) continue
-            val hasKey = repo.loadApiKey(inst.id)?.isNotEmpty() == true
+            val hasKey = repo.loadAnyUsableApiKey(inst.id)?.isNotEmpty() == true
             val entryCount = cfg.modelEntries.count { it.providerInstanceId == inst.id }
             arr.put(JSONObject().apply {
                 put("id", inst.id)

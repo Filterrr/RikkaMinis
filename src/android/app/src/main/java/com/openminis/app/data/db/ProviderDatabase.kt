@@ -35,7 +35,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ProviderAgentLoopIdEntity::class,
         ProviderConfigMetaEntity::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = false,
 )
 abstract class ProviderDatabase : RoomDatabase() {
@@ -162,6 +162,20 @@ abstract class ProviderDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // [T-multi-api-key] Credential metadata blob (labels/notes/
+                // identity for an instance's credentials). Pure additive
+                // nullable TEXT: existing rows read as null → "legacy
+                // single-key instance", which the load path maps to exactly
+                // one credential backed by the historical `apikey_<id>`
+                // EncryptedPrefs slot. No row is rewritten and no provider is
+                // dropped, so a downgrade/upgrade round-trip is lossless —
+                // same contract as MIGRATION_2_3's image-endpoint columns.
+                db.execSQL("ALTER TABLE provider_instances ADD COLUMN credentials_json TEXT")
+            }
+        }
+
         fun getInstance(context: Context): ProviderDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -169,7 +183,7 @@ abstract class ProviderDatabase : RoomDatabase() {
                     ProviderDatabase::class.java,
                     "provider.db",
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
                     .build()
                     .also { INSTANCE = it }
             }

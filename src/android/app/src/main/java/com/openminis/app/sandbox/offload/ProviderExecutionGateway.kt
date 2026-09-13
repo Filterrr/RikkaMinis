@@ -95,6 +95,7 @@ object ProviderExecutionGateway {
         streaming: Boolean = false,
         firstChunkBudgetMs: Long? = null,
         oauthAccessToken: String? = null,
+        credentialIndex: Int = 0,
     ): String = ModelExecutionDispatcher.buildRequestJson(
         instance = instance,
         model = model,
@@ -110,6 +111,7 @@ object ProviderExecutionGateway {
         streaming = streaming,
         firstChunkBudgetMs = firstChunkBudgetMs,
         oauthAccessToken = oauthAccessToken,
+        credentialIndex = credentialIndex,
     )
 
     /**
@@ -136,6 +138,7 @@ object ProviderExecutionGateway {
         tools: List<AgentToolDefinition> = emptyList(),
         thinkingLevel: ThinkingLevel = ThinkingLevel.OFF,
         firstChunkBudgetMs: Long? = null,
+        credentialIndex: Int = 0,
     ): SendResult {
         // [fix-encrypted-prefs-wipe-multiprocess] Resolve OAuth credentials
         // HERE, in the app process, before serializing the request. The
@@ -144,7 +147,7 @@ object ProviderExecutionGateway {
         // worker's create() fail, and its old self-healing path then WIPED
         // the store. The token rides inline in request.json (app-private
         // cacheDir, same uid) instead.
-        val inlineCredential = resolveInlineCredential(context, instance)
+        val inlineCredential = resolveInlineCredential(context, instance, credentialIndex)
         val requestJson = buildRequest(
             instance = instance,
             model = model,
@@ -160,6 +163,7 @@ object ProviderExecutionGateway {
             streaming = false,
             firstChunkBudgetMs = firstChunkBudgetMs,
             oauthAccessToken = inlineCredential,
+            credentialIndex = credentialIndex,
         )
         val raw = ModelExecutionDispatcher.dispatch(context, requestJson)
             ?: return SendResult.Unavailable("model service dispatch failed or timed out")
@@ -172,8 +176,18 @@ object ProviderExecutionGateway {
      * when the instance is not OAuth-backed (API-key instances keep the
      * worker's own read path) or no valid token exists (the worker will then
      * surface the typed missing-credential error).
+     * [T-multi-api-key] [credentialIndex] is accepted for signature symmetry
+     * with the API-key path, but Antigravity is OAuth-only by construction: it
+     * has exactly one credential (the logged-in account), so no index other
+     * than 0 addresses anything. The parameter is deliberately NOT used to
+     * select a token — silently returning some other account's token for a
+     * bogus index would be worse than resolving the single real one.
      */
-    private suspend fun resolveInlineCredential(context: Context, instance: ProviderInstance): String? {
+    private suspend fun resolveInlineCredential(
+        context: Context,
+        instance: ProviderInstance,
+        credentialIndex: Int,
+    ): String? {
         if (instance.providerType != com.openminis.app.data.model.ProviderType.antigravity) return null
         return try {
             com.openminis.app.provider.antigravity.AntigravityCredentialStore
@@ -253,13 +267,14 @@ object ProviderExecutionGateway {
         inputJson: String = "",
         outputExt: String? = null,
         firstChunkBudgetMs: Long? = null,
+        credentialIndex: Int = 0,
     ): Flow<LLMStreamChunk> {
         // [fix-encrypted-prefs-wipe-multiprocess] Same app-process credential
         // resolution as send() — the worker must never touch EncryptedPrefs.
         // The suspend resolve runs inside the flow builder (collection is
         // always on a coroutine, so this is a legal suspend context).
         return flow {
-            val inlineCredential = resolveInlineCredential(context, instance)
+            val inlineCredential = resolveInlineCredential(context, instance, credentialIndex)
             val requestJson = buildRequest(
                 instance = instance,
                 model = model,
@@ -275,6 +290,7 @@ object ProviderExecutionGateway {
                 streaming = true,
                 firstChunkBudgetMs = firstChunkBudgetMs,
                 oauthAccessToken = inlineCredential,
+                credentialIndex = credentialIndex,
             )
             emitAll(ChatStreamOffloadHandler.stream(context, requestJson, thinkingLevel.isEnabled))
         }

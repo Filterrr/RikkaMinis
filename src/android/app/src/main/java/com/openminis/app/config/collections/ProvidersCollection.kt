@@ -48,6 +48,45 @@ class ProvidersCollection(
 
     override fun childIds(): List<String> = repo.instances.map { it.id }
 
+    /**
+     * [T-multi-api-key] Read-only view of an instance's credential metadata.
+     *
+     * This is the introspection half of the feature: without it, the agent
+     * (and the user) can see that a request rotated or parked a key only by
+     * reading logs. Secrets are never exposed — each entry reports identity
+     * and labels only, which is exactly what `ProviderCredentialMeta` holds.
+     *
+     * Deliberately NOT a write surface for secrets: writing keys is
+     * [apiKeyField]'s job (single, `$$ENV`-aware, audited). Managing N keys
+     * through a JSON blob would defeat the write-time `$$ENV` validation and
+     * the redaction that field already provides.
+     */
+    private fun credentialsField(id: String): ConfigField =
+        ReadOnlyField(
+            path = "providers.$id.credentials",
+            displayName = "Credentials",
+            description = "Credential metadata for this instance (labels/notes/order — never the secrets). " +
+                "An empty list means the instance still uses the legacy single-key slot.",
+            valueSchema = ConfigSchema.Json,
+            reader = {
+                val inst = repo.instance(id) ?: return@ReadOnlyField ConfigValue.Null
+                ConfigValue.Arr(
+                    inst.credentials.map { meta ->
+                        ConfigValue.Obj(
+                            linkedMapOf(
+                                "id" to ConfigValue.Str(meta.id),
+                                "label" to ConfigValue.Str(meta.label),
+                                "note" to ConfigValue.Str(meta.note),
+                                "isEnabled" to ConfigValue.Bool(meta.isEnabled),
+                                "createdAt" to ConfigValue.Int(meta.createdAt.toInt()),
+                                "migrated" to ConfigValue.Bool(meta.migrated),
+                            ),
+                        )
+                    },
+                )
+            },
+        )
+
     override fun fields(forId: String): List<ConfigField> {
         if (repo.instance(forId) == null) return emptyList()
         return listOf(
@@ -61,6 +100,7 @@ class ProvidersCollection(
             azureMode(forId),
             customUserAgent(forId),
             apiKeyField(forId),
+            credentialsField(forId),
             // OAuth token stays fully hidden — the flow is browser-driven
             // and can't be expressed as a single value.
             HiddenField(
@@ -151,10 +191,11 @@ class ProvidersCollection(
     //
     // `$$ENV_NAME` references are resolved at WRITE TIME against the
     // env var store. We deliberately don't intercept reads at provider
-    // call time: doing so would mean rewriting 18+ `loadApiKey()` call
-    // sites and lose the "credential was already validated when set"
-    // invariant. A missing env var here surfaces immediately as an
-    // invalid_value error, rather than as a 401 deep inside a stream.
+    // call time: doing so would mean rewriting every `loadApiKey` /
+    // `loadAnyUsableApiKey` call site and lose the "credential was already
+    // validated when set" invariant. A missing env var here surfaces
+    // immediately as an invalid_value error, rather than as a 401 deep
+    // inside a stream.
     private val envRefRegex = Regex("^\\$\\$([A-Za-z_][A-Za-z0-9_]*)$")
 
     private fun resolveCredential(raw: String, fieldName: String): String {

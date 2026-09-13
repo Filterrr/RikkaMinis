@@ -1332,4 +1332,16 @@
     <string name="fault_layer_service">サービス（エンドポイントは応答するがエラー — リレー/プロバイダー側の問題）</string>
     <string name="fault_layer_credentials">認証情報（キーが無効またはクォータ超過）</string>
     <string name="fault_layer_unclear">判定不能（一致するシグネチャなし）</string>
+
+    <!-- [T-multi-api-key] 複数認証情報エディタ。 -->
+    <string name="provider_credential_multi_title">APIキー</string>
+    <string name="provider_credential_multi_summary">%1$d 件設定済み。いずれかのキーが上限に達するかレート制限を受けると、次のキーに自動で切り替わります。</string>
+    <string name="provider_credential_manage">管理</string>
+    <string name="provider_credential_add">キーを追加</string>
+    <string name="provider_credential_delete">キーを削除</string>
+    <string name="provider_credential_edit">編集</string>
+    <string name="provider_credential_empty">キー未保存</string>
+    <string name="provider_credential_label_placeholder">名前(任意)</string>
+    <string name="provider_credential_note_placeholder">メモ(任意)</string>
+    <string name="provider_credential_replace_placeholder">置き換える新しいキーを貼り付け</string>
 </resources>

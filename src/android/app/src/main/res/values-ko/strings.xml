@@ -1324,4 +1324,16 @@
     <string name="fault_layer_service">서비스 (엔드포인트 응답하지만 오류 — 릴레이/제공자 문제)</string>
     <string name="fault_layer_credentials">자격 증명 (키가 무효이거나 한도 소진)</string>
     <string name="fault_layer_unclear">판별 불가 (일치하는 시그니처 없음)</string>
+
+    <!-- [T-multi-api-key] 다중 자격 증명 편집기. -->
+    <string name="provider_credential_multi_title">API 키</string>
+    <string name="provider_credential_multi_summary">%1$d개 구성됨. 키 하나가 할당량을 소진하거나 속도 제한에 걸리면 요청이 다음 키로 자동 전환됩니다.</string>
+    <string name="provider_credential_manage">관리</string>
+    <string name="provider_credential_add">키 추가</string>
+    <string name="provider_credential_delete">키 삭제</string>
+    <string name="provider_credential_edit">편집</string>
+    <string name="provider_credential_empty">저장된 키 없음</string>
+    <string name="provider_credential_label_placeholder">이름 (선택)</string>
+    <string name="provider_credential_note_placeholder">메모 (선택)</string>
+    <string name="provider_credential_replace_placeholder">교체할 새 키 붙여넣기</string>
 </resources>

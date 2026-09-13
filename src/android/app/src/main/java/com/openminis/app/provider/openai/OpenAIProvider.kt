@@ -4,6 +4,7 @@ import android.util.Base64
 import com.openminis.app.data.model.AgentContentPart
 import com.openminis.app.data.model.AgentToolDefinition
 import com.openminis.app.data.model.LLMError
+import com.openminis.app.data.model.isQuotaExhaustedResponse
 import com.openminis.app.data.model.parseRetryAfterMs
 import com.openminis.app.network.GzipRequestInterceptor
 import com.openminis.app.data.model.LLMMediaAttachment
@@ -2842,6 +2843,15 @@ class OpenAIProvider constructor(
     }
 
     private fun mapHttpError(statusCode: Int, body: String, retryAfterMs: Long? = null): LLMError {
+        // [T-multi-api-key] Quota classification MUST run before the 401/403/429
+        // split. OpenAI reports "out of credit" as 429 + `insufficient_quota`,
+        // and several relays report it as 403 or 402 — all of which the
+        // status-first ladder below would file as RateLimited / InvalidApiKey.
+        // RateLimited would make the routing layer *wait* on a key that will
+        // never come back; QuotaExhausted tells it to swap credentials instead.
+        if (isQuotaExhaustedResponse(statusCode, body)) {
+            return LLMError.QuotaExhausted(body.take(300))
+        }
         if (statusCode == 401 || statusCode == 403) return LLMError.InvalidApiKey()
         if (statusCode == 429) return LLMError.RateLimited(retryAfterMs = retryAfterMs)
 

@@ -210,7 +210,7 @@ internal object ProviderMutationMethods {
         }
         val probeURL = when (instance.providerType) {
             ProviderType.anthropic -> "$baseURL/v1/models"
-            ProviderType.gemini -> "$baseURL/v1beta/models?key=" + (repo.loadApiKey(id) ?: "")
+            ProviderType.gemini -> "$baseURL/v1beta/models?key=" + (repo.loadAnyUsableApiKey(id) ?: "")
             ProviderType.openAI -> if (baseURL.endsWith("/v1")) "$baseURL/models" else "$baseURL/v1/models"
             ProviderType.openRouter -> "$baseURL/models"
             // xAI exposes an OpenAI-compatible /models endpoint at the same base.
@@ -227,7 +227,7 @@ internal object ProviderMutationMethods {
             .build()
 
         val builder = okhttp3.Request.Builder().url(probeURL).get()
-        val key = repo.loadApiKey(id)
+        val key = repo.loadAnyUsableApiKey(id)
         when (instance.providerType) {
             ProviderType.anthropic -> if (!key.isNullOrEmpty()) builder.header("x-api-key", key).header("anthropic-version", "2023-06-01")
             ProviderType.openAI -> if (!key.isNullOrEmpty()) builder.header("Authorization", "Bearer $key")
@@ -289,7 +289,7 @@ internal object ProviderMutationMethods {
             put("useResponsesAPI", inst.useResponsesAPI)
             put("customUserAgent", inst.customUserAgent ?: JSONObject.NULL)
             put("createdAt", inst.createdAt)
-            put("hasCredential", repo.loadApiKey(inst.id)?.isNotEmpty() == true)
+            put("hasCredential", repo.loadAnyUsableApiKey(inst.id)?.isNotEmpty() == true)
             put("modelEntryCount", entryCount)
         }
     }
