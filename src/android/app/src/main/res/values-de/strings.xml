@@ -1326,4 +1326,16 @@
     <string name="fault_layer_service">Dienst (Endpunkt antwortet, aber fehlerhaft — Relay/Anbieter-Problem)</string>
     <string name="fault_layer_credentials">Zugangsdaten (Schluessel ungueltig oder Kontingent aufgebraucht)</string>
     <string name="fault_layer_unclear">Unklar (keine passende Signatur)</string>
+
+    <!-- [T-multi-api-key] Editor für mehrere Schlüssel. -->
+    <string name="provider_credential_multi_title">API-Schlüssel</string>
+    <string name="provider_credential_multi_summary">%1$d konfiguriert. Wenn ein Schlüssel sein Kontingent aufbraucht oder gedrosselt wird, wechselt die Anfrage zum nächsten Schlüssel.</string>
+    <string name="provider_credential_manage">Verwalten</string>
+    <string name="provider_credential_add">Schlüssel hinzufügen</string>
+    <string name="provider_credential_delete">Schlüssel löschen</string>
+    <string name="provider_credential_edit">Bearbeiten</string>
+    <string name="provider_credential_empty">Kein Schlüssel gespeichert</string>
+    <string name="provider_credential_label_placeholder">Name (optional)</string>
+    <string name="provider_credential_note_placeholder">Notiz (optional)</string>
+    <string name="provider_credential_replace_placeholder">Neuen Schlüssel zum Ersetzen einfügen</string>
 </resources>

@@ -1763,4 +1763,16 @@
     <string name="antigravity_bridge_test">Save &amp; test</string>
     <string name="antigravity_bridge_sync">Sync existing credential</string>
     <string name="antigravity_bridge_login">Sign in via core (browser)</string>
+
+    <!-- [T-multi-api-key] Multi-credential editor. -->
+    <string name="provider_credential_multi_title">API keys</string>
+    <string name="provider_credential_multi_summary">%1$d configured. Requests rotate to the next key when one runs out of quota or hits a rate limit.</string>
+    <string name="provider_credential_manage">Manage</string>
+    <string name="provider_credential_add">Add key</string>
+    <string name="provider_credential_delete">Delete key</string>
+    <string name="provider_credential_edit">Edit</string>
+    <string name="provider_credential_empty">No key saved</string>
+    <string name="provider_credential_label_placeholder">Name (optional)</string>
+    <string name="provider_credential_note_placeholder">Note (optional)</string>
+    <string name="provider_credential_replace_placeholder">Paste a new key to replace</string>
 </resources>

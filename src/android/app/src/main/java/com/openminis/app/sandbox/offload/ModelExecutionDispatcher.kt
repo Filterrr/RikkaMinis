@@ -48,9 +48,17 @@ object ModelExecutionDispatcher {
 
     /**
      * Build the serialized request JSON for a model run. Pure function —
-     * JVM-testable. The API key is deliberately NOT included: the service
-     * reads it from EncryptedSharedPreferences directly (same uid, same
-     * encrypted prefs file) so the plaintext never touches disk.
+     * JVM-testable.
+     *
+     * [T-multi-api-key] The API key (and, per [oauthAccessToken], any OAuth
+     * token) is deliberately NOT included: the service reads the secret from
+     * EncryptedSharedPreferences directly (same uid, same encrypted prefs
+     * file) so the plaintext never touches disk. Which *slot* to read is
+     * what the request carries — `credential_index` — and the worker resolves
+     * it to `apikey_<id>_<index>` itself. Keeping the secret out of the
+     * request file matters more now than before: with multiple credentials
+     * the plaintext would be one of N rather than a single value, and the
+     * request dir is app-private but unencrypted.
      */
     fun buildRequestJson(
         instance: ProviderInstance,
@@ -78,12 +86,20 @@ object ModelExecutionDispatcher {
          * the worker now opens it READ-ONLY, never wiping).
          */
         oauthAccessToken: String? = null,
+        /**
+         * [T-multi-api-key] Which credential of the instance this request must
+         * use (`0` = the historical `apikey_<id>` slot). The worker maps this
+         * to a prefs slot name and reads the secret itself — see the KDoc
+         * above for why the secret is not inlined here.
+         */
+        credentialIndex: Int = 0,
     ): String {
         return JSONObject().apply {
             put("instance_id", instance.id)
             put("instance_label", instance.label)
             put("provider_type", instance.providerType.name)
             put("credential_type", instance.credentialType.name)
+            if (credentialIndex > 0) put("credential_index", credentialIndex)
             oauthAccessToken?.let { put("oauth_access_token", it) }
             instance.customBaseURL?.let { put("base_url", it) }
             put("append_v1", instance.appendV1Suffix)

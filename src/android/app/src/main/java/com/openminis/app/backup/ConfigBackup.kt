@@ -469,7 +469,7 @@ object ConfigBackup {
      * Gemini-only OAuth side-channel strings that are equally sensitive.
      */
     private val SECRET_PROVIDER_KEYS = listOf(
-        "apiKey", "oauthToken", "manualOAuthToken", "oauthEmail", "oauthGcpProject",
+        "apiKey", "apiKeys", "oauthToken", "manualOAuthToken", "oauthEmail", "oauthGcpProject",
     )
 
     /** Thrown for payloads that aren't ours, or are from a future major format. */

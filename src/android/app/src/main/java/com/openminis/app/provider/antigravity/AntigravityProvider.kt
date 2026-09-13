@@ -11,6 +11,7 @@ import com.openminis.app.data.model.LLMResponse
 import com.openminis.app.data.model.LLMStreamChunk
 import com.openminis.app.data.model.LLMUsage
 import com.openminis.app.data.model.ThinkingLevel
+import com.openminis.app.data.model.isQuotaExhaustedResponse
 import com.openminis.app.data.model.parseRetryAfterMs
 import com.openminis.app.provider.LLMProvider
 import com.openminis.app.provider.applyUserAgentOverride
@@ -758,6 +759,13 @@ class AntigravityProvider(
             return LLMError.InvalidApiKey("Antigravity 访问被拒：${body.take(300)}")
         }
         if (statusCode == 429) return LLMError.RateLimited(retryAfterMs = retryAfterMs)
+        // [T-multi-api-key] Antigravity is OAuth-backed, so a spent credential
+        // is not the usual cause — but the shared classifier also catches
+        // upstream "out of credit" bodies surfaced through the relay, which
+        // must not be filed as a rate limit.
+        if (isQuotaExhaustedResponse(statusCode, body)) {
+            return LLMError.QuotaExhausted(body.take(300))
+        }
         val message = "Antigravity API error $statusCode: ${body.take(200)}"
         val transientCodes = setOf(500, 502, 503, 504, 529)
         if (statusCode in transientCodes) return LLMError.TransientError(message, retryAfterMs)

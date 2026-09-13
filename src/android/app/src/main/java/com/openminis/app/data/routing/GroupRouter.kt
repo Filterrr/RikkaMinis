@@ -25,6 +25,26 @@ class GroupRouter(
 ) {
     private val health = mutableMapOf<String, MemberHealth>()
 
+    // ── composite route identity (T-multi-api-key) ─────────────────────────
+
+    /**
+     * [T-multi-api-key] Composite health key for ONE credential of ONE entry:
+     * `"<entryId>#<keyIndex>"`.
+     *
+     * This is the whole trick that lets a multi-key instance reuse the group
+     * router's existing circuit breaker / cooldown / half-open-probe machinery
+     * WITHOUT touching it: a credential is just another routable member as far
+     * as this map is concerned. A spent key cools alone, its siblings keep
+     * serving, and the model/endpoint never even notices.
+     *
+     * `keyIndex == 0` maps to the bare [entryId] so every pre-existing health
+     * record — and every single-key instance — keeps its historical key shape
+     * and semantics. Single-credential providers are therefore byte-for-byte
+     * unchanged, which is what keeps this change safe to land on main.
+     */
+    fun routeId(entryId: String, keyIndex: Int): String =
+        if (keyIndex <= 0) entryId else "$entryId#$keyIndex"
+
     // ── selection ──────────────────────────────────────────────────────────
 
     /**
@@ -133,6 +153,16 @@ class GroupRouter(
          * user's real scenario: 500 calls / 5 h on a free key) is not
          * prolonged indefinitely. (Moved from ChatViewModel — this is now the
          * single owner of the constant.)
+         *
+         * [T-multi-api-key] With composite route ids this cooldown is now
+         * PER CREDENTIAL, not per instance — a 429 on one key parks that key
+         * for 60s while its siblings keep serving, where previously the whole
+         * entry went dark for a minute. No key-count scaling is applied
+         * deliberately: a provider-supplied Retry-After is authoritative and
+         * honored verbatim, and when the provider sends nothing the local
+         * cooldown is a guess that a shorter value would only make less
+         * conservative. Capacity under multi-key comes from rotating
+         * ([rotateCredential]), not from shrinking the penalty.
          */
         const val RATE_LIMIT_COOLDOWN_DEFAULT_MS = 60_000L
 
@@ -178,12 +208,103 @@ class GroupRouter(
             }
 
             RouteOutcome.AuthError -> health[entryId] = MemberHealth.Dead
+
+            // [T-multi-api-key] Terminal, and deliberately NOT a cooldown: the
+            // spend is a fact about the credential, not a clock. Retrying on a
+            // timer (the old ServerError path) was the bug — a top-up is the
+            // only thing that clears it, so the state must persist until then.
+            RouteOutcome.QuotaExhausted -> health[entryId] = MemberHealth.Exhausted
         }
-        // Bounded memory: drop the oldest entries beyond the cap (simple FIFO).
-        if (health.size > MAX_HEALTH_ENTRIES) {
-            val eldest = health.keys.firstOrNull() ?: return
-            health.remove(eldest)
+        evictIfOverCapacity(now)
+    }
+
+    /**
+     * [T-multi-api-key] Bounded memory, with a fairness guard.
+     *
+     * The cap exists so stale members can't leak memory, but a naive FIFO drop
+     * is now actively harmful: composite keys (`entry#0`, `entry#1`, ...) make
+     * the map grow with credentials, so a busy instance could evict a
+     * *legitimately cooling* key and hand it straight back to the rotation —
+     * the exact thrash the cooldown was meant to prevent.
+     *
+     * So: drop expired demotions first (they carry no information a fresh
+     * request wouldn't rediscover), and only fall back to FIFO when every
+     * entry is still live. Terminal states (Dead / Exhausted) are the most
+     * valuable records in the map and are evicted last.
+     */
+    private fun evictIfOverCapacity(now: Long) {
+        if (health.size <= MAX_HEALTH_ENTRIES) return
+        val overBy = health.size - MAX_HEALTH_ENTRIES
+        // Pass 1: expired cooldowns / circuits — pure derived state.
+        val expired = health.entries
+            .filter { (_, h) -> (h is MemberHealth.Cooling || h is MemberHealth.OpenCircuit) && h.isUsable(now) }
+            .map { it.key }
+            .take(overBy)
+        for (k in expired) health.remove(k)
+        // Pass 2: oldest insertion order, but never a terminal record while a
+        // live one is still present.
+        while (health.size > MAX_HEALTH_ENTRIES) {
+            val victim = health.keys.firstOrNull { health[it] !is MemberHealth.Dead && health[it] !is MemberHealth.Exhausted }
+                ?: health.keys.firstOrNull()
+                ?: break
+            health.remove(victim)
         }
+    }
+
+    // ── credential rotation (T-multi-api-key) ──────────────────────────────
+
+    /**
+     * [T-multi-api-key] Pick the next credential index to try on the SAME
+     * entry after the one at [fromIndex] failed, or null when no sibling
+     * credential is currently usable.
+     *
+     * Rotation is round-robin starting one step past [fromIndex], skipping
+     * every index whose composite route id is demoted. This is the "spend
+     * another key" rung of the escalation ladder — it changes nothing but the
+     * `Authorization` header, so it is always cheaper than group fallback
+     * (which re-resolves a member, rebuilds a provider, and may visibly switch
+     * the model in the top bar).
+     *
+     * @param entryId the group entry whose instance owns the credentials
+     * @param fromIndex index that just failed (rotation starts after it)
+     * @param keyCount number of credentials on the instance (1 = no rotation)
+     */
+    fun rotateCredential(entryId: String, fromIndex: Int, keyCount: Int): Int? {
+        if (keyCount <= 1) return null
+        val now = clock()
+        for (offset in 1 until keyCount) {
+            val idx = (fromIndex + offset) % keyCount
+            val route = routeId(entryId, idx)
+            if (health[route]?.isUsable(now) ?: true) return idx
+        }
+        return null
+    }
+
+    /**
+     * [T-multi-api-key] Order the credentials of one entry for a fresh request:
+     * usable ones first (round-robin from [fromIndex], so load spreads), then
+     * demoted ones as last-resort probes.
+     *
+     * Demoted credentials are kept in the list rather than dropped: when every
+     * key is cooling, attempting a still-cooling key is strictly better than
+     * hard-failing the turn — the provider's own error is more informative
+     * than "no credential available", and a half-open probe is how a cooling
+     * key gets rediscovered after its window lapses.
+     */
+    fun credentialOrder(entryId: String, keyCount: Int, fromIndex: Int = 0): List<Int> {
+        if (keyCount <= 0) return emptyList()
+        if (keyCount == 1) return listOf(0)
+        val now = clock()
+        val rotated = (0 until keyCount).map { (fromIndex + it) % keyCount }
+        val (usable, demoted) = rotated.partition { health[routeId(entryId, it)]?.isUsable(now) ?: true }
+        return usable + demoted
+    }
+
+    /** True when ANY credential of [entryId] may be used now. */
+    fun isEntryUsable(entryId: String, keyCount: Int): Boolean {
+        if (keyCount <= 1) return isUsable(entryId)
+        val now = clock()
+        return (0 until keyCount).any { health[routeId(entryId, it)]?.isUsable(now) ?: true }
     }
 
     /**

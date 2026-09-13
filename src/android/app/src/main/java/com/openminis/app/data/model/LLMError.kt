@@ -6,6 +6,36 @@ sealed class LLMError(message: String, cause: Throwable? = null) : Exception(mes
     class ProviderError(val detail: String) : LLMError("Provider error: $detail")
     class DecodingError(cause: Throwable) : LLMError("Decoding error: ${cause.message}", cause)
     class RateLimited(val retryAfterMs: Long? = null) : LLMError("Rate limited — please try again later")
+
+    /**
+     * [T-multi-api-key] The credential itself is out of quota / balance
+     * (HTTP 402, or 429/403 whose body says so) — as opposed to a per-minute
+     * rate limit.
+     *
+     * The distinction is load-bearing for multi-key routing:
+     *
+     *  - [RateLimited] is a *time* problem. Waiting fixes it, and the same
+     *    credential becomes usable again on its own (free-tier "500 calls /
+     *    5h" windows). Cooldown is bounded and self-healing.
+     *  - [QuotaExhausted] is a *credential* problem. Waiting does NOT fix it;
+     *    the key is spent until the user tops up. Retrying it is pure waste,
+     *    and letting it stay in the rotation just adds a guaranteed failure
+     *    to every fallback chain.
+     *
+     * Before this type existed, `insufficient_quota` fell through
+     * OpenAIProvider.mapHttpError's three-way split (401/403 → InvalidApiKey,
+     * 429 → RateLimited, else → ProviderError) into [ProviderError] →
+     * [com.openminis.app.data.routing.RouteOutcome.ServerError], i.e. it was
+     * recorded as a *server-side* fault: the circuit opened for
+     * CIRCUIT_OPEN_MS (5 min) and then retried the same dead key forever,
+     * surfacing as "Provider returned an error". See
+     * [com.openminis.app.data.routing.RouteOutcome.QuotaExhausted].
+     *
+     * @param detail provider-supplied message, verbatim (shown behind the
+     *   technical-details disclosure only).
+     */
+    class QuotaExhausted(val detail: String = "") : LLMError(if (detail.isBlank()) "Quota exhausted" else "Quota exhausted: $detail")
+
     class TransientError(val detail: String, val retryAfterMs: Long? = null) : LLMError("Transient error: $detail")
     class Cancelled : LLMError("Request was cancelled")
     class Unknown(cause: Throwable?) : LLMError("Unknown error: ${cause?.message}", cause)
@@ -27,8 +57,37 @@ sealed class LLMError(message: String, cause: Throwable? = null) : Exception(mes
      * provider); `isFallbackable` is only consulted AFTER retries are
      * exhausted, so including them here never skips the retry — it just stops
      * the "retried 3×, then hard-stopped with a red banner" dead end.
+     *
+     * [T-multi-api-key] QuotaExhausted is included for the same reason, one
+     * level down: the *credential* can't help, so the routing layer must be
+     * free to try the next credential on the SAME instance before it ever
+     * considers leaving the model/endpoint.
      */
-    val isFallbackable: Boolean get() = this is RateLimited || this is InvalidApiKey || this is ProviderError || this is NetworkError || this is TransientError
+    val isFallbackable: Boolean get() = this is RateLimited || this is InvalidApiKey || this is ProviderError || this is QuotaExhausted || this is NetworkError || this is TransientError
+
+    /**
+     * [T-multi-api-key] True when re-issuing the SAME request with a DIFFERENT
+     * credential on the same instance could plausibly succeed.
+     *
+     * This is the axis that separates "spend another key" from "move on"
+     * (mirrors iOS `CredentialRotation.isRotatable`). Deliberately NOT the
+     * same predicate as [isFallbackable]:
+     *
+     *  - `true`  → RateLimited / InvalidApiKey / QuotaExhausted. All three are
+     *    per-credential conditions; a sibling key on the same endpoint is the
+     *    cheapest possible recovery (no re-resolution, no model switch, no
+     *    visible UI change).
+     *  - `false` → ProviderError / TransientError / NetworkError. A 5xx or a
+     *    dropped socket is the *server's* or the *network's* fault; rotating
+     *    keys multiplies load against a service that is already unwell and
+     *    cannot succeed. Group-level fallback (a genuinely different endpoint)
+     *    remains the right response.
+     *
+     * Key rotation is always attempted before group fallback, and only when
+     * the instance actually carries more than one credential.
+     */
+    val isKeyRotationEligible: Boolean
+        get() = this is RateLimited || this is InvalidApiKey || this is QuotaExhausted
 
     /**
      * Human-readable, user-facing summary of the failure — NO raw error codes
@@ -41,6 +100,7 @@ sealed class LLMError(message: String, cause: Throwable? = null) : Exception(mes
         get() = when (this) {
             is RateLimited -> "Rate limited — try again in a moment"
             is InvalidApiKey -> "API key is invalid or expired"
+            is QuotaExhausted -> "API key is out of quota"
             is ProviderError -> "Provider returned an error"
             is NetworkError -> "Connection failed"
             is TransientError -> "Service temporarily unavailable"
@@ -54,6 +114,7 @@ sealed class LLMError(message: String, cause: Throwable? = null) : Exception(mes
         get() = when (this) {
             is RateLimited -> "Rate limited"
             is InvalidApiKey -> "Invalid API key"
+            is QuotaExhausted -> "Quota exhausted"
             is ProviderError -> "Provider error"
             is TransientError -> "Transient error"
             is NetworkError -> "Network error"
@@ -61,6 +122,51 @@ sealed class LLMError(message: String, cause: Throwable? = null) : Exception(mes
             is Cancelled -> "Cancelled"
             is Unknown -> "Unknown error"
         }
+}
+
+/**
+ * [T-multi-api-key] Classify a provider error BODY as out-of-quota rather than
+ * a generic provider failure.
+ *
+ * Providers disagree on how to report "this key is spent", so the status code
+ * is not sufficient — every shape below has been observed in the wild:
+ *
+ *  - **402 Payment Required** — OpenAI-compatible relays, DeepSeek.
+ *  - **429 with `insufficient_quota`** — OpenAI's documented out-of-credit
+ *    code (a 429 status carrying a non-rate-limit meaning).
+ *  - **403 with a balance message** — several relays (e.g. "余额不足").
+ *
+ * Matching is case-insensitive on the body so a relay that re-cases the code
+ * still classifies. Kept as a pure function (no provider deps) so the whole
+ * taxonomy is JVM-testable without an HTTP stack.
+ *
+ * @param statusCode HTTP status from the response.
+ * @param body raw response body (already truncated by the caller if huge).
+ * @return true when the failure is a spent credential, not a transient fault.
+ */
+fun isQuotaExhaustedResponse(statusCode: Int, body: String): Boolean {
+    val lower = body.lowercase()
+    // Unambiguous status: 402 means "pay up" on every OpenAI-compatible stack.
+    if (statusCode == 402) return true
+    val quotaMarkers = listOf(
+        "insufficient_quota",
+        "insufficient quota",
+        "quota_exceeded",
+        "quota exceeded",
+        "exceeded your current quota",
+        "billing_hard_limit_reached",
+        "credit_balance_too_low",
+        "insufficient_balance",
+        "insufficient balance",
+        "no credit",
+        "out of credit",
+        "balance is too low",
+        "余额不足",
+        "额度不足",
+        "欠费",
+    )
+    if (quotaMarkers.any { lower.contains(it) }) return true
+    return false
 }
 
 /**

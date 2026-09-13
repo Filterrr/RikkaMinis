@@ -8,6 +8,7 @@ import com.openminis.app.data.model.ModelGroup
 import com.openminis.app.data.model.ModelOverrides
 import com.openminis.app.data.model.ProviderConfig
 import com.openminis.app.data.model.ProviderCredential
+import com.openminis.app.data.model.ProviderCredentialMeta
 import com.openminis.app.data.model.ProviderInstance
 import com.openminis.app.data.model.ProviderType
 import com.openminis.app.data.model.RoutingStrategy
@@ -94,6 +95,16 @@ fun ProviderConfig.toSnapshot(
             // [P0-pinned-providers] Persist the favorite flag so Room
             // round-trips don't snap pinned instances back to unpinned.
             pinned = if (inst.pinned) 1 else 0,
+            // [T-multi-api-key] Credential metadata blob. Encoded explicitly
+            // (not via the `credentials.isEmpty` fast path) so "user has one
+            // credential" and "legacy instance, never configured" stay
+            // distinguishable downstream. Secrets are NOT part of this blob —
+            // see ProviderCredentialMeta's class doc.
+            credentialsJson = if (inst.credentials.isEmpty()) null
+                else jsonForBlobs.encodeToString(
+                    ListSerializer(ProviderCredentialMeta.serializer()),
+                    inst.credentials,
+                ),
         )
     }
 
@@ -225,6 +236,20 @@ fun ProviderConfigSnapshot.toProviderConfig(jsonForBlobs: Json): ProviderConfig 
             },
             // [P0-pinned-providers] Restore the favorite flag on load.
             pinned = row.pinned != 0,
+            // [T-multi-api-key] Restore credential metadata. A decode failure
+            // must NOT throw — that would blow up the whole provider load and,
+            // via the JSON-mirror fallback, wipe the provider list from the UI.
+            // Degrading to an empty list restores the legacy single-credential
+            // view, which still resolves the historical `apikey_<id>` slot, so
+            // the user keeps a working provider even if this blob is corrupt.
+            credentials = row.credentialsJson?.let { blob ->
+                runCatching {
+                    jsonForBlobs.decodeFromString(
+                        ListSerializer(ProviderCredentialMeta.serializer()),
+                        blob,
+                    )
+                }.getOrElse { emptyList() }
+            }?.toMutableList() ?: mutableListOf(),
         )
     }.toMutableList()
 

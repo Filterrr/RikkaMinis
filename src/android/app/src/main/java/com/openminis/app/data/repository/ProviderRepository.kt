@@ -17,6 +17,7 @@ import com.openminis.app.data.model.ModelOverrides
 import com.openminis.app.data.model.ModelGroup
 import com.openminis.app.data.model.ProviderConfig
 import com.openminis.app.data.model.ProviderCredential
+import com.openminis.app.data.model.ProviderCredentialMeta
 import com.openminis.app.data.model.ProviderInstance
 import com.openminis.app.data.model.ProviderType
 import com.openminis.app.data.model.RoutingStrategy
@@ -93,6 +94,17 @@ class ProviderRepository(private val context: Context) {
          * antigravity instances; the real tokens live in AntigravityCredentialStore.
          */
         const val ANTIGRAVITY_OAUTH_MARKER = "antigravity:oauth"
+
+        /**
+         * [T-multi-api-key] Upper bound on the credential slots
+         * [deleteAllApiKeys] will probe when no metadata list is available
+         * (older build, or metadata already cleared). Slots are minted densely
+         * from 0 by the editor, so a higher gap cannot arise from normal use;
+         * the bound exists so a corrupted prefs store cannot make teardown
+         * loop indefinitely. Kept well above any plausible hand-managed key
+         * count while staying trivially cheap to scan.
+         */
+        private const val MAX_PROBE_INDEX = 64
 
         /**
          * Per-instance model-cache TTL. Matches iOS's daily calendar-day
@@ -1914,29 +1926,168 @@ class ProviderRepository(private val context: Context) {
     }
 
     // API Key management
+    //
+    // [T-multi-api-key] Storage layout. Credential i of instance X lives at:
+    //
+    //   i == 0  →  "apikey_<X>"        (the historical slot, unchanged)
+    //   i >  0  →  "apikey_<X>_<i>"
+    //
+    // Index 0 deliberately reuses the ORIGINAL key name. That single decision
+    // buys three things at once: (a) every existing install's key is already
+    // at index 0 with no migration write, (b) an older build downgraded onto
+    // this data reads the same slot and sees the user's primary key rather
+    // than nothing, and (c) the OAuth marker convention
+    // (ANTIGRAVITY_OAUTH_MARKER) keeps working untouched for index 0. Only
+    // the *additional* credentials need new names.
+    //
+    // The secrets stay in EncryptedSharedPreferences — never in ProviderConfig,
+    // never in the Room row, never in the JSON mirror. Only the metadata
+    // (label/note/identity, see ProviderCredentialMeta) rides the config
+    // document. saveApiKey/loadApiKey keep their index-0 semantics so the many
+    // existing single-key call sites (voice, model list, connection screen)
+    // need no change and cannot regress.
+
+    /** Encryption slot name for credential [index] of [instanceId]. */
+    private fun apiKeySlot(instanceId: String, index: Int): String =
+        if (index <= 0) "apikey_$instanceId" else "apikey_${instanceId}_$index"
+
+    /** Index-0 write. Unchanged behaviour — see the storage-layout note above. */
     fun saveApiKey(instanceId: String, key: String) {
-        encryptedPrefs.edit().putString("apikey_$instanceId", key).commit()
+        encryptedPrefs.edit().putString(apiKeySlot(instanceId, 0), key).commit()
     }
+
+    /** Write the credential at [index]. Used by the multi-key editor. */
+    fun saveApiKeyAt(instanceId: String, index: Int, key: String) {
+        encryptedPrefs.edit().putString(apiKeySlot(instanceId, index), key).commit()
+    }
+
+    /**
+     * [T-multi-api-key] All credentials of [instanceId], in the user's list
+     * order, as `(index, secret)` pairs with blank/missing secrets dropped.
+     *
+     * Degenerate case is deliberate and important: an instance with no
+     * credential METADATA (every pre-existing provider) yields exactly one
+     * entry — `(0, <the historical apikey_<id> value>)`. Callers therefore
+     * never branch on "single-key vs multi-key"; they always iterate this.
+     * With one entry, credential rotation finds no sibling and the composite
+     * route id collapses to the bare entry id, i.e. behaviour identical to
+     * before this feature existed.
+     *
+     * Missing-but-declared slots are SKIPPED rather than returned blank: a
+     * metadata row whose secret failed to write (or was removed) must not
+     * become a rotation target that burns a request on an empty Bearer token.
+     */
+    fun loadApiKeys(instanceId: String): List<Pair<Int, String>> {
+        val instance = instance(instanceId)
+        val count = instance?.credentialCount ?: 1
+        val expected = if (instance == null) 1 else instance.credentials.size.coerceAtLeast(1)
+        val out = ArrayList<Pair<Int, String>>(expected)
+        for (i in 0 until count) {
+            val key = loadApiKeyAt(instanceId, i)
+            if (!key.isNullOrBlank()) out.add(i to key)
+        }
+        return out
+    }
+
+    /**
+     * Read credential [index] verbatim (no blank-filtering, no fallback to
+     * another index — a caller addressing a specific slot must see that slot's
+     * real content, including null). OAuth marker resolution applies as for
+     * index 0: an Antigravity instance stores the marker in its slot.
+     */
+    fun loadApiKeyAt(instanceId: String, index: Int): String? {
+        val raw = encryptedPrefs.getString(apiKeySlot(instanceId, index), null)
+        if (raw == null) return null
+        if (raw == ANTIGRAVITY_OAUTH_MARKER) return resolveAntigravityToken(instanceId)
+        return raw
+    }
+
+    /**
+     * [T-multi-api-key] Replace the whole credential set of [instanceId]:
+     * writes every provided secret, then deletes the slots of credentials the
+     * user removed.
+     *
+     * Deletion is the part that must not be skipped. Rotation is keyed by
+     * index, so a stale secret left behind at a now-unused index would be
+     * silently *used* — the rotation would succeed against a key the user
+     * believed they deleted. The cleanup loop therefore walks [previousCount]
+     * (the pre-edit size) and removes every slot beyond the new set. A null
+     * entry means "keep whatever is at this index" (the editor submits null
+     * for a credential whose secret the user did not retype).
+     */
+    fun saveApiKeys(
+        instanceId: String,
+        keys: List<String?>,
+        previousCount: Int,
+    ) {
+        val edit = encryptedPrefs.edit()
+        keys.forEachIndexed { index, key ->
+            if (key != null) edit.putString(apiKeySlot(instanceId, index), key)
+        }
+        for (index in keys.size until previousCount.coerceAtLeast(1)) {
+            edit.remove(apiKeySlot(instanceId, index))
+        }
+        edit.commit()
+    }
+
+    /**
+     * Index-0 delete, plus the historical OAuth teardown. Kept name-compatible
+     * with existing callers (instance deletion, logout) which mean "drop this
+     * provider's credentials" — so it now drops ALL indices, not just 0.
+     * Leaving sibling secrets behind after a provider is deleted would strand
+     * encrypted material in prefs with no route to ever address or clear it.
+     */
+    fun deleteApiKey(instanceId: String) {
+        deleteAllApiKeys(instanceId)
+    }
+
+    /**
+     * [T-multi-api-key] Clear every credential slot of [instanceId] (0..n-1,
+     * using the metadata size when known, else the highest index that is
+     * actually populated). Also drops OAuth material — deleting the credential
+     * on an OAuth instance must log the account out.
+     */
+    fun deleteAllApiKeys(instanceId: String) {
+        val edit = encryptedPrefs.edit()
+        val declared = instance(instanceId)?.credentials?.size ?: 0
+        val count = declared.coerceAtLeast(highestPopulatedIndex(instanceId) + 1)
+        for (index in 0 until count) edit.remove(apiKeySlot(instanceId, index))
+        edit.commit()
+        // [T-antigravity-oauth] Drop OAuth material too — deleting the
+        // credential on an OAuth instance must log the account out.
+        AntigravityCredentialStore.clear(context, instanceId)
+    }
+
+    /**
+     * Highest index with a non-null slot, or -1. Used by [deleteAllApiKeys] so
+     * teardown still works when the metadata list was already cleared (or was
+     * never written by an older build).
+     */
+    private fun highestPopulatedIndex(instanceId: String): Int {
+        var highest = -1
+        // Probe a bounded window rather than iterate forever: the editor mints
+        // indices densely from 0, so a gap wider than this cannot arise from
+        // normal use — and stopping early is safe because a missed high slot
+        // would be caught by the metadata-driven count when metadata exists.
+        for (index in 0 until MAX_PROBE_INDEX) {
+            if (encryptedPrefs.contains(apiKeySlot(instanceId, index))) highest = index else break
+        }
+        return highest
+    }
+
 
     /** Scope for fire-and-forget token refreshes triggered from main-thread loads. */
     private val tokenRefreshScope = kotlinx.coroutines.CoroutineScope(
         kotlinx.coroutines.Dispatchers.IO + kotlinx.coroutines.SupervisorJob(),
     )
 
-    fun loadApiKey(instanceId: String): String? {
-        val raw = encryptedPrefs.getString("apikey_$instanceId", null)
-        // [T-antigravity-oauth] Antigravity instances store only a MARKER in
-        // apikey_<id> ("antigravity:oauth"); the live access token + refresh
-        // token live in AntigravityCredentialStore (encrypted, upstream
-        // metadata-parity). loadApiKey therefore resolves to a VALID access
-        // token: on background threads the refresh runs inline (single-flighted
-        // by the store's Mutex); on main we return the possibly-stale token
-        // and kick an async refresh so the next call picks the fresh one up.
-        if (raw == ANTIGRAVITY_OAUTH_MARKER) {
-            return resolveAntigravityToken(instanceId)
-        }
-        return raw
-    }
+    /**
+     * [T-multi-api-key] Index-0 read — the historical accessor, kept so the
+     * many single-key call sites (model list, voice, connection screen) need no
+     * change. Resolves the Antigravity OAuth marker into a valid access token;
+     * [loadApiKeyAt] does the same for any other index.
+     */
+    fun loadApiKey(instanceId: String): String? = loadApiKeyAt(instanceId, 0)
 
     private fun resolveAntigravityToken(instanceId: String): String? {
         val onMain = android.os.Looper.myLooper() == android.os.Looper.getMainLooper()
@@ -1959,13 +2110,6 @@ class ProviderRepository(private val context: Context) {
                 AntigravityCredentialStore.validAccessToken(context, instanceId)
             }
         }
-    }
-
-    fun deleteApiKey(instanceId: String) {
-        encryptedPrefs.edit().remove("apikey_$instanceId").commit()
-        // [T-antigravity-oauth] Drop OAuth material too — deleting the
-        // credential on an OAuth instance must log the account out.
-        AntigravityCredentialStore.clear(context, instanceId)
     }
 
     // -- Import / Export --
@@ -2074,9 +2218,39 @@ class ProviderRepository(private val context: Context) {
                 })
             }
             put("models", modelsArr)
-            loadApiKey(instanceId)?.let { key ->
+            // [T-multi-api-key] Credentials, plural.
+            //
+            // Index 0 keeps writing the historical singular `apiKey` key —
+            // that is what makes the format backward/forward compatible: an
+            // older build restoring this backup reads `apiKey` and gets the
+            // user's primary credential (rather than nothing), and an older
+            // build EXPORTING has its `apiKey` upgraded into credential #0 on
+            // import. Only credentials 1..n need the new array.
+            //
+            // The array carries the SECRET of each credential positionally.
+            // That is consistent with the singular field it extends: this
+            // serializer already emits plaintext-but-base64 secrets, and the
+            // `includeSecrets=false` gate strips them all together
+            // (SECRET_PROVIDER_KEYS). Metadata (label/note/identity) rides the
+            // separate `credentials` array below so a secrets-stripped backup
+            // still restores the user's key names and ordering.
+            val keys = loadApiKeys(instanceId)
+            keys.firstOrNull { it.first == 0 }?.let { (_, key) ->
                 put("apiKey", Base64.encodeToString(key.toByteArray(), Base64.NO_WRAP))
             }
+            if (keys.size > 1) {
+                val keysArr = JSONArray()
+                for ((_, key) in keys) {
+                    keysArr.put(Base64.encodeToString(key.toByteArray(), Base64.NO_WRAP))
+                }
+                put("apiKeys", keysArr)
+            }
+            // Credential metadata — labels/notes/order, no secrets. Emitted
+            // even when secrets are stripped so a sync snapshot still carries
+            // the user's naming. Additive + optional; older readers ignore it.
+            // Delegated to the pure [writeCredentialMeta] seam so the
+            // round-trip is JVM-testable (same pattern as writeRunConfigFields).
+            writeCredentialMeta(this, instance.credentials)
             instance.customBaseURL?.let { put("customBaseURL", it) }
             // [T-fix-backup-field-evap] Preserve the instance creation time
             // across backup/restore. Previously importInstanceJSON always
@@ -2203,17 +2377,40 @@ class ProviderRepository(private val context: Context) {
      * a manual full restore — see ConfigBackup.import's isSyncMerge gating).
      */
     private fun importInstanceCredentials(dict: JSONObject, instance: ProviderInstance) {
-        // Decode API key (base64 or plain text)
-        val keyValue = dict.optString("apiKey", "").ifEmpty { null }
-        if (keyValue != null) {
-            val apiKey = try {
-                String(Base64.decode(keyValue, Base64.NO_WRAP))
-            } catch (_: Exception) {
-                keyValue // plain text fallback
+        // [T-multi-api-key] Preferred path: the plural `apiKeys` array carries
+        // every credential positionally. Each lands in its own slot.
+        val keysArr = dict.optJSONArray("apiKeys")
+        val decoded = ArrayList<String?>(keysArr?.length() ?: 0)
+        if (keysArr != null) {
+            for (i in 0 until keysArr.length()) {
+                decoded.add(decodeExportedSecret(keysArr.optString(i, "")))
             }
-            saveApiKey(instance.id, apiKey)
+        }
+        // Fallback / upgrade: a legacy backup (or an older build's export) has
+        // only the singular `apiKey`. Seed it as credential #0 — the exact slot
+        // the pre-multi-key builds used, so the secret lands where an older
+        // build would look for it.
+        if (decoded.isEmpty()) {
+            dict.optString("apiKey", "").ifEmpty { null }?.let {
+                decoded.add(decodeExportedSecret(it))
+            }
+        }
+        val nonBlank = decoded.filterNotNull().filter { it.isNotBlank() }
+        if (nonBlank.isNotEmpty()) {
+            saveApiKeys(instance.id, decoded, previousCount = nonBlank.size)
         }
 
+        // Metadata via the pure seam (handles the legacy upgrade rule).
+        val metas = readCredentialMeta(dict)
+        if (metas.isNotEmpty()) {
+            // Re-read the instance: importInstanceJSON adds it BEFORE calling
+            // here, and the merge path passes an already-persisted instance, so
+            // a live lookup is the one source of truth for the current state.
+            instance(instance.id)?.let { current ->
+                current.credentials = metas.toMutableList()
+                updateInstance(current)
+            }
+        }
     }
 
     /**
@@ -2547,4 +2744,112 @@ internal fun readRunConfigFields(dict: org.json.JSONObject): RunConfigSnapshot {
         imageEndpointResolved = imageEndpointResolved,
         pinned = dict.optBoolean(RCF_PINNED, false),
     )
+}
+
+// ── [T-multi-api-key] credential metadata seam ───────────────────────────────
+//
+// Same shape as the run-config seam above: the export/import bodies live here
+// as pure functions so the multi-key round-trip is JVM-testable without an
+// Android Context (ProviderRepository needs one, EncryptedPrefs even more so).
+// Secrets are NOT part of this seam — they are written by the repository's
+// encrypted-slot path, and the tests for those slots live alongside the
+// rotation tests in the routing package. What THIS seam guarantees is that the
+// user-visible part of a credential (name, note, enabled, identity) survives a
+// backup / sync-document round-trip, and that a legacy single-key payload
+// upgrades into a well-formed one-credential list instead of vanishing.
+
+/** Envelope key carrying the credential metadata array. */
+private const val CF_CREDENTIALS = "credentials"
+
+/**
+ * Serialize [metas] onto [obj] as the `credentials` array. Always emits the
+ * field when non-empty — including on a secrets-stripped export, because a
+ * label is not a secret and the user's naming should survive a sync.
+ */
+internal fun writeCredentialMeta(
+    obj: org.json.JSONObject,
+    metas: List<ProviderCredentialMeta>,
+) {
+    if (metas.isEmpty()) return
+    val arr = org.json.JSONArray()
+    for (meta in metas) {
+        arr.put(org.json.JSONObject().apply {
+            put("id", meta.id)
+            put("label", meta.label)
+            put("note", meta.note)
+            put("isEnabled", meta.isEnabled)
+            put("createdAt", meta.createdAt)
+            if (meta.migrated) put("migrated", true)
+        })
+    }
+    obj.put(CF_CREDENTIALS, arr)
+}
+
+/**
+ * Parse the `credentials` array from [dict].
+ *
+ * Two degradation rules, both deliberate:
+ *
+ *  - **Absent array + a present singular `apiKey`** → synthesize ONE
+ *    credential marked `migrated`. This is the legacy-upgrade path: an older
+ *    build's export (or a hand-written payload) has a working key but no
+ *    metadata, and leaving `credentials` empty would put the instance in the
+ *    ambiguous "never configured" state while it actually holds a secret.
+ *  - **Absent array + no key** → empty list, i.e. "leave the instance as it
+ *    is". Returning metadata here would invent a credential the export never
+ *    described.
+ *
+ * A malformed entry is skipped rather than throwing: one bad row must not
+ * abort the whole provider import (same tolerance as the image-endpoint enum
+ * parse above).
+ */
+internal fun readCredentialMeta(dict: org.json.JSONObject): List<ProviderCredentialMeta> {
+    val arr = dict.optJSONArray(CF_CREDENTIALS)
+    if (arr == null || arr.length() == 0) {
+        val hasKey = dict.optString("apiKey", "").isNotEmpty() ||
+            (dict.optJSONArray("apiKeys")?.length() ?: 0) > 0
+        return if (hasKey) {
+            listOf(ProviderCredentialMeta(label = "", migrated = true))
+        } else {
+            emptyList()
+        }
+    }
+    val out = ArrayList<ProviderCredentialMeta>(arr.length())
+    for (i in 0 until arr.length()) {
+        val o = arr.optJSONObject(i) ?: continue
+        out.add(
+            ProviderCredentialMeta(
+                id = o.optString("id", "").ifEmpty { java.util.UUID.randomUUID().toString() },
+                label = o.optString("label", ""),
+                note = o.optString("note", ""),
+                isEnabled = o.optBoolean("isEnabled", true),
+                createdAt = o.optLong("createdAt", System.currentTimeMillis()),
+                migrated = o.optBoolean("migrated", false),
+            ),
+        )
+    }
+    return out
+}
+
+/**
+ * Decode one exported secret: base64 when valid, else the raw string.
+ * Mirrors the singular path's historical tolerance — hand-written and
+ * third-party payloads carry plaintext.
+ *
+ * Defensive against a null decode: `android.util.Base64.decode` is documented
+ * to throw, but a platform stub (JVM unit tests run with
+ * `unitTests.isReturnDefaultValues = true`) returns null instead of throwing,
+ * and `String(null)` would NPE. Treating a null decode as "not base64" keeps
+ * the plaintext fallback working in every environment.
+ */
+internal fun decodeExportedSecret(raw: String): String? {
+    if (raw.isEmpty()) return null
+    return try {
+        android.util.Base64.decode(raw, android.util.Base64.NO_WRAP)
+            ?.let { String(it) }
+            ?.ifEmpty { null }
+            ?: raw
+    } catch (_: Exception) {
+        raw
+    }
 }

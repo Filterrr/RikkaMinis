@@ -7166,6 +7166,7 @@ class ChatViewModel(
         imageParts: List<LLMMessage.ImagePart>,
         tools: List<AgentToolDefinition>,
         thinkingLevel: ThinkingLevel,
+        credentialIndex: Int = 0,
     ): Flow<LLMStreamChunk> {
         val instance = provider.instanceContext
             ?: throw ModelStreamErrorException(
@@ -7212,6 +7213,7 @@ class ChatViewModel(
             tools = tools,
             thinkingLevel = thinkingLevel,
             firstChunkBudgetMs = adaptiveBudgetMs,
+            credentialIndex = credentialIndex,
         )
             .onEach {
                 // [feat-provider-health] First chunk of any kind stops the
@@ -7395,6 +7397,26 @@ class ChatViewModel(
         var currentProvider = provider
         val remainingFallbacks = fallbackProviders.toMutableList()
         val fallbackReasons = mutableListOf<String>()
+
+        // [T-multi-api-key] Credential rotation state for the CURRENT member.
+        //
+        // Escalation ladder, cheapest rung first:
+        //   1. auto-retry on the SAME provider (existing, unchanged);
+        //   2. rotate to the next CREDENTIAL of the same instance — same
+        //      endpoint, same model, only the Authorization header changes;
+        //   3. group fallback — re-resolve a different member entirely.
+        //
+        // Rung 2 exists because rung 3 is expensive and user-visible: it
+        // rebuilds a provider, may switch the model capsule, and gives up on
+        // an instance that is fine except for one spent key. With N keys on
+        // an instance, N-1 exhaustion events should cost nothing more than a
+        // silent retry.
+        //
+        // `credentialIndex` is the index actually in use; `credentialAttempts`
+        // bounds the rotation so a fully-spent instance cannot spin through
+        // its keys forever on one turn.
+        var credentialIndex = 0
+        var credentialAttempts = 0
 
         // Accumulate tool inputs across all turns (so persist includes all, not just current turn)
         val allToolInputs = mutableMapOf<String, String>()
@@ -7673,6 +7695,7 @@ class ChatViewModel(
                         imageParts = emptyList(),
                         tools = agentTools,
                         thinkingLevel = if (currentModelSupportsReasoning) _thinkingLevel.value else ThinkingLevel.OFF,
+                        credentialIndex = credentialIndex,
                     ).collect { chunk ->
                 when (chunk) {
                     is LLMStreamChunk.ThinkingDelta -> {
@@ -8195,6 +8218,98 @@ class ChatViewModel(
                     // makes the intent explicit and avoids a one-frame
                     // flash of the stale banner.
                     withContext(Dispatchers.Main) { clearInlineError() }
+
+                    // ── [T-multi-api-key] Escalation rung 2: rotate credential ────
+                    // Before giving up on this MEMBER, try its next CREDENTIAL.
+                    // Only credential-scoped failures qualify: a spent key, a
+                    // rate-limited key, or a rejected key are all properties of
+                    // the Authorization header, so swapping it is a complete
+                    // remedy for the same endpoint+model. Server errors (5xx)
+                    // and network faults are explicitly NOT eligible — the
+                    // credential is not implicated, so rotating would only
+                    // multiply identical failures across every key.
+                    val failedEntryForRotation = _activeEntryId.value
+                    val rotationInstance = failedEntryForRotation?.let { id ->
+                        providerRepository.config.value.modelEntries
+                            .find { it.id == id }
+                            ?.let { providerRepository.instance(it.providerInstanceId) }
+                    }
+                    val credentialScopedFailure =
+                        actual is com.openminis.app.data.model.LLMError.QuotaExhausted ||
+                            actual is com.openminis.app.data.model.LLMError.RateLimited ||
+                            actual is com.openminis.app.data.model.LLMError.InvalidApiKey
+                    val credentialCount = rotationInstance?.credentialCount ?: 1
+                    // Park ONLY this credential so its siblings stay eligible;
+                    // recording on the bare entry id would demote the whole
+                    // instance and make rotation pointless.
+                    if (credentialScopedFailure && failedEntryForRotation != null && credentialCount > 1) {
+                        val outcome = when (actual) {
+                            is com.openminis.app.data.model.LLMError.QuotaExhausted ->
+                                com.openminis.app.data.routing.RouteOutcome.QuotaExhausted
+                            is com.openminis.app.data.model.LLMError.RateLimited ->
+                                com.openminis.app.data.routing.RouteOutcome.RateLimited(
+                                    retryAfterMs = actual.retryAfterMs,
+                                )
+                            else -> com.openminis.app.data.routing.RouteOutcome.AuthError
+                        }
+                        groupRouter.recordResult(
+                            groupRouter.routeId(failedEntryForRotation, credentialIndex),
+                            outcome,
+                        )
+                    }
+                    // Bound the rotation so a fully-spent instance cannot spin
+                    // through its keys indefinitely within one turn. The cap is
+                    // the number of credentials (each gets at most one shot per
+                    // turn) — after that we escalate rather than loop.
+                    val nextCredential = if (
+                        credentialScopedFailure &&
+                        failedEntryForRotation != null &&
+                        credentialAttempts + 1 < credentialCount
+                    ) {
+                        groupRouter.rotateCredential(
+                            entryId = failedEntryForRotation,
+                            fromIndex = credentialIndex,
+                            keyCount = credentialCount,
+                        )
+                    } else null
+                    if (nextCredential != null) {
+                        credentialIndex = nextCredential
+                        credentialAttempts++
+                        // Same provider object, same model — only the worker's
+                        // prefs slot changes. Nothing user-visible needs to
+                        // update: the model capsule, active entry and provider
+                        // label all still describe the same instance.
+                        AppLogger.info(
+                            TAG_STREAM,
+                            "[T-multi-api-key] credential rotation ${credentialAttempts}/$credentialCount on ${currentProvider.model.displayName}" +
+                                " (index=$credentialIndex, reason=${actual.javaClass.simpleName})",
+                        )
+                        // Roll back this attempt's partial blocks exactly as the
+                        // retry path does — a failed stream may have emitted
+                        // PENDING tool blocks that must not survive into the
+                        // next attempt (RC3 / F-T01-01).
+                        val hadPartial = rollbackTurnBlocksTo(allToolBlocks, turnStartBlockIndex)
+                        if (hadPartial) {
+                            withContext(Dispatchers.Main) {
+                                updateAssistantMessage(assistantId, accumulatedText + turnTextSb.toString(), true, allToolBlocks)
+                            }
+                        }
+                        turnTextSb.setLength(0)
+                        currentTextBlockSb = null
+                        turnTextBlockIdx = -1
+                        turnThinking.clear()
+                        toolCalls.clear()
+                        // A different credential is a genuinely different
+                        // provider attempt — refill the auto-retry budget so
+                        // the fresh key gets the same transient tolerance the
+                        // first key had (a dead wifi still must not burn all
+                        // keys' budgets at once, which is why the budget is
+                        // per-credential rather than per-turn).
+                        retryAttempt = 0
+                        continue
+                    }
+                    // ─────────────────────────────────────────────────────────────
+
                     // Fallback classification mirrors iOS and the model layer's
                     // LLMError.isFallbackable contract: anything that says "this
                     // member can't help" falls back to the next member of the
@@ -8253,6 +8368,16 @@ class ChatViewModel(
                         currentProvider = next.provider
                         // Also update class-level provider so the next sendMessage() starts from here
                         this@ChatViewModel.currentProvider = next.provider
+                        // [T-multi-api-key] A NEW member owns a NEW credential
+                        // set: reset the rotation cursor and its per-credential
+                        // attempt budget. Carrying index/attempts across the
+                        // switch would address a slot on an instance that has
+                        // nothing to do with the failed one — e.g. left at 2
+                        // after key #2 of A died, the first request to B would
+                        // read B's third slot, or (for a single-key B) a slot
+                        // that does not exist and surface as missing_api_key.
+                        credentialIndex = 0
+                        credentialAttempts = 0
                         // Update top bar model info + active entry. (For a same-
                         // model endpoint recovery these are no-ops on the visible
                         // model name, but still keep activeEntryId / provider name
@@ -8281,25 +8406,44 @@ class ChatViewModel(
                         // fallback skip it until it recovers. Outcome taxonomy:
                         // 429 → Cooling (Retry-After when available), 5xx →
                         // circuit-breaker counter, 401/403 → Dead (until
-                        // re-auth). Network/transient errors deliberately do NOT
-                        // demote — a wifi blip is the user's side, not this
-                        // member's fault, and churning the whole group over it
-                        // would manufacture instability.
+                        // re-auth), quota-exhausted → Exhausted (terminal for
+                        // THIS credential — see below). Network/transient errors
+                        // deliberately do NOT demote — a wifi blip is the user's
+                        // side, not this member's fault, and churning the whole
+                        // group over it would manufacture instability.
+                        //
+                        // [T-multi-api-key] KEYED BY COMPOSITE ROUTE ID. The
+                        // demotion must land on the exact credential that failed,
+                        // not on the member. Use the transition that already
+                        // happened if any: the rotation block above the fallback
+                        // path parked the failed credential via
+                        // routeId(failed, credentialIndex) whenever the instance
+                        // had siblings to try. Here we only record against the
+                        // bare entry when the failure was NOT credential-scoped
+                        // (5xx / auth on a single-key instance), because in those
+                        // cases the member itself — not one of its keys — is the
+                        // thing that cannot serve.
                         failedEntryId?.let { failed ->
+                            val failedRoute = groupRouter.routeId(failed, credentialIndex)
                             when {
                                 isRateLimit -> groupRouter.recordResult(
-                                    failed,
+                                    failedRoute,
                                     com.openminis.app.data.routing.RouteOutcome.RateLimited(
                                         retryAfterMs = (actual as? com.openminis.app.data.model.LLMError.RateLimited)?.retryAfterMs,
                                     ),
                                 )
+                                actual is com.openminis.app.data.model.LLMError.QuotaExhausted ->
+                                    groupRouter.recordResult(
+                                        failedRoute,
+                                        com.openminis.app.data.routing.RouteOutcome.QuotaExhausted,
+                                    )
                                 actual is com.openminis.app.data.model.LLMError.InvalidApiKey ->
                                     groupRouter.recordResult(
-                                        failed,
+                                        failedRoute,
                                         com.openminis.app.data.routing.RouteOutcome.AuthError,
                                     )
                                 is5xx -> groupRouter.recordResult(
-                                    failed,
+                                    failedRoute,
                                     com.openminis.app.data.routing.RouteOutcome.ServerError,
                                 )
                             }
@@ -8408,9 +8552,17 @@ class ChatViewModel(
             // member that served it is healthy. Clears any prior cooldown /
             // circuit state (also closes a half-open circuit: a successful
             // probe restores the member).
+            //
+            // [T-multi-api-key] Recorded against the composite route id — the
+            // exact credential that served this turn. Clearing the bare entry
+            // id would leave a key that just recovered sitting in its demoted
+            // state (e.g. still Cooling after a successful probe), and clearing
+            // EVERY sibling would erase the terminal Exhausted facts that the
+            // user still needs to see. One key recovering says nothing about
+            // its neighbours.
             _activeEntryId.value?.let { entryId ->
                 groupRouter.recordResult(
-                    entryId,
+                    groupRouter.routeId(entryId, credentialIndex),
                     com.openminis.app.data.routing.RouteOutcome.Success,
                 )
             }

@@ -1483,4 +1483,16 @@
     <string name="fault_layer_service">Сервис (эндпоинт отвечает, но с ошибкой — проблема реле/провайдера)</string>
     <string name="fault_layer_credentials">Учётные данные (ключ недействителен или квота исчерпана)</string>
     <string name="fault_layer_unclear">Неясно (нет совпадающих признаков)</string>
+
+    <!-- [T-multi-api-key] Редактор нескольких ключей. -->
+    <string name="provider_credential_multi_title">Ключи API</string>
+    <string name="provider_credential_multi_summary">Настроено: %1$d. Когда у одного ключа заканчивается квота или срабатывает лимит, запрос переходит к следующему ключу.</string>
+    <string name="provider_credential_manage">Управление</string>
+    <string name="provider_credential_add">Добавить ключ</string>
+    <string name="provider_credential_delete">Удалить ключ</string>
+    <string name="provider_credential_edit">Изменить</string>
+    <string name="provider_credential_empty">Ключ не сохранён</string>
+    <string name="provider_credential_label_placeholder">Название (необязательно)</string>
+    <string name="provider_credential_note_placeholder">Заметка (необязательно)</string>
+    <string name="provider_credential_replace_placeholder">Вставьте новый ключ для замены</string>
 </resources>

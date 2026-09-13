@@ -1637,4 +1637,16 @@
     <string name="fault_layer_service">服務（端點存活但出錯——中繼/服務商問題）</string>
     <string name="fault_layer_credentials">憑證（金鑰無效或額度耗盡）</string>
     <string name="fault_layer_unclear">無法判定（無符合特徵）</string>
+
+    <!-- [T-multi-api-key] 多憑證編輯器。 -->
+    <string name="provider_credential_multi_title">API Key</string>
+    <string name="provider_credential_multi_summary">已設定 %1$d 個。某個 Key 額度用盡或遭限流時,請求會自動輪替到下一個 Key。</string>
+    <string name="provider_credential_manage">管理</string>
+    <string name="provider_credential_add">新增 Key</string>
+    <string name="provider_credential_delete">刪除 Key</string>
+    <string name="provider_credential_edit">編輯</string>
+    <string name="provider_credential_empty">尚未儲存 Key</string>
+    <string name="provider_credential_label_placeholder">名稱(選填)</string>
+    <string name="provider_credential_note_placeholder">備註(選填)</string>
+    <string name="provider_credential_replace_placeholder">貼上新 Key 以取代</string>
 </resources>
