@@ -95,7 +95,6 @@ class NetworkMonitor {
                 // OkHttp's own default order, restored verbatim.
                 listOf(okhttp3.Protocol.HTTP_2, okhttp3.Protocol.HTTP_1_1)
             }
-     )
 
         /**
          * [OPT-restore-doh] Shared DoH Dns for every LLM client, or null when
