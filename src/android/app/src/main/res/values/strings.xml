@@ -917,10 +917,6 @@
     <string name="todo_sheet_empty">No tasks yet. The assistant maintains this list for multi-step work.</string>
     <string name="settings_network_doh_header">DNS over HTTPS</string>
     <string name="settings_network_doh_footer">Resolves API hostnames over encrypted DNS — reduces first-byte latency variance on direct connections. Localhost names always bypass it.</string>
-    <string name="settings_network_llm_proto_header">LLM transport protocol</string>
-    <string name="settings_network_llm_proto_footer">On by default: LLM requests offer HTTP/1.1 only, which survives local VPN/proxy tunnels (clash, v2ray) that silently wedge HTTP/2 connections. Turn off to restore HTTP/2 (ALPN h2) — applied when the provider client is rebuilt, e.g. after switching session or model.</string>
-    <string name="settings_network_llm_proto_toggle">Force HTTP/1.1 for LLM requests</string>
-    <string name="settings_network_llm_proto_toggle_subtitle">Disable to allow HTTP/2 (h2) again</string>
     <string name="settings_network_doh_toggle">Enable DoH</string>
     <string name="settings_network_doh_toggle_subtitle">Applies to all LLM clients on their next lookup</string>
     <string name="settings_network_doh_url">DoH server URL</string>
