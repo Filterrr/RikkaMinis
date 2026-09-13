@@ -66,25 +66,26 @@ sealed class LLMError(message: String, cause: Throwable? = null) : Exception(mes
     val isFallbackable: Boolean get() = this is RateLimited || this is InvalidApiKey || this is ProviderError || this is QuotaExhausted || this is NetworkError || this is TransientError
 
     /**
-     * [T-multi-api-key] True when re-issuing the SAME request with a DIFFERENT
-     * credential on the same instance could plausibly succeed.
+     * [T-multi-api-key] Which failures actually implicate the CREDENTIAL (as
+     * opposed to the endpoint, the network, or the model).
      *
-     * This is the axis that separates "spend another key" from "move on"
-     * (mirrors iOS `CredentialRotation.isRotatable`). Deliberately NOT the
-     * same predicate as [isFallbackable]:
+     * [T-rotate-on-any-error] This is NO LONGER the gate on credential
+     * rotation: by explicit product decision the retry loop now rotates on any
+     * failure, so a problem attributed to the wrong layer still gets the cheap
+     * retry before it costs a model switch. The predicate survives as the
+     * single statement of the taxonomy, and the loop still consults the same
+     * distinction for the two decisions where it genuinely matters:
      *
-     *  - `true`  → RateLimited / InvalidApiKey / QuotaExhausted. All three are
-     *    per-credential conditions; a sibling key on the same endpoint is the
-     *    cheapest possible recovery (no re-resolution, no model switch, no
-     *    visible UI change).
-     *  - `false` → ProviderError / TransientError / NetworkError. A 5xx or a
-     *    dropped socket is the *server's* or the *network's* fault; rotating
-     *    keys multiplies load against a service that is already unwell and
-     *    cannot succeed. Group-level fallback (a genuinely different endpoint)
-     *    remains the right response.
+     *  1. **Park the key?** Only a credential-scoped failure demotes the slot.
+     *     A 5xx says nothing about this key, so marking it demoted would shrink
+     *     the rotation pool for a fault the credential had no part in.
+     *  2. **Refill the auto-retry budget?** Only a credential-scoped failure
+     *     earns the next key a fresh 1s/2s/4s ladder. Granting that on a
+     *     network/5xx failure would turn one dead wifi into 3×N requests
+     *     (N = key count) before the user saw any error.
      *
-     * Key rotation is always attempted before group fallback, and only when
-     * the instance actually carries more than one credential.
+     *  - `true`  → RateLimited / InvalidApiKey / QuotaExhausted.
+     *  - `false` → ProviderError / TransientError / NetworkError.
      */
     val isKeyRotationEligible: Boolean
         get() = this is RateLimited || this is InvalidApiKey || this is QuotaExhausted

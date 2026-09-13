@@ -8220,14 +8220,34 @@ class ChatViewModel(
                     withContext(Dispatchers.Main) { clearInlineError() }
 
                     // ── [T-multi-api-key] Escalation rung 2: rotate credential ────
-                    // Before giving up on this MEMBER, try its next CREDENTIAL.
-                    // Only credential-scoped failures qualify: a spent key, a
-                    // rate-limited key, or a rejected key are all properties of
-                    // the Authorization header, so swapping it is a complete
-                    // remedy for the same endpoint+model. Server errors (5xx)
-                    // and network faults are explicitly NOT eligible — the
-                    // credential is not implicated, so rotating would only
-                    // multiply identical failures across every key.
+                    // Route the retry through the next CREDENTIAL of this
+                    // instance before giving up on the MEMBER.
+                    //
+                    // [T-multi-api-key-rotate-on-any-error] This fires on ANY
+                    // failure, not just credential-scoped ones (per explicit
+                    // product decision). The user's reasoning is sound: a
+                    // problem attributed to the wrong layer should still get
+                    // the cheap retry before it costs a model switch, and from
+                    // the user's seat "try my other key" is a reasonable next
+                    // step regardless of which layer actually broke.
+                    //
+                    // The consequence, stated plainly: for a failure the key
+                    // CANNOT fix (5xx, a dropped socket, a dead network) every
+                    // key fails identically, so one turn can burn
+                    // `credentialCount` attempts where it previously burned
+                    // one. That is bounded and self-limiting — the rotation cap
+                    // below allows each key at most one shot per turn, after
+                    // which the member escalates normally — so the worst case
+                    // is a handful of extra requests on an already-failing
+                    // turn, not a loop.
+                    //
+                    // What is deliberately NOT equal across error kinds is the
+                    // auto-retry BUDGET (see the `retryAttempt` reset below):
+                    // handing every key a fresh backoff ladder would turn one
+                    // dead network into a 3×N request storm. Only
+                    // credential-scoped failures refill it, because only they
+                    // give a reason to believe the next key deserves its own
+                    // tolerance.
                     val failedEntryForRotation = _activeEntryId.value
                     val rotationInstance = failedEntryForRotation?.let { id ->
                         providerRepository.config.value.modelEntries
@@ -8239,9 +8259,13 @@ class ChatViewModel(
                             actual is com.openminis.app.data.model.LLMError.RateLimited ||
                             actual is com.openminis.app.data.model.LLMError.InvalidApiKey
                     val credentialCount = rotationInstance?.credentialCount ?: 1
-                    // Park ONLY this credential so its siblings stay eligible;
-                    // recording on the bare entry id would demote the whole
-                    // instance and make rotation pointless.
+                    // Park the credential that failed. ONLY for credential-
+                    // scoped failures: a 5xx says nothing about this key, so
+                    // marking it demoted would needlessly shrink the rotation
+                    // pool for a fault the credential had no part in. Either
+                    // way the failure is also recorded on the member below by
+                    // the existing fallback path, so a genuine endpoint-wide
+                    // fault still opens the circuit breaker.
                     if (credentialScopedFailure && failedEntryForRotation != null && credentialCount > 1) {
                         val outcome = when (actual) {
                             is com.openminis.app.data.model.LLMError.QuotaExhausted ->
@@ -8257,12 +8281,16 @@ class ChatViewModel(
                             outcome,
                         )
                     }
-                    // Bound the rotation so a fully-spent instance cannot spin
-                    // through its keys indefinitely within one turn. The cap is
-                    // the number of credentials (each gets at most one shot per
-                    // turn) — after that we escalate rather than loop.
+                    // Bound the rotation: each credential gets at most one shot
+                    // per turn, so a fully-failing instance cannot spin. After
+                    // the cap the turn escalates (next member, or a terminal
+                    // error) instead of looping.
+                    //
+                    // Rotation also requires the instance to have siblings to
+                    // try — `rotateCredential` returns null for a single-key
+                    // instance, which is what keeps single-key behaviour
+                    // identical to before this feature existed.
                     val nextCredential = if (
-                        credentialScopedFailure &&
                         failedEntryForRotation != null &&
                         credentialAttempts + 1 < credentialCount
                     ) {
@@ -8273,6 +8301,7 @@ class ChatViewModel(
                         )
                     } else null
                     if (nextCredential != null) {
+                        val previousCredential = credentialIndex
                         credentialIndex = nextCredential
                         credentialAttempts++
                         // Same provider object, same model — only the worker's
@@ -8282,8 +8311,25 @@ class ChatViewModel(
                         AppLogger.info(
                             TAG_STREAM,
                             "[T-multi-api-key] credential rotation ${credentialAttempts}/$credentialCount on ${currentProvider.model.displayName}" +
-                                " (index=$credentialIndex, reason=${actual.javaClass.simpleName})",
+                                " (index=$previousCredential → $credentialIndex, reason=${actual.javaClass.simpleName})",
                         )
+                        // [T-rotate-on-any-error-misattribution] When a
+                        // NON-credential failure rotates, the previous key's
+                        // last health verdict is a false negative: it was
+                        // parked/punished for a fault that was never its own.
+                        // Clear it so the key is not carried into the next turn
+                        // as damaged goods. Only for the non-credential case —
+                        // a 5xx does not demote (see above), and clearing a
+                        // genuinely credential-demoted key here would undo the
+                        // exactly-correct verdict the rotation just recorded.
+                        if (!credentialScopedFailure) {
+                            // `failedEntryForRotation` is non-null here: the
+                            // rotation branch is only reachable when it was.
+                            groupRouter.recordResult(
+                                groupRouter.routeId(failedEntryForRotation!!, previousCredential),
+                                com.openminis.app.data.routing.RouteOutcome.Success,
+                            )
+                        }
                         // Roll back this attempt's partial blocks exactly as the
                         // retry path does — a failed stream may have emitted
                         // PENDING tool blocks that must not survive into the
@@ -8299,13 +8345,15 @@ class ChatViewModel(
                         turnTextBlockIdx = -1
                         turnThinking.clear()
                         toolCalls.clear()
-                        // A different credential is a genuinely different
-                        // provider attempt — refill the auto-retry budget so
-                        // the fresh key gets the same transient tolerance the
-                        // first key had (a dead wifi still must not burn all
-                        // keys' budgets at once, which is why the budget is
-                        // per-credential rather than per-turn).
-                        retryAttempt = 0
+                        // Refill the auto-retry budget ONLY when the failure was
+                        // credential-scoped. A different key is then a genuinely
+                        // different attempt that deserves the transient
+                        // tolerance the first key had. For a network/5xx
+                        // failure the budget stays spent, so each key costs one
+                        // request instead of one full 1s/2s/4s backoff ladder —
+                        // otherwise a single dead wifi would fire 3×N requests
+                        // before the user saw any error at all.
+                        if (credentialScopedFailure) retryAttempt = 0
                         continue
                     }
                     // ─────────────────────────────────────────────────────────────
@@ -8412,19 +8460,37 @@ class ChatViewModel(
                         // side, not this member's fault, and churning the whole
                         // group over it would manufacture instability.
                         //
-                        // [T-multi-api-key] KEYED BY COMPOSITE ROUTE ID. The
-                        // demotion must land on the exact credential that failed,
-                        // not on the member. Use the transition that already
-                        // happened if any: the rotation block above the fallback
-                        // path parked the failed credential via
-                        // routeId(failed, credentialIndex) whenever the instance
-                        // had siblings to try. Here we only record against the
-                        // bare entry when the failure was NOT credential-scoped
-                        // (5xx / auth on a single-key instance), because in those
-                        // cases the member itself — not one of its keys — is the
-                        // thing that cannot serve.
+                        // [T-multi-api-key] KEYED BY COMPOSITE ROUTE ID for
+                        // credential-scoped failures, and by the BARE entry id
+                        // for endpoint-wide ones — see the block below for why
+                        // the distinction is load-bearing (it keeps the circuit
+                        // breaker keyed by the thing that actually broke).
                         failedEntryId?.let { failed ->
-                            val failedRoute = groupRouter.routeId(failed, credentialIndex)
+                            // [T-rotate-on-any-error] Which key to blame depends
+                            // on whether the credential was implicated:
+                            //
+                            //  - credential-scoped (429 / 401 / quota) → the
+                            //    exact key, so siblings stay eligible and only
+                            //    this key is parked. (The rotation block above
+                            //    already recorded this; re-recording the same
+                            //    verdict here is idempotent and keeps this block
+                            //    the single readable statement of the taxonomy.)
+                            //  - 5xx → the BARE entry id, NOT the key. A server
+                            //    fault is endpoint-wide, so keying it per
+                            //    credential would mean a 3-key instance needs 9
+                            //    failures to open a 3-failure circuit — i.e. the
+                            //    breaker would effectively stop working. The
+                            //    member must go dark on its own, independent of
+                            //    how many keys it happens to hold.
+                            val credentialScoped =
+                                isRateLimit ||
+                                    actual is com.openminis.app.data.model.LLMError.QuotaExhausted ||
+                                    actual is com.openminis.app.data.model.LLMError.InvalidApiKey
+                            val failedRoute = if (credentialScoped) {
+                                groupRouter.routeId(failed, credentialIndex)
+                            } else {
+                                failed
+                            }
                             when {
                                 isRateLimit -> groupRouter.recordResult(
                                     failedRoute,

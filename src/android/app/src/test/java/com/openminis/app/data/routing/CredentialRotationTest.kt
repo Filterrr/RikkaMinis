@@ -121,11 +121,26 @@ class CredentialRotationTest {
         val router = routerAt { 0L }
         // A 5xx is the endpoint's fault, so it must NOT be keyed per credential
         // by the rotation logic — recording on the bare id keeps the whole
-        // member in the circuit-breaker path.
+        // member in the circuit-breaker path. This matters more now that
+        // rotation fires on ANY error: if a 3-key instance filed each 5xx under
+        // its own key, the 3-failure circuit would need 9 failures to open and
+        // the breaker would effectively stop working.
         repeat(GroupRouter.CIRCUIT_FAILURE_THRESHOLD) {
             router.recordResult("e", RouteOutcome.ServerError)
         }
         assertFalse(router.isUsable("e"))
+    }
+
+    @Test fun serverErrorPerCredentialWouldBreakTheBreaker() {
+        val router = routerAt { 0L }
+        // The counter-example, pinned so the reasoning above cannot be
+        // "simplified" away later: spreading the SAME failures across composite
+        // ids leaves every one of them under the threshold, so the member stays
+        // selectable and the fault is retried forever.
+        repeat(GroupRouter.CIRCUIT_FAILURE_THRESHOLD) { i ->
+            router.recordResult("e#$i", RouteOutcome.ServerError)
+        }
+        assertTrue(router.isEntryUsable("e", keyCount = 3))
     }
 
     // ─── ordering ──────────────────────────────────────────────────────────

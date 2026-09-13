@@ -96,9 +96,13 @@ class QuotaExhaustionClassificationTest {
     // ─── rotation eligibility axis ────────────────────────────────────────
 
     @Test fun rotationEligibleOnlyForCredentialScopedFailures() {
-        // "Spend another key" is only meaningful when the credential is what
-        // failed. A 5xx must NOT rotate — that multiplies load on a service
-        // that is already unwell and cannot succeed.
+        // [T-rotate-on-any-error] `isKeyRotationEligible` now drives nothing in
+        // the retry loop (rotation fires on ANY error by product decision), but
+        // the predicate is kept as the retained CLASSIFICATION: it is the one
+        // place that states which failures actually implicate a credential, and
+        // the loop still uses that distinction for two things — whether to park
+        // the key, and whether to refill the auto-retry budget. Both must stay
+        // true only for credential-scoped failures.
         assertTrue(LLMError.QuotaExhausted("q").isKeyRotationEligible)
         assertTrue(LLMError.RateLimited().isKeyRotationEligible)
         assertTrue(LLMError.InvalidApiKey().isKeyRotationEligible)
