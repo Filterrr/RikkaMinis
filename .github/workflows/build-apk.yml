@@ -9,6 +9,18 @@ on:
       - 'deps/**'
       - '.github/workflows/build-apk.yml'
   workflow_dispatch:
+    inputs:
+      # [T-llm-prefer-http11] Optional co-existing applicationId. Setting this
+      # (e.g. com.openminis.app.lab) builds a package that installs BESIDE the
+      # stable one — build.gradle.kts [dual-appid] re-points applicationId,
+      # child-process names and the Shizuku provider off this value, so the
+      # two APKs neither replace nor conflict with each other. Unset = normal
+      # build. Only reachable via manual dispatch, so an unattended push build
+      # can never produce a lab package.
+      app_id_override:
+        description: "Optional MINIS_APP_ID_OVERRIDE (e.g. com.openminis.app.lab) for a co-existing build"
+        required: false
+        default: ""
 
 # [audit-RC6] Serialize overlapping builds of the SAME ref. The release path
 # replaces the rolling android-latest asset in place (same tag every build), so
@@ -257,6 +269,11 @@ jobs:
           ./gradlew clean --stacktrace
 
       - name: Build APK with Gradle
+        env:
+          # [T-llm-prefer-http11] Empty string is filtered out by
+          # build.gradle.kts (takeIf { isNotBlank }), so the default manual run
+          # and every push run behave exactly as before.
+          MINIS_APP_ID_OVERRIDE: ${{ github.event.inputs.app_id_override }}
         run: |
           cd src/android
           ./gradlew assembleRelease --stacktrace

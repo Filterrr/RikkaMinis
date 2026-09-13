@@ -13,6 +13,8 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
  * Carried by [NetworkMonitor] as process-wide state so every LLM client
  * builder can read the CURRENT value at build time without a Context hop:
  *
+ *  - [llmHttp11Only]: ALPN offer for all LLM clients — HTTP/1.1 only by
+ *    default (stable through local proxies; see NetworkMonitor).
  *  - [dohEnabled] / [dohUrl]: DNS-over-HTTPS for all LLM clients. TTFB
  *    variance killer for direct connections (bypasses plaintext/cleartext
  *    DNS hijack); harmless through a local VPN/proxy that remotes DNS
@@ -30,6 +32,7 @@ object NetworkSettings {
     private const val PREFS = "network_settings"
     private const val KEY_DOH_ENABLED = "doh.enabled"
     private const val KEY_DOH_URL = "doh.url"
+    private const val KEY_LLM_HTTP11_ONLY = "llm.http11only"
 
     private const val DEFAULT_DOH_URL = "https://dns.alidns.com/dns-query"
 
@@ -44,6 +47,8 @@ object NetworkSettings {
         val p = prefs(context)
         dohEnabled = p.getBoolean(KEY_DOH_ENABLED, false)
         dohUrl = p.getString(KEY_DOH_URL, null)?.ifBlank { null } ?: DEFAULT_DOH_URL
+        // [T-llm-prefer-http11] Default ON: http/1.1-only for LLM clients.
+        llmHttp11Only = p.getBoolean(KEY_LLM_HTTP11_ONLY, true)
     }
 
     fun setDoh(context: Context, enabled: Boolean, url: String?) {
@@ -55,6 +60,25 @@ object NetworkSettings {
             .putString(KEY_DOH_URL, newUrl)
             .apply()
         NetworkMonitor.refreshDoh()
+    }
+
+    /**
+     * [T-llm-prefer-http11] Hard-exclude HTTP/2 from the ALPN offer of every
+     * LLM-facing client. Default true — see
+     * [NetworkMonitor.llmProtocols] for why reordering the offer is not
+     * enough and why this is a switch instead: an http/1.1-only offer is
+     * fatal against a hypothetical h2-only endpoint, and a user hitting that
+     * needs a toggle, not a new build.
+     *
+     * Takes effect on the next client BUILD (providers rebuild on
+     * session/model switch), not mid-stream.
+     */
+    @Volatile var llmHttp11Only: Boolean = true
+        private set
+
+    fun setLlmHttp11Only(context: Context, enabled: Boolean) {
+        llmHttp11Only = enabled
+        prefs(context).edit().putBoolean(KEY_LLM_HTTP11_ONLY, enabled).apply()
     }
 
     /**

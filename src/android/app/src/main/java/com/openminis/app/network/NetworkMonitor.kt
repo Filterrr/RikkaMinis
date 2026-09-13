@@ -57,32 +57,45 @@ class NetworkMonitor {
 
         /**
          * [T-llm-prefer-http11] Single source of truth for the ALPN protocol
-         * list every LLM-facing OkHttpClient must offer.
+         * list every LLM-facing OkHttpClient offers.
          *
          * OkHttp's default is `[h2, http/1.1]`, so ALPN negotiates HTTP/2
          * against every modern endpoint. Through a local VPN/proxy (clash on
          * 127.0.0.1:7890) that h2 tunnel is the fragile path: the CONNECT
-         *隧道 survives a network flap while the multiplexed stream inside it
-         * is already dead, so the pool keeps handing out a wedged tunnel and
-         * a retry writes into it and hangs (see [T-android-stale-conn-retry-
-         * [T-android-stale-conn-retry-hang] above); some proxies abort the
-         * handshake mid-flight once they sniff TLS and refuse to forward h2,
-         * surfacing as SSL_ERROR_SYSCALL. HTTP/1.1 is one request per socket:
-         * broken connections die visibly, the pool drops them, and the retry
-         * gets a fresh socket. We lose stream-level multiplexing and PING
-         * keepalive (pingInterval is a no-op on http/1.1), but LLM traffic is
-         * one long streaming response per connection anyway, so the
-         * concurrency loss is nominal.
+         * tunnel survives a network flap while the multiplexed stream inside
+         * it is already dead, so the pool keeps handing out a wedged tunnel,
+         * and a retry writes into it and hangs waiting for response headers
+         * (see [T-android-stale-conn-retry-hang] above). Some proxies abort
+         * the handshake mid-flight once they sniff TLS and refuse to forward
+         * h2 — surfacing as SSL_ERROR_SYSCALL. HTTP/1.1 is one request per
+         * socket: broken connections die visibly, the pool drops them, and
+         * the retry gets a fresh socket. We lose stream-level multiplexing
+         * and PING keepalive (pingInterval is a no-op on http/1.1), but LLM
+         * traffic is one long streaming response per connection anyway.
          *
-         * Order matters: OkHttp offers ALPN in list order and servers honour
-         * client preference, so http/1.1 first means HTTP/2 is only used when
-         * the endpoint refuses 1.1. Callers that must stay on h2 (none today)
-         * can set their own list and simply not use this value.
+         * WHY THE LIST DROPS h2 INSTEAD OF MERELY REORDERING IT: measured
+         * against the shipped provider set (api.b.ai, openrouter.ai,
+         * apihub.agnes-ai.com, api.baipiao.eu.org, tokenharbor.ai — mostly
+         * Cloudflare-fronted relays), offering `[http/1.1, h2]` still
+         * negotiates h2 on every one of them: those servers ignore client
+         * ALPN preference and pick h2 whenever it is present. Only removing
+         * h2 from the offer changes the outcome. All six endpoints accept an
+         * http/1.1-only offer (no no_application_protocol alert), so this is
+         * a safe hard exclusion — and it is why [NetworkSettings] exposes a
+         * kill switch rather than this being an unconditional one-liner.
+         *
+         * Read at CLIENT-BUILD time (a provider rebuild picks up the new
+         * value; ProviderFactory.create runs on every session/model switch),
+         * unlike the DoH resolver, which is re-read per lookup.
          */
-        val LLM_PREFERRED_PROTOCOLS: List<okhttp3.Protocol> = listOf(
-            okhttp3.Protocol.HTTP_1_1,
-            okhttp3.Protocol.HTTP_2,
-        )
+        fun llmProtocols(): List<okhttp3.Protocol> =
+            if (NetworkSettings.llmHttp11Only) {
+                listOf(okhttp3.Protocol.HTTP_1_1)
+            } else {
+                // OkHttp's own default order, restored verbatim.
+                listOf(okhttp3.Protocol.HTTP_2, okhttp3.Protocol.HTTP_1_1)
+            }
+     )
 
         /**
          * [OPT-restore-doh] Shared DoH Dns for every LLM client, or null when

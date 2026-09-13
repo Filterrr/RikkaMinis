@@ -92,20 +92,28 @@ object ConnectionWarmer {
      * connection pool so warmed connections land where real requests can
      * reuse them; the DNS wrapper re-reads the CURRENT shared DoH resolver
      * on every lookup, so DoH toggles apply without rebuilding this client.
+     *
+     * [T-llm-prefer-http11] The protocol list CANNOT be that lazy, though:
+     * OkHttp only reuses a pooled connection when its negotiated protocol is
+     * in the caller's list, so a warm client stuck on the value captured at
+     * first use would either produce sockets no LLM client can take (orphan
+     * handshakes, wasted TTFB) or leave the pool cold. Keyed on the current
+     * flag so flipping the setting rebuilds once, on next warm, from then on.
      */
-    private val warmClient: OkHttpClient by lazy {
-        OkHttpClient.Builder()
+    private val warmClientRef = java.util.concurrent.atomic.AtomicReference<Pair<Boolean, OkHttpClient>?>(null)
+
+    private fun warmClient(): OkHttpClient {
+        val flag = NetworkSettings.llmHttp11Only
+        warmClientRef.get()?.takeIf { it.first == flag }?.let { return it.second }
+        return OkHttpClient.Builder()
             .connectionPool(NetworkMonitor.sharedLLMConnectionPool)
-            // [T-llm-prefer-http11] Must match the provider clients exactly:
-            // OkHttp only reuses a pooled connection when its negotiated
-            // protocol is in the caller's list, so warming with the default
-            // [h2, http/1.1] would produce sockets no LLM client can take.
-            .protocols(NetworkMonitor.LLM_PREFERRED_PROTOCOLS)
+            .protocols(NetworkMonitor.llmProtocols())
             .dns(NetworkMonitor.buildDns())
             .connectTimeout(5_000L, java.util.concurrent.TimeUnit.MILLISECONDS)
             .readTimeout(5_000L, java.util.concurrent.TimeUnit.MILLISECONDS)
             .writeTimeout(5_000L, java.util.concurrent.TimeUnit.MILLISECONDS)
             .build()
+            .also { warmClientRef.set(flag to it) }
     }
 
     /** Fire-and-forget warmup. Safe to call from any thread, any frequency —
@@ -190,7 +198,7 @@ object ConnectionWarmer {
             .url(headUrl)
             .method("HEAD", null)
             .build()
-        warmClient.newCall(headRequest).enqueue(object : okhttp3.Callback {
+        warmClient().newCall(headRequest).enqueue(object : okhttp3.Callback {
             override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
                 response.close()
                 Log.d(TAG, "warm connection pooled origin=$origin status=${response.code}")

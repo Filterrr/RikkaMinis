@@ -113,7 +113,7 @@ object NetworkProbe {
             // OkHttp only reuses a pooled connection when its negotiated
             // protocol is in the caller's list, so warming with the default
             // [h2, http/1.1] would produce sockets no LLM client can take.
-            .protocols(NetworkMonitor.LLM_PREFERRED_PROTOCOLS)
+            .protocols(NetworkMonitor.llmProtocols())
             .dns(NetworkMonitor.buildDns())
             .eventListenerFactory { listener }
             .connectTimeout(LEG_TIMEOUT_MS, TimeUnit.MILLISECONDS)
