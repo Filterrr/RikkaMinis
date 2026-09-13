@@ -34,11 +34,17 @@ import java.util.concurrent.TimeUnit
 object UpdateChecker {
 
     private const val TAG = "UpdateChecker"
-    private const val OWNER = "logicflow-GYW"
+    // [fix-updatechecker-owner] Must match the repository that actually runs
+    // .github/workflows/build-apk.yml and publishes the rolling `android-latest`
+    // release. It used to point at logicflow-GYW/RikkaMinis — a *different*
+    // fork with its own independent build workflow — so the in-app update
+    // check read a foreign release list and could hand the user an APK built
+    // from another source tree. Keep this in sync with origin's owner.
+    private const val OWNER = "Filterrr"
     // RikkaMinis: this fork's own android-latest release is published on
-    // logicflow-GYW/RikkaMinis by the build-apk.yml workflow, so the in-app
-    // update check points at our own repo (RikkaMinis-*.apk asset), not the
-    // upstream OpenMinis/OpenMinis.
+    // Filterrr/RikkaMinis by the build-apk.yml workflow, so the in-app
+    // update check points at our own repo (RikkaMinis-arm64-v8a.apk asset),
+    // not the upstream OpenMinis/OpenMinis.
     private const val REPO = "RikkaMinis"
     private const val DOWNLOAD_FILENAME = "minis-update.apk"
     /**
@@ -307,7 +313,7 @@ object UpdateChecker {
     }
 
     /** Public so UI can deep-link users to manual download when GitHub is blocked. */
-    const val RELEASES_URL: String = "https://github.com/logicflow-GYW/RikkaMinis/releases"
+    const val RELEASES_URL: String = "https://github.com/$OWNER/$REPO/releases"
 
     /** Returns (downloadUrl, sizeBytes) for the first .apk asset, or (null, 0). */
     private fun findApkAsset(assets: JSONArray?): Pair<String?, Long> {
