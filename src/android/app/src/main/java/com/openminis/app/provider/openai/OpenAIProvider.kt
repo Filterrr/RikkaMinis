@@ -502,6 +502,10 @@ class OpenAIProvider constructor(
         // a per-client pool was never evicted, and a dead h2 tunnel through
         // a local proxy got reused on every retry (silent infinite hang).
         .connectionPool(com.openminis.app.network.NetworkMonitor.sharedLLMConnectionPool)
+        // [T-llm-prefer-http11] Drop h2 from the ALPN offer: LLM routes go
+        // through local proxies, where a wedged h2 tunnel hangs every retry.
+        // See NetworkMonitor.llmProtocols() for the full rationale.
+        .protocols(com.openminis.app.network.NetworkMonitor.llmProtocols())
         // [OPT-restore-doh] Shared DoH resolver when enabled in settings (null =
         // system DNS). Localhost names always bypass DoH.
         .dns(com.openminis.app.network.NetworkMonitor.buildDns())

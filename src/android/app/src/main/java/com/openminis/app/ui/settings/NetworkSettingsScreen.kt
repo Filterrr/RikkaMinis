@@ -51,6 +51,8 @@ fun NetworkSettingsScreen(
     val context = LocalContext.current
 
     var dohEnabled by rememberSaveable { mutableStateOf(NetworkSettings.dohEnabled) }
+    // [T-llm-prefer-http11] Kill switch for the http/1.1-only ALPN offer.
+    var llmHttp11Only by rememberSaveable { mutableStateOf(NetworkSettings.llmHttp11Only) }
     var dohUrl by rememberSaveable { mutableStateOf(NetworkSettings.dohUrl) }
     // [feat4-doh-presets] Per-preset DoH latency (null = untested), plus the
     // running flag that drives one measurement round across all presets.
@@ -85,6 +87,26 @@ fun NetworkSettingsScreen(
                     title = stringResource(R.string.network_diag_entry_title),
                     subtitle = stringResource(R.string.network_diag_entry_subtitle),
                     onClick = onDiagnosticsClick,
+                )
+            }
+        }
+
+        // ─── LLM transport protocol ─────────────────────────────────
+        SettingsSection(
+            header = stringResource(R.string.settings_network_llm_proto_header),
+            footer = stringResource(R.string.settings_network_llm_proto_footer),
+        ) {
+            SettingsCardBlock {
+                SettingsSwitchRow(
+                    title = stringResource(R.string.settings_network_llm_proto_toggle),
+                    subtitle = stringResource(R.string.settings_network_llm_proto_toggle_subtitle),
+                    checked = llmHttp11Only,
+                    onCheckedChange = { enabled ->
+                        llmHttp11Only = enabled
+                        NetworkSettings.setLlmHttp11Only(context, enabled)
+                        AppLogger.info(TAG, "llmHttp11Only=$enabled (applies on next client build)")
+                    },
+                    showDivider = false,
                 )
             }
         }
