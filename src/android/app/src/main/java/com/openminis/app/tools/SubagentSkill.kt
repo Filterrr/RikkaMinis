@@ -169,13 +169,28 @@ object SubagentSkill {
     const val DEFAULT_MAX_PARALLEL = 2
 
     /**
-     * [T-subagent-run-timeout] Per-run wall-clock defaults. Sized to a phone:
-     * a sub-agent is an unattended loop, so the default is far tighter than
-     * the main agent's "keep going until done" behaviour, and a user who
-     * wants a long background run must ask for it explicitly.
+     * [T-subagent-run-timeout] Per-run wall-clock defaults, measured from
+     * SPAWN time (queue wait included).
+     *
+     * Calibrated on dogfood runs subagent-1/2 (2026-09-14): two research
+     * spawns on qwen3.8-flash exhausted the OLD 600s default at turns 14–17
+     * of 48 while still mid-task — a third of the wall clock gone to
+     * transient-retry backoff on an unstable relay. 900s keeps ~60 turns of
+     * headroom for a healthy relay; the max exists so a detached run cannot
+     * outlive its usefulness overnight.
      */
-    const val DEFAULT_TIMEOUT_SECONDS = 600
+    const val DEFAULT_TIMEOUT_SECONDS = 900
     const val MAX_TIMEOUT_SECONDS = 3600
+
+    /**
+     * [T-subagent-queue-budget] How long an INLINE spawn will sit in the
+     * scheduler queue before the spawn fails with queue_timeout. The parent
+     * turn is parked on an inline call returning, so unlike a detached spawn
+     * (which may legitimately wait its whole budget for a slot) its queue
+     * wait is user-visible freeze and gets its own short cap regardless of
+     * timeout_seconds. 30s mirrors the foreground slot wait ExTV shipped.
+     */
+    const val INLINE_QUEUE_WAIT_MS = 30_000L
 
     /**
      * [T-subagent-model-routing] Optional tail appended to the `model`

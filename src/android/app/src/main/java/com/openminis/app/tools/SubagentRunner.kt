@@ -215,8 +215,21 @@ class SubagentRunner(
         // [T-subagent-run-timeout] Clamp per the tool contract. The default is
         // deliberate: a detached run has no human watching it, so an
         // unbounded loop is a cost and permit leak, not a feature.
+        //
+        // [T-subagent-queue-budget] The budget is an ABSOLUTE deadline from
+        // SPAWN time, not a stopwatch started when the permit lands. Two
+        // reasons, both observed in the wild (dogfood run subagent-1/2,
+        // 2026-09-14): a research run spent its whole 600s budget while the
+        // model loop was only half done, and with a per-execution stopwatch a
+        // queued spawn would silently extend that — "timeout_seconds: 600"
+        // meaning "600s plus unbounded waiting" is a lie the tool description
+        // must not tell. Inline spawns additionally cap how long they will
+        // SIT in the scheduler queue (see tryAcquire below): the parent turn
+        // is parked on this call returning, so queue time is user-visible
+        // freeze, not background progress.
         val timeoutSeconds = args.optInt("timeout_seconds", SubagentSkill.DEFAULT_TIMEOUT_SECONDS)
             .coerceIn(1, SubagentSkill.MAX_TIMEOUT_SECONDS)
+        val deadlineNanos = System.nanoTime() + timeoutSeconds * 1_000_000_000L
 
         // [T-subagent-orchestration] Register BEFORE the scheduler hands out
         // a permit, flagged QUEUED — over-limit spawns become visible as
@@ -255,13 +268,14 @@ class SubagentRunner(
             // join_subagents / wait_any or discards via cancel_subagents.
             val detachedJob = deps.orchestrationScope().launch {
                 try {
-                    scheduler.run(skill.id, config.maxParallel) {
+                    scheduler.run(skill.id, config.maxParallel, deadlineNanos) {
                         registry.markExecuting(run.id)
                         executeLoop(
                             run = run, skill = skill, config = config, skillName = skillName,
                             query = query, title = title, runUntil = SubagentSkill.RUN_UNTIL_DONE,
                             sessionId = sessionId, provider = provider, subagentTools = subagentTools,
                             timeoutSeconds = timeoutSeconds,
+                            deadlineNanos = deadlineNanos,
                         )
                     }
                 } catch (e: CancellationException) {
@@ -310,7 +324,19 @@ class SubagentRunner(
         // RUNNING when the permit lands, and complete the job deferred in
         // every exit path so a later join_subagents(run_ids=[…]) can pick
         // up even an inline result.
-        return scheduler.run(skill.id, config.maxParallel) {
+        //
+        // [T-subagent-queue-budget] A QueueTimeout means the spawn's own
+        // budget was eaten by WAITING for a slot — the run never started, so
+        // there are no partial findings to report. Surface it as an ordinary
+        // failed tool result (actionable: retry later, spawn detached, or
+        // raise timeout_seconds), NOT as an exception crashing the parent
+        // turn, and reconcile the registry so the pill does not spin forever.
+        return try {
+            scheduler.run(
+                skill.id, config.maxParallel,
+                deadlineNanos = deadlineNanos,
+                maxQueueWaitMs = SubagentSkill.INLINE_QUEUE_WAIT_MS,
+            ) {
             registry.markExecuting(run.id)
             try {
                 val result = executeLoop(
@@ -318,6 +344,7 @@ class SubagentRunner(
                     query = query, title = title, runUntil = runUntil,
                     sessionId = sessionId, provider = provider, subagentTools = subagentTools,
                     timeoutSeconds = timeoutSeconds,
+                    deadlineNanos = deadlineNanos,
                 )
                 job.deferred.complete(
                     SubagentOrchestration.JobOutcome(
@@ -351,6 +378,26 @@ class SubagentRunner(
                 )
                 throw e
             }
+            }
+        } catch (e: SubagentScheduler.QueueTimeoutException) {
+            registry.finishIfActive(
+                run.id, SubagentRunRegistry.RunStatus.TIMED_OUT,
+                error = e.message,
+            )
+            job.deferred.complete(
+                SubagentOrchestration.JobOutcome(
+                    runId = run.id, success = false, report = "",
+                    skillName = skill.name, error = e.message,
+                ),
+            )
+            ToolExecutionResult(
+                "Error: sub-agent '$skillName' never started — ${e.message} " +
+                    "(${scheduler.activeGlobalCount()}/${SubagentSkill.MAX_PARALLEL_CAP} chat slots busy). " +
+                    "The run consumed NO tokens. Retry later, spawn with run_until='detach' to avoid " +
+                    "parking this turn on a queue, or raise timeout_seconds if the queue is legitimately " +
+                    "long-running.",
+                false, toolTitle = "Sub-agent: $skillName",
+            )
         }
     }
 
@@ -458,6 +505,7 @@ class SubagentRunner(
         provider: com.openminis.app.provider.LLMProvider,
         subagentTools: List<AgentToolDefinition>,
         timeoutSeconds: Int,
+        deadlineNanos: Long,
     ): ToolExecutionResult {
         // [T-subagent-runtime-preamble] Inject a short runtime preamble
         // (current date/time + durable workspace root) ahead of the skill
@@ -472,14 +520,13 @@ class SubagentRunner(
         registry.setModelLabel(run.id, deps.providerLabel(provider))
         val history = mutableListOf(LLMMessage(role = LLMMessage.Role.USER, content = query))
 
-        // [T-subagent-run-timeout] Monotonic deadline for the WHOLE run —
-        // queue wait is excluded (this starts when the permit lands) while
-        // tool calls and provider retries count. Enforced at TURN boundaries
-        // only: a single hung shell_execute is already capped at 900s by
-        // executeSubagentShell, and an interrupt mid-stream would corrupt the
-        // history. The guard this adds is the missing one — an unbounded
-        // number of turns, which nothing capped before.
-        val deadlineNanos = System.nanoTime() + timeoutSeconds * 1_000_000_000L
+        // [T-subagent-run-timeout] The absolute [deadlineNanos] arrives from
+        // the spawn site — measured from SPAWN time and inclusive of queue
+        // wait. Enforced at TURN boundaries only: a single hung shell_execute
+        // is already capped at 900s by executeSubagentShell, and an interrupt
+        // mid-stream would corrupt the history. The guard this adds is the
+        // missing one — an unbounded number of turns, which nothing capped
+        // before.
 
         val resultSb = StringBuilder()
         val artifacts = mutableListOf<String>()
@@ -617,10 +664,17 @@ class SubagentRunner(
                                     "turn $turns retry $streamRetryAttempt/" +
                                     "${STREAM_RETRY_DELAYS_SEC.size} in ${delaySec}s: $errDesc",
                             )
-                            registry.appendResultText(
+                            // [T-subagent-report-hygiene] Notices go to the
+                            // pill/detail stream, NOT into resultText: finish()
+                            // falls back to the streamed text when the model
+                            // emits no closing summary, and these lines were
+                            // being delivered to the parent AS the report
+                            // (dogfood subagent-1/2, 2026-09-14 — the wake-up
+                            // "report" was nothing but retry chatter).
+                            registry.appendNotice(
                                 run.id,
-                                "\n\n[transient stream error ($errDesc) — retrying " +
-                                    "$streamRetryAttempt/${STREAM_RETRY_DELAYS_SEC.size} in ${delaySec}s]\n",
+                                "[transient stream error ($errDesc) — retrying " +
+                                    "$streamRetryAttempt/${STREAM_RETRY_DELAYS_SEC.size} in ${delaySec}s]",
                             )
                             kotlinx.coroutines.delay(delaySec * 1000L)
                             continue
@@ -941,11 +995,28 @@ class SubagentRunner(
         artifacts: List<String>,
         sessionId: String,
     ): String? {
+        // [T-subagent-journal-steps] Re-read the LIVE snapshot: the `run`
+        // handle here is the object captured at registration, whose `steps`
+        // were empty then and never mutate afterwards (Run is immutable and
+        // the registry swaps whole objects). Without this the journal's
+        // "## Steps" section was ALWAYS empty — every dogfooded report so far
+        // lost its audit trail for exactly this reason. Terminal transitions
+        // happen before journal() is called, so the registry already holds
+        // the full step list plus usage/model labels.
+        val live = registry.runs.value.firstOrNull { it.id == run.id } ?: run
+        // Same re-read discipline for the CALLER-SUPPLIED fields: the
+        // detached cancel handler journals with ("", 0) — the coroutine was
+        // cut off before it could assemble a return value — but the registry
+        // HAS the streamed text and the turn count. Falling back here means a
+        // cancelled run's journal still carries everything it produced,
+        // instead of "(no text output produced)" over real findings.
+        val effectiveText = resultText.ifBlank { live.resultText }
+        val effectiveTurns = if (turns > 0) turns else live.turn
         val path = SubagentRunJournal.write(
-            run = if (run.sessionId.isEmpty()) run.copy(sessionId = sessionId) else run,
+            run = if (live.sessionId.isEmpty()) live.copy(sessionId = sessionId) else live,
             terminal = terminal,
-            resultText = resultText,
-            turns = turns,
+            resultText = effectiveText,
+            turns = effectiveTurns,
             error = error,
             artifacts = artifacts,
             context = context,

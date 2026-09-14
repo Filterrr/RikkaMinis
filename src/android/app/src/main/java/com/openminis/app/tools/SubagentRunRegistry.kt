@@ -125,6 +125,11 @@ class SubagentRunRegistry {
          * skill. Empty until the runner stamps it.
          */
         val modelLabel: String = "",
+        /**
+         * [T-subagent-report-hygiene] Run-level notices (retry lines, etc.) —
+         * never part of the report text the parent consumes.
+         */
+        val notices: String = "",
         val steps: List<Step> = emptyList(),
         /** True when the user opened the detail page at least once. */
         val opened: Boolean = false,
@@ -368,6 +373,21 @@ class SubagentRunRegistry {
         }
     }
 
+    /**
+     * [T-subagent-report-hygiene] Run-level notices that are NOT the report:
+     * transient-retry lines, truncation warnings. Kept OUT of [resultText]
+     * because [finish] falls back to the streamed resultText when the caller
+     * passes a blank terminal text (models that stop on a tool call never
+     * emit a summary) — notices mixed into that stream were delivered to the
+     * parent AS the sub-agent's findings.
+     */
+    fun appendNotice(runId: String, line: String) {
+        if (line.isBlank()) return
+        updateRun(runId) { run ->
+            run.copy(notices = (run.notices + "\n" + line).trim().takeLast(MAX_NOTICE_CHARS))
+        }
+    }
+
     fun markOpened(runId: String) {
         updateRun(runId) { if (it.opened) it else it.copy(opened = true) }
     }
@@ -442,6 +462,7 @@ class SubagentRunRegistry {
         const val MAX_RETAINED_RUNS = 20
         const val MAX_STEP_OUTPUT_LINES = 60
         const val MAX_RESULT_TEXT_CHARS = 24_000
+        private const val MAX_NOTICE_CHARS = 2_000
     }
 }
 

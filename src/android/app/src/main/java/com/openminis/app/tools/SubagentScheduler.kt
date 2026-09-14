@@ -55,17 +55,130 @@ class SubagentScheduler(
      * cap ([skillLimit], clamped to 1..[SubagentSkill.MAX_PARALLEL_CAP])
      * and then the chat-global cap. Fair-FIFO at both levels — extra
      * spawns wait their turn instead of failing.
+     *
+     * [deadlineNanos] (when > 0) makes the queue wait BOUNDED by the spawn's
+     * own wall-clock budget: if the budget is already spent while still
+     * queued, the spawn fails fast with [QueueTimeoutException] instead of
+     * executing a run whose deadline expired before it started. The wait
+     * itself remains FIFO; the deadline only refuses to START late work.
      */
-    suspend fun <T> run(skillId: String, skillLimit: Int, block: suspend () -> T): T =
-        skillSemaphore(skillId, skillLimit).withPermit {
-            global.withPermit {
-                activeGlobal.incrementAndGet()
-                try {
-                    block()
-                } finally {
-                    activeGlobal.decrementAndGet()
-                }
+    suspend fun <T> run(
+        skillId: String,
+        skillLimit: Int,
+        deadlineNanos: Long = 0L,
+        maxQueueWaitMs: Long = 0L,
+        block: suspend () -> T,
+    ): T {
+        if (deadlineNanos <= 0L && maxQueueWaitMs <= 0L) {
+            // Ungated (legacy) path: wait FIFO forever, as before.
+            return skillSemaphore(skillId, skillLimit).withPermit {
+                global.withPermit { counted(block) }
             }
+        }
+        // Bounded path. The wait bound is the MIN of the spawn's remaining
+        // budget and an explicit queue cap:
+        //  - deadlineNanos alone (detached): "do not start work whose budget
+        //    already expired" — a background run may still wait for its turn.
+        //  - maxQueueWaitMs (inline): the parent TURN is parked on this call,
+        //    so its queue wait is user-visible freeze and must stay short no
+        //    matter how large the run budget is.
+        val remainingMs = if (deadlineNanos > 0L) {
+            ((deadlineNanos - System.nanoTime()) / 1_000_000L).coerceAtLeast(0L)
+        } else Long.MAX_VALUE
+        // An EXPIRED deadline refuses the spawn even when a slot is free —
+        // tryAcquire(0) would happily grab an available permit and run work
+        // whose budget died before it started. (Self-caught while writing
+        // SubagentSchedulerQueueTest; the "expired deadline" case is exactly
+        // this path.)
+        if (deadlineNanos > 0L && remainingMs == 0L) {
+            throw QueueTimeoutException(
+                "this spawn's timeout_seconds budget was already exhausted " +
+                    "before a scheduler slot could start it",
+            )
+        }
+        val waitMs = if (maxQueueWaitMs > 0L) minOf(remainingMs, maxQueueWaitMs) else remainingMs
+        if (!tryAcquire(skillId, skillLimit, waitMs)) {
+            throw QueueTimeoutException(
+                if (maxQueueWaitMs > 0L) {
+                    "no scheduler slot became free within ${maxQueueWaitMs}ms of queue wait"
+                } else {
+                    "no scheduler slot became available within this spawn's " +
+                        "timeout_seconds budget (queue wait consumed it)"
+                },
+            )
+        }
+        try {
+            return counted(block)
+        } finally {
+            release(skillId, skillLimit)
+        }
+    }
+
+    private suspend fun <T> counted(block: suspend () -> T): T {
+        activeGlobal.incrementAndGet()
+        try {
+            return block()
+        } finally {
+            activeGlobal.decrementAndGet()
+        }
+    }
+
+    /**
+     * Thrown by [run] / [tryAcquire] when the spawn's own timeout budget was
+     * consumed by QUEUE WAITING — the run never started. The runner maps this
+     * to a model-facing error that names the queue as the cause, distinct
+     * from a mid-run TIMED_OUT (which carries partial findings).
+     */
+    class QueueTimeoutException(override val message: String? = null) : Exception(
+        message ?: "no scheduler slot within the spawn's timeout_seconds budget",
+    )
+
+    /**
+     * Bounded acquisition used by the runner's spawn paths: wait for BOTH
+     * permits (skill first, then global — same order as [run]) but give up
+     * after [waitBudgetMs] and roll back any partially-held permit.
+     *
+     * Why this exists: a fair FIFO semaphore queue is correct for detached
+     * spawns and terrible for INLINE ones — the parent turn is parked on
+     * scheduler.run() returning, and the queue head is whatever the previous
+     * spawn's remaining budget is. Before this, `timeout_seconds` only started
+     * counting AFTER the permit landed, so "600s" could mean "600s of work
+     * plus unbounded waiting" — a frozen chat for tens of minutes with no
+     * signal to the model or the user.
+     *
+     * Returns true when both permits are held (caller MUST [release] in a
+     * finally); false when the budget ran out (nothing is held). A caller
+     * passing waitBudgetMs <= 0 gets the immediate-try behaviour: no slot, no
+     * wait.
+     *
+     * Rollback note: giving up on the GLOBAL permit releases the skill permit
+     * again, so a spawn that timed out waiting for a global slot cannot
+     * strand a skill-level slot either.
+     */
+    suspend fun tryAcquire(skillId: String, skillLimit: Int, waitBudgetMs: Long): Boolean {
+        val skillSemaphore = skillSemaphore(skillId, skillLimit)
+        if (!acquireWithin(skillSemaphore, waitBudgetMs)) return false
+        if (!acquireWithin(global, waitBudgetMs)) {
+            skillSemaphore.release()
+            return false
+        }
+        return true
+    }
+
+    /** Release a pair acquired by [tryAcquire]. Mirrors its acquisition order. */
+    fun release(skillId: String, skillLimit: Int) {
+        global.release()
+        skillSemaphore(skillId, skillLimit).release()
+    }
+
+    private suspend fun acquireWithin(semaphore: Semaphore, waitBudgetMs: Long): Boolean =
+        if (waitBudgetMs <= 0) {
+            semaphore.tryAcquire()
+        } else {
+            kotlinx.coroutines.withTimeoutOrNull(waitBudgetMs) {
+                semaphore.acquire()
+                true
+            } ?: false
         }
 
     /** Get-or-create the per-skill semaphore (atomic — no duplicate permits). */

@@ -352,6 +352,30 @@ private fun SubagentRunDetailBody(
                         // group the pill belongs to (join/wait/cancel target).
                         MetaChip(label = "group", value = run.groupId.takeLast(6))
                     }
+                    // [T-subagent-token-accounting] Which model actually ran
+                    // this, and what it cost. The whole "delegate cheap work
+                    // to a cheaper model" rationale is unfalsifiable unless the
+                    // parent can see both — and they cannot read the registry,
+                    // so the pill/detail page is the only surface.
+                    if (run.modelLabel.isNotBlank()) {
+                        MetaChip(label = "model", value = run.modelLabel)
+                    }
+                    formatSubagentTokenCost(run)?.let { MetaChip(label = "tokens", value = it) }
+                }
+                if (run.notices.isNotBlank()) {
+                    // [T-subagent-report-hygiene] Retry / truncation notices
+                    // live OUT of the report card so they never masquerade as
+                    // the sub-agent's findings; the detail page is where they
+                    // stay reviewable.
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        run.notices.lines().firstOrNull { it.isNotBlank() }.orEmpty(),
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = ChatColors.warningText,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
                 if (run.isExecuting && run.maxTurns > 0) {
                     // Turn progress mirrors the in-chat capsule's slim line

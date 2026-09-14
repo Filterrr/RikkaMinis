@@ -92,6 +92,21 @@ internal fun turnProgressFraction(run: SubagentRunRegistry.Run): Float? {
     return fraction.coerceIn(0.04f, 0.96f)
 }
 
+/**
+ * [T-subagent-token-accounting] "in→out" cost label for a run, or null when
+ * the provider never reported usage (both -1) — unknown is RENDERED AS ABSENT,
+ * never as 0 or -1: a silent provider must not masquerade as a free run. One
+ * side unknown keeps a "?" placeholder so a mid-stream snapshot still shows
+ * what IS known.
+ */
+internal fun formatSubagentTokenCost(run: SubagentRunRegistry.Run): String? {
+    if (run.tokensIn < 0 && run.tokensOut < 0) return null
+    fun k(n: Int): String = if (n < 1000) n.toString() else String.format("%.1fk", n / 1000.0)
+    val inPart = if (run.tokensIn >= 0) k(run.tokensIn) else "?"
+    val outPart = if (run.tokensOut >= 0) k(run.tokensOut) else "?"
+    return "$inPart→$outPart"
+}
+
 /** Compact duration formatting shared by pill + detail page. */
 internal fun formatSubagentDuration(ms: Long): String = when {
     ms < 0L -> "0s"
