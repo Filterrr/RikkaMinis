@@ -126,6 +126,34 @@ object ConfigConfirmationGate {
         scope.launch { resolve(current.id, ConfirmOutcome.Rejected) }
     }
 
+    /**
+     * [T-notif-inline-decision] Answer a queued change by id, from OUTSIDE the
+     * dialog — the notification's Approve / Deny buttons.
+     *
+     * Approve applies the change with every row's current (default) approval
+     * flag, i.e. exactly what the in-app "Apply" button does without any
+     * per-row toggles: the shade button is a whole-change decision, and
+     * toggling individual rows stays an in-app affordance.
+     *
+     * Returns true when [id] was still live. A false means the change already
+     * resolved (user opened the app, the 120s window elapsed) — the caller
+     * logs the stale tap instead of resurrecting anything.
+     */
+    fun resolveFromNotification(id: String, approve: Boolean): Boolean {
+        val current = _pending.value
+        // Only the front-of-queue change can be answered: a stacked request
+        // has no dialog yet, so approving it blind would apply a change the
+        // user has never seen.
+        if (current == null || current.id != id) return false
+        scope.launch {
+            resolve(
+                id,
+                if (approve) ConfirmOutcome.Approved(current.items) else ConfirmOutcome.Rejected,
+            )
+        }
+        return true
+    }
+
     private suspend fun timeout(id: String) {
         if (awaiters[id] == null) return
         AppLogger.info(TAG, "timeout for change $id")

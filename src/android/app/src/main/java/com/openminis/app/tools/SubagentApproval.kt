@@ -56,13 +56,11 @@ data class SpawnApprovalRequest(
  * out ask cancels itself by removing its row.
  */
 class SpawnApprovalQueue {
-
     private class Entry(val request: SpawnApprovalRequest) {
         val deferred = CompletableDeferred<SpawnDecision>()
     }
 
     private val entries = ConcurrentHashMap<String, Entry>()
-    private val counter = AtomicLong(0)
 
     private val _requests = MutableStateFlow<List<SpawnApprovalRequest>>(emptyList())
     /** Pending asks in arrival order — what the dialog renders. */
@@ -83,7 +81,7 @@ class SpawnApprovalQueue {
         detached: Boolean,
     ): SubmittedAsk {
         val request = SpawnApprovalRequest(
-            id = "spawn-ask-${counter.incrementAndGet()}",
+            id = nextAskId(),
             skillId = skillId,
             skillName = skillName,
             taskPreview = task.trim().take(TASK_PREVIEW_CHARS),
@@ -140,5 +138,24 @@ class SpawnApprovalQueue {
     companion object {
         /** Enough to recognise the task without turning the dialog into a novel. */
         const val TASK_PREVIEW_CHARS = 600
+
+        /**
+         * [T-notif-inline-decision] Process-wide counter behind ask ids.
+         *
+         * The id leaves the app: it rides a notification's PendingIntent
+         * extras, and the decision comes back through a broadcast whose only
+         * handle on the ask is this string. A per-queue counter would restart
+         * at 1 in every new chat, so a first ask in chat B would collide with
+         * the first ask in chat A — and the notification's registry, which
+         * routes by id alone, could deliver the answer to the wrong
+         * conversation. One global counter keeps ids unique for the process
+         * lifetime, so routing by id is unambiguous.
+         */
+        private val askCounter = AtomicLong(0)
+
+        /** Mint the next process-unique ask id (also namespaced for the router). */
+        fun nextAskId(): String =
+            com.openminis.app.notification.NotificationDecisionRouter.SPAWN_ID_PREFIX +
+                askCounter.incrementAndGet()
     }
 }

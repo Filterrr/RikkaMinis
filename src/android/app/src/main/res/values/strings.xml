@@ -1142,6 +1142,49 @@
     <string name="notif_config_confirm_body_multi">%d changes need your review — open RikkaMinis to approve or reject.</string>
     <string name="notif_task_failed_body">Task ended with an error. Tap to open the chat.</string>
 
+    <!-- [T-notif-inline-decision] Approve / Deny buttons attached to the
+         approval notifications so a backgrounded user can answer from the
+         shade. "Approve all" is explicit about applying every row at once —
+         per-row review stays an in-app affordance. -->
+    <string name="notif_decision_approve_all">Approve all</string>
+    <string name="notif_decision_allow_once">Allow once</string>
+    <string name="notif_decision_deny">Deny</string>
+    <!-- [T-notif-inline-decision] Sub-agent spawn approvals -->
+    <string name="notif_spawn_channel_name">Sub-agent Approvals</string>
+    <string name="notif_spawn_channel_description">Notifies when a sub-agent is waiting for your approval while the app is backgrounded.</string>
+    <string name="notif_spawn_approval_title">🤖 Sub-agent awaiting approval</string>
+    <string name="notif_spawn_approval_body">%1$s · %2$s · %3$s</string>
+    <string name="notif_spawn_approval_unknown_model">default model</string>
+    <string name="notif_spawn_approval_mode_background">background run</string>
+    <string name="notif_spawn_approval_mode_foreground">foreground run</string>
+
+    <!-- [T-android-trace-viewer] Agent trace viewer — the read side of the
+         schema-2.0 traces the runtime writes to workspace/.traces/. -->
+    <string name="chat_menu_agent_traces">Agent traces</string>
+    <string name="trace_title">Agent Traces</string>
+    <string name="trace_detail_title">Trace Detail</string>
+    <string name="trace_empty">No traces for this chat yet</string>
+    <string name="trace_empty_hint">A trace is written each time the agent runs a turn. Send a message and come back.</string>
+    <string name="trace_load_failed">Couldn\'t read the trace files</string>
+    <string name="trace_state_running">Running / not closed</string>
+    <string name="trace_state_succeeded">Succeeded</string>
+    <string name="trace_state_failed">Failed</string>
+    <string name="trace_state_interrupted">Interrupted</string>
+    <string name="trace_state_cancelled">Cancelled</string>
+    <string name="trace_turns">%d turns</string>
+    <string name="trace_events">%d events</string>
+    <string name="trace_errors_count">%d error(s) recorded</string>
+    <string name="trace_evidence_complete">Evidence complete</string>
+    <string name="trace_evidence_gaps">%d evidence gap(s)</string>
+    <string name="trace_leases_clean">leases released</string>
+    <string name="trace_leases_leaked">leases still held</string>
+    <string name="trace_section_timeline">Timeline (%d)</string>
+    <string name="trace_meta_run_id">run</string>
+    <string name="trace_meta_provider">provider</string>
+    <string name="trace_meta_schema">schema</string>
+    <string name="trace_meta_size">size</string>
+    <string name="trace_meta_file">file</string>
+
     <!-- T-selection-add-to-input — long-press text selection menu action -->
     <string name="selection_add_to_chat_input">Add to Chat Input</string>
     <string name="selection_quote">Quote</string>

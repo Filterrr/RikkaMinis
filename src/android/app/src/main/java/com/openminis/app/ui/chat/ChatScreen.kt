@@ -251,6 +251,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.outlined.Public
+import androidx.compose.material.icons.outlined.Timeline
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.automirrored.filled.NoteAdd
@@ -465,6 +466,8 @@ fun ChatScreen(
     // the source message, not just the session top.
     onMoveToSessionFocus: (sessionId: String, focusMessageId: String) -> Unit = { sid, _ -> onMoveToSession(sid) },
     onBrowseChatFiles: () -> Unit = {},
+    /** [T-android-trace-viewer] Open the agent-trace list for this session. */
+    onOpenAgentTraces: () -> Unit = {},
     /** T150: open FilePreviewScreen for a non-image attachment in a user bubble. */
     onPreviewAttachment: (com.openminis.app.ui.sandbox.FileItem) -> Unit = {},
     /** [T-android-modelpicker-group-edit] Navigate to the Model Groups
@@ -726,6 +729,7 @@ fun ChatScreen(
             ChatMenuPrefs.TERMINAL -> onOpenTerminal()
             ChatMenuPrefs.BROWSER -> viewModel.toggleBrowserSheet()
             ChatMenuPrefs.CHAT_FILES -> onBrowseChatFiles()
+            ChatMenuPrefs.AGENT_TRACES -> onOpenAgentTraces()
             ChatMenuPrefs.COMPACT -> viewModel.runCompactNow()
             ChatMenuPrefs.THINKING -> viewModel.toggleThinking()
             ChatMenuPrefs.SESSION_SKILLS -> showSkillsSheet = true
@@ -2475,6 +2479,22 @@ fun ChatScreen(
                                                 },
                                                 leadingIcon = {
                                                     Icon(Icons.Default.Description, contentDescription = null)
+                                                },
+                                            )
+                                        }
+                                        ChatMenuPrefs.AGENT_TRACES -> {
+                                            // [T-android-trace-viewer] Read the schema-2.0
+                                            // traces this run wrote (terminal state, budget
+                                            // refusals, lease balance) instead of having to
+                                            // ask the agent to cat the file.
+                                            DropdownMenuItem(
+                                                text = { Text(stringResource(R.string.chat_menu_agent_traces)) },
+                                                onClick = {
+                                                    showChatMenu = false
+                                                    dispatchChatAction(ChatMenuPrefs.AGENT_TRACES)
+                                                },
+                                                leadingIcon = {
+                                                    Icon(Icons.Outlined.Timeline, contentDescription = null)
                                                 },
                                             )
                                         }

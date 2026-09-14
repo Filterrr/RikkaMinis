@@ -46,7 +46,7 @@ import kotlin.math.roundToInt
  * Settings → Appearance → Chat Menu.
  *
  * Two independent sections:
- *   (A) Top-right menu — the eight menu-renderable actions each have a
+ *   (A) Top-right menu — every menu-renderable action has a
  *       visibility Switch; the order defines the "..." menu rendering. The
  *       two footer-only actions (Token Usage, Settings) are intentionally
  *       absent: the menu's rendering loop has no branch for them, so a
@@ -70,7 +70,7 @@ fun ChatMenuSettingsScreen(
     val rowHeight = 56.dp
     val rowHeightPx = with(LocalDensity.current) { rowHeight.toPx() }
 
-    // Section A: top-right menu order — only the eight menu-renderable
+    // Section A: top-right menu order — only the menu-renderable
     // actions. TOKEN_USAGE / SETTINGS are footer-only: the "..." menu's
     // rendering loop (ChatScreen) has no branch for them, so a visibility
     // switch would be a dead control that silently does nothing AND could

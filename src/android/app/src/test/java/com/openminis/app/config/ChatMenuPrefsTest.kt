@@ -151,14 +151,29 @@ class ChatMenuPrefsTest {
     }
 
     @Test
-    fun `legacy ten-item order resolves to twelve by appending missing entries`() {
-        val legacy = ChatMenuPrefs.DEFAULT_ORDER.joinToString(",")
+    fun `legacy ten-item order resolves to the full pool by appending missing entries`() {
+        // The historical pool, verbatim — what a pre-existing persisted order
+        // looks like. Everything the pool gained since (Token Usage, Settings,
+        // Agent Traces) must be appended, not lost.
+        val legacy = listOf(
+            ChatMenuPrefs.TERMINAL,
+            ChatMenuPrefs.BROWSER,
+            ChatMenuPrefs.CHAT_FILES,
+            ChatMenuPrefs.COMPACT,
+            ChatMenuPrefs.THINKING,
+            ChatMenuPrefs.SESSION_SKILLS,
+            ChatMenuPrefs.SESSION_MCPS,
+            ChatMenuPrefs.SESSION_MEMORY,
+            ChatMenuPrefs.SLASH_COMMANDS,
+            ChatMenuPrefs.EXPORT,
+        ).joinToString(",")
         val result = ChatMenuPrefs.normalizeOrder(legacy, ChatMenuPrefs.ALL_ENTRIES)
-        assertEquals(12, result.size)
+        assertEquals(ChatMenuPrefs.ALL_ENTRIES.size, result.size)
         assertTrue(ChatMenuPrefs.TOKEN_USAGE in result)
         assertTrue(ChatMenuPrefs.SETTINGS in result)
-        // Original ten retain their order at the front
-        assertEquals(ChatMenuPrefs.DEFAULT_ORDER.subList(0, 10), result.subList(0, 10))
+        assertTrue(ChatMenuPrefs.AGENT_TRACES in result)
+        // Every legacy key retains its position at the front, in order.
+        assertEquals(legacy.split(","), result.subList(0, legacy.split(",").size))
     }
 
     @Test
@@ -182,21 +197,25 @@ class ChatMenuPrefsTest {
     fun `normalizeOrder appends missing known keys in known order`() {
         val raw = "menu_export,menu_terminal"
         val result = ChatMenuPrefs.normalizeOrder(raw, ChatMenuPrefs.ALL_ENTRIES)
-        assertEquals(12, result.size)
+        assertEquals(ChatMenuPrefs.ALL_ENTRIES.size, result.size)
         assertEquals(ChatMenuPrefs.EXPORT, result[0])
         assertEquals(ChatMenuPrefs.TERMINAL, result[1])
-        // The twelve missing entries follow in their DEFAULT_ORDER relative positions
+        // Every key the raw order omitted follows, in ALL_ENTRIES order.
+        assertEquals(
+            ChatMenuPrefs.ALL_ENTRIES.filterNot { it == ChatMenuPrefs.EXPORT || it == ChatMenuPrefs.TERMINAL },
+            result.subList(2, result.size),
+        )
     }
 
     @Test
-    fun `resolveOrder on empty prefs yields all twelve entries in default order`() {
+    fun `resolveOrder on empty prefs yields the full pool in default order`() {
         val prefs = FakePrefs()
         val result = ChatMenuPrefs.resolveOrder(prefs)
         assertEquals(ChatMenuPrefs.ALL_ENTRIES, result)
     }
 
     @Test
-    fun `resolvePinOrder on empty prefs yields all twelve entries in default order`() {
+    fun `resolvePinOrder on empty prefs yields the full pool in default order`() {
         val prefs = FakePrefs()
         val result = ChatMenuPrefs.resolvePinOrder(prefs)
         assertEquals(ChatMenuPrefs.ALL_ENTRIES, result)
@@ -219,10 +238,10 @@ class ChatMenuPrefsTest {
     }
 
     @Test
-    fun `settingsPinOrder always lists all twelve entries with SETTINGS last`() {
+    fun `settingsPinOrder always lists every entry with SETTINGS last`() {
         val prefs = FakePrefs()
         // Even with everything unpinned and a scrambled persisted pin order,
-        // the settings list keeps all twelve rows and anchors SETTINGS at the end.
+        // the settings list keeps every row and anchors SETTINGS at the end.
         ChatMenuPrefs.setPinned(prefs, ChatMenuPrefs.TOKEN_USAGE, false)
         ChatMenuPrefs.setPinned(prefs, ChatMenuPrefs.SETTINGS, false)
         ChatMenuPrefs.writePinOrder(prefs, listOf(ChatMenuPrefs.SETTINGS, ChatMenuPrefs.TERMINAL))
@@ -250,7 +269,7 @@ class ChatMenuPrefsTest {
 
     @Test
     fun `settingsPinOrder does not depend on pin flags`() {
-        // The settings list shows all twelve rows regardless of which entries are
+        // The settings list shows every row regardless of which entries are
         // currently pinned — pin state only drives the Switch checked value.
         val prefs = FakePrefs()
         ChatMenuPrefs.setPinned(prefs, ChatMenuPrefs.TERMINAL, true)
@@ -337,7 +356,7 @@ class ChatMenuPrefsTest {
     fun `sanitizeForWrite appends missing known keys`() {
         val partial = listOf(ChatMenuPrefs.TERMINAL)
         val result = ChatMenuPrefs.sanitizeForWrite(partial, ChatMenuPrefs.ALL_ENTRIES)
-        assertEquals(12, result.size)
+        assertEquals(ChatMenuPrefs.ALL_ENTRIES.size, result.size)
         assertEquals(ChatMenuPrefs.TERMINAL, result[0])
     }
 

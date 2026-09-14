@@ -27,7 +27,16 @@ data class PendingConfigChangeItem(
 
 /** A queued CLI request awaiting user confirmation. */
 data class PendingConfigChange(
-    val id: String = UUID.randomUUID().toString(),
+    /**
+     * [T-notif-inline-decision] Prefixed so the notification-decision receiver
+     * can tell a config approval apart from a sub-agent spawn approval without
+     * a second intent extra (see
+     * [com.openminis.app.notification.NotificationDecisionRouter]). The prefix
+     * is part of the id, so existing round-trips (queue bookkeeping, the
+     * once-per-id notification guard, `resolve`) all stay unchanged.
+     */
+    val id: String = com.openminis.app.notification.NotificationDecisionRouter.CONFIG_ID_PREFIX +
+        UUID.randomUUID().toString(),
     val items: List<PendingConfigChangeItem>,
     val caption: String?,
 )

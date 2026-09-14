@@ -378,6 +378,15 @@
             android:name=".offload.ScheduledNotificationReceiver"
             android:exported="false" />
 
+        <!-- [T-notif-inline-decision] Handles the Allow / Deny buttons on
+             approval notifications (config changes + sub-agent spawns) so a
+             backgrounded user can answer without foregrounding the app. Target
+             is explicit (Intent(context, …)), so it stays unexported: only our
+             own PendingIntents can reach it. -->
+        <receiver
+            android:name=".notification.NotificationDecisionReceiver"
+            android:exported="false" />
+
         <!-- Notification listener — lets android-notification read active notifications.
              User must enable this manually in Settings → Notifications → Device &
              app notifications → Notification access. -->

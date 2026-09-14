@@ -99,6 +99,13 @@ class MinisApp : Application(), ImageLoaderFactory {
     lateinit var backgroundSettingsRepository: BackgroundSettingsRepository
         private set
     lateinit var backgroundTaskNotifier: BackgroundTaskNotifier
+
+    /**
+     * [T-notif-inline-decision] Posts the sub-agent spawn-approval notice with
+     * Allow/Deny shade buttons. Read by ChatViewModel when it parks a spawn, so
+     * a backgrounded user can answer without opening the app.
+     */
+    lateinit var spawnApprovalNotifier: com.openminis.app.notification.SpawnApprovalNotifier
         private set
     lateinit var mountedFoldersStore: MountedFoldersStore
         private set
@@ -606,6 +613,26 @@ class MinisApp : Application(), ImageLoaderFactory {
         }
         com.openminis.app.config.confirm.ConfigConfirmationGate.cancelNotification = {
             configConfirmNotifier.cancel(it)
+        }
+
+        // [T-notif-inline-decision] The same notice now carries Approve / Deny
+        // buttons that answer the gate straight from the shade. The receiver
+        // cannot reach a gate itself (one is Android-free by design, the other
+        // is per-chat ViewModel state), so install the handlers here and let it
+        // route by id.
+        spawnApprovalNotifier = com.openminis.app.notification.SpawnApprovalNotifier(
+            context = this,
+            backgroundSettings = backgroundSettingsRepository,
+            isAppForeground = ::isAppForeground,
+        )
+        com.openminis.app.notification.NotificationDecisionRouter.onConfigDecision = { id, approve ->
+            com.openminis.app.config.confirm.ConfigConfirmationGate.resolveFromNotification(id, approve)
+        }
+        com.openminis.app.notification.NotificationDecisionRouter.onSpawnDecision = { id, decision ->
+            // Live queues are per-chat and indexed by the registry; a null
+            // return means the ask already resolved, timed out, or its chat
+            // was torn down — the receiver logs that rather than crashing.
+            com.openminis.app.tools.SpawnApprovalRegistry.resolveById(id, decision) != null
         }
 
         // Track foreground state via ActivityLifecycleCallbacks. Counting
