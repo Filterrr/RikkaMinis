@@ -203,7 +203,7 @@ object AntigravityCredentialStore {
      * Google rejected the refresh token itself (invalid_grant / revoked /
      * password change) — only re-login can fix those.
      */
-    sealed class RefreshFailure(val message: String) : Exception(message) {
+    sealed class RefreshFailure(message: String) : Exception(message) {
         class Transient(cause: Throwable) : RefreshFailure("antigravity token refresh: transient network failure: ${cause.message}")
         class Fatal(val httpCode: Int, body: String) : RefreshFailure("antigravity token refresh: credential rejected (HTTP $httpCode): ${body.take(200)}")
         class Malformed(detail: String) : RefreshFailure("antigravity token refresh: malformed response: $detail")

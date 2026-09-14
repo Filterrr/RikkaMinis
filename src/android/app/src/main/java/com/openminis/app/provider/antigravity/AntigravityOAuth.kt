@@ -179,8 +179,16 @@ object AntigravityOAuth {
 
     private val pkceVerifiers = java.util.concurrent.ConcurrentHashMap<String, String>()
 
+    /** Test/PKCE-flow seam: bind a verifier to [state] (one-time pop at exchange). */
+    internal fun bindPkceVerifier(state: String, verifier: String) {
+        pkceVerifiers[state] = verifier
+    }
+
+    /** Test seam: pop the verifier bound to [state], or null. */
+    internal fun popPkceVerifier(state: String): String? = pkceVerifiers.remove(state)
+
     /** RFC 7636 APPENDIX B verifier alphabet, 64 chars → 427 bits entropy. */
-    private fun generateCodeVerifier(): String {
+    fun generateCodeVerifier(): String {
         val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
         val bytes = ByteArray(64)
         SecureRandom().nextBytes(bytes)

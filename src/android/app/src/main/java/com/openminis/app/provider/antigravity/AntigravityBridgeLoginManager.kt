@@ -126,6 +126,7 @@ object AntigravityBridgeLoginManager {
         return try {
             AntigravityCliProxyBridge.submitCallback(config, redirectUrl)
             AppLogger.info(TAG, "pasted callback accepted by core")
+            null
         } catch (e: Exception) {
             AppLogger.warning(TAG, "pasted callback rejected: ${e.message}")
             "回调提交失败：${e.message?.take(200) ?: "网络错误"}"
@@ -151,6 +152,7 @@ object AntigravityBridgeLoginManager {
             AntigravityCliProxyBridge.fetchLatestAntigravityCredential(config)
         } catch (e: Exception) {
             AppLogger.warning(TAG, "credential sync failed: ${e.message}")
+            null
         } ?: return Result.Failed(
             "内核已完成授权，但未找到可用的 antigravity 凭证。请确认内核已保存凭证文件后重试。",
         )

@@ -87,7 +87,7 @@ object AntigravityLoginManager {
         // the flow byte-identical to upstream when PKCE is not wanted.
         val codeChallenge = if (AntigravityOAuth.pkceEnabled) {
             val verifier = AntigravityOAuth.generateCodeVerifier()
-            AntigravityOAuth.pkceVerifiers[state] = verifier
+            AntigravityOAuth.bindPkceVerifier(state, verifier)
             AntigravityOAuth.codeChallengeS256(verifier)
         } else null
         val authUrl = AntigravityOAuth.buildAuthUrl(state, redirectUri, codeChallenge)

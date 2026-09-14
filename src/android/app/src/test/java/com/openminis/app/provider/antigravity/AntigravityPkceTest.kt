@@ -76,9 +76,9 @@ class AntigravityPkceTest {
 
     @Test
     fun `verifier bound to state is popped exactly once`() {
-        AntigravityOAuth.pkceVerifiers["pop-state"] = "verifier-1"
-        assertEquals("verifier-1", AntigravityOAuth.pkceVerifiers.remove("pop-state"))
-        assertNull("second pop must fail (one-time use)", AntigravityOAuth.pkceVerifiers.remove("pop-state"))
+        AntigravityOAuth.bindPkceVerifier("pop-state", "verifier-1")
+        assertEquals("verifier-1", AntigravityOAuth.popPkceVerifier("pop-state"))
+        assertNull("second pop must fail (one-time use)", AntigravityOAuth.popPkceVerifier("pop-state"))
     }
 }
 

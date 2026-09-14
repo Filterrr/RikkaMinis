@@ -597,7 +597,10 @@ private fun AntigravityOAuthSection(
                         onClick = {
                             isLoggingIn = true
                             statusMessage = null
-                            poolSlot = instance.credentialCount
+                            // Next free pool slot from the LIVE config
+                            // (the Composable's `instance` is a stale
+                            // snapshot; a just-added account would collide).
+                            poolSlot = providerRepository.instance(instanceId)?.credentialCount ?: 1
                             scope.launch {
                                 val result = AntigravityLoginManager.login(
                                     context = appContext,
