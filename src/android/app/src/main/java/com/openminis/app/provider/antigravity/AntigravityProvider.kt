@@ -129,6 +129,21 @@ class AntigravityProvider(
     private var authRetryTried = false
 
     /**
+     * [fix-antigravity-retry-flags-per-request] The two one-shot retry
+     * guards are per-REQUEST semantics upstream (the executor refreshes and
+     * repairs inside each request cycle), so they reset at the start of
+     * every sendMessage / streamMessage call. Without the reset, a long
+     * conversation self-heals exactly once — the second token expiry hours
+     * later surfaced as "登录已过期" even though the refresh token was fine.
+     * The flags stay instance-level @Volatile (stream and non-stream share
+     * one provider instance) so an in-flight retry still can't loop.
+     */
+    private fun resetPerRequestRetryFlags() {
+        authRetryTried = false
+        projectRepairTried = false
+    }
+
+    /**
      * Upstream requires `project` in the envelope (buildRequest errors out
      * without one — see TestAntigravityBuildRequest missing-project case).
      * Fetch via loadCodeAssist/onboardUser on first use or after loss.
@@ -149,6 +164,7 @@ class AntigravityProvider(
         tools: List<AgentToolDefinition>,
         thinkingLevel: ThinkingLevel,
     ): LLMResponse = withContext(Dispatchers.IO) {
+        resetPerRequestRetryFlags()
         ensureProjectId()
         val inner = buildRequestBody(messages, systemPrompt, maxTokens, temperature, imageParts, tools, thinkingLevel)
         val body = envelope(inner)
@@ -172,6 +188,19 @@ class AntigravityProvider(
                 authRetryTried = true
                 response.close()
                 val fresh = try { tokenRefresher()?.invoke() } catch (_: Exception) { null }
+                if (fresh == null) {
+                    // [fix-antigravity-refresh-failure-classify] Distinguish
+                    // the failure classes: a transient refresh error must
+                    // NOT surface as "登录已过期" (re-login can't fix a
+                    // network blip).
+                    if (AntigravityCredentialStore.lastRefreshFailure is AntigravityCredentialStore.RefreshFailure.Transient) {
+                        throw LLMError.NetworkError(
+                            AntigravityCredentialStore.lastRefreshFailure
+                                ?: AntigravityCredentialStore.RefreshFailure.Transient(java.io.IOException("refresh failed")),
+                        )
+                    }
+                    // Fatal (or unknown) → fall through to the honest 401 error.
+                }
                 if (!fresh.isNullOrBlank()) {
                     val retryRequest = request.newBuilder()
                         .header("Authorization", "Bearer $fresh")
@@ -198,10 +227,22 @@ class AntigravityProvider(
                 // Refresh failed → fall through to the honest error below.
             }
             // One repair round: a missing/stale project id surfaces as a 4xx
-            // with PROJECT/VERSION-style bodies upstream. Guarded by
+            // with PROJECT-style bodies upstream. Guarded by
             // projectRepairTried so a retry can never recurse.
-            val projectish = responseBody.contains("project", ignoreCase = true) ||
-                responseBody.contains("VERSION_CHECK_FAILED", ignoreCase = true)
+            //
+            // [fix-antigravity-version-fingerprint] VERSION_CHECK_FAILED is
+            // NOT a project problem — the body merely mentions "version" —
+            // and the old `projectish` substring match routed it into the
+            // project repair path, which can't fix it and burned the
+            // one-shot retry. Surface it directly with the effective
+            // fingerprint version so users know what Google rejected.
+            if (responseBody.contains("VERSION_CHECK_FAILED", ignoreCase = true)) {
+                throw LLMError.ProviderError(
+                    "Antigravity 客户端指纹被上游拒绝（VERSION_CHECK_FAILED，当前版本 " +
+                        AntigravityOAuth.effectiveVersion() + "）。请更新应用或等待版本指纹文件刷新。",
+                )
+            }
+            val projectish = responseBody.contains("project", ignoreCase = true)
             if (!projectRepairTried && projectish && projectIdRefresher != null &&
                 (response.code == 400 || response.code == 403)) {
                 projectRepairTried = true
@@ -247,6 +288,7 @@ class AntigravityProvider(
         tools: List<AgentToolDefinition>,
         thinkingLevel: ThinkingLevel,
     ): Flow<LLMStreamChunk> = callbackFlow {
+        resetPerRequestRetryFlags()
         ensureProjectId()
         val inner = buildRequestBody(messages, systemPrompt, maxTokens, temperature, imageParts, tools, thinkingLevel)
         val body = envelope(inner)
@@ -268,6 +310,19 @@ class AntigravityProvider(
                 val staleBody = response.body?.string() ?: ""
                 response.close()
                 val fresh = try { tokenRefresher()?.invoke() } catch (_: Exception) { null }
+                if (fresh == null) {
+                    // [fix-antigravity-refresh-failure-classify] Same
+                    // transient-vs-fatal split as the non-streaming path.
+                    if (AntigravityCredentialStore.lastRefreshFailure is AntigravityCredentialStore.RefreshFailure.Transient) {
+                        throw LLMError.NetworkError(
+                            AntigravityCredentialStore.lastRefreshFailure
+                                ?: AntigravityCredentialStore.RefreshFailure.Transient(java.io.IOException("refresh failed")),
+                        )
+                    }
+                    // Fatal (or unknown) → surface the stale-body error honestly.
+                    val retryAfterMs = parseRetryAfterMs(response.headers["Retry-After"], System.currentTimeMillis())
+                    throw mapHttpError(401, staleBody, retryAfterMs)
+                }
                 if (!fresh.isNullOrBlank()) {
                     val retryBody = envelope(buildRequestBody(messages, systemPrompt, maxTokens, temperature, imageParts, tools, thinkingLevel))
                     val retryRequest = request.newBuilder()
@@ -290,9 +345,17 @@ class AntigravityProvider(
                 }
             } else {
                 val errorBody = response.body?.string() ?: ""
+                // [fix-antigravity-version-fingerprint] Same VERSION_CHECK
+                // short-circuit as the non-streaming path.
+                if (errorBody.contains("VERSION_CHECK_FAILED", ignoreCase = true)) {
+                    response.close()
+                    throw LLMError.ProviderError(
+                        "Antigravity 客户端指纹被上游拒绝（VERSION_CHECK_FAILED，当前版本 " +
+                            AntigravityOAuth.effectiveVersion() + "）。请更新应用或等待版本指纹文件刷新。",
+                    )
+                }
                 // One repair round, same shape as the non-streaming path above.
-                val projectish = errorBody.contains("project", ignoreCase = true) ||
-                    errorBody.contains("VERSION_CHECK_FAILED", ignoreCase = true)
+                val projectish = errorBody.contains("project", ignoreCase = true)
                 if (!projectRepairTried && projectish && projectIdRefresher != null &&
                     (response.code == 400 || response.code == 403)) {
                     projectRepairTried = true

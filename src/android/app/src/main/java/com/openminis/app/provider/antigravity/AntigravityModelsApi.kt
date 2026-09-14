@@ -40,15 +40,24 @@ object AntigravityModelsApi {
     /**
      * Fetch Antigravity's model list using the OAuth access token. Returns
      * an empty list on hard failure. When [context] is provided, results are
-     * cached for 7 days at `cacheDir/models-cache/antigravity/<sha256>.json`.
+     * cached for 7 days.
+     *
+     * [fix-antigravity-models-cache-key] The cache key is
+     * `<projectId>|<instanceId>` — NOT the access token. The token rotates
+     * roughly hourly (validAccessToken refreshes transparently), so the old
+     * `accessToken.hashCode()` key invalidated the 7-day cache on every
+     * rotation and turned the cache into a per-hour network fetch. The
+     * cache is deliberately never keyed on secrets; identity is what the
+     * model list actually varies with.
      */
     suspend fun fetchModels(
         accessToken: String,
         projectId: String? = null,
         context: Context? = null,
         forceRefresh: Boolean = false,
+        instanceId: String = "",
     ): List<LLMModel> = withContext(Dispatchers.IO) {
-        val cacheKey = projectId.orEmpty() + "|" + accessToken.hashCode()
+        val cacheKey = projectId.orEmpty() + "|" + instanceId
         if (context != null && !forceRefresh) {
             cache.load(context, cacheKey)?.let { return@withContext it }
         }

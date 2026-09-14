@@ -167,6 +167,7 @@ private object AntigravityModelListAdapter : ModelListProvider {
             projectId = context?.let { AntigravityCredentialStore.loadProjectId(it, instance.id) },
             context = context,
             forceRefresh = forceRefresh,
+            instanceId = instance.id,
         )
     }
 }

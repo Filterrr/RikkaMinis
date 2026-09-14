@@ -2139,9 +2139,10 @@ class ProviderRepository(private val context: Context) {
         val count = declared.coerceAtLeast(highestPopulatedIndex(instanceId) + 1)
         for (index in 0 until count) edit.remove(apiKeySlot(instanceId, index))
         edit.commit()
-        // [T-antigravity-oauth] Drop OAuth material too — deleting the
-        // credential on an OAuth instance must log the account out.
-        AntigravityCredentialStore.clear(context, instanceId)
+        // [T-antigravity-oauth][T-antigravity-credential-pool] Drop OAuth
+        // material for EVERY pool slot — deleting the credential on an
+        // OAuth instance must log all pooled accounts out, not just slot 0.
+        AntigravityCredentialStore.clearAll(context, instanceId, count.coerceAtLeast(1))
     }
 
     /**
@@ -2175,26 +2176,78 @@ class ProviderRepository(private val context: Context) {
      */
     fun loadApiKey(instanceId: String): String? = loadApiKeyAt(instanceId, 0)
 
-    private fun resolveAntigravityToken(instanceId: String): String? {
+    private fun resolveAntigravityToken(instanceId: String): String? =
+        resolveAntigravityTokenAt(instanceId, 0)
+
+    /**
+     * [T-antigravity-credential-pool] Resolve the OAuth token stored at
+     * [slot]. Slot 0 keeps the exact pre-pool behavior (including the
+     * main-thread fire-and-forget refresh); sibling slots resolve
+     * synchronously (rotation paths are already off the main thread).
+     */
+    private fun resolveAntigravityTokenAt(instanceId: String, slot: Int): String? {
         val onMain = android.os.Looper.myLooper() == android.os.Looper.getMainLooper()
-        return if (onMain) {
-            val tokens = AntigravityCredentialStore.loadTokens(context, instanceId)
-            if (tokens == null) {
-                null
-            } else if (AntigravityCredentialStore.isExpired(context, instanceId) && tokens.refreshToken.isNotEmpty()) {
-                // Fire-and-forget refresh; callers this turn may still see 401,
-                // the error copy tells the user to retry.
-                tokenRefreshScope.launch {
+        if (slot <= 0) {
+            return if (onMain) {
+                val tokens = AntigravityCredentialStore.loadTokens(context, instanceId)
+                if (tokens == null) {
+                    null
+                } else if (AntigravityCredentialStore.isExpired(context, instanceId) && tokens.refreshToken.isNotEmpty()) {
+                    // Fire-and-forget refresh; callers this turn may still see 401,
+                    // the error copy tells the user to retry.
+                    tokenRefreshScope.launch {
+                        AntigravityCredentialStore.validAccessToken(context, instanceId)
+                    }
+                    tokens.accessToken
+                } else {
+                    tokens.accessToken
+                }
+            } else {
+                kotlinx.coroutines.runBlocking {
                     AntigravityCredentialStore.validAccessToken(context, instanceId)
                 }
-                tokens.accessToken
-            } else {
-                tokens.accessToken
             }
-        } else {
-            kotlinx.coroutines.runBlocking {
-                AntigravityCredentialStore.validAccessToken(context, instanceId)
+        }
+        // Pool slot (slot >= 1): synchronous resolution only.
+        return kotlinx.coroutines.runBlocking {
+            AntigravityCredentialStore.validAccessToken(context, instanceId, slot)
+        }
+    }
+
+    /**
+     * [T-antigravity-credential-pool] Sync the instance-side bookkeeping for
+     * a pool credential that the login manager already persisted into the
+     * token store at [slot] (slot >= 1):
+     *  - append a `ProviderCredentialMeta` row (labeled with the account
+     *    email) so `credentialCount` > 1 and the existing T-multi-api-key
+     *    rotation machinery treats the account as a routable member;
+     *  - write the OAuth marker into the `apikey_<id>_<slot>` secret slot
+     *    the rotation/worker paths read.
+     *
+     * Slot 0 needs no bookkeeping (legacy single-account shape). No-op when
+     * the metadata row already exists (re-login into the same slot).
+     */
+    fun ensureAntigravityPoolMetadata(
+        instanceId: String,
+        slot: Int,
+        email: String?,
+    ) {
+        if (slot <= 0) return
+        val instance = instance(instanceId) ?: return
+        if (instance.credentials.size <= slot) {
+            val meta = instance.credentials
+            while (meta.size < slot) {
+                meta.add(ProviderCredentialMeta(label = ""))
             }
+            meta.add(ProviderCredentialMeta(label = email.orEmpty().ifEmpty { "账号 ${slot + 1}" }))
+            updateInstance(instance.copy()) // persists the metadata list
+        }
+        // Marker into the rotation-visible secret slot (slot 0 already
+        // carries it from the legacy flow).
+        if (!encryptedPrefs.contains(apiKeySlot(instanceId, slot))) {
+            val edit = encryptedPrefs.edit()
+            edit.putString(apiKeySlot(instanceId, slot), ANTIGRAVITY_OAUTH_MARKER)
+            edit.commit()
         }
     }
 
