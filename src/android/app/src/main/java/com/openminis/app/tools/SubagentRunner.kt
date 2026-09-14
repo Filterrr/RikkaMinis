@@ -66,6 +66,75 @@ class SubagentRunner(
          * VM clear tears everything down.
          */
         fun orchestrationScope(): kotlinx.coroutines.CoroutineScope
+
+        /**
+         * [T-subagent-model-routing] Every model a `spawn_agent(model = …)`
+         * may name, as (instanceId, entryId, modelId, displayName). Default
+         * empty = routing disabled (tests / a VM that cannot see the catalog)
+         * → an explicit `model` argument fails loudly instead of guessing.
+         */
+        fun modelCatalog(): List<SubagentModelResolver.Candidate> = emptyList()
+
+        /**
+         * [T-subagent-model-routing] Build a provider for a catalog candidate
+         * resolved from `spawn_agent(model = …)`. Return null when the model
+         * cannot be instantiated (missing credential, disabled instance).
+         * Default null = routing unavailable → an explicit model fails loudly.
+         */
+        fun providerForCandidate(candidate: SubagentModelResolver.Candidate): com.openminis.app.provider.LLMProvider? = null
+
+        /** [T-subagent-model-routing] Human label of a provider (for the run record). */
+        fun providerLabel(provider: com.openminis.app.provider.LLMProvider): String = provider.model.displayName
+
+        /**
+         * [T-subagent-budget-inheritance] The parent loop's execution budget
+         * as a child-facing guard, or null when no run budget is active (tests,
+         * or a spawn outside an agent loop). Returning null makes the
+         * inheritance layer a complete no-op.
+         */
+        fun subagentBudgetGuard(): SubagentBudgetGuard? = null
+
+        /**
+         * [T-subagent-approval] True when "always allow" is granted for this
+         * skill — the fast path that skips the dialog entirely. Default false:
+         * an implementation without persistence still ASKS (safe direction).
+         */
+        fun isSkillAlwaysAllowed(skillId: String): Boolean = false
+
+        /**
+         * [T-subagent-approval] Record an "always allow" grant for [skillId].
+         * Only called after the user explicitly chose that option.
+         */
+        fun setSkillAlwaysAllowed(skillId: String) {}
+
+        /**
+         * [T-subagent-approval] Park the spawn until the user answers. Returns
+         * DENY when nobody answered in time — a gate left unanswered must not
+         * let autonomous work through. The default (no gate wired) allows,
+         * keeping every existing Deps adapter's behaviour unchanged.
+         */
+        suspend fun awaitSpawnApproval(
+            skillId: String,
+            skillName: String,
+            task: String,
+            modelLabel: String,
+            detached: Boolean,
+        ): SpawnDecision = SpawnDecision.ALLOW_ONCE
+
+        /**
+         * [T-subagent-wake-parent] Deliver a DETACHED run's terminal outcome
+         * to the parent conversation as a synthetic turn, so the parent's
+         * model naturally synthesises a reply without the user having to ask
+         * "did that finish?" — the behaviour ExTV shipped and this runtime
+         * lacked.
+         *
+         * Implementations MUST NOT preempt a live parent turn: a sub-agent
+         * wake-up is informational, so queue it (the app's prompt queue) when
+         * the parent is streaming rather than cancelling its in-flight work.
+         *
+         * Default no-op keeps every existing Deps adapter source-compatible.
+         */
+        suspend fun wakeParentWithResult(runId: String, prompt: String) {}
     }
 
     // ── Entry point ──────────────────────────────────────────────────────
@@ -141,10 +210,103 @@ class SubagentRunner(
                 false, toolTitle = title,
             )
         }
-        val provider = deps.currentProvider() ?: return ToolExecutionResult(
+        val parentProvider = deps.currentProvider() ?: return ToolExecutionResult(
             "Error: No active provider available", false, toolTitle = title,
         )
         val sessionId = deps.activeSessionId()
+
+        // [T-subagent-model-routing] Resolve an explicit `model` BEFORE the
+        // run is registered — a bad model name must fail the SPAWN, not create
+        // a run that dies in the background. Fail-loud by design: silently
+        // inheriting the parent's (expensive) model would turn a typo into a
+        // billing surprise, which is the opposite of why this knob exists.
+        val modelArg = args.optString("model", "").trim()
+        val provider = if (modelArg.isEmpty()) parentProvider else when (
+            val resolved = SubagentModelResolver.resolve(
+                modelArg, deps.modelCatalog(),
+            )
+        ) {
+            is SubagentModelResolver.Result.Resolved ->
+                deps.providerForCandidate(resolved.candidate)
+                    ?: return ToolExecutionResult(
+                        "Error: model '${resolved.candidate.describe()}' resolved but could not be " +
+                            "instantiated (disabled provider or missing credential). Spawn aborted; " +
+                            "no sub-agent run was created.",
+                        false, toolTitle = title,
+                    )
+            is SubagentModelResolver.Result.Failed ->
+                return ToolExecutionResult(
+                    "Error: ${resolved.message} Spawn aborted; no sub-agent run was created.",
+                    false, toolTitle = title,
+                )
+            // `model` was non-blank, so Inherit cannot happen here — treat as failure.
+            SubagentModelResolver.Result.Inherit -> return ToolExecutionResult(
+                "Error: model catalog is unavailable, so an explicit model cannot be honoured. " +
+                    "Omit the 'model' argument to inherit the parent's model.",
+                false, toolTitle = title,
+            )
+        }
+
+        // [T-subagent-run-timeout] Clamp per the tool contract. The default is
+        // deliberate: a detached run has no human watching it, so an
+        // unbounded loop is a cost and permit leak, not a feature.
+        //
+        // [T-subagent-queue-budget] The budget is an ABSOLUTE deadline from
+        // SPAWN time, not a stopwatch started when the permit lands. Two
+        // reasons, both observed in the wild (dogfood run subagent-1/2,
+        // 2026-09-14): a research run spent its whole 600s budget while the
+        // model loop was only half done, and with a per-execution stopwatch a
+        // queued spawn would silently extend that — "timeout_seconds: 600"
+        // meaning "600s plus unbounded waiting" is a lie the tool description
+        // must not tell. Inline spawns additionally cap how long they will
+        // SIT in the scheduler queue (see tryAcquire below): the parent turn
+        // is parked on this call returning, so queue time is user-visible
+        // freeze, not background progress.
+        val timeoutSeconds = args.optInt("timeout_seconds", SubagentSkill.DEFAULT_TIMEOUT_SECONDS)
+            .coerceIn(1, SubagentSkill.MAX_TIMEOUT_SECONDS)
+        val deadlineNanos = System.nanoTime() + timeoutSeconds * 1_000_000_000L
+
+        // [T-subagent-budget-inheritance] Pure check before any run exists
+        // (F13): a parent on an expired shared deadline or with zero token
+        // headroom must not spawn at all. Refusing BEFORE registration leaves
+        // nothing behind — no run row, no pill, no journal. The reservation
+        // itself is taken later, inside the loop's try, so a spawn that dies
+        // before execution (queue timeout, cancel-before-start) cannot leak
+        // one.
+        deps.subagentBudgetGuard()?.spawnBlockReason()?.let { reason ->
+            return ToolExecutionResult(
+                "Error: sub-agent '$skillName' was not spawned — $reason " +
+                    "Continue the work inline in this turn, or ask the user to " +
+                    "compact / start a new chat.",
+                false, toolTitle = "Sub-agent: $skillName",
+            )
+        }
+
+        // [T-subagent-approval] Human gate, AFTER skill validation / model
+        // routing / budget pre-check and BEFORE run registration: a denied
+        // spawn must leave nothing behind (no run row, no pill, no journal,
+        // no budget reservation). The user sees WHICH model will run and
+        // whether it goes to the background before answering — the two
+        // things that make a delegated autonomous loop risky. Always-allowed
+        // skills skip the dialog entirely.
+        if (!deps.isSkillAlwaysAllowed(skill.id)) {
+            when (deps.awaitSpawnApproval(
+                skillId = skill.id,
+                skillName = skill.name,
+                task = query,
+                modelLabel = deps.providerLabel(provider),
+                detached = runUntil == SubagentSkill.RUN_UNTIL_DETACH,
+            )) {
+                SpawnDecision.DENY -> return ToolExecutionResult(
+                    "Error: the user declined this sub-agent spawn. Do NOT retry " +
+                        "the same spawn — the answer will not change by asking again. " +
+                        "Do the work inline, or ask the user what they would prefer.",
+                    false, toolTitle = "Sub-agent: $skillName",
+                )
+                SpawnDecision.ALWAYS_ALLOW -> deps.setSkillAlwaysAllowed(skill.id)
+                SpawnDecision.ALLOW_ONCE -> Unit
+            }
+        }
 
         // [T-subagent-orchestration] Register BEFORE the scheduler hands out
         // a permit, flagged QUEUED — over-limit spawns become visible as
@@ -183,13 +345,17 @@ class SubagentRunner(
             // join_subagents / wait_any or discards via cancel_subagents.
             val detachedJob = deps.orchestrationScope().launch {
                 try {
-                    scheduler.run(skill.id, config.maxParallel) {
+                    scheduler.run(skill.id, config.maxParallel, deadlineNanos) {
                         registry.markExecuting(run.id)
-                        executeLoop(
-                            run = run, skill = skill, config = config, skillName = skillName,
-                            query = query, title = title, runUntil = SubagentSkill.RUN_UNTIL_DONE,
-                            sessionId = sessionId, provider = provider, subagentTools = subagentTools,
-                        )
+                        executeLoopGuarded(run, config) {
+                            executeLoop(
+                                run = run, skill = skill, config = config, skillName = skillName,
+                                query = query, title = title, runUntil = SubagentSkill.RUN_UNTIL_DONE,
+                                sessionId = sessionId, provider = provider, subagentTools = subagentTools,
+                                timeoutSeconds = timeoutSeconds,
+                                deadlineNanos = deadlineNanos,
+                            )
+                        }
                     }
                 } catch (e: CancellationException) {
                     // cancel_subagents completed the deferred first, then
@@ -210,8 +376,10 @@ class SubagentRunner(
                 } finally {
                     // Complete the job from the registry's terminal snapshot if
                     // nobody else did (cancel path completes the deferred BEFORE
-                    // cancelling the coroutine, so this is usually a no-op).
-                    completeJobFromRegistry(job)
+                    // cancelling the coroutine, so this is usually a no-op), and
+                    // wake the parent conversation when the result was pushed
+                    // rather than pulled. [T-subagent-delivery]
+                    maybeWakeParent(job)
                 }
             }
             job.coroutineJob = detachedJob
@@ -235,46 +403,82 @@ class SubagentRunner(
         // RUNNING when the permit lands, and complete the job deferred in
         // every exit path so a later join_subagents(run_ids=[…]) can pick
         // up even an inline result.
-        return scheduler.run(skill.id, config.maxParallel) {
-            registry.markExecuting(run.id)
-            try {
-                val result = executeLoop(
-                    run = run, skill = skill, config = config, skillName = skillName,
-                    query = query, title = title, runUntil = runUntil,
-                    sessionId = sessionId, provider = provider, subagentTools = subagentTools,
-                )
-                job.deferred.complete(
-                    SubagentOrchestration.JobOutcome(
-                        runId = run.id,
-                        success = result.success,
-                        report = result.output,
-                        skillName = skill.name,
-                        journalPath = run.id.let { rid ->
-                            registry.runs.value.firstOrNull { it.id == rid }?.journalPath
-                        },
-                        error = if (result.success) null else result.output.take(300),
-                    ),
-                )
-                result
-            } catch (e: CancellationException) {
-                job.deferred.complete(
-                    SubagentOrchestration.JobOutcome(
-                        runId = run.id, success = false, report = "",
-                        skillName = skill.name, cancelled = true,
-                        error = e.message ?: "cancelled",
-                    ),
-                )
-                throw e
-            } catch (e: Exception) {
-                job.deferred.complete(
-                    SubagentOrchestration.JobOutcome(
-                        runId = run.id, success = false, report = "",
-                        skillName = skill.name,
-                        error = e.message ?: e.javaClass.simpleName,
-                    ),
-                )
-                throw e
+        //
+        // [T-subagent-queue-budget] A QueueTimeout means the spawn's own
+        // budget was eaten by WAITING for a slot — the run never started, so
+        // there are no partial findings to report. Surface it as an ordinary
+        // failed tool result (actionable: retry later, spawn detached, or
+        // raise timeout_seconds), NOT as an exception crashing the parent
+        // turn, and reconcile the registry so the pill does not spin forever.
+        return try {
+            scheduler.run(
+                skill.id, config.maxParallel,
+                deadlineNanos = deadlineNanos,
+                maxQueueWaitMs = SubagentSkill.INLINE_QUEUE_WAIT_MS,
+            ) {
+                registry.markExecuting(run.id)
+                try {
+                    val result = executeLoopGuarded(run, config) {
+                        executeLoop(
+                            run = run, skill = skill, config = config, skillName = skillName,
+                            query = query, title = title, runUntil = runUntil,
+                            sessionId = sessionId, provider = provider, subagentTools = subagentTools,
+                            timeoutSeconds = timeoutSeconds,
+                            deadlineNanos = deadlineNanos,
+                        )
+                    }
+                    job.deferred.complete(
+                        SubagentOrchestration.JobOutcome(
+                            runId = run.id,
+                            success = result.success,
+                            report = result.output,
+                            skillName = skill.name,
+                            journalPath = run.id.let { rid ->
+                                registry.runs.value.firstOrNull { it.id == rid }?.journalPath
+                            },
+                            error = if (result.success) null else result.output.take(300),
+                        ),
+                    )
+                    result
+                } catch (e: CancellationException) {
+                    job.deferred.complete(
+                        SubagentOrchestration.JobOutcome(
+                            runId = run.id, success = false, report = "",
+                            skillName = skill.name, cancelled = true,
+                            error = e.message ?: "cancelled",
+                        ),
+                    )
+                    throw e
+                } catch (e: Exception) {
+                    job.deferred.complete(
+                        SubagentOrchestration.JobOutcome(
+                            runId = run.id, success = false, report = "",
+                            skillName = skill.name,
+                            error = e.message ?: e.javaClass.simpleName,
+                        ),
+                    )
+                    throw e
+                }
             }
+        } catch (e: SubagentScheduler.QueueTimeoutException) {
+            registry.finishIfActive(
+                run.id, SubagentRunRegistry.RunStatus.TIMED_OUT,
+                error = e.message,
+            )
+            job.deferred.complete(
+                SubagentOrchestration.JobOutcome(
+                    runId = run.id, success = false, report = "",
+                    skillName = skill.name, error = e.message,
+                ),
+            )
+            ToolExecutionResult(
+                "Error: sub-agent '$skillName' never started — ${e.message} " +
+                    "(${scheduler.activeGlobalCount()}/${SubagentSkill.MAX_PARALLEL_CAP} chat slots busy). " +
+                    "The run consumed NO tokens. Retry later, spawn with run_until='detach' to avoid " +
+                    "parking this turn on a queue, or raise timeout_seconds if the queue is legitimately " +
+                    "long-running.",
+                false, toolTitle = "Sub-agent: $skillName",
+            )
         }
     }
 
@@ -306,26 +510,98 @@ class SubagentRunner(
 
     /**
      * [T-subagent-orchestration] Complete a job's deferred from the run's
-     * terminal registry snapshot. No-op when the deferred already completed
-     * (cancel cascade finished it first).
+     * terminal registry snapshot. No-op (returns null) when the deferred
+     * already completed (cancel cascade finished it first).
+     *
+     * The return value is the [T-subagent-delivery] signal: a non-null result
+     * means THIS path is the run's terminal completer, so it owns the parent
+     * wake-up. A null return means someone else already delivered.
      */
-    private fun completeJobFromRegistry(job: SubagentOrchestration.SubagentJob) {
-        if (job.deferred.isCompleted) return
+    private fun completeJobFromRegistry(job: SubagentOrchestration.SubagentJob): SubagentOrchestration.JobOutcome? {
+        if (job.deferred.isCompleted) return null
         val snapshot = registry.runs.value.firstOrNull { it.id == job.runId }
-        job.deferred.complete(
-            SubagentOrchestration.JobOutcome(
-                runId = job.runId,
-                success = snapshot?.status == SubagentRunRegistry.RunStatus.SUCCESS,
-                report = snapshot?.resultText ?: "",
-                skillName = job.skillName,
-                journalPath = snapshot?.journalPath,
-                error = snapshot?.error,
-                cancelled = snapshot?.status == SubagentRunRegistry.RunStatus.CANCELLED,
-            ),
+        val outcome = SubagentOrchestration.JobOutcome(
+            runId = job.runId,
+            success = snapshot?.status == SubagentRunRegistry.RunStatus.SUCCESS,
+            report = snapshot?.resultText ?: "",
+            skillName = job.skillName,
+            journalPath = snapshot?.journalPath,
+            error = snapshot?.error,
+            cancelled = snapshot?.status == SubagentRunRegistry.RunStatus.CANCELLED,
         )
+        return if (job.deferred.complete(outcome)) outcome else null
+    }
+
+    /**
+     * [T-subagent-delivery] Push a detached run's outcome to the parent only
+     * when no parent call is parked on it. Two guards, in this order:
+     *  1. [completeJobFromRegistry] returns null when the deferred was already
+     *     completed elsewhere (a pull path, or the cancel cascade) — the party
+     *     that completed it already has the outcome, so we would be second.
+     *  2. [SubagentOrchestration.SubagentJob.hasAwaiters] covers the race
+     *     where the run completes WHILE a join/wait is blocked: that join is
+     *     about to return this very outcome, so a wake-up turn is duplication.
+     *
+     * [completeJobFromRegistry] runs FIRST on purpose — completing the deferred
+     * is what releases a blocked join, and checking awaiters before that would
+     * see a stale positive forever.
+     *
+     * Accepted residual race: a join that resolves targets and has not yet
+     * entered its awaiting() bracket has no awaiter visible here, so both
+     * paths could deliver. The window contains no suspension points and the
+     * failure mode is one duplicate informational turn, not lost data.
+     */
+    private suspend fun maybeWakeParent(job: SubagentOrchestration.SubagentJob) {
+        val outcome = completeJobFromRegistry(job) ?: return
+        if (!job.detached) return
+        if (job.hasAwaiters()) {
+            AppLogger.info(TAG, "[Subagent] '${job.skillName}' result pulled by parent join — wake-up skipped")
+            return
+        }
+        val snapshot = registry.runs.value.firstOrNull { it.id == job.runId }
+        runCatching {
+            deps.wakeParentWithResult(job.runId, buildWakePrompt(outcome, snapshot))
+        }.onFailure {
+            AppLogger.warning(TAG, "[Subagent] failed to wake parent with '${job.skillName}' result: ${it.message}")
+        }
     }
 
     // ── Model loop ───────────────────────────────────────────────────────
+
+    /**
+     * [T-subagent-budget-inheritance] Wrap [executeLoop] with the parent
+     * budget's reserve/settle pair. A wrapper rather than per-return-path
+     * calls: the loop has five exits (success, max-turns, TIMED_OUT, cancel,
+     * fatal) and every one of them must settle — a leaked reservation would
+     * permanently shrink the parent's pool, the exact accounting bug this
+     * feature exists to prevent.
+     *
+     * Actual spend is read from the registry's atomic usage totals at settle
+     * time, NOT from a local accumulator — the same -1-means-unknown rule
+     * applies, so an unreported run nets out to a bare release.
+     */
+    private suspend fun executeLoopGuarded(
+        run: SubagentRunRegistry.Run,
+        config: SubagentSkill.SubagentConfig,
+        block: suspend () -> ToolExecutionResult,
+    ): ToolExecutionResult {
+        val guard = deps.subagentBudgetGuard()
+        val reserved = guard != null
+        if (reserved) {
+            guard!!.reserve(config.maxTurns.toLong() * config.maxOutputTokens.toLong())
+        }
+        try {
+            return block()
+        } finally {
+            if (reserved) {
+                val snapshot = registry.runs.value.firstOrNull { it.id == run.id }
+                val actual = snapshot?.let {
+                    it.tokensIn.coerceAtLeast(0).toLong() + it.tokensOut.coerceAtLeast(0).toLong()
+                } ?: 0L
+                runCatching { guard!!.settle(actual) }
+            }
+        }
+    }
 
     /**
      * The sub-agent's model loop. The run is ALREADY registered (and possibly
@@ -344,6 +620,8 @@ class SubagentRunner(
         sessionId: String,
         provider: com.openminis.app.provider.LLMProvider,
         subagentTools: List<AgentToolDefinition>,
+        timeoutSeconds: Int,
+        deadlineNanos: Long,
     ): ToolExecutionResult {
         // [T-subagent-runtime-preamble] Inject a short runtime preamble
         // (current date/time + durable workspace root) ahead of the skill
@@ -353,15 +631,62 @@ class SubagentRunner(
             skill,
             runtimeContext = SubagentSkill.buildRuntimeContext(),
         )
+        // [T-subagent-model-routing] Record what actually ran. A parent that
+        // asked for a cheap model must be able to verify it got one.
+        registry.setModelLabel(run.id, deps.providerLabel(provider))
         val history = mutableListOf(LLMMessage(role = LLMMessage.Role.USER, content = query))
+
+        // [T-subagent-run-timeout] The absolute [deadlineNanos] arrives from
+        // the spawn site — measured from SPAWN time and inclusive of queue
+        // wait. Enforced at TURN boundaries only: a single hung shell_execute
+        // is already capped at 900s by executeSubagentShell, and an interrupt
+        // mid-stream would corrupt the history. The guard this adds is the
+        // missing one — an unbounded number of turns, which nothing capped
+        // before.
 
         val resultSb = StringBuilder()
         val artifacts = mutableListOf<String>()
         var turns = 0
         var lastText = ""
+        // [T-subagent-context-budget] Last API-reported context size, 0 until a
+        // Usage chunk says otherwise — trusted over the local estimate.
+        var lastContextTokens = 0
 
         try {
             while (turns < config.maxTurns) {
+                // [T-subagent-run-timeout] Checked at the turn boundary, i.e.
+                // after the previous turn's tool results are already in
+                // `history` and journaled. Stopping here — never mid-stream —
+                // means the partial report is always coherent: whatever the
+                // run learned so far survives into the TIMED_OUT result below.
+                if (System.nanoTime() >= deadlineNanos) {
+                    val partial = resultSb.toString().trim()
+                    AppLogger.warning(TAG, "[Subagent] '$skillName' exceeded ${timeoutSeconds}s run budget at turn $turns")
+                    registry.finish(
+                        run.id, SubagentRunRegistry.RunStatus.TIMED_OUT,
+                        resultText = partial,
+                        error = "exceeded the $timeoutSeconds-second run budget after $turns turn(s)",
+                    )
+                    val timedOutResult = SubagentResult(
+                        status = SubagentResult.Status.FAILED,
+                        report = partial,
+                        turns = turns,
+                        maxTurns = config.maxTurns,
+                        skillId = skill.id,
+                        skillName = skill.name,
+                        journalPath = journal(
+                            run, "TIMED_OUT", partial, turns,
+                            "timed out after ${timeoutSeconds}s", artifacts, sessionId,
+                        ),
+                        artifacts = artifacts.toList(),
+                        error = "TIMED_OUT after $turns turn(s): the run exceeded its $timeoutSeconds-second " +
+                            "budget. Its partial findings are above — re-spawn with a larger " +
+                            "timeout_seconds only if the work is genuinely unfinished.",
+                    )
+                    return ToolExecutionResult(
+                        timedOutResult.toPromptText(), false, toolTitle = "Sub-agent: ${skill.name}",
+                    )
+                }
                 turns++
                 registry.turnStarted(run.id, turns)
                 val instance = provider.instanceContext ?: let {
@@ -413,6 +738,21 @@ class SubagentRunner(
                                         } catch (_: Exception) { chunk.name },
                                     )
                                 }
+                                // [T-subagent-token-accounting] The sub-agent
+                                // loop used to DROP this chunk — a delegated
+                                // run's cost was invisible, which made the
+                                // "cheaper model for cheap work" rationale
+                                // unfalsifiable.
+                                is LLMStreamChunk.Usage -> {
+                                    registry.addUsage(
+                                        run.id,
+                                        chunk.usage.inputTokens,
+                                        chunk.usage.outputTokens,
+                                    )
+                                    if (chunk.usage.latestContextTokens > 0) {
+                                        lastContextTokens = chunk.usage.latestContextTokens
+                                    }
+                                }
                                 else -> {}
                             }
                         }
@@ -440,10 +780,17 @@ class SubagentRunner(
                                     "turn $turns retry $streamRetryAttempt/" +
                                     "${STREAM_RETRY_DELAYS_SEC.size} in ${delaySec}s: $errDesc",
                             )
-                            registry.appendResultText(
+                            // [T-subagent-report-hygiene] Notices go to the
+                            // pill/detail stream, NOT into resultText: finish()
+                            // falls back to the streamed text when the model
+                            // emits no closing summary, and these lines were
+                            // being delivered to the parent AS the report
+                            // (dogfood subagent-1/2, 2026-09-14 — the wake-up
+                            // "report" was nothing but retry chatter).
+                            registry.appendNotice(
                                 run.id,
-                                "\n\n[transient stream error ($errDesc) — retrying " +
-                                    "$streamRetryAttempt/${STREAM_RETRY_DELAYS_SEC.size} in ${delaySec}s]\n",
+                                "[transient stream error ($errDesc) — retrying " +
+                                    "$streamRetryAttempt/${STREAM_RETRY_DELAYS_SEC.size} in ${delaySec}s]",
                             )
                             kotlinx.coroutines.delay(delaySec * 1000L)
                             continue
@@ -506,6 +853,32 @@ class SubagentRunner(
                 // recovery signal a killed run leaves behind. Best-effort —
                 // failures are swallowed inside the checkpoint writer.
                 SubagentRunCheckpoint.write(run, turns, text, context)
+
+                // [T-subagent-context-budget] The sub-agent's `history` only
+                // ever grew before this — `general-agent` ships max_turns: 48
+                // and a research run's tool outputs are routinely tens of KB,
+                // so long runs died on a provider context error instead of
+                // finishing. Trim at the turn boundary (after this turn's
+                // tool_results are in, before the next request) with the same
+                // turn-granular invariants the main loop uses: whole rounds
+                // only, task message and the newest rounds always kept.
+                runCatching {
+                    val window = provider.model.contextWindowTokens
+                    val trimmed = SubagentHistoryBudget.trim(
+                        history = history,
+                        contextWindowTokens = window,
+                        apiContextTokens = lastContextTokens,
+                    )
+                    if (trimmed.didTrim) {
+                        history.clear()
+                        history.addAll(trimmed.messages)
+                        AppLogger.info(
+                            TAG,
+                            "[Subagent] '$skillName' context trim: dropped ${trimmed.droppedMessages} " +
+                                "messages (~${trimmed.estimatedTokens}t est) to fit ${window}t window",
+                        )
+                    }
+                }
 
                 if (runUntil == SubagentSkill.RUN_UNTIL_TURN_COMPLETE) {
                     // [T-subagent-first-turn] Caller asked for a first-turn
@@ -738,11 +1111,28 @@ class SubagentRunner(
         artifacts: List<String>,
         sessionId: String,
     ): String? {
+        // [T-subagent-journal-steps] Re-read the LIVE snapshot: the `run`
+        // handle here is the object captured at registration, whose `steps`
+        // were empty then and never mutate afterwards (Run is immutable and
+        // the registry swaps whole objects). Without this the journal's
+        // "## Steps" section was ALWAYS empty — every dogfooded report so far
+        // lost its audit trail for exactly this reason. Terminal transitions
+        // happen before journal() is called, so the registry already holds
+        // the full step list plus usage/model labels.
+        val live = registry.runs.value.firstOrNull { it.id == run.id } ?: run
+        // Same re-read discipline for the CALLER-SUPPLIED fields: the
+        // detached cancel handler journals with ("", 0) — the coroutine was
+        // cut off before it could assemble a return value — but the registry
+        // HAS the streamed text and the turn count. Falling back here means a
+        // cancelled run's journal still carries everything it produced,
+        // instead of "(no text output produced)" over real findings.
+        val effectiveText = resultText.ifBlank { live.resultText }
+        val effectiveTurns = if (turns > 0) turns else live.turn
         val path = SubagentRunJournal.write(
-            run = if (run.sessionId.isEmpty()) run.copy(sessionId = sessionId) else run,
+            run = if (live.sessionId.isEmpty()) live.copy(sessionId = sessionId) else live,
             terminal = terminal,
-            resultText = resultText,
-            turns = turns,
+            resultText = effectiveText,
+            turns = effectiveTurns,
             error = error,
             artifacts = artifacts,
             context = context,
@@ -787,7 +1177,11 @@ class SubagentRunner(
                         false, toolTitle = toolTitle,
                     )
                 val (group, jobs) = target
-                val outcomes = SubagentOrchestration.joinAll(jobs, timeoutMs)
+                // [T-subagent-delivery] Bracket the await so a run finishing
+                // inside the window is delivered by THIS pull path only.
+                val outcomes = SubagentOrchestration.awaiting(jobs) {
+                    SubagentOrchestration.joinAll(jobs, timeoutMs)
+                }
                 buildJoinPrompt(group, jobs, outcomes, timedOut = outcomes.any { !it.success && it.error?.contains("join timed out") == true })
             }
             SubagentOrchestrationTools.WAIT_ANY_NAME -> {
@@ -802,7 +1196,18 @@ class SubagentRunner(
                         false, toolTitle = toolTitle,
                     )
                 val (group, jobs) = target
-                val winner = SubagentOrchestration.waitAny(jobs, timeoutMs, successOnly)
+                // [T-subagent-delivery] Bracket the race with the WHOLE batch,
+                // losers included. Tempting to mark only the eventual winner,
+                // but the race blocks until SOMEONE completes — meanwhile a
+                // loser finishing would push a wake-up into a parent that is
+                // synchronously parked here. Foregoing a loser's push is
+                // strictly safer, and the result below enumerates the
+                // still-running ids so the parent can join them explicitly.
+                // The counter releases on return, so a loser that finishes
+                // AFTER the race is still pushed.
+                val winner = SubagentOrchestration.awaiting(jobs) {
+                    SubagentOrchestration.waitAny(jobs, timeoutMs, successOnly)
+                }
                 if (winner == null) {
                     ToolExecutionResult(
                         "wait_any timed out after ${timeoutMs / 1000}s — no member of group ${group.id} " +
@@ -923,3 +1328,49 @@ class SubagentRunner(
         private val STREAM_RETRY_DELAYS_SEC = intArrayOf(1, 2, 4)
     }
 }
+
+/** [T-subagent-delivery] Cap on how much report text rides into the parent turn. */
+private const val WAKE_REPORT_MAX_CHARS = 4000
+
+/**
+ * [T-subagent-delivery] Render the parent-facing turn for a detached run's
+ * terminal outcome.
+ *
+ * Framed as an EVENT, not a user request, so the parent model folds it into
+ * its plan instead of answering it conversationally. The report is bounded — a
+ * detached run that produced a 50 KB dump must not spend the parent's whole
+ * window on it; the journal holds the full text and is named so the parent can
+ * read selectively.
+ *
+ * Top-level + pure (no runner state) so the wording contract is unit-testable.
+ */
+internal fun buildWakePrompt(
+    outcome: SubagentOrchestration.JobOutcome,
+    snapshot: SubagentRunRegistry.Run?,
+    maxReportChars: Int = WAKE_REPORT_MAX_CHARS,
+): String = buildString {
+    val status = snapshot?.status?.name ?: if (outcome.success) "SUCCESS" else "FAILED"
+    appendLine("[Sub-agent '${outcome.skillName}' finished in the background — status $status]")
+    appendLine("run_id: ${outcome.runId}")
+    snapshot?.let { run ->
+        if (run.modelLabel.isNotBlank()) appendLine("model: ${run.modelLabel}")
+        if (run.tokensIn >= 0 || run.tokensOut >= 0) {
+            appendLine("tokens: in=${run.tokensIn.coerceAtLeast(0)} out=${run.tokensOut.coerceAtLeast(0)}")
+        }
+        appendLine("turns: ${run.turn}/${run.maxTurns}")
+    }
+    if (!outcome.error.isNullOrBlank()) appendLine("error: ${outcome.error}")
+    if (outcome.report.isNotBlank()) {
+        appendLine()
+        if (outcome.report.length > maxReportChars) {
+            append(outcome.report.take(maxReportChars))
+            appendLine(" …[truncated]")
+        } else {
+            appendLine(outcome.report)
+        }
+    }
+    outcome.journalPath?.let {
+        appendLine()
+        append("Full report: $it (file_read it for anything truncated above).")
+    }
+}.trim()

@@ -43,8 +43,13 @@ import java.util.concurrent.atomic.AtomicLong
  */
 class SubagentRunRegistry {
 
-    /** How a sub-agent run terminated. */
-    enum class RunStatus { RUNNING, SUCCESS, FAILED, CANCELLED, QUEUED }
+    /**
+     * How a sub-agent run terminated. [TIMED_OUT] is a distinct terminal
+     * status (not FAILED) because the recovery advice differs: a timed-out
+     * run's partial report is usually still worth reading, and the parent may
+     * succeed by re-spawning the SAME task with a larger budget.
+     */
+    enum class RunStatus { RUNNING, SUCCESS, FAILED, CANCELLED, QUEUED, TIMED_OUT }
 
     /** One entry in the sub-agent's live execution log (a tool call step). */
     data class Step(
@@ -103,8 +108,28 @@ class SubagentRunRegistry {
         val maxTurns: Int = 0,
         /** Final or streaming text produced by the sub-agent. */
         val resultText: String = "",
-        /** Error detail when [status] is FAILED/CANCELLED. */
+        /** Error detail when [status] is FAILED/CANCELLED/TIMED_OUT. */
         val error: String? = null,
+        /**
+         * [T-subagent-token-accounting] Cumulative API-reported usage across
+         * every turn of this run. Previously the parent had NO cost signal for
+         * a sub-agent — the whole "delegate cheap work to a cheaper model"
+         * rationale was unfalsifiable. -1 = never reported by the provider
+         * (some endpoints omit usage), surfaced as "unknown" rather than 0.
+         */
+        val tokensIn: Int = -1,
+        val tokensOut: Int = -1,
+        /**
+         * [T-subagent-model-routing] Which model actually ran this sub-agent —
+         * the parent paid for it, so it must be visible without re-reading the
+         * skill. Empty until the runner stamps it.
+         */
+        val modelLabel: String = "",
+        /**
+         * [T-subagent-report-hygiene] Run-level notices (retry lines, etc.) —
+         * never part of the report text the parent consumes.
+         */
+        val notices: String = "",
         val steps: List<Step> = emptyList(),
         /** True when the user opened the detail page at least once. */
         val opened: Boolean = false,
@@ -348,6 +373,21 @@ class SubagentRunRegistry {
         }
     }
 
+    /**
+     * [T-subagent-report-hygiene] Run-level notices that are NOT the report:
+     * transient-retry lines, truncation warnings. Kept OUT of [resultText]
+     * because [finish] falls back to the streamed resultText when the caller
+     * passes a blank terminal text (models that stop on a tool call never
+     * emit a summary) — notices mixed into that stream were delivered to the
+     * parent AS the sub-agent's findings.
+     */
+    fun appendNotice(runId: String, line: String) {
+        if (line.isBlank()) return
+        updateRun(runId) { run ->
+            run.copy(notices = (run.notices + "\n" + line).trim().takeLast(MAX_NOTICE_CHARS))
+        }
+    }
+
     fun markOpened(runId: String) {
         updateRun(runId) { if (it.opened) it else it.copy(opened = true) }
     }
@@ -381,6 +421,37 @@ class SubagentRunRegistry {
         }
     }
 
+    /**
+     * [T-subagent-token-accounting] Add one turn's API-reported usage to the
+     * run's running totals. Lives on the atomic [updateRun] path — the same
+     * compare-and-set the shell line callbacks use — so two providers
+     * reporting usage for the same run can't interleave and lose an add.
+     *
+     * Providers that never emit a Usage chunk leave the totals at -1
+     * ("unknown"); we only promote them to real numbers once we have seen at
+     * least one report, so 0 is never mistaken for "reported nothing".
+     */
+    fun addUsage(runId: String, inputTokens: Int, outputTokens: Int) {
+        if (inputTokens <= 0 && outputTokens <= 0) return
+        updateRun(runId) { run ->
+            val inBase = if (run.tokensIn < 0) 0 else run.tokensIn
+            val outBase = if (run.tokensOut < 0) 0 else run.tokensOut
+            run.copy(
+                tokensIn = inBase + inputTokens,
+                tokensOut = outBase + outputTokens,
+            )
+        }
+    }
+
+    /**
+     * [T-subagent-model-routing] Stamp the model a run actually executed on,
+     * once the runner has resolved (or inherited) it.
+     */
+    fun setModelLabel(runId: String, label: String) {
+        if (label.isBlank()) return
+        updateRun(runId) { if (it.modelLabel == label) it else it.copy(modelLabel = label) }
+    }
+
     /** Wipe all state (clearChat / session switch). */
     fun clear() {
         mutateRuns { emptyList() }
@@ -391,6 +462,7 @@ class SubagentRunRegistry {
         const val MAX_RETAINED_RUNS = 20
         const val MAX_STEP_OUTPUT_LINES = 60
         const val MAX_RESULT_TEXT_CHARS = 24_000
+        private const val MAX_NOTICE_CHARS = 2_000
     }
 }
 

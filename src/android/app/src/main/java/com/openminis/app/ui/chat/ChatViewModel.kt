@@ -83,6 +83,8 @@ import com.openminis.app.tools.SubagentScheduler
 import com.openminis.app.tools.SubagentSkill
 import com.openminis.app.tools.ToolBatchExecutor
 import com.openminis.app.tools.ToolConcurrencyPolicy
+import com.openminis.app.tools.SpawnApprovalQueue
+import com.openminis.app.tools.SpawnDecision
 import com.openminis.app.tools.SubagentOrchestrationTools
 import com.openminis.app.tools.ToolExecutionResult
 import com.openminis.app.tools.ToolFailureHook
@@ -164,6 +166,12 @@ class ChatViewModel(
          */
         /** T9: trace retention cap per session (oldest pruned first). */
         const val MAX_TRACE_FILES_PER_SESSION = 20
+
+        // [T-subagent-approval] How long a spawn parks waiting for the user.
+        // Five minutes, then DENY: the parent agent loop is frozen on the ask
+        // either way, and an unanswered gate for autonomous work must not
+        // default to allow — if the user walked away, that was the answer.
+        const val SPAWN_APPROVAL_TIMEOUT_MS = 5L * 60L * 1000L
 
 
         // ── T7-A: 观察预算默认上限（advisory 观察用，不阻断任何行为）──
@@ -853,6 +861,21 @@ class ChatViewModel(
     )
 
     /**
+     * [T-subagent-approval] Pending spawn approvals for THIS chat — the
+     * dialog renders [SpawnApprovalQueue.requests]; the runner parks on the
+     * deferred each ask hands back. Per-VM like every other sub-agent
+     * surface: an ask belongs to the conversation that spawned it, and
+     * onCleared denies whatever is still outstanding so a torn-down chat
+     * cannot leave a parent turn parked forever.
+     */
+    val subagentApprovals = SpawnApprovalQueue()
+
+    /** UI hook: answer a pending ask (Allow once / Always allow / Deny). */
+    fun resolveSpawnApproval(askId: String, decision: SpawnDecision) {
+        subagentApprovals.resolve(askId, decision)
+    }
+
+    /**
      * [T-subagent-runner] Sub-agent runtime extracted from this ViewModel —
      * spawn_agent lifecycle (loop, tool dispatch, journaling, structured
      * results) lives in [SubagentRunner]; this class only supplies the
@@ -884,6 +907,106 @@ class ChatViewModel(
             override fun unwrapFlowException(e: Throwable) =
                 this@ChatViewModel.unwrapFlowException(e)
             override fun orchestrationScope() = subagentOrchestrationScope
+
+            // [T-subagent-model-routing] Expose the user's own catalog so a
+            // spawn can name a cheaper model. Built from the live provider
+            // config — recomputed per spawn, so a model added mid-chat is
+            // immediately routable.
+            override fun modelCatalog(): List<com.openminis.app.tools.SubagentModelResolver.Candidate> =
+                subagentModelCatalog()
+
+            override fun providerForCandidate(
+                candidate: com.openminis.app.tools.SubagentModelResolver.Candidate,
+            ): LLMProvider? {
+                val instance = providerRepository.instance(candidate.instanceId) ?: return null
+                val entry = providerRepository.entriesFor(candidate.instanceId)
+                    .firstOrNull { it.uuid == candidate.entryId } ?: return null
+                val apiKey = providerRepository.loadAnyUsableApiKey(instance.id) ?: return null
+                return runCatching { ProviderFactory.create(instance, apiKey, entry.model, context) }
+                    .onFailure { AppLogger.warning(TAG, "[Subagent] failed to build provider for ${candidate.describe()}: ${it.message}") }
+                    .getOrNull()
+            }
+
+            override fun providerLabel(provider: LLMProvider): String =
+                provider.model.displayName.ifBlank { provider.model.id }
+
+            // [T-subagent-budget-inheritance] Per-spawn guard over the parent
+            // loop's active budget (null between runs). A fresh guard object
+            // per spawn so each child holds an independent reservation and
+            // settles on its own — concurrent siblings must not share a
+            // reservation counter.
+            override fun subagentBudgetGuard(): com.openminis.app.tools.SubagentBudgetGuard? =
+                activeRunBudget?.let { com.openminis.app.agent.runtime.TokenBudgetChildGuard(it) }
+
+            // [T-subagent-wake-parent] A detached run finishing is an EVENT,
+            // not a user request — so it must never preempt a live turn and
+            // must never touch the user's staged attachments.
+            //  - parent streaming: park it in the prompt queue (no-attachment
+            //    synthetic variant); the existing drain picks it up when the
+            //    loop ends.
+            //  - parent idle: queue + kick the same drain path
+            //    (resumeQueueAfterCancel) that already owns the
+            //    "claim streaming flag, build provider, stream" discipline.
+            // sendMessage() is NOT used: send-is-preempt would CANCEL the
+            // in-flight turn and it drags `_attachments` along with it.
+            // [T-subagent-approval] Per-skill always-allow, persisted in
+            // SubagentApprovalStore (global, survives chats & restarts).
+            override fun isSkillAlwaysAllowed(skillId: String) =
+                com.openminis.app.data.SubagentApprovalStore.isAlwaysAllowed(context, skillId)
+
+            override fun setSkillAlwaysAllowed(skillId: String) {
+                com.openminis.app.data.SubagentApprovalStore.setAlwaysAllowed(context, skillId, true)
+            }
+
+            /**
+             * [T-subagent-approval] Park the spawn on the user's answer.
+             * Timeout → DENY (never allow), and the ask row is removed so a
+             * dialog nobody answered does not linger. Re-checking isOutstanding
+             * after the timeout closes the tap-raced-our-expiry window: if the
+             * user DID answer a microsecond before we gave up, their answer
+             * stands.
+             */
+            override suspend fun awaitSpawnApproval(
+                skillId: String,
+                skillName: String,
+                task: String,
+                modelLabel: String,
+                detached: Boolean,
+            ): com.openminis.app.tools.SpawnDecision {
+                val ask = subagentApprovals.submit(
+                    skillId = skillId,
+                    skillName = skillName,
+                    task = task,
+                    modelLabel = modelLabel,
+                    detached = detached,
+                )
+                val answered = kotlinx.coroutines.withTimeoutOrNull(SPAWN_APPROVAL_TIMEOUT_MS) {
+                    ask.deferred.await()
+                }
+                if (answered != null) return answered
+                subagentApprovals.remove(ask.request.id)
+                // resolve() retires the row the instant it delivers, so a tap
+                // that landed between our timeout firing and the remove is
+                // still honoured — the user's answer beats our fallback.
+                // (isCompleted + getCompleted are the stable-API spelling of
+                // getCompletedOrNull, which needs an experimental opt-in.)
+                return if (ask.deferred.isCompleted) {
+                    runCatching { ask.deferred.getCompleted() }
+                        .getOrDefault(com.openminis.app.tools.SpawnDecision.DENY)
+                } else {
+                    com.openminis.app.tools.SpawnDecision.DENY
+                }
+            }
+
+            override suspend fun wakeParentWithResult(runId: String, prompt: String) {
+                if (!enqueueSyntheticPrompt(prompt)) return
+                if (_isStreaming.value || _isCompacting.value) {
+                    AppLogger.info(TAG, "[Subagent] parent busy — queued '$runId' result for drain")
+                    return
+                }
+                AppLogger.info(TAG, "[Subagent] parent idle — draining '$runId' result now")
+                resumeQueueAfterCancel()
+            }
         },
     )
 
@@ -1086,6 +1209,13 @@ class ChatViewModel(
     private val agentTools: List<AgentToolDefinition>
         get() = AgentTools.makeAgentTools(
             memoryEnabled = _memoryEnabled.value,
+            // [T-subagent-model-routing] Embed the CURRENT model list so the
+            // parent can name a cheaper model for a spawn instead of guessing
+            // one. Same source as Deps.modelCatalog() — the schema and the
+            // resolver must never disagree about what is routable.
+            // Budgeted: capped at MAX_CATALOG_HINT_MODELS names because this
+            // rides in every request's tool schema.
+            modelCatalogHint = SubagentSkill.buildCatalogHint(subagentModelCatalog()),
             // [OPT-browser-websearch-tool] Embed the CURRENT engine/template
             // in the schema so the model's web_search calls (and its mental
             // model of "how search works here") always match the user's
@@ -1094,6 +1224,19 @@ class ChatViewModel(
             searchHintProvider = {
                 com.openminis.app.browser.BrowserSearchPrefs.agentHint(context)
             },
+        )
+
+    /**
+     * [T-subagent-model-routing] The routable model list, read live from the
+     * provider config. Shared by the spawn_agent schema hint and
+     * Deps.modelCatalog() so the two can never disagree — a model shown in the
+     * schema but missing from the resolver would produce a spawn that fails
+     * "unknown model", which reads as a bug in the tool rather than the name.
+     */
+    private fun subagentModelCatalog(): List<com.openminis.app.tools.SubagentModelResolver.Candidate> =
+        buildSubagentModelCatalog(
+            instances = providerRepository.instances,
+            entriesPerInstance = { providerRepository.visibleEntries(it) },
         )
 
     /**
@@ -5658,6 +5801,40 @@ class ChatViewModel(
         _messages.value = _messages.value + chatMsg
         clearAttachments()
         Log.i(TAG, "Enqueued prompt (${trimmed.length}ch, ${pendingAttachments.size} attachments), queue=${_promptQueue.value.size}")
+    }
+
+    /**
+     * [T-subagent-wake-parent] Queue a system-originated prompt with NO
+     * attachment side effects.
+     *
+     * Deliberately separate from [enqueuePrompt], which is a USER action and
+     * therefore (a) steals whatever the user had staged in `_attachments` and
+     * (b) calls clearAttachments(). A background sub-agent finishing is
+     * neither — it must not swallow a draft the user is still composing, and
+     * must not fire while the user's own queue is mid-drain.
+     *
+     * Returns false when [text] is blank. The caller (SubagentRunner) invokes
+     * this on a VM-coroutine; both queue mutation sites are plain StateFlow
+     * assignments, consistent with the rest of the queue path.
+     */
+    fun enqueueSyntheticPrompt(text: String): Boolean {
+        val trimmed = text.trim()
+        if (trimmed.isBlank()) return false
+        val prompt = QueuedPrompt(
+            id = "queued_synthetic_${System.currentTimeMillis()}_${(Math.random() * 1_000_000).toInt()}",
+            text = trimmed,
+            attachments = emptyList(),
+        )
+        _promptQueue.value = _promptQueue.value + prompt
+        _messages.value = _messages.value + ChatMessage(
+            id = "queued_msg_${prompt.id}",
+            role = "user",
+            content = trimmed,
+            isQueued = true,
+            queuedPromptId = prompt.id,
+        )
+        Log.i(TAG, "Enqueued synthetic prompt (${trimmed.length}ch), queue=${_promptQueue.value.size}")
+        return true
     }
 
     /** Remove a queued prompt and its chat message by prompt id. */
@@ -12584,6 +12761,12 @@ Environment variables:
         // runs never outlive their chat.
         subagentOrchestration.clear()
         subagentOrchestrationScope.cancel(kotlinx.coroutines.CancellationException("ViewModel cleared"))
+        // [T-subagent-approval] A dialog nobody can see must not keep a parent
+        // turn parked: deny every outstanding ask. (Waiters cancelled along
+        // with the VM die anyway — deny is for the ones still alive at this
+        // point, and clears the list the dialog renders.) The queue is per-VM,
+        // so the clear-style semantics match the registry above.
+        subagentApprovals.denyAllOutstanding()
         // [T-subagent-parallel] The per-chat limiter is per-VM like the
         // registry — it dies with this VM, so no release is needed. (The
         // old process-global gate required an onCleared release to avoid

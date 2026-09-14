@@ -37,6 +37,7 @@ internal fun runStatusColor(run: SubagentRunRegistry.Run?): Color = when {
     run.isExecuting -> SubagentAccent
     run.status == SubagentRunRegistry.RunStatus.SUCCESS -> ToolCheckColor
     run.status == SubagentRunRegistry.RunStatus.FAILED -> ToolErrorColor
+    run.status == SubagentRunRegistry.RunStatus.TIMED_OUT -> ToolErrorColor
     else -> ToolCancelColor
 }
 
@@ -48,6 +49,7 @@ internal fun runStatusLabel(run: SubagentRunRegistry.Run?): String = when {
     else -> when (run.status) {
         SubagentRunRegistry.RunStatus.SUCCESS -> "Completed"
         SubagentRunRegistry.RunStatus.FAILED -> "Failed"
+        SubagentRunRegistry.RunStatus.TIMED_OUT -> "Timed out"
         SubagentRunRegistry.RunStatus.CANCELLED -> "Cancelled"
         SubagentRunRegistry.RunStatus.QUEUED -> "Queued"
         SubagentRunRegistry.RunStatus.RUNNING -> "Running"
@@ -88,6 +90,21 @@ internal fun turnProgressFraction(run: SubagentRunRegistry.Run): Float? {
     if (!run.isExecuting || run.maxTurns <= 0) return null
     val fraction = run.turn.toFloat() / run.maxTurns.toFloat()
     return fraction.coerceIn(0.04f, 0.96f)
+}
+
+/**
+ * [T-subagent-token-accounting] "in→out" cost label for a run, or null when
+ * the provider never reported usage (both -1) — unknown is RENDERED AS ABSENT,
+ * never as 0 or -1: a silent provider must not masquerade as a free run. One
+ * side unknown keeps a "?" placeholder so a mid-stream snapshot still shows
+ * what IS known.
+ */
+internal fun formatSubagentTokenCost(run: SubagentRunRegistry.Run): String? {
+    if (run.tokensIn < 0 && run.tokensOut < 0) return null
+    fun k(n: Int): String = if (n < 1000) n.toString() else String.format("%.1fk", n / 1000.0)
+    val inPart = if (run.tokensIn >= 0) k(run.tokensIn) else "?"
+    val outPart = if (run.tokensOut >= 0) k(run.tokensOut) else "?"
+    return "$inPart→$outPart"
 }
 
 /** Compact duration formatting shared by pill + detail page. */

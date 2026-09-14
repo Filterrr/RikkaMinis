@@ -1,7 +1,44 @@
 package com.openminis.app.ui.chat
 
+import com.openminis.app.tools.SubagentModelResolver
 import org.json.JSONObject
 import java.net.URLConnection
+
+/**
+ * [T-subagent-model-routing] Project the provider catalog into the spawn-time
+ * model list a sub-agent may be routed to.
+ *
+ * Pure over already-loaded config (no repository / Android reference) so both
+ * the schema hint and the resolver — which MUST agree on what is routable —
+ * are driven by one function that is JVM-unit-testable.
+ *
+ * Disabled instances and hidden entries are excluded: offering them would
+ * produce a spawn that fails at credential resolution, which is a worse error
+ * than "that model is not available".
+ *
+ * [entriesPerInstance] maps a provider instance id to its model entries;
+ * [instances] is the enabled instance list. Callers feed both straight from
+ * ProviderRepository.
+ */
+internal fun buildSubagentModelCatalog(
+    instances: List<com.openminis.app.data.model.ProviderInstance>,
+    entriesPerInstance: (String) -> List<com.openminis.app.data.model.ModelEntry>,
+): List<SubagentModelResolver.Candidate> = instances
+    .filter { it.isEnabled }
+    .flatMap { instance ->
+        entriesPerInstance(instance.id)
+            .asSequence()
+            .filterNot { it.isHidden }
+            .map { entry ->
+                SubagentModelResolver.Candidate(
+                    instanceId = instance.id,
+                    entryId = entry.uuid,
+                    modelId = entry.model.id,
+                    displayName = entry.model.displayName,
+                )
+            }
+            .toList()
+    }
 
 /**
  * Stable same-turn identity for tool calls. UI-only fields are excluded using

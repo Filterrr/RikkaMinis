@@ -25,6 +25,12 @@ object AgentTools {
         // hint for web_search's description. Default keeps the registry
         // Context-free; ChatViewModel passes an Android-backed provider.
         searchHintProvider: () -> String = { "Search engine: app default" },
+        // [T-subagent-model-routing] Same provider pattern: the catalog lives
+        // behind ProviderRepository, which the tools layer must not reference.
+        // Empty (default) keeps the spawn schema static; ChatViewModel embeds
+        // the user's actual model list so `spawn_agent(model=…)` is pickable
+        // rather than guessable.
+        modelCatalogHint: String = "",
     ): List<AgentToolDefinition> = buildList {
         add(shellExecuteDefinition())
         add(FileReadTool.definition())
@@ -49,7 +55,7 @@ object AgentTools {
         // Always exposed — the sub-agent's own tool set is filtered inside
         // SubagentSkill.buildFilteredTools (spawn_agent itself is FORBIDDEN
         // there, so recursion is structurally impossible).
-        add(SubagentSkill.definition())
+        add(SubagentSkill.definition(modelCatalogHint))
         // [T-subagent-orchestration] Parent-side orchestration: join / wait-any
         // / cancel for detached spawns. Sub-agents never see these (capability
         // catalog + FORBIDDEN_TOOLS fail closed twice).
