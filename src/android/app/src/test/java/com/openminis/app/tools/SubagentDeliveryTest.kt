@@ -1,7 +1,7 @@
 package com.openminis.app.tools
 
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -165,7 +165,7 @@ class SubagentDeliveryTest {
     @Test
     fun `a blocked join wakes when the run completes and interest then clears`() = runBlocking {
         val j = job()
-        val joiner = launch {
+        val joiner = async {
             SubagentOrchestration.awaiting(listOf(j)) {
                 SubagentOrchestration.joinAll(listOf(j), timeoutMs = 5_000L)
             }
