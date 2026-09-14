@@ -290,9 +290,17 @@ object AntigravityOAuth {
             "grant_type" to "refresh_token",
             "refresh_token" to refreshToken,
         ),
+        // Google's refresh response usually OMITS refresh_token (rotation is
+        // rare); keep the one we refreshed with instead of blanking it.
+        // Without this, a successful keep-alive refresh would wipe the stored
+        // refresh token and brick the credential at the NEXT expiry.
+        fallbackRefreshToken = refreshToken,
     )
 
-    private suspend fun tokenRequest(form: Map<String, String>): Tokens = withContext(Dispatchers.IO) {
+    private suspend fun tokenRequest(
+        form: Map<String, String>,
+        fallbackRefreshToken: String? = null,
+    ): Tokens = withContext(Dispatchers.IO) {
         val body = form.entries.joinToString("&") { (k, v) ->
             "$k=${java.net.URLEncoder.encode(v, "UTF-8")}"
         }
@@ -325,7 +333,8 @@ object AntigravityOAuth {
             }
             Tokens(
                 accessToken = access,
-                refreshToken = json.optString("refresh_token"),
+                refreshToken = json.optString("refresh_token")
+                    .ifEmpty { fallbackRefreshToken ?: "" },
                 expiresIn = json.optLong("expires_in", 3600L),
                 tokenType = json.optString("token_type").ifEmpty { null },
             )

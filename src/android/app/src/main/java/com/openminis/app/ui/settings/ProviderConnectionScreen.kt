@@ -452,6 +452,14 @@ private fun AntigravityOAuthSection(
     var projectId by remember { mutableStateOf<String?>(null) }
     var expiredText by remember { mutableStateOf<String?>(null) }
     var isLoggingIn by remember { mutableStateOf(false) }
+    // [T-antigravity-keepalive] UI mirrors of the keep-alive settings (the
+    // prefs file is the source of truth; these re-sync in refreshStatus).
+    var keepAliveEnabled by remember {
+        mutableStateOf(AntigravityKeepAlive.isEnabled(appContext))
+    }
+    var keepAliveIntervalH by remember {
+        mutableStateOf(AntigravityKeepAlive.intervalHours(appContext))
+    }
     // [T-antigravity-credential-pool] Credential-pool slot the next login
     // writes into. 0 = the historical single account; >= 1 appends an
     // additional account to the pool (rotation on QuotaExhausted is then
@@ -649,6 +657,109 @@ private fun AntigravityOAuthSection(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+
+            // ── [T-antigravity-keepalive] Authorization keep-alive ──
+            Spacer(Modifier.height(12.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.antigravity_keepalive_title),
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Text(
+                        text = stringResource(R.string.antigravity_keepalive_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                androidx.compose.material3.Switch(
+                    checked = keepAliveEnabled,
+                    onCheckedChange = { on ->
+                        keepAliveEnabled = on
+                        scope.launch {
+                            withContext(Dispatchers.IO) {
+                                AntigravityKeepAlive.setEnabled(appContext, on)
+                            }
+                        }
+                    },
+                )
+            }
+            if (keepAliveEnabled) {
+                Spacer(Modifier.height(6.dp))
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Text(
+                        text = stringResource(R.string.antigravity_keepalive_interval),
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f),
+                    )
+                    // Cycle button — matches the segment control's role while
+                    // staying cheap for 5 discrete cadences.
+                    androidx.compose.material3.TextButton(
+                        onClick = {
+                            val choices = AntigravityKeepAlive.INTERVAL_CHOICES_HOURS
+                            val next = choices[(choices.indexOf(keepAliveIntervalH) + 1) % choices.size]
+                            keepAliveIntervalH = next
+                            scope.launch {
+                                withContext(Dispatchers.IO) {
+                                    AntigravityKeepAlive.setIntervalHours(appContext, next)
+                                }
+                            }
+                        },
+                    ) {
+                        Text(
+                            stringResource(
+                                R.string.antigravity_keepalive_interval_value,
+                                keepAliveIntervalH,
+                            ),
+                        )
+                    }
+                }
+                // Status line: last pass + outcome; fatal accounts surface a
+                // re-login hint (never auto-cleared by the machinery).
+                val fatal = AntigravityKeepAlive.fatalAccounts(appContext)
+                val lastRun = AntigravityKeepAlive.lastRunAt(appContext)
+                val lastResult = AntigravityKeepAlive.lastResult(appContext)
+                Text(
+                    text = if (lastRun == 0L) {
+                        stringResource(R.string.antigravity_keepalive_never)
+                    } else {
+                        stringResource(
+                            R.string.antigravity_keepalive_last_run,
+                            java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault())
+                                .format(java.util.Date(lastRun)),
+                            lastResult ?: "—",
+                        )
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (fatal.isNotEmpty()) {
+                    Text(
+                        text = stringResource(R.string.antigravity_keepalive_fatal_hint, fatal.joinToString("、")),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                androidx.compose.material3.TextButton(
+                    onClick = {
+                        scope.launch {
+                            val ran = withContext(Dispatchers.IO) {
+                                AntigravityKeepAlive.runKeepAliveNow(appContext)
+                            }
+                            statusMessage = if (ran) {
+                                appContext.getString(R.string.antigravity_keepalive_done)
+                            } else {
+                                appContext.getString(R.string.antigravity_keepalive_throttled)
+                            }
+                            refreshStatus()
+                        }
+                    },
+                ) {
+                    Text(stringResource(R.string.antigravity_keepalive_run_now))
+                }
             }
         }
 

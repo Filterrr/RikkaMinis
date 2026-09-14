@@ -1785,6 +1785,16 @@
     <string name="antigravity_oauth_login">Sign in</string>
     <string name="antigravity_oauth_relogin">Sign in again</string>
     <string name="antigravity_oauth_add_account">Add another account to pool</string>
+    <string name="antigravity_keepalive_title">Keep authorization alive</string>
+    <string name="antigravity_keepalive_desc">Periodically refreshes the stored Google tokens in the background, even when the app is closed, so the login never quietly expires.</string>
+    <string name="antigravity_keepalive_interval">Check interval</string>
+    <string name="antigravity_keepalive_interval_value">%1$d h</string>
+    <string name="antigravity_keepalive_never">Not run yet.</string>
+    <string name="antigravity_keepalive_last_run">Last run %1$s · %2$s</string>
+    <string name="antigravity_keepalive_fatal_hint">Google rejected the refresh token for %1$s — sign in again.</string>
+    <string name="antigravity_keepalive_run_now">Run now</string>
+    <string name="antigravity_keepalive_done">Keep-alive pass completed.</string>
+    <string name="antigravity_keepalive_throttled">Skipped — a pass completed less than 30 min ago.</string>
     <string name="antigravity_oauth_waiting">Waiting for the authorization callback (up to 5 min)…</string>
     <string name="antigravity_oauth_done">Signed in: %1$s</string>
     <string name="antigravity_oauth_cancelled">Sign-in cancelled</string>
