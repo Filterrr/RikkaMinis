@@ -58,6 +58,10 @@ object AntigravityBridgeLoginManager {
      * Safe to cancel — cancellation surfaces as a [Result.Failed] with the
      * timeout text on the next poll tick (the core session expires on its
      * own 5-minute deadline, matching upstream).
+     *
+     * [slot] targets a credential-pool slot
+     * ([T-antigravity-credential-pool]); the default 0 preserves the
+     * historical single-account behavior.
      */
     suspend fun login(
         context: Context,
@@ -65,8 +69,9 @@ object AntigravityBridgeLoginManager {
         browser: AntigravityLoginBrowser,
         openBrowser: (url: String) -> Unit,
         instanceId: String,
+        slot: Int = 0,
     ): Result {
-        AppLogger.info(TAG, "bridge login start (instance=$instanceId, core=${config.host}:${config.port})")
+        AppLogger.info(TAG, "bridge login start (instance=$instanceId, slot=$slot, core=${config.host}:${config.port})")
 
         // Step 1: authorization URL from the core.
         val start = try {
@@ -97,7 +102,7 @@ object AntigravityBridgeLoginManager {
                 continue
             }
             when (status.status) {
-                "ok" -> return finishBySync(context, config, instanceId)
+                "ok" -> return finishBySync(context, config, instanceId, slot)
                 "error" -> return Result.Failed(status.error ?: "内核报告登录失败")
                 else -> Unit // "wait" (or unrecognized) — keep polling
             }
@@ -134,11 +139,14 @@ object AntigravityBridgeLoginManager {
      * Pulls the newest antigravity credential from the core and mirrors it
      * into the local encrypted store. Called after a successful poll, and
      * directly by the UI's "从内核同步已有凭证" action.
+     *
+     * [slot] targets a credential-pool slot ([T-antigravity-credential-pool]).
      */
     suspend fun finishBySync(
         context: Context,
         config: AntigravityCliProxyBridge.Config,
         instanceId: String,
+        slot: Int = 0,
     ): Result {
         val credential = try {
             AntigravityCliProxyBridge.fetchLatestAntigravityCredential(config)
@@ -160,10 +168,11 @@ object AntigravityBridgeLoginManager {
             ),
             email = credential.email,
             projectId = credential.projectId,
+            slot = slot,
         )
         AppLogger.info(
             TAG,
-            "bridge login complete for $instanceId " +
+            "bridge login complete for $instanceId slot=$slot " +
                 "(email=${credential.email != null}, projectId=${credential.projectId != null})",
         )
         return Result.Success(credential.email, credential.projectId)

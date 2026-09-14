@@ -13,6 +13,32 @@ import com.openminis.app.provider.gemini.GeminiProvider
 import com.openminis.app.provider.openai.OpenAIProvider
 
 object ProviderFactory {
+
+    /**
+     * [fix-antigravity-version-fingerprint] One-shot load of the remote
+     * Antigravity version fingerprint from assets. Release automation can
+     * ship a new `antigravity_version.txt` in an APK-independent channel
+     * (or a plain app update) without touching Kotlin; when the asset is
+     * absent/malformed the compiled FALLBACK_VERSION stays in effect.
+     */
+    @Volatile
+    private var antigravityVersionLoaded = false
+
+    private fun maybeInitAntigravityVersion(context: Context?) {
+        if (antigravityVersionLoaded || context == null) return
+        synchronized(this) {
+            if (antigravityVersionLoaded) return
+            try {
+                val text = context.assets.open("antigravity_version.txt")
+                    .bufferedReader().use { it.readLine() }
+                AntigravityOAuth.initRemoteVersion(text)
+            } catch (_: Exception) {
+                // Asset absent → keep the compiled fallback. Not an error.
+            }
+            antigravityVersionLoaded = true
+        }
+    }
+
     /**
      * Create a provider for an API-key instance.
      * [context] is retained for call-site compatibility; OAuth (which needed
@@ -104,6 +130,7 @@ object ProviderFactory {
                 // AntigravityCredentialStore.validAccessToken() (auto-refresh).
                 // Custom base = full upstream origin (no /v1 appending);
                 // default mirrors upstream resolveAntigravityRequestBaseURL.
+                maybeInitAntigravityVersion(context)
                 // Project id rides through the encrypted store (keyed by
                 // instance id) when the provider carries one.
                 val storeProjectId = context?.let {
@@ -128,13 +155,15 @@ object ProviderFactory {
                     },
                     // [fix-antigravity-401-refresh-retry] 401 → rotate the
                     // access token via the refresh_token and replay once
-                    // (upstream executor parity). validAccessToken is
-                    // single-flighted and returns null when the refresh
-                    // token itself is dead, in which case the provider
-                    // surfaces the honest re-login error.
+                    // (upstream executor parity). Uses the classified
+                    // refresh ([fix-antigravity-refresh-failure-classify]):
+                    // the provider reads lastRefreshFailure to tell a
+                    // network blip (NetworkError) from a dead refresh token
+                    // (honest re-login error). validAccessToken remains
+                    // single-flighted.
                     accessTokenRefresher = ctx@ {
                         val appContext = context ?: return@ctx null
-                        AntigravityCredentialStore.validAccessToken(appContext, instance.id)
+                        AntigravityCredentialStore.refreshAccessTokenOrNull(appContext, instance.id)
                     },
                 )
             }

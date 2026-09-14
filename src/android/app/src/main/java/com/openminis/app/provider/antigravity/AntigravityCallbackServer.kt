@@ -24,6 +24,27 @@ class AntigravityCallbackServer(private val port: Int) {
 
     companion object {
         private const val TAG = "AntigravityCallback"
+
+        /**
+         * [fix-antigravity-oauth-error-sentinel] Prefix used on the single
+         * result slot when Google redirects back with an OAuth error
+         * (?error=access_denied&…) instead of an authorization code. The
+         * login manager MUST consume this sentinel — feeding it to
+         * exchangeCodeForTokens used to surface a misleading "换取令牌失败"
+         * and wasted a round-trip to the token endpoint.
+         */
+        const val OAUTH_ERROR_PREFIX = "oauth-error:"
+
+        // ── [fix-antigravity-callback-hardening] resource limits ──
+        // The catcher speaks to exactly one peer class (browsers following
+        // Google's 302), so tiny limits are safe: request lines ≤ 16 KiB,
+        // ≤ 100 header lines, 10 s read deadline. A local hostile process
+        // could previously wedge the accept thread with an endless header
+        // flood (unbounded readLine) — now every read is bounded.
+        private const val MAX_REQUEST_LINE_BYTES = 16 * 1024
+        private const val MAX_HEADER_LINE_BYTES = 8 * 1024
+        private const val MAX_HEADER_LINES = 100
+        private const val READ_TIMEOUT_MS = 10_000
     }
 
     /**
@@ -81,22 +102,50 @@ class AntigravityCallbackServer(private val port: Int) {
         serverSocket = null
     }
 
+    /**
+     * Test seam: the actually-bound port (meaningful when constructed with
+     * an ephemeral port), or null when not listening.
+     */
+    internal fun boundPort(): Int? = serverSocket?.localPort
+
     private fun handleConnection(socket: Socket) {
         try {
             socket.use { s ->
+                // [fix-antigravity-callback-hardening] Bound every read: a
+                // slow/hostsile client can no longer hold the accept thread.
+                s.soTimeout = READ_TIMEOUT_MS
                 val reader = BufferedReader(InputStreamReader(s.getInputStream()))
-                val requestLine = reader.readLine() ?: return
+
+                val requestLine = readBoundedLine(reader, MAX_REQUEST_LINE_BYTES)
+                    ?: return  // EOF before any data — nothing to serve.
+                if (requestLine.length >= MAX_REQUEST_LINE_BYTES) {
+                    respond(s, "413 Payload Too Large", "<html><body><h1>Request too large</h1></body></html>")
+                    return
+                }
+
                 // Drain request headers (Google sends a short GET; read to the blank line).
+                var headerCount = 0
                 while (true) {
-                    val line = reader.readLine() ?: break
+                    val line = readBoundedLine(reader, MAX_HEADER_LINE_BYTES) ?: break
                     if (line.isEmpty()) break
+                    headerCount++
+                    if (headerCount > MAX_HEADER_LINES) {
+                        respond(s, "431 Request Header Fields Too Large", "<html><body><h1>Too many headers</h1></body></html>")
+                        return
+                    }
                 }
 
                 var html = "<html><body><h1>Waiting for authorization…</h1></body></html>"
                 var matched = false
 
                 val parts = requestLine.split(" ")
-                if (parts.size >= 2 && parts[0] == "GET") {
+                if (parts.size < 2 || (parts[0] != "GET" && parts[0] != "HEAD")) {
+                    // [fix-antigravity-callback-hardening] Malformed request
+                    // line: answer 400 and never touch the result slot.
+                    respond(s, "400 Bad Request", "<html><body><h1>Bad request</h1></body></html>")
+                    return
+                }
+                if (parts[0] == "GET") {
                     val uri = URI("http://localhost${parts[1]}")
                     val params = uri.query?.split("&")?.associate {
                         val kv = it.split("=", limit = 2)
@@ -114,7 +163,7 @@ class AntigravityCallbackServer(private val port: Int) {
                                 "<p>You can close this page and retry in the app.</p></body></html>"
                             // Surface the failure through the same single slot so
                             // the waiter doesn't hang out the full 5 minutes.
-                            sink("oauth-error:$error", state)
+                            sink(AntigravityCallbackServer.OAUTH_ERROR_PREFIX + error, state)
                         }
                         code != null -> {
                             matched = true
@@ -128,19 +177,64 @@ class AntigravityCallbackServer(private val port: Int) {
                     }
                 }
 
-                val body = html.toByteArray(Charsets.UTF_8)
-                val response = "HTTP/1.1 200 OK\r\n" +
-                    "Content-Type: text/html; charset=utf-8\r\n" +
-                    "Content-Length: ${body.size}\r\n" +
-                    "Connection: close\r\n" +
-                    "\r\n"
-                s.getOutputStream().write(response.toByteArray(Charsets.UTF_8))
-                s.getOutputStream().write(body)
-                s.getOutputStream().flush()
+                respond(s, "200 OK", html)
                 if (matched) stop()
             }
         } catch (e: Exception) {
             Log.w(TAG, "connection handling failed: ${e.message}")
+        }
+    }
+
+    /**
+     * [fix-antigravity-callback-hardening] readLine with a hard cap — the
+     * stock BufferedReader.readLine buffers without limit, so a flood line
+     * grows the heap and an unterminated one blocks forever. Returns the
+     * line without its terminator, null on EOF-with-no-data, and a string
+     * of length ≥ [maxBytes] when the cap was hit (caller decides).
+     */
+    private fun readBoundedLine(reader: BufferedReader, maxBytes: Int): String? {
+        val sb = StringBuilder(128)
+        while (true) {
+            val c = reader.read()
+            if (c == -1) return if (sb.isEmpty()) null else sb.toString()
+            if (c == '\n'.code) return sb.toString().trimEnd('\r')
+            sb.append(c.toChar())
+            if (sb.length >= maxBytes) return sb.toString()
+        }
+    }
+
+    private fun respond(socket: Socket, statusLine: String, html: String) {
+        val body = html.toByteArray(Charsets.UTF_8)
+        val response = "HTTP/1.1 $statusLine\r\n" +
+            "Content-Type: text/html; charset=utf-8\r\n" +
+            "Content-Length: ${body.size}\r\n" +
+            "Connection: close\r\n" +
+            "\r\n"
+        socket.getOutputStream().write(response.toByteArray(Charsets.UTF_8))
+        socket.getOutputStream().write(body)
+        socket.getOutputStream().flush()
+        drainInbound(socket)
+    }
+
+    /**
+     * Deliver-then-drain: half-close the write side (FIN after the response)
+     * and consume whatever the client still has in flight before close.
+     * Closing with unread receive data emits RST, which DISCARDS the
+     * response on the client — the bounded-read rejection paths (413 on a
+     * 32 KiB junk line, 431 on a header flood) would otherwise race the
+     * client's pipelined request and the rejection would never be seen.
+     * Bounded: a 300 ms read timeout caps the drain, so a client that
+     * never closes cannot stall the (single-threaded) catcher loop.
+     */
+    private fun drainInbound(socket: Socket) {
+        try {
+            socket.shutdownOutput()
+            socket.soTimeout = 300
+            val buf = ByteArray(4096)
+            while (true) {
+                if (socket.getInputStream().read(buf) == -1) break
+            }
+        } catch (_: Exception) {
         }
     }
 }

@@ -1704,6 +1704,7 @@
     <string name="antigravity_browser_in_app">应用内浏览器</string>
     <string name="antigravity_oauth_login">开始登录</string>
     <string name="antigravity_oauth_relogin">重新登录</string>
+    <string name="antigravity_oauth_add_account">添加账号到配额池</string>
     <string name="antigravity_oauth_waiting">等待授权回调（最长 5 分钟）…</string>
     <string name="antigravity_oauth_done">登录成功：%1$s</string>
     <string name="antigravity_oauth_cancelled">登录已取消</string>

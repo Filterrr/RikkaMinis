@@ -1784,6 +1784,7 @@
     <string name="antigravity_browser_in_app">In-app browser</string>
     <string name="antigravity_oauth_login">Sign in</string>
     <string name="antigravity_oauth_relogin">Sign in again</string>
+    <string name="antigravity_oauth_add_account">Add another account to pool</string>
     <string name="antigravity_oauth_waiting">Waiting for the authorization callback (up to 5 min)…</string>
     <string name="antigravity_oauth_done">Signed in: %1$s</string>
     <string name="antigravity_oauth_cancelled">Sign-in cancelled</string>

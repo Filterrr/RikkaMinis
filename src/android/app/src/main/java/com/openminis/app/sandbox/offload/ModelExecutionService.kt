@@ -561,8 +561,13 @@ class ModelExecutionService : Service() {
         }
         return try {
             kotlinx.coroutines.runBlocking {
+                // [fix-antigravity-prewarm-refresh] Task-start resolution IS
+                // the prewarm point: refreshes proactively when the stored
+                // token is expired/near-expiry so the task doesn't open with
+                // a 401 round-trip. Same single-flight mutex as the lazy
+                // path; identical silent-null contract.
                 com.openminis.app.provider.antigravity.AntigravityCredentialStore
-                    .validAccessToken(this@ModelExecutionService, instance.id)
+                    .prewarmAccessToken(this@ModelExecutionService, instance.id)
             } ?: ""
         } catch (e: Exception) {
             Log.w(TAG, "worker antigravity token resolve failed: ${e.message}")

@@ -122,7 +122,10 @@ object AntigravityCliProxyBridge {
             host = p.getString(PREF_HOST, "").orEmpty(),
             port = p.getInt(PREF_PORT, DEFAULT_PORT),
             tls = p.getBoolean(PREF_TLS, false),
-            secret = p.getString(PREF_SECRET, "").orEmpty(),
+            // [fix-antigravity-bridge-secret-encryption] The management secret
+            // is a full-control credential for the core (it can download auth
+            // files). It used to live in plaintext SharedPreferences.
+            secret = BridgeSecretStore.load(context).orEmpty(),
         )
     }
 
@@ -131,13 +134,79 @@ object AntigravityCliProxyBridge {
             .putString(PREF_HOST, config.host)
             .putInt(PREF_PORT, config.port)
             .putBoolean(PREF_TLS, config.tls)
-            .putString(PREF_SECRET, config.secret)
             .apply()
+        // [fix-antigravity-bridge-secret-encryption] Secret moves to the
+        // encrypted store; a legacy plaintext PREF_SECRET value is migrated
+        // once and then erased from the plaintext file.
+        BridgeSecretStore.save(context, config.secret)
+        val legacy = prefs(context).getString(PREF_SECRET, null)
+        if (!legacy.isNullOrEmpty()) {
+            prefs(context).edit().remove(PREF_SECRET).apply()
+            AppLogger.info(TAG, "migrated legacy plaintext bridge secret into encrypted store")
+        }
         AppLogger.info(TAG, "saved CLIProxyAPI bridge config (host=${config.host}, port=${config.port}, tls=${config.tls}, secret=${config.hasUsableSecret})")
+    }
+
+    /**
+     * [fix-antigravity-bridge-secret-encryption] Outbound transport check.
+     * Sending the management secret over plaintext HTTP to a non-loopback
+     * host exposes it to anyone on the path (LAN sniffing, proxies). The
+     * settings UI should surface [insecureTransportReason] before saving.
+     */
+    fun insecureTransportReason(config: Config): String? {
+        if (config.tls) return null
+        val host = config.host.lowercase()
+        val loopback = host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]"
+        if (loopback) return null
+        return if (config.hasUsableSecret) {
+            "管理密钥将通过明文 HTTP 发送到 $host（非本机地址），链路上的任何设备都可能截获它。建议在内核启用 TLS，或确认处于可信网络。"
+        } else {
+            "未加密连接到非本机内核：任何同网段设备都能访问这个管理接口。建议在内核启用 TLS 并配置管理密钥。"
+        }
     }
 
     private fun prefs(context: Context): SharedPreferences =
         context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    /**
+     * [fix-antigravity-bridge-secret-encryption] Encrypted at-rest storage
+     * for the core management secret. Uses the app-wide EncryptedPrefsFactory
+     * (same store family as AntigravityCredentialStore). Falls back to a
+     * plain in-memory null when Keystore init fails so the UI can still
+     * render (the secret simply won't persist).
+     */
+    private object BridgeSecretStore {
+        private const val FILE = "cliproxy_bridge_secret"
+        private const val KEY = "management_secret"
+
+        @Volatile
+        private var prefsRef: android.content.SharedPreferences? = null
+
+        fun load(context: Context): String? = try {
+            prefs(context.applicationContext).getString(KEY, null)
+        } catch (e: Exception) {
+            AppLogger.warning(TAG, "bridge secret store unavailable: ${e.message}")
+            null
+        }
+
+        fun save(context: Context, secret: String) {
+            try {
+                prefs(context.applicationContext).edit().putString(KEY, secret.trim()).apply()
+            } catch (e: Exception) {
+                AppLogger.warning(TAG, "bridge secret store write failed: ${e.message}")
+            }
+        }
+
+        private fun prefs(appContext: Context): android.content.SharedPreferences {
+            prefsRef?.let { return it }
+            synchronized(this) {
+                prefsRef?.let { return it }
+                val p = com.openminis.app.util.EncryptedPrefsFactory.safeCreate(appContext, FILE)
+                prefsRef = p
+                return p
+            }
+        }
+    }
 
     // ── Response models ──
 
@@ -313,6 +382,11 @@ object AntigravityCliProxyBridge {
      */
     suspend fun testConnection(config: Config): TestResult = withContext(Dispatchers.IO) {
         try {
+            // [fix-antigravity-bridge-secret-encryption] Transport-safety
+            // advisory: non-TLS to a non-loopback core exposes the management
+            // secret on the wire. Advisory only — a user who understands the
+            // risk (trusted LAN) can still connect.
+            val transportAdvisory = insecureTransportReason(config)?.let { "⚠️ $it" }
             val pingRequest = Request.Builder()
                 .url("${config.origin}$MANAGEMENT_BASE/get-auth-status")
                 .get()
@@ -321,14 +395,20 @@ object AntigravityCliProxyBridge {
                 if (!resp.isSuccessful) {
                     return@withContext TestResult(
                         ok = false,
-                        message = "内核可达但管理接口不可用（HTTP ${resp.code}）。请在内核配置管理密钥。",
+                        message = listOfNotNull(
+                            "内核可达但管理接口不可用（HTTP ${resp.code}）。请在内核配置管理密钥。",
+                            transportAdvisory,
+                        ).joinToString("\n"),
                     )
                 }
             }
             if (!config.hasUsableSecret) {
                 return@withContext TestResult(
                     ok = false,
-                    message = "内核可达，但尚未配置可用的管理密钥（哈希密钥无法用于桥接）。",
+                    message = listOfNotNull(
+                        "内核可达，但尚未配置可用的管理密钥（哈希密钥无法用于桥接）。",
+                        transportAdvisory,
+                    ).joinToString("\n"),
                 )
             }
             val authedRequest = Request.Builder()
@@ -337,12 +417,26 @@ object AntigravityCliProxyBridge {
                 .auth(config)
                 .build()
             client.newCall(authedRequest).execute().use { resp ->
-                if (resp.code == 401 || resp.code == 403) {
-                    TestResult(ok = false, message = "内核可达，但管理密钥未通过校验（HTTP ${resp.code}）。")
-                } else if (!resp.isSuccessful) {
-                    TestResult(ok = false, message = "内核可达，但管理接口返回 HTTP ${resp.code}。")
-                } else {
-                    TestResult(ok = true, message = "内核可达，管理密钥有效。")
+                when {
+                    resp.code == 401 || resp.code == 403 -> TestResult(
+                        ok = false,
+                        message = listOfNotNull(
+                            "内核可达，但管理密钥未通过校验（HTTP ${resp.code}）。",
+                            transportAdvisory,
+                        ).joinToString("\n"),
+                    )
+                    !resp.isSuccessful -> TestResult(
+                        ok = false,
+                        message = listOfNotNull(
+                            "内核可达，但管理接口返回 HTTP ${resp.code}。",
+                            transportAdvisory,
+                        ).joinToString("\n"),
+                    )
+                    else -> TestResult(
+                        ok = true,
+                        message = listOfNotNull("内核可达，管理密钥有效。", transportAdvisory)
+                            .joinToString("\n"),
+                    )
                 }
             }
         } catch (e: Exception) {

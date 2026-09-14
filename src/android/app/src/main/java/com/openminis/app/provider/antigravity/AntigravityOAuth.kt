@@ -60,6 +60,32 @@ object AntigravityOAuth {
 
     /** Upstream fallback client version (misc/antigravity_version.go). */
     const val FALLBACK_VERSION = "2.9.1"
+
+    /**
+     * [fix-antigravity-version-fingerprint] Remote version override. The
+     * UA fingerprint (antigravity/hub/<version> …) is what Google's
+     * cloudcode-pa endpoint validates; when Google bumps its minimum, every
+     * build pinned to FALLBACK_VERSION dies with VERSION_CHECK_FAILED until
+     * an app update ships. The runtime reads
+     * `assets/antigravity_version.txt` (one line: the version string), which
+     * release automation can refresh remotely without a rebuild.
+     *
+     * Populated by ProviderFactory at startup via [initRemoteVersion];
+     * requestUserAgent() falls back to FALLBACK_VERSION when unset.
+     */
+    @Volatile
+    private var remoteVersion: String? = null
+
+    fun initRemoteVersion(version: String?) {
+        val v = version?.trim()?.takeUnless { it.isEmpty() }
+        remoteVersion = if (v != null && Regex("^\\d+\\.\\d+([-.]\\w+)*$").matches(v)) v else null
+        if (v != null && remoteVersion == null) {
+            AppLogger.warning(TAG, "ignoring malformed remote antigravity version: $v")
+        }
+    }
+
+    /** Current effective client version (remote override → fallback). */
+    fun effectiveVersion(): String = remoteVersion ?: FALLBACK_VERSION
     const val NODE_API_CLIENT_UA = "google-api-nodejs-client/10.3.0"
     const val GOOG_API_CLIENT_UA = "gl-node/22.21.1"
 
@@ -93,8 +119,12 @@ object AntigravityOAuth {
      * Byte-exact upstream default: misc.AntigravityUserAgent() =
      * `antigravity/hub/<version> darwin/arm64` (the `hub` segment is what
      * cloudcode-pa's endpoint fingerprint expects).
+     *
+     * [fix-antigravity-version-fingerprint] Uses [effectiveVersion] so a
+     * remotely refreshed assets/antigravity_version.txt takes effect
+     * without an app update.
      */
-    fun requestUserAgent(): String = "antigravity/hub/$FALLBACK_VERSION darwin/arm64"
+    fun requestUserAgent(): String = "antigravity/hub/${effectiveVersion()} darwin/arm64"
 
     /** Long control-plane UA used by onboardUser. */
     fun nodeUserAgent(): String = "${requestUserAgent()} $NODE_API_CLIENT_UA"
@@ -136,7 +166,75 @@ object AntigravityOAuth {
 
     // ── Step 1: authorization URL (auth.go BuildAuthURL) ──
 
-    fun buildAuthUrl(state: String, redirectUri: String = loopbackRedirect()): String {
+    /**
+     * [T-antigravity-pkce] PKCE S256 code-verifier store, keyed by the OAuth
+     * state (which round-trips through Google and the loopback callback
+     * untouched). Enabled via [pkceEnabled]; the flag exists because the
+     * upstream Go client does NOT send PKCE — if Google's installed-app
+     * client-id rejects the extra `code_challenge` params, the flag flips
+     * the flow back to upstream-exact without touching callers.
+     */
+    @Volatile
+    var pkceEnabled: Boolean = false
+
+    private val pkceVerifiers = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    /** Test/PKCE-flow seam: bind a verifier to [state] (one-time pop at exchange). */
+    internal fun bindPkceVerifier(state: String, verifier: String) {
+        pkceVerifiers[state] = verifier
+    }
+
+    /** Test seam: pop the verifier bound to [state], or null. */
+    internal fun popPkceVerifier(state: String): String? = pkceVerifiers.remove(state)
+
+    /** RFC 7636 APPENDIX B verifier alphabet, 64 chars → 427 bits entropy. */
+    fun generateCodeVerifier(): String {
+        val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
+        val bytes = ByteArray(64)
+        SecureRandom().nextBytes(bytes)
+        return buildString(64) {
+            for (b in bytes) append(alphabet[(b.toInt() and 0xFF) % alphabet.length])
+        }
+    }
+
+    /**
+     * BASE64URL-encode(SHA-256(ASCII(verifier))) with no padding (RFC 7636 §4.2).
+     *
+     * Pure-Kotlin encoder: android.util.Base64 is a null-returning stub under
+     * JVM unit tests (returnDefaultValues), and java.util.Base64 requires
+     * API 26 while this module's minSdk is 24 — so neither is usable here.
+     */
+    fun codeChallengeS256(verifier: String): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(verifier.toByteArray(Charsets.US_ASCII))
+        val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+        val out = StringBuilder(((digest.size + 2) / 3) * 4)
+        var i = 0
+        while (i + 3 <= digest.size) {
+            val n = ((digest[i].toInt() and 0xFF) shl 16) or
+                ((digest[i + 1].toInt() and 0xFF) shl 8) or
+                (digest[i + 2].toInt() and 0xFF)
+            out.append(alphabet[(n ushr 18) and 63]).append(alphabet[(n ushr 12) and 63])
+                .append(alphabet[(n ushr 6) and 63]).append(alphabet[n and 63])
+            i += 3
+        }
+        val rem = digest.size - i
+        if (rem == 1) {
+            val n = (digest[i].toInt() and 0xFF) shl 16
+            out.append(alphabet[(n ushr 18) and 63]).append(alphabet[(n ushr 12) and 63])
+        } else if (rem == 2) {
+            val n = ((digest[i].toInt() and 0xFF) shl 16) or ((digest[i + 1].toInt() and 0xFF) shl 8)
+            out.append(alphabet[(n ushr 18) and 63]).append(alphabet[(n ushr 12) and 63])
+                .append(alphabet[(n ushr 6) and 63])
+        }
+        return out.toString() // unpadded base64url — RFC 7636 §4.2
+    }
+
+    fun buildAuthUrl(
+        state: String,
+        redirectUri: String = loopbackRedirect(),
+        codeChallenge: String? = null,
+    ): String {
         val params = linkedMapOf(
             "access_type" to "offline",
             "client_id" to CLIENT_ID,
@@ -146,6 +244,12 @@ object AntigravityOAuth {
             "scope" to SCOPES.joinToString(" "),
             "state" to state,
         )
+        // [T-antigravity-pkce] S256 challenge rides only when PKCE is on and
+        // a challenge was supplied by the login manager.
+        if (pkceEnabled && codeChallenge != null) {
+            params["code_challenge"] = codeChallenge
+            params["code_challenge_method"] = "S256"
+        }
         val query = params.entries.joinToString("&") { (k, v) ->
             "$k=${java.net.URLEncoder.encode(v, "UTF-8")}"
         }
@@ -156,16 +260,26 @@ object AntigravityOAuth {
 
     // ── Step 3: code exchange (auth.go ExchangeCodeForTokens) ──
 
-    suspend fun exchangeCodeForTokens(code: String, redirectUri: String = loopbackRedirect()): Tokens =
-        tokenRequest(
-            form = mapOf(
-                "code" to code,
-                "client_id" to CLIENT_ID,
-                "client_secret" to CLIENT_SECRET,
-                "redirect_uri" to redirectUri,
-                "grant_type" to "authorization_code",
-            ),
+    suspend fun exchangeCodeForTokens(
+        code: String,
+        redirectUri: String = loopbackRedirect(),
+        state: String? = null,
+    ): Tokens {
+        // [T-antigravity-pkce] Pop the verifier bound to this state exactly
+        // once; a loopback-attacker who intercepted the authorization code
+        // cannot replay it without the verifier that never left this process.
+        val verifier = state?.let { pkceVerifiers.remove(it) }
+        return tokenRequest(
+            form = buildMap {
+                put("code", code)
+                put("client_id", CLIENT_ID)
+                put("client_secret", CLIENT_SECRET)
+                put("redirect_uri", redirectUri)
+                put("grant_type", "authorization_code")
+                if (verifier != null) put("code_verifier", verifier)
+            },
         )
+    }
 
     // ── Step 6: refresh rotation (antigravity_executor_auth.go) ──
 

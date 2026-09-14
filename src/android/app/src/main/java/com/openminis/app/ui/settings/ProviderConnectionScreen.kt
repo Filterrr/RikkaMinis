@@ -452,6 +452,11 @@ private fun AntigravityOAuthSection(
     var projectId by remember { mutableStateOf<String?>(null) }
     var expiredText by remember { mutableStateOf<String?>(null) }
     var isLoggingIn by remember { mutableStateOf(false) }
+    // [T-antigravity-credential-pool] Credential-pool slot the next login
+    // writes into. 0 = the historical single account; >= 1 appends an
+    // additional account to the pool (rotation on QuotaExhausted is then
+    // handled by the existing T-multi-api-key machinery).
+    var poolSlot by remember { mutableStateOf(0) }
     var statusMessage by remember { mutableStateOf<String?>(null) }
 
     suspend fun refreshStatus() = withContext(Dispatchers.IO) {
@@ -540,6 +545,7 @@ private fun AntigravityOAuthSection(
                                     AntigravityBrowserLauncher.open(appContext, url, browserChoice)
                                 },
                                 instanceId = instanceId,
+                                slot = poolSlot,
                             )
                             when (result) {
                                 is AntigravityLoginManager.Result.Success -> {
@@ -547,6 +553,15 @@ private fun AntigravityOAuthSection(
                                         R.string.antigravity_oauth_done,
                                         result.email ?: "—",
                                     )
+                                    // [T-antigravity-credential-pool] When
+                                    // logging into a pool slot, sync the
+                                    // instance metadata so the rotation
+                                    // machinery picks the account up.
+                                    if (poolSlot > 0) {
+                                        providerRepository.ensureAntigravityPoolMetadata(
+                                            instanceId, poolSlot, result.email,
+                                        )
+                                    }
                                     // Refresh the model list now that a
                                     // credential exists (force: bypass cache).
                                     val instance = providerRepository.instance(instanceId)
@@ -572,6 +587,58 @@ private fun AntigravityOAuthSection(
                             stringResource(R.string.antigravity_oauth_relogin)
                         },
                     )
+                }
+
+                // [T-antigravity-credential-pool] Append an additional Google
+                // account to this instance's credential pool. Shown only when
+                // the primary account exists; writes into the next free slot.
+                // SettingsCardBlock is a plain Column (no verticalArrangement)
+                // — the explicit Spacer is what keeps this button's edge (and
+                // its pressed elevation shadow) off the relogin button above.
+                if (email != null) {
+                    Spacer(Modifier.height(12.dp))
+                    com.openminis.app.ui.components.MinisButton(
+                        onClick = {
+                            isLoggingIn = true
+                            statusMessage = null
+                            // Next free pool slot from the LIVE config
+                            // (the Composable's `instance` is a stale
+                            // snapshot; a just-added account would collide).
+                            poolSlot = providerRepository.instance(instanceId)?.credentialCount ?: 1
+                            scope.launch {
+                                val result = AntigravityLoginManager.login(
+                                    context = appContext,
+                                    browser = browserChoice,
+                                    openBrowser = { url ->
+                                        AntigravityBrowserLauncher.open(appContext, url, browserChoice)
+                                    },
+                                    instanceId = instanceId,
+                                    slot = poolSlot,
+                                )
+                                if (result is AntigravityLoginManager.Result.Success) {
+                                    statusMessage = appContext.getString(
+                                        R.string.antigravity_oauth_done,
+                                        result.email ?: "—",
+                                    )
+                                    providerRepository.ensureAntigravityPoolMetadata(
+                                        instanceId, poolSlot, result.email,
+                                    )
+                                    providerRepository.instance(instanceId)?.let {
+                                        providerRepository.refreshModels(it, forceRefresh = true)
+                                    }
+                                } else if (result is AntigravityLoginManager.Result.Failed) {
+                                    statusMessage = result.message
+                                }
+                                isLoggingIn = false
+                                poolSlot = 0
+                                refreshStatus()
+                            }
+                        },
+                        enabled = !isLoggingIn,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(stringResource(R.string.antigravity_oauth_add_account))
+                    }
                 }
             }
 
@@ -803,7 +870,11 @@ private fun AntigravityOAuthSection(
                     title = stringResource(R.string.antigravity_oauth_logout),
                     titleColor = MaterialTheme.colorScheme.error,
                     onClick = {
-                        AntigravityCredentialStore.clear(appContext, instanceId)
+                        // [T-antigravity-credential-pool] Logout clears ALL
+                        // pool slots — a partial logout would leave sibling
+                        // accounts live while the UI shows "logged out".
+                        val declaredCount = providerRepository.instance(instanceId)?.credentialCount ?: 1
+                        AntigravityCredentialStore.clearAll(appContext, instanceId, declaredCount)
                         providerRepository.saveApiKey(instanceId, "")
                         scope.launch {
                             val instance = providerRepository.instance(instanceId)
