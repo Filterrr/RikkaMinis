@@ -292,6 +292,7 @@ import com.openminis.app.data.repository.MemoryRepository
 import com.openminis.app.data.repository.ProviderRepository
 import com.openminis.app.ui.browser.BrowserSheet
 import com.openminis.app.ui.subagent.ChatSubagentRunsHolder
+import com.openminis.app.ui.subagent.SubagentApprovalDialog
 import com.openminis.app.ui.theme.ChatColors
 import com.openminis.app.ui.components.MinisTextButton
 
@@ -4585,6 +4586,15 @@ fun ChatScreen(
                     },
                 )
             }
+            // [T-subagent-approval] Sub-agent spawn gate. Driven entirely by
+            // the VM's queue — answering one ask surfaces the next (a parallel
+            // fan-out asks per spawn), and a spawn timing out removes its own
+            // row, so no local dialog state to keep in sync.
+            val pendingSpawns by viewModel.subagentApprovals.requests.collectAsState()
+            SubagentApprovalDialog(
+                request = pendingSpawns.firstOrNull(),
+                onDecision = viewModel::resolveSpawnApproval,
+            )
         }
         // Top gradient fade: messages fade into the Scaffold background.
         Box(
