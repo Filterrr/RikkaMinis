@@ -884,6 +884,49 @@ class ChatViewModel(
             override fun unwrapFlowException(e: Throwable) =
                 this@ChatViewModel.unwrapFlowException(e)
             override fun orchestrationScope() = subagentOrchestrationScope
+
+            // [T-subagent-model-routing] Expose the user's own catalog so a
+            // spawn can name a cheaper model. Built from the live provider
+            // config — recomputed per spawn, so a model added mid-chat is
+            // immediately routable.
+            override fun modelCatalog(): List<com.openminis.app.tools.SubagentModelResolver.Candidate> =
+                subagentModelCatalog()
+
+            override fun providerForCandidate(
+                candidate: com.openminis.app.tools.SubagentModelResolver.Candidate,
+            ): LLMProvider? {
+                val instance = providerRepository.instance(candidate.instanceId) ?: return null
+                val entry = providerRepository.entriesFor(candidate.instanceId)
+                    .firstOrNull { it.uuid == candidate.entryId } ?: return null
+                val apiKey = providerRepository.loadAnyUsableApiKey(instance.id) ?: return null
+                return runCatching { ProviderFactory.create(instance, apiKey, entry.model, context) }
+                    .onFailure { AppLogger.warning(TAG, "[Subagent] failed to build provider for ${candidate.describe()}: ${it.message}") }
+                    .getOrNull()
+            }
+
+            override fun providerLabel(provider: LLMProvider): String =
+                provider.model.displayName.ifBlank { provider.model.id }
+
+            // [T-subagent-wake-parent] A detached run finishing is an EVENT,
+            // not a user request — so it must never preempt a live turn and
+            // must never touch the user's staged attachments.
+            //  - parent streaming: park it in the prompt queue (no-attachment
+            //    synthetic variant); the existing drain picks it up when the
+            //    loop ends.
+            //  - parent idle: queue + kick the same drain path
+            //    (resumeQueueAfterCancel) that already owns the
+            //    "claim streaming flag, build provider, stream" discipline.
+            // sendMessage() is NOT used: send-is-preempt would CANCEL the
+            // in-flight turn and it drags `_attachments` along with it.
+            override suspend fun wakeParentWithResult(runId: String, prompt: String) {
+                if (!enqueueSyntheticPrompt(prompt)) return
+                if (_isStreaming.value || _isCompacting.value) {
+                    AppLogger.info(TAG, "[Subagent] parent busy — queued '$runId' result for drain")
+                    return
+                }
+                AppLogger.info(TAG, "[Subagent] parent idle — draining '$runId' result now")
+                resumeQueueAfterCancel()
+            }
         },
     )
 
@@ -1086,6 +1129,13 @@ class ChatViewModel(
     private val agentTools: List<AgentToolDefinition>
         get() = AgentTools.makeAgentTools(
             memoryEnabled = _memoryEnabled.value,
+            // [T-subagent-model-routing] Embed the CURRENT model list so the
+            // parent can name a cheaper model for a spawn instead of guessing
+            // one. Same source as Deps.modelCatalog() — the schema and the
+            // resolver must never disagree about what is routable.
+            // Budgeted: capped at MAX_CATALOG_HINT_MODELS names because this
+            // rides in every request's tool schema.
+            modelCatalogHint = SubagentSkill.buildCatalogHint(subagentModelCatalog()),
             // [OPT-browser-websearch-tool] Embed the CURRENT engine/template
             // in the schema so the model's web_search calls (and its mental
             // model of "how search works here") always match the user's
@@ -1094,6 +1144,19 @@ class ChatViewModel(
             searchHintProvider = {
                 com.openminis.app.browser.BrowserSearchPrefs.agentHint(context)
             },
+        )
+
+    /**
+     * [T-subagent-model-routing] The routable model list, read live from the
+     * provider config. Shared by the spawn_agent schema hint and
+     * Deps.modelCatalog() so the two can never disagree — a model shown in the
+     * schema but missing from the resolver would produce a spawn that fails
+     * "unknown model", which reads as a bug in the tool rather than the name.
+     */
+    private fun subagentModelCatalog(): List<com.openminis.app.tools.SubagentModelResolver.Candidate> =
+        buildSubagentModelCatalog(
+            instances = providerRepository.instances,
+            entriesPerInstance = { providerRepository.visibleEntries(it) },
         )
 
     /**
@@ -5658,6 +5721,40 @@ class ChatViewModel(
         _messages.value = _messages.value + chatMsg
         clearAttachments()
         Log.i(TAG, "Enqueued prompt (${trimmed.length}ch, ${pendingAttachments.size} attachments), queue=${_promptQueue.value.size}")
+    }
+
+    /**
+     * [T-subagent-wake-parent] Queue a system-originated prompt with NO
+     * attachment side effects.
+     *
+     * Deliberately separate from [enqueuePrompt], which is a USER action and
+     * therefore (a) steals whatever the user had staged in `_attachments` and
+     * (b) calls clearAttachments(). A background sub-agent finishing is
+     * neither — it must not swallow a draft the user is still composing, and
+     * must not fire while the user's own queue is mid-drain.
+     *
+     * Returns false when [text] is blank. The caller (SubagentRunner) invokes
+     * this on a VM-coroutine; both queue mutation sites are plain StateFlow
+     * assignments, consistent with the rest of the queue path.
+     */
+    fun enqueueSyntheticPrompt(text: String): Boolean {
+        val trimmed = text.trim()
+        if (trimmed.isBlank()) return false
+        val prompt = QueuedPrompt(
+            id = "queued_synthetic_${System.currentTimeMillis()}_${(Math.random() * 1_000_000).toInt()}",
+            text = trimmed,
+            attachments = emptyList(),
+        )
+        _promptQueue.value = _promptQueue.value + prompt
+        _messages.value = _messages.value + ChatMessage(
+            id = "queued_msg_${prompt.id}",
+            role = "user",
+            content = trimmed,
+            isQueued = true,
+            queuedPromptId = prompt.id,
+        )
+        Log.i(TAG, "Enqueued synthetic prompt (${trimmed.length}ch), queue=${_promptQueue.value.size}")
+        return true
     }
 
     /** Remove a queued prompt and its chat message by prompt id. */

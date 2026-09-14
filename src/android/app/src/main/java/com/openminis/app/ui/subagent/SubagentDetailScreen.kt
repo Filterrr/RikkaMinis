@@ -620,10 +620,13 @@ private fun SubagentResultCard(
                 } else {
                     val doneGlyph = when (run.status) {
                         SubagentRunRegistry.RunStatus.FAILED -> Icons.Default.Error
+                        SubagentRunRegistry.RunStatus.TIMED_OUT -> Icons.Default.Error
                         SubagentRunRegistry.RunStatus.CANCELLED -> Icons.Default.Error
                         else -> Icons.Default.CheckCircle
                     }
-                    val doneTint = if (run.status == SubagentRunRegistry.RunStatus.FAILED) {
+                    val doneTint = if (run.status == SubagentRunRegistry.RunStatus.FAILED ||
+                        run.status == SubagentRunRegistry.RunStatus.TIMED_OUT
+                    ) {
                         ChatColors.error
                     } else {
                         ChatColors.success

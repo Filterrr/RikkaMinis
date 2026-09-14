@@ -169,6 +169,63 @@ object SubagentSkill {
     const val DEFAULT_MAX_PARALLEL = 2
 
     /**
+     * [T-subagent-run-timeout] Per-run wall-clock defaults. Sized to a phone:
+     * a sub-agent is an unattended loop, so the default is far tighter than
+     * the main agent's "keep going until done" behaviour, and a user who
+     * wants a long background run must ask for it explicitly.
+     */
+    const val DEFAULT_TIMEOUT_SECONDS = 600
+    const val MAX_TIMEOUT_SECONDS = 3600
+
+    /**
+     * [T-subagent-model-routing] Optional tail appended to the `model`
+     * parameter description so the parent can see what it may pick without
+     * guessing. Supplied by the caller (the catalog lives behind a repository
+     * the tools layer must not reference); empty keeps the schema static.
+     */
+    const val MAX_CATALOG_HINT_MODELS = 30
+
+    /**
+     * [T-subagent-model-routing] Byte ceiling on the hint — the entry CAP is
+     * not enough on its own, since 30 entries with verbose display names can
+     * still be kilobytes riding in every parent request.
+     */
+    const val MAX_CATALOG_HINT_CHARS = 600
+
+    /**
+     * [T-subagent-model-routing] Render a model list for embedding in the
+     * spawn_agent schema.
+     *
+     * BUDGET: this text rides in EVERY parent request's tool schema, so it is
+     * deliberately capped at [MAX_CATALOG_HINT_MODELS] names and counts as
+     * prompt bytes, not prose. A 200-model catalog would otherwise add
+     * kilobytes to every single turn to benefit the rare spawn that names a
+     * model. Beyond the cap we say only how many exist and point at the uuid
+     * form — the resolver still accepts an exact uuid/model-id for a model
+     * that is not listed here, so truncation costs nothing but discoverability.
+     */
+    fun buildCatalogHint(
+        candidates: List<SubagentModelResolver.Candidate>,
+        limit: Int = MAX_CATALOG_HINT_MODELS,
+        maxChars: Int = MAX_CATALOG_HINT_CHARS,
+    ): String {
+        if (candidates.isEmpty()) return ""
+        val shown = candidates.take(limit)
+        val names = shown.joinToString(", ") { it.describe() }
+        val hint = if (candidates.size <= limit) {
+            "Known models: $names."
+        } else {
+            "Known models (first $limit of ${candidates.size}): $names. " +
+                "A model uuid or exact model id is also accepted."
+        }
+        // Second guard: a few dozen entries can still be enormous when display
+        // names are long. Cutting mid-list is acceptable — the resolver takes
+        // the full catalog, so an unlisted model stays routable by exact id.
+        return if (hint.length <= maxChars) hint
+        else hint.take(maxChars).trimEnd() + " …(list truncated; an exact model uuid or model id also works)"
+    }
+
+    /**
      * Parsed from a skill's SKILL.md frontmatter. Returned by
      * [parseSubagentConfig] for every skill; [isSubagent] is false
      * for regular skills.
@@ -189,7 +246,7 @@ object SubagentSkill {
 
     // ── Tool definition ──────────────────────────────────────────────────
 
-    fun definition(): AgentToolDefinition = AgentToolDefinition(
+    fun definition(modelCatalogHint: String = ""): AgentToolDefinition = AgentToolDefinition(
         name = NAME,
         description = "Spawn a sub-agent with its own system prompt, tool set, " +
             "and budget. The sub-agent runs independently and returns its final " +
@@ -240,9 +297,39 @@ object SubagentSkill {
                     "with turn_complete's meaning.)",
                 enumValues = listOf("done", "turn_complete", "detach", "first_turn"),
             ),
+            // [T-subagent-model-routing] Delegate cheap work to a cheaper
+            // model. Ported from ExTV's three-form resolver: a model uuid, a
+            // provider model id, or a display name. Unknown/ambiguous values
+            // FAIL with the valid options rather than silently inheriting the
+            // parent model — a typo must not bill the expensive route.
+            "model" to AgentToolParam(
+                "string",
+                "Optional. Run this sub-agent on a different (usually cheaper) " +
+                    "model: a model uuid, a provider model id, or a display " +
+                    "name (case-insensitive exact match). Omit to inherit the " +
+                    "parent's model. An unknown or ambiguous value fails the " +
+                    "spawn and the error lists what would have matched — do " +
+                    "NOT retry with a guessed name." +
+                    (if (modelCatalogHint.isNotBlank()) " $modelCatalogHint" else ""),
+            ),
+            // [T-subagent-run-timeout] Wall-clock ceiling for ONE run.
+            // RikkaMinis previously had no run-level timeout at all: an
+            // unattended detached run could keep calling tools forever (each
+            // turn is fine, the LOOP is not), and a hung sub-agent held a
+            // scheduler permit nobody else could take.
+            "timeout_seconds" to AgentToolParam(
+                "integer",
+                "Optional. Wall-clock cap for the whole run (default " +
+                    "$DEFAULT_TIMEOUT_SECONDS; max $MAX_TIMEOUT_SECONDS). On " +
+                    "expiry the run is stopped and reported as TIMED_OUT with " +
+                    "its partial output — this is per RUN, not per tool call " +
+                    "(shell_execute has its own). Detached runs are also " +
+                    "subject to it, so a background spawn cannot outlive its " +
+                    "usefulness.",
+            ),
         ),
         required = listOf("tool_title", "skill_name", "query"),
-        propertyOrdering = listOf("tool_title", "skill_name", "query", "run_until"),
+        propertyOrdering = listOf("tool_title", "skill_name", "query", "run_until", "model", "timeout_seconds"),
     )
 
     // ── Config parsing ───────────────────────────────────────────────────

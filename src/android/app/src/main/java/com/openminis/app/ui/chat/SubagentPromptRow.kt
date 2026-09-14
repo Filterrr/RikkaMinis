@@ -263,6 +263,7 @@ private fun SubagentStatusGlyph(run: SubagentRunRegistry.Run, tint: Color) {
             val icon: ImageVector = when (run.status) {
                 SubagentRunRegistry.RunStatus.SUCCESS -> Icons.Default.CheckCircle
                 SubagentRunRegistry.RunStatus.FAILED -> Icons.Default.Error
+                SubagentRunRegistry.RunStatus.TIMED_OUT -> Icons.Default.Error
                 else -> Icons.Default.Cancel
             }
             Icon(

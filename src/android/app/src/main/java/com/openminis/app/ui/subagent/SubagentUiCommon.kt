@@ -37,6 +37,7 @@ internal fun runStatusColor(run: SubagentRunRegistry.Run?): Color = when {
     run.isExecuting -> SubagentAccent
     run.status == SubagentRunRegistry.RunStatus.SUCCESS -> ToolCheckColor
     run.status == SubagentRunRegistry.RunStatus.FAILED -> ToolErrorColor
+    run.status == SubagentRunRegistry.RunStatus.TIMED_OUT -> ToolErrorColor
     else -> ToolCancelColor
 }
 
@@ -48,6 +49,7 @@ internal fun runStatusLabel(run: SubagentRunRegistry.Run?): String = when {
     else -> when (run.status) {
         SubagentRunRegistry.RunStatus.SUCCESS -> "Completed"
         SubagentRunRegistry.RunStatus.FAILED -> "Failed"
+        SubagentRunRegistry.RunStatus.TIMED_OUT -> "Timed out"
         SubagentRunRegistry.RunStatus.CANCELLED -> "Cancelled"
         SubagentRunRegistry.RunStatus.QUEUED -> "Queued"
         SubagentRunRegistry.RunStatus.RUNNING -> "Running"

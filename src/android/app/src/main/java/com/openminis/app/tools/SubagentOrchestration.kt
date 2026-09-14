@@ -90,8 +90,48 @@ object SubagentOrchestration {
         val detached: Boolean,
         val deferred: CompletableDeferred<JobOutcome> = CompletableDeferred(),
         @Volatile var coroutineJob: kotlinx.coroutines.Job? = null,
-    )
+    ) {
+        /**
+         * [T-subagent-delivery] How many parent calls are BLOCKED on this
+         * job's result right now (join_subagents / wait_any bracket their
+         * await with begin/end).
+         *
+         * Why a count and not a one-shot "parent asked for it" latch: a join
+         * can TIME OUT while the run keeps going. A latch set at join entry
+         * would then suppress the eventual wake-up forever, and the parent —
+         * which already gave up waiting — would never learn the result it
+         * paid for. A count tracks actual interest: blocked now → the pusher
+         * stays silent (the puller has it); nobody blocked → the push happens.
+         *
+         * A detached result can reach the parent two ways: the parent PULLS it
+         * (join / wait resolving the deferred) or the runner PUSHES it (waking
+         * the parent conversation with a synthetic turn when the run finishes
+         * on its own). Doing BOTH doubles the context cost of the same report
+         * and — worse — reads to the model as two independent sub-agents
+         * corroborating each other.
+         */
+        private val awaiters = java.util.concurrent.atomic.AtomicInteger(0)
 
+        fun beginAwait() { awaiters.incrementAndGet() }
+        fun endAwait() { awaiters.decrementAndGet() }
+
+        /** True when a parent call is parked on this result — suppress the push. */
+        fun hasAwaiters(): Boolean = awaiters.get() > 0
+    }
+
+    /**
+     * Run [block] with every [jobs] entry marked as awaited, so a run that
+     * finishes inside the window is delivered by the PULL path only. Release
+     * is in `finally`: a timed-out join must stop suppressing later wake-ups.
+     */
+    suspend fun <T> awaiting(jobs: List<SubagentJob>, block: suspend () -> T): T {
+        jobs.forEach { it.beginAwait() }
+        try {
+            return block()
+        } finally {
+            jobs.forEach { it.endAwait() }
+        }
+    }
     // ── Registries ───────────────────────────────────────────────────────
 
     /**
