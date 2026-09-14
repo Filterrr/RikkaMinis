@@ -17,6 +17,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -248,6 +249,7 @@ fun SubagentDetailScreen(
  * bar exactly like the chat message list does. Lives OUTSIDE the Scaffold
  * scope's Column — fills the padded area with [Modifier.fillMaxSize].
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SubagentRunDetailBody(
     run: SubagentRunRegistry.Run,
@@ -345,7 +347,15 @@ private fun SubagentRunDetailBody(
                     color = ChatColors.primaryText,
                 )
                 Spacer(modifier = Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                // [T-subagent-approval][T-subagent-token-accounting] FlowRow,
+                // not Row: with skill + group + model + tokens this line
+                // overflows a phone width, and a single-line Row squeezed the
+                // monospace chips into misaligned ellipses. Wrapping keeps
+                // every chip whole (same pattern as ChatHistoryDrawer's footer).
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
                     MetaChip(label = "skill", value = run.skillId.ifBlank { run.skillName })
                     if (run.groupId.isNotEmpty()) {
                         // [T-subagent-orchestration] Batch provenance — the
@@ -543,6 +553,13 @@ private fun MetaChip(label: String, value: String) {
         fontSize = 11.sp,
         fontFamily = FontFamily.Monospace,
         color = ChatColors.secondaryText,
+        // [T-subagent-token-accounting] One line per chip: inside a FlowRow a
+        // pathologically long value (a model with a verbose display name) is
+        // measured at flow width, and without this it would render as a
+        // squeezed multi-line capsule. The full model id remains recoverable
+        // from the run's wake-up prompt / journal.
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
         modifier = Modifier
             .background(ChatColors.toolCapsuleBg, RoundedCornerShape(6.dp))
             .padding(horizontal = 6.dp, vertical = 2.dp),
