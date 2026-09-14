@@ -466,7 +466,7 @@ internal object ConfigBuiltins {
         // plus two comma-separated order fields. All live in appearance_prefs so
         // they round-trip through minis-config AND every local backup
         // automatically (ConfigBackup walks the registry). Defaults keep the
-        // eight original menu entries visible and pin Token Usage + Settings to
+        // the menu-renderable entries visible and pin Token Usage + Settings to
         // the footer — identical to the pre-customization UI.
         for (entryKey in ChatMenuPrefs.ALL_ENTRIES) {
             r.register(

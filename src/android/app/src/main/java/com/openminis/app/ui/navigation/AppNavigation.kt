@@ -48,6 +48,9 @@ import com.openminis.app.ui.settings.ProviderDetailScreen
 import com.openminis.app.ui.settings.ProviderListScreen
 import com.openminis.app.ui.sandbox.FileBrowserScreen
 import com.openminis.app.ui.sandbox.FileBrowserViewModel
+import com.openminis.app.ui.trace.TraceDetailScreen
+import com.openminis.app.ui.trace.TraceListScreen
+import com.openminis.app.ui.trace.TraceViewModel
 import com.openminis.app.ui.sandbox.FileItem
 import com.openminis.app.ui.sandbox.FilePreviewScreen
 import com.openminis.app.ui.sandbox.RootfsManagementScreen
@@ -186,6 +189,14 @@ object Routes {
     /** Chat-files browser: opens FileBrowser rooted at /var/minis for the session. */
     const val CHAT_FILES = "chat_files/{sessionId}"
     fun chatFiles(sessionId: String) = "chat_files/$sessionId"
+
+    /** [T-android-trace-viewer] Agent traces for one session (list → detail). */
+    const val AGENT_TRACES = "agent_traces/{sessionId}"
+    fun agentTraces(sessionId: String) = "agent_traces/$sessionId"
+
+    /** [T-android-trace-viewer] One trace file's detail. */
+    const val TRACE_DETAIL = "trace_detail/{sessionId}/{traceId}"
+    fun traceDetail(sessionId: String, traceId: String) = "trace_detail/$sessionId/$traceId"
     const val MEMORY = "memory"
     /** [T-mcp-integration-android] MCP Integrations management screen. */
     const val MCP = "mcp"
@@ -631,6 +642,10 @@ fun AppNavigation(
                 onBrowseChatFiles = {
                     navController.safeNavigate(Routes.chatFiles(sessionId))
                 },
+                // [T-android-trace-viewer] Agent traces for this chat.
+                onOpenAgentTraces = {
+                    navController.safeNavigate(Routes.agentTraces(sessionId))
+                },
                 onPreviewAttachment = { item ->
                     FilePreviewHolder.currentItem = item
                     navController.safeNavigate(Routes.FILE_PREVIEW)
@@ -1064,6 +1079,50 @@ fun AppNavigation(
                     FilePreviewHolder.currentItem = item
                     navController.safeNavigate(Routes.FILE_PREVIEW)
                 },
+            )
+        }
+
+        // [T-android-trace-viewer] Agent traces for one chat: list → detail.
+        // Reads workspace/.traces/agent-*.jsonl, the schema-2.0 evidence the
+        // runtime has been writing since T6/T9 — see TraceRun for why the read
+        // side exists at all.
+        composable(
+            route = Routes.AGENT_TRACES,
+            arguments = listOf(navArgument("sessionId") { type = NavType.StringType }),
+        ) { backStackEntry ->
+            val context = androidx.compose.ui.platform.LocalContext.current
+            val sessionId = backStackEntry.arguments?.getString("sessionId") ?: return@composable
+            val vm = remember(sessionId) {
+                TraceViewModel(context.applicationContext, sessionId)
+            }
+            TraceListScreen(
+                viewModel = vm,
+                onBack = { navController.safePopBackStack() },
+                onOpenTrace = { traceId ->
+                    navController.safeNavigate(Routes.traceDetail(sessionId, traceId))
+                },
+            )
+        }
+
+        // [T-android-trace-viewer] One trace in full. The ViewModel is scoped to
+        // the session, so opening a run re-reads only that file.
+        composable(
+            route = Routes.TRACE_DETAIL,
+            arguments = listOf(
+                navArgument("sessionId") { type = NavType.StringType },
+                navArgument("traceId") { type = NavType.StringType },
+            ),
+        ) { backStackEntry ->
+            val context = androidx.compose.ui.platform.LocalContext.current
+            val sessionId = backStackEntry.arguments?.getString("sessionId") ?: return@composable
+            val traceId = backStackEntry.arguments?.getString("traceId") ?: return@composable
+            val vm = remember(sessionId) {
+                TraceViewModel(context.applicationContext, sessionId)
+            }
+            TraceDetailScreen(
+                viewModel = vm,
+                traceId = traceId,
+                onBack = { navController.safePopBackStack() },
             )
         }
 

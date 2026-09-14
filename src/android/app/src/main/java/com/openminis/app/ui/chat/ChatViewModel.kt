@@ -84,6 +84,7 @@ import com.openminis.app.tools.SubagentSkill
 import com.openminis.app.tools.ToolBatchExecutor
 import com.openminis.app.tools.ToolConcurrencyPolicy
 import com.openminis.app.tools.SpawnApprovalQueue
+import com.openminis.app.tools.SpawnApprovalRegistry
 import com.openminis.app.tools.SpawnDecision
 import com.openminis.app.tools.SubagentOrchestrationTools
 import com.openminis.app.tools.ToolExecutionResult
@@ -870,9 +871,27 @@ class ChatViewModel(
      */
     val subagentApprovals = SpawnApprovalQueue()
 
+    /**
+     * [T-notif-inline-decision] Post the spawn-approval notice when an ask is
+     * submitted while the app is backgrounded (no-op in the foreground — the
+     * dialog is already on screen). The clear hook drops the shade entry once
+     * the ask resolves, whichever route answered it.
+     *
+     * Both are pulled from the app singleton rather than threaded through the
+     * factory: the ViewModel factory has several call sites and the notifier is
+     * a process-wide component, so a direct read keeps the wiring in one place.
+     * Null whenever the app instance is unavailable (unit tests) — every call
+     * site null-checks, and an absent notifier simply means the pre-existing
+     * in-app-only behaviour.
+     */
+    private val spawnApprovalNotifier = (context.applicationContext as? com.openminis.app.MinisApp)
+
     /** UI hook: answer a pending ask (Allow once / Always allow / Deny). */
     fun resolveSpawnApproval(askId: String, decision: SpawnDecision) {
         subagentApprovals.resolve(askId, decision)
+        // Either route may have answered (in-app dialog or notification
+        // button) — clear the shade entry so a resolved ask never lingers.
+        spawnApprovalNotifier?.spawnApprovalNotifier?.cancel(askId)
     }
 
     /**
@@ -980,9 +999,22 @@ class ChatViewModel(
                     modelLabel = modelLabel,
                     detached = detached,
                 )
+                // [T-notif-inline-decision] Make the ask answerable from the
+                // shade: publish the queue (the broadcast can only see ids, not
+                // ViewModel state) and post the notice. Both are needed only
+                // while an ask is outstanding, so they live here rather than in
+                // init/onCleared bookkeeping.
+                val liveSessionId = activeSessionId.ifBlank { sessionId }
+                SpawnApprovalRegistry.register(liveSessionId, subagentApprovals)
+                spawnApprovalNotifier?.spawnApprovalNotifier
+                    ?.notifyIfBackgrounded(ask.request, liveSessionId)
                 val answered = kotlinx.coroutines.withTimeoutOrNull(SPAWN_APPROVAL_TIMEOUT_MS) {
                     ask.deferred.await()
                 }
+                // Whatever the outcome, the ask is no longer answerable: drop
+                // the registration and the shade entry.
+                SpawnApprovalRegistry.unregister(liveSessionId, subagentApprovals)
+                spawnApprovalNotifier?.spawnApprovalNotifier?.cancel(ask.request.id)
                 if (answered != null) return answered
                 subagentApprovals.remove(ask.request.id)
                 // resolve() retires the row the instant it delivers, so a tap

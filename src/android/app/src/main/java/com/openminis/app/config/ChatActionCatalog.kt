@@ -13,6 +13,7 @@ import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Terminal
+import androidx.compose.material.icons.outlined.Timeline
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.openminis.app.R
 
@@ -52,6 +53,9 @@ object ChatActionCatalog {
         ChatActionSpec(ChatMenuPrefs.SESSION_MEMORY, R.string.session_memory_title, Icons.Outlined.Psychology, true, false),
         ChatActionSpec(ChatMenuPrefs.SLASH_COMMANDS, R.string.chat_menu_slash_commands, Icons.Outlined.Keyboard, true, false),
         ChatActionSpec(ChatMenuPrefs.EXPORT, R.string.sessionlist_export, Icons.Outlined.Share, true, false),
+        // [T-android-trace-viewer] Read side of the agent traces the runtime
+        // writes each run — the "why did this run fail?" screen.
+        ChatActionSpec(ChatMenuPrefs.AGENT_TRACES, R.string.chat_menu_agent_traces, Icons.Outlined.Timeline, true, false),
         ChatActionSpec(ChatMenuPrefs.TOKEN_USAGE, R.string.settings_token_usage, Icons.Outlined.DataUsage, false, true),
         ChatActionSpec(ChatMenuPrefs.SETTINGS, R.string.settings, Icons.Outlined.Settings, false, true),
     )
