@@ -163,7 +163,7 @@ class AntigravityCallbackServerTest {
         }
     }
 
-    /** Sends an arbitrary raw request line + headers; returns the status line + body. */
+    /** Sends an arbitrary raw request; returns the status CODE ("200"/"413"/…) + body. */
     private fun rawGet(host: String, port: Int, raw: String): Pair<String, String> {
         val socket = java.net.Socket(host, port)
         socket.soTimeout = 5_000
@@ -171,9 +171,12 @@ class AntigravityCallbackServerTest {
             s.getOutputStream().write(raw.toByteArray())
             s.getOutputStream().flush()
             val resp = s.getInputStream().bufferedReader().readText()
-            val statusLine = resp.lineSequence().firstOrNull() ?: ""
+            // Status line shape: "HTTP/1.1 <code> <reason>" — the code is
+            // the second token.
+            val statusLine = resp.lineSequence().firstOrNull().orEmpty().trimEnd('\r')
+            val code = statusLine.split(' ').getOrElse(1) { "" }
             val bodyStart = resp.indexOf("\r\n\r\n")
-            return statusLine to resp.substring(bodyStart + 4)
+            return code to if (bodyStart >= 0) resp.substring(bodyStart + 4) else resp
         }
     }
 }

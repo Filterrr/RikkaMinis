@@ -213,5 +213,28 @@ class AntigravityCallbackServer(private val port: Int) {
         socket.getOutputStream().write(response.toByteArray(Charsets.UTF_8))
         socket.getOutputStream().write(body)
         socket.getOutputStream().flush()
+        drainInbound(socket)
+    }
+
+    /**
+     * Deliver-then-drain: half-close the write side (FIN after the response)
+     * and consume whatever the client still has in flight before close.
+     * Closing with unread receive data emits RST, which DISCARDS the
+     * response on the client — the bounded-read rejection paths (413 on a
+     * 32 KiB junk line, 431 on a header flood) would otherwise race the
+     * client's pipelined request and the rejection would never be seen.
+     * Bounded: a 300 ms read timeout caps the drain, so a client that
+     * never closes cannot stall the (single-threaded) catcher loop.
+     */
+    private fun drainInbound(socket: Socket) {
+        try {
+            socket.shutdownOutput()
+            socket.soTimeout = 300
+            val buf = ByteArray(4096)
+            while (true) {
+                if (socket.getInputStream().read(buf) == -1) break
+            }
+        } catch (_: Exception) {
+        }
     }
 }

@@ -197,11 +197,37 @@ object AntigravityOAuth {
         }
     }
 
-    /** BASE64URL-encode(SHA256(ASCII(verifier))) with no padding (RFC 7636 §4.2). */
+    /**
+     * BASE64URL-encode(SHA-256(ASCII(verifier))) with no padding (RFC 7636 §4.2).
+     *
+     * Pure-Kotlin encoder: android.util.Base64 is a null-returning stub under
+     * JVM unit tests (returnDefaultValues), and java.util.Base64 requires
+     * API 26 while this module's minSdk is 24 — so neither is usable here.
+     */
     fun codeChallengeS256(verifier: String): String {
         val digest = java.security.MessageDigest.getInstance("SHA-256")
             .digest(verifier.toByteArray(Charsets.US_ASCII))
-        return android.util.Base64.encodeToString(digest, android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP or android.util.Base64.URL_SAFE)
+        val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+        val out = StringBuilder(((digest.size + 2) / 3) * 4)
+        var i = 0
+        while (i + 3 <= digest.size) {
+            val n = ((digest[i].toInt() and 0xFF) shl 16) or
+                ((digest[i + 1].toInt() and 0xFF) shl 8) or
+                (digest[i + 2].toInt() and 0xFF)
+            out.append(alphabet[(n ushr 18) and 63]).append(alphabet[(n ushr 12) and 63])
+                .append(alphabet[(n ushr 6) and 63]).append(alphabet[n and 63])
+            i += 3
+        }
+        val rem = digest.size - i
+        if (rem == 1) {
+            val n = (digest[i].toInt() and 0xFF) shl 16
+            out.append(alphabet[(n ushr 18) and 63]).append(alphabet[(n ushr 12) and 63])
+        } else if (rem == 2) {
+            val n = ((digest[i].toInt() and 0xFF) shl 16) or ((digest[i + 1].toInt() and 0xFF) shl 8)
+            out.append(alphabet[(n ushr 18) and 63]).append(alphabet[(n ushr 12) and 63])
+                .append(alphabet[(n ushr 6) and 63])
+        }
+        return out.toString() // unpadded base64url — RFC 7636 §4.2
     }
 
     fun buildAuthUrl(

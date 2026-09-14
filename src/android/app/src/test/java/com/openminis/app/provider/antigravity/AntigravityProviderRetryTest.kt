@@ -38,16 +38,17 @@ class AntigravityProviderRetryTest {
     private val model = LLMModel("gemini-3-flash", "Gemini 3 Flash", "Antigravity")
 
     private fun okBody(text: String = "hello") = MockResponse().setBody(
-        """{"response":{"candidates":[{"content":{"parts":[{"text":"$text"}]},
-           "finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":1}}}""",
+        "{\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"$text\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":3,\"candidatesTokenCount\":1}}}",
     )
 
     private fun unauthorized(body: String = """{"error":"invalid credential"}""") =
         MockResponse().setResponseCode(401).setBody(body)
 
     private fun sseBody(text: String = "chunk") = MockResponse().setBody(
-        """data: {"response":{"candidates":[{"content":{"parts":[{"text":"$text"}]}},
-           "finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":1}}}""" + "\n\n",
+        // SINGLE LINE: the SSE reader parses one line per event; a raw
+        // newline inside the template would split the JSON mid-event and
+        // the parser would silently skip both fragments (empty stream).
+        "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"$text\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":3,\"candidatesTokenCount\":1}}}\n\n",
     )
 
     @Before
@@ -91,12 +92,12 @@ class AntigravityProviderRetryTest {
         return text
     }
 
-    // ── 1: 401 → refresh → replay once (non-stream) ──
+    // ── 1: 401 → refresh → replay once ──
 
     @Test
-    fun `non-stream 401 rotates bearer token and replays once`() = runBlocking {
+    fun `stream 401 rotates bearer token and replays once`() = runBlocking {
         server.enqueue(unauthorized())
-        server.enqueue(okBody())
+        server.enqueue(sseBody("hello"))
 
         val text = provider().sendOrThrow()
 
@@ -140,7 +141,7 @@ class AntigravityProviderRetryTest {
     @Test
     fun `transient refresh failure surfaces NetworkError not re-login`() = runBlocking {
         server.enqueue(unauthorized())
-        server.enqueue(okBody()) // unused — flow aborts before replay
+        server.enqueue(okBody()) // replay target: success JSON on the non-stream path
 
         val p = provider(refreshToken = {
             // Simulate the store's classified outcome for a network blip.
@@ -164,7 +165,7 @@ class AntigravityProviderRetryTest {
     @Test
     fun `fatal refresh failure surfaces InvalidApiKey`() = runBlocking {
         server.enqueue(unauthorized())
-        server.enqueue(okBody()) // unused
+        server.enqueue(okBody()) // replay target — never consumed when refresh fails
 
         val p = provider(refreshToken = {
             AntigravityCredentialStore.lastRefreshFailure =
