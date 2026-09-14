@@ -4,6 +4,7 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
@@ -54,7 +55,9 @@ class AntigravityCallbackServerTest {
         assertEquals(200, status)
         assertTrue(body.contains("Login successful"))
 
-        val (code, state) = received ?: fail("onResult not invoked")
+        // requireNotNull (not `?: fail`): JUnit fail returns java.lang.Void,
+        // which widens the elvis result to Any and breaks destructuring.
+        val (code, state) = requireNotNull(received) { "onResult not invoked" }
         assertEquals("SplxlOBeZQQYbYS6WxSbIA", code)
         assertEquals("xyz123", state)
     }
@@ -74,7 +77,7 @@ class AntigravityCallbackServerTest {
         assertTrue(body.contains("Authorization failed"))
         assertTrue(body.contains("access_denied"))
 
-        val (code, state) = received ?: fail("onResult not invoked")
+        val (code, state) = requireNotNull(received) { "onResult not invoked" }
         assertEquals(
             "error redirect must surface through the sentinel prefix",
             "oauth-error:access_denied",
