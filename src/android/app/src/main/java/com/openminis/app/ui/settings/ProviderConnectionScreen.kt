@@ -592,7 +592,11 @@ private fun AntigravityOAuthSection(
                 // [T-antigravity-credential-pool] Append an additional Google
                 // account to this instance's credential pool. Shown only when
                 // the primary account exists; writes into the next free slot.
+                // SettingsCardBlock is a plain Column (no verticalArrangement)
+                // — the explicit Spacer is what keeps this button's edge (and
+                // its pressed elevation shadow) off the relogin button above.
                 if (email != null) {
+                    Spacer(Modifier.height(12.dp))
                     com.openminis.app.ui.components.MinisButton(
                         onClick = {
                             isLoggingIn = true
