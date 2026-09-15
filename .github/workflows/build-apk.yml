@@ -55,6 +55,15 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
+        with:
+          # Google pulled the deprecated `tools` package from the SDK repo
+          # (2026-09): the action's DEFAULT install list still references it
+          # and now dies with "Failed to find package 'tools'" — every build
+          # breaks at this step regardless of branch. Install the modern
+          # equivalents explicitly; everything else (platforms, build-tools)
+          # is fetched by AGP on demand, and the NDK step below drives
+          # sdkmanager directly.
+          packages: 'android-commandlinetools platform-tools'
 
       # Build the proot sandbox engine from source: deps/proot (submodule) +
       # deps/build_proot.sh + vendored deps/talloc. Needs NDK r28; the runner
