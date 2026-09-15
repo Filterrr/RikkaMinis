@@ -65,6 +65,33 @@ object AntigravityKeepAlive {
 
     private const val REQUEST_CODE = 0x5AB17A18 // stable PendingIntent request code
 
+    // ── pure decision helpers (internal seams for JVM unit tests) ──────────
+
+    /** [fix via tests] Clamp a persisted/user-supplied interval to the
+     *  allow-list; anything unknown collapses to the default. */
+    internal fun sanitizeInterval(hours: Int): Int =
+        hours.takeIf { it in INTERVAL_CHOICES_HOURS } ?: DEFAULT_INTERVAL_HOURS
+
+    /** Throttle predicate: true when a pass completed less than
+     *  [MIN_INTERVAL_MS] before [now]. `lastRunAt == 0` (never run) is
+     *  always unthrottled. */
+    internal fun isThrottled(now: Long, lastRunAt: Long): Boolean =
+        lastRunAt > 0 && now - lastRunAt < MIN_INTERVAL_MS
+
+    /** Catch-up predicate for the foreground re-arm: true when the last
+     *  completed pass is older than the cadence itself. Never-run (0) is
+     *  NOT overdue — the first pass waits for the first scheduled tick. */
+    internal fun isOverdue(now: Long, lastRunAt: Long, intervalHours: Int): Boolean =
+        lastRunAt > 0 && now - lastRunAt > intervalHours * 60L * 60L * 1000L
+
+    /** Parse the comma-joined fatal-account pref; blank entries dropped. */
+    internal fun parseFatalAccounts(raw: String?): List<String> =
+        raw.orEmpty().split(',').map { it.trim() }.filter { it.isNotEmpty() }
+
+    /** One-line pass summary for the settings UI. */
+    internal fun formatSummary(ok: Int, fatal: Int, transientFail: Int): String =
+        "$ok ok · $fatal fatal · $transientFail transient"
+
     private fun prefs(context: Context): SharedPreferences =
         context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
@@ -73,8 +100,7 @@ object AntigravityKeepAlive {
     fun isEnabled(context: Context): Boolean = prefs(context).getBoolean(KEY_ENABLED, false)
 
     fun intervalHours(context: Context): Int =
-        prefs(context).getInt(KEY_INTERVAL_HOURS, DEFAULT_INTERVAL_HOURS)
-            .takeIf { it in INTERVAL_CHOICES_HOURS } ?: DEFAULT_INTERVAL_HOURS
+        sanitizeInterval(prefs(context).getInt(KEY_INTERVAL_HOURS, DEFAULT_INTERVAL_HOURS))
 
     /** Epoch ms of the last completed pass, or 0. */
     fun lastRunAt(context: Context): Long = prefs(context).getLong(KEY_LAST_RUN_AT, 0L)
@@ -85,8 +111,7 @@ object AntigravityKeepAlive {
 
     /** Emails whose refresh token Google REJECTED (fatal) at the last pass. */
     fun fatalAccounts(context: Context): List<String> =
-        prefs(context).getString(KEY_FATAL_ACCOUNTS, "").orEmpty()
-            .split(',').map { it.trim() }.filter { it.isNotEmpty() }
+        parseFatalAccounts(prefs(context).getString(KEY_FATAL_ACCOUNTS, ""))
 
     // ── scheduling ─────────────────────────────────────────────────────────
 
@@ -103,7 +128,7 @@ object AntigravityKeepAlive {
 
     /** Change the cadence; re-arms so the new interval applies from now. */
     fun setIntervalHours(context: Context, hours: Int) {
-        val h = hours.takeIf { it in INTERVAL_CHOICES_HOURS } ?: DEFAULT_INTERVAL_HOURS
+        val h = sanitizeInterval(hours)
         prefs(context).edit().putInt(KEY_INTERVAL_HOURS, h).apply()
         if (isEnabled(context)) scheduleNext(context)
     }
@@ -155,8 +180,8 @@ object AntigravityKeepAlive {
         if (!isEnabled(context)) return@withContext false
         val now = System.currentTimeMillis()
         val prev = lastRunAt(context)
-        if (prev > 0 && now - prev < MIN_INTERVAL_MS) {
-            AppLogger.info(TAG, "throttled (last pass ${now - prev / 1000}s ago)")
+        if (isThrottled(now, prev)) {
+            AppLogger.info(TAG, "throttled (last pass ${(now - prev) / 1000}s ago)")
             return@withContext false
         }
         prefs(context).edit().putLong(KEY_LAST_RUN_AT, now).apply()
@@ -201,7 +226,7 @@ object AntigravityKeepAlive {
             AppLogger.info(TAG, "keep-alive: no antigravity credentials found")
             prefs(context).edit().putString(KEY_LAST_RESULT, "无凭证").apply()
         } else {
-            val summary = "$ok ok · $fatal fatal · $transientFail transient"
+            val summary = formatSummary(ok, fatal, transientFail)
             AppLogger.info(TAG, "keep-alive pass complete: $summary")
             prefs(context).edit()
                 .putString(KEY_LAST_RESULT, summary)
@@ -224,8 +249,7 @@ object AntigravityKeepAlive {
         if (!isEnabled(context)) return
         scheduleNext(context)
         val last = lastRunAt(context)
-        val dueMs = intervalHours(context) * 60 * 60 * 1000L
-        if (last > 0 && System.currentTimeMillis() - last > dueMs) {
+        if (isOverdue(System.currentTimeMillis(), last, intervalHours(context))) {
             AppLogger.info(TAG, "keep-alive overdue (last pass ${(System.currentTimeMillis() - last) / 3_600_000}h ago) — catch-up pass")
             CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
                 try {
