@@ -860,6 +860,19 @@ class ProviderRepository(private val context: Context) {
     fun enabledInstances(providerType: ProviderType): List<ProviderInstance> =
         _config.value.instances.filter { it.providerType == providerType && it.isEnabled }
 
+    /**
+     * [T-antigravity-keepalive] Every antigravity instance — disabled
+     * included (a disabled provider that gets re-enabled should not present
+     * as "登录已过期"). The keep-alive pass itself skips instances without a
+     * stored credential (store-checked), so no secret read is needed here.
+     * Loads the config first so the snapshot is real even when the process
+     * started just for an alarm.
+     */
+    fun antigravityInstances(): List<ProviderInstance> {
+        ensureConfigLoaded()
+        return _config.value.instances.filter { it.providerType == ProviderType.antigravity }
+    }
+
     fun entriesFor(instanceId: String): List<ModelEntry> =
         _config.value.modelEntries.filter { it.providerInstanceId == instanceId }
 

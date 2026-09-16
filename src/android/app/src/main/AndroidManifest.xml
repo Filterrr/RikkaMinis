@@ -370,6 +370,18 @@
             </intent-filter>
         </receiver>
 
+        <!-- [T-antigravity-keepalive] Authorization keep-alive: periodic
+             AlarmManager tick + BOOT_COMPLETED re-arm for the Antigravity
+             OAuth refresh-token liveness pinger. Non-exported except for the
+             system BOOT broadcast (same registration shape as AlarmReceiver). -->
+        <receiver
+            android:name=".provider.antigravity.AntigravityKeepAliveReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
         
 
         <!-- Scheduled notification receiver — fires `android-notification schedule`

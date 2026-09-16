@@ -86,6 +86,9 @@ class MinisApp : Application(), ImageLoaderFactory {
         private set
     lateinit var providerRepository: ProviderRepository
         private set
+
+    /** [T-antigravity-keepalive] True once providerRepository is assigned (onCreate). */
+    val providerRepositoryReady: Boolean get() = ::providerRepository.isInitialized
     lateinit var envVarRepository: EnvVarRepository
         private set
     lateinit var skillRepository: SkillRepository
@@ -661,6 +664,19 @@ class MinisApp : Application(), ImageLoaderFactory {
                 // after edits refetches any sibling changes. Cheap no-op when
                 // the feature is off or no WebDAV is configured.
                 if (wasBackgrounded) syncMultiDeviceIfEnabled()
+                // [T-antigravity-keepalive] Re-arm the keep-alive alarm on
+                // foreground: setAndAllowWhileIdle alarms do not survive OEM
+                // aggressive-kill, and BOOT_COMPLETED only fires on reboot.
+                // If the due time already passed while the alarm was dead,
+                // the pass also runs here (throttled inside).
+                if (wasBackgrounded) {
+                    kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                        runCatching {
+                            com.openminis.app.provider.antigravity.AntigravityKeepAlive
+                                .rearmIfEnabled(this@MinisApp)
+                        }
+                    }
+                }
                 // T298: as soon as the app transitions background → foreground,
                 // clear any task-completed notifications still in the tray.
                 // The user is back in front of the app — there's no point
