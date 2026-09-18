@@ -357,6 +357,53 @@ class SubagentSkillTest {
         assertTrue(prompt.trimEnd().endsWith("Body instructions."))
     }
 
+    /**
+     * [T-subagent-dir-isolation] A run-scoped runtime context points the run
+     * at ITS OWN artifacts directory, and states the ownership rule.
+     */
+    @Test
+    fun `runtime context names the run's own artifacts directory`() {
+        val ctx = SubagentSkill.buildRuntimeContext(
+            LocalDateTime.of(2026, 9, 8, 10, 30),
+            runId = "subagent-12",
+        )
+        assertTrue(ctx.contains("/var/minis/workspace/subagents/subagent-12"))
+        assertTrue("the ownership rule must be stated", ctx.contains("belongs to THIS sub-agent run"))
+        assertFalse("a scoped run must not be pointed at the shared root", ctx.contains("Durable artifacts directory: /var/minis/workspace/ ("))
+    }
+
+    /** Two concurrent runs can never share a directory. */
+    @Test
+    fun `different run ids map to different artifacts directories`() {
+        val a = SubagentSkill.artifactsDirFor("subagent-1")
+        val b = SubagentSkill.artifactsDirFor("subagent-2")
+        assertTrue(a != b)
+        assertTrue(a.startsWith(SubagentSkill.ARTIFACTS_DIR))
+        assertTrue(b.startsWith(SubagentSkill.ARTIFACTS_DIR))
+        // Same id → same dir (idempotent, deterministic).
+        assertEquals(a, SubagentSkill.artifactsDirFor("subagent-1"))
+    }
+
+    /** No run id (callers outside a run) keeps the shared-root behaviour. */
+    @Test
+    fun `a blank run id falls back to the shared workspace root`() {
+        assertEquals(
+            SubagentSkill.SHARED_WORKSPACE_ROOT,
+            SubagentSkill.artifactsDirFor(""),
+        )
+        val ctx = SubagentSkill.buildRuntimeContext(LocalDateTime.of(2026, 9, 8, 10, 30), runId = "")
+        assertTrue(ctx.contains(SubagentSkill.SHARED_WORKSPACE_ROOT))
+        assertFalse(ctx.contains("belongs to THIS sub-agent run"))
+    }
+
+    /** The per-run directory always sits UNDER the shared root (no escape). */
+    @Test
+    fun `the per-run directory is contained in the shared workspace`() {
+        val dir = SubagentSkill.artifactsDirFor("subagent-99")
+        assertTrue(dir.startsWith(SubagentSkill.SHARED_WORKSPACE_ROOT))
+        assertFalse("no traversal", dir.contains(".."))
+    }
+
     @Test
     fun `runtime preamble wraps description fallback for blank body`() {
         val skill = TestSkill(description = "Fallback description", body = "")

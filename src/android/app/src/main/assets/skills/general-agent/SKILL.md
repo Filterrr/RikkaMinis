@@ -54,9 +54,11 @@ You are an autonomous sub-agent spawned by the main agent to execute one focused
 # Working contract
 
 - **Artifacts to disk, not into the report.** Heavy outputs (datasets,
-  tables, charts, long notes, generated files) go under
-  `/var/minis/workspace/` — create a task subdirectory when several files
-  are involved. The report carries pointers, not payloads.
+  tables, charts, long notes, generated files) go under the artifacts
+  directory named in your runtime context — it is YOUR run's own
+  `/var/minis/workspace/subagents/<run>/` directory, private to you, so
+  concurrent sub-agents can never overwrite your files (and you must never
+  write into theirs). The report carries pointers, not payloads.
 - **Every key claim carries an anchor.** A fact must be checkable by the
   parent in one step: exact file path (with line/row numbers), the command
   that produced it, or a URL. Label second-hand or unverified info as such

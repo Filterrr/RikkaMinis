@@ -9,6 +9,7 @@ import com.openminis.app.data.model.LLMStreamChunk
 import com.openminis.app.data.model.ThinkingLevel
 import com.openminis.app.logging.AppLogger
 import com.openminis.app.sandbox.ExecutionCoordinator
+import com.openminis.app.sandbox.PRootKernel
 import com.openminis.app.sandbox.offload.ModelExecutionStreamException
 import com.openminis.app.sandbox.offload.ModelStreamErrorException
 import com.openminis.app.sandbox.offload.ModelWorkerDiedException
@@ -679,12 +680,25 @@ class SubagentRunner(
         deadlineNanos: Long,
     ): ToolExecutionResult {
         // [T-subagent-runtime-preamble] Inject a short runtime preamble
-        // (current date/time + durable workspace root) ahead of the skill
+        // (current date/time + durable artifacts root) ahead of the skill
         // body. Sub-agents run without any shell-derived context and used
         // to burn their first turn discovering what day it is.
+        //
+        // [T-subagent-dir-isolation] The run gets its OWN artifacts
+        // directory (/var/minis/workspace/subagents/<runId>/), created
+        // eagerly so even a one-shot `file_write report.md` relative fallback
+        // cannot scatter files into the shared root. Concurrent runs writing
+        // same-named deliverables (`report.md`, `data.csv`) were the exact
+        // collision this closes: with N parallel research agents, last
+        // writer won and the parent could not attribute a file to a run.
+        val artifactsDir = SubagentSkill.artifactsDirFor(run.id)
+        runCatching {
+            val dirFile = PRootKernel.resolveSessionHostPath(sessionId, artifactsDir, context)
+            if (dirFile != null) dirFile.mkdirs()
+        }
         val systemPrompt = SubagentSkill.buildSystemPrompt(
             skill,
-            runtimeContext = SubagentSkill.buildRuntimeContext(),
+            runtimeContext = SubagentSkill.buildRuntimeContext(runId = run.id),
         )
         // [T-subagent-model-routing] Record what actually ran. A parent that
         // asked for a cheap model must be able to verify it got one.
