@@ -54,6 +54,23 @@ class SubagentRunner(
         fun currentProvider(): com.openminis.app.provider.LLMProvider?
         fun activeSessionId(): String
         suspend fun executeBrowserUse(argsJson: String): ToolExecutionResult
+
+        /**
+         * [T-subagent-websearch] One-shot web search for a sub-agent.
+         *
+         * The tool was absent from the capability catalog, so sub-agents never
+         * even saw its schema — the research workflows this fork advertises
+         * spent their turns hand-rolling navigate → get_readable instead. The
+         * default fails loudly: a Deps adapter that cannot provide search must
+         * say so in the tool result rather than pretend the tool works.
+         */
+        suspend fun executeWebSearch(argsJson: String): ToolExecutionResult =
+            ToolExecutionResult(
+                "Error: web_search is unavailable in this sub-agent host. " +
+                    "Use browser_use (navigate + get_readable) instead, or report the gap.",
+                false,
+            )
+
         fun maybeReloadSkillsForPath(argsJson: String)
         fun unwrapFlowException(e: Throwable): Throwable
 
@@ -289,6 +306,18 @@ class SubagentRunner(
         // whether it goes to the background before answering — the two
         // things that make a delegated autonomous loop risky. Always-allowed
         // skills skip the dialog entirely.
+        //
+        // [T-subagent-spawn-dedupe] A DUPLICATE of an in-flight task is
+        // resolved BEFORE the gate: the model re-issuing the same task is not
+        // a new decision, so it must not cost the user a new prompt. The
+        // authoritative check-then-register still happens below (registerOrReuse
+        // is atomic); this early probe only decides whether the human is
+        // bothered at all.
+        val earlyDuplicate = registry.findActiveDuplicate(skill.id, query)
+        if (earlyDuplicate != null) {
+            SubagentOrchestration.attachReusedRun(orchestration, earlyDuplicate.id, groupId)
+            return deduplicatedSpawnResult(earlyDuplicate.id, skillName)
+        }
         if (!deps.isSkillAlwaysAllowed(skill.id)) {
             when (deps.awaitSpawnApproval(
                 skillId = skill.id,
@@ -327,6 +356,12 @@ class SubagentRunner(
             queued = true,
         )
         if (outcome.reused) {
+            // [T-subagent-orchestration-fix] The deduped run still belongs to
+            // THIS spawn batch's group: a join by group_id (or by "most
+            // recent batch") must return this run's outcome too, or the model
+            // collects fewer reports than tasks it dispatched. Membership
+            // only — the existing job handle owns the result delivery.
+            SubagentOrchestration.attachReusedRun(orchestration, outcome.run.id, groupId)
             return deduplicatedSpawnResult(outcome.run.id, skillName)
         }
         val run = outcome.run
@@ -336,7 +371,13 @@ class SubagentRunner(
             skillName = skill.name,
             detached = runUntil == SubagentSkill.RUN_UNTIL_DETACH,
         )
-        orchestration.putJob(job)
+        // [T-subagent-orchestration-fix] THE missing wiring: attach to the
+        // spawn batch's group AND register the job handle. Before this the
+        // group registry was empty in production, so every group-addressed
+        // join/wait/cancel (and the "most recent batch" default) failed with
+        // "No matching sub-agent runs found" while the spawn tool result kept
+        // advertising a group_id that could never resolve.
+        SubagentOrchestration.registerSpawn(orchestration, job, groupId)
 
         if (runUntil == SubagentSkill.RUN_UNTIL_DETACH) {
             // [T-subagent-orchestration] Fire-and-forget: launch on the
@@ -648,6 +689,20 @@ class SubagentRunner(
         val artifacts = mutableListOf<String>()
         var turns = 0
         var lastText = ""
+        // [T-subagent-loop-detector] A per-run loop detector with the SAME
+        // semantics the main loop uses (10 warnings / 20 blocks, poll-aware).
+        //
+        // Why a sub-agent needs one: its only stop conditions are maxTurns and
+        // the wall clock, so a tool that keeps failing the same way (a command
+        // that always errors, a URL that never loads, a path that never
+        // exists) burns the ENTIRE run budget — every turn costs a model call
+        // and produces nothing — and the parent receives a TIMED_OUT report
+        // with no findings. The main loop is protected from exactly this by
+        // ToolLoopDetector; delegating a task must not mean losing that
+        // protection. Scope is per run (the detector is not thread-safe by
+        // design and a sub-agent loop is single-threaded), so no session state
+        // leaks in from the parent.
+        val loopDetector = com.openminis.app.agent.ToolLoopDetector()
         // [T-subagent-context-budget] Last API-reported context size, 0 until a
         // Usage chunk says otherwise — trusted over the local estimate.
         var lastContextTokens = 0
@@ -662,7 +717,7 @@ class SubagentRunner(
                 if (System.nanoTime() >= deadlineNanos) {
                     val partial = resultSb.toString().trim()
                     AppLogger.warning(TAG, "[Subagent] '$skillName' exceeded ${timeoutSeconds}s run budget at turn $turns")
-                    registry.finish(
+                    registry.finishIfActive(
                         run.id, SubagentRunRegistry.RunStatus.TIMED_OUT,
                         resultText = partial,
                         error = "exceeded the $timeoutSeconds-second run budget after $turns turn(s)",
@@ -690,7 +745,7 @@ class SubagentRunner(
                 turns++
                 registry.turnStarted(run.id, turns)
                 val instance = provider.instanceContext ?: let {
-                    registry.finish(
+                    registry.finishIfActive(
                         run.id, SubagentRunRegistry.RunStatus.FAILED,
                         error = "No provider instance context",
                     )
@@ -824,9 +879,41 @@ class SubagentRunner(
                 // main loop (shared ToolConcurrencyPolicy): consecutive
                 // parallel-safe reads fan out, the rest stay serial. Before
                 // this, sub-agent tool calls were strictly sequential.
+                //
+                // [T-subagent-loop-detector] Each call is pre-checked against
+                // the run's detector exactly as the main loop does: CRITICAL
+                // short-circuits execution and returns a synthesized error
+                // result (keeping the tool_use/tool_result pairing balanced),
+                // so a stuck loop stops COSTING instead of merely being
+                // warned about. WARNING outcomes are appended to the result so
+                // the model sees them on its next turn.
                 val calls = toolCalls.map { ToolBatchExecutor.Call(it.id, it.name, it.args.toString()) }
                 val results = ToolBatchExecutor.executeBatched(calls) { call ->
-                    executeSubagentTool(call.name, call.argsJson, call.id, run.id, artifacts)
+                    val paramsMap = try {
+                        val o = call.argsJson.let { org.json.JSONObject(it) }
+                        buildMap<String, Any?> {
+                            val keys = o.keys()
+                            while (keys.hasNext()) {
+                                val k = keys.next()
+                                put(k, if (o.get(k) == org.json.JSONObject.NULL) null else o.get(k))
+                            }
+                        }
+                    } catch (_: Exception) {
+                        emptyMap()
+                    }
+                    val precheck = loopDetector.check(call.name, paramsMap)
+                    if (precheck.level == com.openminis.app.agent.Level.CRITICAL) {
+                        val blocked = precheck.message ?: "[LOOP BLOCKED] tool execution blocked"
+                        AppLogger.warning(
+                            TAG,
+                            "[Subagent] '$skillName' tool BLOCKED by loop detector " +
+                                "name=${call.name} reason=$blocked",
+                        )
+                        registry.appendNotice(run.id, "[loop blocked: ${call.name}]")
+                        ToolExecutionResult(blocked, false, toolTitle = call.name)
+                    } else {
+                        executeSubagentTool(call.name, call.argsJson, call.id, run.id, artifacts)
+                    }
                 }
                 for ((call, result) in toolCalls.zip(results)) {
                     val resultContent = if (result.success) result.output else "Error: ${result.output}"
@@ -836,12 +923,64 @@ class SubagentRunner(
                             SubagentRunRegistry.MAX_STEP_OUTPUT_LINES,
                         ).joinToString("\n"),
                     )
+                    // [T-subagent-loop-detector] Record post-execution and fold
+                    // a WARNING into the text the model receives, mirroring the
+                    // main loop's postRecord handling.
+                    val paramsForRecord = try {
+                        val o = org.json.JSONObject(call.args.toString())
+                        buildMap<String, Any?> {
+                            val keys = o.keys()
+                            while (keys.hasNext()) {
+                                val k = keys.next()
+                                put(k, if (o.get(k) == org.json.JSONObject.NULL) null else o.get(k))
+                            }
+                        }
+                    } catch (_: Exception) {
+                        emptyMap()
+                    }
+                    val postRecord = loopDetector.record(
+                        toolName = call.name,
+                        params = paramsForRecord,
+                        result = if (result.success) result.output else null,
+                        errorMessage = if (result.success) null else result.output,
+                        toolCallId = call.id,
+                    )
+                    val contentForModel = if (
+                        postRecord.level == com.openminis.app.agent.Level.WARNING &&
+                        postRecord.message != null
+                    ) {
+                        "$resultContent\n\n${postRecord.message}"
+                    } else {
+                        resultContent
+                    }
+                    // [T-subagent-vision] Forward the tool's IMAGE payload.
+                    //
+                    // Before this, a sub-agent's read_image / browser screenshot
+                    // arrived as text only: the model got the metadata banner
+                    // ("[path | WxH | N bytes]") and no pixels, while the main
+                    // loop passed imageData/imageMimeType/imageLinuxPath through
+                    // to the same provider. A sub-agent asked to inspect a chart
+                    // or read a screenshot therefore either guessed from the
+                    // filename or silently produced confident descriptions of
+                    // an image it never saw — worse than failing, because the
+                    // fabricated specifics look like findings.
+                    //
+                    // The worker protocol already carries these fields on
+                    // ToolResult parts (ModelExecutionDispatcher →
+                    // ModelExecutionService → provider), and each provider
+                    // re-checks the model's inputModalities, so a text-only
+                    // model keeps working exactly as before. When the bytes are
+                    // elided by an image budget, imageLinuxPath keeps the image
+                    // re-fetchable — the same contract the main loop relies on.
                     history.add(LLMMessage(
                         role = LLMMessage.Role.USER,
-                        content = "Result of ${call.name} (${call.id}):\n$resultContent",
+                        content = "Result of ${call.name} (${call.id}):\n$contentForModel",
                         contentParts = listOf(AgentContentPart.ToolResult(
                             id = call.id, name = call.name,
-                            content = resultContent, isError = !result.success,
+                            content = contentForModel, isError = !result.success,
+                            imageData = result.imageData,
+                            imageMimeType = result.imageMimeType,
+                            imageLinuxPath = result.imageLinuxPath,
                         )),
                     ))
                 }
@@ -862,6 +1001,24 @@ class SubagentRunner(
                 // tool_results are in, before the next request) with the same
                 // turn-granular invariants the main loop uses: whole rounds
                 // only, task message and the newest rounds always kept.
+                //
+                // [T-subagent-vision] Image bytes get their own pass here,
+                // unconditionally (not only when the context is tight):
+                // tool_result images now reach the model, and a long run's
+                // decoded bitmaps would otherwise sit in the heap until the
+                // run ends. Stale rounds keep a re-fetchable path instead.
+                runCatching {
+                    val (slimmed, elidedImages) = SubagentHistoryBudget.elideStaleImages(history)
+                    if (elidedImages > 0) {
+                        history.clear()
+                        history.addAll(slimmed)
+                        AppLogger.info(
+                            TAG,
+                            "[Subagent] '$skillName' elided $elidedImages stale tool-result " +
+                                "image(s) from older rounds to bound heap",
+                        )
+                    }
+                }
                 runCatching {
                     val window = provider.model.contextWindowTokens
                     val trimmed = SubagentHistoryBudget.trim(
@@ -886,7 +1043,7 @@ class SubagentRunner(
                     // their results are recorded (naming now matches the
                     // actual semantics).
                     val partial = resultSb.toString().trim()
-                    registry.finish(
+                    registry.finishIfActive(
                         run.id, SubagentRunRegistry.RunStatus.SUCCESS,
                         resultText = partial,
                         error = "Stopped early (run_until=$runUntil)",
@@ -916,7 +1073,7 @@ class SubagentRunner(
             // pill must not spin forever), then rethrow so the framework's
             // cancel cleanup can attach the recovery pointer.
             val partial = resultSb.toString()
-            registry.finish(
+            registry.finishIfActive(
                 run.id, SubagentRunRegistry.RunStatus.CANCELLED,
                 resultText = partial,
                 error = e.message ?: "cancelled",
@@ -927,7 +1084,7 @@ class SubagentRunner(
         } catch (e: Exception) {
             val msg = e.message ?: e.javaClass.simpleName
             AppLogger.warning(TAG, "[Subagent] '$skillName' error after $turns turn(s): $msg")
-            registry.finish(
+            registry.finishIfActive(
                 run.id, SubagentRunRegistry.RunStatus.FAILED,
                 resultText = resultSb.toString(), error = msg,
             )
@@ -952,14 +1109,14 @@ class SubagentRunner(
 
         val finalText = resultSb.toString().trim()
         if (finalText.isBlank()) {
-            registry.finish(run.id, SubagentRunRegistry.RunStatus.SUCCESS, resultText = "")
+            registry.finishIfActive(run.id, SubagentRunRegistry.RunStatus.SUCCESS, resultText = "")
             return ToolExecutionResult(
                 "Sub-agent '$skillName' completed in $turns turn(s) with no output.",
                 true, toolTitle = "Sub-agent: ${skill.name}",
             )
         }
 
-        registry.finish(run.id, SubagentRunRegistry.RunStatus.SUCCESS, resultText = finalText)
+        registry.finishIfActive(run.id, SubagentRunRegistry.RunStatus.SUCCESS, resultText = finalText)
         val result = SubagentResult(
             status = SubagentResult.Status.SUCCESS,
             report = finalText,
@@ -1004,6 +1161,10 @@ class SubagentRunner(
         return when (name) {
             "shell_execute" -> executeSubagentShell(argsJson, callId, runId)
             "browser_use" -> deps.executeBrowserUse(argsJson)
+            // [T-subagent-websearch] Same executor the main loop uses
+            // (configured engine + render wait + readable extraction), so a
+            // sub-agent's search behaves identically to the parent's.
+            "web_search" -> deps.executeWebSearch(argsJson)
             FileWriteTool.NAME, FileEditTool.NAME -> {
                 val result = executeFileTool(name, argsJson)
                 if (result.success) {
@@ -1223,7 +1384,7 @@ class SubagentRunner(
                             append(winner.runId)
                             append(" (").append(winner.skillName).append(")")
                             append(if (winner.cancelled) " CANCELLED" else if (winner.success) " SUCCESS" else " FAILED")
-                            append("\n\n---\n").append(winner.report.ifBlank { "(no report text)" })
+                            append("\n\n---\n").append(boundWaitAnyReport(winner))
                             winner.journalPath?.let { append("\n\nJournal: $it") }
                             append("\n\n---\nStill running (NOT waited on): ")
                             append(losers.joinToString(", ") { it.runId }.ifEmpty { "(none)" })
@@ -1254,9 +1415,16 @@ class SubagentRunner(
                         false, toolTitle = toolTitle,
                     )
                 }
-                val wakeRunIds = SubagentOrchestration.cancelCascade(jobs, reason)
+                // [T-subagent-cancel-honesty] Split the request into what this
+                // tool can actually affect (detached runs hold their own
+                // coroutine) and what it cannot (inline runs live inside the
+                // parent turn). See the result text below for the user-facing
+                // contract.
+                val detachedJobs = jobs.filter { it.detached }
+                val inlineJobs = jobs.filter { !it.detached }
+                val wakeRunIds = SubagentOrchestration.cancelCascade(detachedJobs, reason)
                 var killed = 0
-                for (job in jobs) {
+                for (job in detachedJobs) {
                     registry.finishIfActive(
                         job.runId, SubagentRunRegistry.RunStatus.CANCELLED,
                         error = reason,
@@ -1268,11 +1436,43 @@ class SubagentRunner(
                         }
                     }
                 }
+                // [T-subagent-cancel-honesty] INLINE runs are NOT cancellable
+                // from here, and saying otherwise is a lie with teeth: the
+                // inline loop executes INSIDE the parent turn's dispatch
+                // stack, so the only thing that can stop it is a cancellation
+                // of that turn (the user's Stop) — there is no child coroutine
+                // to tear down (SubagentJob.coroutineJob stays null for
+                // non-detached spawns). The previous code reported every
+                // matched run as "cancelled" regardless, which also pushed a
+                // false CANCELLED outcome into a deferred that the still-
+                // running loop would later contradict with its real result.
+                // Reported truthfully instead, with the two routes that DO
+                // work (let it finish and join it, or stop the parent turn).
+                val inlineLive = inlineJobs.filter { !it.deferred.isCompleted }
                 ToolExecutionResult(
                     buildString {
-                        append("Cancelled ${jobs.size} sub-agent run(s) — $killed background coroutine(s) torn down, ")
+                        append("Cancelled ${detachedJobs.size} detached sub-agent run(s) — ")
+                        append("$killed background coroutine(s) torn down, ")
                         append("registry reconciled, ${wakeRunIds.size} blocked join/wait woke with 'cancelled'. ")
-                        append("Cancelled runs: ").append(jobs.joinToString(", ") { it.runId })
+                        if (detachedJobs.isNotEmpty()) {
+                            append("\nCancelled runs: ").append(detachedJobs.joinToString(", ") { it.runId })
+                        }
+                        if (inlineLive.isNotEmpty()) {
+                            append("\n\nNOT cancelled (inline runs cannot be stopped out-of-band): ")
+                            append(inlineLive.joinToString(", ") { it.runId })
+                            append(". An inline sub-agent runs inside the parent turn that spawned it, ")
+                            append("so the only thing that ends it early is stopping that turn. ")
+                            append("Otherwise it finishes on its own and you can collect it with join_subagents — ")
+                            append("the run is unaffected by this call.")
+                        }
+                        if (inlineJobs.isNotEmpty()) {
+                            val alreadyDone = inlineJobs.filter { it.deferred.isCompleted }
+                            if (alreadyDone.isNotEmpty()) {
+                                append("\nAlready finished (nothing to cancel): ")
+                                append(alreadyDone.joinToString(", ") { it.runId })
+                                append(" — join_subagents still returns their reports.")
+                            }
+                        }
                     },
                     true, toolTitle = toolTitle,
                 )
@@ -1291,6 +1491,15 @@ class SubagentRunner(
         val sb = StringBuilder()
         sb.append(SubagentOrchestration.joinSummary(group, jobs, outcomes))
         sb.append("\n")
+        // [T-subagent-report-budget] Bound each report for the same reason the
+        // detached wake-up path is bounded (WAKE_REPORT_MAX_CHARS): these
+        // texts RIDE IN THE PARENT TURN. A single join of four detached
+        // research runs could legally carry 4 × 24k chars of registry
+        // resultText (inline results are unbounded outright), spending most
+        // of the parent's window on the first tool result of the turn —
+        // exactly what the 4k wake-up cap exists to prevent, defeated by the
+        // sibling code path. The journal holds the full text (and is named on
+        // truncation), so nothing is lost — only the automatic spend is.
         for ((job, outcome) in jobs.zip(outcomes)) {
             sb.append("\n\n=== run ").append(job.runId)
                 .append(" (").append(outcome.skillName).append(") — ")
@@ -1302,8 +1511,17 @@ class SubagentRunner(
                     },
                 )
                 .append(" ===")
-            if (outcome.report.isNotBlank()) sb.append("\n").append(outcome.report)
-            else sb.append("\n(no report text)")
+            if (outcome.report.isNotBlank()) {
+                sb.append("\n").append(
+                    boundReportForParent(
+                        report = outcome.report,
+                        journalPath = outcome.journalPath,
+                        maxChars = JOIN_REPORT_MAX_CHARS,
+                    ),
+                )
+            } else {
+                sb.append("\n(no report text)")
+            }
             outcome.error?.let { sb.append("\nError: ").append(it) }
             outcome.journalPath?.let { sb.append("\nJournal: ").append(it) }
         }
@@ -1331,6 +1549,56 @@ class SubagentRunner(
 
 /** [T-subagent-delivery] Cap on how much report text rides into the parent turn. */
 private const val WAKE_REPORT_MAX_CHARS = 4000
+
+/**
+ * [T-subagent-report-budget] Cap on ONE joined run's report in a
+ * `join_subagents` / `wait_any` result. Slightly larger than the wake-up cap
+ * (a join is an explicit "give me the results" call, so a little more depth is
+ * warranted) but still bounded: N reports share one parent turn, so an
+ * unbounded per-report cap is an unbounded turn.
+ */
+internal const val JOIN_REPORT_MAX_CHARS = 6000
+
+/**
+ * [T-subagent-report-budget] Bound one report for parent-turn delivery.
+ *
+ * A truncation is only acceptable when the full text remains reachable, so
+ * every cut names its recovery path: the journal when one exists, else an
+ * explicit "re-run with a smaller scope / file_read the artifact" hint. Silent
+ * truncation would let the parent treat a partial report as the whole finding
+ * — the failure mode this whole subsystem's report hygiene exists to prevent.
+ *
+ * Top-level + pure so the wording contract is unit-testable.
+ */
+internal fun boundReportForParent(
+    report: String,
+    journalPath: String?,
+    maxChars: Int,
+): String {
+    if (report.length <= maxChars) return report
+    val recovery = if (!journalPath.isNullOrBlank()) {
+        "full text: file_read $journalPath"
+    } else {
+        "the run was not journaled — re-spawn with a narrower scope to get the rest"
+    }
+    return report.take(maxChars) +
+        "\n…[report truncated at $maxChars chars — $recovery]"
+}
+
+/**
+ * [T-subagent-report-budget] Render the wait_any winner's report with the SAME
+ * budget as join/wake. wait_any was the third unbounded sink for the same
+ * text: it fires during competitive fan-outs, i.e. exactly when several large
+ * reports exist, and it returned one of them verbatim.
+ */
+internal fun boundWaitAnyReport(
+    outcome: SubagentOrchestration.JobOutcome,
+    maxChars: Int = JOIN_REPORT_MAX_CHARS,
+): String = boundReportForParent(
+    report = outcome.report.ifBlank { "(no report text)" },
+    journalPath = outcome.journalPath,
+    maxChars = maxChars,
+)
 
 /**
  * [T-subagent-delivery] Render the parent-facing turn for a detached run's
@@ -1362,12 +1630,7 @@ internal fun buildWakePrompt(
     if (!outcome.error.isNullOrBlank()) appendLine("error: ${outcome.error}")
     if (outcome.report.isNotBlank()) {
         appendLine()
-        if (outcome.report.length > maxReportChars) {
-            append(outcome.report.take(maxReportChars))
-            appendLine(" …[truncated]")
-        } else {
-            appendLine(outcome.report)
-        }
+        appendLine(boundReportForParent(outcome.report, outcome.journalPath, maxReportChars))
     }
     outcome.journalPath?.let {
         appendLine()

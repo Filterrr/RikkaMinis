@@ -530,8 +530,19 @@ fun ChatScreen(
     // (AppNavigation has no VM reference; the holder is the FilePreviewHolder-
     // style bridge). The flow object is stable for the VM's lifetime, so
     // re-publishing on each composition is a no-op write.
+    // [T-subagent-user-cancel] The cancel action rides along so the detail
+    // page can offer a Stop button without holding a VM reference.
     SideEffect {
-        ChatSubagentRunsHolder.push(viewModel.subagentRunRegistry.runs)
+        ChatSubagentRunsHolder.push(
+            viewModel.subagentRunRegistry.runs,
+            onCancel = { runId -> viewModel.cancelSubagentRun(runId) },
+            detachedIds = {
+                viewModel.subagentRunRegistry.runs.value
+                    .filter { viewModel.subagentOrchestration.getJob(it.id)?.detached == true }
+                    .map { it.id }
+                    .toSet()
+            },
+        )
     }
     val selectedGroupName by viewModel.selectedGroupName.collectAsState()
     val providerName by viewModel.providerName.collectAsState()

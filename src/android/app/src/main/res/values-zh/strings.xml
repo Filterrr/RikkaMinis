@@ -406,6 +406,10 @@
     <string name="skill_section_installed">已安装</string>
     <string name="skill_section_footer">Skill 通过专门的指令和工作流扩展 AI agent。启用后会被载入 system prompt。</string>
     <string name="skill_empty_title">未安装 Skill</string>
+    <string name="skill_subagent_trust_header">已信任的子 agent</string>
+    <string name="skill_subagent_trust_footer">你点过“始终允许”的 Skill。它们可以不再询问就启动子 agent（拥有自己的 shell、文件与浏览器循环）。撤销授权后，下次启动会重新询问。</string>
+    <string name="skill_subagent_trust_empty">当前没有长期授权——每次启动子 agent 都会先询问。</string>
+    <string name="skill_subagent_trust_revoke">撤销</string>
     <string name="skill_empty_action">点击 + 导入 SKILL.md 或浏览 RikkaMinis Skills。</string>
     <string name="skill_import_modal_title">导入技能</string>
     <string name="skill_minis_skills_modal">RikkaMinis Skills</string>

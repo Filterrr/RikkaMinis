@@ -167,6 +167,48 @@ class SubagentSkillTest {
         assertEquals(setOf("file_read", "shell_execute", "browser_use"), names)
     }
 
+    /**
+     * [T-subagent-websearch] web_search must reach sub-agents.
+     *
+     * It was absent from the capability catalog, so the fail-closed filter
+     * dropped it — while `general-agent/SKILL.md` and the parent's own system
+     * prompt both advertise "the full tool set your parent has (minus spawning
+     * and memory)". Research sub-agents therefore lost their primary retrieval
+     * tool and had to hand-roll navigate → get_readable.
+     */
+    @Test
+    fun `web_search is granted to sub-agents`() {
+        val all = listOf(
+            makeTool("file_read"),
+            makeTool("web_search"),
+            makeTool("browser_use"),
+        )
+        val names = SubagentSkill.buildFilteredTools(all, null).map { it.name }.toSet()
+        assertTrue("web_search must be a sub-agent capability", names.contains("web_search"))
+        assertTrue(AgentCapabilities.isToolGrantableToSubagent("web_search"))
+    }
+
+    /** The search capability is not an accidental door-opener for the rest. */
+    @Test
+    fun `granting web_search does not widen other capabilities`() {
+        assertFalse(
+            "spawn_agent stays hard-forbidden",
+            AgentCapabilities.isToolGrantableToSubagent("spawn_agent"),
+        )
+        assertFalse(
+            "memory stays isolated",
+            AgentCapabilities.isToolGrantableToSubagent("memory_get"),
+        )
+        assertFalse(
+            "an unmapped tool is still fail-closed",
+            AgentCapabilities.isToolGrantableToSubagent("send_email"),
+        )
+        assertFalse(
+            "orchestration is parent-only",
+            AgentCapabilities.isToolGrantableToSubagent("cancel_subagents"),
+        )
+    }
+
     @Test
     fun `allowlist restricts to listed tools`() {
         val all = listOf(

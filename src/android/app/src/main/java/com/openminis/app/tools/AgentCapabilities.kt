@@ -27,6 +27,20 @@ enum class AgentCapability {
     /** Drive the automated browser (`browser_use`). */
     BROWSER,
 
+    /**
+     * [T-subagent-websearch] One-shot web search (`web_search`).
+     *
+     * Why this needed its own capability rather than riding on [BROWSER]:
+     * `web_search` is a composite (navigate + wait + extract) that the parent
+     * model was told to delegate, and the sub-agent prompt advertises tool
+     * parity — but the tool was missing from this catalog, so the fail-closed
+     * filter dropped it and every research sub-agent silently lost its
+     * primary retrieval tool (it had to hand-roll navigate → get_readable,
+     * spending 2–3 extra turns per query). Read-only and stateless (the
+     * browser pool serializes per tab), so it is safe for sub-agents.
+     */
+    WEB_SEARCH,
+
     /** Read the agent memory store (`memory_get`). */
     MEMORY_READ,
 
@@ -52,6 +66,10 @@ object AgentCapabilities {
         "file_edit" -> AgentCapability.FILE_WRITE
         "shell_execute" -> AgentCapability.SHELL
         "browser_use" -> AgentCapability.BROWSER
+        // [T-subagent-websearch] Registered so the fail-closed filter GRANTS it
+        // instead of dropping it — see AgentCapability.WEB_SEARCH for why the
+        // omission was a real capability loss, not a conservative default.
+        "web_search" -> AgentCapability.WEB_SEARCH
         "memory_get" -> AgentCapability.MEMORY_READ
         "memory_write" -> AgentCapability.MEMORY_WRITE
         "memory_rollup" -> AgentCapability.MEMORY_WRITE
@@ -75,6 +93,9 @@ object AgentCapabilities {
         AgentCapability.FILE_WRITE,
         AgentCapability.SHELL,
         AgentCapability.BROWSER,
+        // [T-subagent-websearch] Research sub-agents are the main consumer of
+        // search; without this they fall back to hand-rolled navigation.
+        AgentCapability.WEB_SEARCH,
     )
 
     /**

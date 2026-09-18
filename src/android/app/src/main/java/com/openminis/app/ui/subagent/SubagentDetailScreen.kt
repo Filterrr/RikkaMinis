@@ -47,6 +47,7 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Radar
+import androidx.compose.material.icons.filled.StopCircle
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.statusBars
@@ -87,6 +88,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.withStyle
 import com.openminis.app.tools.SubagentAnsiText
 import com.openminis.app.tools.SubagentRunRegistry
+import com.openminis.app.ui.chat.ToolCancelColor
 import com.openminis.app.ui.chat.toolAccentColor
 import com.openminis.app.ui.theme.ChatColors
 
@@ -122,6 +124,12 @@ private const val RESULT_STEP_KEY = "subagent-result-card"
 fun SubagentDetailScreen(
     runId: String,
     onBack: () -> Unit,
+    /**
+     * [T-subagent-user-cancel] Stop this run. Null when the hosting nav graph
+     * has no cancel channel (e.g. a preview) — the Stop affordance then simply
+     * does not render rather than offering a dead button.
+     */
+    onStop: ((String) -> Unit)? = null,
 ) {
     val runsFlow = remember { ChatSubagentRunsHolder.currentRuns }
     val runs: List<SubagentRunRegistry.Run> = if (runsFlow != null) {
@@ -210,6 +218,28 @@ fun SubagentDetailScreen(
                             strokeWidth = 2.dp,
                             color = SubagentAccent,
                         )
+                    }
+                    // [T-subagent-user-cancel] Stop, for DETACHED runs only.
+                    //
+                    // An inline run cannot be stopped from here (it executes
+                    // inside the parent turn), so showing a button that silently
+                    // does nothing would be worse than showing none — the
+                    // navigation-level holder already returns an explanatory
+                    // message for that case, and this branch keeps the pill
+                    // honest about which kind of run the user is looking at.
+                    if (run != null && run.isActive && onStop != null) {
+                        val detached = remember(run.id, run.status) {
+                            ChatSubagentRunsHolder.isDetached(run.id)
+                        }
+                        if (detached) {
+                            IconButton(onClick = { onStop(run.id) }) {
+                                Icon(
+                                    Icons.Default.StopCircle,
+                                    contentDescription = "Stop this sub-agent",
+                                    tint = ToolCancelColor,
+                                )
+                            }
+                        }
                     }
                 },
                 windowInsets = WindowInsets.statusBars,
@@ -372,6 +402,14 @@ private fun SubagentRunDetailBody(
                         MetaChip(label = "model", value = run.modelLabel)
                     }
                     formatSubagentTokenCost(run)?.let { MetaChip(label = "tokens", value = it) }
+                    // [T-subagent-queue-visibility] How long the run waited
+                    // for a scheduler permit before it started executing.
+                    // Without this the wait is invisible: the live timer
+                    // restarts when execution begins, so a run that sat in the
+                    // queue for two minutes looks identical to one that
+                    // started instantly — and the user's "why is nothing
+                    // happening?" has no answer on screen.
+                    formatSubagentQueueWait(run)?.let { MetaChip(label = "queue", value = it) }
                 }
                 if (run.notices.isNotBlank()) {
                     // [T-subagent-report-hygiene] Retry / truncation notices

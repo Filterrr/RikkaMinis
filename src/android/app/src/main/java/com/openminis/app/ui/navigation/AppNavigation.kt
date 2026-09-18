@@ -1235,6 +1235,10 @@ fun AppNavigation(
             SubagentDetailScreen(
                 runId = runId,
                 onBack = { navController.safePopBackStack() },
+                // [T-subagent-user-cancel] The holder carries the chat layer's
+                // cancel action (nav has no VM reference) — same bridge that
+                // supplies the runs flow.
+                onStop = { id -> com.openminis.app.ui.subagent.ChatSubagentRunsHolder.cancelRun?.invoke(id) },
             )
         }
 

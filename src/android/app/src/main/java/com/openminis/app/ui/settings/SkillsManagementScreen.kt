@@ -65,6 +65,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -311,6 +312,18 @@ fun SkillsManagementScreen(
                 }
             }
         }
+
+        Spacer(Modifier.height(24.dp))
+
+        // [T-subagent-approval] Standing "Always allow" grants for sub-agent
+        // spawns. This section is the missing half of the spawn gate: the
+        // dialog lets a user say "always allow", and until now NOTHING in the
+        // app could take it back — SubagentApprovalStore.revokeAll and
+        // alwaysAllowedSkillIds existed with a doc comment promising exactly
+        // this surface, but had no callers, so the grant was a one-way door.
+        // Lives on the Skills screen because the grant is per SKILL (its id is
+        // the store key) and this is where the user already manages them.
+        SubagentTrustSection(context = context, skills = skills)
 
         Spacer(Modifier.height(24.dp))
     }
@@ -1047,6 +1060,69 @@ private val SettingsIconGreen: Color
  * Before this, the action rows used a bare 18dp tinted glyph with no container,
  * so they read as a different visual language from every other settings surface.
  */
+/**
+ * [T-subagent-approval] Standing sub-agent spawn grants, with per-skill
+ * revocation.
+ *
+ * Reads [SubagentApprovalStore] directly (it is a stateless object over
+ * SharedPreferences, read on each recomposition via a local tick) rather than
+ * threading state through the repository: the grants are written by the
+ * spawn-approval DIALOG, which lives in the chat layer, so there is no shared
+ * observable to collect — and a re-read per composition is a cheap in-memory
+ * prefs hit.
+ *
+ * Skill ids are resolved to display names when the skill is installed; a
+ * grant for a since-deleted skill still shows (by id) so it can be revoked
+ * rather than lingering invisibly.
+ */
+@Composable
+private fun SubagentTrustSection(
+    context: android.content.Context,
+    skills: List<SkillRepository.Skill>,
+) {
+    var tick by remember { mutableStateOf(0) }
+    val grantedIds = remember(tick) {
+        com.openminis.app.data.SubagentApprovalStore.alwaysAllowedSkillIds(context)
+    }
+    val byId = remember(skills) { skills.associateBy { it.id } }
+
+    SettingsSection(
+        header = stringResource(R.string.skill_subagent_trust_header),
+        footer = stringResource(R.string.skill_subagent_trust_footer),
+    ) {
+        if (grantedIds.isEmpty()) {
+            Text(
+                text = stringResource(R.string.skill_subagent_trust_empty),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 16.dp),
+            )
+        } else {
+            grantedIds.forEachIndexed { index, skillId ->
+                SettingsRow(
+                    title = byId[skillId]?.name ?: skillId,
+                    subtitle = byId[skillId]?.let { stripMarkdown(it.description) } ?: skillId,
+                    showChevron = false,
+                    showDivider = index < grantedIds.size - 1,
+                    trailing = {
+                        TextButton(
+                            onClick = {
+                                com.openminis.app.data.SubagentApprovalStore
+                                    .setAlwaysAllowed(context, skillId, false)
+                                tick++
+                            },
+                        ) {
+                            Text(stringResource(R.string.skill_subagent_trust_revoke))
+                        }
+                    },
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun SettingsActionIcon(
     icon: androidx.compose.ui.graphics.vector.ImageVector,

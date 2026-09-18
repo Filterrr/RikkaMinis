@@ -32,11 +32,28 @@ import java.util.concurrent.atomic.AtomicLong
  */
 object SubagentOrchestration {
 
-    /** Default join timeout: 30 min — longer than any sane sub-agent budget. */
-    const val DEFAULT_JOIN_TIMEOUT_MS = 30L * 60 * 1000
+    /**
+     * Default join timeout: 10 min.
+     *
+     * Was 30 min, which let a model's single default call freeze the parent
+     * turn for half an hour — the tool result stays "running" that whole time
+     * and the only escape is the user pressing Stop. Ten minutes covers the
+     * overwhelming majority of detached runs (the default run budget is 15)
+     * while keeping a bad call to a bounded wait; the tool description tells
+     * the model to call it again for stragglers, so a longer wait is opt-in
+     * via an explicit `timeout_sec`.
+     */
+    const val DEFAULT_JOIN_TIMEOUT_MS = 10L * 60 * 1000
 
-    /** Default wait_any timeout: 10 min. */
-    const val DEFAULT_WAIT_ANY_TIMEOUT_MS = 10L * 60 * 1000
+    /**
+     * Default wait_any timeout: 5 min.
+     *
+     * wait_any is a RACING call — it should return as soon as anyone finishes,
+     * so its timeout exists only to bound the pathological case (every racer
+     * stuck). 5 min matches that intent and keeps the bad case from parking
+     * the parent turn; was 10.
+     */
+    const val DEFAULT_WAIT_ANY_TIMEOUT_MS = 5L * 60 * 1000
 
     // ── Group model ──────────────────────────────────────────────────────
 
@@ -233,6 +250,54 @@ object SubagentOrchestration {
         val MAX_RETAINED_JOBS: Int = 60
     }
 
+    /**
+     * [T-subagent-orchestration-fix] Register one spawn's orchestration
+     * records — group membership AND the job handle — in one place.
+     *
+     * THE BUG THIS EXISTS FOR: `attachRunToGroup` was called ONLY from unit
+     * tests, never from production code. The parent loop minted a group id
+     * per spawn batch (`nextGroupId`) and the spawn tool result proudly
+     * printed `group_id: sgroup-N`, but `Registries.groups` stayed empty in
+     * the app. Every consequence followed from that one missing call:
+     *
+     *   - `join_subagents(group_id=…)` → "No matching sub-agent runs found";
+     *   - `wait_any(group_id=…)` → same;
+     *   - `cancel_subagents(group_id=…)` → same;
+     *   - the documented "omit both → join the MOST RECENT batch" default →
+     *     `groupsSnapshot().firstOrNull()` is always null, so it failed too.
+     *
+     * The only surviving path was explicit `run_ids`, which is exactly the
+     * plumbing detach-mode's batch workflow was designed to avoid. A named
+     * seam (instead of two bare calls at the runner site) so the contract is
+     * unit-testable without instantiating a runner/ViewModel: the test binds
+     * to THIS function and the runner is a one-line caller.
+     */
+    fun registerSpawn(
+        registries: Registries,
+        job: SubagentJob,
+        groupId: String,
+    ): SubagentJob {
+        if (groupId.isNotEmpty()) registries.attachRunToGroup(groupId, job.runId)
+        registries.putJob(job)
+        return job
+    }
+
+    /**
+     * [T-subagent-orchestration-fix] Attach an ALREADY-REGISTERED run (a
+     * spawn that deduped onto an in-flight identical task) to a new spawn
+     * batch's group.
+     *
+     * Why the reused run belongs to the NEW group too: a batch of three
+     * spawns where one dedupes is still "three tasks the model asked for in
+     * this turn"; joining the batch must return three outcomes, not two plus
+     * silence. The run keeps its original job handle (the existing deferred
+     * already carries its result), so this call is group membership only —
+     * no second job, no second result delivery.
+     */
+    fun attachReusedRun(registries: Registries, runId: String, groupId: String) {
+        if (groupId.isNotEmpty()) registries.attachRunToGroup(groupId, runId)
+    }
+
     // ── Resolution (pure-ish, over the registries) ───────────────────────
 
     /**
@@ -311,7 +376,31 @@ object SubagentOrchestration {
                 }
             }
         }
-        return outcomes.map { it ?: timeoutOutcome(job = jobs[0], timeoutMs = timeoutMs) }
+        // [T-subagent-orchestration-fix] `map` cannot see the index, so the
+        // historical `jobs[0]` fallback stamped every un-filled slot with the
+        // FIRST job's identity — a cancelled/timed-out outcome attributed to
+        // the wrong run (and the wrong skill) in the join prompt. A slot is
+        // only null when a sibling launch died before writing (its catch
+        // clauses cover both timeout paths), but a mis-attributed result is
+        // worse than no result: the parent acts on a report belonging to
+        // another task. Extracted so the attribution contract is unit-testable
+        // even though the triggering interleaving is hard to force.
+        return fillMissingOutcomes(jobs, outcomes, timeoutMs)
+    }
+
+    /**
+     * [T-subagent-orchestration-fix] Pair each job with its outcome, falling
+     * back to a PER-JOB timeout outcome for any slot a failed sibling left
+     * empty. Exposed (internal) purely so the attribution rule — the fallback
+     * must never borrow another job's identity — has a test that fails if
+     * someone reintroduces an index-blind mapping.
+     */
+    internal fun fillMissingOutcomes(
+        jobs: List<SubagentJob>,
+        outcomes: Array<JobOutcome?>,
+        timeoutMs: Long,
+    ): List<JobOutcome> = jobs.mapIndexed { idx, job ->
+        outcomes.getOrNull(idx) ?: timeoutOutcome(job, timeoutMs)
     }
 
     /**

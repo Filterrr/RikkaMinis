@@ -114,3 +114,17 @@ internal fun formatSubagentDuration(ms: Long): String = when {
     ms < 60_000L -> String.format("%.1fs", ms / 1000.0)
     else -> String.format("%dm%02ds", ms / 60_000, (ms % 60_000) / 1000)
 }
+
+/**
+ * [T-subagent-queue-visibility] "waited 2m10s" label for a run that spent
+ * time queued before executing, or null when it started immediately (the
+ * common case — no chip, no noise) or the wait was imperceptible.
+ */
+internal fun formatSubagentQueueWait(run: SubagentRunRegistry.Run): String? {
+    val waited = run.queueWaitMs ?: return null
+    if (waited < QUEUE_WAIT_NOTABLE_MS) return null
+    return "waited ${formatSubagentDuration(waited)}"
+}
+
+/** Below this, a queue hop is scheduler jitter rather than a visible wait. */
+private const val QUEUE_WAIT_NOTABLE_MS = 1000L

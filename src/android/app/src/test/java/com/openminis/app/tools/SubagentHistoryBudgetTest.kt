@@ -126,4 +126,131 @@ class SubagentHistoryBudgetTest {
         val r = SubagentHistoryBudget.trim(h, contextWindowTokens = 100, keepRecentTurns = 4)
         assertFalse("nothing to drop without violating the floor", r.didTrim)
     }
+
+    // ── [T-subagent-vision] image payloads in the loop ───────────────────
+
+    /** A tool_result round carrying image bytes (read_image / screenshot). */
+    private fun imageRound(bytes: Int, linuxPath: String? = "/var/minis/workspace/chart.png"): List<LLMMessage> = listOf(
+        LLMMessage(
+            role = LLMMessage.Role.ASSISTANT,
+            content = "reading",
+            contentParts = listOf(
+                AgentContentPart.ToolUse(id = "img", name = "read_image", input = org.json.JSONObject()),
+            ),
+        ),
+        LLMMessage(
+            role = LLMMessage.Role.USER,
+            content = "Result of read_image (img):\n[chart.png | 800x600 | N bytes]",
+            contentParts = listOf(
+                AgentContentPart.ToolResult(
+                    id = "img", name = "read_image",
+                    content = "[chart.png | 800x600 | N bytes]",
+                    imageData = ByteArray(bytes),
+                    imageMimeType = "image/jpeg",
+                    imageLinuxPath = linuxPath,
+                ),
+            ),
+        ),
+    )
+
+    private fun historyWithImages(rounds: Int, bytesPerImage: Int): MutableList<LLMMessage> {
+        val h = mutableListOf(task())
+        repeat(rounds) { h.addAll(imageRound(bytesPerImage)) }
+        return h
+    }
+
+    /**
+     * Image bytes must count toward the token estimate. Before the vision
+     * forwarding, `estimateTokens` read only `part.content`; a screenshot-heavy
+     * run would then under-report its true payload and sail past the trimming
+     * threshold into the provider's real context limit — dying on an error
+     * instead of degrading, the exact failure this module exists to prevent.
+     */
+    @Test
+    fun `tool result images count toward the token estimate`() {
+        val textOnly = historyWithImages(rounds = 1, bytesPerImage = 0).let { h ->
+            // Strip the bytes to make a pure-text baseline of the same shape.
+            h.map { msg ->
+                msg.copy(contentParts = msg.contentParts.map { p ->
+                    if (p is AgentContentPart.ToolResult) p.copy(imageData = null, imageMimeType = null) else p
+                })
+            }
+        }
+        val withImages = historyWithImages(rounds = 1, bytesPerImage = 50_000)
+
+        val plain = SubagentHistoryBudget.estimateTokens(textOnly)
+        val imaged = SubagentHistoryBudget.estimateTokens(withImages)
+        assertTrue("an image must raise the estimate (plain=$plain imaged=$imaged)", imaged > plain)
+    }
+
+    /** Stale rounds lose their bytes; recent rounds keep theirs. */
+    @Test
+    fun `stale images are elided and recent rounds keep theirs`() {
+        val history = historyWithImages(rounds = 8, bytesPerImage = 1000)
+
+        val (slimmed, elided) = SubagentHistoryBudget.elideStaleImages(history, keepRecentTurns = 4)
+
+        assertTrue("older images must be elided", elided > 0)
+        val remaining = slimmed.flatMap { it.contentParts }
+            .filterIsInstance<AgentContentPart.ToolResult>()
+            .count { it.imageData != null }
+        assertEquals("exactly the newest 4 rounds keep pixels", 4, remaining)
+        assertEquals("message count is unchanged", history.size, slimmed.size)
+    }
+
+    /** An elided image keeps a re-fetchable pointer — never a silent hole. */
+    @Test
+    fun `an elided image names its linux path`() {
+        val history = historyWithImages(rounds = 8, bytesPerImage = 1000)
+
+        val (slimmed, _) = SubagentHistoryBudget.elideStaleImages(history, keepRecentTurns = 2)
+
+        val dropped = slimmed.flatMap { it.contentParts }
+            .filterIsInstance<AgentContentPart.ToolResult>()
+            .first { it.imageData == null }
+        assertTrue("must name the recovery route", dropped.content.contains("read_image"))
+        assertTrue(dropped.content.contains("/var/minis/workspace/chart.png"))
+    }
+
+    /** With no path there is nothing to point at, but the loss is still stated. */
+    @Test
+    fun `an elided image without a path says it is gone`() {
+        val history = historyWithImages(rounds = 8, bytesPerImage = 1000)
+        // Strip the paths to force the unaddressable branch.
+        val pathless = history.map { msg ->
+            msg.copy(contentParts = msg.contentParts.map { p ->
+                if (p is AgentContentPart.ToolResult) p.copy(imageLinuxPath = null) else p
+            })
+        }.toMutableList()
+
+        val (slimmed, _) = SubagentHistoryBudget.elideStaleImages(pathless, keepRecentTurns = 2)
+
+        val dropped = slimmed.flatMap { it.contentParts }
+            .filterIsInstance<AgentContentPart.ToolResult>()
+            .first { it.imageData == null }
+        assertTrue(dropped.content.contains("no longer addressable"))
+    }
+
+    /** A short history (inside the keep window) is untouched, byte-for-byte. */
+    @Test
+    fun `a history inside the keep window keeps every image`() {
+        val history = historyWithImages(rounds = 3, bytesPerImage = 1000)
+
+        val (slimmed, elided) = SubagentHistoryBudget.elideStaleImages(history, keepRecentTurns = 4)
+
+        assertEquals(0, elided)
+        assertEquals(history, slimmed)
+    }
+
+    /** Idempotent: a second pass over an already-elided history changes nothing. */
+    @Test
+    fun `elision is idempotent`() {
+        val history = historyWithImages(rounds = 8, bytesPerImage = 1000)
+        val (once, firstCount) = SubagentHistoryBudget.elideStaleImages(history, keepRecentTurns = 2)
+        val (twice, secondCount) = SubagentHistoryBudget.elideStaleImages(once, keepRecentTurns = 2)
+
+        assertTrue(firstCount > 0)
+        assertEquals("a re-run must find nothing left to elide", 0, secondCount)
+        assertEquals(once, twice)
+    }
 }
