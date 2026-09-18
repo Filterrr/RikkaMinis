@@ -4311,6 +4311,15 @@ class ChatViewModel(
                 if (prompt != null) {
                     Log.i(TAG, "loadSession: ${interrupted.size} interrupted sub-agent run(s) recovered from checkpoints")
                     enqueueSyntheticPrompt(prompt)
+                    // [T-subagent-ckpt-recovery] Report each interrupted run
+                    // EXACTLY ONCE: without this marker every session open
+                    // re-enqueued the same recovery turn (each copy burning
+                    // parent context and inviting the model to redo recovered
+                    // work). The file is renamed aside, not deleted, so the
+                    // evidence survives for debugging.
+                    interrupted.forEach { run ->
+                        SubagentRunCheckpoint.markReported(run.name, context, sessionId)
+                    }
                 }
             }.onFailure {
                 // Recovery reporting must never break session entry.

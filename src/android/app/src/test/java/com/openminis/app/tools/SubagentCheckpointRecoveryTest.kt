@@ -160,4 +160,49 @@ class SubagentCheckpointRecoveryTest {
             dir.deleteRecursively()
         }
     }
+
+    // ── report-once marker ───────────────────────────────────────────────
+
+    /**
+     * [T-subagent-ckpt-recovery] A reported checkpoint must never be reported
+     * again: the recovery prompt enqueues on every session open, and without
+     * a seen-marker a user who reopens the chat gets the same turn re-injected
+     * (and again, and again). markReported moves the file out of the scan's
+     * view while keeping the evidence on disk.
+     */
+    @Test
+    fun `a reported checkpoint is not reported twice`() {
+        val dir = java.nio.file.Files.createTempDirectory("ckpt-once").toFile()
+        try {
+            java.io.File(dir, "subagent-1.ckpt").writeText(ckpt(query = "orphan task"))
+            assertEquals(1, SubagentRunCheckpoint.scanDirectory(dir).size)
+
+            // Simulate what the session-open path does after enqueueing.
+            val seen = java.io.File(dir, "subagent-1.ckpt.seen")
+            assertTrue(
+                "the marker must keep the evidence on disk",
+                java.io.File(dir, "subagent-1.ckpt").renameTo(seen),
+            )
+
+            assertTrue("a marked checkpoint must leave the scan", SubagentRunCheckpoint.scanDirectory(dir).isEmpty())
+            assertTrue("the file survives as .seen for debugging", seen.exists())
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    /** markReported tolerates non-checkpoint names and missing files. */
+    @Test
+    fun `markReported is safe on odd input`() {
+        val dir = java.nio.file.Files.createTempDirectory("ckpt-mark").toFile()
+        try {
+            // No throw for a journal name, a .seen name, or a nonexistent id.
+            SubagentRunCheckpoint.markReported("subagent-1.md", null, null)
+            SubagentRunCheckpoint.markReported("subagent-1.ckpt.seen", null, null)
+            SubagentRunCheckpoint.markReported("subagent-404.ckpt", null, null)
+            assertTrue(dir.listFiles()!!.isEmpty())
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
 }

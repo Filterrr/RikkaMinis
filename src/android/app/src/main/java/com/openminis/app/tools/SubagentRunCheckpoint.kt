@@ -188,6 +188,36 @@ object SubagentRunCheckpoint {
     }
 
     /**
+     * [T-subagent-ckpt-recovery] Mark a reported checkpoint as SEEN so the
+     * session-open scan reports each interrupted run exactly ONCE.
+     *
+     * The bug this closes: the recovery prompt enqueues on every session
+     * open, and nothing said "this one was already surfaced" — a user who
+     * backgrounded the app and came back got the same recovery turn again
+     * (and again), each copy burning parent context and inviting the model
+     * to redo recovered work. Renaming to `.ckpt.seen` is atomic, keeps the
+     * evidence on disk for debugging, and is invisible to the scan (which
+     * only reads `*.ckpt`).
+     */
+    fun markReported(fileName: String, context: Context? = null, sessionId: String? = null) {
+        runCatching {
+            if (!fileName.endsWith(".ckpt")) return
+            val sandboxPath = "$DIR/$fileName"
+            val file = if (context != null && sessionId != null) {
+                PRootKernel.resolveSessionHostPath(sessionId, sandboxPath, context) ?: return
+            } else {
+                java.io.File(sandboxPath)
+            }
+            val seen = java.io.File(file.parentFile, "$fileName.seen")
+            if (!file.renameTo(seen)) {
+                // Rename can fail across mount boundaries; fall back to
+                // delete so the goal (report once) still holds.
+                file.delete()
+            }
+        }
+    }
+
+    /**
      * Best-effort delete of the checkpoint file once the run reached a
      * terminal state (the journal takes over as the durable record).
      * Never throws.

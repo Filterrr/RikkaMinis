@@ -718,7 +718,7 @@
     <string name="skill_section_footer">Skills extend the AI agent with specialized instructions and workflows. They are loaded into the system prompt when enabled.</string>
     <string name="skill_empty_title">No Skills Installed</string>
     <string name="skill_subagent_trust_header">Trusted Sub-agents</string>
-    <string name="skill_subagent_trust_footer">Skills you answered "Always allow" for. Each may spawn a sub-agent (its own shell, files and browser loop) without asking again. Revoke a grant to be prompted on the next spawn.</string>
+    <string name="skill_subagent_trust_footer">Skills you answered \"Always allow\" for. Each may spawn a sub-agent (its own shell, files and browser loop) without asking again. Revoke a grant to be prompted on the next spawn.</string>
     <string name="skill_subagent_trust_empty">No standing grants — every sub-agent spawn asks first.</string>
     <string name="skill_subagent_trust_revoke">Revoke</string>
     <string name="skill_empty_action">Tap + to import a SKILL.md, .zip, or .skill file, or browse RikkaMinis Skills.</string>

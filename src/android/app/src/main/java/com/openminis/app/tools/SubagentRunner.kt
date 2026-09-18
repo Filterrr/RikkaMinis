@@ -316,7 +316,7 @@ class SubagentRunner(
         val earlyDuplicate = registry.findActiveDuplicate(skill.id, query)
         if (earlyDuplicate != null) {
             SubagentOrchestration.attachReusedRun(orchestration, earlyDuplicate.id, groupId)
-            return deduplicatedSpawnResult(earlyDuplicate.id, skillName)
+            return deduplicatedSpawnResult(earlyDuplicate.id, skillName, batchGroupId = groupId)
         }
         if (!deps.isSkillAlwaysAllowed(skill.id)) {
             when (deps.awaitSpawnApproval(
@@ -362,7 +362,7 @@ class SubagentRunner(
             // collects fewer reports than tasks it dispatched. Membership
             // only — the existing job handle owns the result delivery.
             SubagentOrchestration.attachReusedRun(orchestration, outcome.run.id, groupId)
-            return deduplicatedSpawnResult(outcome.run.id, skillName)
+            return deduplicatedSpawnResult(outcome.run.id, skillName, batchGroupId = groupId)
         }
         val run = outcome.run
         val job = SubagentOrchestration.SubagentJob(
@@ -531,7 +531,11 @@ class SubagentRunner(
      * job deferred completes on every exit path, so join_subagents can
      * collect an inline run's result later too.
      */
-    private fun deduplicatedSpawnResult(existingRunId: String, skillName: String): ToolExecutionResult {
+    private fun deduplicatedSpawnResult(
+        existingRunId: String,
+        skillName: String,
+        batchGroupId: String = "",
+    ): ToolExecutionResult {
         val snapshot = registry.runs.value.firstOrNull { it.id == existingRunId }
         val statusDesc = if (snapshot?.isQueued == true) "queued (waiting for a scheduler slot)" else "running"
         return ToolExecutionResult(
@@ -540,6 +544,16 @@ class SubagentRunner(
                 append("no new run was created.")
                 append("\nrun_id: $existingRunId")
                 snapshot?.groupId?.takeIf { it.isNotEmpty() }?.let { append("\ngroup_id: $it") }
+                // [T-subagent-orchestration-fix] batchGroupId is the batch THIS
+                // duplicate call arrived with. The reused run was just attached
+                // to it, but the run row still carries its ORIGINAL group — so
+                // naming only one would send a group-addressed join at the
+                // wrong batch or lose the original. Both memberships are true;
+                // both are stated.
+                if (batchGroupId.isNotEmpty() && batchGroupId != snapshot?.groupId) {
+                    append("\nbatch_group_id: $batchGroupId — this call's batch; the run above is a member of it too, ")
+                    append("so joining either group returns this run")
+                }
                 append("\n\nCollect its result with join_subagents (pass the run_id above), ")
                 append("race it with wait_any, or cancel it with cancel_subagents. ")
                 append("Do NOT spawn this same task again while that run is active.")
