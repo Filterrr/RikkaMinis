@@ -137,7 +137,11 @@ class SubagentDeliveryTest {
         )
         val text = buildWakePrompt(o, run())
         assertTrue("report body must be capped", text.length < huge.length)
-        assertTrue(text.contains("…[truncated]"))
+        // [T-subagent-report-budget] The truncation notice now names the cap
+        // AND the recovery route in one line (see boundReportForParent) — so
+        // the assertion checks the announcement, not one exact rendering.
+        assertTrue("the cut must be announced", text.contains("truncated"))
+        assertTrue("it must say how much was kept", text.contains("at 4000 chars"))
         assertTrue("the full text needs an anchor", text.contains("/var/minis/workspace/.subagent/r1.md"))
     }
 

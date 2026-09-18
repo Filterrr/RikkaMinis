@@ -15,10 +15,12 @@ object SubagentOrchestrationTools {
     const val WAIT_ANY_NAME = "wait_any"
     const val CANCEL_NAME = "cancel_subagents"
 
-    private fun timeoutParam(): Pair<String, AgentToolParam> = "timeout_sec" to AgentToolParam(
+    private fun timeoutParam(defaultSec: Int, toolLabel: String): Pair<String, AgentToolParam> = "timeout_sec" to AgentToolParam(
         "integer",
-        "Optional. Max seconds to wait before giving up (default 1800 for join, 600 for wait_any). " +
-            "On timeout the runs KEEP running in the background — call the tool again later.",
+        "Optional. Max seconds to wait before giving up (default $defaultSec for $toolLabel). " +
+            "On timeout the runs KEEP running in the background — call the tool again later " +
+            "to collect stragglers. Prefer several short waits over one long one: a large value " +
+            "parks this turn (and the user's view of it) until the wait ends.",
     )
 
     // ── join_subagents ───────────────────────────────────────────────────
@@ -47,7 +49,7 @@ object SubagentOrchestrationTools {
                 "Optional. Join every member of one spawn batch group " +
                     "(e.g. the id returned by a detached spawn).",
             ),
-            timeoutParam(),
+            timeoutParam(defaultSec = 600, toolLabel = "join_subagents"),
         ),
         required = listOf("tool_title"),
         propertyOrdering = listOf("tool_title", "run_ids", "group_id", "timeout_sec"),
@@ -81,7 +83,7 @@ object SubagentOrchestrationTools {
                 "Optional. Default true — keep waiting for the first SUCCESSFUL completion and " +
                     "skip failed/cancelled members. false = resolve on the first terminal state of any kind.",
             ),
-            timeoutParam(),
+            timeoutParam(defaultSec = 300, toolLabel = "wait_any"),
         ),
         required = listOf("tool_title"),
         propertyOrdering = listOf("tool_title", "run_ids", "group_id", "success_only", "timeout_sec"),
@@ -91,11 +93,14 @@ object SubagentOrchestrationTools {
 
     fun cancelDefinition(): AgentToolDefinition = AgentToolDefinition(
         name = CANCEL_NAME,
-        description = "Cancel one or more running sub-agent runs (or a whole group) and discard " +
-            "them. Parent → child teardown: their model streams and tool calls stop at the next " +
-            "cancellation point, partial reports are journaled, and any join_subagents / " +
+        description = "Cancel one or more running DETACHED sub-agent runs (or a whole group) and " +
+            "discard them. Parent → child teardown: their model streams and tool calls stop at " +
+            "the next cancellation point, partial reports are journaled, and any join_subagents / " +
             "wait_any blocked on them wakes with a 'cancelled' outcome. Use after wait_any to " +
-            "reap losing racers, or when a detached spawn turns out to be unnecessary.",
+            "reap losing racers, or when a detached spawn turns out to be unnecessary. " +
+            "INLINE runs (spawned without run_until='detach') cannot be cancelled this way — they " +
+            "execute inside the turn that spawned them, so stopping the turn is what ends them " +
+            "early; this tool reports those ids separately instead of pretending to kill them.",
         parameters = mapOf(
             "tool_title" to AgentToolParam(
                 "string",
@@ -107,7 +112,7 @@ object SubagentOrchestrationTools {
             ),
             "group_id" to AgentToolParam(
                 "string",
-                "Optional. Cancel every member of one spawn batch group.",
+                "Optional. Cancel every detached member of one spawn batch group.",
             ),
             "reason" to AgentToolParam(
                 "string",

@@ -34,20 +34,41 @@ object SubagentApprovalStore {
     fun isAlwaysAllowed(context: Context, skillId: String): Boolean =
         prefs(context).getBoolean(KEY_PREFIX + skillId, false)
 
-    /** Grant or revoke "always allow" for [skillId]. */
+    /**
+     * Grant or revoke "always allow" for [skillId].
+     *
+     * [T-subagent-approval] A revoke REMOVES the key rather than writing
+     * `false`. The trusted-skills list on the Skills screen enumerates keys
+     * (there is no cheap per-key value read through `prefs.all`), so a
+     * `false` slot would keep rendering a "Trusted" row whose runtime gate
+     * actually denies — the user taps Revoke, the row stays, and the store
+     * silently disagrees with the UI. Key removal makes list, runtime gate,
+     * and revokeAll agree on one rule: a grant exists iff its key exists.
+     */
     fun setAlwaysAllowed(context: Context, skillId: String, allowed: Boolean) {
-        prefs(context).edit().putBoolean(KEY_PREFIX + skillId, allowed).apply()
+        prefs(context).edit().apply {
+            if (allowed) putBoolean(KEY_PREFIX + skillId, true)
+            else remove(KEY_PREFIX + skillId)
+        }.apply()
     }
 
     /**
      * Every skill currently auto-approved. Surfaces in the approval dialog
      * ("revocable here") so a grant is never a one-way door the user cannot
      * find again.
+     *
+     * [T-subagent-approval] Only keys whose value is actually `true` count.
+     * Legacy builds wrote `false` on revoke (leaving the key present), so a
+     * key-existence filter would list grants the runtime gate already denies.
+     * Filtering by value keeps the list honest with old data; with new data
+     * (revocation removes the key) it is equivalent.
      */
     fun alwaysAllowedSkillIds(context: Context): List<String> =
-        runCatching { prefs(context).all.keys }
-            .getOrDefault(emptySet())
-            .filter { it.startsWith(KEY_PREFIX) }
+        runCatching { prefs(context).all }
+            .getOrDefault(emptyMap())
+            .filterKeys { it.startsWith(KEY_PREFIX) }
+            .filterValues { it == true }
+            .keys
             .map { it.removePrefix(KEY_PREFIX) }
             .sorted()
 

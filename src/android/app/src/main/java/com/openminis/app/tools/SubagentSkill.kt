@@ -515,11 +515,45 @@ object SubagentSkill {
      * current local date/time (the sub-agent previously had to spend a turn
      * running `date` to learn what day it is) and the durable workspace
      * root for artifacts. Pure function of [now] → JVM-testable.
+     *
+     * [T-subagent-dir-isolation] [runId] gives the run its OWN artifacts
+     * directory under [SubagentSkill.ARTIFACTS_DIR]. Concurrent sub-agents
+     * used to share `/var/minis/workspace/` as the stated deliverable root,
+     * and the general-agent skill actively pushed them there ("create a task
+     * subdirectory when several files are involved") — so a fan-out of N
+     * research runs had N models independently choosing filenames like
+     * `report.md` / `notes.md` in the same directory: last writer wins,
+     * partial overwrites, and a parent that cannot tell which artifact came
+     * from which run. A per-run directory removes the collision class
+     * entirely and makes every path in the final report self-attributing.
+     * Blank [runId] (tests, callers outside a run) keeps the shared root.
      */
-    fun buildRuntimeContext(now: LocalDateTime = LocalDateTime.now()): String =
-        "Current date/time: " + now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")) +
-            " (local time). Durable artifacts directory: /var/minis/workspace/ (persists " +
-            "across the session — write deliverables there, reference them by path)."
+    fun buildRuntimeContext(now: LocalDateTime = LocalDateTime.now(), runId: String = ""): String {
+        val dir = artifactsDirFor(runId)
+        return "Current date/time: " + now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")) +
+            " (local time). Durable artifacts directory: $dir (persists across the session — " +
+            "write deliverables there, reference them by path)." +
+            if (runId.isBlank()) ""
+            else " This directory belongs to THIS sub-agent run; other agents have their own — " +
+                "never write outside it, and reference your deliverables by these paths in the report."
+    }
+
+    /**
+     * [T-subagent-dir-isolation] The artifacts directory for one run: the
+     * shared root when no run id is known, else a dedicated
+     * `/var/minis/workspace/subagents/<runId>/` directory. The run id is
+     * unique within a chat (monotonic registry counter), and the chat owns
+     * the session sandbox, so two concurrent runs can never share a
+     * directory — that is the whole point.
+     */
+    fun artifactsDirFor(runId: String): String =
+        if (runId.isBlank()) SHARED_WORKSPACE_ROOT else "$ARTIFACTS_DIR/$runId"
+
+    /** Shared fallback root (pre-isolation behaviour, still the parent's own). */
+    const val SHARED_WORKSPACE_ROOT = "/var/minis/workspace/"
+
+    /** Per-run artifacts root — one subdirectory per run id below it. */
+    const val ARTIFACTS_DIR = "/var/minis/workspace/subagents"
 
 
     // ── Helpers ──────────────────────────────────────────────────────────

@@ -8,6 +8,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.CompletableDeferred
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.atomic.AtomicInteger
@@ -222,6 +223,130 @@ class SubagentRunRegistryTest {
         val final = registry.runs.value.single()
         assertEquals(SubagentRunRegistry.RunStatus.SUCCESS, final.status)
         assertTrue(final.endedAtMs > 0)
+    }
+
+    // ── [T-subagent-terminal-once] first terminal state wins ─────────────
+
+    /**
+     * A cancelled run must NOT be resurrected as SUCCESS when its loop later
+     * unwinds into its own success path. That is exactly what the unconditional
+     * `finish()` allowed: the cancel cascade wrote CANCELLED, then the loop's
+     * natural exit wrote SUCCESS over it, and the pill flipped from
+     * "Cancelled" back to "Completed" on a run the user had stopped.
+     */
+    @Test
+    fun `a cancelled run is not resurrected by a later success finish`() {
+        val registry = makeRegistry()
+        val run = registry.register("b1", "s", "s", "q", "t", 4)
+
+        assertTrue(registry.finishOnce(run.id, SubagentRunRegistry.RunStatus.CANCELLED, error = "user stop"))
+        assertFalse(
+            "the second terminal write must be refused",
+            registry.finishOnce(run.id, SubagentRunRegistry.RunStatus.SUCCESS, resultText = "done"),
+        )
+
+        val final = registry.runs.value.single()
+        assertEquals(SubagentRunRegistry.RunStatus.CANCELLED, final.status)
+        assertEquals("user stop", final.error)
+    }
+
+    /** The first terminal write reports that IT terminated the run. */
+    @Test
+    fun `the first terminal write reports ownership`() {
+        val registry = makeRegistry()
+        val run = registry.register("b1", "s", "s", "q", "t", 4)
+        assertTrue(registry.finishOnce(run.id, SubagentRunRegistry.RunStatus.SUCCESS))
+        assertFalse(registry.finishOnce(run.id, SubagentRunRegistry.RunStatus.FAILED))
+    }
+
+    /** finishIfActive still applies to a live run and is a no-op once terminal. */
+    @Test
+    fun `finishIfActive applies once and then stops`() {
+        val registry = makeRegistry()
+        val run = registry.register("b1", "s", "s", "q", "t", 4)
+        registry.finishIfActive(run.id, SubagentRunRegistry.RunStatus.TIMED_OUT, error = "budget")
+        registry.finishIfActive(run.id, SubagentRunRegistry.RunStatus.SUCCESS)
+        assertEquals(SubagentRunRegistry.RunStatus.TIMED_OUT, registry.runs.value.single().status)
+    }
+
+    /** A QUEUED run (never executed) is still "active" for this purpose. */
+    @Test
+    fun `a queued run is terminally writable`() {
+        val registry = makeRegistry()
+        val run = registry.register("b1", "s", "s", "q", "t", 4, queued = true)
+        assertTrue(run.isQueued)
+        assertTrue(registry.finishOnce(run.id, SubagentRunRegistry.RunStatus.TIMED_OUT, error = "queue budget"))
+        assertEquals(SubagentRunRegistry.RunStatus.TIMED_OUT, registry.runs.value.single().status)
+    }
+
+    // ── [T-subagent-queue-visibility] the wait stays measurable ──────────
+
+    /**
+     * The queue wait must survive the transition to RUNNING. The old
+     * `markExecuting` overwrote startedAtMs and the KDoc claimed the wait was
+     * "still visible via the untouched startedAtMs" — so a run that sat in the
+     * queue showed a timer reset to zero the moment it started, hiding exactly
+     * the delay the user was staring at.
+     */
+    @Test
+    fun `queue wait is preserved after execution starts`() {
+        val registry = makeRegistry()
+        val run = registry.register("b1", "s", "s", "q", "t", 4, queued = true)
+        assertTrue("a queued run has no completed wait yet", run.queueWaitMs == null)
+        assertTrue(run.queuedAtMs > 0L)
+
+        registry.markExecuting(run.id)
+        val live = registry.runs.value.single()
+        assertEquals(SubagentRunRegistry.RunStatus.RUNNING, live.status)
+        assertTrue("the queue wait must be measurable", (live.queueWaitMs ?: -1L) >= 0L)
+        assertTrue("queuedAtMs must not be cleared", live.queuedAtMs > 0L)
+    }
+
+    /** A run that never queued reports no wait (the common case — no chip). */
+    @Test
+    fun `a run that never queued has no queue wait`() {
+        val registry = makeRegistry()
+        val run = registry.register("b1", "s", "s", "q", "t", 4)
+        assertEquals(0L, run.queuedAtMs)
+        assertNull(run.queueWaitMs)
+    }
+
+    /** The registry passthrough agrees with the run's own property. */
+    @Test
+    fun `the registry passthrough matches the run property`() {
+        val registry = makeRegistry()
+        val run = registry.register("b1", "s", "s", "q", "t", 4, queued = true)
+        registry.markExecuting(run.id)
+        val live = registry.runs.value.single()
+        assertEquals(live.queueWaitMs, registry.queueWaitMs(live))
+    }
+
+    // ── [T-subagent-spawn-dedupe] duplicate probe ────────────────────────
+
+    /**
+     * The spawn path consults `findActiveDuplicate` BEFORE the approval gate
+     * so a re-issued identical task does not cost the user another prompt.
+     * It must never create anything.
+     */
+    @Test
+    fun `findActiveDuplicate reports an in-flight twin without registering`() {
+        val registry = makeRegistry()
+        val first = registry.register("b1", "s", "s", "same query", "t", 4)
+
+        val found = registry.findActiveDuplicate("s", "same query")
+        assertEquals(first.id, found?.id)
+        assertEquals("the probe must not create a run", 1, registry.runs.value.size)
+    }
+
+    @Test
+    fun `findActiveDuplicate ignores terminal runs and other tasks`() {
+        val registry = makeRegistry()
+        val done = registry.register("b1", "s", "s", "same query", "t", 4)
+        registry.finish(done.id, SubagentRunRegistry.RunStatus.SUCCESS)
+
+        assertNull("a finished task may be re-run", registry.findActiveDuplicate("s", "same query"))
+        assertNull("a different query is a different task", registry.findActiveDuplicate("s", "other query"))
+        assertNull("a different skill is a different task", registry.findActiveDuplicate("other", "same query"))
     }
 }
 

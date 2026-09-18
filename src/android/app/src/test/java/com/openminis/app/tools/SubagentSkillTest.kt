@@ -167,6 +167,48 @@ class SubagentSkillTest {
         assertEquals(setOf("file_read", "shell_execute", "browser_use"), names)
     }
 
+    /**
+     * [T-subagent-websearch] web_search must reach sub-agents.
+     *
+     * It was absent from the capability catalog, so the fail-closed filter
+     * dropped it — while `general-agent/SKILL.md` and the parent's own system
+     * prompt both advertise "the full tool set your parent has (minus spawning
+     * and memory)". Research sub-agents therefore lost their primary retrieval
+     * tool and had to hand-roll navigate → get_readable.
+     */
+    @Test
+    fun `web_search is granted to sub-agents`() {
+        val all = listOf(
+            makeTool("file_read"),
+            makeTool("web_search"),
+            makeTool("browser_use"),
+        )
+        val names = SubagentSkill.buildFilteredTools(all, null).map { it.name }.toSet()
+        assertTrue("web_search must be a sub-agent capability", names.contains("web_search"))
+        assertTrue(AgentCapabilities.isToolGrantableToSubagent("web_search"))
+    }
+
+    /** The search capability is not an accidental door-opener for the rest. */
+    @Test
+    fun `granting web_search does not widen other capabilities`() {
+        assertFalse(
+            "spawn_agent stays hard-forbidden",
+            AgentCapabilities.isToolGrantableToSubagent("spawn_agent"),
+        )
+        assertFalse(
+            "memory stays isolated",
+            AgentCapabilities.isToolGrantableToSubagent("memory_get"),
+        )
+        assertFalse(
+            "an unmapped tool is still fail-closed",
+            AgentCapabilities.isToolGrantableToSubagent("send_email"),
+        )
+        assertFalse(
+            "orchestration is parent-only",
+            AgentCapabilities.isToolGrantableToSubagent("cancel_subagents"),
+        )
+    }
+
     @Test
     fun `allowlist restricts to listed tools`() {
         val all = listOf(
@@ -313,6 +355,53 @@ class SubagentSkillTest {
         assertTrue(prompt.contains("/var/minis/workspace/"))
         assertTrue(prompt.contains("# Task from the parent agent"))
         assertTrue(prompt.trimEnd().endsWith("Body instructions."))
+    }
+
+    /**
+     * [T-subagent-dir-isolation] A run-scoped runtime context points the run
+     * at ITS OWN artifacts directory, and states the ownership rule.
+     */
+    @Test
+    fun `runtime context names the run's own artifacts directory`() {
+        val ctx = SubagentSkill.buildRuntimeContext(
+            LocalDateTime.of(2026, 9, 8, 10, 30),
+            runId = "subagent-12",
+        )
+        assertTrue(ctx.contains("/var/minis/workspace/subagents/subagent-12"))
+        assertTrue("the ownership rule must be stated", ctx.contains("belongs to THIS sub-agent run"))
+        assertFalse("a scoped run must not be pointed at the shared root", ctx.contains("Durable artifacts directory: /var/minis/workspace/ ("))
+    }
+
+    /** Two concurrent runs can never share a directory. */
+    @Test
+    fun `different run ids map to different artifacts directories`() {
+        val a = SubagentSkill.artifactsDirFor("subagent-1")
+        val b = SubagentSkill.artifactsDirFor("subagent-2")
+        assertTrue(a != b)
+        assertTrue(a.startsWith(SubagentSkill.ARTIFACTS_DIR))
+        assertTrue(b.startsWith(SubagentSkill.ARTIFACTS_DIR))
+        // Same id → same dir (idempotent, deterministic).
+        assertEquals(a, SubagentSkill.artifactsDirFor("subagent-1"))
+    }
+
+    /** No run id (callers outside a run) keeps the shared-root behaviour. */
+    @Test
+    fun `a blank run id falls back to the shared workspace root`() {
+        assertEquals(
+            SubagentSkill.SHARED_WORKSPACE_ROOT,
+            SubagentSkill.artifactsDirFor(""),
+        )
+        val ctx = SubagentSkill.buildRuntimeContext(LocalDateTime.of(2026, 9, 8, 10, 30), runId = "")
+        assertTrue(ctx.contains(SubagentSkill.SHARED_WORKSPACE_ROOT))
+        assertFalse(ctx.contains("belongs to THIS sub-agent run"))
+    }
+
+    /** The per-run directory always sits UNDER the shared root (no escape). */
+    @Test
+    fun `the per-run directory is contained in the shared workspace`() {
+        val dir = SubagentSkill.artifactsDirFor("subagent-99")
+        assertTrue(dir.startsWith(SubagentSkill.SHARED_WORKSPACE_ROOT))
+        assertFalse("no traversal", dir.contains(".."))
     }
 
     @Test

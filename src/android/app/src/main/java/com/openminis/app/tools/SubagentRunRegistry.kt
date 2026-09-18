@@ -102,6 +102,13 @@ class SubagentRunRegistry {
         val journalPath: String? = null,
         val status: RunStatus = RunStatus.RUNNING,
         val startedAtMs: Long = System.currentTimeMillis(),
+        /**
+         * [T-subagent-queue-visibility] When the run was REGISTERED while
+         * QUEUED — i.e. the moment it began waiting for a scheduler permit.
+         * 0 for runs that never queued. Kept after execution starts so the
+         * wait is measurable; see [queueWaitMs].
+         */
+        val queuedAtMs: Long = 0L,
         val endedAtMs: Long = 0L,
         /** Current turn (1-based) / configured max turns. */
         val turn: Int = 0,
@@ -137,6 +144,20 @@ class SubagentRunRegistry {
         val isActive: Boolean get() = status == RunStatus.RUNNING || status == RunStatus.QUEUED
         val isExecuting: Boolean get() = status == RunStatus.RUNNING
         val isQueued: Boolean get() = status == RunStatus.QUEUED
+
+        /**
+         * [T-subagent-queue-visibility] How long this run waited for a
+         * scheduler permit before executing, in ms — null while still queued
+         * (the wait is ongoing; the live elapsed tile covers that case) and
+         * null for runs that never queued. Kept as a computed property so
+         * every surface reads the same number.
+         */
+        val queueWaitMs: Long?
+            get() {
+                if (queuedAtMs <= 0L) return null
+                if (status == RunStatus.QUEUED) return null
+                return (startedAtMs - queuedAtMs).coerceAtLeast(0L)
+            }
         val durationMs: Long
             get() = (if (endedAtMs > 0) endedAtMs else System.currentTimeMillis()) - startedAtMs
     }
@@ -208,6 +229,9 @@ class SubagentRunRegistry {
             // are visible as "queued · waiting for slot" instead of
             // appearing only when they start executing.
             status = if (queued) RunStatus.QUEUED else RunStatus.RUNNING,
+            // [T-subagent-queue-visibility] Stamp the registration moment so
+            // the wait for a permit stays measurable after execution starts.
+            queuedAtMs = if (queued) System.currentTimeMillis() else 0L,
             maxTurns = maxTurns,
         )
         // Newest first — the pill shows the freshest run; detail page lists
@@ -226,6 +250,23 @@ class SubagentRunRegistry {
      * EXISTING active run with the same skill + query ([reused] == true).
      */
     data class RegisterOutcome(val run: Run, val reused: Boolean)
+
+    /**
+     * [T-subagent-spawn-dedupe] Look up an ACTIVE run for the same skill +
+     * query WITHOUT creating anything.
+     *
+     * Extracted so the spawn path can check for a duplicate BEFORE asking the
+     * user to approve it: previously the approval dialog ran first, so a model
+     * that re-issued an identical task prompted the user again for work that
+     * was already running — and with a fan-out, N duplicate asks arrived in a
+     * row. A duplicate is not a new decision, so it must not consume a new
+     * decision from the human.
+     */
+    fun findActiveDuplicate(skillId: String, query: String): Run? = synchronized(registerLock) {
+        _runs.value.firstOrNull {
+            it.isActive && it.skillId == skillId && it.query == query
+        }
+    }
 
     /**
      * [T-subagent-spawn-dedupe] Idempotent register used by spawn_agent.
@@ -268,20 +309,36 @@ class SubagentRunRegistry {
         )
     }
 
-    /**
-     * [T-subagent-orchestration] The scheduler granted a permit — flip a
-     * QUEUED run to RUNNING and stamp the actual execution start time (the
-     * queue wait is still visible via the untouched [Run.startedAtMs].
+    /** [T-subagent-orchestration] The scheduler granted a permit — flip a
+     * QUEUED run to RUNNING.
+     *
+     * [T-subagent-queue-visibility] The queue wait is preserved, not lost.
+     * The old comment claimed "the queue wait is still visible via the
+     * untouched startedAtMs", but this function OVERWROTE startedAtMs with
+     * the execution start — so the pill's live timer reset to 0:00 the moment
+     * a run finally started, erasing exactly the delay the user was staring
+     * at ("why is nothing happening?"). [Run.queuedAtMs] is stamped at
+     * registration and kept, so the UI can show "waited 2m10s" and the run's
+     * total latency stays auditable.
      */
     fun markExecuting(runId: String) {
         updateRun(runId) { run ->
             if (run.status == RunStatus.QUEUED) {
-                run.copy(status = RunStatus.RUNNING, startedAtMs = System.currentTimeMillis())
+                run.copy(
+                    status = RunStatus.RUNNING,
+                    startedAtMs = System.currentTimeMillis(),
+                )
             } else {
                 run
             }
         }
     }
+
+    /**
+     * [T-subagent-queue-visibility] Convenience passthrough to
+     * [Run.queueWaitMs] for registry-level callers and tests.
+     */
+    fun queueWaitMs(run: Run): Long? = run.queueWaitMs
 
     /** [T-subagent-orchestration] Attach the spawn-batch group id after creation. */
     fun setGroupId(runId: String, groupId: String) {
@@ -398,16 +455,49 @@ class SubagentRunRegistry {
      * own finally-path: if the runner already finished the run, this is a
      * no-op instead of overwriting SUCCESS with CANCELLED.
      */
+    /**
+     * [T-subagent-terminal-once] Terminal write that applies only while the
+     * run is still active — the boolean-returning spelling of the loop's
+     * terminal transitions. See [finishOnce] for the rationale; kept as its
+     * own name because most call sites do not care whether they won.
+     */
     fun finishIfActive(runId: String, status: RunStatus, resultText: String = "", error: String? = null) {
+        finishOnce(runId, status, resultText, error)
+    }
+
+    /**
+     * [T-subagent-terminal-once] Terminal write that REFUSES to overwrite an
+     * already-terminal run. [finish] below is the unconditional variant used
+     * by legacy call sites; this one is the honest model.
+     *
+     * Why this exists: the runner's natural-exit path calls [finish] with
+     * SUCCESS, which replaced a CANCELLED status written earlier by the
+     * cancel cascade — a run the user explicitly stopped would flip back to
+     * "Completed" in the pill and detail page. A terminal state is a fact
+     * about what happened first; it must not be rewritten by a path that was
+     * only possible because the cancel did its job (the loop unwound, then
+     * its success branch ran).
+     *
+     * Returns true when THIS call was the one that terminated the run, false
+     * when a terminal state already existed (the caller then knows its
+     * outcome was discarded).
+     */
+    fun finishOnce(runId: String, status: RunStatus, resultText: String = "", error: String? = null): Boolean {
+        var applied = false
         updateRun(runId) { run ->
-            if (!run.isActive) run
-            else run.copy(
-                status = status,
-                endedAtMs = System.currentTimeMillis(),
-                resultText = resultText.ifBlank { run.resultText },
-                error = error,
-            )
+            if (!run.isActive) {
+                run
+            } else {
+                applied = true
+                run.copy(
+                    status = status,
+                    endedAtMs = System.currentTimeMillis(),
+                    resultText = resultText.ifBlank { run.resultText },
+                    error = error,
+                )
+            }
         }
+        return applied
     }
 
     fun finish(runId: String, status: RunStatus, resultText: String = "", error: String? = null) {

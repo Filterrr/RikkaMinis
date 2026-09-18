@@ -77,6 +77,7 @@ import com.openminis.app.tools.MemoryRollupTool
 import com.openminis.app.tools.MemoryTools
 import com.openminis.app.tools.ReadImageTool
 import com.openminis.app.tools.SubagentOrchestration
+import com.openminis.app.tools.SubagentRunCheckpoint
 import com.openminis.app.tools.SubagentRunRegistry
 import com.openminis.app.tools.SubagentRunner
 import com.openminis.app.tools.SubagentScheduler
@@ -895,6 +896,70 @@ class ChatViewModel(
     }
 
     /**
+     * [T-subagent-user-cancel] Stop ONE sub-agent run from the UI.
+     *
+     * The pieces already existed but were reachable only by the MODEL calling
+     * cancel_subagents — a user watching a detached run burn tokens had no
+     * control surface at all (the detail page offered only "back"). A detached
+     * run is by definition "background work nobody is watching", so the manual
+     * override matters most exactly where it was missing.
+     *
+     * Semantics per lifecycle (mirrors [cancelStream]'s inline handling):
+     *  - detached: cancel its coroutine + wake any parked join/wait with a
+     *    cancelled outcome. The runner's cancellation handling journals the
+     *    partial report, so nothing is lost — only stopped.
+     *  - inline: the loop runs inside the parent turn's dispatch stack, so
+     *    there is no coroutine to cancel. Reported honestly (the run is left
+     *    alone) rather than marked cancelled while it keeps executing. The
+     *    user-facing route for an inline run is the Stop button on the turn.
+     *
+     * Returns a short human-readable outcome for a snackbar.
+     */
+    fun cancelSubagentRun(runId: String): String {
+        val run = subagentRunRegistry.runs.value.firstOrNull { it.id == runId }
+            ?: return "That sub-agent run is no longer available."
+        if (!run.isActive) {
+            return "That sub-agent already finished (${run.status.name.lowercase()})."
+        }
+        val job = subagentOrchestration.getJob(runId)
+        if (job == null || !job.detached) {
+            // Inline (or unregistered): the run lives inside the parent turn.
+            return "This sub-agent runs inside the current turn — press Stop to end the turn, " +
+                "or let it finish and read the result."
+        }
+        subagentRunRegistry.finishIfActive(
+            runId,
+            SubagentRunRegistry.RunStatus.CANCELLED,
+            error = "cancelled by user",
+        )
+        job.coroutineJob?.cancel(kotlinx.coroutines.CancellationException("cancelled by user"))
+        SubagentOrchestration.cancelCascade(listOf(job), "cancelled by user")
+        AppLogger.info(TAG, "[Subagent] user cancelled run '$runId' (skill=${run.skillId})")
+        return "Stopped '${run.skillName}'. Its partial work stays in the journal."
+    }
+
+    /**
+     * [T-subagent-approval] Skill ids the user has granted "always allow" for
+     * sub-agent spawns. Backs the revoke UI.
+     */
+    fun alwaysAllowedSubagentSkills(): List<String> =
+        com.openminis.app.data.SubagentApprovalStore.alwaysAllowedSkillIds(context)
+
+    /**
+     * [T-subagent-approval] Revoke a single skill's "always allow" grant.
+     *
+     * The store has carried both this and [alwaysAllowedSubagentSkills] since
+     * the approval gate shipped, with a doc comment promising they surface in
+     * the dialog ("revocable here") — but nothing called them, so "always
+     * allow" was a ONE-WAY DOOR: a user who tapped it once could never stop
+     * the prompts without clearing app data. This is the missing caller.
+     */
+    fun revokeSubagentAlwaysAllow(skillId: String) {
+        com.openminis.app.data.SubagentApprovalStore.setAlwaysAllowed(context, skillId, false)
+        AppLogger.info(TAG, "[Subagent] revoked always-allow for skill '$skillId'")
+    }
+
+    /**
      * [T-subagent-runner] Sub-agent runtime extracted from this ViewModel —
      * spawn_agent lifecycle (loop, tool dispatch, journaling, structured
      * results) lives in [SubagentRunner]; this class only supplies the
@@ -921,6 +986,11 @@ class ChatViewModel(
             override fun activeSessionId() = this@ChatViewModel.activeSessionId
             override suspend fun executeBrowserUse(argsJson: String) =
                 this@ChatViewModel.executeBrowserUseTool(argsJson)
+            // [T-subagent-websearch] Reuses the parent's own web_search
+            // executor — same configured engine/prefs, so a delegated search
+            // resolves against exactly what the user's URL bar would.
+            override suspend fun executeWebSearch(argsJson: String) =
+                this@ChatViewModel.executeWebSearchTool(argsJson)
             override fun maybeReloadSkillsForPath(argsJson: String) =
                 this@ChatViewModel.maybeReloadSkillsForPath(argsJson)
             override fun unwrapFlowException(e: Throwable) =
@@ -975,6 +1045,22 @@ class ChatViewModel(
 
             override fun setSkillAlwaysAllowed(skillId: String) {
                 com.openminis.app.data.SubagentApprovalStore.setAlwaysAllowed(context, skillId, true)
+                // [T-subagent-approval] Collapse the asks this grant already
+                // covers. A fan-out of N spawns submits N asks up front, so
+                // answering the FIRST with "Always allow" used to leave the
+                // remaining N-1 dialogs stacked and waiting — each one asking
+                // a question the user had just answered, and (because the
+                // always-allow check only runs on the way IN to a spawn) each
+                // still requiring a tap. resolveForSkill exists for exactly
+                // this and had no caller.
+                val collapsed = subagentApprovals.resolveForSkill(skillId, SpawnDecision.ALWAYS_ALLOW)
+                if (collapsed > 0) {
+                    AppLogger.info(
+                        TAG,
+                        "[Subagent] 'always allow' for '$skillId' auto-answered $collapsed " +
+                            "pending ask(s) of the same skill",
+                    )
+                }
             }
 
             /**
@@ -4202,6 +4288,42 @@ class ChatViewModel(
                     _canResume.value = true
                     Log.i(TAG, "loadSession: detected interrupted agent loop, canResume=true (lastRole=${lastEntry.role})")
                 }
+            }
+            // [T-subagent-ckpt-recovery] Surface sub-agent runs that process
+            // death killed mid-flight. The checkpoint writer has persisted a
+            // recovery anchor per turn since [T-subagent-checkpoint], but
+            // nothing ever READ one back — `resumeNote` was reachable only
+            // from unit tests, so a killed research run left findings on disk
+            // that no surface would ever mention. Worse, the parent's own
+            // transcript showed the spawn as merely "no result", so the model
+            // had no cue that recoverable work existed.
+            //
+            // Delivered as a QUEUED synthetic prompt rather than folded into
+            // the system prompt: it is a one-shot event ("these runs died"),
+            // it must be visible to the user as a chat row they can withdraw,
+            // and the drain path already owns "inject a synthetic turn at the
+            // right moment" semantics (the same mechanism the detached
+            // wake-up uses). Only checkpoints WITHOUT a matching journal are
+            // reported — see [SubagentRunCheckpoint.scanInterruptedRuns].
+            runCatching {
+                val interrupted = SubagentRunCheckpoint.scanInterruptedRuns(sessionId, context)
+                val prompt = SubagentRunCheckpoint.buildRecoveryPrompt(interrupted)
+                if (prompt != null) {
+                    Log.i(TAG, "loadSession: ${interrupted.size} interrupted sub-agent run(s) recovered from checkpoints")
+                    enqueueSyntheticPrompt(prompt)
+                    // [T-subagent-ckpt-recovery] Report each interrupted run
+                    // EXACTLY ONCE: without this marker every session open
+                    // re-enqueued the same recovery turn (each copy burning
+                    // parent context and inviting the model to redo recovered
+                    // work). The file is renamed aside, not deleted, so the
+                    // evidence survives for debugging.
+                    interrupted.forEach { run ->
+                        SubagentRunCheckpoint.markReported(run.name, context, sessionId)
+                    }
+                }
+            }.onFailure {
+                // Recovery reporting must never break session entry.
+                Log.w(TAG, "loadSession: checkpoint recovery scan failed: ${it.message}")
             }
             } finally {
                 // T201: open the gate even on early `return@launch` (draft path,

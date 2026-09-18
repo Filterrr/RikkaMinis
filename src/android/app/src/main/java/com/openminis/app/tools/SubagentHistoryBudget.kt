@@ -132,11 +132,87 @@ object SubagentHistoryBudget {
                 chars += when (part) {
                     is AgentContentPart.Text -> part.text.length
                     is AgentContentPart.ToolUse -> part.input.toString().length
-                    is AgentContentPart.ToolResult -> part.content.length
+                    is AgentContentPart.ToolResult ->
+                        // [T-subagent-vision] A tool_result can now carry an
+                        // image (read_image / browser screenshot) whose BYTES
+                        // dominate the part. Counting only `content` would let
+                        // a screenshot-heavy run sail past the trimming
+                        // threshold and die on the provider's real context
+                        // limit instead of trimming gracefully — the exact
+                        // failure this module exists to prevent. Estimated as a
+                        // flat per-image cost, matching [IMAGE_TOKEN_GUESS]:
+                        // the wire cost of an image is bounded by its
+                        // dimensions after provider-side compression, not by
+                        // its encoded byte length.
+                        part.content.length + if (part.imageData != null) IMAGE_TOKEN_GUESS else 0
                     is AgentContentPart.ImageData -> IMAGE_TOKEN_GUESS
                 }
             }
         }
         return (chars / CHARS_PER_TOKEN).toInt()
     }
+
+    /**
+     * [T-subagent-vision] Drop image BYTES from every tool_result that is NOT
+     * among the [keepRecentTurns] newest rounds, replacing each with a text
+     * placeholder that names its [AgentContentPart.ToolResult.imageLinuxPath]
+     * so it stays re-fetchable with `read_image`.
+     *
+     * Why bytes need their own pass while text has [trim]: the two have
+     * different blast radii. Dropping a text round is recoverable by
+     * re-deriving; a dropped screenshot needs one cheap tool call, but an
+     * UNBOUNDED history of them pins every decoded bitmap in the JVM heap for
+     * the run's lifetime — the main loop learned this the hard way (a
+     * 50-screenshot turn sequence ≈ 50–75 MB) and mirrors request-level
+     * elision back into history for exactly this reason (see
+     * ChatViewModel's [fix/history-bytes-offload]).
+     *
+     * The newest rounds keep their pixels: that region is the live task state,
+     * and yanking an image the model just looked at would break the very
+     * reasoning the image was fetched for. Returns the rebuilt history and how
+     * many images were elided.
+     */
+    fun elideStaleImages(
+        history: List<LLMMessage>,
+        keepRecentTurns: Int = 4,
+    ): Pair<List<LLMMessage>, Int> {
+        if (history.isEmpty()) return history to 0
+        val keepFrom = roundBoundaryFromEnd(history, keepRecentTurns)
+        var elided = 0
+        val rebuilt = history.mapIndexed { idx, msg ->
+            if (idx >= keepFrom) return@mapIndexed msg
+            if (msg.contentParts.none { it is AgentContentPart.ToolResult && it.imageData != null }) {
+                return@mapIndexed msg
+            }
+            val parts = msg.contentParts.map { part ->
+                if (part is AgentContentPart.ToolResult && part.imageData != null) {
+                    elided++
+                    part.copy(
+                        content = part.content + "\n" + elidedImageNote(part.imageLinuxPath),
+                        imageData = null,
+                        imageMimeType = null,
+                    )
+                } else {
+                    part
+                }
+            }
+            msg.copy(contentParts = parts)
+        }
+        return rebuilt to elided
+    }
+
+    /**
+     * Placeholder left in place of elided image bytes. Names the recovery
+     * route — without a path the model can only guess what it was shown, and
+     * a guess presented as a finding is the failure mode this subsystem's
+     * report hygiene exists to prevent.
+     */
+    internal fun elidedImageNote(linuxPath: String?): String =
+        if (linuxPath.isNullOrBlank()) {
+            "[image dropped from older context to bound memory. Bytes are no longer addressable; " +
+                "re-run the tool (read_image / browser_use screenshot) if you need to see it again.]"
+        } else {
+            "[image dropped from older context to bound memory. Original at $linuxPath — " +
+                "re-read it with read_image if you need to see it again.]"
+        }
 }
