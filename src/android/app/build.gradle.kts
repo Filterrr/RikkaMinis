@@ -146,9 +146,10 @@ android {
             // optimized assets (screenshots/badges), so the pass burned CI
             // minutes without shrinking the APK measurably. Debug builds
             // keep crunching (fast iteration unaffected).
-            androidResources {
-                cruncherEnabled = false
-            }
+            // API note: isCrunchPngs is the modern name (AGP 4.1+); the old
+            // androidResources.cruncherEnabled property no longer exists in
+            // the AGP 8.x Kotlin DSL.
+            isCrunchPngs = false
             signingConfig = signingConfigs.getByName("debug")
         }
     }
