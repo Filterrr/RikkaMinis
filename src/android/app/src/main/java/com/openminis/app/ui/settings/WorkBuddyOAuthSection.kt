@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SegmentedButton
@@ -28,6 +29,7 @@ import com.openminis.app.R
 import com.openminis.app.data.repository.ProviderRepository
 import com.openminis.app.provider.workbuddy.WorkBuddyConstants
 import com.openminis.app.provider.workbuddy.WorkBuddyCredentialStore
+import com.openminis.app.provider.workbuddy.WorkBuddyKeepAlive
 import com.openminis.app.provider.workbuddy.WorkBuddyLoginManager
 import com.openminis.app.ui.components.MinisButton
 import com.openminis.app.ui.components.MinisOutlinedButton
@@ -81,6 +83,15 @@ fun WorkBuddyOAuthSection(
     // sign-in coroutine below runs outside one. Capture the copy it needs up
     // front so the lambda never touches the composition.
     val waitingText = stringResource(R.string.workbuddy_oauth_waiting)
+
+    // [T-workbuddy-keepalive] UI mirrors of the keep-alive settings (the
+    // machinery itself lives in WorkBuddyKeepAlive; these only read).
+    var keepAliveEnabled by remember {
+        mutableStateOf(WorkBuddyKeepAlive.isEnabled(appContext))
+    }
+    var keepAliveIntervalH by remember {
+        mutableStateOf(WorkBuddyKeepAlive.intervalHours(appContext))
+    }
 
     fun reload() {
         tokens = WorkBuddyCredentialStore.loadTokens(appContext, instanceId)
@@ -261,6 +272,117 @@ fun WorkBuddyOAuthSection(
                     enabled = !working,
                 ) {
                     Text(stringResource(R.string.workbuddy_oauth_logout))
+                }
+            }
+
+            // ── [T-workbuddy-keepalive] Authorization keep-alive ────────
+            // Only meaningful once signed in (nothing to keep alive before
+            // that), and hidden while a sign-in is in flight to keep the
+            // card stable.
+            if (tokens != null && !working) {
+                Spacer(Modifier.height(12.dp))
+                HorizontalDivider()
+                Spacer(Modifier.height(10.dp))
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = stringResource(R.string.workbuddy_keepalive_title),
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                        Text(
+                            text = stringResource(R.string.workbuddy_keepalive_desc),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    androidx.compose.material3.Switch(
+                        checked = keepAliveEnabled,
+                        onCheckedChange = { on ->
+                            keepAliveEnabled = on
+                            scope.launch {
+                                withContext(Dispatchers.IO) {
+                                    WorkBuddyKeepAlive.setEnabled(appContext, on)
+                                }
+                            }
+                        },
+                    )
+                }
+                if (keepAliveEnabled) {
+                    Spacer(Modifier.height(6.dp))
+                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Text(
+                            text = stringResource(R.string.workbuddy_keepalive_interval),
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.weight(1f),
+                        )
+                        // Cycle button — matches the Antigravity section's
+                        // pattern for 5 discrete cadences.
+                        androidx.compose.material3.TextButton(
+                            onClick = {
+                                val choices = WorkBuddyKeepAlive.INTERVAL_CHOICES_HOURS
+                                val next = choices[
+                                    (choices.indexOf(keepAliveIntervalH) + 1) % choices.size,
+                                ]
+                                keepAliveIntervalH = next
+                                scope.launch {
+                                    withContext(Dispatchers.IO) {
+                                        WorkBuddyKeepAlive.setIntervalHours(appContext, next)
+                                    }
+                                }
+                            },
+                        ) {
+                            Text(
+                                stringResource(
+                                    R.string.workbuddy_keepalive_interval_value,
+                                    keepAliveIntervalH,
+                                ),
+                            )
+                        }
+                    }
+                    // Status line: last pass + outcome; a fatal rejection
+                    // surfaces the re-login hint (never auto-cleared).
+                    val fatal = WorkBuddyKeepAlive.fatalAccounts(appContext)
+                    val lastRun = WorkBuddyKeepAlive.lastRunAt(appContext)
+                    val lastResult = WorkBuddyKeepAlive.lastResult(appContext)
+                    Text(
+                        text = if (lastRun == 0L) {
+                            stringResource(R.string.workbuddy_keepalive_never)
+                        } else {
+                            stringResource(
+                                R.string.workbuddy_keepalive_last_run,
+                                java.text.SimpleDateFormat(
+                                    "MM-dd HH:mm",
+                                    java.util.Locale.getDefault(),
+                                ).format(java.util.Date(lastRun)),
+                                lastResult ?: "—",
+                            )
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (fatal.isNotEmpty()) {
+                        Text(
+                            text = stringResource(
+                                R.string.workbuddy_keepalive_fatal_hint,
+                                fatal.joinToString("、"),
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    androidx.compose.material3.TextButton(
+                        onClick = {
+                            scope.launch {
+                                withContext(Dispatchers.IO) {
+                                    runCatching {
+                                        WorkBuddyKeepAlive.runKeepAliveNow(appContext)
+                                    }
+                                }
+                            }
+                        },
+                    ) {
+                        Text(stringResource(R.string.workbuddy_keepalive_run_now))
+                    }
                 }
             }
 

@@ -1828,6 +1828,14 @@
     <string name="workbuddy_import_json">Import credential JSON</string>
     <string name="workbuddy_import_json_hint">Paste the JSON exported by WorkBuddy2API (or another client) to reuse that session here.</string>
     <string name="workbuddy_import_json_action">Import</string>
+    <string name="workbuddy_keepalive_title">Keep authorization alive</string>
+    <string name="workbuddy_keepalive_desc">Periodically refreshes the stored WorkBuddy session in the background, even when the app is closed, so the login does not quietly go stale.</string>
+    <string name="workbuddy_keepalive_interval">Check interval</string>
+    <string name="workbuddy_keepalive_interval_value">%1$d h</string>
+    <string name="workbuddy_keepalive_never">Not run yet.</string>
+    <string name="workbuddy_keepalive_last_run">Last run %1$s · %2$s</string>
+    <string name="workbuddy_keepalive_fatal_hint">The backend rejected the session for %1$s — sign in again.</string>
+    <string name="workbuddy_keepalive_run_now">Run now</string>
     <string name="workbuddy_import_ok">Credential imported.</string>
     <string name="workbuddy_import_failed">Import failed: %1$s</string>
     <string name="add_provider_subtitle_antigravity">Google Antigravity — OAuth sign-in with your Google account, full Claude / Gemini lineup</string>

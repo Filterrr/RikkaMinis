@@ -890,6 +890,17 @@ class ProviderRepository(private val context: Context) {
         return _config.value.instances.filter { it.providerType == ProviderType.antigravity }
     }
 
+    /**
+     * [T-workbuddy-keepalive] Every WorkBuddy instance, for the keep-alive
+     * pass. Loads the config first so the snapshot is real even when the
+     * process started just for an alarm. One instance = one credential (the
+     * logged-in account) — no pool slots to walk.
+     */
+    fun workBuddyInstances(): List<ProviderInstance> {
+        ensureConfigLoaded()
+        return _config.value.instances.filter { it.providerType == ProviderType.workBuddy }
+    }
+
     fun entriesFor(instanceId: String): List<ModelEntry> =
         _config.value.modelEntries.filter { it.providerInstanceId == instanceId }
 

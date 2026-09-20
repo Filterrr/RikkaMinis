@@ -1748,6 +1748,14 @@
     <string name="workbuddy_import_json">导入凭据 JSON</string>
     <string name="workbuddy_import_json_hint">粘贴 WorkBuddy2API（或其他客户端）导出的 JSON，可直接复用该登录态。</string>
     <string name="workbuddy_import_json_action">导入</string>
+    <string name="workbuddy_keepalive_title">保持登录有效</string>
+    <string name="workbuddy_keepalive_desc">即使应用未打开，也定期在后台刷新已保存的 WorkBuddy 登录态，避免授权静默失效。</string>
+    <string name="workbuddy_keepalive_interval">检查间隔</string>
+    <string name="workbuddy_keepalive_interval_value">%1$d 小时</string>
+    <string name="workbuddy_keepalive_never">尚未运行。</string>
+    <string name="workbuddy_keepalive_last_run">上次运行 %1$s · %2$s</string>
+    <string name="workbuddy_keepalive_fatal_hint">后端拒绝了 %1$s 的登录态 — 请重新登录。</string>
+    <string name="workbuddy_keepalive_run_now">立即运行</string>
     <string name="workbuddy_import_ok">凭据已导入。</string>
     <string name="workbuddy_import_failed">导入失败：%1$s</string>
     <string name="add_provider_subtitle_antigravity">Google Antigravity — 使用 Google 账号 OAuth 登录，Claude / Gemini 全模型阵容</string>
