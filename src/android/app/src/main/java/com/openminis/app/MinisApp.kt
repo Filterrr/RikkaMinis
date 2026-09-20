@@ -675,6 +675,14 @@ class MinisApp : Application(), ImageLoaderFactory {
                             com.openminis.app.provider.antigravity.AntigravityKeepAlive
                                 .rearmIfEnabled(this@MinisApp)
                         }
+                        // [T-workbuddy-keepalive] Same foreground re-arm: the
+                        // one-shot alarm does not survive OEM aggressive-kill,
+                        // and a long app absence is exactly when the stored
+                        // WorkBuddy session needs its catch-up refresh.
+                        runCatching {
+                            com.openminis.app.provider.workbuddy.WorkBuddyKeepAlive
+                                .rearmIfEnabled(this@MinisApp)
+                        }
                     }
                 }
                 // T298: as soon as the app transitions background → foreground,

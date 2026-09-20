@@ -4,6 +4,9 @@ import android.content.Context
 import com.openminis.app.provider.KimiConstants
 import com.openminis.app.provider.antigravity.AntigravityCredentialStore
 import com.openminis.app.provider.antigravity.AntigravityModelsApi
+import com.openminis.app.provider.workbuddy.WorkBuddyApi
+import com.openminis.app.provider.workbuddy.WorkBuddyConstants
+import com.openminis.app.provider.workbuddy.WorkBuddyCredentialStore
 import com.openminis.app.data.model.LLMModel
 import com.openminis.app.data.model.ProviderInstance
 import com.openminis.app.data.model.ProviderType
@@ -184,6 +187,84 @@ fun registerModelListProviders() {
     ModelListProviderRegistry.register(ProviderType.xAI, XAIModelListAdapter)
     ModelListProviderRegistry.register(ProviderType.kimiCode, KimiModelListAdapter)
     ModelListProviderRegistry.register(ProviderType.antigravity, AntigravityModelListAdapter)
+    ModelListProviderRegistry.register(ProviderType.workBuddy, WorkBuddyModelListAdapter)
+}
+
+/**
+ * [T-workbuddy-oauth] WorkBuddy model catalog.
+ *
+ * Unlike the API-key providers, this list is **account-scoped**: it is the set
+ * of models the signed-in tenant is entitled to, so it can only be fetched
+ * through the OAuth token in [WorkBuddyCredentialStore] — the `apiKey`
+ * argument hands us the marker string, not a credential, and is ignored.
+ *
+ * A signed-out instance returns the bundled placeholder catalog rather than an
+ * empty list, so the provider is not a dead end before login: the user sees
+ * what the account will offer, picks a model, and is prompted to sign in when
+ * a request actually needs a token.
+ */
+private object WorkBuddyModelListAdapter : ModelListProvider {
+    /** Application context, injected at startup via [initWorkBuddyAdapter]. */
+    @Volatile private var appContextRef: Context? = null
+
+    fun init(context: Context) {
+        appContextRef = context.applicationContext
+    }
+
+    override suspend fun fetchModels(
+        apiKey: String?,
+        instance: ProviderInstance,
+        thirdParty: Boolean,
+        forceRefresh: Boolean,
+    ): List<LLMModel> {
+        val region = WorkBuddyConstants.Region.from(instance.workBuddyRegion)
+        // Same reasoning as the Antigravity adapter: resolve through the store
+        // so a token that expired since the last request is rotated
+        // (single-flighted) instead of producing a silent 401 → empty list.
+        val context = appContextRef
+        val tokens = if (context != null) {
+            WorkBuddyCredentialStore.loadTokens(context, instance.id)?.let { stored ->
+                if (stored.isExpired && stored.hasRefreshToken) {
+                    runCatching { WorkBuddyCredentialStore.refreshAccessToken(context, instance.id) }
+                        .getOrNull() ?: stored
+                } else {
+                    stored
+                }
+            }
+        } else {
+            // Adapter not initialized (tests / exotic call orders) — no store
+            // to read, so fall through to the bundled catalog below.
+            null
+        }
+
+        if (tokens == null) {
+            // Signed out: offer the bundled placeholder so the picker is not
+            // empty. The live catalog replaces it after login.
+            return WorkBuddyApi.bundledModels(region)
+        }
+
+        return try {
+            // Honour an instance-level base URL (enterprise proxy/mirror) —
+            // same override the chat path applies.
+            val live = WorkBuddyApi.fetchModels(tokens, backendOverride = instance.customBaseURL)
+            if (live.isEmpty()) WorkBuddyApi.bundledModels(region) else live
+        } catch (e: Exception) {
+            // A failed catalog fetch must not wipe an already-working model
+            // list — fall back to the bundled snapshot, and to whatever the
+            // repository already holds when even that is empty (achieved by
+            // returning an empty list, which makes refreshModels PRESERVE).
+            com.openminis.app.logging.AppLogger.warning(
+                "WorkBuddyModels",
+                "catalog fetch failed: ${e.message}",
+            )
+            WorkBuddyApi.bundledModels(region)
+        }
+    }
+}
+
+/** Application-context injection for adapters that need one (called at startup). */
+fun initWorkBuddyAdapter(context: android.content.Context) {
+    WorkBuddyModelListAdapter.init(context)
 }
 
 /** Application-context injection for adapters that need one (called at startup). */

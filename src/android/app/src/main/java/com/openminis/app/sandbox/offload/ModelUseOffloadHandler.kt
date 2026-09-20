@@ -399,6 +399,37 @@ class ModelUseOffloadHandler(
                     null
                 }
             } else null,
+            // [T-workbuddy-oauth] WorkBuddy carries a whole credential bundle
+            // (bearer token + the tenant identity headers the backend routes
+            // by) across the process boundary — the worker cannot read the
+            // encrypted store, so the app process resolves it here.
+            workBuddyAuth = if (instance.providerType == com.openminis.app.data.model.ProviderType.workBuddy) {
+                try {
+                    kotlinx.coroutines.runBlocking {
+                        val store = com.openminis.app.provider.workbuddy.WorkBuddyCredentialStore
+                        store.loadTokens(context, instance.id)?.let { stored ->
+                            val tokens = if (stored.isExpired && stored.hasRefreshToken) {
+                                store.refreshAccessToken(context, instance.id) ?: stored
+                            } else {
+                                stored
+                            }
+                            org.json.JSONObject().apply {
+                                put("accessToken", tokens.accessToken)
+                                put("refreshToken", tokens.refreshToken)
+                                put("expiresAt", tokens.expiresAt)
+                                put("uid", tokens.uid)
+                                put("enterpriseId", tokens.enterpriseId)
+                                put("nickname", tokens.nickname ?: "")
+                                put("domain", tokens.domain)
+                                put("region", tokens.region)
+                            }
+                        }
+                    }
+                } catch (t: Throwable) {
+                    Log.w(TAG, "inline workbuddy credential resolve failed: ${t.message}")
+                    null
+                }
+            } else null,
             // [R4-budget-parity] Non-streaming model-use calls get the same
             // adaptive first-chunk budget as chat streams — a slow relay
             // otherwise times out here at the route-static generation
@@ -1442,7 +1473,7 @@ class ModelUseOffloadHandler(
             // xAI (Grok) / Kimi Coding / Antigravity have no image-output
             // models in the current catalog — fall through to empty hint
             // like Anthropic.
-            ProviderType.anthropic, ProviderType.xAI, ProviderType.kimiCode, ProviderType.antigravity, null -> ""
+            ProviderType.anthropic, ProviderType.xAI, ProviderType.kimiCode, ProviderType.antigravity, ProviderType.workBuddy, null -> ""
         }
     }
 

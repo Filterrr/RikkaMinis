@@ -31,6 +31,7 @@ import com.openminis.app.data.model.isVoiceTemplateSeedShape
 import com.openminis.app.data.model.withInferredVoiceModality
 import com.openminis.app.provider.registerModelListProviders
 import com.openminis.app.provider.initAntigravityAdapter
+import com.openminis.app.provider.initWorkBuddyAdapter
 import com.openminis.app.provider.antigravity.AntigravityCredentialStore
 import org.json.JSONArray
 import org.json.JSONObject
@@ -94,6 +95,17 @@ class ProviderRepository(private val context: Context) {
          * antigravity instances; the real tokens live in AntigravityCredentialStore.
          */
         const val ANTIGRAVITY_OAUTH_MARKER = "antigravity:oauth"
+
+        /**
+         * [T-workbuddy-oauth] Marker stored in apikey_<id> for OAuth-backed
+         * WorkBuddy instances; the real token bundle lives in
+         * [com.openminis.app.provider.workbuddy.WorkBuddyCredentialStore].
+         * Same mechanism as [ANTIGRAVITY_OAUTH_MARKER]: the marker keeps the
+         * instance visible to every "has a credential" gate (model refresh,
+         * connection test, routing eligibility) without duplicating the
+         * rotating OAuth token into the API-key slots.
+         */
+        const val WORKBUDDY_OAUTH_MARKER = com.openminis.app.provider.workbuddy.WorkBuddyConstants.OAUTH_MARKER
 
         /**
          * [T-multi-api-key] Upper bound on the credential slots
@@ -266,6 +278,11 @@ class ProviderRepository(private val context: Context) {
         // Idempotent (last-registration-wins per type).
         registerModelListProviders()
         initAntigravityAdapter(context)
+        // [T-workbuddy-oauth] Same injection purpose as the Antigravity
+        // adapter: the WorkBuddy catalog adapter needs an application context
+        // to reach the OAuth token store (the `apiKey` argument carries only
+        // the marker for OAuth-backed instances).
+        initWorkBuddyAdapter(context)
         loadScope.launch {
             val loaded = loadConfig()
             synchronized(configLock) {
@@ -871,6 +888,17 @@ class ProviderRepository(private val context: Context) {
     fun antigravityInstances(): List<ProviderInstance> {
         ensureConfigLoaded()
         return _config.value.instances.filter { it.providerType == ProviderType.antigravity }
+    }
+
+    /**
+     * [T-workbuddy-keepalive] Every WorkBuddy instance, for the keep-alive
+     * pass. Loads the config first so the snapshot is real even when the
+     * process started just for an alarm. One instance = one credential (the
+     * logged-in account) — no pool slots to walk.
+     */
+    fun workBuddyInstances(): List<ProviderInstance> {
+        ensureConfigLoaded()
+        return _config.value.instances.filter { it.providerType == ProviderType.workBuddy }
     }
 
     fun entriesFor(instanceId: String): List<ModelEntry> =
@@ -2068,6 +2096,7 @@ class ProviderRepository(private val context: Context) {
         val raw = encryptedPrefs.getString(apiKeySlot(instanceId, index), null)
         if (raw == null) return null
         if (raw == ANTIGRAVITY_OAUTH_MARKER) return resolveAntigravityToken(instanceId)
+        if (raw == WORKBUDDY_OAUTH_MARKER) return resolveWorkBuddyToken(instanceId)
         return raw
     }
 
@@ -2156,6 +2185,12 @@ class ProviderRepository(private val context: Context) {
         // material for EVERY pool slot — deleting the credential on an
         // OAuth instance must log all pooled accounts out, not just slot 0.
         AntigravityCredentialStore.clearAll(context, instanceId, count.coerceAtLeast(1))
+        // [T-workbuddy-oauth] Same teardown duty for the WorkBuddy token
+        // store: the bearer/refresh pair must not outlive the instance
+        // (or the user's explicit sign-out), or the next sign-in into a
+        // recycled instance id would silently inherit a stale session.
+        com.openminis.app.provider.workbuddy.WorkBuddyCredentialStore
+            .clear(context, instanceId)
     }
 
     /**
@@ -2191,6 +2226,43 @@ class ProviderRepository(private val context: Context) {
 
     private fun resolveAntigravityToken(instanceId: String): String? =
         resolveAntigravityTokenAt(instanceId, 0)
+
+    /**
+     * [T-workbuddy-oauth] Resolve the WorkBuddy OAuth marker into a live
+     * access token, mirroring [resolveAntigravityTokenAt]'s threading rules:
+     *
+     *  - on the main thread, an expired token triggers a fire-and-forget
+     *    rotation and the (possibly stale) token is returned immediately, so
+     *    the first request of a session never blocks the UI on KeyStore I/O;
+     *  - off the main thread, resolution is synchronous so the caller sees a
+     *    fresh token.
+     *
+     * Returns null when the instance has never signed in — the same "no
+     * credential" answer an empty API-key slot would give.
+     */
+    private fun resolveWorkBuddyToken(instanceId: String): String? {
+        val onMain = android.os.Looper.myLooper() == android.os.Looper.getMainLooper()
+        return if (onMain) {
+            val tokens = com.openminis.app.provider.workbuddy.WorkBuddyCredentialStore
+                .loadTokens(context, instanceId)
+            if (tokens == null) {
+                null
+            } else if (tokens.isExpired && tokens.hasRefreshToken) {
+                tokenRefreshScope.launch {
+                    com.openminis.app.provider.workbuddy.WorkBuddyCredentialStore
+                        .refreshAccessToken(context, instanceId)
+                }
+                tokens.accessToken
+            } else {
+                tokens.accessToken
+            }
+        } else {
+            kotlinx.coroutines.runBlocking {
+                com.openminis.app.provider.workbuddy.WorkBuddyCredentialStore
+                    .validAccessToken(context, instanceId)
+            }
+        }
+    }
 
     /**
      * [T-antigravity-credential-pool] Resolve the OAuth token stored at
@@ -2417,6 +2489,11 @@ class ProviderRepository(private val context: Context) {
             // when set; old/new readers without the key decode to null →
             // default UA. Field name matches iOS for cross-platform interop.
             instance.customUserAgent?.takeIf { it.isNotBlank() }?.let { put("customUserAgent", it) }
+            // [T-workbuddy-oauth] Tenant id, additive + optional — without it
+            // a backup/restore or shared instance JSON silently reverts a
+            // WorkBuddy provider to the default tenant, and the account's
+            // tokens (which are tenant-scoped) stop matching the endpoint.
+            instance.workBuddyRegion?.let { put("workBuddyRegion", it) }
             // [RC5 / P0-pinned + GH#68] Additive provider run-config fields.
             // These were previously NEVER written by the backup export, so a
             // config restore / device migration silently reset them to
@@ -2463,6 +2540,10 @@ class ProviderRepository(private val context: Context) {
         // [T-provider-custom-user-agent] Additive: old exports lack the key →
         // empty → null → default UA. Field name matches iOS.
         val customUserAgent = dict.optString("customUserAgent", "").ifEmpty { null }
+        // [T-workbuddy-oauth] Restore the tenant id exported by the matching
+        // write. Absent in old backups → null → default region on read, which
+        // is exactly the pre-feature behaviour for every other provider type.
+        val workBuddyRegion = dict.optString("workBuddyRegion", "").ifEmpty { null }
         // [RC5 / P0-pinned + GH#68] Restore the run-config fields written by
         // [exportInstanceJSON]. Each defaults to the model's own default when
         // the key is absent (old backup) so nothing crashes and a legacy
@@ -2484,6 +2565,7 @@ class ProviderRepository(private val context: Context) {
             customUserAgent = customUserAgent,
             isEnabled = rc.isEnabled,
             azureMode = rc.azureMode,
+            workBuddyRegion = workBuddyRegion,
             imageEndpointMode = rc.imageEndpointMode,
             imageEndpointResolved = rc.imageEndpointResolved,
             pinned = rc.pinned,

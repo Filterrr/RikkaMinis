@@ -452,6 +452,10 @@ private fun deleteSessionAndCleanup(chatRepository: ChatRepository, id: String) 
         chatRepository.deleteSession(id)
         ChatViewModelStore.release(id)
         com.openminis.app.service.SessionBadgeStore.clear(id)
+        // [fix-todo-session-scope] A deleted conversation's task list must
+        // not linger in the store (memory + stale content if the id were
+        // ever reused).
+        com.openminis.app.tools.TodoStore.dropSession(id)
     }
 }
 

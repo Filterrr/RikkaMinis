@@ -44,7 +44,27 @@ object ProviderFactory {
      * [context] is retained for call-site compatibility; OAuth (which needed
      * it for encrypted token storage) was removed.
      */
-    fun create(instance: ProviderInstance, apiKey: String, model: LLMModel, context: Context? = null): LLMProvider {
+    fun create(
+        instance: ProviderInstance,
+        apiKey: String,
+        model: LLMModel,
+        context: Context? = null,
+        /**
+         * [T-workbuddy-oauth] Pre-resolved WorkBuddy credential bundle.
+         *
+         * WorkBuddy needs more than a bearer token: the backend routes by
+         * tenant, so every request must also carry `X-User-Id` /
+         * `X-Enterprise-Id` / `X-Tenant-Id` / `X-Domain`. Those live in the
+         * encrypted store, which the `:modelservice` worker cannot read
+         * (per-process Android Keystore). The app process therefore resolves
+         * the whole bundle and hands it across the process boundary; when it
+         * is present it takes precedence over a store read.
+         *
+         * Null (the normal in-process case, and every non-WorkBuddy type)
+         * leaves resolution to the store.
+         */
+        workBuddyInline: com.openminis.app.provider.workbuddy.WorkBuddyCredentialStore.Tokens? = null,
+    ): LLMProvider {
         // T174: route through ProviderInstance.effectiveBaseURL instead of
         // re-implementing the trim-+-endsWith dance inline. The previous
         // version did `url.endsWith("/v1")` on the raw, untrimmed string,
@@ -167,6 +187,48 @@ object ProviderFactory {
                     },
                 )
             }
+            ProviderType.workBuddy -> {
+                // [T-workbuddy-oauth] WorkBuddy is OAuth-only and its token is
+                // resolved FRESH on every request rather than being handed in
+                // once: an agent loop can easily outlive a single access
+                // token, and the provider's per-call delegate rebuild would
+                // otherwise re-send a credential that expired mid-session.
+                // The `apiKey` slot holds the marker (see
+                // ProviderRepository.WORKBUDDY_OAUTH_MARKER), not the token.
+                //
+                // `context` is required here — without it there is no token
+                // store to read, so we fail loudly at construction instead of
+                // silently building a provider that 401s on first use.
+                val appContext = context
+                    ?: error("WorkBuddy provider requires a Context for credential resolution")
+                val wbRegion = com.openminis.app.provider.workbuddy.WorkBuddyConstants.Region
+                    .from(instance.workBuddyRegion)
+                // [T-workbuddy-oauth] In the worker process the store is
+                // unreadable, so an inline bundle supplied by the app process
+                // is authoritative and static for the request's lifetime.
+                // In-process callers pass null and get live resolution.
+                val inline = workBuddyInline
+                com.openminis.app.provider.workbuddy.WorkBuddyProvider(
+                    context = appContext,
+                    tokenResolver = {
+                        inline ?: com.openminis.app.provider.workbuddy.WorkBuddyCredentialStore
+                            .loadTokens(appContext, instance.id)
+                            ?.let { stored ->
+                                if (stored.isExpired && stored.hasRefreshToken) {
+                                    com.openminis.app.provider.workbuddy.WorkBuddyCredentialStore
+                                        .refreshAccessToken(appContext, instance.id) ?: stored
+                                } else {
+                                    stored
+                                }
+                            }
+                    },
+                    model = model,
+                    region = wbRegion,
+                    // [T-workbuddy-oauth] Honour a user-supplied base URL so
+                    // an enterprise proxy/mirror can front the data plane.
+                    customBackend = instance.customBaseURL,
+                )
+            }
         }).also { provider ->
             provider.instanceContext = instance
             // [OPT7-conn-warmup] Every provider build is a "user is heading
@@ -191,5 +253,9 @@ object ProviderFactory {
         ProviderType.kimiCode -> KimiConstants.CODING_API_BASE + "/v1"
         // [T-antigravity-oauth] Upstream default (resolveAntigravityRequestBaseURL).
         ProviderType.antigravity -> AntigravityOAuth.DAILY_API_ENDPOINT
+        // [T-workbuddy-oauth] Domestic default; the warmed origin is only a
+        // hint (the real host depends on the instance's region).
+        ProviderType.workBuddy -> com.openminis.app.provider.workbuddy.WorkBuddyConstants
+            .DEFAULT_REGION.backend
     }
 }

@@ -207,6 +207,10 @@ internal object ProviderMutationMethods {
             ProviderType.kimiCode -> "https://api.kimi.com/coding/v1"
             // Full origin (no /v1) — antigravity paths are /v1internal:*.
             ProviderType.antigravity -> com.openminis.app.provider.antigravity.AntigravityOAuth.DAILY_API_ENDPOINT
+            // [T-workbuddy-oauth] Tenant-dependent origin; the region default
+            // is used for a bare reachability probe.
+            ProviderType.workBuddy -> com.openminis.app.provider.workbuddy.WorkBuddyConstants
+                .DEFAULT_REGION.backend
         }
         val probeURL = when (instance.providerType) {
             ProviderType.anthropic -> "$baseURL/v1/models"
@@ -220,6 +224,10 @@ internal object ProviderMutationMethods {
             // Antigravity: POST-based fetchAvailableModels; GET probe not
             // applicable — report the endpoint origin as reachable-or-not.
             ProviderType.antigravity -> baseURL
+            // [T-workbuddy-oauth] WorkBuddy's catalog route lives on the
+            // console path, not under /v1. Probing it verifies the host AND
+            // the credential in one call.
+            ProviderType.workBuddy -> "$baseURL/console/enterprises/personal/models"
         }
         val client = okhttp3.OkHttpClient.Builder()
             .connectTimeout(timeoutMs.toLong(), java.util.concurrent.TimeUnit.MILLISECONDS)
@@ -240,6 +248,24 @@ internal object ProviderMutationMethods {
             ProviderType.kimiCode -> if (!key.isNullOrEmpty()) builder.header("Authorization", "Bearer $key")
             // Antigravity: Bearer OAuth access token.
             ProviderType.antigravity -> if (!key.isNullOrEmpty()) builder.header("Authorization", "Bearer $key")
+            // [T-workbuddy-oauth] Bearer OAuth access token, plus the tenant
+            // identity headers the backend routes by. Without them the
+            // catalog route answers as an unauthenticated caller even with a
+            // valid token, so the probe would report a healthy host as broken.
+            ProviderType.workBuddy -> {
+                val inst = repo.instance(id)
+                if (!key.isNullOrEmpty()) builder.header("Authorization", "Bearer $key")
+                if (inst != null) {
+                    val stored = com.openminis.app.provider.workbuddy.WorkBuddyCredentialStore
+                        .loadTokens(context, id)
+                    if (stored != null) {
+                        builder.header("X-User-Id", stored.uid)
+                        builder.header("X-Enterprise-Id", stored.enterpriseId)
+                        builder.header("X-Tenant-Id", stored.enterpriseId)
+                        builder.header("X-Domain", stored.domain)
+                    }
+                }
+            }
         }
         val start = System.currentTimeMillis()
         try {

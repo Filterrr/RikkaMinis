@@ -72,5 +72,7 @@ object ProviderAccents {
     val xAI = Color(0xFFFF7043)        // orange — Grok brand
     val kimiCode = Color(0xFF5C6BC0)   // indigo — Kimi accent
     val antigravity = Color(0xFF4A90D9) // blue-violet — Antigravity accent
+    // [T-workbuddy-oauth] WorkBuddy — the CodeBuddy brand blue.
+    val workBuddy = Color(0xFF2E7CE0)
     val fallback = Color(0xFF8E8E93)   // gray
 }

@@ -96,6 +96,10 @@ object VoiceProviderFactory {
 
             // [T-antigravity-oauth] Antigravity serves no voice models.
             ProviderType.antigravity -> null
+
+            // [T-workbuddy-oauth] WorkBuddy's catalog is text/chat only —
+            // no audio-in or audio-out models, so no voice shadow provider.
+            ProviderType.workBuddy -> null
         }
     }
 

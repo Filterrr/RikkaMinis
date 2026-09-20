@@ -3831,10 +3831,12 @@ class ChatViewModel(
             // re-enters the session and everything is resolved via the real
             // id. See debug report 2026-04-21 (TikTok Chinese filename).
             migrateDraftResources(fromDraft = sessionId, toReal = session.id)
-            // [T-todo-tool] Session switch → drop the previous session's
-            // task list so the top-bar badge doesn't leak stale items into
-            // the new conversation.
-            com.openminis.app.tools.TodoStore.clearForSession(session.id)
+            // [T-todo-tool][fix-todo-session-scope] No clear here any more:
+            // task lists are PER SESSION (TodoStore keys by session id), so
+            // persisting a draft must not wipe anything — the old global
+            // clear was exactly what leaked/erased lists across
+            // conversations. ChatScreen's lifecycle hook publishes the right
+            // list for whichever session is on screen.
             // [T-android-session-skill-override-init-timing] Re-point any
             // session_skill_overrides / mcp_session_overrides rows written
             // pre-first-message (against `__new__<uuid>`) onto the real
@@ -12976,6 +12978,8 @@ Environment variables:
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                     ChatViewModelStore.release(sid)
                 }
+                // [fix-todo-session-scope] Same teardown as the drawer path.
+                com.openminis.app.tools.TodoStore.dropSession(sid)
             } catch (t: Throwable) {
                 AppLogger.warning(TAG, "cleanupIfEmptyOnExit failed for $sid: ${t.message}")
             }

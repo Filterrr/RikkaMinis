@@ -95,6 +95,7 @@ object ProviderExecutionGateway {
         streaming: Boolean = false,
         firstChunkBudgetMs: Long? = null,
         oauthAccessToken: String? = null,
+        workBuddyAuth: org.json.JSONObject? = null,
         credentialIndex: Int = 0,
     ): String = ModelExecutionDispatcher.buildRequestJson(
         instance = instance,
@@ -111,6 +112,7 @@ object ProviderExecutionGateway {
         streaming = streaming,
         firstChunkBudgetMs = firstChunkBudgetMs,
         oauthAccessToken = oauthAccessToken,
+        workBuddyAuth = workBuddyAuth,
         credentialIndex = credentialIndex,
     )
 
@@ -148,6 +150,9 @@ object ProviderExecutionGateway {
         // the store. The token rides inline in request.json (app-private
         // cacheDir, same uid) instead.
         val inlineCredential = resolveInlineCredential(context, instance, credentialIndex)
+        // [T-workbuddy-oauth] WorkBuddy needs more than a bearer token across
+        // the process boundary (tenant headers), so it travels separately.
+        val workBuddyAuth = resolveWorkBuddyInlineCredential(context, instance)
         val requestJson = buildRequest(
             instance = instance,
             model = model,
@@ -163,6 +168,7 @@ object ProviderExecutionGateway {
             streaming = false,
             firstChunkBudgetMs = firstChunkBudgetMs,
             oauthAccessToken = inlineCredential,
+            workBuddyAuth = workBuddyAuth,
             credentialIndex = credentialIndex,
         )
         val raw = ModelExecutionDispatcher.dispatch(context, requestJson)
@@ -194,6 +200,44 @@ object ProviderExecutionGateway {
                 .validAccessToken(context, instance.id)
         } catch (t: Throwable) {
             android.util.Log.w("ProviderExecGateway", "inline antigravity credential resolve failed: ${t.message}")
+            null
+        }
+    }
+
+    /**
+     * [T-workbuddy-oauth] App-process resolution of the WorkBuddy credential
+     * bundle (bearer token plus the tenant identity fields the backend routes
+     * by). Returns null when the instance is not WorkBuddy-backed or has never
+     * signed in — the worker then reports the ordinary missing-credential error.
+     *
+     * An expired token is rotated HERE, in the app process, because the worker
+     * can neither reach the refresh token nor the encrypted store it lives in.
+     */
+    private suspend fun resolveWorkBuddyInlineCredential(
+        context: Context,
+        instance: ProviderInstance,
+    ): org.json.JSONObject? {
+        if (instance.providerType != com.openminis.app.data.model.ProviderType.workBuddy) return null
+        return try {
+            val store = com.openminis.app.provider.workbuddy.WorkBuddyCredentialStore
+            val stored = store.loadTokens(context, instance.id) ?: return null
+            val tokens = if (stored.isExpired && stored.hasRefreshToken) {
+                store.refreshAccessToken(context, instance.id) ?: stored
+            } else {
+                stored
+            }
+            org.json.JSONObject().apply {
+                put("accessToken", tokens.accessToken)
+                put("refreshToken", tokens.refreshToken)
+                put("expiresAt", tokens.expiresAt)
+                put("uid", tokens.uid)
+                put("enterpriseId", tokens.enterpriseId)
+                put("nickname", tokens.nickname ?: "")
+                put("domain", tokens.domain)
+                put("region", tokens.region)
+            }
+        } catch (t: Throwable) {
+            android.util.Log.w("ProviderExecGateway", "inline workbuddy credential resolve failed: ${t.message}")
             null
         }
     }
@@ -275,6 +319,9 @@ object ProviderExecutionGateway {
         // always on a coroutine, so this is a legal suspend context).
         return flow {
             val inlineCredential = resolveInlineCredential(context, instance, credentialIndex)
+            // [T-workbuddy-oauth] Same reasoning as send(): the tenant identity
+            // fields cannot be recovered worker-side.
+            val workBuddyAuth = resolveWorkBuddyInlineCredential(context, instance)
             val requestJson = buildRequest(
                 instance = instance,
                 model = model,
@@ -290,6 +337,7 @@ object ProviderExecutionGateway {
                 streaming = true,
                 firstChunkBudgetMs = firstChunkBudgetMs,
                 oauthAccessToken = inlineCredential,
+                workBuddyAuth = workBuddyAuth,
                 credentialIndex = credentialIndex,
             )
             emitAll(ChatStreamOffloadHandler.stream(context, requestJson, thinkingLevel.isEnabled))

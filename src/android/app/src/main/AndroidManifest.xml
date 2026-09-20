@@ -382,6 +382,17 @@
             </intent-filter>
         </receiver>
 
+        <!-- [T-workbuddy-keepalive] Same alarm/boot chain for the WorkBuddy
+             authorization keep-alive (see WorkBuddyKeepAlive). System BOOT
+             broadcast (same registration shape as the Antigravity receiver). -->
+        <receiver
+            android:name=".provider.workbuddy.WorkBuddyKeepAliveReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
         
 
         <!-- Scheduled notification receiver — fires `android-notification schedule`

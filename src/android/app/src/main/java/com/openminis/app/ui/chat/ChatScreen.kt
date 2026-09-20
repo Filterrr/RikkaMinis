@@ -599,6 +599,14 @@ fun ChatScreen(
     val tHangDiagAppContext = androidx.compose.ui.platform.LocalContext.current.applicationContext
     androidx.compose.runtime.DisposableEffect(sessionId) {
         ChatViewModelStore.setActiveSession(sessionId)
+        // [T-todo-tool][fix-todo-session-scope] Publish THIS session's task
+        // list to the top-bar badge/sheet. ChatScreen mounts/unmounts per
+        // conversation switch — exactly the "visible session" signal the
+        // per-session TodoStore needs. On dispose the badge keeps showing
+        // the last-published list until the next screen publishes (the
+        // badge lives inside this screen anyway, so a disposed screen's
+        // badge is gone too).
+        com.openminis.app.tools.TodoStore.setActiveSession(sessionId)
         // [T-HANG-DIAG] enter / dispose markers around the ChatScreen lifetime
         // so we can correlate "user tapped session X" → loadSession timings
         // and any subsequent hang record. Removable by grepping out
@@ -611,6 +619,10 @@ fun ChatScreen(
         onDispose {
             println("[T-HANG-DIAG] ChatScreen UNMOUNT session=$sessionId")
             ChatViewModelStore.setActiveSession(null)
+            // [fix-todo-session-scope] Only retract if WE are still the
+            // published session — a fast A→B→dispose(B) ordering must not
+            // retract B's (already replaced) publication of A.
+            com.openminis.app.tools.TodoStore.retractActiveSession(sessionId)
             // T-android-new-chat-empty-residue: drop sessions materialised by
             // a settings toggle (ensureSession via /memory, /thinking, etc.)
             // but never sent a real message. VM guards on streaming + DB count
