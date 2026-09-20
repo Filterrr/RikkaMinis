@@ -2174,6 +2174,12 @@ class ProviderRepository(private val context: Context) {
         // material for EVERY pool slot — deleting the credential on an
         // OAuth instance must log all pooled accounts out, not just slot 0.
         AntigravityCredentialStore.clearAll(context, instanceId, count.coerceAtLeast(1))
+        // [T-workbuddy-oauth] Same teardown duty for the WorkBuddy token
+        // store: the bearer/refresh pair must not outlive the instance
+        // (or the user's explicit sign-out), or the next sign-in into a
+        // recycled instance id would silently inherit a stale session.
+        com.openminis.app.provider.workbuddy.WorkBuddyCredentialStore
+            .clear(context, instanceId)
     }
 
     /**
@@ -2472,6 +2478,11 @@ class ProviderRepository(private val context: Context) {
             // when set; old/new readers without the key decode to null →
             // default UA. Field name matches iOS for cross-platform interop.
             instance.customUserAgent?.takeIf { it.isNotBlank() }?.let { put("customUserAgent", it) }
+            // [T-workbuddy-oauth] Tenant id, additive + optional — without it
+            // a backup/restore or shared instance JSON silently reverts a
+            // WorkBuddy provider to the default tenant, and the account's
+            // tokens (which are tenant-scoped) stop matching the endpoint.
+            instance.workBuddyRegion?.let { put("workBuddyRegion", it) }
             // [RC5 / P0-pinned + GH#68] Additive provider run-config fields.
             // These were previously NEVER written by the backup export, so a
             // config restore / device migration silently reset them to
@@ -2518,6 +2529,10 @@ class ProviderRepository(private val context: Context) {
         // [T-provider-custom-user-agent] Additive: old exports lack the key →
         // empty → null → default UA. Field name matches iOS.
         val customUserAgent = dict.optString("customUserAgent", "").ifEmpty { null }
+        // [T-workbuddy-oauth] Restore the tenant id exported by the matching
+        // write. Absent in old backups → null → default region on read, which
+        // is exactly the pre-feature behaviour for every other provider type.
+        val workBuddyRegion = dict.optString("workBuddyRegion", "").ifEmpty { null }
         // [RC5 / P0-pinned + GH#68] Restore the run-config fields written by
         // [exportInstanceJSON]. Each defaults to the model's own default when
         // the key is absent (old backup) so nothing crashes and a legacy
@@ -2539,6 +2554,7 @@ class ProviderRepository(private val context: Context) {
             customUserAgent = customUserAgent,
             isEnabled = rc.isEnabled,
             azureMode = rc.azureMode,
+            workBuddyRegion = workBuddyRegion,
             imageEndpointMode = rc.imageEndpointMode,
             imageEndpointResolved = rc.imageEndpointResolved,
             pinned = rc.pinned,

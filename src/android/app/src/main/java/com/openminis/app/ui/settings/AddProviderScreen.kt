@@ -586,10 +586,21 @@ private fun ColumnScope.ApiKeyConfigSection(
             (appContext as? MinisApp)?.applicationScope?.launch {
                 val result = providerRepository.refreshModels(instance, forceRefresh = true)
                 if (result != ModelRefreshResult.SUCCESS_API) {
+                    // [T-workbuddy-oauth] OAuth-only providers take no key, so
+                    // "no key" is the EXPECTED pre-sign-in state, not an error
+                    // worth alarming the user about — the sign-in section owns
+                    // that step next.
+                    val oauthOnly = providerType.isOAuthOnly
                     val msg = when (result) {
-                        ModelRefreshResult.NO_KEY -> "已保存，但未读到 API 密钥"
-                        ModelRefreshResult.FAILURE -> "已保存，但模型列表拉取失败，请检查 URL 与密钥"
-                        ModelRefreshResult.PRESERVED -> "已保存，但无法从该地址拉取模型，请检查 URL"
+                        ModelRefreshResult.NO_KEY ->
+                            if (oauthOnly) null
+                            else "已保存，但未读到 API 密钥"
+                        ModelRefreshResult.FAILURE ->
+                            if (oauthOnly) null
+                            else "已保存，但模型列表拉取失败，请检查 URL 与密钥"
+                        ModelRefreshResult.PRESERVED ->
+                            if (oauthOnly) null
+                            else "已保存，但无法从该地址拉取模型，请检查 URL"
                         else -> null
                     }
                     // [fix/addprovider-toast-looper] Toast 必须回主线程弹，

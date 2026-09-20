@@ -275,16 +275,49 @@ object WorkBuddyApi {
         val access = token.optString("accessToken")
         if (access.isBlank()) return@withContext null
 
+        // ── Step 3: exchange the token for the account block ─────────────
+        // Upstream (NativeCore.pollOAuth) does NOT trust the token payload
+        // for identity: it immediately calls the login/account route with the
+        // same state, carrying the fresh Bearer token, and reads
+        // uid/enterpriseId/nickname from THAT response. A blank uid aborts
+        // the whole sign-in — the account block is what every later request
+        // echoes back in the tenant headers, so shipping without it would
+        // produce requests the backend cannot attribute (and the chat route
+        // would 401 even though the token itself is valid).
+        val accountRequest = buildRequest(
+            "${session.region.backend}/v2/plugin/login/account?state=$encoded",
+            "GET",
+            null,
+            noAuthHeaders(session.region).toMutableMap().apply {
+                put("Authorization", "Bearer $access")
+                val domain = token.optString("domain").ifBlank { session.region.defaultDomain }
+                if (domain.isNotBlank()) put("X-Domain", domain)
+                token.optString("enterpriseId").takeIf { it.isNotBlank() }?.let {
+                    put("X-Enterprise-Id", it)
+                    put("X-Tenant-Id", it)
+                }
+            },
+        )
+        val account = try {
+            unwrap(executeJson(accountRequest, allowHttpError = true))
+        } catch (e: Exception) {
+            AppLogger.warning(TAG, "login/account fetch failed: ${e.message}")
+            throw WorkBuddyAuthException("获取账号信息失败：${e.message?.take(200) ?: "网络错误"}")
+        }
+        val uid = account.optString("uid")
+        if (uid.isBlank()) {
+            // Upstream treats this as a failed login rather than a partial
+            // one: identity-less tokens are unusable downstream.
+            throw WorkBuddyAuthException("登录响应缺少账号 uid")
+        }
+
         val domain = token.optString("domain").ifBlank { session.region.defaultDomain }
         val expiresAt = resolveExpiry(token)
-        // The account block carries the tenant identity every later request
-        // must echo; it is folded in here so the caller stores one bundle.
-        val account = token.optJSONObject("account") ?: JSONObject()
         AuthResult(
             accessToken = access,
             refreshToken = token.optString("refreshToken"),
             expiresAt = expiresAt,
-            uid = account.optString("uid").ifBlank { token.optString("uid") },
+            uid = uid,
             enterpriseId = account.optString("enterpriseId").ifBlank { token.optString("enterpriseId") },
             nickname = account.optString("nickname").takeIf { it.isNotBlank() },
             domain = domain,

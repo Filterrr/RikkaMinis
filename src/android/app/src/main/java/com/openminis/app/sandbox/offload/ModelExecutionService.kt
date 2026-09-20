@@ -1279,6 +1279,10 @@ class ModelExecutionService : Service() {
                 },
                 azureMode = req.optBoolean("azure_mode", false),
                 pinned = false,
+                // [T-workbuddy-oauth] Same inline region as the non-streaming
+                // path — without it the reconstructed instance resolves the
+                // wrong backend for a streaming chat run.
+                workBuddyRegion = req.optString("workbuddy_region", "").ifEmpty { null },
             )
 
             // ── Reconstruct LLMModel ──

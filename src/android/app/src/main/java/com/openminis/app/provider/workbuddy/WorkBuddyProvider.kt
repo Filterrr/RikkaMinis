@@ -116,8 +116,14 @@ class WorkBuddyProvider(
                 "X-Enterprise-Id" to enterpriseId,
                 "X-Tenant-Id" to enterpriseId,
                 "X-Domain" to domain,
-                "User-Agent" to WorkBuddyConstants.CLIENT_UA,
             ),
+            // [fix-workbuddy-ua-clobber] The upstream client identity MUST go
+            // through customUserAgent, not extraHeaders: buildRequest applies
+            // extraHeaders FIRST and then applyUserAgentOverride(null) stamps
+            // the Minis default UA over anything extraHeaders set — the
+            // WorkBuddy UA would be silently replaced on every request.
+            // customUserAgent is applied LAST and wins.
+            customUserAgent = WorkBuddyConstants.CLIENT_UA,
         ).also { it.instanceContext = instanceContext }
     }
 

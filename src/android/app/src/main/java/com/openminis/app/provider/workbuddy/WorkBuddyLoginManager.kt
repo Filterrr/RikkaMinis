@@ -68,13 +68,26 @@ object WorkBuddyLoginManager {
         }
         AppLogger.info(TAG, "browser opened; polling for authorization (≤5 min)")
 
+        // Hard rejections short-circuit the loop: the withTimeoutOrNull block
+        // cannot `return@withContext` from inside its lambda (non-local return
+        // is prohibited in an inline-lambda-with-receiver like this one), so a
+        // rejection is carried out through the sentinel below and mapped to
+        // its Failed result at the same place the timeout path lands.
+        var rejected: WorkBuddyAuthException? = null
         val auth: WorkBuddyApi.AuthResult? = withTimeoutOrNull(TIMEOUT_MS) {
             while (true) {
                 delay(POLL_INTERVAL_MS)
                 val result = try {
                     WorkBuddyApi.pollOAuth(session)
+                } catch (e: WorkBuddyAuthException) {
+                    // Authoritative rejection (state consumed/expired, no uid,
+                    // account fetch refused): waiting longer cannot fix it, so
+                    // surface the real reason instead of burning the deadline
+                    // and reporting a misleading "timeout".
+                    rejected = e
+                    break
                 } catch (e: Exception) {
-                    // A transport hiccup mid-poll is not fatal — the user may
+                    // Transport hiccup mid-poll is not fatal — the user may
                     // still be on the consent page, so keep waiting until the
                     // deadline rather than failing the whole sign-in.
                     AppLogger.info(TAG, "poll error (continuing): ${e.message}")
@@ -84,6 +97,8 @@ object WorkBuddyLoginManager {
             }
             @Suppress("UNREACHABLE_CODE") null
         }
+
+        rejected?.let { return@withContext Result.Failed(it.message ?: "登录被拒绝") }
 
         if (auth == null) {
             return@withContext Result.Failed("登录超时或被取消（5 分钟内未完成授权）")
