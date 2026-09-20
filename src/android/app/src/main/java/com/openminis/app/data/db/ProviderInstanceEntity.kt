@@ -45,4 +45,12 @@ data class ProviderInstanceEntity(
     // credential", which matters for the UI's first-run hint. SECRETS ARE NOT
     // STORED HERE — see ProviderCredentialMeta's class doc.
     @ColumnInfo(name = "credentials_json") val credentialsJson: String? = null,
+    // [T-workbuddy-oauth] WorkBuddy tenant id ("domestic"/"international").
+    // Nullable TEXT so MIGRATION_8_9 backfills existing rows to null →
+    // WorkBuddyConstants.DEFAULT_REGION on read, matching the JSON model's
+    // `workBuddyRegion = null`. Needed because the tenant is a property of
+    // the signed-in ACCOUNT (distinct hosts, distinct token domains), so
+    // losing it on save would silently point the instance at the wrong
+    // backend after a restart. Same contract as MIGRATION_7_8's column.
+    @ColumnInfo(name = "workbuddy_region") val workBuddyRegion: String? = null,
 )

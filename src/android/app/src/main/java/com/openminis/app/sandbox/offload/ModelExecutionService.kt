@@ -575,6 +575,43 @@ class ModelExecutionService : Service() {
         }
     }
 
+    /**
+     * [T-workbuddy-oauth] Rebuild the WorkBuddy credential bundle from the
+     * request JSON, or null when this request is not a WorkBuddy one.
+     *
+     * The bundle is more than a bearer token: WorkBuddy's backend routes by
+     * tenant, so `uid` / `enterpriseId` / `domain` must accompany every
+     * request. Those live in the app process's encrypted store, which this
+     * worker cannot open — hence they travel inline, exactly like the
+     * Antigravity access token ([resolveWorkerApiKey]'s marker branch).
+     *
+     * Returns null (rather than throwing) on a malformed block so a bad
+     * payload degrades to the normal "missing credential" error instead of
+     * crashing the worker.
+     */
+    private fun parseWorkBuddyAuth(
+        req: JSONObject,
+    ): com.openminis.app.provider.workbuddy.WorkBuddyCredentialStore.Tokens? {
+        val obj = req.optJSONObject("workbuddy_auth") ?: return null
+        val access = obj.optString("accessToken", "")
+        if (access.isBlank()) return null
+        return try {
+            com.openminis.app.provider.workbuddy.WorkBuddyCredentialStore.Tokens(
+                accessToken = access,
+                refreshToken = obj.optString("refreshToken", ""),
+                expiresAt = obj.optLong("expiresAt", 0L),
+                uid = obj.optString("uid", ""),
+                enterpriseId = obj.optString("enterpriseId", ""),
+                nickname = obj.optString("nickname", "").ifEmpty { null },
+                domain = obj.optString("domain", ""),
+                region = obj.optString("region", ""),
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "workbuddy inline auth parse failed: ${e.message}")
+            null
+        }
+    }
+
     /** Extract the stable runId (the UUID embedded in the `run-<uuid>` dir name). */
     private fun runIdOf(dir: File): String? {
         val name = dir.name
@@ -991,6 +1028,7 @@ class ModelExecutionService : Service() {
             },
             azureMode = req.optBoolean("azure_mode", false),
             pinned = false,
+            workBuddyRegion = req.optString("workbuddy_region", "").ifEmpty { null },
         )
 
         // ── Reconstruct LLMModel ──
@@ -1042,8 +1080,12 @@ class ModelExecutionService : Service() {
 
         // ── API key: inline OAuth token first, EncryptedPrefs read-only fallback ──
         val apiKey = req.optString("oauth_access_token", "").ifEmpty { resolveWorkerApiKey(instance, credentialIndex) }
-        if (apiKey.isEmpty()) {
-            Log.w(TAG, "missing credential: antigravity inline token absent AND prefs miss for ${instance.id.take(8)}")
+        // [T-workbuddy-oauth] WorkBuddy's bearer token AND tenant identity ride
+        // in together; the worker rebuilds the bundle so ProviderFactory can
+        // hand the provider a working credential without touching the store.
+        val workBuddyAuth = parseWorkBuddyAuth(req)
+        if (apiKey.isEmpty() && workBuddyAuth == null) {
+            Log.w(TAG, "missing credential: inline token absent AND prefs miss for ${instance.id.take(8)}")
             return JSONObject().apply {
                 put("error", "missing_api_key")
                 put("message", "No API key configured for ${instance.label}.")
@@ -1054,6 +1096,7 @@ class ModelExecutionService : Service() {
         // ── Build provider ──
         val provider = com.openminis.app.provider.ProviderFactory.create(
             instance = instance, apiKey = apiKey, model = model, context = this,
+            workBuddyInline = workBuddyAuth,
         )
 
         // ── Passthrough extras ──
@@ -1290,9 +1333,10 @@ class ModelExecutionService : Service() {
 
             // ── API key: inline OAuth token first, EncryptedPrefs read-only fallback ──
             val apiKey = req.optString("oauth_access_token", "").ifEmpty { resolveWorkerApiKey(instance, credentialIndex) }
+            val workBuddyAuth = parseWorkBuddyAuth(req)
             ModelExecutionRunLog.log(dir, android.os.Process.myPid(), ModelExecutionRunLog.Phase.REQUEST_PARSED, "streaming=true model=${model.id}", runId = runIdOf(dir))
-            if (apiKey.isEmpty()) {
-                Log.w(TAG, "missing credential (stream): antigravity inline token absent AND prefs miss for ${instance.id.take(8)}")
+            if (apiKey.isEmpty() && workBuddyAuth == null) {
+                Log.w(TAG, "missing credential (stream): inline token absent AND prefs miss for ${instance.id.take(8)}")
                 appendLine(ChatStreamJsonl.errorLine("missing_api_key"))
                 writeResultAtomically(dir, JSONObject().apply {
                     put("error", "missing_api_key")
@@ -1304,7 +1348,9 @@ class ModelExecutionService : Service() {
 
             // ── Provider ──
             @Suppress("UNCHECKED_CAST")
-            val provider = com.openminis.app.provider.ProviderFactory.create(instance, apiKey, model, this)
+            val provider = com.openminis.app.provider.ProviderFactory.create(
+                instance, apiKey, model, this, workBuddyInline = workBuddyAuth,
+            )
             ModelExecutionRunLog.log(dir, android.os.Process.myPid(), ModelExecutionRunLog.Phase.PROVIDER_BUILT, "provider=${instance.providerType}", runId = runIdOf(dir))
             kotlinx.coroutines.runBlocking {
                 // [worker-first-chunk-guard] Wrap provider streaming in a bounded

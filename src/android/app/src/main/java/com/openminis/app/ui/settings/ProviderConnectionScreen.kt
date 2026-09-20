@@ -98,8 +98,11 @@ fun ProviderConnectionScreen(
         // /v1 is appended automatically for all non-Gemini providers (Gemini
         // uses v1beta full-path URLs). effectiveBaseURL guards double-append.
         // [T-antigravity-oauth] Antigravity also rides full-origin URLs.
+        // [T-workbuddy-oauth] WorkBuddy's base already carries /v2, so the
+        // generic /v1 append must be skipped for it too.
         val appendV1 = instance.providerType != ProviderType.gemini &&
-            instance.providerType != ProviderType.antigravity
+            instance.providerType != ProviderType.antigravity &&
+            instance.providerType != ProviderType.workBuddy
         providerRepository.updateInstance(
             instance.copy(
                 customBaseURL = customBaseURL.ifBlank { null },
@@ -118,11 +121,16 @@ fun ProviderConnectionScreen(
         onBack = onBack,
     ) {
         // ─── Credential / API Key ───────────────────────────────────
-        // [T-antigravity-oauth] Antigravity instances get the OAuth login
-        // section (browser picker + 开始登录 + account status) instead of
-        // the API-key editor. Every other type keeps the key editor.
+        // [T-antigravity-oauth] [T-workbuddy-oauth] OAuth-only providers get
+        // their own sign-in section (account status + sign-in action) instead
+        // of the API-key editor. Every other type keeps the key editor.
         if (instance.providerType == ProviderType.antigravity) {
             AntigravityOAuthSection(
+                instanceId = instanceId,
+                providerRepository = providerRepository,
+            )
+        } else if (instance.providerType == ProviderType.workBuddy) {
+            WorkBuddyOAuthSection(
                 instanceId = instanceId,
                 providerRepository = providerRepository,
             )
@@ -242,6 +250,11 @@ fun ProviderConnectionScreen(
                 ProviderType.openAI -> "https://api.openai.com"
                 // [T-antigravity-oauth] Full-origin upstream default.
                 ProviderType.antigravity -> com.openminis.app.provider.antigravity.AntigravityOAuth.DAILY_API_ENDPOINT
+                // [T-workbuddy-oauth] Placeholder shows the region the
+                // instance is actually pinned to, so the field never
+                // contradicts the account.
+                ProviderType.workBuddy -> com.openminis.app.provider.workbuddy.WorkBuddyConstants
+                    .Region.from(instance.workBuddyRegion).backend
                 else -> stringResource(R.string.provider_detail_https_api_example_placeholder)
             }
             SettingsSection(header = stringResource(R.string.provider_detail_custom_api_base)) {

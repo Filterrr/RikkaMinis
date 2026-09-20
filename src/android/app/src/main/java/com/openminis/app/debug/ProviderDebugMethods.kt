@@ -77,6 +77,11 @@ internal object ProviderDebugMethods {
         ProviderType.xAI -> "https://api.x.ai/v1"
         ProviderType.kimiCode -> "https://api.kimi.com/coding/v1"
         ProviderType.antigravity -> com.openminis.app.provider.antigravity.AntigravityOAuth.DAILY_API_ENDPOINT
+        // [T-workbuddy-oauth] WorkBuddy has no instance-independent origin
+        // (domestic vs international); the region default is the best guess
+        // for a diagnostic probe.
+        ProviderType.workBuddy -> com.openminis.app.provider.workbuddy.WorkBuddyConstants
+            .DEFAULT_REGION.backend
     }
 
     fun instancesList(context: Context, params: JSONObject): JSONObject {

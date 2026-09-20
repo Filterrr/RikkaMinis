@@ -31,6 +31,7 @@ import com.openminis.app.data.model.isVoiceTemplateSeedShape
 import com.openminis.app.data.model.withInferredVoiceModality
 import com.openminis.app.provider.registerModelListProviders
 import com.openminis.app.provider.initAntigravityAdapter
+import com.openminis.app.provider.initWorkBuddyAdapter
 import com.openminis.app.provider.antigravity.AntigravityCredentialStore
 import org.json.JSONArray
 import org.json.JSONObject
@@ -94,6 +95,17 @@ class ProviderRepository(private val context: Context) {
          * antigravity instances; the real tokens live in AntigravityCredentialStore.
          */
         const val ANTIGRAVITY_OAUTH_MARKER = "antigravity:oauth"
+
+        /**
+         * [T-workbuddy-oauth] Marker stored in apikey_<id> for OAuth-backed
+         * WorkBuddy instances; the real token bundle lives in
+         * [com.openminis.app.provider.workbuddy.WorkBuddyCredentialStore].
+         * Same mechanism as [ANTIGRAVITY_OAUTH_MARKER]: the marker keeps the
+         * instance visible to every "has a credential" gate (model refresh,
+         * connection test, routing eligibility) without duplicating the
+         * rotating OAuth token into the API-key slots.
+         */
+        const val WORKBUDDY_OAUTH_MARKER = com.openminis.app.provider.workbuddy.WorkBuddyConstants.OAUTH_MARKER
 
         /**
          * [T-multi-api-key] Upper bound on the credential slots
@@ -266,6 +278,11 @@ class ProviderRepository(private val context: Context) {
         // Idempotent (last-registration-wins per type).
         registerModelListProviders()
         initAntigravityAdapter(context)
+        // [T-workbuddy-oauth] Same injection purpose as the Antigravity
+        // adapter: the WorkBuddy catalog adapter needs an application context
+        // to reach the OAuth token store (the `apiKey` argument carries only
+        // the marker for OAuth-backed instances).
+        initWorkBuddyAdapter(context)
         loadScope.launch {
             val loaded = loadConfig()
             synchronized(configLock) {
@@ -2068,6 +2085,7 @@ class ProviderRepository(private val context: Context) {
         val raw = encryptedPrefs.getString(apiKeySlot(instanceId, index), null)
         if (raw == null) return null
         if (raw == ANTIGRAVITY_OAUTH_MARKER) return resolveAntigravityToken(instanceId)
+        if (raw == WORKBUDDY_OAUTH_MARKER) return resolveWorkBuddyToken(instanceId)
         return raw
     }
 
@@ -2191,6 +2209,43 @@ class ProviderRepository(private val context: Context) {
 
     private fun resolveAntigravityToken(instanceId: String): String? =
         resolveAntigravityTokenAt(instanceId, 0)
+
+    /**
+     * [T-workbuddy-oauth] Resolve the WorkBuddy OAuth marker into a live
+     * access token, mirroring [resolveAntigravityTokenAt]'s threading rules:
+     *
+     *  - on the main thread, an expired token triggers a fire-and-forget
+     *    rotation and the (possibly stale) token is returned immediately, so
+     *    the first request of a session never blocks the UI on KeyStore I/O;
+     *  - off the main thread, resolution is synchronous so the caller sees a
+     *    fresh token.
+     *
+     * Returns null when the instance has never signed in — the same "no
+     * credential" answer an empty API-key slot would give.
+     */
+    private fun resolveWorkBuddyToken(instanceId: String): String? {
+        val onMain = android.os.Looper.myLooper() == android.os.Looper.getMainLooper()
+        return if (onMain) {
+            val tokens = com.openminis.app.provider.workbuddy.WorkBuddyCredentialStore
+                .loadTokens(context, instanceId)
+            if (tokens == null) {
+                null
+            } else if (tokens.isExpired && tokens.hasRefreshToken) {
+                tokenRefreshScope.launch {
+                    com.openminis.app.provider.workbuddy.WorkBuddyCredentialStore
+                        .refreshAccessToken(context, instanceId)
+                }
+                tokens.accessToken
+            } else {
+                tokens.accessToken
+            }
+        } else {
+            kotlinx.coroutines.runBlocking {
+                com.openminis.app.provider.workbuddy.WorkBuddyCredentialStore
+                    .validAccessToken(context, instanceId)
+            }
+        }
+    }
 
     /**
      * [T-antigravity-credential-pool] Resolve the OAuth token stored at

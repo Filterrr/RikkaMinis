@@ -140,6 +140,8 @@ private val providerDisplayOrder = listOf(
     ProviderType.xAI,
     ProviderType.kimiCode,
     ProviderType.antigravity,
+    // [T-workbuddy-oauth] Tencent CodeBuddy / WorkBuddy.
+    ProviderType.workBuddy,
     ProviderType.openRouter,
 )
 
@@ -154,6 +156,8 @@ private fun providerIcon(type: ProviderType): Pair<ImageVector, Color> = when (t
     ProviderType.kimiCode -> Icons.Default.Terminal to ProviderAccents.kimiCode
     // [T-antigravity-oauth] Rocket — Antigravity brand visual cue.
     ProviderType.antigravity -> Icons.Default.RocketLaunch to ProviderAccents.antigravity
+    // [T-workbuddy-oauth] Cloud — CodeBuddy is a hosted coding assistant.
+    ProviderType.workBuddy -> Icons.Default.Cloud to ProviderAccents.workBuddy
 }
 
 // -- Step 1: Choose Provider Type --
@@ -181,6 +185,7 @@ private fun ChooseProviderScreen(
                     ProviderType.xAI -> "xAI (Grok)"
                     ProviderType.kimiCode -> "Kimi Code"
                     ProviderType.antigravity -> "Antigravity"
+                    ProviderType.workBuddy -> "WorkBuddy (CodeBuddy)"
                 }
                 // Describe which vendors each protocol supports, rather than a
                 // raw built-in model count.
@@ -192,6 +197,7 @@ private fun ChooseProviderScreen(
                     ProviderType.xAI -> R.string.add_provider_subtitle_xai
                     ProviderType.kimiCode -> R.string.add_provider_subtitle_kimi
                     ProviderType.antigravity -> R.string.add_provider_subtitle_antigravity
+                    ProviderType.workBuddy -> R.string.add_provider_subtitle_workbuddy
                 }
                 val (icon, iconColor) = providerIcon(type)
                 SettingsRow(
@@ -257,6 +263,14 @@ private fun ConfigureProviderScreen(
     var apiKey by remember { mutableStateOf("") }
     // [feat3-lan-discovery] Seed the base URL from a LAN-scan pick (if any).
     var customBaseURL by remember { mutableStateOf(initialBaseUrl ?: "") }
+    // [T-workbuddy-oauth] Which WorkBuddy tenant this instance belongs to.
+    // Chosen BEFORE sign-in because it determines both the backend host and
+    // which account the OAuth round-trip authenticates — a session minted on
+    // one tenant is invalid on the other, so it cannot be fixed after the
+    // fact by switching.
+    var workBuddyRegion by remember {
+        mutableStateOf(com.openminis.app.provider.workbuddy.WorkBuddyConstants.DEFAULT_REGION)
+    }
 
     SettingsScaffold(
         title = stringResource(R.string.add_provider_configure_provider, providerType.displayName),
@@ -291,6 +305,8 @@ private fun ConfigureProviderScreen(
             onCustomBaseURLChange = { customBaseURL = it },
             providerRepository = providerRepository,
             onSaved = onSaved,
+            workBuddyRegion = workBuddyRegion,
+            onWorkBuddyRegionChange = { workBuddyRegion = it },
         )
 
         Spacer(Modifier.height(24.dp))
@@ -307,6 +323,8 @@ private fun ColumnScope.ApiKeyConfigSection(
     onCustomBaseURLChange: (String) -> Unit,
     providerRepository: ProviderRepository,
     onSaved: () -> Unit,
+    workBuddyRegion: com.openminis.app.provider.workbuddy.WorkBuddyConstants.Region,
+    onWorkBuddyRegionChange: (com.openminis.app.provider.workbuddy.WorkBuddyConstants.Region) -> Unit,
 ) {
     // [T-provider-save-refresh] The post-save model refresh MUST survive the
     // navigation away from this screen. rememberCoroutineScope() would cancel
@@ -320,7 +338,12 @@ private fun ColumnScope.ApiKeyConfigSection(
     // v1beta full-path URLs). effectiveBaseURL already guards against double-append.
     // [T-antigravity-oauth] Antigravity uses full-origin URLs (/v1internal:*)
     // — same no-append rule as Gemini.
-    val appendV1Suffix = providerType != ProviderType.gemini && providerType != ProviderType.antigravity
+    // [T-workbuddy-oauth] WorkBuddy's base URL already carries its API
+    // version prefix (/v2); letting the generic logic append /v1 would build
+    // /v2/v1/chat/completions. Same no-append rule as Gemini/Antigravity.
+    val appendV1Suffix = providerType != ProviderType.gemini &&
+        providerType != ProviderType.antigravity &&
+        providerType != ProviderType.workBuddy
     // OpenAI API Format: false = Chat Completions, true = Responses API
     var useResponsesAPI by remember { mutableStateOf(false) }
 
@@ -333,20 +356,41 @@ private fun ColumnScope.ApiKeyConfigSection(
         ProviderType.xAI -> "xai-..."
         ProviderType.kimiCode -> "sk-..."
         ProviderType.antigravity -> "OAuth 登录后自动获取"
+        ProviderType.workBuddy -> "OAuth 登录后自动获取"
     }
-    // [T-antigravity-oauth] Antigravity is OAuth-ONLY: no API key field.
-    // The credential section becomes a notice pointing at the in-app login
-    // (ProviderConnectionScreen owns the actual 开始登录 button, since the
-    // browser handoff + loopback listener live there for re-login too).
-    if (providerType == ProviderType.antigravity) {
+    // [T-antigravity-oauth] [T-workbuddy-oauth] OAuth-only providers take no
+    // API key. The credential section becomes a notice pointing at the in-app
+    // login (ProviderConnectionScreen owns the actual sign-in button, since
+    // the browser handoff lives there for re-login too).
+    if (providerType.isOAuthOnly) {
         SettingsSection(
             header = stringResource(R.string.add_provider_credential),
-            footer = stringResource(R.string.antigravity_oauth_notice_footer),
+            footer = stringResource(
+                if (providerType == ProviderType.workBuddy) {
+                    R.string.workbuddy_oauth_notice_footer
+                } else {
+                    R.string.antigravity_oauth_notice_footer
+                },
+            ),
         ) {
             SettingsCardBlock {
-                RowLabel(text = stringResource(R.string.antigravity_oauth_notice_title))
+                RowLabel(
+                    text = stringResource(
+                        if (providerType == ProviderType.workBuddy) {
+                            R.string.workbuddy_oauth_notice_title
+                        } else {
+                            R.string.antigravity_oauth_notice_title
+                        },
+                    ),
+                )
                 Text(
-                    text = stringResource(R.string.antigravity_oauth_notice_body),
+                    text = stringResource(
+                        if (providerType == ProviderType.workBuddy) {
+                            R.string.workbuddy_oauth_notice_body
+                        } else {
+                            R.string.antigravity_oauth_notice_body
+                        },
+                    ),
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                 )
@@ -378,6 +422,49 @@ private fun ColumnScope.ApiKeyConfigSection(
         }
     }
 
+    // ── Region (WorkBuddy only) ─────────────────────────────────────────
+    // Rendered BEFORE the endpoint section on purpose: the region picks the
+    // host, so showing a URL field first would invite the user to hardcode a
+    // host that contradicts the account they are about to sign into.
+    if (providerType == ProviderType.workBuddy) {
+        SettingsSection(
+            header = stringResource(R.string.workbuddy_region_label),
+            footer = stringResource(R.string.workbuddy_region_hint),
+        ) {
+            SettingsCardBlock {
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    com.openminis.app.provider.workbuddy.WorkBuddyConstants.Region.entries
+                        .forEachIndexed { index, region ->
+                            SegmentedButton(
+                                selected = workBuddyRegion == region,
+                                onClick = {
+                                    onWorkBuddyRegionChange(region)
+                                    // Keep the endpoint field honest: a stale
+                                    // host from the other tenant would make the
+                                    // saved instance unreachable.
+                                    onCustomBaseURLChange("")
+                                },
+                                shape = SegmentedButtonDefaults.itemShape(
+                                    index = index,
+                                    count = com.openminis.app.provider.workbuddy.WorkBuddyConstants.Region.entries.size,
+                                ),
+                            ) {
+                                Text(
+                                    stringResource(
+                                        if (region == com.openminis.app.provider.workbuddy.WorkBuddyConstants.Region.DOMESTIC) {
+                                            R.string.workbuddy_region_domestic
+                                        } else {
+                                            R.string.workbuddy_region_international
+                                        },
+                                    ),
+                                )
+                            }
+                        }
+                }
+            }
+        }
+    }
+
     // ── Endpoint (skip for OpenRouter — fixed base URL) ─────────────────
     if (providerType != ProviderType.openRouter) {
         val defaultUrl = when (providerType) {
@@ -386,6 +473,10 @@ private fun ColumnScope.ApiKeyConfigSection(
             ProviderType.openAI -> "https://api.openai.com"
             // Antigravity uses the full-origin upstream (no /v1 appending).
             ProviderType.antigravity -> com.openminis.app.provider.antigravity.AntigravityOAuth.DAILY_API_ENDPOINT
+            // [T-workbuddy-oauth] Region-dependent; the domestic tenant is
+            // the placeholder default.
+            ProviderType.workBuddy -> com.openminis.app.provider.workbuddy.WorkBuddyConstants
+                .DEFAULT_REGION.backend
             else -> "https://api.example.com"
         }
         // T-mimo-anthropic-endpoint-android: Anthropic third-party
@@ -397,12 +488,17 @@ private fun ColumnScope.ApiKeyConfigSection(
         // on the Anthropic endpoint footer so this can be discovered
         // without scraping issue threads. Default Anthropic + other
         // provider types keep their original footer copy.
-        val baseUrlFooter = if (providerType == ProviderType.gemini) {
-            "Leave empty to use the default Google endpoint. Enter the full base URL including version path."
-        } else if (providerType == ProviderType.anthropic) {
-            stringResource(R.string.add_provider_endpoint_anthropic_hint)
-        } else {
-            "Leave empty to use the default endpoint. \"/v1\" is appended automatically — enter the base host only."
+        val baseUrlFooter = when {
+            providerType == ProviderType.gemini ->
+                "Leave empty to use the default Google endpoint. Enter the full base URL including version path."
+            providerType == ProviderType.anthropic ->
+                stringResource(R.string.add_provider_endpoint_anthropic_hint)
+            // [T-workbuddy-oauth] WorkBuddy's base carries its own version
+            // path, so the generic "/v1 is appended" hint would be wrong here.
+            providerType == ProviderType.workBuddy ->
+                "Leave empty to use this account region's endpoint. Enter the full base URL including the version path (e.g. https://host/v2) only if you front it with a proxy."
+            else ->
+                "Leave empty to use the default endpoint. \"/v1\" is appended automatically — enter the base host only."
         }
         SettingsSection(
             header = stringResource(R.string.add_provider_endpoint),
@@ -461,15 +557,26 @@ private fun ColumnScope.ApiKeyConfigSection(
                 appendV1Suffix = appendV1Suffix,
                 // Only OpenAI-family providers expose the Responses API toggle.
                 useResponsesAPI = providerType == ProviderType.openAI && useResponsesAPI,
+                // [T-workbuddy-oauth] Persist the tenant choice so the OAuth
+                // flow and every later request address the same backend.
+                workBuddyRegion = if (providerType == ProviderType.workBuddy) {
+                    workBuddyRegion.id
+                } else {
+                    null
+                },
             )
             providerRepository.addInstance(instance)
-            // [T-antigravity-oauth] OAuth-only providers are saved with a
-            // marker instead of a blank key, so refreshModels() sees a
-            // credential and the store resolver kicks in.
-            if (providerType == ProviderType.antigravity) {
-                providerRepository.saveApiKey(instance.id, ProviderRepository.ANTIGRAVITY_OAUTH_MARKER)
-            } else {
-                providerRepository.saveApiKey(instance.id, apiKey.trim())
+            // [T-antigravity-oauth] [T-workbuddy-oauth] OAuth-only providers
+            // are saved with a marker instead of a blank key, so
+            // refreshModels() sees a credential and the store resolver kicks
+            // in. Each provider keeps its own marker so the two resolvers stay
+            // distinguishable in the credential slot.
+            when (providerType) {
+                ProviderType.antigravity ->
+                    providerRepository.saveApiKey(instance.id, ProviderRepository.ANTIGRAVITY_OAUTH_MARKER)
+                ProviderType.workBuddy ->
+                    providerRepository.saveApiKey(instance.id, ProviderRepository.WORKBUDDY_OAUTH_MARKER)
+                else -> providerRepository.saveApiKey(instance.id, apiKey.trim())
             }
             // Auto-refresh models in background (fetches from API or falls back to models.dev).
             // Launched on the app-scoped scope so the fetch survives this screen's disposal.
@@ -502,7 +609,7 @@ private fun ColumnScope.ApiKeyConfigSection(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp),
-        enabled = providerType == ProviderType.antigravity || apiKey.isNotBlank(),
+        enabled = providerType.isOAuthOnly || apiKey.isNotBlank(),
     ) {
         Text(stringResource(R.string.provider_list_add_provider))
     }

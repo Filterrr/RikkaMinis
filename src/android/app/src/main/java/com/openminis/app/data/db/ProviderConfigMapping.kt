@@ -84,6 +84,7 @@ fun ProviderConfig.toSnapshot(
             appendV1Suffix = if (inst.appendV1Suffix) 1 else 0,
             useResponsesAPI = if (inst.useResponsesAPI) 1 else 0,
             azureMode = if (inst.azureMode) 1 else 0,
+            workBuddyRegion = inst.workBuddyRegion,
             // [GH#68] Persist the picker choice + probe cache; auto is stored
             // explicitly (not null) so a legit "auto" survives round-trips too.
             imageEndpointMode = inst.imageEndpointMode.name,
@@ -225,6 +226,7 @@ fun ProviderConfigSnapshot.toProviderConfig(jsonForBlobs: Json): ProviderConfig 
             customUserAgent = row.customUserAgent,
             useResponsesAPI = row.useResponsesAPI != 0,
             azureMode = row.azureMode != 0,
+            workBuddyRegion = row.workBuddyRegion,
             // [GH#68] Safe parse: null (pre-migration rows) or an unknown
             // name from a future build falls back to auto / no cache rather
             // than throwing and wiping the whole provider load.

@@ -87,6 +87,15 @@ object ModelExecutionDispatcher {
          */
         oauthAccessToken: String? = null,
         /**
+         * [T-workbuddy-oauth] The full WorkBuddy credential bundle (access +
+         * refresh token AND the tenant identity fields the backend routes by).
+         * Serialized as a JSON object because — unlike Antigravity, where the
+         * bearer token is the whole credential — WorkBuddy requests also need
+         * `uid`, `enterpriseId` and `domain`, none of which the worker can
+         * recover on its own (it cannot read the encrypted store).
+         */
+        workBuddyAuth: org.json.JSONObject? = null,
+        /**
          * [T-multi-api-key] Which credential of the instance this request must
          * use (`0` = the historical `apikey_<id>` slot). The worker maps this
          * to a prefs slot name and reads the secret itself — see the KDoc
@@ -101,6 +110,8 @@ object ModelExecutionDispatcher {
             put("credential_type", instance.credentialType.name)
             if (credentialIndex > 0) put("credential_index", credentialIndex)
             oauthAccessToken?.let { put("oauth_access_token", it) }
+            workBuddyAuth?.let { put("workbuddy_auth", it) }
+            instance.workBuddyRegion?.let { put("workbuddy_region", it) }
             instance.customBaseURL?.let { put("base_url", it) }
             put("append_v1", instance.appendV1Suffix)
             instance.customUserAgent?.let { put("user_agent", it) }

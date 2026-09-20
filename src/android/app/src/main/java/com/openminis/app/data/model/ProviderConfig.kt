@@ -1,6 +1,7 @@
 package com.openminis.app.data.model
 
 import androidx.compose.runtime.Stable
+import com.openminis.app.provider.workbuddy.WorkBuddyConstants
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import java.util.UUID
@@ -20,7 +21,13 @@ enum class ProviderType(val displayName: String) {
     // port 51121) via AntigravityOAuth, upstream protocol ported 1:1 from
     // CLIProxyAPI internal/auth/antigravity. Appended last: name-based
     // (de)serialization keeps existing persisted configs intact.
-    antigravity("Antigravity");
+    antigravity("Antigravity"),
+    // [T-workbuddy-oauth] Tencent CodeBuddy / WorkBuddy — OAuth (hosted auth
+    // URL + poll), OpenAI-compatible upstream at /v2/chat/completions.
+    // Credentials live in WorkBuddyCredentialStore, keyed by instance id.
+    // Appended last for the same name-based (de)serialization reason as
+    // antigravity above.
+    workBuddy("WorkBuddy");
 
     val builtInModels: List<LLMModel>
         get() = when (this) {
@@ -33,7 +40,23 @@ enum class ProviderType(val displayName: String) {
             // [T-antigravity-oauth] Pre-login placeholder catalog; replaced by
             // the live fetchAvailableModels call after OAuth completes.
             antigravity -> com.openminis.app.provider.antigravity.AntigravityOAuth.FALLBACK_MODELS
+            // [T-workbuddy-oauth] Pre-login placeholder catalog for the
+            // international tenant; the live enterprise catalog replaces it
+            // once the account is signed in. Domestic accounts have no
+            // bundled list (their entitlement differs per tenant) and stay
+            // empty until the first successful fetch.
+            workBuddy -> WorkBuddyConstants.BUNDLED_INTERNATIONAL
         }
+
+    /**
+     * True for providers whose credential is an OAuth session rather than a
+     * user-pasted API key — they take no key field, and their token store is
+     * addressed by an OAuth marker in the credential slot. Drives the
+     * Add-Provider form (no key input, save enabled without one) and the
+     * connection screen's sign-in section.
+     */
+    val isOAuthOnly: Boolean
+        get() = this == antigravity || this == workBuddy
 }
 
 @Serializable
@@ -218,6 +241,18 @@ data class ProviderInstance(
     // instances may be pinned at once. Boolean default false == old
     // persisted JSON stays valid (coerceInputValues covers missing field).
     var pinned: Boolean = false,
+    // [T-workbuddy-oauth] Which WorkBuddy deployment this instance signs into.
+    // WorkBuddy runs two independent tenants (domestic: copilot.tencent.com,
+    // international: www.codebuddy.ai) that share one wire protocol but have
+    // distinct hosts AND distinct token domains — a token minted on one is
+    // meaningless on the other, so the region is a property of the account
+    // that has to persist alongside it. Stored as the enum's wire id
+    // ("domestic" / "international") so it round-trips through the JSON
+    // mirror and cross-platform export like every other string field.
+    // null = never chosen; readers fall back to WorkBuddyConstants.DEFAULT_REGION.
+    // Adding an optional field with a default is deserialization-safe for
+    // older persisted JSON, same as azureMode above.
+    var workBuddyRegion: String? = null,
     // [T-multi-api-key] Metadata for this instance's credentials, in the order
     // the user arranged them. SECRETS ARE NOT HERE — only the labels/notes
     // that are safe to surface. The secret for index i lives in
