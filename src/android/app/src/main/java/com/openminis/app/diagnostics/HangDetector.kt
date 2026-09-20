@@ -1,8 +1,11 @@
 package com.openminis.app.diagnostics
 
+import android.app.Activity
+import android.app.Application
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import java.io.File
 import java.io.FileWriter
@@ -47,6 +50,43 @@ object HangDetector {
 
     /** A hang fires once the main thread has missed a heartbeat for this long. */
     private const val HANG_THRESHOLD_MS = 3_000L
+
+    /**
+     * [perf/power-mode-watchdog] Background power mode. The app process
+     * (cache + FGS services) survives much longer than the old wall-clock
+     * budget suggested, so the watchdog used to run its full foreground
+     * cadence 7x24: a main-thread wakeup every 1s, a 500ms watch-loop tick,
+     * and a liveness println every ~15s — all while the process was cached
+     * and the user was away. That is pure battery cost with zero diagnostic
+     * upside: a cached process is frozen (no UI thread to hang) or running
+     * headless agent work (which has no UI hang surface at all).
+     *
+     * When the LAST started Activity stops (started/stopped balance hits
+     * zero — the same edge [BackgroundTaskNotifier] tracks), the watchdog
+     * degrades to
+     * this cadence: heartbeat 1s → 30s, watch tick 500ms → 5s, and the
+     * 3s hang threshold widens by the same 30x so a background threshold
+     * breach cannot fire between two 30s heartbeats. Everything comes back
+     * at full sensitivity the moment an Activity onStart balances the
+     * counter (the same signal [BackgroundTaskNotifier] already uses).
+     */
+    private const val BG_HEARTBEAT_INTERVAL_MS = 30_000L
+    private const val BG_WATCH_TICK_MS = 5_000L
+    private const val BG_HANG_THRESHOLD_MS = 90_000L
+
+    /**
+     * [perf/power-mode-watchdog] Clock backend. [SystemClock.uptimeMillis]
+     * stops during deep sleep, so a 90s doze does NOT read as a hang. The
+     * wall clock previously kept running through doze, so any deep-sleep
+     * window longer than 3s could synthesize a hang episode: the post-recovery
+     * snapshot, a persisted count bump, and a render-breaker flip — all for
+     * a device that was simply asleep. uptimeMillis also removes the wall
+     * clock's NTP/time-set jumps.
+     */
+    private fun nowMs(): Long = SystemClock.uptimeMillis()
+
+    /** Liveness ping cadence for the watch loop (DEBUG-only stdout line). */
+    private const val WATCH_LOG_EVERY_TICKS = 30L
 
     /**
      * [T-android-hangdetector-midhang-sample] While a hang episode is still
@@ -96,6 +136,48 @@ object HangDetector {
 
     private var appContext: Context? = null
 
+    /**
+     * [perf/power-mode-watchdog] True while at least one Activity has
+     * started and not stopped. Written from the main thread (lifecycle
+     * callbacks) and read from the watch thread — Volatile for cross-thread
+     * visibility; a missed edge for one watch tick is harmless because the
+     * watch loop re-reads the flag every iteration.
+     */
+    @Volatile
+    private var appInForeground: Boolean = true
+
+    /**
+     * [perf/power-mode-watchdog] Identity set of Activities currently between
+     * onStart and onStop, maintained on the MAIN thread (the only thread the
+     * lifecycle callbacks fire on — no synchronization needed). Android has
+     * no "query the started balance" API, so onActivityStopped consults this
+     * set to compute the foreground edge: flip to background only when the
+     * LAST started Activity has stopped. An A→B Activity hand-off keeps the
+     * set non-empty throughout (B's onStart fires before A's onStop), so the
+     * watchdog never drops to background cadence mid-hand-off.
+     */
+    private val startedActivities =
+        java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Activity, Boolean>())
+
+    /**
+     * [perf/power-mode-watchdog] Test hook: overrides the foreground probe
+     * so JVM unit tests can drive both power modes without an Application.
+     * Non-null wins over [appInForeground].
+     */
+    @Volatile
+    internal var forceForegroundForTest: Boolean? = null
+
+    private fun effectiveForeground(): Boolean =
+        forceForegroundForTest ?: appInForeground
+
+    /** Current heartbeat cadence (foreground / background). */
+    internal fun heartbeatIntervalMs(): Long =
+        if (effectiveForeground()) HEARTBEAT_INTERVAL_MS else BG_HEARTBEAT_INTERVAL_MS
+
+    /** Current hang threshold (foreground / background). */
+    internal fun hangThresholdMs(): Long =
+        if (effectiveForeground()) HANG_THRESHOLD_MS else BG_HANG_THRESHOLD_MS
+
     private val _renderBreakerActive = MutableStateFlow(false)
 
     /**
@@ -113,7 +195,34 @@ object HangDetector {
     fun start(context: Context) {
         if (!started.compareAndSet(false, true)) return
         appContext = context.applicationContext
-        lastHeartbeatAt.set(System.currentTimeMillis())
+        lastHeartbeatAt.set(nowMs())
+        // [perf/power-mode-watchdog] Track app foreground state from the same
+        // started/stopped balance MinisApp uses, so the watchdog can drop to
+        // its background cadence when no Activity is visible. Registered
+        // BEFORE scheduleHeartbeat() so the first heartbeat is already on the
+        // right cadence. Balanced callbacks cannot double-fire this (the
+        // AtomicBoolean guard makes start() one-shot).
+        val app = appContext as? Application
+        if (app != null) {
+            app.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
+                override fun onActivityStarted(activity: Activity) {
+                    startedActivities.add(activity)
+                    appInForeground = true
+                }
+
+                override fun onActivityStopped(activity: Activity) {
+                    startedActivities.remove(activity)
+                    // Foreground edge = LAST started Activity stopped.
+                    if (startedActivities.isEmpty()) appInForeground = false
+                }
+
+                override fun onActivityCreated(activity: Activity, savedInstanceState: android.os.Bundle?) {}
+                override fun onActivityResumed(activity: Activity) {}
+                override fun onActivityPaused(activity: Activity) {}
+                override fun onActivitySaveInstanceState(activity: Activity, outState: android.os.Bundle) {}
+                override fun onActivityDestroyed(activity: Activity) {}
+            })
+        }
         // [T-android-render-breaker] Seed the render breaker from the
         // PERSISTED hang count: in the ANR-kill loop the process never lives
         // long enough to accumulate 2 in-process hangs, but the count
@@ -193,9 +302,9 @@ object HangDetector {
 
     private fun scheduleHeartbeat() {
         mainHandler.postDelayed({
-            lastHeartbeatAt.set(System.currentTimeMillis())
+            lastHeartbeatAt.set(nowMs())
             scheduleHeartbeat()
-        }, HEARTBEAT_INTERVAL_MS)
+        }, heartbeatIntervalMs())
     }
 
     private fun watchLoop() {
@@ -213,21 +322,28 @@ object HangDetector {
         var escalation = 0
         var episodePeakSinceMs = 0L
         while (true) {
+            // [perf/power-mode-watchdog] Mode re-read EVERY tick: a transition
+            // observed by the watch loop takes effect on the very next sleep,
+            // with no dedicated wake path needed.
+            val bg = !effectiveForeground()
+            val tickMs = if (bg) BG_WATCH_TICK_MS else 500L
+            val thresholdMs = if (bg) BG_HANG_THRESHOLD_MS else HANG_THRESHOLD_MS
             try {
-                Thread.sleep(500)
+                Thread.sleep(tickMs)
             } catch (e: InterruptedException) {
                 return
             }
             ticks++
-            val now = System.currentTimeMillis()
+            val now = nowMs()
             val since = now - lastHeartbeatAt.get()
-            // [T-HANG-DIAG] every 30 ticks (~15s) emit a liveness ping so we
-            // can confirm the watchdog is alive even when nothing hangs.
-            // Volume is intentionally tiny (~4 lines / minute).
-            if (ticks % 30L == 0L) {
-                println("[T-HANG-DIAG] HangDetector tick=$ticks sinceHeartbeat=${since}ms")
+            // [T-HANG-DIAG] periodic liveness ping so we can confirm the
+            // watchdog is alive. DEBUG-only (was unconditional — ~4 lines per
+            // minute of stdout in release builds, feeding LogcatTailer file
+            // writes whenever the user had logging enabled).
+            if (ticks % WATCH_LOG_EVERY_TICKS == 0L && com.openminis.app.BuildConfig.DEBUG) {
+                println("[T-HANG-DIAG] HangDetector tick=$ticks sinceHeartbeat=${since}ms bg=$bg")
             }
-            if (since < HANG_THRESHOLD_MS) {
+            if (since < thresholdMs) {
                 if (hangActive) {
                     // Episode over — the heartbeat landed. One labeled
                     // post-recovery snapshot closes the record (its stack is

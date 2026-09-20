@@ -141,6 +141,15 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // [perf/no-png-crunch] AAPT2 PNG crunching re-optimizes every
+            // .png at build time. This fork's drawable PNGs are already
+            // optimized assets (screenshots/badges), so the pass burned CI
+            // minutes without shrinking the APK measurably. Debug builds
+            // keep crunching (fast iteration unaffected).
+            // API note: isCrunchPngs is the modern name (AGP 4.1+); the old
+            // androidResources.cruncherEnabled property no longer exists in
+            // the AGP 8.x Kotlin DSL.
+            isCrunchPngs = false
             signingConfig = signingConfigs.getByName("debug")
         }
     }
