@@ -2,6 +2,7 @@ package com.openminis.app.logging
 
 import android.content.Context
 import android.util.Log
+import java.io.BufferedWriter
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileWriter
@@ -30,6 +31,13 @@ object AppLogger {
     // against a single runaway day generating hundreds of MB. Today's file
     // is always excluded from size-pruning (see pruneOldLogs).
     private const val MAX_TOTAL_SIZE_BYTES = 200L * 1024 * 1024
+
+    /**
+     * [perf/buffered-log-io] Size of the BufferedWriter sitting between
+     * PrintWriter and FileWriter in [getWriter]. 8KB matches the platform's
+     * default buffer class sizing; see getWriter() for the syscall math.
+     */
+    private const val LOG_WRITE_BUFFER_BYTES = 8192
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
     private val timestampFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
 
@@ -286,7 +294,21 @@ object AppLogger {
             writer?.close()
             val dir = logDir ?: throw IllegalStateException("AppLogger not initialized")
             val file = File(dir, "minis-$date.log")
-            writer = PrintWriter(FileWriter(file, true))
+            // [perf/buffered-log-io] 8KB BufferedWriter between PrintWriter and
+            // FileWriter: every println() used to hit the filesystem with one
+            // write(2) syscall per log line — under an SSE stream that is
+            // hundreds of syscalls/second (main thread + LogcatTailer thread
+            // + binder threads all funnel through here), each dirtying page
+            // cache and driving small-block writeback churn on flash storage.
+            // The buffer amortizes that to one syscall per 8KB. PrintWriter's
+            // autoflush (second ctor arg `true`) keeps the contract: each
+            // complete println() line is flushed through the buffer to disk
+            // before the call returns, so readers of the file never see a
+            // HALF line — at most the tail few completed-but-unwritten lines
+            // since the last flush. Crash forensics therefore lose at most
+            // the final lines; stall-*.log / crash reports (written by their
+            // own writers, not this one) are unaffected.
+            writer = PrintWriter(BufferedWriter(FileWriter(file, true), LOG_WRITE_BUFFER_BYTES), true)
             currentDate = date
         }
         return writer!!

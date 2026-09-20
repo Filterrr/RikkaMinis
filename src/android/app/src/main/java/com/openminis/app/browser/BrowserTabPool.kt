@@ -275,7 +275,23 @@ class BrowserTabPool(private val context: Context) : ComponentCallbacks2 {
         evictionJob = evictionScope.launch {
             while (isActive) {
                 delay(IDLE_CHECK_INTERVAL_MS)
-                withContext(Dispatchers.Main) { evictIdleTabs() }
+                // [perf/idle-evict-gate] Cheap pre-filter on this (Default)
+                // thread: only bounce to Main when at least one tab LOOKS
+                // evictable. The old code woke the main thread every 60s
+                // even with zero tabs in the pool — a permanent battery tax
+                // for a feature that usually has nothing to do. False
+                // positives (a stale cross-thread inUse read) merely cost
+                // the same Main hop the old code paid every tick, and
+                // evictIdleTabs() re-filters on Main with fresh state before
+                // destroying anything. False negatives are impossible for
+                // elapsed idle time (it only grows); a tab that crosses its
+                // timeout mid-interval waits one extra interval at worst —
+                // semantically identical to the 60s check cadence.
+                val now = System.currentTimeMillis()
+                val hasCandidate = _tabs.value.any { tab ->
+                    !tab.inUse && (now - tab.lastActivityDate.time) >= idleTimeoutMs
+                }
+                if (hasCandidate) withContext(Dispatchers.Main) { evictIdleTabs() }
             }
         }
 
