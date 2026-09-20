@@ -182,4 +182,90 @@ class TodoStoreSessionScopeTest {
         assertEquals(3, list.totalCount)
         assertEquals(2, list.pendingCount)
     }
+
+    // ───────────────── [fix-todo-badge-never-shows] draft→real id ─────────────────
+
+    /**
+     * The production bug: a fresh chat's VM constructor sessionId is the
+     * draft key "__new__<uuid>". The agent writes its plan mid-turn (before
+     * or after ensureSession persists the draft — the constructor param
+     * NEVER updates). When the user re-enters the conversation, ChatScreen
+     * publishes with the REAL id; a store that keys the list under the raw
+     * draft key never matches → the top-bar badge stays empty forever.
+     */
+    @Test
+    fun `draft-keyed write becomes visible after renameSession to the real id`() {
+        val draftKey = "__new__abc-123"
+        // Screen is on the draft chat; agent writes the plan mid-turn.
+        TodoStore.setActiveSession(draftKey)
+        TodoStore.write(draftKey, listOf(item("plan-1"), item("plan-2")))
+        assertEquals(2, TodoStore.todo.value.items.size)
+
+        // First send persists the draft → ensureSession renames the key.
+        val realId = "real-session-1"
+        TodoStore.renameSession(draftKey, realId)
+
+        // Draft key no longer resolves; the real id carries the list.
+        assertEquals(0, TodoStore.listFor(draftKey).items.size)
+        assertEquals(
+            listOf("plan-1", "plan-2"),
+            TodoStore.listFor(realId).items.map { it.content },
+        )
+
+        // User leaves and re-enters the conversation — the screen now
+        // publishes with the REAL id (the route param changed).
+        TodoStore.setActiveSession(null) // dispose
+        TodoStore.setActiveSession(realId) // re-mount
+        assertEquals(
+            listOf("plan-1", "plan-2"),
+            TodoStore.todo.value.items.map { it.content },
+        )
+    }
+
+    @Test
+    fun `write normalizes the draft key through the alias map`() {
+        val draftKey = "__new__xyz-789"
+        val realId = "real-session-2"
+        TodoStore.renameSession(draftKey, realId)
+
+        // A background/late write still arrives with the (stale) constructor
+        // draft key — it must land under the canonical real id.
+        TodoStore.setActiveSession(realId)
+        TodoStore.write(draftKey, listOf(item("late-write")))
+
+        assertEquals(0, TodoStore.listFor(draftKey).items.size)
+        assertEquals(
+            listOf("late-write"),
+            TodoStore.listFor(realId).items.map { it.content },
+        )
+        assertEquals("real-session-2", TodoStore.todo.value.sessionId)
+    }
+
+    @Test
+    fun `renameSession is a no-op when the target list already exists`() {
+        TodoStore.setActiveSession("A")
+        TodoStore.write("A", listOf(item("A1")))
+        TodoStore.write("__new__d", listOf(item("draft-list")))
+        TodoStore.renameSession("__new__d", "A")
+
+        // "A" already had a list — the rename must not overwrite it.
+        assertEquals(listOf("A1"), TodoStore.listFor("A").items.map { it.content })
+    }
+
+    @Test
+    fun `dropSession purges draft aliases pointing at the deleted session`() {
+        val draftKey = "__new__gone"
+        val realId = "real-session-3"
+        TodoStore.renameSession(draftKey, realId)
+        TodoStore.setActiveSession(realId)
+        TodoStore.write(realId, listOf(item("s3")))
+
+        TodoStore.dropSession(realId)
+
+        // The draft alias is gone too: a stale draft-keyed write after the
+        // deletion can no longer resurrect a ghost list under the real id.
+        TodoStore.write(draftKey, listOf(item("ghost")))
+        assertEquals(0, TodoStore.listFor(realId).items.size)
+        assertEquals(listOf("ghost"), TodoStore.listFor(draftKey).items.map { it.content })
+    }
 }

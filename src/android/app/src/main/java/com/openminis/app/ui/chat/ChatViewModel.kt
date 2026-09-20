@@ -3831,6 +3831,15 @@ class ChatViewModel(
             // re-enters the session and everything is resolved via the real
             // id. See debug report 2026-04-21 (TikTok Chinese filename).
             migrateDraftResources(fromDraft = sessionId, toReal = session.id)
+            // [fix-todo-badge-never-shows] The todo executor writes under the
+            // VM's CONSTRUCTOR sessionId (the draft key "__new__<uuid>") — it
+            // can't read [realSessionId] because that lives in the VM while
+            // TodoStore is process-wide. Re-index any draft-keyed list onto
+            // the real id here so the badge keeps following this conversation
+            // after the user leaves and re-enters it (the screen publishes
+            // with the real id; without the rename the stored list is
+            // orphaned under the draft key and the badge shows empty).
+            com.openminis.app.tools.TodoStore.renameSession(sessionId, session.id)
             // [T-todo-tool][fix-todo-session-scope] No clear here any more:
             // task lists are PER SESSION (TodoStore keys by session id), so
             // persisting a draft must not wipe anything — the old global
@@ -10805,6 +10814,11 @@ class ChatViewModel(
         }
         // The VM's sessionId IS the authoritative current session (the
         // executor runs inside that VM) — no repository lookup needed.
+        // [fix-todo-badge-never-shows] Write under the VM's sessionId (which
+        // IS the draft key "__new__<uuid>" for a fresh chat). TodoStore.write
+        // normalizes it through the draft→real alias map, and ensureSession()
+        // re-indexes at persist time — so the list is always visible under
+        // whichever id the foreground ChatScreen is publishing with.
         com.openminis.app.tools.TodoStore.write(sessionId, items)
         val done = items.count { it.status == com.openminis.app.tools.TodoStore.Status.completed }
         return ToolExecutionResult(
