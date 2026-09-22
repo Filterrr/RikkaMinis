@@ -137,6 +137,17 @@ class SubagentRunRegistry {
          * never part of the report text the parent consumes.
          */
         val notices: String = "",
+        /**
+         * [T-subagent-declared-status] The sub-agent's SELF-DECLARED report
+         * outcome ("partial" / "failed"), parsed from the report tail by
+         * `SubagentSkill.parseReportStatus`. The PARENT already receives this
+         * as an automatic annotation on the SpawnResult prompt text — the
+         * detail page did not, so a run whose own report says "partial" still
+         * rendered as a plain green "Completed" and the human had to open the
+         * journal to find out the deliverable was incomplete. Null = declared
+         * done / no structured contract / not yet parsed.
+         */
+        val declaredStatus: String? = null,
         val steps: List<Step> = emptyList(),
         /** True when the user opened the detail page at least once. */
         val opened: Boolean = false,
@@ -531,6 +542,17 @@ class SubagentRunRegistry {
                 tokensOut = outBase + outputTokens,
             )
         }
+    }
+
+    /**
+     * [T-subagent-declared-status] Stamp the report's self-declared outcome
+     * once the runner has parsed it from the terminal text. Null (no
+     * structured contract / declared done) is a no-op — absence is the
+     * correct rendering for "nothing to warn about".
+     */
+    fun setDeclaredStatus(runId: String, declared: String?) {
+        if (declared == null) return
+        updateRun(runId) { if (it.declaredStatus == declared) it else it.copy(declaredStatus = declared) }
     }
 
     /**

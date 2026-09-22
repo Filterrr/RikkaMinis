@@ -542,6 +542,15 @@ fun ChatScreen(
                     .map { it.id }
                     .toSet()
             },
+            // [T-subagent-ui-report-md] The detail page renders the finished
+            // report as markdown and resolves `minis://` links through the
+            // session that owns the run. Only the SESSION travels across the
+            // holder: link DISPATCH belongs to AppNavigation, which owns the
+            // NavController needed to open a file preview (see its
+            // SUBAGENT_DETAIL route). Publishing ChatScreen's own click handler
+            // here would also be a forward reference — it is declared further
+            // down this function, after this SideEffect runs.
+            session = sessionId,
         )
     }
     val selectedGroupName by viewModel.selectedGroupName.collectAsState()

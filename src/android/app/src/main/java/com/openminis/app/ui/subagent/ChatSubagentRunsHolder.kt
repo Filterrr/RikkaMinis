@@ -48,10 +48,12 @@ object ChatSubagentRunsHolder {
         runs: StateFlow<List<SubagentRunRegistry.Run>>,
         onCancel: ((String) -> Unit)? = null,
         detachedIds: (() -> Set<String>)? = null,
+        session: String? = null,
     ) {
         currentRuns = runs
         cancelRun = onCancel
         detachedRunIds = detachedIds
+        sessionId = session
     }
 
     /** Clear everything (chat torn down) so no stale action outlives its VM. */
@@ -59,6 +61,7 @@ object ChatSubagentRunsHolder {
         currentRuns = null
         cancelRun = null
         detachedRunIds = null
+        sessionId = null
     }
 
     /**
@@ -71,6 +74,22 @@ object ChatSubagentRunsHolder {
      */
     @Volatile
     var detachedRunIds: (() -> Set<String>)? = null
+
+    /**
+     * [T-subagent-ui-report-md] Session owning the runs.
+     *
+     * The finished report renders through the shared markdown renderer, which
+     * resolves `minis://…` paths and sandbox media through the AMBIENT
+     * [com.openminis.app.ui.chat.LocalMarkdownSessionId] — provided by
+     * ChatScreen for its own subtree. The detail page is a NAV-LEVEL route
+     * outside that subtree and re-provides it for the report body, so a path a
+     * sub-agent wrote resolves against the session that spawned it instead of
+     * whichever session last booted a shell (the global bind-mount map is
+     * last-writer-wins). Null when no chat is mounted — links then stay inert
+     * rather than guessing a session.
+     */
+    @Volatile
+    var sessionId: String? = null
 
     /** True when [runId] is a detached run the user can stop. */
     fun isDetached(runId: String): Boolean =

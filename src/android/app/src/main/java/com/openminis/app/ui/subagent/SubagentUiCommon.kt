@@ -35,10 +35,41 @@ internal fun runStatusColor(run: SubagentRunRegistry.Run?): Color = when {
     run == null -> ChatColors.secondaryText
     run.isQueued -> ChatColors.tertiaryText
     run.isExecuting -> SubagentAccent
-    run.status == SubagentRunRegistry.RunStatus.SUCCESS -> ToolCheckColor
+    // [T-subagent-declared-status] A "completed" run whose own report
+    // declares `partial` gets the attention color, not the success green:
+    // one glance must not promise a deliverable the report itself disclaims.
+    run.status == SubagentRunRegistry.RunStatus.SUCCESS ->
+        if (run.declaredStatus == "partial") ToolCancelColor else ToolCheckColor
     run.status == SubagentRunRegistry.RunStatus.FAILED -> ToolErrorColor
     run.status == SubagentRunRegistry.RunStatus.TIMED_OUT -> ToolErrorColor
     else -> ToolCancelColor
+}
+
+/**
+ * [T-subagent-declared-status] One-line explanation of a degraded
+ * self-declared outcome, or null when the report declares nothing unusual.
+ * The parent model receives the same warning as a prompt annotation
+ * ([SubagentResult.declaredStatusAnnotation]); this is the human-facing twin,
+ * so the two surfaces cannot tell different stories about one run.
+ */
+internal fun declaredStatusNote(run: SubagentRunRegistry.Run): String? = when (run.declaredStatus) {
+    "partial" -> "The report declares status: partial — it did not complete the " +
+        "task as specified. Check its `gaps` field before relying on this result."
+    "failed" -> "The report declares status: failed — treat this as an error " +
+        "report, not a deliverable."
+    else -> null
+}
+
+/**
+ * [T-subagent-queue-visibility] Placeholder copy for the log area before the
+ * first tool call lands. A QUEUED run has not begun WORKING — it is waiting
+ * for a concurrency slot — so promising "waiting for first tool call…" made
+ * a scheduler wait indistinguishable from a slow model. The two states now
+ * read differently because they have different answers.
+ */
+internal fun emptyLogLabel(run: SubagentRunRegistry.Run): String = when {
+    run.isQueued -> "queued — waiting for a free slot…"
+    else -> "waiting for first tool call…"
 }
 
 /** Short human label for a run state — identical wording on both surfaces. */
@@ -47,7 +78,14 @@ internal fun runStatusLabel(run: SubagentRunRegistry.Run?): String = when {
     run.isQueued -> "Queued"
     run.isExecuting -> "Running"
     else -> when (run.status) {
-        SubagentRunRegistry.RunStatus.SUCCESS -> "Completed"
+        // [T-subagent-declared-status] A SUCCESS run whose own report says
+        // `status: partial` must NOT read as a clean "Completed" — the parent
+        // model already gets that annotation on its prompt text, and the
+        // human reading the pill had no equivalent. The runtime status stays
+        // authoritative for WHAT happened (the loop did finish); the declared
+        // word describes the deliverable, so both are named.
+        SubagentRunRegistry.RunStatus.SUCCESS ->
+            if (run.declaredStatus == "partial") "Partial" else "Completed"
         SubagentRunRegistry.RunStatus.FAILED -> "Failed"
         SubagentRunRegistry.RunStatus.TIMED_OUT -> "Timed out"
         SubagentRunRegistry.RunStatus.CANCELLED -> "Cancelled"

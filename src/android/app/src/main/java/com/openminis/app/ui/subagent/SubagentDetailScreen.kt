@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -39,7 +40,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.Error
@@ -67,14 +70,18 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -91,6 +98,8 @@ import com.openminis.app.tools.SubagentRunRegistry
 import com.openminis.app.ui.chat.ToolCancelColor
 import com.openminis.app.ui.chat.toolAccentColor
 import com.openminis.app.ui.theme.ChatColors
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private fun stepIcon(toolName: String): androidx.compose.ui.graphics.vector.ImageVector = when (toolName) {
     "shell_execute" -> Icons.Default.Terminal
@@ -102,12 +111,100 @@ private fun stepIcon(toolName: String): androidx.compose.ui.graphics.vector.Imag
     else -> Icons.Default.Radar
 }
 
+/**
+ * [T-subagent-ui-turns] Which turn (1-based) a timeline entry belongs to.
+ * Steps carry their own turn; the RESULT card is the tail of the last turn.
+ * Used to place the turn separators and to address them for auto-follow —
+ * ONE derivation serving both, so a separator can never disagree with the
+ * follow target.
+ */
+internal fun stepTurnOf(step: SubagentRunRegistry.Step, fallback: Int): Int =
+    if (step.turn > 0) step.turn else fallback
+
+/** A timeline entry: either a turn header or one tool call. */
+internal sealed interface LogEntry {
+    data class TurnHeader(val turn: Int, val first: Boolean) : LogEntry
+    data class Call(val step: SubagentRunRegistry.Step) : LogEntry
+}
+
+/**
+ * [T-subagent-ui-turns] Build the interleaved timeline shown by the
+ * execution log. A sub-agent's run is a SEQUENCE OF TURNS — each turn
+ * streams text, then fires one or more tool calls — but the flat step list
+ * rendered them as one undifferentiated column, so "which turn is this / how
+ * many rounds did it take" was only readable from the header counter.
+ * Separators make the round structure visible and give the auto-follow a
+ * coarse, stable target instead of individual steps.
+ *
+ * Pure (no Compose) so it unit-tests on the JVM.
+ *
+ * @param maxTurns configured budget, used as the fallback turn for steps
+ *   that predate the turn stamp (legacy/unknown runs render as one turn).
+ */
+internal fun buildLogEntries(
+    steps: List<SubagentRunRegistry.Step>,
+    maxTurns: Int,
+): List<LogEntry> {
+    if (steps.isEmpty()) return emptyList()
+    val fallback = if (maxTurns > 0) maxTurns else 1
+    val out = ArrayList<LogEntry>(steps.size + 4)
+    var lastTurn = 0
+    for (step in steps) {
+        val turn = stepTurnOf(step, fallback)
+        if (turn != lastTurn) {
+            out += LogEntry.TurnHeader(turn = turn, first = out.isEmpty())
+            lastTurn = turn
+        }
+        out += LogEntry.Call(step)
+    }
+    return out
+}
+
+/** Number of turn headers in [entries] — the separator count for the header. */
+internal fun turnCountOf(entries: List<LogEntry>): Int =
+    entries.count { it is LogEntry.TurnHeader }
+
+/**
+ * [T-subagent-ui-follow-target] Index of the newest thing worth scrolling to.
+ *
+ * The old logic assumed "task header + N steps" and aimed at
+ * `1 + stepCount - 1` — which is the LAST ITEM overall only while no turn
+ * separators and no result/error card exist. With separators interleaved the
+ * arithmetic silently pointed at a middle row, so following stopped landing on
+ * the tail. Targeting the LIST's own tail (totalItemsCount - 1) is immune to
+ * however many non-step items the log grows.
+ */
+internal fun logFollowTarget(totalItems: Int): Int? =
+    if (totalItems > 0) totalItems - 1 else null
+
+/**
+ * [T-subagent-ui-follow] True when the log's last item is on screen — the
+ * ground-truth "the reader is at the tail" test, matching the sentinel rule
+ * ChatScreen uses for its own list.
+ *
+ * Kept as a named pure function rather than an inline `derivedStateOf` so the
+ * rule is unit-testable: the follow bug this page had was NOT the predicate
+ * (it was the scroll TARGET), and pinning the predicate stops a future edit
+ * from "fixing" the wrong half.
+ */
+internal fun isLogNearBottom(visibleIndices: List<Int>, totalItems: Int): Boolean =
+    totalItems > 0 && visibleIndices.contains(totalItems - 1)
+
 // [T-subagent-ui-collapse] Shared collapse mechanics for the detail page.
 // Collapsed boxes keep the LAST lines (streaming output and results grow at
 // the tail — the head is the least informative part). The result panel uses
 // a larger preview so the agent's answer stays readable while collapsed.
 private const val COLLAPSED_PREVIEW_LINES = 3
 private const val RESULT_PREVIEW_LINES = 10
+
+/**
+ * [T-subagent-ui-report-md] Height cap for a COLLAPSED markdown report.
+ * The final report renders as real markdown, so a tail-line slice would cut
+ * structure mid-block (an orphaned list marker, a severed table row). A
+ * height clamp keeps the top of the document — status + findings, where the
+ * answer actually is — structurally intact.
+ */
+private val RESULT_PREVIEW_MAX_HEIGHT = 240.dp
 
 /** Pseudo key under which the RESULT card's collapse flag is stored. */
 private const val RESULT_STEP_KEY = "subagent-result-card"
@@ -130,6 +227,13 @@ fun SubagentDetailScreen(
      * does not render rather than offering a dead button.
      */
     onStop: ((String) -> Unit)? = null,
+    /**
+     * [T-subagent-ui-report-md] Open a link tapped in the finished report.
+     * Supplied by the nav layer (which owns the NavController needed to
+     * preview a sandbox file). Null disables link tapping — the report still
+     * renders, its links just do not act.
+     */
+    onOpenLink: ((String) -> Unit)? = null,
 ) {
     val runsFlow = remember { ChatSubagentRunsHolder.currentRuns }
     val runs: List<SubagentRunRegistry.Run> = if (runsFlow != null) {
@@ -141,6 +245,22 @@ fun SubagentDetailScreen(
     // Hoisted: a @Composable call must not sit inside buildString's plain
     // lambda below. `let` is inline so the composable context is preserved.
     val elapsedMs = run?.let { rememberRunElapsedMs(it) } ?: 0L
+    // [T-subagent-ui-report-md] The shared markdown renderer resolves URLs and
+    // sandbox media through ChatScreen-scoped CompositionLocals. This page is
+    // a nav-level route OUTSIDE that subtree, so they are re-provided here —
+    // otherwise a report's links and images would silently render inert.
+    // The session comes from the holder (only the chat layer knows it); the
+    // font scale comes from the same appearance preference the chat reads, so
+    // a report matches the user's message-text size without the holder having
+    // to relay a value that is already globally readable.
+    val reportContext = androidx.compose.ui.platform.LocalContext.current
+    val reportFontScale = remember(reportContext) {
+        com.openminis.app.ui.settings.getFontScale(
+            reportContext,
+            com.openminis.app.ui.settings.KEY_FONT_MESSAGE,
+        )
+    }
+    val sessionForReport = ChatSubagentRunsHolder.sessionId
     // [T-subagent-ui-chat-consistent] Scaffold + M3 TopAppBar — the SAME
     // chrome the main chat uses: container color = ChatColors.background
     // at 0.92 alpha (content scrolls under the bar), status-bar insets
@@ -265,10 +385,21 @@ fun SubagentDetailScreen(
                 )
             }
         } else {
-            SubagentRunDetailBody(
-                run = run,
-                contentPadding = innerPadding,
-            )
+            // [T-subagent-ui-report-md] Re-provide the chat's markdown
+            // environment for the report body: the URL handler routes taps,
+            // the session id lets `minis://…` paths and sandbox media resolve
+            // against the run's own session, and the font scale keeps the
+            // report matching the user's message-text setting.
+            androidx.compose.runtime.CompositionLocalProvider(
+                com.openminis.app.ui.chat.LocalMarkdownUrlClickHandler provides onOpenLink,
+                com.openminis.app.ui.chat.LocalMarkdownSessionId provides sessionForReport,
+                com.openminis.app.ui.chat.LocalMarkdownFontScale provides reportFontScale,
+            ) {
+                SubagentRunDetailBody(
+                    run = run,
+                    contentPadding = innerPadding,
+                )
+            }
         }
     }
 }
@@ -287,7 +418,12 @@ private fun SubagentRunDetailBody(
     contentPadding: PaddingValues,
 ) {
     val listState = rememberLazyListState()
-    val stepCount = run.steps.size
+    // [T-subagent-ui-turns] The log is a turn-structured timeline now, not a
+    // flat step list — separators and the result/error cards are REAL items,
+    // so every index that used to be derived from `stepCount` is derived from
+    // the item list itself (see logFollowTarget for the off-by-one this fixed).
+    val entries = remember(run.steps, run.maxTurns) { buildLogEntries(run.steps, run.maxTurns) }
+    val turnCount = remember(entries) { turnCountOf(entries) }
     // [T-subagent-ui-collapse] Collapse/expand state lives HERE, in a
     // keyed snapshot map, instead of rememberSaveable(step.id) inside each
     // card: one source of truth enables the bulk "expand all / collapse
@@ -299,14 +435,15 @@ private fun SubagentRunDetailBody(
     val manualOverride = remember { mutableStateMapOf<String, Boolean>() }
     // Pause auto-follow when the USER drags away from the bottom; resume
     // when they return (derivedStateOf so only actual position flips
-    // recompose, not every scroll pixel). Programmatic animateScrollToItem
-    // does NOT emit drag interactions — user intent only.
+    // recompose, not every scroll pixel). Programmatic scrollToItem does
+    // NOT emit drag interactions — user intent only.
     var followPaused by remember { mutableStateOf(false) }
     val atBottom by remember {
         derivedStateOf {
-            val info = listState.layoutInfo
-            val last = info.visibleItemsInfo.lastOrNull()
-            last == null || last.index >= info.totalItemsCount - 1
+            isLogNearBottom(
+                visibleIndices = listState.layoutInfo.visibleItemsInfo.map { it.index },
+                totalItems = listState.layoutInfo.totalItemsCount,
+            )
         }
     }
     LaunchedEffect(listState) {
@@ -317,270 +454,354 @@ private fun SubagentRunDetailBody(
     LaunchedEffect(atBottom) {
         if (atBottom) followPaused = false
     }
-    // Follow the live log: keep the newest step visible while running,
-    // unless the user is reading history.
-    LaunchedEffect(stepCount, run.isActive) {
-        if (run.isActive && stepCount > 0 && !followPaused) {
-            val target = 1 + stepCount - 1  // "task" header + newest step
-            runCatching {
-                listState.animateScrollToItem(target.coerceAtLeast(0))
-            }
-        }
+    // [T-subagent-ui-follow] Follow the tail while the run is alive.
+    //
+    // Keys on the RESULT TEXT LENGTH as well as the step count: the old
+    // (stepCount, isActive) pair only re-ran when a new TOOL CALL appeared,
+    // so the page stopped following the moment the sub-agent started writing
+    // its final answer — exactly the stretch the user is watching. Length is
+    // the cheapest monotonic proxy for "new tail content"; it changes on
+    // every flush, and the item count below is what actually gets scrolled.
+    // Snap (not animate): the list re-pins several times a second while
+    // streaming, and animated scrolls queue up into visible drift.
+    LaunchedEffect(entries.size, run.resultText.length, run.isActive, followPaused, run.error) {
+        if (!run.isActive || followPaused) return@LaunchedEffect
+        val target = logFollowTarget(listState.layoutInfo.totalItemsCount) ?: return@LaunchedEffect
+        runCatching { listState.scrollToItem(target) }
     }
+    // Explicit "resume following" affordance: the drag heuristic above can
+    // leave the reader detached (they flicked upward mid-stream to re-read a
+    // tool result), and until now the ONLY way back was to scroll to the very
+    // end by hand — which is fiddly on a list that keeps growing.
+    val showFollowChip = run.isActive && followPaused && entries.isNotEmpty()
+    // Scope for the chip's suspend scrollToItem (a click handler is not a
+    // coroutine, and scrollToItem cannot be called from Compose's own thread).
+    val scope = rememberCoroutineScope()
 
-    LazyColumn(
-        state = listState,
-        modifier = Modifier
-            .fillMaxSize()
-            .fillMaxWidth(),
-        // Scaffold inner padding: status bar + 68dp TopAppBar. The list
-        // paints edge-to-edge under the 0.92-alpha bar (chat parity); the
-        // extra top inset keeps the first card from hiding behind it, and
-        // a bottom landing pad matches the chat's scroll-footer rhythm.
-        contentPadding = PaddingValues(
-            start = 16.dp,
-            end = 16.dp,
-            top = contentPadding.calculateTopPadding() + 12.dp,
-            bottom = contentPadding.calculateBottomPadding() + 12.dp,
-        ),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        // ── Task header ─────────────────────────────────────────────────
-        item(key = "task") {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(ChatColors.toolBg, RoundedCornerShape(14.dp))
-                    .border(0.5.dp, ChatColors.toolBorder, RoundedCornerShape(14.dp))
-                    .padding(14.dp),
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        runStatusLabel(run).uppercase(),
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = runStatusColor(run),
-                        letterSpacing = 1.sp,
-                    )
-                    Spacer(modifier = Modifier.weight(1f))
-                    Text(
-                        formatSubagentDuration(rememberRunElapsedMs(run)),
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                        color = ChatColors.secondaryText,
-                    )
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    run.query,
-                    fontSize = 14.sp,
-                    lineHeight = 20.sp,
-                    color = ChatColors.primaryText,
-                )
-                Spacer(modifier = Modifier.height(10.dp))
-                // [T-subagent-approval][T-subagent-token-accounting] FlowRow,
-                // not Row: with skill + group + model + tokens this line
-                // overflows a phone width, and a single-line Row squeezed the
-                // monospace chips into misaligned ellipses. Wrapping keeps
-                // every chip whole (same pattern as ChatHistoryDrawer's footer).
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    MetaChip(label = "skill", value = run.skillId.ifBlank { run.skillName })
-                    if (run.groupId.isNotEmpty()) {
-                        // [T-subagent-orchestration] Batch provenance — the
-                        // group the pill belongs to (join/wait/cancel target).
-                        MetaChip(label = "group", value = run.groupId.takeLast(6))
-                    }
-                    // [T-subagent-token-accounting] Which model actually ran
-                    // this, and what it cost. The whole "delegate cheap work
-                    // to a cheaper model" rationale is unfalsifiable unless the
-                    // parent can see both — and they cannot read the registry,
-                    // so the pill/detail page is the only surface.
-                    if (run.modelLabel.isNotBlank()) {
-                        MetaChip(label = "model", value = run.modelLabel)
-                    }
-                    formatSubagentTokenCost(run)?.let { MetaChip(label = "tokens", value = it) }
-                    // [T-subagent-queue-visibility] How long the run waited
-                    // for a scheduler permit before it started executing.
-                    // Without this the wait is invisible: the live timer
-                    // restarts when execution begins, so a run that sat in the
-                    // queue for two minutes looks identical to one that
-                    // started instantly — and the user's "why is nothing
-                    // happening?" has no answer on screen.
-                    formatSubagentQueueWait(run)?.let { MetaChip(label = "queue", value = it) }
-                }
-                if (run.notices.isNotBlank()) {
-                    // [T-subagent-report-hygiene] Retry / truncation notices
-                    // live OUT of the report card so they never masquerade as
-                    // the sub-agent's findings; the detail page is where they
-                    // stay reviewable.
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        run.notices.lines().firstOrNull { it.isNotBlank() }.orEmpty(),
-                        fontSize = 10.sp,
-                        fontFamily = FontFamily.Monospace,
-                        color = ChatColors.warningText,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                if (run.isExecuting && run.maxTurns > 0) {
-                    // Turn progress mirrors the in-chat capsule's slim line
-                    // (shared fraction logic, same 4–96% clamp) so the two
-                    // surfaces tell one consistent story.
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(3.dp)
-                            .background(
-                                SubagentAccent.copy(alpha = if (ChatColors.isDark) 0.18f else 0.12f),
-                                RoundedCornerShape(2.dp),
-                            ),
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth(turnProgressFraction(run) ?: 0f)
-                                .height(3.dp)
-                                .background(SubagentAccent, RoundedCornerShape(2.dp)),
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        "turn ${run.turn} of ${run.maxTurns}",
-                        fontSize = 10.sp,
-                        fontFamily = FontFamily.Monospace,
-                        color = ChatColors.tertiaryText,
-                    )
-                }
-            }
-        }
-
-        // ── Execution log ───────────────────────────────────────────────
-        if (run.steps.isEmpty()) {
-            item(key = "log-empty") {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .alpha(0.65f)
-                        .padding(vertical = 8.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(12.dp),
-                        strokeWidth = 1.5.dp,
-                        color = SubagentAccent,
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        "waiting for first tool call…",
-                        fontSize = 12.sp,
-                        fontFamily = FontFamily.Monospace,
-                        color = ChatColors.tertiaryText,
-                    )
-                }
-            }
-        } else {
-            item(key = "log-header") {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "EXECUTION LOG",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = ChatColors.tertiaryText,
-                        letterSpacing = 1.sp,
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        "${run.steps.count { it.status != SubagentRunRegistry.ToolStepStatus.RUNNING }}/${run.steps.size}",
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                        color = ChatColors.secondaryText,
-                    )
-                    Spacer(modifier = Modifier.weight(1f))
-                    // [T-subagent-ui-collapse] Bulk control: expand/collapse
-                    // every step's output at once (streaming finals included
-                    // via the STEP_RESULT pseudo-key). Collapsing also clears
-                    // manual overrides so auto-reveal works again afterwards.
-                    SubagentCollapseToggle(
-                        label = "expand all",
-                        onClick = {
-                            run.steps.forEach { collapsed[it.id] = false }
-                            collapsed[RESULT_STEP_KEY] = false
-                            run.steps.forEach { manualOverride[it.id] = true }
-                            manualOverride[RESULT_STEP_KEY] = true
-                        },
-                    )
-                    Text(
-                        "·",
-                        fontSize = 11.sp,
-                        color = ChatColors.tertiaryText,
-                        modifier = Modifier.padding(horizontal = 4.dp),
-                    )
-                    SubagentCollapseToggle(
-                        label = "collapse all",
-                        onClick = {
-                            run.steps.forEach { collapsed[it.id] = true }
-                            collapsed[RESULT_STEP_KEY] = true
-                            run.steps.forEach { manualOverride.remove(it.id) }
-                            manualOverride.remove(RESULT_STEP_KEY)
-                        },
-                    )
-                }
-            }
-        }
-
-        items(items = run.steps, key = { it.id }) { step ->
-            SubagentStepCard(
-                step = step,
-                collapsed = collapsed,
-                manualOverride = manualOverride,
-            )
-        }
-
-        // ── Streaming / final result ────────────────────────────────────
-        if (run.resultText.isNotBlank()) {
-            item(key = "result") {
-                SubagentResultCard(
-                    run = run,
-                    collapsed = collapsed,
-                    manualOverride = manualOverride,
-                )
-            }
-        }
-
-        // ── Error banner ────────────────────────────────────────────────
-        run.error?.let { err ->
-            item(key = "error") {
+    Box(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier
+                .fillMaxSize()
+                .fillMaxWidth(),
+            // Scaffold inner padding: status bar + 68dp TopAppBar. The list
+            // paints edge-to-edge under the 0.92-alpha bar (chat parity); the
+            // extra top inset keeps the first card from hiding behind it, and
+            // a bottom landing pad matches the chat's scroll-footer rhythm.
+            contentPadding = PaddingValues(
+                start = 16.dp,
+                end = 16.dp,
+                top = contentPadding.calculateTopPadding() + 12.dp,
+                bottom = contentPadding.calculateBottomPadding() + 12.dp,
+            ),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            // ── Task header ─────────────────────────────────────────────────
+            item(key = "task") {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(
-                            ChatColors.warningBg,
-                            RoundedCornerShape(10.dp),
-                        )
-                        .padding(12.dp),
+                        .background(ChatColors.toolBg, RoundedCornerShape(14.dp))
+                        .border(0.5.dp, ChatColors.toolBorder, RoundedCornerShape(14.dp))
+                        .padding(14.dp),
                 ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            runStatusLabel(run).uppercase(),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = runStatusColor(run),
+                            letterSpacing = 1.sp,
+                        )
+                        Spacer(modifier = Modifier.weight(1f))
+                        Text(
+                            formatSubagentDuration(rememberRunElapsedMs(run)),
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = ChatColors.secondaryText,
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        "ERROR",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = ChatColors.error,
-                        letterSpacing = 1.sp,
+                        run.query,
+                        fontSize = 14.sp,
+                        lineHeight = 20.sp,
+                        color = ChatColors.primaryText,
                     )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        err,
-                        fontSize = 13.sp,
-                        lineHeight = 18.sp,
-                        color = ChatColors.error,
+                    Spacer(modifier = Modifier.height(10.dp))
+                    // [T-subagent-approval][T-subagent-token-accounting] FlowRow,
+                    // not Row: with skill + group + model + tokens this line
+                    // overflows a phone width, and a single-line Row squeezed the
+                    // monospace chips into misaligned ellipses. Wrapping keeps
+                    // every chip whole (same pattern as ChatHistoryDrawer's footer).
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        MetaChip(label = "skill", value = run.skillId.ifBlank { run.skillName })
+                        if (run.groupId.isNotEmpty()) {
+                            // [T-subagent-orchestration] Batch provenance — the
+                            // group the pill belongs to (join/wait/cancel target).
+                            MetaChip(label = "group", value = run.groupId.takeLast(6))
+                        }
+                        // [T-subagent-token-accounting] Which model actually ran
+                        // this, and what it cost. The whole "delegate cheap work
+                        // to a cheaper model" rationale is unfalsifiable unless the
+                        // parent can see both — and they cannot read the registry,
+                        // so the pill/detail page is the only surface.
+                        if (run.modelLabel.isNotBlank()) {
+                            MetaChip(label = "model", value = run.modelLabel)
+                        }
+                        formatSubagentTokenCost(run)?.let { MetaChip(label = "tokens", value = it) }
+                        // [T-subagent-queue-visibility] How long the run waited
+                        // for a scheduler permit before it started executing.
+                        // Without this the wait is invisible: the live timer
+                        // restarts when execution begins, so a run that sat in the
+                        // queue for two minutes looks identical to one that
+                        // started instantly — and the user's "why is nothing
+                        // happening?" has no answer on screen.
+                        formatSubagentQueueWait(run)?.let { MetaChip(label = "queue", value = it) }
+                    }
+                    if (run.notices.isNotBlank()) {
+                        // [T-subagent-report-hygiene] Retry / truncation notices
+                        // live OUT of the report card so they never masquerade as
+                        // the sub-agent's findings; the detail page is where they
+                        // stay reviewable.
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            run.notices.lines().firstOrNull { it.isNotBlank() }.orEmpty(),
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = ChatColors.warningText,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    if (run.isExecuting && run.maxTurns > 0) {
+                        // Turn progress mirrors the in-chat capsule's slim line
+                        // (shared fraction logic, same 4–96% clamp) so the two
+                        // surfaces tell one consistent story.
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(3.dp)
+                                .background(
+                                    SubagentAccent.copy(alpha = if (ChatColors.isDark) 0.18f else 0.12f),
+                                    RoundedCornerShape(2.dp),
+                                ),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth(turnProgressFraction(run) ?: 0f)
+                                    .height(3.dp)
+                                    .background(SubagentAccent, RoundedCornerShape(2.dp)),
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            "turn ${run.turn} of ${run.maxTurns}",
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = ChatColors.tertiaryText,
+                        )
+                    }
+                }
+            }
+
+            // ── Execution log ───────────────────────────────────────────────
+            if (run.steps.isEmpty()) {
+                item(key = "log-empty") {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .alpha(0.65f)
+                            .padding(vertical = 8.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(12.dp),
+                            strokeWidth = 1.5.dp,
+                            color = SubagentAccent,
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            // [T-subagent-queue-visibility] A queued run is not
+                            // "waiting for a model" — it is waiting for a slot.
+                            text = emptyLogLabel(run),
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = ChatColors.tertiaryText,
+                        )
+                    }
+                }
+            } else {
+                item(key = "log-header") {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "EXECUTION LOG",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = ChatColors.tertiaryText,
+                            letterSpacing = 1.sp,
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            // [T-subagent-ui-turns] "N turns · M calls": the round
+                            // structure is the part a flat call counter hid.
+                            buildString {
+                                if (turnCount > 0) {
+                                    append(turnCount)
+                                    append(if (turnCount == 1) " turn · " else " turns · ")
+                                }
+                                append(run.steps.count { it.status != SubagentRunRegistry.ToolStepStatus.RUNNING })
+                                append('/')
+                                append(run.steps.size)
+                            },
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = ChatColors.secondaryText,
+                        )
+                        Spacer(modifier = Modifier.weight(1f))
+                        // [T-subagent-ui-collapse] Bulk control: expand/collapse
+                        // every step's output at once (streaming finals included
+                        // via the STEP_RESULT pseudo-key). Collapsing also clears
+                        // manual overrides so auto-reveal works again afterwards.
+                        SubagentCollapseToggle(
+                            label = "expand all",
+                            onClick = {
+                                run.steps.forEach { collapsed[it.id] = false }
+                                collapsed[RESULT_STEP_KEY] = false
+                                run.steps.forEach { manualOverride[it.id] = true }
+                                manualOverride[RESULT_STEP_KEY] = true
+                            },
+                        )
+                        Text(
+                            "·",
+                            fontSize = 11.sp,
+                            color = ChatColors.tertiaryText,
+                            modifier = Modifier.padding(horizontal = 4.dp),
+                        )
+                        SubagentCollapseToggle(
+                            label = "collapse all",
+                            onClick = {
+                                run.steps.forEach { collapsed[it.id] = true }
+                                collapsed[RESULT_STEP_KEY] = true
+                                run.steps.forEach { manualOverride.remove(it.id) }
+                                manualOverride.remove(RESULT_STEP_KEY)
+                            },
+                        )
+                    }
+                }
+            }
+
+            // [T-subagent-ui-turns] Timeline: turn separators interleaved with
+            // their tool calls, so the round structure is visible instead of
+            // implied by a counter in the header.
+            items(
+                items = entries,
+                key = { entry ->
+                    when (entry) {
+                        is LogEntry.TurnHeader -> "turn-${entry.turn}"
+                        is LogEntry.Call -> entry.step.id
+                    }
+                },
+            ) { entry ->
+                when (entry) {
+                    is LogEntry.TurnHeader -> TurnSeparator(
+                        turn = entry.turn,
+                        maxTurns = run.maxTurns,
+                        first = entry.first,
+                    )
+                    is LogEntry.Call -> SubagentStepCard(
+                        step = entry.step,
+                        collapsed = collapsed,
+                        manualOverride = manualOverride,
                     )
                 }
             }
+
+            // ── Streaming / final result ────────────────────────────────────
+            if (run.resultText.isNotBlank()) {
+                item(key = "result") {
+                    SubagentResultCard(
+                        run = run,
+                        collapsed = collapsed,
+                        manualOverride = manualOverride,
+                    )
+                }
+            }
+
+            // ── Error banner ────────────────────────────────────────────────
+            run.error?.let { err ->
+                item(key = "error") {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                ChatColors.warningBg,
+                                RoundedCornerShape(10.dp),
+                            )
+                            .padding(12.dp),
+                    ) {
+                        Text(
+                            "ERROR",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = ChatColors.error,
+                            letterSpacing = 1.sp,
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            err,
+                            fontSize = 13.sp,
+                            lineHeight = 18.sp,
+                            color = ChatColors.error,
+                        )
+                    }
+                }
+            }
         }
+
+    // [T-subagent-ui-follow] Resume-follow chip. Floats over the list
+    // (not an item) so it stays reachable while the reader is parked
+    // anywhere in history.
+    if (showFollowChip) {
+        Row(
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 12.dp, bottom = 16.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(ChatColors.inputBg, RoundedCornerShape(14.dp))
+                .border(0.5.dp, ChatColors.toolBorder, RoundedCornerShape(14.dp))
+                .clickable {
+                    followPaused = false
+                    val target = logFollowTarget(listState.layoutInfo.totalItemsCount)
+                    // scrollToItem is suspend — hop onto the composition's
+                    // scope rather than blocking the click handler.
+                    if (target != null) {
+                        scope.launch { runCatching { listState.scrollToItem(target) } }
+                    }
+                }
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Default.KeyboardArrowDown,
+                contentDescription = null,
+                tint = SubagentAccent,
+                modifier = Modifier.size(14.dp),
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(
+                "resume following",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+                color = SubagentAccent,
+            )
+        }
+    }
     }
 }
 
@@ -588,20 +809,20 @@ private fun SubagentRunDetailBody(
 @Composable
 private fun MetaChip(label: String, value: String) {
     Text(
-        text = "$label: $value",
-        fontSize = 11.sp,
-        fontFamily = FontFamily.Monospace,
-        color = ChatColors.secondaryText,
-        // [T-subagent-token-accounting] One line per chip: inside a FlowRow a
-        // pathologically long value (a model with a verbose display name) is
-        // measured at flow width, and without this it would render as a
-        // squeezed multi-line capsule. The full model id remains recoverable
-        // from the run's wake-up prompt / journal.
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-        modifier = Modifier
-            .background(ChatColors.toolCapsuleBg, RoundedCornerShape(6.dp))
-            .padding(horizontal = 6.dp, vertical = 2.dp),
+    text = "$label: $value",
+    fontSize = 11.sp,
+    fontFamily = FontFamily.Monospace,
+    color = ChatColors.secondaryText,
+    // [T-subagent-token-accounting] One line per chip: inside a FlowRow a
+    // pathologically long value (a model with a verbose display name) is
+    // measured at flow width, and without this it would render as a
+    // squeezed multi-line capsule. The full model id remains recoverable
+    // from the run's wake-up prompt / journal.
+    maxLines = 1,
+    overflow = TextOverflow.Ellipsis,
+    modifier = Modifier
+        .background(ChatColors.toolCapsuleBg, RoundedCornerShape(6.dp))
+        .padding(horizontal = 6.dp, vertical = 2.dp),
     )
 }
 
@@ -623,127 +844,186 @@ private fun SubagentResultCard(
     // opened shows its result expanded (the report is the content) — the
     // stream-time auto-collapse below never fired for late visitors.
     LaunchedEffect(Unit) {
-        if (RESULT_STEP_KEY !in collapsed && !run.isActive) {
-            collapsed[RESULT_STEP_KEY] = false
-        }
+    if (RESULT_STEP_KEY !in collapsed && !run.isActive) {
+        collapsed[RESULT_STEP_KEY] = false
+    }
     }
     // Auto-reveal once on stream completion; every set is guarded so only
     // the transition running→finished writes, and never over a manual pick.
     val wasActive = remember { mutableStateOf(run.isActive) }
     LaunchedEffect(run.isActive) {
-        if (wasActive.value && !run.isActive && manualOverride[RESULT_STEP_KEY] != true) {
-            collapsed[RESULT_STEP_KEY] = false
-        }
-        wasActive.value = run.isActive
+    if (wasActive.value && !run.isActive && manualOverride[RESULT_STEP_KEY] != true) {
+        collapsed[RESULT_STEP_KEY] = false
+    }
+    wasActive.value = run.isActive
     }
     // While streaming, if the user never touched the card, keep following
     // the tail collapsed instead of re-expanding on every new chunk.
     LaunchedEffect(run.isActive) {
-        if (run.isActive && manualOverride[RESULT_STEP_KEY] != true) {
-            collapsed[RESULT_STEP_KEY] = true
-        }
+    if (run.isActive && manualOverride[RESULT_STEP_KEY] != true) {
+        collapsed[RESULT_STEP_KEY] = true
+    }
     }
 
     val expanded = collapsed[RESULT_STEP_KEY] == false
-    // [T-subagent-ui-chat-consistent] The RESULT card reuses the tool-step
-    // card's EXACT visual language (same layout, same glyph rail, same
-    // black terminal output box with success-green base text) so the final
-    // report reads as the last entry of the execution log, not a foreign
-    // banner. The accent carries the sub-agent violet; the status glyph
-    // mirrors the run state (spinner while streaming, check once done).
+    // [T-subagent-ui-report-md] The finished report renders as a markdown
+    // DOCUMENT rather than a terminal box: the general-agent contract is a
+    // bulleted field list, and bullets/headings/links/paths only read
+    // correctly once parsed. The card keeps the step-card chrome (accent rail,
+    // status glyph, duration) so it still reads as the log's last entry.
+    //
+    // Toggleability is decided from the line count as before — a cheap
+    // heuristic for "this is longer than the collapsed window" — because the
+    // collapsed state is now a HEIGHT clamp on rendered markdown, and turning
+    // that into a measurement would mean measuring a layout we are trying to
+    // avoid composing.
     val lineCount = run.resultText.count { it == '\n' } + 1
     val toggleable = lineCount > RESULT_PREVIEW_LINES || expanded
     val shape = RoundedCornerShape(12.dp)
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .background(ChatColors.secondaryBg, shape)
-            .border(0.5.dp, ChatColors.toolBorder, shape)
-            .animateContentSize(),
+    modifier = Modifier
+        .fillMaxWidth()
+        .clip(shape)
+        .background(ChatColors.secondaryBg, shape)
+        .border(0.5.dp, ChatColors.toolBorder, shape)
+        .animateContentSize(),
     ) {
-        // Left rail — same 36dp accent chip the step cards use.
-        Column(
+    // Left rail — same 36dp accent chip the step cards use.
+    Column(
+        modifier = Modifier
+            .width(36.dp)
+            .padding(top = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(
             modifier = Modifier
-                .width(36.dp)
-                .padding(top = 10.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
+                .size(24.dp)
+                .background(SubagentAccent.copy(alpha = 0.14f), CircleShape),
+            contentAlignment = Alignment.Center,
         ) {
-            Box(
-                modifier = Modifier
-                    .size(24.dp)
-                    .background(SubagentAccent.copy(alpha = 0.14f), CircleShape),
-                contentAlignment = Alignment.Center,
-            ) {
+            Icon(
+                Icons.Default.Psychology,
+                contentDescription = null,
+                tint = SubagentAccent,
+                modifier = Modifier.size(13.dp),
+            )
+        }
+    }
+    Column(
+        modifier = Modifier
+            .weight(1f)
+            .padding(start = 2.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
+    ) {
+        // Title row — step-card rhythm: status glyph + 13sp Medium
+        // title + monospace duration on the right.
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (run.isActive) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(12.dp),
+                    strokeWidth = 1.5.dp,
+                    color = SubagentAccent,
+                )
+            } else {
+                val doneGlyph = when (run.status) {
+                    SubagentRunRegistry.RunStatus.FAILED -> Icons.Default.Error
+                    SubagentRunRegistry.RunStatus.TIMED_OUT -> Icons.Default.Error
+                    SubagentRunRegistry.RunStatus.CANCELLED -> Icons.Default.Error
+                    else -> Icons.Default.CheckCircle
+                }
+                val doneTint = if (run.status == SubagentRunRegistry.RunStatus.FAILED ||
+                    run.status == SubagentRunRegistry.RunStatus.TIMED_OUT
+                ) {
+                    ChatColors.error
+                } else {
+                    ChatColors.success
+                }
                 Icon(
-                    Icons.Default.Psychology,
+                    doneGlyph,
                     contentDescription = null,
-                    tint = SubagentAccent,
-                    modifier = Modifier.size(13.dp),
+                    tint = doneTint,
+                    modifier = Modifier
+                        .size(13.dp)
+                        .alpha(0.9f),
+                )
+            }
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = if (run.isActive) "OUTPUT (streaming)" else "RESULT",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                color = ChatColors.primaryText,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            // [T-subagent-ui-copy] The report is the deliverable — make it
+            // extractable. Until now the ONLY way to reuse a sub-agent's
+            // findings was to hand-select monospace text out of the box,
+            // and the repo's own long-press selection does not cover this
+            // page. Copy takes the FULL report even while collapsed, so a
+            // collapsed tail never truncates what lands on the clipboard.
+            if (run.resultText.isNotBlank()) {
+                val clipboard = LocalClipboardManager.current
+                var copied by remember(run.id) { mutableStateOf(false) }
+                val scope = rememberCoroutineScope()
+                IconButton(
+                    onClick = {
+                        clipboard.setText(AnnotatedString(run.resultText))
+                        copied = true
+                        scope.launch {
+                            delay(1400)
+                            copied = false
+                        }
+                    },
+                    modifier = Modifier.size(26.dp),
+                ) {
+                    Icon(
+                        imageVector = if (copied) Icons.Default.Check else Icons.Default.ContentCopy,
+                        contentDescription = "Copy report",
+                        tint = if (copied) ChatColors.success else ChatColors.tertiaryText,
+                        modifier = Modifier.size(14.dp),
+                    )
+                }
+            }
+            if (!run.isActive && run.durationMs > 0) {
+                Text(
+                    formatSubagentDuration(run.durationMs),
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = ChatColors.secondaryText,
                 )
             }
         }
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .padding(start = 2.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
-        ) {
-            // Title row — step-card rhythm: status glyph + 13sp Medium
-            // title + monospace duration on the right.
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (run.isActive) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(12.dp),
-                        strokeWidth = 1.5.dp,
-                        color = SubagentAccent,
-                    )
-                } else {
-                    val doneGlyph = when (run.status) {
-                        SubagentRunRegistry.RunStatus.FAILED -> Icons.Default.Error
-                        SubagentRunRegistry.RunStatus.TIMED_OUT -> Icons.Default.Error
-                        SubagentRunRegistry.RunStatus.CANCELLED -> Icons.Default.Error
-                        else -> Icons.Default.CheckCircle
-                    }
-                    val doneTint = if (run.status == SubagentRunRegistry.RunStatus.FAILED ||
-                        run.status == SubagentRunRegistry.RunStatus.TIMED_OUT
-                    ) {
-                        ChatColors.error
-                    } else {
-                        ChatColors.success
-                    }
-                    Icon(
-                        doneGlyph,
-                        contentDescription = null,
-                        tint = doneTint,
-                        modifier = Modifier
-                            .size(13.dp)
-                            .alpha(0.9f),
-                    )
-                }
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = if (run.isActive) "OUTPUT (streaming)" else "RESULT",
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = ChatColors.primaryText,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                if (!run.isActive && run.durationMs > 0) {
-                    Text(
-                        formatSubagentDuration(run.durationMs),
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                        color = ChatColors.secondaryText,
-                    )
-                }
-            }
-            if (run.resultText.isNotBlank()) {
-                Spacer(modifier = Modifier.height(6.dp))
-                // Black terminal box, same as the step output boxes — the
-                // report IS tool-family output to the eye. Green base text
-                // (terminalCard default), in-box line hint, tail preview.
+        // [T-subagent-declared-status] The report's own verdict, surfaced
+        // OUTSIDE the text box so it cannot read as part of the findings —
+        // same hygiene rule the notices follow.
+        declaredStatusNote(run)?.let { note ->
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                note,
+                fontSize = 11.sp,
+                lineHeight = 15.sp,
+                color = ChatColors.warningText,
+            )
+        }
+        if (run.resultText.isNotBlank()) {
+            Spacer(modifier = Modifier.height(6.dp))
+            // [T-subagent-ui-report-md] The REPORT is markdown prose — the
+            // general-agent contract is literally a bulleted field list
+            // (`- status: …`, `- key_findings: …`) — but it used to render
+            // as a black terminal box with success-green base text: bullets
+            // flattened, file paths and URLs unclickable, and headings
+            // indistinguishable from body text. A finished report now
+            // renders as a DOCUMENT (the same block renderer the chat and
+            // the file previewer use), so paths, links, code and lists
+            // behave the way the author wrote them.
+            //
+            // Streaming keeps the cheap monospace tail: markdown costs a
+            // parse per flush, and mid-stream the text is still stable to
+            // read as a terminal. The switch happens exactly when the run
+            // stops, which is also when the reader starts actually reading.
+            if (run.isActive) {
+                // Black terminal box, same as the step output boxes.
                 SubagentColoredOutput(
                     rawOutput = run.resultText,
                     expanded = expanded,
@@ -760,42 +1040,74 @@ private fun SubagentResultCard(
                         .padding(8.dp)
                         .animateContentSize(),
                 )
-                // Same toggle row as the step cards (only when there is
-                // something to toggle — short reports stay clean).
-                if (toggleable) {
-                    Row(
+            } else {
+                val reportShape = RoundedCornerShape(8.dp)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(reportShape)
+                        .background(ChatColors.codeBlockBg, reportShape)
+                        .border(0.5.dp, ChatColors.toolBorder, reportShape)
+                        // Collapsed = a bounded window onto the TOP of the
+                        // report (the head carries status + findings; the
+                        // terminal renderer above slices the tail because a
+                        // live stream grows downward). Clamped by height,
+                        // not by slicing text, so the markdown structure
+                        // stays intact inside the visible window.
+                        .then(
+                            if (expanded) Modifier
+                            else Modifier.heightIn(max = RESULT_PREVIEW_MAX_HEIGHT),
+                        )
+                        .clipToBounds()
+                        .clickable(enabled = toggleable) {
+                            collapsed[RESULT_STEP_KEY] = expanded
+                            manualOverride[RESULT_STEP_KEY] = true
+                        }
+                        .padding(10.dp)
+                        .animateContentSize(),
+                ) {
+                    com.openminis.app.ui.chat.MarkdownBlock(
+                        rawText = run.resultText,
+                        isStreaming = false,
+                    )
+                }
+            }
+            // Same toggle row as the step cards (only when there is
+            // something to toggle — short reports stay clean).
+            if (toggleable) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 2.dp)
+                        .clickable {
+                            collapsed[RESULT_STEP_KEY] = expanded
+                            manualOverride[RESULT_STEP_KEY] = true
+                        },
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center,
+                ) {
+                    val rotation by animateFloatAsState(
+                        targetValue = if (expanded) 0f else -90f,
+                        animationSpec = tween(durationMillis = 150),
+                        label = "resultChevron",
+                    )
+                    Icon(
+                        Icons.Default.KeyboardArrowDown,
+                        contentDescription = null,
+                        tint = ChatColors.tertiaryText,
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 2.dp)
-                            .clickable {
-                                collapsed[RESULT_STEP_KEY] = expanded
-                                manualOverride[RESULT_STEP_KEY] = true
-                            },
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center,
-                    ) {
-                        val rotation by animateFloatAsState(
-                            targetValue = if (expanded) 0f else -90f,
-                            animationSpec = tween(durationMillis = 150),
-                            label = "resultChevron",
-                        )
-                        Icon(
-                            Icons.Default.KeyboardArrowDown,
-                            contentDescription = null,
-                            tint = ChatColors.tertiaryText,
-                            modifier = Modifier
-                                .size(13.dp)
-                                .graphicsLayer { rotationZ = rotation },
-                        )
-                        Text(
-                            if (expanded) "collapse" else "full output",
-                            fontSize = 11.sp,
-                            color = ChatColors.tertiaryText,
-                        )
-                    }
+                            .size(13.dp)
+                            .graphicsLayer { rotationZ = rotation },
+                    )
+                    Text(
+                        if (expanded) "collapse" else "full output",
+                        fontSize = 11.sp,
+                        color = ChatColors.tertiaryText,
+                    )
                 }
             }
         }
+    }
     }
 }
 
@@ -803,15 +1115,57 @@ private fun SubagentResultCard(
 @Composable
 private fun SubagentCollapseToggle(label: String, onClick: () -> Unit) {
     Text(
-        text = label,
-        fontSize = 11.sp,
-        fontFamily = FontFamily.Monospace,
-        color = SubagentAccent,
-        modifier = Modifier
-            .clip(RoundedCornerShape(6.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 4.dp, vertical = 2.dp),
+    text = label,
+    fontSize = 11.sp,
+    fontFamily = FontFamily.Monospace,
+    color = SubagentAccent,
+    modifier = Modifier
+        .clip(RoundedCornerShape(6.dp))
+        .clickable(onClick = onClick)
+        .padding(horizontal = 4.dp, vertical = 2.dp),
     )
+}
+
+/**
+ * [T-subagent-ui-turns] Separator between two model rounds in the execution
+ * log: a hairline with "TURN n / max" sitting on it. Deliberately quiet —
+ * it is a structural marker, not a status surface, and the log can hold
+ * dozens of them. The first one is suppressed (the header right above it
+ * already says where the log starts), which keeps the top of the page from
+ * opening on a rule.
+ */
+@Composable
+private fun TurnSeparator(turn: Int, maxTurns: Int, first: Boolean) {
+    Row(
+    modifier = Modifier
+        .fillMaxWidth()
+        .padding(top = if (first) 2.dp else 6.dp, bottom = 2.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    ) {
+    Text(
+        text = buildString {
+            append("TURN ")
+            append(turn)
+            if (maxTurns > 0) {
+                append(" / ")
+                append(maxTurns)
+            }
+        },
+        fontSize = 10.sp,
+        fontFamily = FontFamily.Monospace,
+        fontWeight = FontWeight.Medium,
+        letterSpacing = 1.sp,
+        color = ChatColors.tertiaryText,
+        maxLines = 1,
+    )
+    Spacer(modifier = Modifier.width(8.dp))
+    Box(
+        modifier = Modifier
+            .weight(1f)
+            .height(0.5.dp)
+            .background(ChatColors.toolBorder),
+    )
+    }
 }
 
 /**
@@ -847,50 +1201,50 @@ private fun SubagentColoredOutput(
     // — model prose, not tool output) keeps the theme-colored rendering.
     val cardBg = if (terminalCard) Color.Black else ChatColors.codeBlockBg
     val baseColor = baseOverride
-        ?: if (terminalCard) ChatColors.success else ChatColors.secondaryText
+    ?: if (terminalCard) ChatColors.success else ChatColors.secondaryText
     // Parse once per output change — NOT per style lookup — and reuse the
     // spans for both the expanded and collapsed (tail-sliced) rendering.
     val spans = remember(rawOutput) { SubagentAnsiText.parse(rawOutput) }
     val shownSpans = remember(spans, expanded, previewLines) {
-        if (expanded) spans else SubagentAnsiText.tailLines(spans, previewLines)
+    if (expanded) spans else SubagentAnsiText.tailLines(spans, previewLines)
     }
 
     val annotated = remember(shownSpans, baseColor) {
-        buildAnnotatedString {
-            for (span in shownSpans) {
-                withStyle(SpanStyle(
-                    color = span.color?.let { Color(it) } ?: baseColor,
-                    fontWeight = if (span.bold) FontWeight.Bold else null,
-                    fontStyle = if (span.italic) FontStyle.Italic else null,
-                    textDecoration = if (span.underline) TextDecoration.Underline else null,
-                )) {
-                    append(span.text)
-                }
+    buildAnnotatedString {
+        for (span in shownSpans) {
+            withStyle(SpanStyle(
+                color = span.color?.let { Color(it) } ?: baseColor,
+                fontWeight = if (span.bold) FontWeight.Bold else null,
+                fontStyle = if (span.italic) FontStyle.Italic else null,
+                textDecoration = if (span.underline) TextDecoration.Underline else null,
+            )) {
+                append(span.text)
             }
         }
+    }
     }
     val lineCount = remember(rawOutput) { rawOutput.count { it == '\n' } + 1 }
 
     Column(modifier = modifier) {
+    Text(
+        annotated,
+        fontSize = fontSize,
+        lineHeight = lineHeight,
+        fontFamily = FontFamily.Monospace,
+        // Color comes per-span now; the base style stays colorless.
+        modifier = Modifier.fillMaxWidth(),
+    )
+    if (!expanded && showLineHint && lineCount > previewLines) {
+        Spacer(modifier = Modifier.height(4.dp))
         Text(
-            annotated,
-            fontSize = fontSize,
-            lineHeight = lineHeight,
+            "⋯ $lineCount lines — tap to expand",
+            fontSize = 10.sp,
             fontFamily = FontFamily.Monospace,
-            // Color comes per-span now; the base style stays colorless.
-            modifier = Modifier.fillMaxWidth(),
+            // Fixed gray tuned for the black card (both themes) — the
+            // chat terminal card's own secondary text is theme-fixed too.
+            color = Color(0xFF98989D),
         )
-        if (!expanded && showLineHint && lineCount > previewLines) {
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                "⋯ $lineCount lines — tap to expand",
-                fontSize = 10.sp,
-                fontFamily = FontFamily.Monospace,
-                // Fixed gray tuned for the black card (both themes) — the
-                // chat terminal card's own secondary text is theme-fixed too.
-                color = Color(0xFF98989D),
-            )
-        }
+    }
     }
 }
 
@@ -918,145 +1272,154 @@ private fun SubagentStepCard(
     val hasOutput = step.output.isNotBlank()
     // Absent key = collapsed (the default). Manual gestures set the flag
     // AND mark the override so auto-reveal on stream completion stays away.
-    val expanded = collapsed[step.id] == false
+    //
+    // [T-subagent-ui-live-open] A RUNNING step auto-opens: its output is
+    // arriving right now, and the reader's whole reason to be on this page is
+    // to watch it happen. Default-collapsed meant the live stream was hidden
+    // behind a tap until the step finished — the one moment it was worth
+    // seeing was the one moment it was closed. A manual gesture still wins,
+    // so a reader who collapses a noisy step keeps it collapsed.
+    val autoOpen = step.status == SubagentRunRegistry.ToolStepStatus.RUNNING &&
+    manualOverride[step.id] != true
+    val expanded = if (autoOpen) true else collapsed[step.id] == false
     val shape = RoundedCornerShape(12.dp)
 
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .background(ChatColors.secondaryBg, shape)
-            .border(0.5.dp, ChatColors.toolBorder, shape)
-            .animateContentSize(),
+    modifier = Modifier
+        .fillMaxWidth()
+        .clip(shape)
+        .background(ChatColors.secondaryBg, shape)
+        .border(0.5.dp, ChatColors.toolBorder, shape)
+        .animateContentSize(),
     ) {
-        // Left rail: the tool's own accent, always present, so the log
-        // reads as a colored spine of activity even when titles truncate.
-        Column(
+    // Left rail: the tool's own accent, always present, so the log
+    // reads as a colored spine of activity even when titles truncate.
+    Column(
+        modifier = Modifier
+            .width(36.dp)
+            .padding(top = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(
             modifier = Modifier
-                .width(36.dp)
-                .padding(top = 10.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
+                .size(24.dp)
+                .background(accent.copy(alpha = 0.14f), CircleShape),
+            contentAlignment = Alignment.Center,
         ) {
-            Box(
-                modifier = Modifier
-                    .size(24.dp)
-                    .background(accent.copy(alpha = 0.14f), CircleShape),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    stepIcon(step.toolName),
+            Icon(
+                stepIcon(step.toolName),
+                contentDescription = null,
+                tint = accent,
+                modifier = Modifier.size(13.dp),
+            )
+        }
+    }
+    Column(
+        modifier = Modifier
+            .weight(1f)
+            .padding(start = 2.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            when (step.status) {
+                SubagentRunRegistry.ToolStepStatus.RUNNING -> CircularProgressIndicator(
+                    modifier = Modifier.size(12.dp),
+                    strokeWidth = 1.5.dp,
+                    color = accent,
+                )
+                SubagentRunRegistry.ToolStepStatus.SUCCESS -> Icon(
+                    Icons.Default.CheckCircle,
                     contentDescription = null,
-                    tint = accent,
+                    tint = ChatColors.success,
+                    modifier = Modifier
+                        .size(13.dp)
+                        .alpha(0.9f),
+                )
+                SubagentRunRegistry.ToolStepStatus.FAILED -> Icon(
+                    Icons.Default.Error,
+                    contentDescription = null,
+                    tint = ChatColors.error,
                     modifier = Modifier.size(13.dp),
                 )
             }
-        }
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .padding(start = 2.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                when (step.status) {
-                    SubagentRunRegistry.ToolStepStatus.RUNNING -> CircularProgressIndicator(
-                        modifier = Modifier.size(12.dp),
-                        strokeWidth = 1.5.dp,
-                        color = accent,
-                    )
-                    SubagentRunRegistry.ToolStepStatus.SUCCESS -> Icon(
-                        Icons.Default.CheckCircle,
-                        contentDescription = null,
-                        tint = ChatColors.success,
-                        modifier = Modifier
-                            .size(13.dp)
-                            .alpha(0.9f),
-                    )
-                    SubagentRunRegistry.ToolStepStatus.FAILED -> Icon(
-                        Icons.Default.Error,
-                        contentDescription = null,
-                        tint = ChatColors.error,
-                        modifier = Modifier.size(13.dp),
-                    )
-                }
-                Spacer(modifier = Modifier.width(6.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = step.toolTitle.ifBlank { step.toolName },
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                color = ChatColors.primaryText,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            if (step.durationMs > 0) {
                 Text(
-                    text = step.toolTitle.ifBlank { step.toolName },
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = ChatColors.primaryText,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
+                    formatSubagentDuration(step.durationMs),
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = ChatColors.secondaryText,
                 )
-                if (step.durationMs > 0) {
-                    Text(
-                        formatSubagentDuration(step.durationMs),
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                        color = ChatColors.secondaryText,
-                    )
-                }
             }
-            if (hasOutput) {
-                Spacer(modifier = Modifier.height(6.dp))
-                val lineCount = step.output.count { it == '\n' } + 1
-                val toggleable = lineCount > COLLAPSED_PREVIEW_LINES || expanded
-                // [T-subagent-ui-ansi] Colored rendering: ANSI SGR spans →
-                // styled text; collapsed keeps the styled tail 3 lines.
-                // [T-subagent-ui-chat-consistent] Black terminal card —
-                // same shell as the chat's ToolDetailSheet output card
-                // (black bg, 0xFF404040 border, success-green base text).
-                SubagentColoredOutput(
-                    rawOutput = step.output,
-                    expanded = expanded,
-                    previewLines = COLLAPSED_PREVIEW_LINES,
+        }
+        if (hasOutput) {
+            Spacer(modifier = Modifier.height(6.dp))
+            val lineCount = step.output.count { it == '\n' } + 1
+            val toggleable = lineCount > COLLAPSED_PREVIEW_LINES || expanded
+            // [T-subagent-ui-ansi] Colored rendering: ANSI SGR spans →
+            // styled text; collapsed keeps the styled tail 3 lines.
+            // [T-subagent-ui-chat-consistent] Black terminal card —
+            // same shell as the chat's ToolDetailSheet output card
+            // (black bg, 0xFF404040 border, success-green base text).
+            SubagentColoredOutput(
+                rawOutput = step.output,
+                expanded = expanded,
+                previewLines = COLLAPSED_PREVIEW_LINES,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color.Black, RoundedCornerShape(8.dp))
+                    .border(0.5.dp, Color(0xFF404040), RoundedCornerShape(8.dp))
+                    .clickable(enabled = toggleable) {
+                        collapsed[step.id] = expanded
+                        manualOverride[step.id] = true
+                    }
+                    .padding(8.dp)
+                    .animateContentSize(),
+            )
+            // Toggle affordance only when there is something to toggle —
+            // short outputs (≤ preview lines) never grow a chevron row.
+            if (toggleable) {
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(Color.Black, RoundedCornerShape(8.dp))
-                        .border(0.5.dp, Color(0xFF404040), RoundedCornerShape(8.dp))
-                        .clickable(enabled = toggleable) {
+                        .padding(top = 2.dp)
+                        .clickable {
                             collapsed[step.id] = expanded
                             manualOverride[step.id] = true
-                        }
-                        .padding(8.dp)
-                        .animateContentSize(),
-                )
-                // Toggle affordance only when there is something to toggle —
-                // short outputs (≤ preview lines) never grow a chevron row.
-                if (toggleable) {
-                    Row(
+                        },
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center,
+                ) {
+                    val rotation by animateFloatAsState(
+                        targetValue = if (expanded) 0f else -90f,
+                        animationSpec = tween(durationMillis = 150),
+                        label = "chevron",
+                    )
+                    Icon(
+                        Icons.Default.KeyboardArrowDown,
+                        contentDescription = null,
+                        tint = ChatColors.tertiaryText,
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 2.dp)
-                            .clickable {
-                                collapsed[step.id] = expanded
-                                manualOverride[step.id] = true
-                            },
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center,
-                    ) {
-                        val rotation by animateFloatAsState(
-                            targetValue = if (expanded) 0f else -90f,
-                            animationSpec = tween(durationMillis = 150),
-                            label = "chevron",
-                        )
-                        Icon(
-                            Icons.Default.KeyboardArrowDown,
-                            contentDescription = null,
-                            tint = ChatColors.tertiaryText,
-                            modifier = Modifier
-                                .size(13.dp)
-                                .graphicsLayer { rotationZ = rotation },
-                        )
-                        Text(
-                            if (expanded) "collapse" else "full output",
-                            fontSize = 11.sp,
-                            color = ChatColors.tertiaryText,
-                        )
-                    }
+                            .size(13.dp)
+                            .graphicsLayer { rotationZ = rotation },
+                    )
+                    Text(
+                        if (expanded) "collapse" else "full output",
+                        fontSize = 11.sp,
+                        color = ChatColors.tertiaryText,
+                    )
                 }
             }
         }
+    }
     }
 }

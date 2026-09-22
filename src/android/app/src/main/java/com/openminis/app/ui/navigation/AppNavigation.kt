@@ -1232,6 +1232,13 @@ fun AppNavigation(
             ),
         ) { backStackEntry ->
             val runId = backStackEntry.arguments?.getString("runId") ?: return@composable
+            // [T-subagent-ui-report-md] Web links from a report open in the
+            // same in-app preview sheet the chat uses. Held as route-local
+            // state (there is no web-preview nav destination) exactly as
+            // ChatScreen holds `previewUrl`.
+            val reportUrl = androidx.compose.runtime.remember {
+                androidx.compose.runtime.mutableStateOf<String?>(null)
+            }
             SubagentDetailScreen(
                 runId = runId,
                 onBack = { navController.safePopBackStack() },
@@ -1239,7 +1246,43 @@ fun AppNavigation(
                 // cancel action (nav has no VM reference) — same bridge that
                 // supplies the runs flow.
                 onStop = { id -> com.openminis.app.ui.subagent.ChatSubagentRunsHolder.cancelRun?.invoke(id) },
+                // [T-subagent-ui-report-md] Report links are dispatched HERE,
+                // not in ChatScreen: a `minis://workspace/x.md` tap must open
+                // the nav-level file preview, and only this scope owns the
+                // NavController to do it. Routing is the SAME resolver the
+                // chat uses, so a path in a report and a path in a message
+                // land in the same place.
+                onOpenLink = { url ->
+                    val ctx = context
+                    val session =
+                        com.openminis.app.ui.subagent.ChatSubagentRunsHolder.sessionId
+                    when (val action = com.openminis.app.ui.chat.ChatLinkResolver.resolve(url, session, ctx)) {
+                        is com.openminis.app.ui.chat.ChatLinkAction.DeepLink ->
+                            com.openminis.app.ui.chat.ChatLinkResolver.dispatchDeepLink(ctx, url)
+                        is com.openminis.app.ui.chat.ChatLinkAction.SandboxFile -> {
+                            FilePreviewHolder.currentItem = action.item
+                            navController.safeNavigate(Routes.FILE_PREVIEW)
+                        }
+                        is com.openminis.app.ui.chat.ChatLinkAction.Web ->
+                            reportUrl.value = url
+                        is com.openminis.app.ui.chat.ChatLinkAction.ExternalApp ->
+                            com.openminis.app.ui.browser.BrowserExternalSchemeHandler
+                                .handle(ctx, action.url)
+                        is com.openminis.app.ui.chat.ChatLinkAction.MissingFile ->
+                            android.widget.Toast.makeText(
+                                ctx,
+                                ctx.getString(com.openminis.app.R.string.chat_link_file_missing),
+                                android.widget.Toast.LENGTH_SHORT,
+                            ).show()
+                    }
+                },
             )
+            reportUrl.value?.let { url ->
+                com.openminis.app.ui.components.UrlPreviewSheet(
+                    url = url,
+                    onDismiss = { reportUrl.value = null },
+                )
+            }
         }
 
         composable(

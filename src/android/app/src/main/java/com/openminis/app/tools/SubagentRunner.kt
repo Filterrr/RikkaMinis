@@ -1071,6 +1071,10 @@ class SubagentRunner(
                     // their results are recorded (naming now matches the
                     // actual semantics).
                     val partial = resultSb.toString().trim()
+                    // [T-subagent-declared-status] Same parse the prompt text
+                    // carries — mirrored into the registry so the detail page
+                    // can warn the human, not just the parent model.
+                    registry.setDeclaredStatus(run.id, SubagentSkill.parseReportStatus(partial))
                     registry.finishIfActive(
                         run.id, SubagentRunRegistry.RunStatus.SUCCESS,
                         resultText = partial,
@@ -1145,10 +1149,16 @@ class SubagentRunner(
         }
 
         registry.finishIfActive(run.id, SubagentRunRegistry.RunStatus.SUCCESS, resultText = finalText)
+        val declared = SubagentSkill.parseReportStatus(finalText)
+        // [T-subagent-declared-status] Mirror the report's self-assessment into
+        // the registry: the prompt text already annotates it for the parent,
+        // and the human looking at the detail page must not be told
+        // "Completed" by a report that says `status: partial`.
+        registry.setDeclaredStatus(run.id, declared)
         val result = SubagentResult(
             status = SubagentResult.Status.SUCCESS,
             report = finalText,
-            declaredStatus = SubagentSkill.parseReportStatus(finalText),
+            declaredStatus = declared,
             turns = turns,
             maxTurns = config.maxTurns,
             skillId = skill.id,
