@@ -1,6 +1,6 @@
 ---
 name: general-agent
-version: 1.4.1
+version: 1.4.2
 description: General-purpose sub-agent with the same tool capabilities as the main agent (shell, browser, file read/write/edit, image reading). Spawn via spawn_agent for delegating complex sub-tasks — research, code exploration, multi-step file operations, parallel investigation. The sub-agent works in an isolated context and returns a structured, anchor-verifiable final report.
 subagent: true
 max_turns: 40
