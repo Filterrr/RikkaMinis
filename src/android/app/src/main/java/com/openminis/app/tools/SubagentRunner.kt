@@ -717,6 +717,24 @@ class SubagentRunner(
         val artifacts = mutableListOf<String>()
         var turns = 0
         var lastText = ""
+        // [T-subagent-thinking] Resolve the reasoning level ONCE, before the
+        // loop, and record the outcome on the run. The value that reaches the
+        // provider may legitimately differ from the skill's request (the
+        // model may not support reasoning), and a silent downgrade is
+        // indistinguishable from a bug — the meta chip on the detail page
+        // makes the effective choice visible instead.
+        val reasoningLevel = resolveSubagentThinkingLevel(
+            requested = config.thinkingLevel,
+            modelSupportsReasoning = provider.model.supportsReasoning,
+        )
+        registry.setReasoningEnabled(run.id, reasoningLevel.isEnabled)
+        if (config.thinkingLevel.isEnabled && !reasoningLevel.isEnabled) {
+            registry.appendNotice(
+                run.id,
+                "[thinking: requested ${config.thinkingLevel.displayName} but " +
+                    "${provider.model.displayName} does not support reasoning — ran with it off]",
+            )
+        }
         // [T-subagent-loop-detector] A per-run loop detector with the SAME
         // semantics the main loop uses (10 warnings / 20 blocks, poll-aware).
         //
@@ -734,6 +752,12 @@ class SubagentRunner(
         // [T-subagent-context-budget] Last API-reported context size, 0 until a
         // Usage chunk says otherwise — trusted over the local estimate.
         var lastContextTokens = 0
+        // [T-subagent-thinking] Latest `ReasoningContent` blob seen on this
+        // stream. This channel re-sends the ACCUMULATED reasoning on every
+        // chunk within a turn, so the difference against this value is the
+        // only part worth appending; it is reset at each turn boundary
+        // because the next turn's reasoning genuinely starts fresh.
+        var lastReasoningBlob = ""
 
         try {
             while (turns < config.maxTurns) {
@@ -772,6 +796,12 @@ class SubagentRunner(
                 }
                 turns++
                 registry.turnStarted(run.id, turns)
+                // [T-subagent-thinking] The reasoning accumulator is per TURN:
+                // a provider re-sends the whole blob within one response, but
+                // the next turn's reasoning genuinely starts fresh. Clearing
+                // the snapshot here keeps the diff honest across turns instead
+                // of treating turn N+1's opening as a "shorter blob" to skip.
+                lastReasoningBlob = ""
                 val instance = provider.instanceContext ?: let {
                     registry.finishIfActive(
                         run.id, SubagentRunRegistry.RunStatus.FAILED,
@@ -805,12 +835,39 @@ class SubagentRunner(
                             maxTokens = config.maxOutputTokens,
                             temperature = null,
                             tools = subagentTools,
-                            thinkingLevel = ThinkingLevel.OFF,
+                            thinkingLevel = reasoningLevel,
                         ).collect { chunk ->
                             when (chunk) {
                                 is LLMStreamChunk.Text -> {
                                     textSb.append(chunk.text)
                                     registry.appendResultText(run.id, chunk.text)
+                                    // [T-subagent-chat-stream] Same delta also
+                                    // extends the transcript, so narration and
+                                    // tool pills keep their true order.
+                                    registry.appendSegmentText(run.id, chunk.text)
+                                }
+                                // [T-subagent-thinking] Reasoning used to be
+                                // dropped on the floor here (it shares the
+                                // `else -> {}` branch below). It is captured
+                                // separately from the answer — chain-of-
+                                // thought must never leak into the report the
+                                // parent consumes.
+                                is LLMStreamChunk.ThinkingDelta -> {
+                                    registry.appendSegmentThinking(run.id, chunk.text)
+                                }
+                                is LLMStreamChunk.ReasoningContent -> {
+                                    // Accumulated blob echoed on later turns:
+                                    // only the part NEW to this run is kept, or
+                                    // the same reasoning would be re-appended
+                                    // every turn and inflate the panel.
+                                    val fresh = newReasoningTail(
+                                        previous = lastReasoningBlob,
+                                        incoming = chunk.content,
+                                    )
+                                    lastReasoningBlob = chunk.content
+                                    if (fresh.isNotEmpty()) {
+                                        registry.appendSegmentThinking(run.id, fresh)
+                                    }
                                 }
                                 is LLMStreamChunk.ToolCallComplete -> {
                                     toolCalls.add(SubagentToolCall(chunk.id, chunk.name, chunk.args))
@@ -1598,6 +1655,53 @@ internal const val JOIN_REPORT_MAX_CHARS = 6000
  *
  * Top-level + pure so the wording contract is unit-testable.
  */
+/**
+ * [T-subagent-thinking] Effective reasoning level for a sub-agent run.
+ *
+ * The skill's frontmatter states an INTENT (`thinking: low`); whether it can
+ * be honoured depends on the model that the spawn actually resolved to. The
+ * rule mirrors the main chat's: a model that cannot reason runs with reasoning
+ * off rather than sending an unsupported parameter (which some providers
+ * reject outright). [modelSupportsReasoning] is tri-state — `null` means the
+ * catalog does not know, and this deliberately treats unknown as capable so
+ * the user's explicit request is not silently dropped for a model the app has
+ * no information about.
+ *
+ * Pure + top-level so the downgrade rule is unit-testable without a provider.
+ */
+internal fun resolveSubagentThinkingLevel(
+    requested: com.openminis.app.data.model.ThinkingLevel,
+    modelSupportsReasoning: Boolean?,
+): com.openminis.app.data.model.ThinkingLevel =
+    if (!requested.isEnabled) com.openminis.app.data.model.ThinkingLevel.OFF
+    else if (modelSupportsReasoning == false) com.openminis.app.data.model.ThinkingLevel.OFF
+    else requested
+
+/**
+ * [T-subagent-thinking] The part of an accumulated `ReasoningContent` blob
+ * that is NEW relative to [previous].
+ *
+ * Providers on this channel (OpenAI-family reasoning models) re-send the
+ * whole reasoning so far on every request within a turn, so only the tail
+ * beyond what was already seen may be appended — the blob verbatim would
+ * repeat the entire chain of thought on every chunk.
+ *
+ * A blob that is neither identical to nor an extension of [previous] is
+ * returned WHOLE. That case is not hypothetical: the accumulator resets per
+ * model turn, so the first chunk of turn N+1 is typically much shorter than
+ * the final blob of turn N, and any "must be longer than last time" rule
+ * drops it — silently losing the reasoning of every turn after the first.
+ * Repeating a few characters is the cheaper failure: it is visible, whereas
+ * a dropped chain of thought just looks like the model never reasoned.
+ */
+internal fun newReasoningTail(previous: String, incoming: String): String = when {
+    incoming.isEmpty() -> ""
+    incoming == previous -> ""
+    previous.isEmpty() -> incoming
+    incoming.startsWith(previous) -> incoming.substring(previous.length)
+    else -> incoming
+}
+
 internal fun boundReportForParent(
     report: String,
     journalPath: String?,

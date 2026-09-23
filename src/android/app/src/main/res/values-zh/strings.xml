@@ -1783,5 +1783,10 @@
     <string name="provider_credential_empty">尚未保存 Key</string>
     <string name="provider_credential_label_placeholder">名称(可选)</string>
     <string name="provider_credential_note_placeholder">备注(可选)</string>
-    <string name="provider_credential_replace_placeholder">粘贴新 Key 以替换</string>
+    <!-- [T-subagent-chat-stream] 子 agent 二级页：顶栏工具计数 -->
+    <string name="subagent_tools_label">工具调用</string>
+    <string name="subagent_stream_waiting">等待首个输出…</string>
+    <string name="subagent_output_empty">该工具没有输出。</string>
+    <string name="subagent_output_running">运行中——暂无输出。</string>
+    <string name="subagent_close">关闭</string>
 </resources>

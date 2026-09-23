@@ -72,6 +72,39 @@ object SubagentRunJournal {
         appendLine()
         appendLine(run.query)
         appendLine()
+        // [T-subagent-chat-stream] The ORDERED transcript — narration,
+        // reasoning and tool calls in the order they happened. This is what
+        // actually occurred; `## Steps` below is the flat tool-only index
+        // kept for readers (and tests) that expect it. Reasoning is included
+        // here because the journal is the durable record of the run and the
+        // page only holds a bounded tail of it.
+        if (run.segments.isNotEmpty()) {
+            appendLine("## Transcript")
+            appendLine()
+            for (segment in run.segments) {
+                when (segment) {
+                    is SubagentRunRegistry.Segment.Text -> {
+                        appendLine("**turn ${segment.turn} — text**")
+                        appendLine()
+                        appendLine(segment.content.trim())
+                        appendLine()
+                    }
+                    is SubagentRunRegistry.Segment.Thinking -> {
+                        appendLine("**turn ${segment.turn} — thinking**")
+                        appendLine()
+                        appendLine(segment.content.trim())
+                        appendLine()
+                    }
+                    is SubagentRunRegistry.Segment.ToolCall -> {
+                        appendLine(
+                            "**turn ${segment.turn} — tool: " +
+                                "${segment.toolTitle.ifBlank { segment.toolName }}**",
+                        )
+                        appendLine()
+                    }
+                }
+            }
+        }
         appendLine("## Report")
         appendLine()
         if (resultText.isBlank()) appendLine("(no text output produced)") else appendLine(resultText)

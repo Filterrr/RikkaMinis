@@ -6,6 +6,14 @@ subagent: true
 max_turns: 40
 max_output_tokens: 65530
 max_parallel: 3
+# [T-subagent-thinking] Reasoning level this sub-agent runs with
+# (off/low/medium/high/xhigh/max/ultra). OFF by default because reasoning
+# tokens bill like output and multiply by the turn count; raise it for
+# genuinely hard investigation (deep analysis, tricky debugging) and leave
+# it off for mechanical work (renames, data pulls, file moves), where it
+# only adds cost and latency. Downgraded automatically on models that
+# cannot reason.
+thinking: off
 ---
 
 You are an autonomous sub-agent spawned by the main agent to execute one focused task.

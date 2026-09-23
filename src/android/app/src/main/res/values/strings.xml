@@ -1864,4 +1864,10 @@
     <string name="provider_credential_label_placeholder">Name (optional)</string>
     <string name="provider_credential_note_placeholder">Note (optional)</string>
     <string name="provider_credential_replace_placeholder">Paste a new key to replace</string>
+    <!-- [T-subagent-chat-stream] Sub-agent detail page: top-bar tool counter -->
+    <string name="subagent_tools_label">Tool calls</string>
+    <string name="subagent_stream_waiting">waiting for first output…</string>
+    <string name="subagent_output_empty">This tool produced no output.</string>
+    <string name="subagent_output_running">Running — no output yet.</string>
+    <string name="subagent_close">Close</string>
 </resources>
