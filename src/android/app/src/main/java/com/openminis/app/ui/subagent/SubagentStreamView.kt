@@ -118,20 +118,25 @@ internal sealed interface SubagentStreamItem {
 internal fun buildSubagentStreamItems(run: SubagentRunRegistry.Run): List<SubagentStreamItem> {
     val stepsById = run.stepsById
     val items = mutableListOf<SubagentStreamItem>()
-    run.segments.forEachIndexed { index, segment ->
+    run.segments.forEach { segment ->
         when (segment) {
             is SubagentRunRegistry.Segment.Text -> {
-                if (segment.content.isEmpty()) return@forEachIndexed
+                if (segment.content.isEmpty()) return@forEach
                 items += SubagentStreamItem.Narrate(
-                    key = "seg-text-$index-t${segment.turn}",
+                    // seq is monotonic per registry and does NOT shift when
+                    // MAX_SEGMENTS pruning rotates the head — the LazyColumn
+                    // keeps item identity (scroll position, animations) while
+                    // the transcript grows past its cap. index would shift on
+                    // every prune and rebuild every row.
+                    key = "seg-text-${segment.seq}",
                     text = segment.content,
                     streaming = false,
                 )
             }
             is SubagentRunRegistry.Segment.Thinking -> {
-                if (segment.content.isEmpty()) return@forEachIndexed
+                if (segment.content.isEmpty()) return@forEach
                 items += SubagentStreamItem.Reason(
-                    key = "seg-think-$index-t${segment.turn}",
+                    key = "seg-think-${segment.seq}",
                     text = segment.content,
                     streaming = false,
                 )
@@ -139,6 +144,9 @@ internal fun buildSubagentStreamItems(run: SubagentRunRegistry.Run): List<Subage
             is SubagentRunRegistry.Segment.ToolCall -> {
                 val step = stepsById[segment.id]
                 items += SubagentStreamItem.ToolUse(
+                    // Tool rows key on the STEP id (not seq): the pill opens
+                    // the output sheet through this id, and the step id is the
+                    // identity the registry itself guarantees unique.
                     key = "seg-tool-${segment.id}",
                     toolName = segment.toolName,
                     toolTitle = segment.toolTitle.ifBlank { step?.toolTitle.orEmpty() },
@@ -300,10 +308,15 @@ internal fun SubagentStreamBody(
                     is SubagentStreamItem.ToolUse -> ToolCallPill(
                         block = item.toBlock(),
                         allToolBlocks = emptyList(),
-                        // Per-pill stop mirrors the chat: only while running,
-                        // and only when the run is actually stoppable (a
-                        // detached run; inline runs have no separate stop).
-                        onStop = if (item.status == ToolBlockStatus.RUNNING) onStop else null,
+                        // [T-subagent-user-cancel] A Stop button that silently
+                        // does nothing is worse than none: cancelSubagentRun
+                        // REFUSES inline runs (they execute inside the parent
+                        // turn — the honest advice is "stop the turn"), so the
+                        // per-pill stop is offered only when the run is a
+                        // cancellable detached one. The parent screen passes
+                        // onStop already gated on detached + active; null here
+                        // renders the pill clean.
+                        onStop = onStop,
                         onOpenDetail = { onOpenToolOutput(item.toBlock()) },
                     )
                 }

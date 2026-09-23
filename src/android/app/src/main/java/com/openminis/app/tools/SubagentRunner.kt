@@ -752,12 +752,6 @@ class SubagentRunner(
         // [T-subagent-context-budget] Last API-reported context size, 0 until a
         // Usage chunk says otherwise — trusted over the local estimate.
         var lastContextTokens = 0
-        // [T-subagent-thinking] Latest `ReasoningContent` blob seen on this
-        // stream. This channel re-sends the ACCUMULATED reasoning on every
-        // chunk within a turn, so the difference against this value is the
-        // only part worth appending; it is reset at each turn boundary
-        // because the next turn's reasoning genuinely starts fresh.
-        var lastReasoningBlob = ""
 
         try {
             while (turns < config.maxTurns) {
@@ -796,12 +790,6 @@ class SubagentRunner(
                 }
                 turns++
                 registry.turnStarted(run.id, turns)
-                // [T-subagent-thinking] The reasoning accumulator is per TURN:
-                // a provider re-sends the whole blob within one response, but
-                // the next turn's reasoning genuinely starts fresh. Clearing
-                // the snapshot here keeps the diff honest across turns instead
-                // of treating turn N+1's opening as a "shorter blob" to skip.
-                lastReasoningBlob = ""
                 val instance = provider.instanceContext ?: let {
                     registry.finishIfActive(
                         run.id, SubagentRunRegistry.RunStatus.FAILED,
@@ -825,6 +813,14 @@ class SubagentRunner(
                 while (true) {
                     textSb.setLength(0)
                     toolCalls.clear()
+                    // [T-subagent-chat-stream] Snapshot the transcript position
+                    // BEFORE this attempt writes anything. A transient failure
+                    // mid-stream (SSL reset, worker death) leaves the deltas
+                    // the attempt already emitted in the registry — without a
+                    // rollback the retry would append them AGAIN, duplicating
+                    // every narration / reasoning row of the turn.
+                    val attemptSnap = registry.turnSnapshot(run.id)
+                    val attemptToolIds = mutableListOf<String>()
                     try {
                         ProviderExecutionGateway.stream(
                             context = context,
@@ -856,21 +852,23 @@ class SubagentRunner(
                                     registry.appendSegmentThinking(run.id, chunk.text)
                                 }
                                 is LLMStreamChunk.ReasoningContent -> {
-                                    // Accumulated blob echoed on later turns:
-                                    // only the part NEW to this run is kept, or
-                                    // the same reasoning would be re-appended
-                                    // every turn and inflate the panel.
-                                    val fresh = newReasoningTail(
-                                        previous = lastReasoningBlob,
-                                        incoming = chunk.content,
+                                    // Accumulated blob echoed at stream end.
+                                    // OpenAI-family providers ALSO stream the
+                                    // same reasoning as ThinkingDelta events,
+                                    // so the blob is a duplicate of what the
+                                    // deltas already delivered — dedupe=true
+                                    // makes it a no-op in that case while
+                                    // still accepting new text from providers
+                                    // that ONLY send the blob.
+                                    registry.appendSegmentThinking(
+                                        run.id,
+                                        chunk.content,
+                                        dedupe = true,
                                     )
-                                    lastReasoningBlob = chunk.content
-                                    if (fresh.isNotEmpty()) {
-                                        registry.appendSegmentThinking(run.id, fresh)
-                                    }
                                 }
                                 is LLMStreamChunk.ToolCallComplete -> {
                                     toolCalls.add(SubagentToolCall(chunk.id, chunk.name, chunk.args))
+                                    attemptToolIds.add(chunk.id)
                                     registry.stepStarted(
                                         run.id, chunk.id, turns, chunk.name,
                                         try {
@@ -926,12 +924,26 @@ class SubagentRunner(
                             // emits no closing summary, and these lines were
                             // being delivered to the parent AS the report
                             // (dogfood subagent-1/2, 2026-09-14 — the wake-up
-                            // "report" was nothing but retry chatter).
+                            // "report" was nothing but retry chatter). The
+                            // notice is written AFTER the segment rollback
+                            // below so the retry cannot wipe it — notices and
+                            // segments are separate fields, but sequencing the
+                            // rollback first keeps the intent obvious.
                             registry.appendNotice(
                                 run.id,
                                 "[transient stream error ($errDesc) — retrying " +
                                     "$streamRetryAttempt/${STREAM_RETRY_DELAYS_SEC.size} in ${delaySec}s]",
                             )
+                            // [T-subagent-chat-stream] Roll back this attempt's
+                            // partial transcript + tool rows before the retry,
+                            // so the retried stream does not double them. The
+                            // notice ABOVE is written after the rollback would
+                            // wipe it — notices live outside segments, so the
+                            // order here is: rollback segments, then the
+                            // notice (already appended before this line) is
+                            // untouched because resetTurn only touches
+                            // segments/steps.
+                            registry.resetTurn(run.id, attemptSnap, attemptToolIds)
                             kotlinx.coroutines.delay(delaySec * 1000L)
                             continue
                         }
@@ -1676,31 +1688,6 @@ internal fun resolveSubagentThinkingLevel(
     if (!requested.isEnabled) com.openminis.app.data.model.ThinkingLevel.OFF
     else if (modelSupportsReasoning == false) com.openminis.app.data.model.ThinkingLevel.OFF
     else requested
-
-/**
- * [T-subagent-thinking] The part of an accumulated `ReasoningContent` blob
- * that is NEW relative to [previous].
- *
- * Providers on this channel (OpenAI-family reasoning models) re-send the
- * whole reasoning so far on every request within a turn, so only the tail
- * beyond what was already seen may be appended — the blob verbatim would
- * repeat the entire chain of thought on every chunk.
- *
- * A blob that is neither identical to nor an extension of [previous] is
- * returned WHOLE. That case is not hypothetical: the accumulator resets per
- * model turn, so the first chunk of turn N+1 is typically much shorter than
- * the final blob of turn N, and any "must be longer than last time" rule
- * drops it — silently losing the reasoning of every turn after the first.
- * Repeating a few characters is the cheaper failure: it is visible, whereas
- * a dropped chain of thought just looks like the model never reasoned.
- */
-internal fun newReasoningTail(previous: String, incoming: String): String = when {
-    incoming.isEmpty() -> ""
-    incoming == previous -> ""
-    previous.isEmpty() -> incoming
-    incoming.startsWith(previous) -> incoming.substring(previous.length)
-    else -> incoming
-}
 
 internal fun boundReportForParent(
     report: String,

@@ -3,6 +3,7 @@ package com.openminis.app.tools
 import com.openminis.app.data.model.ThinkingLevel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -16,6 +17,8 @@ import org.junit.Test
  *   • consecutive deltas coalesce (no per-token segment explosion)
  *   • reasoning never lands in [SubagentRunRegistry.Run.resultText]
  *   • both lists are bounded
+ *   • the accumulated reasoning blob cannot duplicate the streamed deltas
+ *   • a retried stream attempt rolls back its partial writes (no doubling)
  */
 class SubagentTranscriptTest {
 
@@ -164,22 +167,153 @@ class SubagentTranscriptTest {
         )
     }
 
-    // ── reasoning blob diffing ───────────────────────────────────────────
+    // ── reasoning blob dedup（provider 双通道）──────────────────────────
 
     @Test
-    fun `accumulated reasoning only appends the new tail`() {
-        assertEquals("de", newReasoningTail(previous = "abc", incoming = "abcde"))
-        // Unchanged blob -> nothing new.
-        assertEquals("", newReasoningTail(previous = "abc", incoming = "abc"))
-        // Shorter blob arrives (the per-turn accumulator reset) -> still the
-        // whole text, because dropping it loses a whole turn's reasoning.
-        assertEquals("a", newReasoningTail(previous = "abc", incoming = "a"))
-        // First blob -> whole text.
-        assertEquals("abc", newReasoningTail(previous = "", incoming = "abc"))
-        // Divergent blob -> returned whole rather than losing new text.
-        assertEquals("xyz", newReasoningTail(previous = "abc", incoming = "xyz"))
-        // Empty incoming -> nothing.
-        assertEquals("", newReasoningTail(previous = "abc", incoming = ""))
+    fun `accumulated reasoning blob does not duplicate the streamed deltas`() {
+        val (registry, run) = registryWithRun()
+
+        // What OpenAI-family actually does: every reasoning delta arrives as
+        // ThinkingDelta, then ONE accumulated ReasoningContent blob at the
+        // stream end. The blob is a duplicate of the deltas — appending it
+        // verbatim doubled the whole panel (bug found in self-review).
+        registry.appendSegmentThinking(run.id, "Step A: ")
+        registry.appendSegmentThinking(run.id, "check B. ")
+        registry.appendSegmentThinking(run.id, "Step A: check B. ", dedupe = true)
+
+        val snapshot = registry.runs.value.single()
+        assertEquals("Step A: check B. ", snapshot.thinkingText)
+        // Exactly ONE thinking segment survived.
+        assertEquals(
+            1,
+            snapshot.segments.count { it is SubagentRunRegistry.Segment.Thinking },
+        )
+    }
+
+    @Test
+    fun `reasoning blob with genuinely new tail is still accepted`() {
+        val (registry, run) = registryWithRun()
+        registry.appendSegmentThinking(run.id, "Step A. ")
+        // A provider that sends more text in the final blob than it streamed.
+        registry.appendSegmentThinking(run.id, "Step A. Extra conclusion.", dedupe = true)
+
+        val snapshot = registry.runs.value.single()
+        assertEquals("Step A. Extra conclusion.", snapshot.thinkingText)
+    }
+
+    @Test
+    fun `reasoning blob from a fresh panel is accepted whole`() {
+        val (registry, run) = registryWithRun()
+        // Provider that ONLY sends the accumulated blob (no deltas).
+        registry.appendSegmentThinking(run.id, "All the reasoning at once.", dedupe = true)
+        assertEquals("All the reasoning at once.", registry.runs.value.single().thinkingText)
+    }
+
+    // ── retry rollback ───────────────────────────────────────────────────
+
+    @Test
+    fun `resetTurn rolls back a failed attempt's partial transcript`() {
+        val (registry, run) = registryWithRun()
+        registry.appendSegmentText(run.id, "committed before the attempt. ")
+        val snap = registry.turnSnapshot(run.id)
+
+        // The failed attempt's partial writes:
+        registry.appendSegmentText(run.id, "partial narr")
+        registry.appendSegmentThinking(run.id, "partial think")
+        registry.stepStarted(run.id, "call-partial", 1, "file_read", "Read")
+
+        registry.resetTurn(run.id, snap, listOf("call-partial"))
+
+        val snapshot = registry.runs.value.single()
+        assertEquals(
+            listOf("committed before the attempt. "),
+            snapshot.segments.filterIsInstance<SubagentRunRegistry.Segment.Text>()
+                .map { it.content },
+        )
+        assertEquals(0, snapshot.segments.count { it is SubagentRunRegistry.Segment.Thinking })
+        assertNull(snapshot.stepsById["call-partial"])
+    }
+
+    @Test
+    fun `retry after rollback coalesces onto the pre-attempt segment`() {
+        val (registry, run) = registryWithRun()
+        registry.appendSegmentText(run.id, "pre. ")
+        val snap = registry.turnSnapshot(run.id)
+
+        // The failed attempt coalesces into the PRE-ATTEMPT segment (same
+        // turn, same kind) — this is the case a seq-only filter misses.
+        registry.appendSegmentText(run.id, "LOST PARTIAL")
+        registry.resetTurn(run.id, snap)
+
+        // The retry's first delta extends the PRE-ATTEMPT tail — byte-equal
+        // to the state had the failed attempt never written.
+        registry.appendSegmentText(run.id, "retry. ")
+        assertEquals(
+            "pre. retry. ",
+            (registry.runs.value.single().segments.single()
+                as SubagentRunRegistry.Segment.Text).content,
+        )
+    }
+
+    @Test
+    fun `rollback also truncates a coalesced thinking segment`() {
+        val (registry, run) = registryWithRun()
+        registry.appendSegmentThinking(run.id, "before ")
+        val snap = registry.turnSnapshot(run.id)
+        registry.appendSegmentThinking(run.id, "failed partial")
+        registry.resetTurn(run.id, snap)
+        registry.appendSegmentThinking(run.id, "after")
+
+        val snapshot = registry.runs.value.single()
+        assertEquals("before after", snapshot.thinkingText)
+        assertEquals(
+            1,
+            snapshot.segments.count { it is SubagentRunRegistry.Segment.Thinking },
+        )
+    }
+
+    @Test
+    fun `rollback undoes resultText written by the failed attempt`() {
+        val (registry, run) = registryWithRun()
+        // Pre-attempt state (earlier turns already delivered text).
+        registry.appendResultText(run.id, "turn-1 answer. ")
+        val snap = registry.turnSnapshot(run.id)
+
+        // The failed attempt streamed partial text — the runner writes BOTH
+        // the transcript AND resultText per delta, so the retry would double
+        // the partial answer inside what the parent eventually consumes.
+        registry.appendResultText(run.id, "partial ")
+        registry.appendSegmentText(run.id, "partial ")
+        registry.resetTurn(run.id, snap)
+
+        // Retry delivers the full turn text.
+        registry.appendResultText(run.id, "full answer.")
+
+        val snapshot = registry.runs.value.single()
+        assertEquals("turn-1 answer. full answer.", snapshot.resultText)
+        assertFalse(snapshot.resultText.contains("partial"))
+    }
+
+    // ── stable UI keys ───────────────────────────────────────────────────
+
+    @Test
+    fun `segment seq stays stable when the transcript is pruned`() {
+        val (registry, run) = registryWithRun()
+        registry.appendSegmentText(run.id, "first — will be pruned")
+        val firstSeq = registry.runs.value.single().segments.single().seq
+
+        // Push past the cap so pruning rotates the head.
+        repeat(SubagentRunRegistry.MAX_SEGMENTS) { i ->
+            registry.appendSegmentText(run.id, "t$i ")
+            registry.stepStarted(run.id, "call-$i", 1, "file_read", "Read $i")
+        }
+
+        val remaining = registry.runs.value.single().segments
+            .filterIsInstance<SubagentRunRegistry.Segment.Text>()
+        // The pruned-away segment is gone; every surviving seq differs from it
+        // and is strictly increasing — i.e. seq is identity, not index.
+        assertTrue(remaining.none { it.seq == firstSeq })
+        assertEquals(remaining.map { it.seq }, remaining.map { it.seq }.sorted())
     }
 
     // ── frontmatter parsing ──────────────────────────────────────────────

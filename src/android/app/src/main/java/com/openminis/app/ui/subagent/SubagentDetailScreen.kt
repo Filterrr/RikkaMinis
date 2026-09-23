@@ -292,7 +292,13 @@ fun SubagentDetailScreen(
             SubagentRunDetailBody(
                 run = run,
                 contentPadding = innerPadding,
-                onStop = if (run.isActive && onStop != null) {
+                onStop = if (run.isActive && onStop != null &&
+                    // [T-subagent-user-cancel] Only a DETACHED run is
+                    // stoppable from this page — an inline run executes inside
+                    // the parent turn, and a Stop button that just answers
+                    // "press Stop on the turn" is a dead control.
+                    ChatSubagentRunsHolder.isDetached(run.id)
+                ) {
                     { onStop(run.id) }
                 } else {
                     null

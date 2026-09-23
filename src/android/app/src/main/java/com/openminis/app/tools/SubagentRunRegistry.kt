@@ -87,11 +87,15 @@ class SubagentRunRegistry {
      * pill can render live status/output from [Run.steps].
      */
     sealed interface Segment {
+        /** Monotonic per-registry sequence — a stable identity for UI keys. */
+        val seq: Long
+
         /** Model turn (1-based) this segment belongs to. */
         val turn: Int
 
         /** Narration / answer text streamed by the sub-agent. */
         data class Text(
+            override val seq: Long,
             override val turn: Int,
             val content: String,
         ) : Segment
@@ -103,12 +107,14 @@ class SubagentRunRegistry {
          * thought into the answer.
          */
         data class Thinking(
+            override val seq: Long,
             override val turn: Int,
             val content: String,
         ) : Segment
 
         /** A tool call; [id] matches the [Step] with the same id. */
         data class ToolCall(
+            override val seq: Long,
             override val turn: Int,
             val id: String,
             val toolName: String,
@@ -258,6 +264,17 @@ class SubagentRunRegistry {
     /** Monotonic ids — unique within the VM lifetime, stable across updates. */
     private val idCounter = AtomicLong(0)
     fun nextId(prefix: String): String = "$prefix-${idCounter.incrementAndGet()}"
+
+    /**
+     * [T-subagent-chat-stream] Monotonic segment sequence — the stable UI key.
+     * Unlike the list index, it does NOT shift when [MAX_SEGMENTS] pruning
+     * drops head entries, so a LazyColumn keeps its item identity (and its
+     * scroll position / animations) while the transcript rotates. Internal
+     * (not private) because the runner snapshots it before each stream
+     * attempt to enable retry rollback — see [resetTurn].
+     */
+    internal val segmentSeq = AtomicLong(0)
+    internal fun nextSeq(): Long = segmentSeq.incrementAndGet()
 
     /**
      * Synchronous snapshot of "any run active" for imperative callers
@@ -458,6 +475,90 @@ class SubagentRunRegistry {
         updateRun(runId) { it.copy(turn = turn) }
     }
 
+    /**
+     * [T-subagent-transient-retry] Pre-attempt transcript snapshot — see
+     * [turnSnapshot] / [resetTurn].
+     *
+     * [attemptSeq] is the seq the attempt's NEW segments would exceed; the
+     * text/think fields carry the seq + content length of the segments a
+     * coalescing delta would extend (the trailing Text / Thinking at attempt
+     * start). Truncating those back to their snapshot length is what removes
+     * coalesced deltas — a pure seq filter cannot, because the coalesced
+     * segment's seq is OLDER than the attempt.
+     *
+     * [thinkingLen] / [resultLen] are the ACCUMULATOR lengths (run-wide,
+     * across turns). The runner writes both per delta DURING the stream, so
+     * a failed attempt pollutes them exactly like the segments — and the
+     * resultText doubling predates the transcript: the retry loop never
+     * rolled it back.
+     */
+    data class TurnSnapshot(
+        val attemptSeq: Long,
+        val textSeq: Long?,
+        val textLen: Int,
+        val thinkSeq: Long?,
+        val thinkLen: Int,
+        val thinkingLen: Int,
+        val resultLen: Int,
+    )
+
+    /**
+     * Snapshot the transcript state before a stream attempt. Cheap: reads the
+     * current list once, no copying of content.
+     */
+    fun turnSnapshot(runId: String): TurnSnapshot {
+        val run = _runs.value.firstOrNull { it.id == runId }
+        val lastText = run?.segments?.lastOrNull { it is Segment.Text } as? Segment.Text
+        val lastThink = run?.segments?.lastOrNull { it is Segment.Thinking } as? Segment.Thinking
+        return TurnSnapshot(
+            attemptSeq = nextSeq(),
+            textSeq = lastText?.seq,
+            textLen = lastText?.content?.length ?: 0,
+            thinkSeq = lastThink?.seq,
+            thinkLen = lastThink?.content?.length ?: 0,
+            thinkingLen = run?.thinkingText?.length ?: 0,
+            resultLen = run?.resultText?.length ?: 0,
+        )
+    }
+
+    /**
+     * [T-subagent-transient-retry] Roll back what a FAILED stream attempt
+     * already wrote, so the retried attempt's deltas do not DOUBLE the
+     * narration / reasoning — in the transcript, in the thinking accumulator,
+     * AND in resultText (which the parent later consumes; a doubled partial
+     * report is not just a UI glitch).
+     *
+     * [partialToolIds] are the tool calls the attempt opened; their [Step]
+     * rows and transcript entries are removed — the retry re-registers them
+     * (stepStarted is idempotent per id) with fresh state.
+     */
+    fun resetTurn(runId: String, snap: TurnSnapshot, partialToolIds: List<String> = emptyList()) {
+        val dead = partialToolIds.toSet()
+        updateRun(runId) { run ->
+            run.copy(
+                segments = run.segments
+                    .filter { it.seq < snap.attemptSeq }
+                    .map { seg ->
+                        when {
+                            snap.textSeq != null && seg is Segment.Text && seg.seq == snap.textSeq ->
+                                seg.copy(content = seg.content.take(snap.textLen))
+                            snap.thinkSeq != null && seg is Segment.Thinking && seg.seq == snap.thinkSeq ->
+                                seg.copy(content = seg.content.take(snap.thinkLen))
+                            else -> seg
+                        }
+                    },
+                steps = run.steps.filter { it.id !in dead },
+                thinkingText = run.thinkingText.take(snap.thinkingLen),
+                // resultText is a takeLast-bounded tail; a straight take() on
+                // the bounded string is still exact here because the snapshot
+                // length can only refer to the same bounded content the run
+                // held at snapshot time (lengths only grow between snapshot
+                // and rollback within one single-threaded loop).
+                resultText = run.resultText.take(snap.resultLen),
+            )
+        }
+    }
+
     /** Tool call started inside the sub-agent loop. */
     fun stepStarted(runId: String, stepId: String, turn: Int, toolName: String, toolTitle: String) {
         updateRun(runId) { run ->
@@ -492,7 +593,7 @@ class SubagentRunRegistry {
         toolTitle: String,
     ): List<Segment> {
         if (current.any { it is Segment.ToolCall && it.id == stepId }) return current
-        val item = Segment.ToolCall(turn, stepId, toolName, toolTitle)
+        val item = Segment.ToolCall(nextSeq(), turn, stepId, toolName, toolTitle)
         // Replacing the list (not mutating it) keeps Run a value snapshot.
         return appendBounded(current, item)
     }
@@ -514,14 +615,40 @@ class SubagentRunRegistry {
      * [T-subagent-thinking] Append reasoning to the transcript AND to the
      * run's [Run.thinkingText] accumulator (the page's "deep thinking" row
      * reads the accumulator so it survives segment pruning).
+     *
+     * [dedupe] handles the provider that emits BOTH channels for the same
+     * reasoning — per-delta `ThinkingDelta` events AND one accumulated
+     * `ReasoningContent` blob at stream end (OpenAI-family does exactly
+     * this; see OpenAIProvider's `sawReasoningField` flush). The blob equals
+     * what the deltas already delivered, so appending it verbatim would
+     * duplicate the whole panel. The trailing-thinking match below makes the
+     * accumulated blob a no-op while still accepting genuinely new text
+     * (e.g. a provider that ONLY sends the blob).
      */
-    fun appendSegmentThinking(runId: String, delta: String) {
+    fun appendSegmentThinking(runId: String, delta: String, dedupe: Boolean = false) {
         if (delta.isEmpty()) return
         updateRun(runId) { run ->
-            run.copy(
-                segments = appendStreamed(run.segments, run.turn, delta, thinking = true),
-                thinkingText = (run.thinkingText + delta).takeLast(MAX_THINKING_TEXT_CHARS),
-            )
+            if (dedupe) {
+                val trailing = run.segments.lastOrNull() as? Segment.Thinking
+                if (trailing != null && delta.startsWith(trailing.content)) {
+                    val fresh = delta.substring(trailing.content.length)
+                    if (fresh.isEmpty()) return@updateRun run
+                    run.copy(
+                        segments = appendStreamed(run.segments, run.turn, fresh, thinking = true),
+                        thinkingText = (run.thinkingText + fresh).takeLast(MAX_THINKING_TEXT_CHARS),
+                    )
+                } else {
+                    run.copy(
+                        segments = appendStreamed(run.segments, run.turn, delta, thinking = true),
+                        thinkingText = (run.thinkingText + delta).takeLast(MAX_THINKING_TEXT_CHARS),
+                    )
+                }
+            } else {
+                run.copy(
+                    segments = appendStreamed(run.segments, run.turn, delta, thinking = true),
+                    thinkingText = (run.thinkingText + delta).takeLast(MAX_THINKING_TEXT_CHARS),
+                )
+            }
         }
     }
 
@@ -554,7 +681,7 @@ class SubagentRunRegistry {
             }
             return current.dropLast(1) + grown
         }
-        val fresh: Segment = if (thinking) Segment.Thinking(turn, delta) else Segment.Text(turn, delta)
+        val fresh: Segment = if (thinking) Segment.Thinking(nextSeq(), turn, delta) else Segment.Text(nextSeq(), turn, delta)
         return appendBounded(current, fresh)
     }
 
