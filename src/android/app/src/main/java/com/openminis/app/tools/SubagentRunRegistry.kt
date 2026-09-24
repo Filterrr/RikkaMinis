@@ -68,6 +68,61 @@ class SubagentRunRegistry {
     enum class ToolStepStatus { RUNNING, SUCCESS, FAILED }
 
     /**
+     * [T-subagent-chat-stream] One entry of the run's INTERLEAVED transcript:
+     * the sub-agent's own narration, its reasoning, and its tool calls, in the
+     * order they actually happened. The detail page renders these as a chat
+     * stream (text → tool pill → text → tool pill), the same reading order the
+     * parent chat uses.
+     *
+     * Why a separate list instead of deriving it from [Run.steps] + text:
+     * text deltas land in [Run.resultText] as ONE concatenated blob and steps
+     * carry only tool calls, so the alternation — the thing that makes the log
+     * readable — was unrecoverable. [turn] carries the model turn the item
+     * belongs to, so a renderer can group items per turn without re-parsing
+     * text positions.
+     *
+     * [Text]/[Thinking] are append-only accumulators (each delta extends the
+     * last item of the same kind inside the same turn); [ToolCall] is created
+     * on ToolCallComplete and shares its id with the matching [Step], so the
+     * pill can render live status/output from [Run.steps].
+     */
+    sealed interface Segment {
+        /** Monotonic per-registry sequence — a stable identity for UI keys. */
+        val seq: Long
+
+        /** Model turn (1-based) this segment belongs to. */
+        val turn: Int
+
+        /** Narration / answer text streamed by the sub-agent. */
+        data class Text(
+            override val seq: Long,
+            override val turn: Int,
+            val content: String,
+        ) : Segment
+
+        /**
+         * [T-subagent-thinking] Reasoning stream (`ThinkingDelta` /
+         * `ReasoningContent`). Distinct from [Text] so the page can render it
+         * as a collapsible "Deep thinking" row instead of mixing chain-of-
+         * thought into the answer.
+         */
+        data class Thinking(
+            override val seq: Long,
+            override val turn: Int,
+            val content: String,
+        ) : Segment
+
+        /** A tool call; [id] matches the [Step] with the same id. */
+        data class ToolCall(
+            override val seq: Long,
+            override val turn: Int,
+            val id: String,
+            val toolName: String,
+            val toolTitle: String,
+        ) : Segment
+    }
+
+    /**
      * A sub-agent run. Immutable snapshot — updates replace the whole object
      * via [updateRun] so Compose sees a new reference (cheap diffing).
      */
@@ -115,6 +170,28 @@ class SubagentRunRegistry {
         val maxTurns: Int = 0,
         /** Final or streaming text produced by the sub-agent. */
         val resultText: String = "",
+        /**
+         * [T-subagent-chat-stream] Interleaved transcript — narration,
+         * reasoning and tool calls in arrival order. Empty for runs that
+         * produced nothing yet (and for runs restored from a journal written
+         * before this field existed). [steps] stays the source of truth for
+         * per-tool status/output; this list carries the ORDER and the prose.
+         */
+        val segments: List<Segment> = emptyList(),
+        /**
+         * [T-subagent-thinking] Accumulated reasoning text of the CURRENT and
+         * past turns, kept separate from [resultText] so chain-of-thought is
+         * never delivered as the report. Bounded by [MAX_THINKING_TEXT_CHARS].
+         */
+        val thinkingText: String = "",
+        /**
+         * [T-subagent-thinking] True when this run was actually started with
+         * reasoning enabled (the skill asked for it AND the model supports
+         * it). Rendered as a meta chip so "why is there no thinking block?"
+         * is answerable from the page instead of guesswork — a request that
+         * was silently downgraded must not look like a bug.
+         */
+        val reasoningEnabled: Boolean = false,
         /** Error detail when [status] is FAILED/CANCELLED/TIMED_OUT. */
         val error: String? = null,
         /**
@@ -160,6 +237,13 @@ class SubagentRunRegistry {
             }
         val durationMs: Long
             get() = (if (endedAtMs > 0) endedAtMs else System.currentTimeMillis()) - startedAtMs
+
+        /** Tool steps as a map — the chat-stream pills read status/output here. */
+        val stepsById: Map<String, Step>
+            get() = steps.associateBy { it.id }
+
+        /** Ordered transcript, or an empty list for runs that have none yet. */
+        val transcript: List<Segment> get() = segments
     }
 
     private val _runs = MutableStateFlow<List<Run>>(emptyList())
@@ -180,6 +264,17 @@ class SubagentRunRegistry {
     /** Monotonic ids — unique within the VM lifetime, stable across updates. */
     private val idCounter = AtomicLong(0)
     fun nextId(prefix: String): String = "$prefix-${idCounter.incrementAndGet()}"
+
+    /**
+     * [T-subagent-chat-stream] Monotonic segment sequence — the stable UI key.
+     * Unlike the list index, it does NOT shift when [MAX_SEGMENTS] pruning
+     * drops head entries, so a LazyColumn keeps its item identity (and its
+     * scroll position / animations) while the transcript rotates. Internal
+     * (not private) because the runner snapshots it before each stream
+     * attempt to enable retry rollback — see [resetTurn].
+     */
+    internal val segmentSeq = AtomicLong(0)
+    internal fun nextSeq(): Long = segmentSeq.incrementAndGet()
 
     /**
      * Synchronous snapshot of "any run active" for imperative callers
@@ -380,6 +475,90 @@ class SubagentRunRegistry {
         updateRun(runId) { it.copy(turn = turn) }
     }
 
+    /**
+     * [T-subagent-transient-retry] Pre-attempt transcript snapshot — see
+     * [turnSnapshot] / [resetTurn].
+     *
+     * [attemptSeq] is the seq the attempt's NEW segments would exceed; the
+     * text/think fields carry the seq + content length of the segments a
+     * coalescing delta would extend (the trailing Text / Thinking at attempt
+     * start). Truncating those back to their snapshot length is what removes
+     * coalesced deltas — a pure seq filter cannot, because the coalesced
+     * segment's seq is OLDER than the attempt.
+     *
+     * [thinkingLen] / [resultLen] are the ACCUMULATOR lengths (run-wide,
+     * across turns). The runner writes both per delta DURING the stream, so
+     * a failed attempt pollutes them exactly like the segments — and the
+     * resultText doubling predates the transcript: the retry loop never
+     * rolled it back.
+     */
+    data class TurnSnapshot(
+        val attemptSeq: Long,
+        val textSeq: Long?,
+        val textLen: Int,
+        val thinkSeq: Long?,
+        val thinkLen: Int,
+        val thinkingLen: Int,
+        val resultLen: Int,
+    )
+
+    /**
+     * Snapshot the transcript state before a stream attempt. Cheap: reads the
+     * current list once, no copying of content.
+     */
+    fun turnSnapshot(runId: String): TurnSnapshot {
+        val run = _runs.value.firstOrNull { it.id == runId }
+        val lastText = run?.segments?.lastOrNull { it is Segment.Text } as? Segment.Text
+        val lastThink = run?.segments?.lastOrNull { it is Segment.Thinking } as? Segment.Thinking
+        return TurnSnapshot(
+            attemptSeq = nextSeq(),
+            textSeq = lastText?.seq,
+            textLen = lastText?.content?.length ?: 0,
+            thinkSeq = lastThink?.seq,
+            thinkLen = lastThink?.content?.length ?: 0,
+            thinkingLen = run?.thinkingText?.length ?: 0,
+            resultLen = run?.resultText?.length ?: 0,
+        )
+    }
+
+    /**
+     * [T-subagent-transient-retry] Roll back what a FAILED stream attempt
+     * already wrote, so the retried attempt's deltas do not DOUBLE the
+     * narration / reasoning — in the transcript, in the thinking accumulator,
+     * AND in resultText (which the parent later consumes; a doubled partial
+     * report is not just a UI glitch).
+     *
+     * [partialToolIds] are the tool calls the attempt opened; their [Step]
+     * rows and transcript entries are removed — the retry re-registers them
+     * (stepStarted is idempotent per id) with fresh state.
+     */
+    fun resetTurn(runId: String, snap: TurnSnapshot, partialToolIds: List<String> = emptyList()) {
+        val dead = partialToolIds.toSet()
+        updateRun(runId) { run ->
+            run.copy(
+                segments = run.segments
+                    .filter { it.seq < snap.attemptSeq }
+                    .map { seg ->
+                        when {
+                            snap.textSeq != null && seg is Segment.Text && seg.seq == snap.textSeq ->
+                                seg.copy(content = seg.content.take(snap.textLen))
+                            snap.thinkSeq != null && seg is Segment.Thinking && seg.seq == snap.thinkSeq ->
+                                seg.copy(content = seg.content.take(snap.thinkLen))
+                            else -> seg
+                        }
+                    },
+                steps = run.steps.filter { it.id !in dead },
+                thinkingText = run.thinkingText.take(snap.thinkingLen),
+                // resultText is a takeLast-bounded tail; a straight take() on
+                // the bounded string is still exact here because the snapshot
+                // length can only refer to the same bounded content the run
+                // held at snapshot time (lengths only grow between snapshot
+                // and rollback within one single-threaded loop).
+                resultText = run.resultText.take(snap.resultLen),
+            )
+        }
+    }
+
     /** Tool call started inside the sub-agent loop. */
     fun stepStarted(runId: String, stepId: String, turn: Int, toolName: String, toolTitle: String) {
         updateRun(runId) { run ->
@@ -389,8 +568,137 @@ class SubagentRunRegistry {
                 id = stepId, turn = turn, toolName = toolName, toolTitle = toolTitle,
             )
             if (idx >= 0) steps[idx] = step else steps.add(step)
-            run.copy(steps = steps)
+            run.copy(
+                steps = steps,
+                // [T-subagent-chat-stream] The pill is a transcript item too:
+                // appended here (not in a separate call) so the ORDER of
+                // narration vs. tool calls survives without the call sites
+                // having to coordinate — stepStarted is already invoked from
+                // the exact point in the stream where the call arrived.
+                segments = appendToolCallSegment(run.segments, turn, stepId, toolName, toolTitle),
+            )
         }
+    }
+
+    /**
+     * [T-subagent-chat-stream] Append a tool call to the transcript, ignoring
+     * a repeat of a step already present (the stream can re-emit a tool call
+     * id on retry — the log must not grow a duplicate pill for it).
+     */
+    private fun appendToolCallSegment(
+        current: List<Segment>,
+        turn: Int,
+        stepId: String,
+        toolName: String,
+        toolTitle: String,
+    ): List<Segment> {
+        if (current.any { it is Segment.ToolCall && it.id == stepId }) return current
+        val item = Segment.ToolCall(nextSeq(), turn, stepId, toolName, toolTitle)
+        // Replacing the list (not mutating it) keeps Run a value snapshot.
+        return appendBounded(current, item)
+    }
+
+    /**
+     * [T-subagent-chat-stream] Append text to the transcript. Consecutive
+     * deltas inside the same turn extend the trailing [Segment.Text] rather
+     * than creating one segment per token — the renderer keys on segment
+     * identity and a 200-segment turn would thrash the LazyColumn.
+     */
+    fun appendSegmentText(runId: String, delta: String) {
+        if (delta.isEmpty()) return
+        updateRun(runId) { run ->
+            run.copy(segments = appendStreamed(run.segments, run.turn, delta, thinking = false))
+        }
+    }
+
+    /**
+     * [T-subagent-thinking] Append reasoning to the transcript AND to the
+     * run's [Run.thinkingText] accumulator (the page's "deep thinking" row
+     * reads the accumulator so it survives segment pruning).
+     *
+     * [dedupe] handles the provider that emits BOTH channels for the same
+     * reasoning — per-delta `ThinkingDelta` events AND one accumulated
+     * `ReasoningContent` blob at stream end (OpenAI-family does exactly
+     * this; see OpenAIProvider's `sawReasoningField` flush). The blob equals
+     * what the deltas already delivered, so appending it verbatim would
+     * duplicate the whole panel. The trailing-thinking match below makes the
+     * accumulated blob a no-op while still accepting genuinely new text
+     * (e.g. a provider that ONLY sends the blob).
+     */
+    fun appendSegmentThinking(runId: String, delta: String, dedupe: Boolean = false) {
+        if (delta.isEmpty()) return
+        updateRun(runId) { run ->
+            if (dedupe) {
+                val trailing = run.segments.lastOrNull() as? Segment.Thinking
+                if (trailing != null && delta.startsWith(trailing.content)) {
+                    val fresh = delta.substring(trailing.content.length)
+                    if (fresh.isEmpty()) return@updateRun run
+                    run.copy(
+                        segments = appendStreamed(run.segments, run.turn, fresh, thinking = true),
+                        thinkingText = (run.thinkingText + fresh).takeLast(MAX_THINKING_TEXT_CHARS),
+                    )
+                } else {
+                    run.copy(
+                        segments = appendStreamed(run.segments, run.turn, delta, thinking = true),
+                        thinkingText = (run.thinkingText + delta).takeLast(MAX_THINKING_TEXT_CHARS),
+                    )
+                }
+            } else {
+                run.copy(
+                    segments = appendStreamed(run.segments, run.turn, delta, thinking = true),
+                    thinkingText = (run.thinkingText + delta).takeLast(MAX_THINKING_TEXT_CHARS),
+                )
+            }
+        }
+    }
+
+    /**
+     * Shared tail-append for streamed prose: extend the trailing segment of
+     * the same turn + kind, else start a new one. Deltas interleaved with a
+     * tool call land in a NEW segment, which is exactly how the alternation
+     * ("text → pill → text") is reconstructed.
+     */
+    private fun appendStreamed(
+        current: List<Segment>,
+        turn: Int,
+        delta: String,
+        thinking: Boolean,
+    ): List<Segment> {
+        val last = current.lastOrNull()
+        val sameKind = when {
+            thinking -> last is Segment.Thinking && last.turn == turn
+            else -> last is Segment.Text && last.turn == turn
+        }
+        if (sameKind) {
+            // Exhaustive over the sealed interface so the accumulator type is
+            // never nullable; the ToolCall arm is unreachable here (sameKind
+            // only matches Text/Thinking) and simply declines to grow.
+            val grown: Segment = when (val l = last) {
+                is Segment.Text -> l.copy(content = l.content + delta)
+                is Segment.Thinking -> l.copy(content = l.content + delta)
+                is Segment.ToolCall -> return current
+                null -> return current
+            }
+            return current.dropLast(1) + grown
+        }
+        val fresh: Segment = if (thinking) Segment.Thinking(nextSeq(), turn, delta) else Segment.Text(nextSeq(), turn, delta)
+        return appendBounded(current, fresh)
+    }
+
+    /**
+     * [T-subagent-chat-stream] Bound the transcript so a 100-turn run cannot
+     * pin unbounded prose in a StateFlow. Oldest entries are dropped first —
+     * the tail is where the run currently is, and the full text survives in
+     * the journal for anything the user needs to re-read.
+     */
+    private fun appendBounded(current: List<Segment>, item: Segment): List<Segment> {
+        val next = current + item
+        return if (next.size > MAX_SEGMENTS) next.takeLast(MAX_SEGMENTS) else next
+    }
+
+    /** [T-subagent-thinking] Record whether reasoning actually ran (see Run). */
+    fun setReasoningEnabled(runId: String, enabled: Boolean) {
+        updateRun(runId) { if (it.reasoningEnabled == enabled) it else it.copy(reasoningEnabled = enabled) }
     }
 
     /**
@@ -553,6 +861,19 @@ class SubagentRunRegistry {
         const val MAX_STEP_OUTPUT_LINES = 60
         const val MAX_RESULT_TEXT_CHARS = 24_000
         private const val MAX_NOTICE_CHARS = 2_000
+        /**
+         * [T-subagent-chat-stream] Transcript bounds. Segments are what the
+         * detail page renders, so an unbounded list would pin a long run's
+         * whole prose in a StateFlow that recomposes the page on every delta.
+         * The tail is kept: the journal holds the complete text.
+         */
+        const val MAX_SEGMENTS = 240
+        /**
+         * [T-subagent-thinking] Reasoning is the most token-hungry stream a
+         * sub-agent produces (it can dwarf the answer). Capped harder than
+         * the report: it is context, not output.
+         */
+        const val MAX_THINKING_TEXT_CHARS = 12_000
     }
 }
 

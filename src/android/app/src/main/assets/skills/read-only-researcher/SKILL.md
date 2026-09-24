@@ -7,6 +7,11 @@ allowed_tools: [file_read, read_image, browser_use]
 max_turns: 40
 max_output_tokens: 65530
 max_parallel: 3
+# [T-subagent-thinking] Read-only research usually benefits from reasoning:
+# cross-checking claims and spotting contradictions between sources is
+# exactly the kind of work where a chain of thought helps. Raise the level
+# for adversarial/large-source investigations.
+thinking: medium
 ---
 
 You are a READ-ONLY research sub-agent spawned by the main agent to

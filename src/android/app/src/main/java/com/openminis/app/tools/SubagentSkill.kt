@@ -2,6 +2,7 @@ package com.openminis.app.tools
 
 import com.openminis.app.data.model.AgentToolDefinition
 import com.openminis.app.data.model.AgentToolParam
+import com.openminis.app.data.model.ThinkingLevel
 import org.json.JSONObject
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
@@ -257,6 +258,16 @@ object SubagentSkill {
          * the requester's config and the app cap). 1 = serial.
          */
         val maxParallel: Int = 1,
+        /**
+         * [T-subagent-thinking] Reasoning level this skill asks its sub-agent
+         * to run with, from `thinking:` in the frontmatter. Defaults to OFF:
+         * reasoning tokens are billed like any other output and multiply by
+         * the turn count, so a delegated run must opt IN explicitly rather
+         * than silently inheriting the parent's level. Ignored (downgraded to
+         * OFF) when the resolved model cannot reason — see
+         * [com.openminis.app.tools.resolveSubagentThinkingLevel].
+         */
+        val thinkingLevel: ThinkingLevel = ThinkingLevel.OFF,
     )
 
     // ── Tool definition ──────────────────────────────────────────────────
@@ -388,6 +399,11 @@ object SubagentSkill {
         var maxOutputTokens = DEFAULT_MAX_OUTPUT_TOKENS
         var allowedTools: Set<String>? = null
         var maxParallel = 1
+        // [T-subagent-thinking] `thinking:` in the frontmatter. Accepts the
+        // same names the chat's level picker shows (case-insensitive) plus a
+        // couple of obvious synonyms; an unrecognised value stays OFF rather
+        // than guessing a level the user did not ask for.
+        var thinkingLevel = ThinkingLevel.OFF
 
         var i = 0
         while (i < lines.size) {
@@ -410,6 +426,9 @@ object SubagentSkill {
                     // queues without benefit.
                     maxParallel = (trimmed.substringAfter(":").trim().toIntOrNull() ?: 1)
                         .coerceIn(1, MAX_PARALLEL_CAP)
+                }
+                trimmed.startsWith("thinking:") -> {
+                    thinkingLevel = parseThinkingLevelName(trimmed.substringAfter(":").trim())
                 }
                 trimmed.startsWith("allowed_tools:") -> {
                     val listStr = trimmed.substringAfter(":").trim()
@@ -440,7 +459,26 @@ object SubagentSkill {
             maxOutputTokens = maxOutputTokens.coerceIn(256, 128_000),
             allowedTools = allowedTools,
             maxParallel = maxParallel,
+            thinkingLevel = thinkingLevel,
         )
+    }
+
+    /**
+     * [T-subagent-thinking] Parse a frontmatter `thinking:` value into a
+     * [ThinkingLevel]. Case-insensitive, accepting the names the chat's level
+     * picker uses plus the two common synonyms ("off"/"none" and "medium").
+     * Anything unrecognised resolves to [ThinkingLevel.OFF]: guessing a level
+     * the skill did not ask for would spend the user's tokens on reasoning
+     * they never requested.
+     */
+    fun parseThinkingLevelName(raw: String): ThinkingLevel = when (raw.trim().lowercase()) {
+        "low" -> ThinkingLevel.LOW
+        "medium", "med" -> ThinkingLevel.MEDIUM
+        "high" -> ThinkingLevel.HIGH
+        "xhigh", "x-high" -> ThinkingLevel.XHIGH
+        "max" -> ThinkingLevel.MAX
+        "ultra" -> ThinkingLevel.ULTRA
+        else -> ThinkingLevel.OFF
     }
 
     /**

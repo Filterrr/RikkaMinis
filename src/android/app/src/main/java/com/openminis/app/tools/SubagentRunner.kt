@@ -717,6 +717,24 @@ class SubagentRunner(
         val artifacts = mutableListOf<String>()
         var turns = 0
         var lastText = ""
+        // [T-subagent-thinking] Resolve the reasoning level ONCE, before the
+        // loop, and record the outcome on the run. The value that reaches the
+        // provider may legitimately differ from the skill's request (the
+        // model may not support reasoning), and a silent downgrade is
+        // indistinguishable from a bug — the meta chip on the detail page
+        // makes the effective choice visible instead.
+        val reasoningLevel = resolveSubagentThinkingLevel(
+            requested = config.thinkingLevel,
+            modelSupportsReasoning = provider.model.supportsReasoning,
+        )
+        registry.setReasoningEnabled(run.id, reasoningLevel.isEnabled)
+        if (config.thinkingLevel.isEnabled && !reasoningLevel.isEnabled) {
+            registry.appendNotice(
+                run.id,
+                "[thinking: requested ${config.thinkingLevel.displayName} but " +
+                    "${provider.model.displayName} does not support reasoning — ran with it off]",
+            )
+        }
         // [T-subagent-loop-detector] A per-run loop detector with the SAME
         // semantics the main loop uses (10 warnings / 20 blocks, poll-aware).
         //
@@ -795,6 +813,14 @@ class SubagentRunner(
                 while (true) {
                     textSb.setLength(0)
                     toolCalls.clear()
+                    // [T-subagent-chat-stream] Snapshot the transcript position
+                    // BEFORE this attempt writes anything. A transient failure
+                    // mid-stream (SSL reset, worker death) leaves the deltas
+                    // the attempt already emitted in the registry — without a
+                    // rollback the retry would append them AGAIN, duplicating
+                    // every narration / reasoning row of the turn.
+                    val attemptSnap = registry.turnSnapshot(run.id)
+                    val attemptToolIds = mutableListOf<String>()
                     try {
                         ProviderExecutionGateway.stream(
                             context = context,
@@ -805,15 +831,44 @@ class SubagentRunner(
                             maxTokens = config.maxOutputTokens,
                             temperature = null,
                             tools = subagentTools,
-                            thinkingLevel = ThinkingLevel.OFF,
+                            thinkingLevel = reasoningLevel,
                         ).collect { chunk ->
                             when (chunk) {
                                 is LLMStreamChunk.Text -> {
                                     textSb.append(chunk.text)
                                     registry.appendResultText(run.id, chunk.text)
+                                    // [T-subagent-chat-stream] Same delta also
+                                    // extends the transcript, so narration and
+                                    // tool pills keep their true order.
+                                    registry.appendSegmentText(run.id, chunk.text)
+                                }
+                                // [T-subagent-thinking] Reasoning used to be
+                                // dropped on the floor here (it shares the
+                                // `else -> {}` branch below). It is captured
+                                // separately from the answer — chain-of-
+                                // thought must never leak into the report the
+                                // parent consumes.
+                                is LLMStreamChunk.ThinkingDelta -> {
+                                    registry.appendSegmentThinking(run.id, chunk.text)
+                                }
+                                is LLMStreamChunk.ReasoningContent -> {
+                                    // Accumulated blob echoed at stream end.
+                                    // OpenAI-family providers ALSO stream the
+                                    // same reasoning as ThinkingDelta events,
+                                    // so the blob is a duplicate of what the
+                                    // deltas already delivered — dedupe=true
+                                    // makes it a no-op in that case while
+                                    // still accepting new text from providers
+                                    // that ONLY send the blob.
+                                    registry.appendSegmentThinking(
+                                        run.id,
+                                        chunk.content,
+                                        dedupe = true,
+                                    )
                                 }
                                 is LLMStreamChunk.ToolCallComplete -> {
                                     toolCalls.add(SubagentToolCall(chunk.id, chunk.name, chunk.args))
+                                    attemptToolIds.add(chunk.id)
                                     registry.stepStarted(
                                         run.id, chunk.id, turns, chunk.name,
                                         try {
@@ -869,12 +924,26 @@ class SubagentRunner(
                             // emits no closing summary, and these lines were
                             // being delivered to the parent AS the report
                             // (dogfood subagent-1/2, 2026-09-14 — the wake-up
-                            // "report" was nothing but retry chatter).
+                            // "report" was nothing but retry chatter). The
+                            // notice is written AFTER the segment rollback
+                            // below so the retry cannot wipe it — notices and
+                            // segments are separate fields, but sequencing the
+                            // rollback first keeps the intent obvious.
                             registry.appendNotice(
                                 run.id,
                                 "[transient stream error ($errDesc) — retrying " +
                                     "$streamRetryAttempt/${STREAM_RETRY_DELAYS_SEC.size} in ${delaySec}s]",
                             )
+                            // [T-subagent-chat-stream] Roll back this attempt's
+                            // partial transcript + tool rows before the retry,
+                            // so the retried stream does not double them. The
+                            // notice ABOVE is written after the rollback would
+                            // wipe it — notices live outside segments, so the
+                            // order here is: rollback segments, then the
+                            // notice (already appended before this line) is
+                            // untouched because resetTurn only touches
+                            // segments/steps.
+                            registry.resetTurn(run.id, attemptSnap, attemptToolIds)
                             kotlinx.coroutines.delay(delaySec * 1000L)
                             continue
                         }
@@ -1598,6 +1667,28 @@ internal const val JOIN_REPORT_MAX_CHARS = 6000
  *
  * Top-level + pure so the wording contract is unit-testable.
  */
+/**
+ * [T-subagent-thinking] Effective reasoning level for a sub-agent run.
+ *
+ * The skill's frontmatter states an INTENT (`thinking: low`); whether it can
+ * be honoured depends on the model that the spawn actually resolved to. The
+ * rule mirrors the main chat's: a model that cannot reason runs with reasoning
+ * off rather than sending an unsupported parameter (which some providers
+ * reject outright). [modelSupportsReasoning] is tri-state — `null` means the
+ * catalog does not know, and this deliberately treats unknown as capable so
+ * the user's explicit request is not silently dropped for a model the app has
+ * no information about.
+ *
+ * Pure + top-level so the downgrade rule is unit-testable without a provider.
+ */
+internal fun resolveSubagentThinkingLevel(
+    requested: com.openminis.app.data.model.ThinkingLevel,
+    modelSupportsReasoning: Boolean?,
+): com.openminis.app.data.model.ThinkingLevel =
+    if (!requested.isEnabled) com.openminis.app.data.model.ThinkingLevel.OFF
+    else if (modelSupportsReasoning == false) com.openminis.app.data.model.ThinkingLevel.OFF
+    else requested
+
 internal fun boundReportForParent(
     report: String,
     journalPath: String?,
