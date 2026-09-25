@@ -200,6 +200,16 @@ class BrowserTabPool(private val context: Context) : ComponentCallbacks2 {
         set(value) { _userAgentProfile.value = value }
     private var customUserAgentString: String? = null
 
+    /**
+     * [T-ua-global-default-android] Custom-UA string snapshot for the settings
+     * UI (BrowserSettingsSheet renders this under the "Custom" radio). Lives on
+     * the pool so every surface — per-chat pool, the app-scoped
+     * [sharedBrowserTabPool] — reads the same value instead of each re-parsing
+     * SharedPreferences with its own fallbacks.
+     */
+    val currentCustomUserAgent: String
+        get() = customUserAgentString.orEmpty()
+
     private var sessionId: String? = null
     private val savedURLs = mutableMapOf<Int, String>()
 
@@ -928,7 +938,7 @@ class BrowserTabPool(private val context: Context) : ComponentCallbacks2 {
 
         val id = nextTabId++
         val webView = WebView(context)
-        val manager = BrowserUseManager(webView, userAgentProfile)
+        val manager = BrowserUseManager(webView, userAgentProfile, customUserAgentString)
         if (userAgentProfile == UserAgentProfile.CUSTOM && !customUserAgentString.isNullOrEmpty()) {
             manager.setUserAgent(userAgentProfile, customUserAgentString)
         }
@@ -939,6 +949,12 @@ class BrowserTabPool(private val context: Context) : ComponentCallbacks2 {
         // Setup window.open / close handlers
         manager.onNewWindow = { resultMsg -> handleNewWindow(resultMsg) }
         manager.onCloseWindow = { handleCloseWindow(manager) }
+        // [T-ua-global-default-android] Agent `set_user_agent` → pool-wide
+        // switch (all tabs + future tabs, non-persisted). Wired per manager so
+        // the action works no matter which tab the agent drives.
+        manager.tabPoolRequestGlobalUserAgent = { profile, customUA ->
+            handleSetUserAgent(profile, customUA)
+        }
         // [OPT-browser-renderer-recovery] Renderer crashed / OOM-killed: the
         // tab can never render again, so destroy it and recreate a fresh tab
         // at the same URL. Serialized on the eviction scope (main-thread
@@ -1054,7 +1070,7 @@ class BrowserTabPool(private val context: Context) : ComponentCallbacks2 {
         }
         val id = nextTabId++
         val newWebView = WebView(context)
-        val manager = BrowserUseManager(newWebView, userAgentProfile)
+        val manager = BrowserUseManager(newWebView, userAgentProfile, customUserAgentString)
         if (userAgentProfile == UserAgentProfile.CUSTOM && !customUserAgentString.isNullOrEmpty()) {
             manager.setUserAgent(userAgentProfile, customUserAgentString)
         }
@@ -1062,6 +1078,11 @@ class BrowserTabPool(private val context: Context) : ComponentCallbacks2 {
         manager.applyViewport(vpW, vpH)
         manager.onNewWindow = { msg -> handleNewWindow(msg) }
         manager.onCloseWindow = { handleCloseWindow(manager) }
+        // [T-ua-global-default-android] Same pool-wide UA hook as createTab —
+        // window.open tabs are real tabs and must expose the same behavior.
+        manager.tabPoolRequestGlobalUserAgent = { profile, customUA ->
+            handleSetUserAgent(profile, customUA)
+        }
         wireDownloadHandlers(manager)
 
         val tab = Tab(id = id, manager = manager)
@@ -1193,12 +1214,41 @@ class BrowserTabPool(private val context: Context) : ComponentCallbacks2 {
 
     // -- User Agent --
 
-    /** Set user agent from UI settings. Applies to all existing tabs and reloads them. */
-    fun setUserAgentFromUI(profile: UserAgentProfile, customUA: String? = null) {
+    /**
+     * The effective UA string for the current global profile. Mirrors iOS
+     * `BrowserTabPool.resolvedUserAgentString()`; resolves through
+     * [UserAgentProfile.effectiveString] so it can never disagree with what
+     * per-tab managers compute.
+     */
+    fun resolvedUserAgentString(): String? =
+        UserAgentProfile.effectiveString(userAgentProfile, customUserAgentString)
+
+    /**
+     * Switch the pool's global user-agent profile: fans the new UA out to every
+     * live tab and applies the resolved viewport, so all future tabs inherit
+     * it via createTab().
+     *
+     * @param persist When `true` (default), writes the profile (and the latest
+     *   custom string) to SharedPreferences as the new global default — the
+     *   settings sheet path. Pass `false` for temporary agent-driven switches
+     *   that should not outlive the session — mirrors iOS
+     *   `setUserAgentProfile(_:persist:)`.
+     */
+    fun setUserAgentProfile(profile: UserAgentProfile, customUA: String? = null, persist: Boolean = true) {
         userAgentProfile = profile
-        customUserAgentString = customUA
+        if (customUA != null) {
+            customUserAgentString = customUA.trim().takeIf { it.isNotEmpty() }
+        }
+        if (persist) {
+            val prefs = context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
+            prefs.edit()
+                .putString("user_agent_profile", profile.name)
+                .putString("custom_user_agent", customUserAgentString.orEmpty())
+                .apply()
+        }
+        val ua = resolvedUserAgentString()
         for (tab in _tabs.value) {
-            tab.manager.setUserAgent(profile, customUA)
+            tab.manager.setUserAgent(profile, ua)
         }
         // `setUserAgent` resets each tab's layout to the new UA profile's
         // default viewport. Re-apply the resolved viewport so a session or
@@ -1206,6 +1256,11 @@ class BrowserTabPool(private val context: Context) : ComponentCallbacks2 {
         // applyViewportToAllTabs is suspend because it awaits tab reloads;
         // fire-and-forget since this is called from the UI thread.
         evictionScope.launch { applyViewportToAllTabs() }
+    }
+
+    /** Set user agent from UI settings. Applies to all existing tabs and reloads them. */
+    fun setUserAgentFromUI(profile: UserAgentProfile, customUA: String? = null) {
+        setUserAgentProfile(profile, customUA, persist = true)
     }
 
     // -- Release --
@@ -1338,6 +1393,36 @@ class BrowserTabPool(private val context: Context) : ComponentCallbacks2 {
             }
             saveState()
         }
+    }
+
+    // -- User Agent API (agent-driven; mirrors iOS BrowserTabPool) --
+
+    /**
+     * Pool-wide handler for the agent's `set_user_agent` action. Updates the
+     * global profile (+ optional custom string), fans the switch out to every
+     * live tab and lets all future tabs inherit it — but does NOT persist to
+     * SharedPreferences. Agent-driven UA switches are temporary for the
+     * session: the user's configured default wins again on the next launch.
+     * Mirrors iOS `setUserAgentProfile(_:persist: false)`.
+     *
+     * A null profile means "re-assert the current global default" (the
+     * parameter was absent) — done via the same fan-out path without flipping
+     * the profile.
+     */
+    private suspend fun handleSetUserAgent(
+        profile: UserAgentProfile?,
+        customUA: String?,
+    ): BrowserActionResult {
+        val target = profile ?: userAgentProfile
+        withContext(Dispatchers.Main) {
+            setUserAgentProfile(target, customUA, persist = false)
+        }
+        val vp = target.viewportSize
+        val suffix = if (customUA != null && target == UserAgentProfile.CUSTOM) " with custom UA" else ""
+        return BrowserActionResult(
+            text = "Switched to ${target.value} (${vp.first}x${vp.second})$suffix" +
+                ". Applies to all tabs; reverts to the user's default on next launch.",
+        )
     }
 
     // -- Viewport API (mirrors iOS BrowserTabPool) --

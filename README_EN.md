@@ -116,6 +116,17 @@ Android-specific product changes that are not present upstream.
 - **Settings consistency fixes.** Restored preferences refresh the live
   settings UI, and previously disconnected/missing settings keys are now
   registered and included in backups.
+- **Global browser UA setting.** The User-Agent radio group in browser
+  settings is now a true global default: persisted to SharedPreferences and
+  applied across every tab and every session — including the app-scoped pool
+  that backs shell-side `minis-browser-use`. The agent's `set_user_agent`
+  action upgraded from "current tab only, forgotten by the next tab" to a
+  pool-wide switch — all current and future tabs inherit it immediately, but
+  it is **not** persisted and reverts to the user's default on next launch
+  (matching the iOS upstream semantics). Also adds a free-form UA string for
+  the `custom` profile (tool param `custom_user_agent` / CLI
+  `--custom-user-agent`); a blank custom string falls back to the WebView
+  default.
 - **Bundled platform integrations (GitHub / Cloudflare / Hugging Face).**
   Full detail in [Built-in platform integrations](#built-in-platform-integrationsgithub--cloudflare--hugging-face).
   In short: three platform skills (semantic memory, GitHub automation, and

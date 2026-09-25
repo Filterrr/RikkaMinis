@@ -86,6 +86,7 @@
     <string name="rom_autostart_row_title">자동 시작 설정 열기</string>
     <string name="rom_autostart_row_subtitle">%1$s에서 RikkaMinis 사용</string>
     <string name="browser_settings_ua_not_set">설정되지 않음</string>
+    <string name="browser_settings_ua_scope">전역 기본값 — 모든 탭과 세션에 적용됩니다. set_user_agent로 전환한 것은 임시이며 다음 실행 시 이 기본값으로 되돌아갑니다.</string>
     <!-- T135 — Settings + About i18n keys -->
     <string name="settings_title">설정</string>
     <string name="settings_section_llm_providers">LLM 제공자</string>

@@ -86,6 +86,7 @@
     <string name="rom_autostart_row_title">自動起動の設定を開く</string>
     <string name="rom_autostart_row_subtitle">%1$s で RikkaMinis を有効にする</string>
     <string name="browser_settings_ua_not_set">未設定</string>
+    <string name="browser_settings_ua_scope">グローバル既定 — すべてのタブとセッションに適用。set_user_agent によるエージェントの切り替えは一時的で、次回起動時にこの既定に戻ります。</string>
     <!-- T135 — Settings + About i18n keys -->
     <string name="settings_title">設定</string>
     <string name="settings_section_llm_providers">LLM プロバイダー</string>

@@ -145,6 +145,7 @@ class BrowserUseOffloadHandler(private val app: MinisApp) : NativeOffloadHandler
         args.getInt("amount")?.let { obj.put("amount", it) }
         args.get("script")?.let { obj.put("script", it) }
         args.get("user-agent", "user_agent", "ua")?.let { obj.put("user_agent", it) }
+        args.get("custom-user-agent", "custom_user_agent", "ua-string")?.let { obj.put("custom_user_agent", it) }
         args.getInt("max-depth", "max_depth")?.let { obj.put("max_depth", it) }
         args.getInt("tab-id", "tab_id")?.let { obj.put("tab_id", it) }
         // set_viewport parameters
@@ -430,6 +431,8 @@ ACTIONS:
   hover           --selector <css>
   get_readable
   set_user_agent  --user-agent mobile_chrome|desktop_chrome|custom
+                  [--custom-user-agent '<raw string>']   (with `custom`)
+                  Session-wide: applies to ALL tabs, non-persisted.
   set_viewport    --width <n> --height <n> | --reset
   get_backbone    [--max-depth <n>]
   fetch           --url <url>

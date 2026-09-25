@@ -105,5 +105,16 @@ enum class UserAgentProfile(val value: String) {
 
     companion object {
         fun fromString(s: String): UserAgentProfile? = entries.find { it.value == s }
+
+        /**
+         * Pure resolver: the effective UA string for a profile plus an optional
+         * custom value. CUSTOM with a blank/whitespace value resolves to null
+         * (= leave the WebView default untouched). JVM-testable — both the
+         * pool ([BrowserTabPool.resolvedUserAgentString]) and per-tab managers
+         * resolve through this single function so they can never disagree.
+         */
+        fun effectiveString(profile: UserAgentProfile, custom: String?): String? =
+            if (profile == CUSTOM) custom?.trim()?.takeIf { it.isNotEmpty() }
+            else profile.userAgentString
     }
 }

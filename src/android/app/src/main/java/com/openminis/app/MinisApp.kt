@@ -184,6 +184,10 @@ class MinisApp : Application(), ImageLoaderFactory {
      * Application-scoped BrowserTabPool for shell-invoked `minis-browser-use`.
      * Separate from the per-ChatViewModel pool so browser state driven from
      * within an ish shell doesn't collide with the agent's own tabs.
+     *
+     * [T-ua-global-default-android] UA 设置持久化在 SharedPreferences（而非
+     * 内存单例），所以这里新建的池在 init 里读到的就是用户配置的全局 UA 默认
+     * ——shell 侧浏览器与聊天侧浏览器保持一致，无需跨实例同步。
      */
     val sharedBrowserTabPool: BrowserTabPool by lazy {
         BrowserTabPool(this).also { it.setSession("minis-browser-use") }

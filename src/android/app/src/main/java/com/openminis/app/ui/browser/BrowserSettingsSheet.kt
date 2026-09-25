@@ -74,13 +74,16 @@ fun BrowserSettingsSheet(
     val prefs = remember { context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE) }
 
     var selectedProfile by remember {
-        mutableStateOf(
-            prefs.getString("user_agent_profile", "MOBILE_CHROME")
-                ?.let { try { UserAgentProfile.valueOf(it) } catch (_: Exception) { null } }
-                ?: UserAgentProfile.MOBILE_CHROME
-        )
+        // [T-ua-global-default-android] Seed from the pool, which restores the
+        // persisted profile (with corrupt-name fallback) in init — one read
+        // path instead of re-parsing SharedPreferences here.
+        mutableStateOf(tabPool.currentUserAgentProfile.value)
     }
-    var customUA by remember { mutableStateOf(prefs.getString("custom_user_agent", "") ?: "") }
+    // [T-ua-global-default-android] Seed from the pool (single source of
+    // truth) instead of re-parsing SharedPreferences with local fallbacks —
+    // this sheet can attach to either the per-chat pool or the app-scoped
+    // sharedBrowserTabPool, and both restore the persisted profile in init.
+    var customUA by remember { mutableStateOf(tabPool.currentCustomUserAgent) }
     var showClearConfirm by remember { mutableStateOf(false) }
     var idleTimeoutText by remember {
         mutableStateOf(
@@ -158,6 +161,15 @@ fun BrowserSettingsSheet(
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
             )
+            Spacer(Modifier.height(4.dp))
+            // [T-ua-global-default-android] Make the scope explicit: this radio
+            // group is the GLOBAL default (persists, applies to every tab and
+            // session); agent-driven set_user_agent switches are temporary.
+            Text(
+                stringResource(R.string.browser_settings_ua_scope),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Spacer(Modifier.height(8.dp))
 
             val notSetPlaceholder = stringResource(R.string.browser_settings_ua_not_set)
@@ -178,9 +190,10 @@ fun BrowserSettingsSheet(
                         selected = selectedProfile == profile,
                         onClick = {
                             selectedProfile = profile
-                            prefs.edit()
-                                .putString("user_agent_profile", profile.name)
-                                .apply()
+                            // [T-ua-global-default-android] setUserAgentFromUI
+                            // → setUserAgentProfile(persist = true): one write
+                            // path owns both the pool fan-out and the
+                            // SharedPreferences persistence.
                             tabPool.setUserAgentFromUI(profile, if (profile == UserAgentProfile.CUSTOM) customUA else null)
                         },
                     )
@@ -203,6 +216,10 @@ fun BrowserSettingsSheet(
                     value = customUA,
                     onValueChange = {
                         customUA = it
+                        // [T-ua-global-default-android] Persist on every edit —
+                        // mirrors iOS ("edits made while already on the custom
+                        // profile survive across launches"). The pool's
+                        // in-memory string refreshes on Apply below.
                         prefs.edit().putString("custom_user_agent", it).apply()
                     },
                     label = { Text(stringResource(R.string.browser_settings_custom_ua_label)) },
