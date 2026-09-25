@@ -17,6 +17,8 @@ data class BrowserActionInput(
     val amount: Int? = null,
     val script: String? = null,
     val userAgent: UserAgentProfile? = null,
+    /** [T-ua-global-default-android] Free-form UA string for `user_agent=custom`. */
+    val customUserAgent: String? = null,
     val maxDepth: Int? = null,
     val tabId: Int? = null,
     /** Viewport width override (set_viewport action). */
@@ -62,6 +64,7 @@ data class BrowserActionInput(
                     amount = if (obj.has("amount")) obj.optInt("amount") else null,
                     script = obj.optString("script").ifEmpty { null },
                     userAgent = obj.optString("user_agent").ifEmpty { null }?.let { UserAgentProfile.fromString(it) },
+                    customUserAgent = obj.optString("custom_user_agent").trim().ifEmpty { null },
                     maxDepth = if (obj.has("max_depth")) obj.optInt("max_depth") else null,
                     tabId = if (obj.has("tab_id")) obj.optInt("tab_id") else null,
                     viewportWidth = if (obj.has("viewport_width")) obj.optInt("viewport_width") else null,

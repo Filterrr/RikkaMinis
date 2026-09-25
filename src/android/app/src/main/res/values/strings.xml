@@ -122,6 +122,7 @@
 
     <!-- T68: Browser settings — UA list "Not set" placeholder for empty Custom UA -->
     <string name="browser_settings_ua_not_set">Not set</string>
+    <string name="browser_settings_ua_scope">Global default — all tabs, all sessions. Agent switches via set_user_agent are temporary and revert to this on next launch.</string>
     <!-- T135 — Settings + About i18n keys -->
     <string name="settings_title">Settings</string>
     <string name="settings_section_llm_providers">LLM Providers</string>

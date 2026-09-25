@@ -79,8 +79,13 @@ object BrowserUseTool {
 
         properties.put("user_agent", JSONObject().apply {
             put("type", "string")
-            put("description", "User agent profile to switch to")
-            put("enum", JSONArray(listOf("desktop_chrome", "mobile_chrome")))
+            put("description", "User agent profile to switch to. Switches the UA for the current browser session — ALL tabs (current and future) use it, and it reverts to the user's configured default on the next app launch. Requires set_user_agent action.")
+            put("enum", JSONArray(listOf("desktop_chrome", "mobile_chrome", "custom")))
+        })
+
+        properties.put("custom_user_agent", JSONObject().apply {
+            put("type", "string")
+            put("description", "Raw user-agent string, used together with action=set_user_agent and user_agent=custom. Empty/omitted falls back to the mobile Chrome profile.")
         })
 
         properties.put("max_depth", JSONObject().apply {

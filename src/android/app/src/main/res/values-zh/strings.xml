@@ -98,6 +98,7 @@
     <string name="rom_autostart_row_title">打开自启动设置</string>
     <string name="rom_autostart_row_subtitle">在 %1$s 上启用 RikkaMinis</string>
     <string name="browser_settings_ua_not_set">未设置</string>
+    <string name="browser_settings_ua_scope">全局默认——对所有标签页、所有会话生效。智能体通过 set_user_agent 的切换是临时的，下次启动恢复为此默认。</string>
     <!-- T135 — Settings + About i18n keys -->
     <string name="settings_title">设置</string>
     <string name="settings_section_llm_providers">LLM 提供商</string>

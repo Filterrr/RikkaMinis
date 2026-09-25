@@ -1106,6 +1106,7 @@
     <string name="rom_autostart_row_title">開啟自啟動設定</string>
     <string name="rom_autostart_row_subtitle">在 %1$s 上啟用 RikkaMinis</string>
     <string name="browser_settings_ua_not_set">未設定</string>
+    <string name="browser_settings_ua_scope">全域預設——對所有分頁、所有工作階段生效。智能體透過 set_user_agent 的切換是暫時的，下次啟動恢復為此預設。</string>
     <string name="settings_title">設定</string>
     <string name="settings_section_llm_providers">LLM 提供商</string>
     <string name="settings_section_llm_providers_footer">配置 agent 使用的模型,管理每個提供商的 API key 與 OAuth,並建立模型組用於回退或負載均衡。</string>

@@ -87,6 +87,7 @@
     <string name="rom_autostart_row_title">Autostart-Einstellungen öffnen</string>
     <string name="rom_autostart_row_subtitle">RikkaMinis auf %1$s aktivieren</string>
     <string name="browser_settings_ua_not_set">Nicht festgelegt</string>
+    <string name="browser_settings_ua_scope">Globale Standardeinstellung — gilt für alle Tabs und Sitzungen. Über set_user_agent ausgelöste Wechsel sind temporär und kehren beim nächsten Start hierzu zurück.</string>
     <!-- T135 — Settings + About i18n keys -->
     <string name="settings_title">Einstellungen</string>
     <string name="settings_section_llm_providers">LLM-Anbieter</string>

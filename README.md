@@ -119,6 +119,13 @@ SHA-256  FC:0C:40:0D:B7:7E:C1:81:A3:35:18:C2:E8:13:6A:AE
   共用同一触发逻辑——点击即弹出斜杠命令面板，仍可通过键入「/」或右上角菜单进入。
 - **设置一致性修复。** 恢复的偏好会刷新实时设置界面，此前缺失/断连的设置键
   现已注册并纳入备份。
+- **浏览器全局 UA 设置。** 浏览器设置里的 User-Agent 单选组现在是真正的全局默认：
+  持久化到 SharedPreferences，对所有标签页、所有会话（含 shell 侧
+  `minis-browser-use` 的应用级池）生效。智能体的 `set_user_agent` 动作从
+  「只改当前一个标签页、不影响后续新标签」升级为池级切换——当前与未来的所有
+  标签页立即继承，但**不持久化**，下次启动恢复用户设置（对齐 iOS 上游语义）。
+  另支持 `custom` 档位携带自由 UA 串（工具入参 `custom_user_agent` /
+  CLI `--custom-user-agent`），自定义档位下的空白 UA 回退到 WebView 默认。
 - **三大平台内置集成（GitHub / Cloudflare / Hugging Face）。** 完整能力见下文
   [内置平台集成](#内置平台集成github--cloudflare--hugging-face)。简单说：三个
   平台技能（语义记忆、GitHub 自动化、Cloudflare 运维）直接打进 APK，构建系统

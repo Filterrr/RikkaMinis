@@ -35,6 +35,7 @@ import java.io.File
 class BrowserUseManager(
     val webView: WebView,
     profile: UserAgentProfile = UserAgentProfile.MOBILE_CHROME,
+    customUA: String? = null,
 ) {
     companion object {
         private const val TAG = "BrowserUseManager"
@@ -186,6 +187,17 @@ class BrowserUseManager(
     var onDownloadStart: ((url: String, userAgent: String?, contentDisposition: String?, mimeType: String?, contentLength: Long) -> Unit)? = null
 
     /**
+     * [T-ua-global-default-android] Hook the pool wires in so the agent's
+     * `set_user_agent` action upgrades from per-tab to POOL-WIDE: the pool
+     * updates its global profile (+ optional custom string), fans the switch
+     * out to every live tab and persists nothing — agent-driven switches stay
+     * temporary for the session, matching iOS `setUserAgentProfile(persist:
+     * false)`. Null when no pool owns this manager (standalone use / tests) —
+     * the action then falls back to the legacy per-tab behavior.
+     */
+    var tabPoolRequestGlobalUserAgent: (suspend (profile: UserAgentProfile?, customUA: String?) -> BrowserActionResult)? = null
+
+    /**
      * Callback delivering the bytes of a blob: download. blob: URLs only exist
      * inside the page's JS context, so [fetchBlobDownload] reads them via an
      * injected FileReader and hands the decoded bytes back through the bridge.
@@ -278,7 +290,12 @@ class BrowserUseManager(
     }
 
     init {
-        configureWebView(webView, profile)
+        // [T-ua-global-default-android] Pass the custom UA through at
+        // construction so a pool created under the persisted CUSTOM profile
+        // starts with the right string. configureWebView falls back to the
+        // profile string when [customUA] is null — matching the previous
+        // behavior for non-custom profiles.
+        configureWebView(webView, profile, customUA)
         webView.addJavascriptInterface(jsBridge, "__minis__")
         setupWebViewClient()
         setupWebChromeClient()
@@ -621,7 +638,7 @@ class BrowserUseManager(
             BrowserAction.FIND_ELEMENTS -> return findElements(input.selector)
             BrowserAction.HOVER -> hover(input.selector)
             BrowserAction.GET_READABLE -> return getReadable()
-            BrowserAction.SET_USER_AGENT -> return setUserAgent(input.userAgent)
+            BrowserAction.SET_USER_AGENT -> return handleAgentSetUserAgent(input.userAgent, input.customUserAgent)
             BrowserAction.SET_VIEWPORT ->
                 return BrowserActionResult.error("set_viewport must be routed through BrowserTabPool")
             BrowserAction.GET_BACKBONE -> return getBackbone(input.maxDepth)
@@ -1217,11 +1234,24 @@ class BrowserUseManager(
 
     // -- Set User Agent --
 
-    /** Set user agent from UI settings (public, non-result). */
-    fun setUserAgent(profile: UserAgentProfile, customUA: String? = null) {
-        currentProfile = profile
-        val ua = if (profile == UserAgentProfile.CUSTOM && !customUA.isNullOrEmpty()) customUA
-            else profile.userAgentString
+    /**
+     * Set user agent from UI settings (public, non-result).
+     *
+     * [profile] may be null: pool callers (setUserAgentFromUI /
+     * applyViewportToAllTabs) pass `null` to mean "re-assert the pool's current
+     * global default" without re-stating which profile that is. A null profile
+     * with a null customUA keeps the current profile unchanged — it only
+     * re-applies UA + viewport and reloads, which is what a global-settings
+     * change needs (the profile itself did not change).
+     */
+    fun setUserAgent(profile: UserAgentProfile?, customUA: String? = null) {
+        if (profile != null) {
+            currentProfile = profile
+        }
+        val ua = UserAgentProfile.effectiveString(
+            profile ?: currentProfile,
+            if (profile == UserAgentProfile.CUSTOM) customUA else null,
+        )
         if (ua != null) {
             webView.settings.userAgentString = ua
         }
@@ -1281,29 +1311,39 @@ class BrowserUseManager(
         applyShrinkToFit(cssWidth)
     }
 
-    private suspend fun setUserAgent(profile: UserAgentProfile?): BrowserActionResult {
-        val newProfile = profile ?: UserAgentProfile.MOBILE_CHROME
-        currentProfile = newProfile
-        val ua = newProfile.userAgentString
-        // Every WebView method must be called on the main thread, but the
-        // offload handler's `runBlocking { ... execute(...) }` dispatches on
-        // a worker. `applyViewport(...)` measures/layouts the detached
-        // WebView; settings / reload likewise. Hop to main so we don't
-        // crash with "A WebView method was called on thread 'worker-N'".
-        withContext(Dispatchers.Main) {
-            if (ua != null) {
-                webView.settings.userAgentString = ua
+    private suspend fun handleAgentSetUserAgent(profile: UserAgentProfile?, customUA: String?): BrowserActionResult {
+        // [T-ua-global-default-android] Route through the pool so the switch is
+        // pool-wide (all live tabs + future tabs inherit it) and stays alive for
+        // the rest of the session — the agent's tool description promises
+        // "switches UA for the current session". Custom profiles carry an
+        // optional free-form string via [customUA].
+        return tabPoolRequestGlobalUserAgent?.invoke(profile, customUA)
+            ?: run {
+                // No pool wired (standalone manager, tests): keep the legacy
+                // per-tab behavior rather than dropping the action entirely.
+                val newProfile = profile ?: UserAgentProfile.MOBILE_CHROME
+                currentProfile = newProfile
+                val ua = newProfile.userAgentString
+                // Every WebView method must be called on the main thread, but
+                // the offload handler's `runBlocking { ... execute(...) }`
+                // dispatches on a worker. `applyViewport(...)` measures/layouts
+                // the detached WebView; settings / reload likewise. Hop to main
+                // so we don't crash with "A WebView method was called on thread
+                // 'worker-N'".
+                withContext(Dispatchers.Main) {
+                    if (ua != null) {
+                        webView.settings.userAgentString = ua
+                    }
+                    applyViewport()
+                    val oldUrl = _currentURL.value
+                    if (oldUrl.isNotEmpty()) {
+                        webView.reload()
+                    }
+                }
+                val vp = newProfile.viewportSize
+                BrowserActionResult(text = "Switched to ${newProfile.value} (${vp.first}x${vp.second})")
             }
-            applyViewport()
-            val oldUrl = _currentURL.value
-            if (oldUrl.isNotEmpty()) {
-                webView.reload()
-            }
-        }
-        val vp = newProfile.viewportSize
-        return BrowserActionResult(text = "Switched to ${newProfile.value} (${vp.first}x${vp.second})")
     }
-
     // -- User Navigation --
 
     fun goBack() { if (webView.canGoBack()) webView.goBack() }
