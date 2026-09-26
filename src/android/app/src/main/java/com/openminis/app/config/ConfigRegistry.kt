@@ -109,6 +109,7 @@ class ConfigRegistry private constructor() {
             envVarRepository: EnvVarRepository,
             chatRepository: ChatRepository,
             sessionIdProvider: () -> String?,
+            backgroundSettingsRepository: com.openminis.app.data.repository.BackgroundSettingsRepository? = null,
         ): ConfigRegistry {
             INSTANCE?.let { return it }
             synchronized(this) {
@@ -118,6 +119,7 @@ class ConfigRegistry private constructor() {
                     ConfigBuiltins.registerInto(
                         r, context, providerRepository, envVarRepository, chatRepository,
                         sessionIdProvider,
+                        backgroundSettingsRepository,
                     )
                 }
                 INSTANCE = r
