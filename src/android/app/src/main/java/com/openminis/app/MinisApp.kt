@@ -101,6 +101,18 @@ class MinisApp : Application(), ImageLoaderFactory {
         private set
     lateinit var backgroundSettingsRepository: BackgroundSettingsRepository
         private set
+
+    /**
+     * [T-config-bg-notif-dead-key] Assigned BEFORE ConfigRegistry.init so
+     * registerBackground can hand the repository to the `background.*`
+     * ClosureField reader/writer. Nullable until onCreate fills it —
+     * ConfigField reads/writes only run long after onCreate completes
+     * (agent offload / settings UI), never during init itself. The
+     * [backgroundSettingsRepository] lateinit property points at the SAME
+     * instance.
+     */
+    var backgroundSettingsRepositoryEarly: BackgroundSettingsRepository? = null
+        private set
     lateinit var backgroundTaskNotifier: BackgroundTaskNotifier
 
     /**
@@ -399,6 +411,14 @@ class MinisApp : Application(), ImageLoaderFactory {
         )
         providerRepository = ProviderRepository(this)
         envVarRepository = EnvVarRepository(this)
+        // [T-config-bg-notif-dead-key] Construct the background-settings
+        // repository up-front (instead of down at the T180-bg-notif block)
+        // so ConfigRegistry.init below can wire the `background.*` config
+        // fields to it. The later assignment keeps the existing lateinit
+        // property (and the notifier wiring) pointing at the SAME instance.
+        backgroundSettingsRepository = BackgroundSettingsRepository(this).also {
+            backgroundSettingsRepositoryEarly = it
+        }
         skillRepository = SkillRepository(this)
         mcpRepository = MCPRepository(this)
         memoryRepository = MemoryRepository(java.io.File(filesDir, "minis-global/memory"))
@@ -423,6 +443,11 @@ class MinisApp : Application(), ImageLoaderFactory {
             // [T8-2] Config layer no longer imports service/UI classes —
             // session-id provider is injected here.
             { com.openminis.app.ui.chat.ChatViewModelStore.activeSessionId },
+            // [T-config-bg-notif-dead-key] Hand the background-settings
+            // repository to the registry so `background.notifications`
+            // routes through BackgroundSettingsRepository (StateFlow) and
+            // actually reaches the notifier + Settings switch.
+            backgroundSettingsRepositoryEarly,
         )
 
         // Initialize models.dev registry (loads from bundled asset, refreshes in background)
@@ -595,7 +620,13 @@ class MinisApp : Application(), ImageLoaderFactory {
         // hook so any session whose stream finishes (success or error)
         // posts a tap-to-open notification when the app is backgrounded.
         // Mirrors iOS BackgroundKeepAliveManager.postBackgroundTaskNotification.
-        backgroundSettingsRepository = BackgroundSettingsRepository(this)
+        //
+        // [T-config-bg-notif-dead-key] The repository is constructed early
+        // (next to the other repositories, before ConfigRegistry.init);
+        // this line re-assigns the same instance — kept as an explicit
+        // assignment so the lateinit invariant holds even if the early
+        // block is ever moved.
+        backgroundSettingsRepository = backgroundSettingsRepositoryEarly!!
         backgroundTaskNotifier = BackgroundTaskNotifier(
             context = this,
             chatRepository = chatRepository,

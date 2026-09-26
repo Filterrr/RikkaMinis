@@ -47,12 +47,13 @@ internal object ConfigBuiltins {
         envVarRepo: EnvVarRepository,
         chatRepo: ChatRepository,
         sessionIdProvider: () -> String?,
+        backgroundSettings: com.openminis.app.data.repository.BackgroundSettingsRepository? = null,
     ) {
         registerSelfMeta(r)
         registerSession(r, providerRepo, chatRepo, sessionIdProvider)
         registerAppearance(r, context)
         registerChat(r, context)
-        registerBackground(r, context)
+        registerBackground(r, backgroundSettings)
         registerLogs(r, context)
         registerProviderCollections(r, providerRepo, envVarRepo)
         registerDefaults(r, providerRepo)
@@ -620,32 +621,47 @@ internal object ConfigBuiltins {
 
     // -- Background --
 
-    private fun registerBackground(r: ConfigRegistry, context: Context) {
-        val prefs = context.getSharedPreferences("background_settings", Context.MODE_PRIVATE)
+    // [T-config-bg-notif-dead-key] The previous PrefsBoolField here was a
+    // dead write: `background.notifications` wrote key
+    // "background_notifications_enabled" but the ONLY consumer
+    // (BackgroundSettingsRepository, whose StateFlow feeds
+    // BackgroundTaskNotifier and the Settings screen) reads
+    // "taskNotificationsEnabled" — a minis-config write landed in an
+    // orphan key and never reached the notifier. Fix: the field is now a
+    // ClosureField routed through
+    // BackgroundSettingsRepository.setTaskNotificationsEnabled so the
+    // StateFlow fires and every consumer updates immediately.
+    private fun registerBackground(
+        r: ConfigRegistry,
+        backgroundSettings: com.openminis.app.data.repository.BackgroundSettingsRepository,
+    ) {
         r.register(
-            PrefsBoolField(
-                path = "background.enhanced",
-                displayName = "Enhanced background execution",
-                description = "Keep agent tasks running when the app is backgrounded.",
-                prefs = prefs,
-                key = "enhanced_background_execution",
-                defaultValue = false,
-                risk = ConfigRisk.SENSITIVE,
-            )
-        )
-        r.register(
-            PrefsBoolField(
+            ClosureField(
                 path = "background.notifications",
                 displayName = "Background notifications",
-                description = "Post a system notification when long-running tasks complete.",
-                prefs = prefs,
-                key = "background_notifications_enabled",
-                defaultValue = true,
+                description = "Post a system notification when long-running tasks complete (background tray notification only; in-app completion sound/vibration is always on). Routed through BackgroundSettingsRepository so the Settings switch and notifier stay in sync.",
+                valueSchema = ConfigSchema.Bool,
+                risk = ConfigRisk.NORMAL,
+                revertable = true,
+                reader = {
+                    ConfigValue.Bool(backgroundSettings.taskNotificationsEnabled.value)
+                },
+                writer = { v ->
+                    val b = (v as? ConfigValue.Bool)?.value
+                        ?: throw ConfigError.TypeMismatch("bool")
+                    backgroundSettings.setTaskNotificationsEnabled(b)
+                },
             )
         )
-        // [T-android-config-feature-unavailable] Live Updates / "dynamic
-        // island" was removed 2026-08-17 — this feature (and its registration)
-        // is gone; nothing between the two notification fields references it.
+        // [T-android-config-feature-unavailable] `background.enhanced`
+        // (enhanced keep-alive) was removed from the registry: its prefs
+        // key "enhanced_background_execution" had NO reader anywhere in the
+        // codebase (the enhanced keep-alive feature it mirrored on iOS has
+        // no Android runtime counterpart), so every write was a silent
+        // no-op. Old backups carrying the field are skipped by restore with
+        // a "no longer exists in this version" note (ConfigBackup handles
+        // unknown fields that way) — same treatment the removed Live-Updates
+        // field got.
     }
 
     // -- Logs --
