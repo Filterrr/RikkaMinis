@@ -633,8 +633,14 @@ internal object ConfigBuiltins {
     // StateFlow fires and every consumer updates immediately.
     private fun registerBackground(
         r: ConfigRegistry,
-        backgroundSettings: com.openminis.app.data.repository.BackgroundSettingsRepository,
+        backgroundSettings: com.openminis.app.data.repository.BackgroundSettingsRepository?,
     ) {
+        // Nullable for source-compat with headless/test registrations that
+        // never build the repository. Without the repository there is no
+        // live StateFlow to bind the writer to, so simply don't expose the
+        // field (an agent write then gets the precise "unknown_path"
+        // instead of a write that nothing observes).
+        if (backgroundSettings == null) return
         r.register(
             ClosureField(
                 path = "background.notifications",
