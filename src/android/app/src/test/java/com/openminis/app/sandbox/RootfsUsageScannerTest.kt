@@ -92,7 +92,44 @@ class RootfsUsageScannerTest {
         Files.createLink(File(root, "b.bin").toPath(), a.toPath())
 
         val report = RootfsUsageScanner.scan(root, nioStat())
-        assertEquals(4000L, report.totalBytes)
+
+        // [test-env-hardlinks] On a NATIVE hardlink filesystem (CI ext4) the
+        // directory holds exactly a.bin + b.bin sharing one inode → the total
+        // is exactly the content size.
+        //
+        // Some environments EMULATE Files.createLink with hidden backing
+        // files (PRoot's link-to-symlink translation leaves `.l2s.*` entries
+        // that legitimately occupy real disk), so the directory holds MORE
+        // than two entries while a.bin/b.bin still report the same fileKey.
+        // An exact-equals assertion would fail there without any scanner
+        // bug. For those, verify against an INDEPENDENT walk that applies
+        // the same dedupe rule the scanner documents (same inode → count
+        // once; null key → always count):
+        val children = root.listFiles()!!.filter { !it.isDirectory }
+        if (children.size == 2) {
+            assertEquals(4000L, report.totalBytes)
+            return
+        }
+        var expected = 0L
+        val seenKeys = HashSet<String>()
+        for (f in children) {
+            val attrs = Files.readAttributes(
+                f.toPath(), BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS,
+            )
+            val key = attrs.fileKey()?.toString()
+            if (key != null && !seenKeys.add(key)) continue
+            expected += attrs.size()
+        }
+        assertEquals(
+            "scanner total must match an independent fileKey-dedupe walk",
+            expected, report.totalBytes,
+        )
+        // The hard property in EVERY environment: the linked copy must never
+        // double-count the content (2 × 4000 = broken dedupe).
+        assertTrue(
+            "hardlink must not double-count the content, got ${report.totalBytes}",
+            report.totalBytes < 2 * 4000L,
+        )
     }
 
     @Test
