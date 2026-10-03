@@ -265,6 +265,24 @@ class SubagentRunner(
             )
         }
 
+        // [T-subagent-output-from-model] The per-turn output ceiling for every
+        // request this run makes comes from the MODEL it will actually use:
+        // 管理提供商 / Manage Providers → per-model "Max Output Tokens", folded
+        // into provider.model by ModelEntry and read through
+        // LLMProvider.effectiveMaxOutputTokens. It is the same single knob the
+        // main loop's dynamicMaxTokens() sizes its turns from; the skill
+        // frontmatter's `max_output_tokens` key was removed so the two can
+        // never drift. (A spawn `model` argument routes to a different model —
+        // the ceiling follows THAT model, not the parent's.) The per-turn
+        // request additionally clamps into the remaining context window, see
+        // [resolveSubagentTurnMaxTokens].
+        val modelMaxOutputTokens = provider.effectiveMaxOutputTokens(provider.model)
+        // Worst case a child can spend: every turn asking up to the (globally
+        // capped) ceiling. Reserved against the parent's pool for the run's
+        // lifetime, settled with the real usage at the end.
+        val worstCaseChildTokens =
+            config.maxTurns.toLong() * subagentOutputCeiling(modelMaxOutputTokens).toLong()
+
         // [T-subagent-run-timeout] Clamp per the tool contract. The default is
         // deliberate: a detached run has no human watching it, so an
         // unbounded loop is a cost and permit leak, not a feature.
@@ -389,13 +407,14 @@ class SubagentRunner(
                 try {
                     scheduler.run(skill.id, config.maxParallel, deadlineNanos) {
                         registry.markExecuting(run.id)
-                        executeLoopGuarded(run, config) {
+                        executeLoopGuarded(run, worstCaseChildTokens) {
                             executeLoop(
                                 run = run, skill = skill, config = config, skillName = skillName,
                                 query = query, title = title, runUntil = SubagentSkill.RUN_UNTIL_DONE,
                                 sessionId = sessionId, provider = provider, subagentTools = subagentTools,
                                 timeoutSeconds = timeoutSeconds,
                                 deadlineNanos = deadlineNanos,
+                                modelMaxOutputTokens = modelMaxOutputTokens,
                             )
                         }
                     }
@@ -460,13 +479,14 @@ class SubagentRunner(
             ) {
                 registry.markExecuting(run.id)
                 try {
-                    val result = executeLoopGuarded(run, config) {
+                    val result = executeLoopGuarded(run, worstCaseChildTokens) {
                         executeLoop(
                             run = run, skill = skill, config = config, skillName = skillName,
                             query = query, title = title, runUntil = runUntil,
                             sessionId = sessionId, provider = provider, subagentTools = subagentTools,
                             timeoutSeconds = timeoutSeconds,
                             deadlineNanos = deadlineNanos,
+                            modelMaxOutputTokens = modelMaxOutputTokens,
                         )
                     }
                     job.deferred.complete(
@@ -635,16 +655,22 @@ class SubagentRunner(
      * Actual spend is read from the registry's atomic usage totals at settle
      * time, NOT from a local accumulator — the same -1-means-unknown rule
      * applies, so an unreported run nets out to a bare release.
+     *
+     * [T-subagent-output-from-model] The worst-case estimate is passed in by
+     * the spawn site (maxTurns × the run model's effective output ceiling),
+     * NOT read off the skill config — the output dimension now lives on the
+     * model (管理提供商 → Max Output Tokens), and the spawn site is the only
+     * place that has resolved which model the run will use.
      */
     private suspend fun executeLoopGuarded(
         run: SubagentRunRegistry.Run,
-        config: SubagentSkill.SubagentConfig,
+        worstCaseChildTokens: Long,
         block: suspend () -> ToolExecutionResult,
     ): ToolExecutionResult {
         val guard = deps.subagentBudgetGuard()
         val reserved = guard != null
         if (reserved) {
-            guard!!.reserve(config.maxTurns.toLong() * config.maxOutputTokens.toLong())
+            guard!!.reserve(worstCaseChildTokens)
         }
         try {
             return block()
@@ -678,6 +704,13 @@ class SubagentRunner(
         subagentTools: List<AgentToolDefinition>,
         timeoutSeconds: Int,
         deadlineNanos: Long,
+        /**
+         * [T-subagent-output-from-model] Per-turn output ceiling resolved at
+         * the spawn site from the run's ACTUAL model (管理提供商 → Max Output
+         * Tokens → effectiveMaxOutputTokens). Each request further clamps it
+         * into the remaining context window, see [resolveSubagentTurnMaxTokens].
+         */
+        modelMaxOutputTokens: Int,
     ): ToolExecutionResult {
         // [T-subagent-runtime-preamble] Inject a short runtime preamble
         // (current date/time + durable artifacts root) ahead of the skill
@@ -828,7 +861,17 @@ class SubagentRunner(
                             model = provider.model,
                             messages = history.toList(),
                             systemPrompt = systemPrompt,
-                            maxTokens = config.maxOutputTokens,
+                            // [T-subagent-output-from-model] Per-turn output
+                            // ceiling = the run model's configured Max Output
+                            // Tokens, clamped into the remaining context window
+                            // (same sizing the main loop's dynamicMaxTokens
+                            // applies). Recomputed per attempt so a retry after
+                            // a Usage chunk uses the latest context figure.
+                            maxTokens = resolveSubagentTurnMaxTokens(
+                                modelMaxOutputTokens = modelMaxOutputTokens,
+                                contextWindowTokens = provider.model.contextWindowTokens,
+                                lastContextTokens = lastContextTokens,
+                            ),
                             temperature = null,
                             tools = subagentTools,
                             thinkingLevel = reasoningLevel,
@@ -887,8 +930,19 @@ class SubagentRunner(
                                         chunk.usage.inputTokens,
                                         chunk.usage.outputTokens,
                                     )
-                                    if (chunk.usage.latestContextTokens > 0) {
-                                        lastContextTokens = chunk.usage.latestContextTokens
+                                    // [T-subagent-output-from-model] Mirrors the
+                                    // main loop's rule: trust the API-reported
+                                    // context size; when a provider omits
+                                    // latestContextTokens, recover it from fresh
+                                    // input + cache tokens (inputTokens is
+                                    // fresh-only — the cached portion is already
+                                    // subtracted). Without this a cache-hit
+                                    // provider leaves lastContextTokens at 0 and
+                                    // every turn asks for the FULL output ceiling
+                                    // even when the window is nearly full.
+                                    val ctx = subagentContextTokensFromUsage(chunk.usage)
+                                    if (ctx > 0) {
+                                        lastContextTokens = ctx
                                     }
                                 }
                                 else -> {}
@@ -1688,6 +1742,64 @@ internal fun resolveSubagentThinkingLevel(
     if (!requested.isEnabled) com.openminis.app.data.model.ThinkingLevel.OFF
     else if (modelSupportsReasoning == false) com.openminis.app.data.model.ThinkingLevel.OFF
     else requested
+
+/**
+ * [T-subagent-output-from-model] Upper bound for one sub-agent turn's output
+ * request: the run model's configured Max Output Tokens (管理提供商 / Manage
+ * Providers → the model's "Max Output Tokens", which may come from the model
+ * catalog, a per-entry override, or the provider default), never above the
+ * shared 128K cap that [com.openminis.app.provider.clampOutboundMaxTokens]
+ * enforces for every provider family. Pure so the clamp boundaries are
+ * unit-testable without a provider.
+ */
+internal fun subagentOutputCeiling(modelMaxOutputTokens: Int): Int =
+    modelMaxOutputTokens.coerceIn(1, com.openminis.app.provider.GLOBAL_MAX_OUTPUT_CEILING)
+
+/**
+ * [T-subagent-output-from-model] Fallback floor when the remaining context
+ * window cannot fit another meaningful reply — mirrors the main loop's
+ * `MIN_MAX_TOKENS`. A value below this would starve the turn entirely, which
+ * is worse than letting the provider report the overrun loudly.
+ */
+private const val SUBAGENT_MIN_MAX_TOKENS = 1024
+
+/**
+ * [T-subagent-output-from-model] Per-turn `maxTokens` for a sub-agent request:
+ * the model's output ceiling ([subagentOutputCeiling]), reduced to what still
+ * fits the remaining context window (window − last API-reported input tokens)
+ * with a floor of [SUBAGENT_MIN_MAX_TOKENS]. Mirrors the main loop's
+ * `dynamicMaxTokens()` sizing so a delegated run and an inline run against the
+ * same model behave identically. [lastContextTokens] is 0 until the first
+ * Usage chunk reports a figure.
+ */
+internal fun resolveSubagentTurnMaxTokens(
+    modelMaxOutputTokens: Int,
+    contextWindowTokens: Int,
+    lastContextTokens: Int = 0,
+): Int {
+    val ceiling = subagentOutputCeiling(modelMaxOutputTokens)
+    if (contextWindowTokens <= 0) return ceiling
+    val remaining = contextWindowTokens - lastContextTokens
+    return minOf(ceiling, maxOf(remaining, SUBAGENT_MIN_MAX_TOKENS))
+}
+
+/**
+ * [T-subagent-output-from-model] Context size for the next turn's output
+ * sizing, mirroring the main loop's Usage-chunk rule (ChatViewModel):
+ * `latestContextTokens` when the provider reports it; otherwise fresh
+ * `inputTokens` + cache-read + cache-creation (inputTokens is fresh-only —
+ * the cached portion is subtracted by the parser, so a cache-hit turn would
+ * otherwise under-report context pressure and every turn would ask for the
+ * FULL output ceiling even on a nearly-full window). 0 = nothing reported.
+ */
+internal fun subagentContextTokensFromUsage(usage: com.openminis.app.data.model.LLMUsage): Int =
+    when {
+        usage.latestContextTokens > 0 -> usage.latestContextTokens
+        usage.inputTokens > 0 -> usage.inputTokens +
+            (usage.cacheReadInputTokens ?: 0) +
+            (usage.cacheCreationInputTokens ?: 0)
+        else -> 0
+    }
 
 internal fun boundReportForParent(
     report: String,

@@ -37,7 +37,6 @@ class SubagentSkillTest {
         val config = SubagentSkill.parseSubagentConfig(skill)
         assertFalse(config.isSubagent)
         assertEquals(12, config.maxTurns)
-        assertEquals(4096, config.maxOutputTokens)
         assertNull(config.allowedTools)
     }
 
@@ -60,7 +59,29 @@ class SubagentSkillTest {
     }
 
     @Test
-    fun `subagent with custom budget overrides defaults`() {
+    fun `subagent with custom turn budget overrides defaults`() {
+        val skill = makeSkill(
+            """
+            ---
+            subagent: true
+            max_turns: 6
+            ---
+            You are a focused agent.
+            """.trimIndent(),
+        )
+        val config = SubagentSkill.parseSubagentConfig(skill)
+        assertTrue(config.isSubagent)
+        assertEquals(6, config.maxTurns)
+    }
+
+    /**
+     * [T-subagent-output-from-model] `max_output_tokens` is no longer a skill
+     * knob — the per-turn output ceiling comes from the model's own config
+     * (管理提供商 → Max Output Tokens) at spawn time. A skill still carrying
+     * the (now legacy) key must parse cleanly and simply ignore it.
+     */
+    @Test
+    fun `legacy max_output_tokens in frontmatter is ignored, not honoured`() {
         val skill = makeSkill(
             """
             ---
@@ -72,9 +93,8 @@ class SubagentSkillTest {
             """.trimIndent(),
         )
         val config = SubagentSkill.parseSubagentConfig(skill)
-        assertTrue(config.isSubagent)
+        assertTrue("the skill still parses as a subagent", config.isSubagent)
         assertEquals(6, config.maxTurns)
-        assertEquals(2048, config.maxOutputTokens)
     }
 
     @Test
@@ -140,9 +160,9 @@ class SubagentSkillTest {
         )
         val config = SubagentSkill.parseSubagentConfig(skill)
         assertTrue(config.isSubagent)
-        // Invalid number falls back to default; out-of-range clamps
+        // Invalid number falls back to default; every unknown key (including
+        // the retired max_output_tokens) is ignored without error.
         assertEquals(12, config.maxTurns)
-        assertEquals(128_000, config.maxOutputTokens)
     }
 
     // ── buildFilteredTools ───────────────────────────────────────────────
@@ -438,7 +458,6 @@ class SubagentFrontmatterPreservationTest {
         val config = SubagentSkill.parseSubagentConfig(skill)
         assertTrue(config.isSubagent)
         assertEquals(24, config.maxTurns)
-        assertEquals(8192, config.maxOutputTokens)
     }
 
     @Test
