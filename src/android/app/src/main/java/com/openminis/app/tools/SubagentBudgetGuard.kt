@@ -44,10 +44,12 @@ interface SubagentBudgetGuard {
     /**
      * Take a reservation for one child run against the parent's remaining
      * pool. [worstCaseChildTokens] is the child's theoretical ceiling
-     * (maxTurns × maxOutputTokens); per contract rule 4 (a child may only get
-     * quota from the parent's REMAINDER) implementations clamp the estimate
-     * to what is left rather than reject a large ask — over-estimating is
-     * corrected at settle time.
+     * (maxTurns × the run model's effective Max Output Tokens — the spawn
+     * site computes it, so the estimate tracks the model the run actually
+     * uses); per contract rule 4 (a child may only get quota from the
+     * parent's REMAINDER) implementations clamp the estimate to what is left
+     * rather than reject a large ask — over-estimating is corrected at
+     * settle time.
      */
     fun reserve(worstCaseChildTokens: Long)
 

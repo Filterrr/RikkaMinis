@@ -167,6 +167,78 @@ class SubagentTranscriptTest {
         )
     }
 
+    // ── output-ceiling resolution [T-subagent-output-from-model] ─────────
+
+    @Test
+    fun `the model's configured max output tokens is the ceiling`() {
+        // The value comes straight from the model config (管理提供商 →
+        // Max Output Tokens); no skill-level override exists any more.
+        assertEquals(65_530, subagentOutputCeiling(65_530))
+        assertEquals(4_096, subagentOutputCeiling(4_096))
+    }
+
+    @Test
+    fun `the global 128K cap still bounds a model claiming more`() {
+        assertEquals(128_000, subagentOutputCeiling(1_000_000))
+        assertEquals(128_000, subagentOutputCeiling(128_000))
+    }
+
+    @Test
+    fun `a non-positive model value degrades to the lower bound`() {
+        assertEquals(1, subagentOutputCeiling(0))
+        assertEquals(1, subagentOutputCeiling(-5))
+    }
+
+    @Test
+    fun `turn maxTokens uses the model ceiling when the window has room`() {
+        assertEquals(
+            65_530,
+            resolveSubagentTurnMaxTokens(
+                modelMaxOutputTokens = 65_530,
+                contextWindowTokens = 1_000_000,
+                lastContextTokens = 0,
+            ),
+        )
+    }
+
+    @Test
+    fun `turn maxTokens shrinks to the remaining window when nearly full`() {
+        // 200K window, 195K of input already sent → only ~5K can be produced.
+        assertEquals(
+            5_000,
+            resolveSubagentTurnMaxTokens(
+                modelMaxOutputTokens = 65_530,
+                contextWindowTokens = 200_000,
+                lastContextTokens = 195_000,
+            ),
+        )
+    }
+
+    @Test
+    fun `turn maxTokens floors at MIN when the window is exhausted`() {
+        // The provider must get a legal positive number and report any real
+        // overrun itself — sending 0/negative is a deterministic 400.
+        assertEquals(
+            1_024,
+            resolveSubagentTurnMaxTokens(
+                modelMaxOutputTokens = 65_530,
+                contextWindowTokens = 200_000,
+                lastContextTokens = 200_000,
+            ),
+        )
+    }
+
+    @Test
+    fun `turn maxTokens falls back to the ceiling when the window is unknown`() {
+        assertEquals(
+            8_192,
+            resolveSubagentTurnMaxTokens(
+                modelMaxOutputTokens = 8_192,
+                contextWindowTokens = 0,
+            ),
+        )
+    }
+
     // ── reasoning blob dedup（provider 双通道）──────────────────────────
 
     @Test

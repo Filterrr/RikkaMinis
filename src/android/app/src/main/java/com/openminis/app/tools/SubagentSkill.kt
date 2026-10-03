@@ -107,9 +107,8 @@ object SubagentSkill {
         SubagentOrchestrationTools.CANCEL_NAME,
     )
 
-    /** Default budget for sub-agents when the skill doesn't specify. */
+    /** Default turn budget for sub-agents when the skill doesn't specify. */
     private const val DEFAULT_MAX_TURNS = 12
-    private const val DEFAULT_MAX_OUTPUT_TOKENS = 4096
 
     /**
      * [T-subagent-runtime-preamble] Marker line the runtime prepends to the
@@ -245,11 +244,21 @@ object SubagentSkill {
      * Parsed from a skill's SKILL.md frontmatter. Returned by
      * [parseSubagentConfig] for every skill; [isSubagent] is false
      * for regular skills.
+     *
+     * [T-subagent-output-from-model] The per-turn output ceiling is NOT a
+     * skill property. It is read at run time from the resolved model's
+     * `maxOutputTokens` (管理提供商 / Manage Providers → per-model "Max Output
+     * Tokens", folded into [com.openminis.app.data.model.ModelEntry.model]) via
+     * [com.openminis.app.provider.LLMProvider.effectiveMaxOutputTokens] — the
+     * same single source of truth the main loop's `dynamicMaxTokens` consumes.
+     * A skill-frontmatter `max_output_tokens` value would be a second, silent
+     * knob that drifts from the model the run actually uses (the spawn `model`
+     * argument may route it to a different model); the frontmatter key is
+     * therefore no longer recognised and is ignored when present.
      */
     data class SubagentConfig(
         val isSubagent: Boolean = false,
         val maxTurns: Int = DEFAULT_MAX_TURNS,
-        val maxOutputTokens: Int = DEFAULT_MAX_OUTPUT_TOKENS,
         /** Null = allow all non-FORBIDDEN tools. Non-null = explicit allowlist. */
         val allowedTools: Set<String>? = null,
         /**
@@ -365,12 +374,17 @@ object SubagentSkill {
      * Recognises YAML frontmatter fields:
      *   subagent: true
      *   max_turns: 12
-     *   max_output_tokens: 4096
      *   allowed_tools: [file_read, file_write, shell_execute]
      *   max_parallel: 2
      *
      * (FORBIDDEN tools — spawn_agent and the memory tools — can never be
      * re-enabled via allowed_tools; see [AgentCapabilities].)
+     *
+     * [T-subagent-output-from-model] `max_output_tokens` is deliberately NOT
+     * read: the per-turn output ceiling lives in the model's own config
+     * (管理提供商 → Max Output Tokens) and is resolved from the run's actual
+     * provider at spawn time. A legacy skill still carrying the key is parsed
+     * normally — the line is simply ignored.
      *
      * Returns [SubagentConfig] with isSubagent=false for skills without
      * `subagent: true` in the frontmatter — existing skills are unaffected.
@@ -396,7 +410,6 @@ object SubagentSkill {
         val lines = frontmatter.lines()
         var isSubagent = false
         var maxTurns = DEFAULT_MAX_TURNS
-        var maxOutputTokens = DEFAULT_MAX_OUTPUT_TOKENS
         var allowedTools: Set<String>? = null
         var maxParallel = 1
         // [T-subagent-thinking] `thinking:` in the frontmatter. Accepts the
@@ -416,9 +429,12 @@ object SubagentSkill {
                 trimmed.startsWith("max_turns:") -> {
                     maxTurns = trimmed.substringAfter(":").trim().toIntOrNull() ?: DEFAULT_MAX_TURNS
                 }
-                trimmed.startsWith("max_output_tokens:") -> {
-                    maxOutputTokens = trimmed.substringAfter(":").trim().toIntOrNull() ?: DEFAULT_MAX_OUTPUT_TOKENS
-                }
+                // [T-subagent-output-from-model] `max_output_tokens:` in the
+                // frontmatter is intentionally not honoured any more — the
+                // per-turn output ceiling comes from the model config (管理提供商
+                // → Max Output Tokens) resolved at spawn time. The key is not
+                // matched here, so a legacy skill carrying it is parsed
+                // normally with the line ignored.
                 trimmed.startsWith("max_parallel:") -> {
                     // [T-subagent-parallel] Optional concurrency knob for this
                     // skill; clamped to [1, 4] — the worker serializes model
@@ -456,7 +472,6 @@ object SubagentSkill {
         return SubagentConfig(
             isSubagent = isSubagent,
             maxTurns = maxTurns.coerceIn(1, 100),
-            maxOutputTokens = maxOutputTokens.coerceIn(256, 128_000),
             allowedTools = allowedTools,
             maxParallel = maxParallel,
             thinkingLevel = thinkingLevel,
