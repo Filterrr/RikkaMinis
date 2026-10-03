@@ -930,8 +930,19 @@ class SubagentRunner(
                                         chunk.usage.inputTokens,
                                         chunk.usage.outputTokens,
                                     )
-                                    if (chunk.usage.latestContextTokens > 0) {
-                                        lastContextTokens = chunk.usage.latestContextTokens
+                                    // [T-subagent-output-from-model] Mirrors the
+                                    // main loop's rule: trust the API-reported
+                                    // context size; when a provider omits
+                                    // latestContextTokens, recover it from fresh
+                                    // input + cache tokens (inputTokens is
+                                    // fresh-only — the cached portion is already
+                                    // subtracted). Without this a cache-hit
+                                    // provider leaves lastContextTokens at 0 and
+                                    // every turn asks for the FULL output ceiling
+                                    // even when the window is nearly full.
+                                    val ctx = subagentContextTokensFromUsage(chunk.usage)
+                                    if (ctx > 0) {
+                                        lastContextTokens = ctx
                                     }
                                 }
                                 else -> {}
@@ -1771,6 +1782,24 @@ internal fun resolveSubagentTurnMaxTokens(
     val remaining = contextWindowTokens - lastContextTokens
     return minOf(ceiling, maxOf(remaining, SUBAGENT_MIN_MAX_TOKENS))
 }
+
+/**
+ * [T-subagent-output-from-model] Context size for the next turn's output
+ * sizing, mirroring the main loop's Usage-chunk rule (ChatViewModel):
+ * `latestContextTokens` when the provider reports it; otherwise fresh
+ * `inputTokens` + cache-read + cache-creation (inputTokens is fresh-only —
+ * the cached portion is subtracted by the parser, so a cache-hit turn would
+ * otherwise under-report context pressure and every turn would ask for the
+ * FULL output ceiling even on a nearly-full window). 0 = nothing reported.
+ */
+internal fun subagentContextTokensFromUsage(usage: com.openminis.app.data.model.LLMUsage): Int =
+    when {
+        usage.latestContextTokens > 0 -> usage.latestContextTokens
+        usage.inputTokens > 0 -> usage.inputTokens +
+            (usage.cacheReadInputTokens ?: 0) +
+            (usage.cacheCreationInputTokens ?: 0)
+        else -> 0
+    }
 
 internal fun boundReportForParent(
     report: String,

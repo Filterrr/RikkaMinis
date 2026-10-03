@@ -239,6 +239,47 @@ class SubagentTranscriptTest {
         )
     }
 
+    @Test
+    fun `context tokens prefer the api-reported figure`() {
+        assertEquals(
+            180_000,
+            subagentContextTokensFromUsage(
+                com.openminis.app.data.model.LLMUsage(
+                    inputTokens = 10_000,
+                    outputTokens = 1,
+                    latestContextTokens = 180_000,
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun `context tokens recover the true size from fresh input plus cache`() {
+        // Anthropic-style providers subtract the cached portion from
+        // inputTokens — a cache-hit turn must NOT under-report pressure.
+        assertEquals(
+            190_000,
+            subagentContextTokensFromUsage(
+                com.openminis.app.data.model.LLMUsage(
+                    inputTokens = 10_000,
+                    outputTokens = 1,
+                    cacheReadInputTokens = 170_000,
+                    cacheCreationInputTokens = 10_000,
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun `context tokens are zero when nothing is reported`() {
+        assertEquals(
+            0,
+            subagentContextTokensFromUsage(
+                com.openminis.app.data.model.LLMUsage(inputTokens = 0, outputTokens = 500),
+            ),
+        )
+    }
+
     // ── reasoning blob dedup（provider 双通道）──────────────────────────
 
     @Test
