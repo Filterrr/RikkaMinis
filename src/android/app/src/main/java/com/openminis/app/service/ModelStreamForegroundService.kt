@@ -48,6 +48,15 @@ class ModelStreamForegroundService : Service() {
         private const val CHANNEL_ID = "model_stream_status"
         private const val NOTIFICATION_ID = 9003
 
+        /**
+         * [perf/wakelock-timeout] Bounded hold for the stream wake lock.
+         * Long enough that any healthy stream turn keeps its lease (each new
+         * stream re-arms it — see [onStreamStarted]), short enough that a
+         * worker whose end callbacks were lost cannot pin the CPU past the
+         * ceiling.
+         */
+        private const val WAKELOCK_CEILING_MS = 10 * 60 * 1000L
+
         /** Mirrors [ChatStreamOffloadHandler.activeStreams] semantics. */
         private var streamCount = 0
 
@@ -55,28 +64,34 @@ class ModelStreamForegroundService : Service() {
 
         /**
          * Called by ChatStreamOffloadHandler around every offloaded stream.
-         * Idempotent: the service is only started on the 0→1 edge, and
-         * only stopped when the count drains back to 0.
+         *
+         * Start semantics: the 0→1 edge starts the FGS; every subsequent
+         * call still delivers an intent (the service's [onStartCommand]
+         * re-arms the [WAKELOCK_CEILING_MS] lease — see
+         * [ModelStreamForegroundService.armWakeLock]). The service's own
+         * companion copy of [streamCount] is always 0 in the `:modelservice`
+         * process, so the arm-on-every-start contract is the ONLY
+         * cross-process renewal channel available; it must not be gated on
+         * the caller-side count.
          */
         @Synchronized
         fun onStreamStarted(context: Context) {
             streamCount += 1
-            if (!isRunning) {
-                isRunning = true
-                val intent = Intent(context, ModelStreamForegroundService::class.java)
-                try {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        ContextCompat.startForegroundService(context, intent)
-                    } else {
-                        context.startService(intent)
-                    }
-                } catch (e: Exception) {
-                    // FES start can legitimately throw on some OEMs (background
-                    // start restrictions) — degrade to non-foreground worker
-                    // rather than failing the stream.
-                    isRunning = false
-                    Log.w(TAG, "FGS start failed (degraded to background worker): ${e.message}")
+            val firstStart = !isRunning
+            if (firstStart) isRunning = true
+            val intent = Intent(context, ModelStreamForegroundService::class.java)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    ContextCompat.startForegroundService(context, intent)
+                } else {
+                    context.startService(intent)
                 }
+            } catch (e: Exception) {
+                // FES start can legitimately throw on some OEMs (background
+                // start restrictions) — degrade to non-foreground worker
+                // rather than failing the stream.
+                if (firstStart) isRunning = false
+                Log.w(TAG, "FGS start failed (degraded to background worker): ${e.message}")
             }
         }
 
@@ -102,9 +117,31 @@ class ModelStreamForegroundService : Service() {
         // Same rationale as AgentForegroundService: Doze can suspend worker
         // threads mid-stream after screen-off on aggressive OEM ROMs. Held for
         // the service lifetime only.
-        wakeLock = (getSystemService(POWER_SERVICE) as? PowerManager)
-            ?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Minis:ModelStreamFgs")
-            ?.apply { setReferenceCounted(false); acquire(30 * 60 * 1000L) }
+        //
+        // [perf/wakelock-timeout] The ceiling is re-armed by the companion's
+        // stream-count edges (start/end) rather than a timer: this service
+        // exists exactly while `streamCount > 0`, and every new stream calls
+        // [onStreamStarted] which re-acquires the lease. If the SERVICE is
+        // alive but the count tracked stale (worker died without its end
+        // callback), no further re-arm happens and the ceiling lapses — the
+        // same fail-safe shape as the main process fix.
+        armWakeLock()
+    }
+
+    /** [perf/wakelock-timeout] Bounded acquire + renew (see onCreate note). */
+    private fun armWakeLock() {
+        try {
+            val lock = wakeLock ?: (getSystemService(POWER_SERVICE) as? PowerManager)
+                ?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Minis:ModelStreamFgs")
+                ?.apply { setReferenceCounted(false) }
+                ?.also { wakeLock = it }
+            // Non-reference-counted re-acquire replaces the pending timeout
+            // releaser (AOSP PowerManager.WakeLock.acquireLocked removes it),
+            // so this doubles as "extend the lease".
+            lock?.acquire(WAKELOCK_CEILING_MS)
+        } catch (e: Exception) {
+            Log.w(TAG, "WakeLock acquire failed: ${e.message}")
+        }
     }
 
     /**
@@ -154,6 +191,13 @@ class ModelStreamForegroundService : Service() {
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
+        // [perf/wakelock-timeout] Every start delivery re-arms the bounded
+        // wake-lock lease. The main process sends one intent per stream start
+        // ([onStreamStarted] deliberately does NOT gate the start call on its
+        // companion count, which is always 0 in this process), so a busy
+        // session keeps the lock alive while a worker whose end callbacks
+        // were lost lets it lapse.
+        armWakeLock()
         // NOTE: deliberately NO "count drained → stop immediately" check here.
         // streamCount lives in the CALLER's process (main); this service runs
         // in :modelservice, where the companion copy is always 0 — a drain

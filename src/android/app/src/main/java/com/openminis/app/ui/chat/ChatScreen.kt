@@ -3113,7 +3113,13 @@ fun ChatScreen(
                         viewModel.streamingById,
                     ) { msgs, stream -> msgs to stream }
                         .conflate()
-                        .sample(80L)
+                        // [perf/thermal-guard] The 80ms publication cadence is
+                        // what drives the incremental flatten/reconcile below.
+                        // Under thermal throttling we stretch it so the whole
+                        // pipeline runs proportionally less often (2x at
+                        // MODERATE, 3x at SEVERE+). Evaluated when the flow
+                        // chain is built for this effect run.
+                        .sample(80L * com.openminis.app.power.ThermalGuard.throttleMultiplier())
                         .collect { (msgs, stream) ->
                             val tickStartNs = System.nanoTime()
                             if (stream.isNotEmpty() && !streamWasActive) {

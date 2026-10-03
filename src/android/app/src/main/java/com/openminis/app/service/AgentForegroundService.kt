@@ -22,9 +22,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
@@ -50,6 +52,32 @@ class AgentForegroundService : Service() {
         private const val EXTRA_TOOL_STATUS = "tool_status"
 
         private const val ACTION_STOP = "com.openminis.app.STOP_AGENT_SERVICE"
+
+        /**
+         * [perf/wakelock-timeout] Upper bound on a single wake-lock hold.
+         * Ten minutes comfortably exceeds a normal tool/stream segment, and a
+         * live turn renews the ceiling before it lapses (see
+         * [startWakeLockRenewal]) — so this bound is invisible to healthy
+         * runs and only ever bites a session that is "active" on paper while
+         * nothing is actually driving it.
+         */
+        private const val WAKELOCK_CEILING_MS = 10 * 60 * 1000L
+
+        /** How often a still-progressing turn re-arms [WAKELOCK_CEILING_MS]. */
+        private const val WAKELOCK_RENEW_INTERVAL_MS = 5 * 60 * 1000L
+
+        /**
+         * [perf/wakelock-timeout] A turn with no observable forward progress
+         * (no stream flush, no tool-status change) for this long stops
+         * extending the lease. Combined with [WAKELOCK_CEILING_MS] this caps
+         * any single "stuck active" tail at roughly ceiling + this window,
+         * instead of the unbounded pin the old always-held lock produced.
+         * Generous on purpose: a legitimately silent long tool run is covered
+         * separately by `isToolRunning` (see the renewal loop), and genuine
+         * stream silence is already bounded by the 30 s first-chunk timeout
+         * and the 5 min stream-idle stall watchdog.
+         */
+        private const val WAKELOCK_PROGRESS_STALE_MS = 15 * 60 * 1000L
 
         /**
          * Starts or updates the foreground service with current status.
@@ -88,6 +116,13 @@ class AgentForegroundService : Service() {
      * never leak across orientation changes or process restarts.
      */
     private var wakeLock: PowerManager.WakeLock? = null
+
+    /**
+     * [perf/wakelock-timeout] Renewal loop for the bounded wake lock. While
+     * any session remains active it re-arms the ceiling; it exits when the
+     * active set drains (or on service teardown). See [startWakeLockRenewal].
+     */
+    private var wakeLockRenewalJob: Job? = null
 
     /**
      * T-bg-overlay phase 2: floating tool-status overlay manager + its
@@ -358,6 +393,16 @@ class AgentForegroundService : Service() {
         // notification alone. collectLatest would race release-on-empty with
         // a re-acquire; a plain collect on the StateFlow gives us every
         // observed value so the acquire/release edge logic stays correct.
+        //
+        // [perf/wakelock-timeout] HARD CEILING: the lock is acquired WITH a
+        // timeout so a stuck/leaked `activeSessions` entry (killed streamJob,
+        // OEM process kill mid-finalize, crash between setActive and the
+        // finally) can never pin the CPU indefinitely — the original
+        // "pocket warmer" failure mode. A live turn re-acquires on every
+        // observed emission of the active set (the collector below re-arms
+        // the ceiling whenever the lock is still wanted), so a genuinely
+        // long stream keeps its lock; only a stale-or-absent collector lets
+        // it lapse.
         overlayScope.launch {
             SessionActivityTracker.activeSessions.collect { active ->
                 if (active.isNotEmpty()) {
@@ -511,26 +556,103 @@ class AgentForegroundService : Service() {
     }
 
     private fun acquireWakeLock() {
-        if (wakeLock != null) return
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        val lock = wakeLock ?: pm.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "minis:inference",
+        ).apply {
+            setReferenceCounted(false)
+        }.also { wakeLock = it }
+
         try {
-            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-            wakeLock = pm.newWakeLock(
-                PowerManager.PARTIAL_WAKE_LOCK,
-                "minis:inference",
-            ).apply {
-                setReferenceCounted(false)
-                // No timeout — release happens deterministically in onDestroy
-                // when SessionActivityTracker reports zero active sessions.
-                acquire()
-            }
-            Log.d(TAG, "WakeLock acquired (PARTIAL_WAKE_LOCK)")
+            // [perf/wakelock-timeout] Bounded acquisition + safe renewal in
+            // ONE call. On a non-reference-counted lock every acquire()
+            // runs acquireLocked(), which (a) removes the previously queued
+            // timeout releaser before posting the fresh one, and (b)
+            // re-acquires at the system level even when mHeld was already
+            // true (AOSP comment: "a subsequent call to acquire should
+            // immediately acquire the wake lock once again despite never
+            // having been explicitly released"). So repeated calls with a
+            // timeout are exactly "extend the lease" — no isHeld guard,
+            // which would silently skip the refresh and let a live turn
+            // fall off its ceiling.
+            //
+            // The timeout is the last-resort bound: if every software
+            // release path is lost (stuck activeSessions entry, crash
+            // between setActive and the streamJob finally, collector death),
+            // the CPU still unpins after the ceiling. Healthy long turns
+            // are kept alive by [startWakeLockRenewal].
+            lock.acquire(WAKELOCK_CEILING_MS)
+            Log.d(TAG, "WakeLock acquired/renewed (ceiling ${WAKELOCK_CEILING_MS / 60_000}min)")
         } catch (e: Exception) {
             Log.w(TAG, "WakeLock acquire failed: ${e.message}")
+        }
+        startWakeLockRenewal()
+    }
+
+    /**
+     * [perf/wakelock-timeout] While any session is still active, re-arm the
+     * wake-lock ceiling at [WAKELOCK_RENEW_INTERVAL_MS]. This is what keeps
+     * the bounded acquisition safe for legitimate long turns: every renewal
+     * interval the holder checks for LIVE evidence of work and extends the
+     * lease only when it finds it. When the active set drains — or goes stale
+     * with nothing running — the loop releases the lock itself.
+     *
+     * "Live evidence" is deliberately two-sided:
+     *  - [SessionActivityTracker.progressAgeMs] fresh → the turn is producing
+     *    stream output / tool-status changes (the normal hot path);
+     *  - [SessionActivityTracker.isToolRunning] true → a tool is mid-flight
+     *    and may legitimately emit nothing for many minutes (a long build,
+     *    an apt install). Status polling is the progress signal here.
+     *
+     * A stuck `activeSessions` entry satisfies neither and therefore stops
+     * renewing — the exact failure mode the old always-held lock turned into
+     * an indefinite CPU pin.
+     *
+     * Runs on [overlayScope] (Main) on purpose: if the main thread wedges the
+     * renewal loop stops running, and the pending ceiling expires on its own
+     * — the fail-safe this change exists to provide.
+     */
+    private fun startWakeLockRenewal() {
+        if (wakeLockRenewalJob?.isActive == true) return
+        wakeLockRenewalJob = overlayScope.launch {
+            while (isActive) {
+                delay(WAKELOCK_RENEW_INTERVAL_MS)
+                if (SessionActivityTracker.activeSessions.value.isEmpty()) break
+                val progressing = SessionActivityTracker.progressAgeMs() < WAKELOCK_PROGRESS_STALE_MS
+                val toolRunning = SessionActivityTracker.isToolRunning.value
+                if (!progressing && !toolRunning) {
+                    // No observable work for the whole stale window — do NOT
+                    // extend; let the outstanding ceiling lapse on its own.
+                    // The loop keeps polling so that if real progress resumes
+                    // (e.g. a socket recovers) the lease is re-acquired.
+                    Log.w(
+                        TAG,
+                        "WakeLock renewal skipped: no progress for " +
+                            "${SessionActivityTracker.progressAgeMs() / 60_000}min, no tool running",
+                    )
+                    continue
+                }
+                try {
+                    val lock = wakeLock ?: break
+                    lock.acquire(WAKELOCK_CEILING_MS)
+                    Log.d(TAG, "WakeLock renewed (progress=$progressing, tool=$toolRunning)")
+                } catch (e: Exception) {
+                    Log.w(TAG, "WakeLock renewal failed: ${e.message}")
+                }
+            }
+            wakeLockRenewalJob = null
+            // The loop only exits when the active set drained — release so we
+            // do not rely solely on the collector's edge (they are both
+            // idempotent; whichever runs first wins).
+            releaseWakeLock()
         }
     }
 
     private fun releaseWakeLock() {
         try {
+            wakeLockRenewalJob?.cancel()
+            wakeLockRenewalJob = null
             wakeLock?.let {
                 if (it.isHeld) {
                     it.release()

@@ -630,14 +630,15 @@ class ChatViewModel(
     // length; the newline fast-path flushes immediately on a line break once
     // enough new chars have accumulated, gated to short docs so dense
     // box-drawing streams don't pin the flush rate to the per-token cadence.
-    private fun streamFlushThrottleMs(len: Int): Long = when {
-        len < 500 -> 200L
-        len < 2_000 -> 300L
-        len < 32_000 -> 500L
-        len < 64_000 -> 1_000L
-        len < 128_000 -> 1_500L
-        else -> 2_000L
-    }
+    //
+    // [perf/thermal-guard] Delegates to the (shared, JVM-tested) top-level
+    // [streamFlushThrottleMs] with the CURRENT thermal multiplier: while the
+    // SoC is throttling, coalescing widens (2x at MODERATE, 3x at SEVERE+) so
+    // the parse + recompose pipeline runs proportionally less often. Reading
+    // the multiplier per decision (not caching it) keeps the degradation
+    // responsive when the device cools back down mid-turn.
+    private fun streamFlushThrottleMsThermal(len: Int): Long =
+        streamFlushThrottleMs(len, com.openminis.app.power.ThermalGuard.throttleMultiplier())
 
     /**
      * Composer draft. Owned by VM so it survives navigation (e.g. push EnvVars
@@ -7751,14 +7752,12 @@ class ChatViewModel(
         // other tools get 5Hz so command/url previews stay legible.
         var lastFileToolInputMs = 0L
         var lastOtherToolInputMs = 0L
-        fun textDeltaThrottleMs(len: Int): Long = when {
-            len < 500     -> 150L
-            len < 2_000   -> 300L
-            len < 32_000  -> 500L
-            len < 64_000  -> 1_000L
-            len < 128_000 -> 1_500L
-            else          -> 2_000L
-        }
+        // [perf/thermal-guard] Local delegate so the (shared, JVM-tested)
+        // top-level function picks up the live thermal multiplier: streaming
+        // coalescing widens while the SoC throttles, self-restoring as it
+        // cools. See streamFlushThrottleMsThermal for the sibling flush tier.
+        fun textDeltaThrottleMs(len: Int): Long =
+            textDeltaThrottleMs(len, com.openminis.app.power.ThermalGuard.throttleMultiplier())
 
         // Fallback state — mirrors iOS streamWithGroupFallback
         var currentProvider = provider
@@ -8191,6 +8190,9 @@ class ChatViewModel(
                             // for the assistant message body. These are O(n) calls
                             // but happen at throttled cadence, not per delta.
                             // (activeSb === currentTextBlockSb by construction.)
+                            // [perf/wakelock-timeout] Liveness is signalled inside
+                            // updateAssistantMessage's publish() funnel, which
+                            // every flush path passes through.
                             materializeActiveTextBlock()
                             val turnSnap = turnTextSb.toString()
                             withContext(Dispatchers.Main) {
@@ -11069,7 +11071,7 @@ class ChatViewModel(
                 toolStatusChanged
             val now = System.currentTimeMillis()
             val elapsed = now - st.lastFlushMs
-            val throttle = streamFlushThrottleMs(content.length)
+            val throttle = streamFlushThrottleMsThermal(content.length)
             val newChunk = if (content.length > st.lastFlushedLen) {
                 content.substring(st.lastFlushedLen.coerceAtMost(content.length))
             } else ""
@@ -11079,6 +11081,13 @@ class ChatViewModel(
                 unflushed >= NEWLINE_FLUSH_MIN_CHARS
 
             fun publish(text: String, blocks: List<AssistantBlock>, awaiting: Boolean) {
+                // [perf/wakelock-timeout] This is the single funnel every
+                // streaming update passes through (primary flush, trailing
+                // flush, tool-status publishes), so it is the correct place to
+                // refresh the turn's liveness clock — one volatile write per
+                // publish, well below the throttle cadence. It keeps the
+                // bounded wake-lock lease renewable while text/tools flow.
+                SessionActivityTracker.notifyProgress()
                 // [T-streamlining-thinking-fix] Monotonic terminal guard: a tool
                 // block published in a terminal state (SUCCESS/FAILED/TIMEOUT/
                 // CANCELLED) must never regress to an alive state (RUNNING/

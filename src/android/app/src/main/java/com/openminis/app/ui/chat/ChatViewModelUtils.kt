@@ -123,28 +123,42 @@ private fun StringBuilder.appendStableToolCallJson(value: Any?) {
  * (was ChatViewModel.runAgentLoop → textDeltaThrottleMs)
  * Adaptive throttle delay (ms) for text delta streaming, keyed on the
  * length of the pending delta text. Longer deltas = more aggressive batching.
+ *
+ * [perf/thermal-guard] [thermalMultiplier] stretches the window while the
+ * device is thermally throttled (1 = neutral, 2 = MODERATE, 3 = SEVERE+).
+ * Kept as a parameter rather than reading the thermal state in here so this
+ * stays a pure JVM-testable function — callers pass
+ * `ThermalGuard.throttleMultiplier()`.
  */
-internal fun textDeltaThrottleMs(len: Int): Long = when {
-    len < 500 -> 150L
-    len < 2_000 -> 300L
-    len < 32_000 -> 500L
-    len < 64_000 -> 1_000L
-    len < 128_000 -> 1_500L
-    else -> 2_000L
+internal fun textDeltaThrottleMs(len: Int, thermalMultiplier: Int = 1): Long {
+    val base = when {
+        len < 500 -> 150L
+        len < 2_000 -> 300L
+        len < 32_000 -> 500L
+        len < 64_000 -> 1_000L
+        len < 128_000 -> 1_500L
+        else -> 2_000L
+    }
+    return base * thermalMultiplier.coerceAtLeast(1)
 }
 
 /**
  * (was ChatViewModel.streamFlushThrottleMs)
  * Adaptive throttle delay (ms) for stream-flush batching, keyed on the
  * length of the pending delta text. Longer deltas = more aggressive batching.
+ *
+ * [perf/thermal-guard] [thermalMultiplier] as in [textDeltaThrottleMs].
  */
-internal fun streamFlushThrottleMs(len: Int): Long = when {
-    len < 500 -> 200L
-    len < 2_000 -> 300L
-    len < 32_000 -> 500L
-    len < 64_000 -> 1_000L
-    len < 128_000 -> 1_500L
-    else -> 2_000L
+internal fun streamFlushThrottleMs(len: Int, thermalMultiplier: Int = 1): Long {
+    val base = when {
+        len < 500 -> 200L
+        len < 2_000 -> 300L
+        len < 32_000 -> 500L
+        len < 64_000 -> 1_000L
+        len < 128_000 -> 1_500L
+        else -> 2_000L
+    }
+    return base * thermalMultiplier.coerceAtLeast(1)
 }
 
 // ── Tool display helpers ──────────────────────────────────────────────────

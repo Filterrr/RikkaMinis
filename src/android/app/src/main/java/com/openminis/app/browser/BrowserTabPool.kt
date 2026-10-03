@@ -37,6 +37,144 @@ class BrowserTabPool(private val context: Context) : ComponentCallbacks2 {
     companion object {
         private const val TAG = "BrowserTabPool"
 
+        // ── [perf/webview-lifecycle] App-foreground WebView suspension ──────
+        //
+        // Before this, NOTHING called WebView.onPause()/pauseTimers() — a page
+        // left open in the pool kept its JS timers, GIF/CSS animations,
+        // setInterval polling and media running while the app sat in the
+        // background. That is the classic "phone gets warm sitting in my
+        // pocket" source: the WebView keeps burning CPU with no user-visible
+        // reason.
+        //
+        // The underlying switch is PROCESS-WIDE: `WebView.pauseTimers()`
+        // affects every WebView instance in the process, not one pool. So the
+        // coordination state lives here, once, instead of per pool (two pools
+        // tracking their own "suspended" flag would desync the moment one of
+        // them resumed). Pools only self-register (weak keys, so a disposed
+        // pool is collectable) and expose their tabs.
+        //
+        // Safety rule: suspension is SKIPPED whenever any tab in any pool is
+        // agent-busy (`inUse` — an action executing or inside its post-action
+        // grace window), and any action about to run calls
+        // [ensureResumedForAction] first. A backgrounded agent task must keep
+        // its browser fully functional; correctness beats the power win.
+        private val livePools: MutableSet<BrowserTabPool> =
+            java.util.Collections.newSetFromMap(java.util.WeakHashMap())
+
+        private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+        /** True while the process-wide WebView timers are paused. */
+        @Volatile
+        private var processSuspended = false
+
+        private fun snapshotPools(): List<BrowserTabPool> =
+            synchronized(livePools) { livePools.toList() }
+
+        /**
+         * Suspend every pool's WebViews after the app has gone fully to the
+         * background. Cheap when nothing can be done (no pools / an agent
+         * action in flight). All real work happens on the main thread, where
+         * the flag is re-validated with fresh state.
+         */
+        fun suspendAllIfIdle() {
+            if (processSuspended) return
+            val pools = snapshotPools()
+            if (pools.isEmpty()) return
+            if (pools.any { it.hasInUseTab() }) {
+                android.util.Log.i(TAG, "webview-suspend skipped: an agent action is in flight")
+                return
+            }
+            mainHandler.post {
+                if (processSuspended) return@post
+                val now = snapshotPools()
+                if (now.any { it.hasInUseTab() }) return@post
+                runCatching {
+                    for (pool in now) {
+                        for (tab in pool.tabsSnapshot()) {
+                            tab.manager.webView.onPause()
+                            // NOTE: pauseTimers() is an INSTANCE method (API 36
+                            // signature: `public void pauseTimers()`) whose
+                            // effect is process-wide — it freezes timers for
+                            // every WebView in the app. One call is enough;
+                            // calling per-tab keeps the loop uniform and
+                            // harmless (idempotent).
+                            tab.manager.webView.pauseTimers()
+                        }
+                    }
+                    processSuspended = true
+                    android.util.Log.i(TAG, "webview-suspend: timers paused for ${now.size} pool(s)")
+                }.onFailure { android.util.Log.w(TAG, "suspendAllIfIdle failed: ${it.message}") }
+            }
+        }
+
+        /**
+         * Resume every pool's WebViews. ALWAYS posts (never gates on the
+         * read-side flag): a resume may arrive while a suspend is still
+         * queued — e.g. the user flips away and straight back — and the
+         * posted block's fresh check is the only ordering-safe place to
+         * decide. Posting both operations to the same main queue keeps
+         * their relative order identical to the call order.
+         */
+        fun resumeAll() {
+            mainHandler.post {
+                if (!processSuspended) return@post
+                runCatching {
+                    // resumeTimersLocked clears processSuspended itself when it
+                    // could actually issue the resume (see its deferred case).
+                    resumeTimersLocked()
+                    android.util.Log.i(TAG, "webview-resume: timers resumed (suspended=$processSuspended)")
+                }.onFailure { android.util.Log.w(TAG, "resumeAll failed: ${it.message}") }
+            }
+        }
+
+        /**
+         * Blocking, suspend-context variant used right before an agent action
+         * executes: if timers are paused (app backgrounded while the agent was
+         * driving the browser), lift the suspension so the action sees a live
+         * page. No-op in the common case (nothing suspended).
+         */
+        internal suspend fun ensureResumedForAction() {
+            if (!processSuspended) return
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                if (processSuspended) {
+                    runCatching {
+                        resumeTimersLocked()
+                        android.util.Log.i(TAG, "webview-resume: lifted for agent action (suspended=$processSuspended)")
+                    }.onFailure { android.util.Log.w(TAG, "ensureResumedForAction failed: ${it.message}") }
+                }
+            }
+        }
+
+        /**
+         * Main-thread resume body shared by [resumeAll] and
+         * [ensureResumedForAction]. `resumeTimers()` is process-wide but an
+         * INSTANCE method, so it is issued once from the first live tab and
+         * `onResume()` loops per tab.
+         *
+         * Edge case: every tab can be evicted (idle sweep / onTrimMemory)
+         * while the app sits suspended, leaving no instance to call from. The
+         * flag then STAYS set so the pause is lifted by [createTab] the moment
+         * a WebView exists again — otherwise a fresh tab would run with
+         * process-wide timers still frozen.
+         */
+        private fun resumeTimersLocked() {
+            var resumed = false
+            for (pool in snapshotPools()) {
+                for (tab in pool.tabsSnapshot()) {
+                    tab.manager.webView.onResume()
+                    if (!resumed) {
+                        tab.manager.webView.resumeTimers()
+                        resumed = true
+                    }
+                }
+            }
+            if (resumed) {
+                processSuspended = false
+            } else {
+                android.util.Log.i(TAG, "webview-resume deferred: no live tab to issue it from")
+            }
+        }
+
         /**
          * [fix/chat-bitmap-draw-limit] Upper bound for session viewport CSS
          * dimensions (set_viewport). Unbounded viewports persist across app
@@ -238,6 +376,14 @@ class BrowserTabPool(private val context: Context) : ComponentCallbacks2 {
     private var nextTabId = 0
 
     private val evictionScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    init {
+        // [perf/webview-lifecycle] Make this pool reachable from the app-level
+        // foreground transition so a background app can suspend every pool's
+        // WebViews. Weak-keyed; no explicit unregister needed on dispose.
+        synchronized(livePools) { livePools.add(this) }
+    }
+
     private var evictionJob: Job? = null
 
     /**
@@ -641,6 +787,11 @@ class BrowserTabPool(private val context: Context) : ComponentCallbacks2 {
                 val serialTabId = input.tabId?.takeIf { reqId ->
                     _tabs.value.any { it.id == reqId }
                 }
+                // [perf/webview-lifecycle] Any real page action (explicit tab,
+                // follow-selected, or fan-out) must run with live JS timers —
+                // the app may be backgrounded with the agent still driving.
+                // Lift the suspension once, here, before any dispatch branch.
+                ensureResumedForAction()
                 if (serialTabId != null) {
                     executeSerialized(serialTabId, input)
                 } else {
@@ -936,6 +1087,18 @@ class BrowserTabPool(private val context: Context) : ComponentCallbacks2 {
     private fun createTab(tabs: MutableList<Tab>, url: String? = null): Tab? {
         if (tabs.size >= MAX_TABS) return null
 
+        // [perf/webview-lifecycle] A WebView created while the process-wide
+        // timers are paused would start frozen. createTab is only ever called
+        // because somebody is about to USE the browser (an agent action or an
+        // explicit UI open), so the suspension is by definition obsolete —
+        // lift it before instantiating. This also covers the deferred-resume
+        // edge where every tab had been evicted while suspended and there was
+        // no instance left to issue resumeTimers() from (see
+        // [resumeTimersLocked]). Runs on Main (all createTab callers do).
+        if (processSuspended) {
+            resumeTimersLocked()
+        }
+
         val id = nextTabId++
         val webView = WebView(context)
         val manager = BrowserUseManager(webView, userAgentProfile, customUserAgentString)
@@ -1004,6 +1167,18 @@ class BrowserTabPool(private val context: Context) : ComponentCallbacks2 {
     }
 
     // -- Tab Management Actions --
+
+    /**
+     * [perf/webview-lifecycle] True when any tab is executing an agent action
+     * (or inside its post-action grace window). The app-level suspend path
+     * consults this: an in-flight agent task must never have its WebView
+     * timers frozen out from under it. Read off the main thread (the check is
+     * advisory — [suspendAllIfIdle] re-validates on Main before acting).
+     */
+    internal fun hasInUseTab(): Boolean = _tabs.value.any { it.inUse }
+
+    /** [perf/webview-lifecycle] Snapshot of the current tabs, for the app-level suspend/resume. */
+    internal fun tabsSnapshot(): List<Tab> = _tabs.value
 
     private suspend fun newTab(url: String?): BrowserActionResult = withContext(Dispatchers.Main) {
         val currentTabs = _tabs.value.toMutableList()

@@ -44,6 +44,16 @@ object ProviderRssProbe {
     /** 每条记录峰值采样间隔（ms）。 */
     private const val PEAK_SAMPLE_MS = 80L
 
+    /**
+     * [perf/thermal-guard] Relaxed peak-sampling interval used while the
+     * device is thermally throttled. The 80ms cadence exists to catch a
+     * transient RSS spike inside one provider call; while the SoC is hot that
+     * resolution is not worth a dedicated wakeup every 80ms for the whole
+     * generation. Coarse sampling still catches sustained growth (the
+     * LEAK-SUSPECT conditions key off peak/aggregate, not single samples).
+     */
+    private const val PEAK_SAMPLE_MS_HEATED = 500L
+
     /** 单次调用 peakDelta 超过该值（512MB）即触发 LEAK-SUSPECT 条件 A（峰值持续偏高）。 */
     private const val PEAK_SUSPECT_KB = 512L * 1024L
 
@@ -200,10 +210,30 @@ object ProviderRssProbe {
     }
 
     /**
+     * [perf/thermal-guard] Resolve the peak-sampling interval for the current
+     * thermal state. Kept as a small helper (not inlined) so the two
+     * default-argument call sites share one definition. Wrapped in runCatching
+     * because ProviderRssProbe is also exercised from JVM tests where the
+     * Android power service is absent.
+     */
+    private fun defaultSampleIntervalMs(): Long = try {
+        if (com.openminis.app.power.ThermalGuard.isHeated()) PEAK_SAMPLE_MS_HEATED
+        else PEAK_SAMPLE_MS
+    } catch (t: Throwable) {
+        PEAK_SAMPLE_MS
+    }
+
+    /**
      * 手动峰值采样的一次会话（用于 suspend 调用点）：调用方 start 后执行 provider 调用，
      * finally 里 stop() 取峰值。
+     *
+     * [perf/thermal-guard] Default interval is 80ms in the normal state, but
+     * relaxes to [PEAK_SAMPLE_MS_HEATED] while the device is thermally
+     * throttled (see the field docs) — the default is resolved at call time,
+     * not baked into the signature, so an in-flight call always uses the
+     * cadence appropriate to the current thermal state.
      */
-    fun startPeakSampling(intervalMs: Long = PEAK_SAMPLE_MS): SampleHandle {
+    fun startPeakSampling(intervalMs: Long = defaultSampleIntervalMs()): SampleHandle {
         val stop = AtomicBoolean(false)
         val peak = java.util.concurrent.atomic.AtomicLong(-1L)
         val sampler = Thread {
