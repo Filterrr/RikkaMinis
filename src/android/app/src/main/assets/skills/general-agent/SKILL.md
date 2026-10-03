@@ -1,11 +1,11 @@
 ---
 name: general-agent
-version: 1.4.2
+version: 1.4.3
 description: General-purpose sub-agent with the same tool capabilities as the main agent (shell, browser, file read/write/edit, image reading). Spawn via spawn_agent for delegating complex sub-tasks — research, code exploration, multi-step file operations, parallel investigation. The sub-agent works in an isolated context and returns a structured, anchor-verifiable final report.
 subagent: true
 max_turns: 40
 max_output_tokens: 65530
-max_parallel: 3
+max_parallel: 2
 # [T-subagent-thinking] Reasoning level this sub-agent runs with
 # (off/low/medium/high/xhigh/max/ultra). OFF by default because reasoning
 # tokens bill like output and multiply by the turn count; raise it for
