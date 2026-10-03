@@ -677,6 +677,15 @@ class BrowserUseManager(
 
     private suspend fun attachSnapshot(result: BrowserActionResult): BrowserActionResult {
         return try {
+            // [perf/thermal-guard] Auto-snapshot compresses a full-viewport
+            // JPEG on every visual-change action (navigate/click/scroll/…).
+            // While the device is thermally throttled that encode is pure
+            // heat for a convenience thumbnail — skip it and let the agent
+            // request an explicit screenshot if it needs pixels.
+            if (com.openminis.app.power.ThermalGuard.shouldSkipAutoSnapshot()) {
+                Log.i(TAG, "auto-snapshot skipped (thermal ${com.openminis.app.power.ThermalGuard.currentLevel()})")
+                return result
+            }
             delay(300) // Let page settle
             val bitmap = captureWebViewBitmap() ?: return result
             val file = saveBitmapToFile(bitmap, "snapshot", SNAPSHOT_QUALITY)
@@ -862,17 +871,23 @@ class BrowserUseManager(
             }
         } ?: return BrowserActionResult.error("Failed to capture screenshot")
 
+        // [perf/screenshot-single-encode] ONE JPEG encode for both consumers:
+        // the bytes are written straight to the cache file and the same byte
+        // array is base64-encoded for the tool result. Previously the bitmap
+        // was compressed twice back-to-back (here for the payload, then again
+        // inside saveBitmapToFile), doubling a CPU-bound encode on the very
+        // path that already runs a software bitmap capture.
         val out = ByteArrayOutputStream()
         bitmap.compress(Bitmap.CompressFormat.JPEG, SCREENSHOT_QUALITY, out)
         val jpegBytes = out.toByteArray()
 
-        val file = saveBitmapToFile(bitmap, "screenshot")
+        val file = writeScreenshotBytes(jpegBytes, "screenshot")
         val base64 = Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
 
         val w = bitmap.width; val h = bitmap.height
         bitmap.recycle()
 
-        Log.i(TAG, "Screenshot saved: ${file.absolutePath}, ${w}x$h, ${jpegBytes.size} bytes (full_page=$fullPage)")
+        Log.i(TAG, "Screenshot saved: ${file?.absolutePath}, ${w}x$h, ${jpegBytes.size} bytes (full_page=$fullPage)")
 
         val meta = viewportMetadata(
             imageW = w,
@@ -884,7 +899,7 @@ class BrowserUseManager(
         )
 
         return BrowserActionResult(
-            text = meta, base64Image = base64, imageFilePath = file.absolutePath
+            text = meta, base64Image = base64, imageFilePath = file?.absolutePath
         )
     }
 
@@ -1013,6 +1028,26 @@ class BrowserUseManager(
         // successful save (see pruneScreenshotCache for the rationale).
         pruneScreenshotCache()
         return file
+    }
+
+    /**
+     * [perf/screenshot-single-encode] Persist already-encoded JPEG bytes.
+     * Companion of [saveBitmapToFile] for callers that must encode once (the
+     * payload path): writing the byte array skips a second full-bitmap
+     * compress. Returns null when the write fails — the caller keeps its
+     * in-memory bytes either way.
+     */
+    private fun writeScreenshotBytes(jpegBytes: ByteArray, prefix: String): File? {
+        val filename = "${prefix}_${System.currentTimeMillis()}.jpg"
+        val file = File(screenshotsDir, filename)
+        return try {
+            file.outputStream().use { out -> out.write(jpegBytes) }
+            pruneScreenshotCache()
+            file
+        } catch (e: Exception) {
+            Log.w(TAG, "writeScreenshotBytes failed: ${e.message}")
+            null
+        }
     }
 
     // -- Click --

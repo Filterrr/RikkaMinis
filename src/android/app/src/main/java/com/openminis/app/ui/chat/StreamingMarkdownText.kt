@@ -522,13 +522,20 @@ private fun MdText(
 // line on dense streams while keeping short replies responsive.
 //   < 500  : 200ms   < 2000 : 300ms   < 32K : 500ms
 //   < 64K  : 1000ms  < 128K : 1500ms  else  : 2000ms
-private fun streamingThrottleFor(content: String): Long = when {
-    content.length < 500 -> 200L
-    content.length < 2_000 -> 300L
-    content.length < 32_000 -> 500L
-    content.length < 64_000 -> 1_000L
-    content.length < 128_000 -> 1_500L
-    else -> 2_000L
+//
+// [perf/thermal-guard] Multiplied by the live thermal multiplier (2x at
+// MODERATE, 3x at SEVERE+) so the block-parse + recompose pass runs
+// proportionally less often while the SoC is protecting itself.
+private fun streamingThrottleFor(content: String): Long {
+    val base = when {
+        content.length < 500 -> 200L
+        content.length < 2_000 -> 300L
+        content.length < 32_000 -> 500L
+        content.length < 64_000 -> 1_000L
+        content.length < 128_000 -> 1_500L
+        else -> 2_000L
+    }
+    return base * com.openminis.app.power.ThermalGuard.throttleMultiplier().coerceAtLeast(1)
 }
 
 

@@ -31,6 +31,30 @@ object SessionActivityTracker {
     val activeSessions: StateFlow<Set<String>> = _activeSessions.asStateFlow()
 
     /**
+     * [perf/wakelock-timeout] Wall-clock timestamp of the last observed
+     * forward progress in ANY active turn — stream start, tool-status
+     * change, streamed-text flush. The wake-lock renewal loop in
+     * [com.openminis.app.service.AgentForegroundService] consults this so a
+     * STUCK `activeSessions` entry (the exact state that used to pin the CPU
+     * forever) cannot keep extending the lease: with no progress inside that
+     * service's WAKELOCK_PROGRESS_STALE_MS window the loop stops renewing and
+     * lets the outstanding ceiling lapse.
+     *
+     * Deliberately cheap: a volatile long write on flush/tool events
+     * (sub-millisecond, no allocation), so it is safe on the streaming path.
+     */
+    @Volatile
+    private var lastProgressAtMs: Long = System.currentTimeMillis()
+
+    /** Record forward progress in a live turn. See [lastProgressAtMs]. */
+    fun notifyProgress() {
+        lastProgressAtMs = System.currentTimeMillis()
+    }
+
+    /** Milliseconds since the last [notifyProgress] — wake-lock staleness check. */
+    fun progressAgeMs(): Long = System.currentTimeMillis() - lastProgressAtMs
+
+    /**
      * T166: sessions the user is currently *present in* (composing /
      * reading), distinct from [activeSessions] which tracks streaming.
      * Drives the foreground service so the process stays at adj=200
@@ -325,6 +349,9 @@ object SessionActivityTracker {
         if (onStop != null) {
             synchronized(streamCancellers) { streamCancellers[sessionId] = onStop }
         }
+        // [perf/wakelock-timeout] Starting a turn is progress: it re-bases
+        // the staleness clock so the wake-lock lease starts fresh.
+        notifyProgress()
         // [T-android-overlay-reply-status-34599] Track which session is
         // driving the overlay so the tap-to-open intent lands in the
         // right chat. Clear the previous reply excerpt so the user
@@ -522,6 +549,9 @@ object SessionActivityTracker {
         // lastToolOutcome) does not leak the prior result into the new
         // tool's "running" state.
         if (isRunning) _lastToolOutcome.value = ToolOutcome.Unknown
+        // [perf/wakelock-timeout] A tool-status change is forward progress —
+        // it keeps the bounded wake-lock lease renewable while the turn runs.
+        notifyProgress()
         if (_activeSessions.value.isNotEmpty()) {
             updateService()
         }

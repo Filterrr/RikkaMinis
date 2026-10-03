@@ -392,6 +392,13 @@ class MinisApp : Application(), ImageLoaderFactory {
             Log.w("MinisApp", "LaunchCycleBeacon.recordLaunch failed: ${t.message}")
         }
 
+        // [perf/thermal-guard] Start observing the device thermal status so
+        // streaming/flush throttles and the browser auto-snapshot can degrade
+        // BEFORE the OS resorts to CPU throttling / process kills. Cheap:
+        // one listener registration on Q+, a no-op below (and the per-call
+        // reads are volatile-int comparisons).
+        com.openminis.app.power.ThermalGuard.init(this)
+
         // Start the main-thread hang watchdog before the heavier subsystems
         // (DB / repositories / iSH bring-up) get going so it can observe any
         // stall in onCreate itself. Posts heartbeats at 1s cadence; if the
@@ -685,6 +692,12 @@ class MinisApp : Application(), ImageLoaderFactory {
                 val wasBackgrounded = foregroundActivityCount == 0
                 foregroundActivityCount++
                 if (wasBackgrounded) _isAppForegroundFlow.value = true
+                // [perf/webview-lifecycle] App is visible again — lift the
+                // background WebView suspension so pages resume their JS
+                // timers/animations. Cheap no-op when nothing was suspended.
+                if (wasBackgrounded) {
+                    com.openminis.app.browser.BrowserTabPool.resumeAll()
+                }
                 // T-MIUI-FGS-race: app came to the foreground — unhide FG
                 // service starts and refresh it if a session was running.
                 // Must set the flag BEFORE the sync / badge work so a
@@ -772,6 +785,12 @@ class MinisApp : Application(), ImageLoaderFactory {
                     // initiating new FG-service starts so a background
                     // kill can't race a startForeground deadline.
                     SessionActivityTracker.setAppForeground(false)
+                    // [perf/webview-lifecycle] App is fully invisible — freeze
+                    // the WebView JS timers/animations so a page left open by a
+                    // previous turn stops burning CPU in the background. Skipped
+                    // automatically while an agent action is in flight, and
+                    // lifted again on the next foreground (onActivityStarted).
+                    runCatching { com.openminis.app.browser.BrowserTabPool.suspendAllIfIdle() }
                     // [T-android-config-confirm-timeout] The user switched away
                     // while a config-confirm dialog may still be showing — nudge
                     // them so they can come back before the 120s timeout.
