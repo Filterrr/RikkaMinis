@@ -36,9 +36,9 @@ object SessionActivityTracker {
      * change, streamed-text flush. The wake-lock renewal loop in
      * [com.openminis.app.service.AgentForegroundService] consults this so a
      * STUCK `activeSessions` entry (the exact state that used to pin the CPU
-     * forever) cannot keep extending the lease: with no progress inside
-     * [com.openminis.app.service.AgentForegroundService.WAKELOCK_STALE_MS]
-     * the loop stops renewing and releases the lock.
+     * forever) cannot keep extending the lease: with no progress inside that
+     * service's WAKELOCK_PROGRESS_STALE_MS window the loop stops renewing and
+     * lets the outstanding ceiling lapse.
      *
      * Deliberately cheap: a volatile long write on flush/tool events
      * (sub-millisecond, no allocation), so it is safe on the streaming path.

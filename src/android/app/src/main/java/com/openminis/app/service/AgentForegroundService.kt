@@ -556,15 +556,20 @@ class AgentForegroundService : Service() {
     }
 
     private fun acquireWakeLock() {
-        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        val lock = wakeLock ?: pm.newWakeLock(
-            PowerManager.PARTIAL_WAKE_LOCK,
-            "minis:inference",
-        ).apply {
-            setReferenceCounted(false)
-        }.also { wakeLock = it }
-
+        // [perf/wakelock-regression] The whole construction is guarded: the
+        // collector that drives this runs on overlayScope (Main) — an
+        // uncaught throw here would kill the overlay/wake-lock collector
+        // coroutine for the life of the service. (The original code also had
+        // this inside its try; the bounded-acquire rewrite must not regress.)
         try {
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            val lock = wakeLock ?: pm.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "minis:inference",
+            ).apply {
+                setReferenceCounted(false)
+            }.also { wakeLock = it }
+
             // [perf/wakelock-timeout] Bounded acquisition + safe renewal in
             // ONE call. On a non-reference-counted lock every acquire()
             // runs acquireLocked(), which (a) removes the previously queued

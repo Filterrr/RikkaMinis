@@ -1025,6 +1025,14 @@ class BrowserTabPool(private val context: Context) : ComponentCallbacks2 {
      * lazily created.
      */
     private suspend fun acquireTab(requestedTabId: Int? = null): Tab? = withContext(Dispatchers.Main) {
+        // [perf/webview-lifecycle] Second suspension gate, INSIDE acquire:
+        // between execute()'s early ensureResumedForAction() and this point a
+        // queued suspendAllIfIdle post could still land (its inUse probe runs
+        // before this action's inUse=true below). Resuming here — same Main
+        // thread as the suspend block — serializes against it: whichever
+        // lands first, the action never runs on frozen timers. Cheap no-op
+        // in the common case (nothing suspended).
+        ensureResumedForAction()
         var currentTabs = _tabs.value.toMutableList()
 
         // Find requested tab, falling back to default-or-create when the
@@ -1168,14 +1176,19 @@ class BrowserTabPool(private val context: Context) : ComponentCallbacks2 {
 
     // -- Tab Management Actions --
 
-    /**
-     * [perf/webview-lifecycle] True when any tab is executing an agent action
-     * (or inside its post-action grace window). The app-level suspend path
-     * consults this: an in-flight agent task must never have its WebView
-     * timers frozen out from under it. Read off the main thread (the check is
-     * advisory — [suspendAllIfIdle] re-validates on Main before acting).
-     */
-    internal fun hasInUseTab(): Boolean = _tabs.value.any { it.inUse }
+        /**
+         * [perf/webview-lifecycle] True when any tab is executing an agent action
+         * (or inside its post-action grace window). The app-level suspend path
+         * consults this: an in-flight agent task must never have its WebView
+         * timers frozen out from under it.
+         *
+         * Threading: every caller runs on Main ([suspendAllIfIdle] is invoked
+         * from the Activity-lifecycle stopped callback, and re-validated inside
+         * its Main-handler post), and `inUse` is also only ever written on Main
+         * (acquireTab / the action finally / the grace release) — so the read
+         * is same-thread and race-free by construction.
+         */
+        internal fun hasInUseTab(): Boolean = _tabs.value.any { it.inUse }
 
     /** [perf/webview-lifecycle] Snapshot of the current tabs, for the app-level suspend/resume. */
     internal fun tabsSnapshot(): List<Tab> = _tabs.value

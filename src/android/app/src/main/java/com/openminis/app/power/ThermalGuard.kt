@@ -97,9 +97,6 @@ object ThermalGuard {
         else -> 1
     }
 
-    /** Convenience wrapper for throttle tiers: [baseMs] × current multiplier. */
-    fun adjusted(baseMs: Long): Long = baseMs * throttleMultiplier()
-
     /**
      * Auto-snapshot (browser_use visual-change actions) encodes a full
      * viewport JPEG per call — a CPU burst we can simply skip while the
