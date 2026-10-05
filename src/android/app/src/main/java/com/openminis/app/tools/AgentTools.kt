@@ -31,6 +31,10 @@ object AgentTools {
         // the user's actual model list so `spawn_agent(model=…)` is pickable
         // rather than guessable.
         modelCatalogHint: String = "",
+        // [T-subagent-model-spread] Same pattern for MODEL GROUPS: names of
+        // the configured groups so a spawn can target one. Empty default
+        // keeps the schema unchanged for callers that don't supply it.
+        groupHint: String = "",
     ): List<AgentToolDefinition> = buildList {
         add(shellExecuteDefinition())
         add(FileReadTool.definition())
@@ -55,7 +59,7 @@ object AgentTools {
         // Always exposed — the sub-agent's own tool set is filtered inside
         // SubagentSkill.buildFilteredTools (spawn_agent itself is FORBIDDEN
         // there, so recursion is structurally impossible).
-        add(SubagentSkill.definition(modelCatalogHint))
+        add(SubagentSkill.definition(modelCatalogHint, groupHint))
         // [T-subagent-orchestration] Parent-side orchestration: join / wait-any
         // / cancel for detached spawns. Sub-agents never see these (capability
         // catalog + FORBIDDEN_TOOLS fail closed twice).

@@ -241,6 +241,35 @@ object SubagentSkill {
     }
 
     /**
+     * [T-subagent-model-spread] Render the configured MODEL GROUP names for
+     * embedding in the spawn_agent schema — the discoverability half of
+     * "a spawn may name a group" (`model = "group:<name>"` or a bare name).
+     *
+     * Same budget discipline as [buildCatalogHint]: this rides in every
+     * parent request, so it is capped at [MAX_CATALOG_HINT_MODELS] names and
+     * [MAX_CATALOG_HINT_CHARS] characters. A group NOT listed here stays
+     * addressable by its exact name or id — truncation costs discoverability,
+     * never capability.
+     */
+    fun buildGroupHint(
+        groupNames: List<String>,
+        limit: Int = MAX_CATALOG_HINT_MODELS,
+        maxChars: Int = MAX_CATALOG_HINT_CHARS,
+    ): String {
+        val names = groupNames.map { it.trim() }.filter { it.isNotEmpty() }
+        if (names.isEmpty()) return ""
+        val shown = names.take(limit)
+        val list = shown.joinToString(", ")
+        val hint = if (names.size <= limit) {
+            "Model groups: $list."
+        } else {
+            "Model groups (first $limit of ${names.size}): $list."
+        }
+        return if (hint.length <= maxChars) hint
+        else hint.take(maxChars).trimEnd() + " …(list truncated; an exact group name or id also works)"
+    }
+
+    /**
      * Parsed from a skill's SKILL.md frontmatter. Returned by
      * [parseSubagentConfig] for every skill; [isSubagent] is false
      * for regular skills.
@@ -281,7 +310,7 @@ object SubagentSkill {
 
     // ── Tool definition ──────────────────────────────────────────────────
 
-    fun definition(modelCatalogHint: String = ""): AgentToolDefinition = AgentToolDefinition(
+    fun definition(modelCatalogHint: String = "", groupHint: String = ""): AgentToolDefinition = AgentToolDefinition(
         name = NAME,
         description = "Spawn a sub-agent with its own system prompt, tool set, " +
             "and budget. The sub-agent runs independently and returns its final " +
@@ -294,6 +323,10 @@ object SubagentSkill {
             "execution process (every tool call and output) in real time. " +
             "Multiple spawn_agent calls emitted in ONE turn run in parallel " +
             "(bounded by max_parallel); each spawn batch forms a group. " +
+            "When this chat runs on a MODEL GROUP, a multi-spawn batch " +
+            "automatically spreads its children across the group's members " +
+            "(child 1 → member a, child 2 → member b, …), skipping members " +
+            "already taken by other live sub-agents. " +
             "Spawning is idempotent while a task is active: if a run with the " +
             "same skill_name and query is still queued or running, the call " +
             "returns that existing run_id instead of creating a duplicate — " +
@@ -344,8 +377,14 @@ object SubagentSkill {
                     "name (case-insensitive exact match). Omit to inherit the " +
                     "parent's model. An unknown or ambiguous value fails the " +
                     "spawn and the error lists what would have matched — do " +
-                    "NOT retry with a guessed name." +
-                    (if (modelCatalogHint.isNotBlank()) " $modelCatalogHint" else ""),
+                    "NOT retry with a guessed name. This argument may also " +
+                    "name a MODEL GROUP (prefix 'group:' or a bare group " +
+                    "name/id): in a multi-spawn turn each child then takes a " +
+                    "different member of that group (1 号 → member a, 2 号 → " +
+                    "member b, …), and members already occupied by other " +
+                    "running sub-agents are skipped." +
+                    (if (modelCatalogHint.isNotBlank()) " $modelCatalogHint" else "") +
+                    (if (groupHint.isNotBlank()) " $groupHint" else ""),
             ),
             // [T-subagent-run-timeout] Wall-clock ceiling for ONE run.
             // RikkaMinis previously had no run-level timeout at all: an
