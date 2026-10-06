@@ -104,6 +104,43 @@ class SubagentRunner(
         /** [T-subagent-model-routing] Human label of a provider (for the run record). */
         fun providerLabel(provider: com.openminis.app.provider.LLMProvider): String = provider.model.displayName
 
+        // ── [T-subagent-model-spread] Group-aware routing for spawn batches ──
+        //
+        // When several spawns run in ONE batch while the chat is bound to a
+        // model group (or a spawn explicitly names one), the children rotate
+        // over the group's members — 1 号子 agent → a、2 号 → b — instead of
+        // every child inheriting the parent's single active member. The
+        // per-call member choice is precomputed by the conversation layer
+        // (which knows the batch structure + emission order) and read back
+        // here by blockId, so concurrent spawn coroutines never race for a
+        // slot. Defaults (null/empty) disable spreading entirely — every
+        // existing Deps adapter is source- and behaviour-compatible.
+
+        /**
+         * Batch member assignments for inherited-model spawns, keyed by the
+         * spawn's tool_use block id. Built by the parent loop per dispatch
+         * batch (see ChatViewModel.planSpawnBatchSpread) — only batches with
+         * >1 spawn get entries; a lone spawn never appears here and keeps the
+         * plain parent provider.
+         */
+        fun groupSpreadAssignments(): Map<String, SubagentGroupSpread.Assignment> = emptyMap()
+
+        /**
+         * [T-subagent-model-spread] Diagnostic callback for the spread audit
+         * line ("spawn_agent model resolution"), invoked once per spawn with
+         * what actually happened. A no-op default keeps tests silent.
+         */
+        fun recordSpreadAssignment(blockId: String, detail: String) {}
+
+        /** Resolve a `model` token that matched no model to a configured group: (groupId, name), or null. */
+        fun findModelGroup(query: String): Pair<String, String>? = null
+
+        /** Live routable members of [groupId] (enabled instance, non-hidden), declaration order. */
+        fun modelGroupMembers(groupId: String): List<SubagentModelResolver.Candidate> = emptyList()
+
+        /** Names of configured groups — appended to fail-loud error text (caller bounds the list). */
+        fun modelGroupNames(): List<String> = emptyList()
+
         /**
          * [T-subagent-budget-inheritance] The parent loop's execution budget
          * as a child-facing guard, or null when no run budget is active (tests,
@@ -238,31 +275,107 @@ class SubagentRunner(
         // a run that dies in the background. Fail-loud by design: silently
         // inheriting the parent's (expensive) model would turn a typo into a
         // billing surprise, which is the opposite of why this knob exists.
+        //
+        // [T-subagent-model-spread] The argument may ALSO name a model group:
+        // 'group:<name|id>' explicitly, or a bare name/id that matched no
+        // model (cross-tier precedence — a value that matches any model stays
+        // a model; see SubagentGroupSpread.resolveSpawnModelPlan).
+        //
+        // The runner itself NEVER chooses a member by mutable rule: for a
+        // BATCHED spawn the conversation layer (ChatViewModel, which knows the
+        // batch structure and emission order) precomputes one assignment per
+        // call and the runner picks up its own by blockId — see
+        // [Deps.groupSpreadAssignments]. This keeps children deterministic
+        // under async fan-out. A lone call with no precomputed assignment
+        // (manual dispatch, tests) uses the group's first usable member.
         val modelArg = args.optString("model", "").trim()
-        val provider = if (modelArg.isEmpty()) parentProvider else when (
-            val resolved = SubagentModelResolver.resolve(
-                modelArg, deps.modelCatalog(),
-            )
-        ) {
-            is SubagentModelResolver.Result.Resolved ->
-                deps.providerForCandidate(resolved.candidate)
-                    ?: return ToolExecutionResult(
-                        "Error: model '${resolved.candidate.describe()}' resolved but could not be " +
+        val precomputed = deps.groupSpreadAssignments()[blockId]
+        // [T-subagent-model-spread] Non-empty only when this spawn actually
+        // landed on a group member via the batch plan — drives the approval
+        // dialog text, the run's notice line, and the spawn result so the
+        // parent can VERIFY the spread instead of trusting it.
+        var spreadLabel = ""
+        // Precedence: the BATCH PLAN wins when present. The conversation layer
+        // only builds plans for calls it could resolve to a group it spreads
+        // (inherited-model calls on a group-bound chat, and multi-spawn
+        // batches whose `model` names a group) — so a plan is exactly the
+        // deterministic member pick for THIS call, decided in emission order
+        // before the async fan-out. Everything else falls through to the
+        // explicit-model plan (single model = a pin; group = first member for
+        // a lone spawn; unknown = fail loudly) and finally to plain inherit.
+        val plan = if (modelArg.isEmpty()) null else SubagentGroupSpread.resolveSpawnModelPlan(
+            rawModel = modelArg,
+            modelCatalog = deps.modelCatalog(),
+            groupLookup = { q -> deps.findModelGroup(q) },
+            groupMembers = { gid -> deps.modelGroupMembers(gid) },
+            knownGroupNames = { deps.modelGroupNames() },
+        )
+        val provider = when {
+            precomputed != null -> buildSpreadProvider(blockId, precomputed)?.let { pick ->
+                spreadLabel = "group:${precomputed.groupName} member " +
+                    "${pick.index + 1}/${precomputed.members.size}" +
+                    (if (pick.walkedForward > 0) {
+                        " (assigned slot ${precomputed.memberIndex + 1} fell through)"
+                    } else "")
+                pick.provider
+            } ?: parentProvider
+            plan is SubagentGroupSpread.ModelPlan.SingleModel -> {
+                val p = deps.providerForCandidate(plan.candidate)
+                if (p == null) {
+                    deps.recordSpreadAssignment(blockId, "single:${plan.candidate.describe()}:unbuildable")
+                    return ToolExecutionResult(
+                        "Error: model '${plan.candidate.describe()}' resolved but could not be " +
                             "instantiated (disabled provider or missing credential). Spawn aborted; " +
                             "no sub-agent run was created.",
                         false, toolTitle = title,
                     )
-            is SubagentModelResolver.Result.Failed ->
+                }
+                deps.recordSpreadAssignment(blockId, "single:${plan.candidate.describe()}:ok")
+                p
+            }
+            plan is SubagentGroupSpread.ModelPlan.Mapped -> {
+                // Explicit `group:` / bare-name pick WITHOUT a batch plan
+                // (a lone spawn, or a group too small to rotate): "use this
+                // group" for a single child means its first usable member.
+                // A multi-spawn batch gets a plan instead — see the comment
+                // above — so rotation applies there.
+                val members = deps.modelGroupMembers(plan.groupId)
+                val pick = members.firstOrNull()
+                val p = pick?.let { deps.providerForCandidate(it) }
+                if (p == null || pick == null) {
+                    deps.recordSpreadAssignment(blockId, "group:${plan.groupName}:unusable")
+                    return ToolExecutionResult(
+                        "Error: model group '${plan.groupName}' has no member that could be " +
+                            "instantiated (disabled provider or missing credential). Spawn " +
+                            "aborted; no sub-agent run was created.",
+                        false, toolTitle = title,
+                    )
+                }
+                spreadLabel = "group:${plan.groupName} member 1/${members.size}"
+                deps.recordSpreadAssignment(blockId, "group:${plan.groupName}→${pick.describe()}:1/${members.size}")
+                p
+            }
+            plan is SubagentGroupSpread.ModelPlan.GroupUnusable -> {
+                deps.recordSpreadAssignment(blockId, "group:unusable")
+                return ToolExecutionResult("Error: ${plan.message}", false, toolTitle = title)
+            }
+            plan is SubagentGroupSpread.ModelPlan.Failed -> {
+                deps.recordSpreadAssignment(blockId, "failed")
                 return ToolExecutionResult(
-                    "Error: ${resolved.message} Spawn aborted; no sub-agent run was created.",
+                    "Error: ${plan.message} Spawn aborted; no sub-agent run was created.",
                     false, toolTitle = title,
                 )
-            // `model` was non-blank, so Inherit cannot happen here — treat as failure.
-            SubagentModelResolver.Result.Inherit -> return ToolExecutionResult(
-                "Error: model catalog is unavailable, so an explicit model cannot be honoured. " +
-                    "Omit the 'model' argument to inherit the parent's model.",
+            }
+            // `model` was non-blank and neither a model nor a group path
+            // matched, so Inherit cannot happen here — treat as failure.
+            plan is SubagentGroupSpread.ModelPlan.Inherit -> return ToolExecutionResult(
+                "Error: an explicit model (or model group) could not be honoured in this " +
+                    "host. Omit the 'model' argument to inherit the parent's model.",
                 false, toolTitle = title,
             )
+            // Plain inherit (no `model`, no batch plan) — pre-spread behaviour,
+            // unchanged.
+            else -> parentProvider
         }
 
         // [T-subagent-output-from-model] The per-turn output ceiling for every
@@ -342,7 +455,8 @@ class SubagentRunner(
                 skillId = skill.id,
                 skillName = skill.name,
                 task = query,
-                modelLabel = deps.providerLabel(provider),
+                modelLabel = deps.providerLabel(provider) +
+                    (if (spreadLabel.isNotBlank()) " [$spreadLabel]" else ""),
                 detached = runUntil == SubagentSkill.RUN_UNTIL_DETACH,
             )) {
                 SpawnDecision.DENY -> return ToolExecutionResult(
@@ -415,6 +529,7 @@ class SubagentRunner(
                                 timeoutSeconds = timeoutSeconds,
                                 deadlineNanos = deadlineNanos,
                                 modelMaxOutputTokens = modelMaxOutputTokens,
+                                spreadLabel = spreadLabel,
                             )
                         }
                     }
@@ -449,6 +564,7 @@ class SubagentRunner(
                     append("Sub-agent '$skillName' spawned detached.")
                     append("\nrun_id: ${run.id}")
                     if (groupId.isNotEmpty()) append("\ngroup_id: $groupId")
+                    if (spreadLabel.isNotBlank()) append("\nmodel: $spreadLabel")
                     append("\n\nIt is now running in the background — this call returned WITHOUT waiting. ")
                     append("Collect the result later with join_subagents (run_ids or group_id), ")
                     append("or race siblings with wait_any. Cancel with cancel_subagents if it becomes unnecessary. ")
@@ -487,6 +603,7 @@ class SubagentRunner(
                             timeoutSeconds = timeoutSeconds,
                             deadlineNanos = deadlineNanos,
                             modelMaxOutputTokens = modelMaxOutputTokens,
+                            spreadLabel = spreadLabel,
                         )
                     }
                     job.deferred.complete(
@@ -542,6 +659,64 @@ class SubagentRunner(
                 false, toolTitle = "Sub-agent: $skillName",
             )
         }
+    }
+
+    /**
+     * [T-subagent-model-spread] Result of building a batch assignment: the
+     * provider plus WHICH member it actually landed on (the assigned one, or
+     * a walk-forward survivor).
+     */
+    private data class SpreadPick(
+        val provider: com.openminis.app.provider.LLMProvider,
+        val candidate: SubagentModelResolver.Candidate,
+        val index: Int,
+        val walkedForward: Int,
+    )
+
+    /**
+     * [T-subagent-model-spread] Build the provider for a precomputed batch
+     * assignment: try the assigned member, walk FORWARD through the rest of
+     * the snapshot (a key removed between plan time and dispatch must not fail
+     * the whole batch), and return null when no member builds — the caller
+     * then falls back to the parent provider, preserving pre-spread
+     * behaviour as the floor.
+     */
+    private fun buildSpreadProvider(
+        blockId: String,
+        assignment: SubagentGroupSpread.Assignment,
+    ): SpreadPick? {
+        val n = assignment.members.size
+        if (n == 0) return null
+        for (step in 0 until n) {
+            val idx = (assignment.memberIndex + step) % n
+            val candidate = assignment.members[idx]
+            val built = deps.providerForCandidate(candidate)
+            if (built != null) {
+                AppLogger.info(
+                    TAG,
+                    "[Subagent] spread '${assignment.groupName}': run on " +
+                        "${candidate.describe()} (member ${idx + 1}/$n" +
+                        (if (step > 0) ", walked forward $step from assigned slot)" else ")"),
+                )
+                deps.recordSpreadAssignment(
+                    blockId,
+                    "spread:${assignment.groupName}→${candidate.describe()}:${idx + 1}/$n",
+                )
+                return SpreadPick(
+                    provider = built,
+                    candidate = candidate,
+                    index = idx,
+                    walkedForward = step,
+                )
+            }
+        }
+        AppLogger.warning(
+            TAG,
+            "[Subagent] spread '${assignment.groupName}': no member could be instantiated — " +
+                "falling back to the parent provider",
+        )
+        deps.recordSpreadAssignment(blockId, "spread:${assignment.groupName}:fallback-parent")
+        return null
     }
 
     /**
@@ -711,6 +886,13 @@ class SubagentRunner(
          * into the remaining context window, see [resolveSubagentTurnMaxTokens].
          */
         modelMaxOutputTokens: Int,
+        /**
+         * [T-subagent-model-spread] "group:<name> member k/n" when this run
+         * landed on a group member via the batch plan; empty for ordinary
+         * spawns. Folded into the run's model label so the detail page and
+         * every downstream surface show the same story.
+         */
+        spreadLabel: String = "",
     ): ToolExecutionResult {
         // [T-subagent-runtime-preamble] Inject a short runtime preamble
         // (current date/time + durable artifacts root) ahead of the skill
@@ -735,7 +917,13 @@ class SubagentRunner(
         )
         // [T-subagent-model-routing] Record what actually ran. A parent that
         // asked for a cheap model must be able to verify it got one.
-        registry.setModelLabel(run.id, deps.providerLabel(provider))
+        // [T-subagent-model-spread] A spread run additionally says WHICH group
+        // member it took — the "did 1 号 really get a, 2 号 b?" check.
+        registry.setModelLabel(
+            run.id,
+            deps.providerLabel(provider) +
+                (if (spreadLabel.isNotBlank()) " [$spreadLabel]" else ""),
+        )
         val history = mutableListOf(LLMMessage(role = LLMMessage.Role.USER, content = query))
 
         // [T-subagent-run-timeout] The absolute [deadlineNanos] arrives from

@@ -852,6 +852,230 @@ class ChatViewModel(
     val subagentOrchestration = SubagentOrchestration.Registries()
 
     /**
+     * [T-subagent-model-spread] Per-dispatch-batch spread assignments:
+     * spawn tool_use block id → the group member that call should run on.
+     *
+     * Written by [planSpawnBatchSpread] BEFORE the batch is fanned out, read
+     * by the runner inside each (concurrent) spawn coroutine. Passing picks
+     * down — instead of letting each child claim a slot at run time — is what
+     * makes "1 号 → a, 2 号 → b" deterministic under async fan-out: the
+     * conversation layer knows the batch structure and emission order, the
+     * children only need their own line. The map is RETAINED (not cleared per
+     * turn) so a spawn retried by the dedupe / re-dispatch path still finds
+     * its assignment; entries are small and bounded by the spawn count.
+     */
+    private val spawnSpreadAssignments =
+        java.util.concurrent.ConcurrentHashMap<String, com.openminis.app.tools.SubagentGroupSpread.Assignment>()
+
+    /**
+     * [T-subagent-model-spread] Single source of truth for "build a provider
+     * for this catalog candidate" — used by the runner's Deps adapter AND by
+     * plan-time member validation ([spreadMemberCanBuild]). One definition so
+     * plan-time and execution-time member checks can never drift.
+     */
+    private fun buildProviderForCandidate(
+        candidate: com.openminis.app.tools.SubagentModelResolver.Candidate,
+    ): LLMProvider? {
+        val instance = providerRepository.instance(candidate.instanceId) ?: return null
+        val entry = providerRepository.entriesFor(candidate.instanceId)
+            .firstOrNull { it.uuid == candidate.entryId } ?: return null
+        val apiKey = providerRepository.loadAnyUsableApiKey(instance.id) ?: return null
+        return runCatching { ProviderFactory.create(instance, apiKey, entry.model, context) }
+            .onFailure {
+                AppLogger.warning(TAG, "[Subagent] failed to build provider for ${candidate.describe()}: ${it.message}")
+            }
+            .getOrNull()
+    }
+
+    /** [T-subagent-model-spread] Plan-time member validation — same logic as execution. */
+    private fun spreadMemberCanBuild(candidate: com.openminis.app.tools.SubagentModelResolver.Candidate): Boolean =
+        buildProviderForCandidate(candidate) != null
+
+    /**
+     * [T-subagent-model-spread] Compute the member assignment for every spawn
+     * call in one dispatch batch, and publish it under each call's block id.
+     *
+     * Two shapes feed the rotation:
+     *  - INHERITED calls (no `model`) on a chat bound to a model group — a
+     *    multi-spawn batch spreads over the SELECTED group's members;
+     *  - calls whose `model` explicitly names a model group (prefix
+     *    'group:' or bare name/id) — a multi-spawn batch spreads over THAT
+     *    group's members (the schema promises this).
+     * Calls that pin a SINGLE model are excluded from every rotation — a pin
+     * is a pin — and do not occupy a member slot.
+     *
+     * Rotation rule (see SubagentGroupSpread.planBatchMemberIndexes): the
+     * parent's active member anchors the order (when it is in that group),
+     * calls take consecutive slots in emission order, and members occupied by
+     * other LIVE sub-agent runs are skipped — so a second batch keeps fanning
+     * onto free members instead of stacking on member[0].
+     *
+     * Exactly one spread group per batch: when explicit group targets appear,
+     * they take the batch's rotation and inherited calls of that batch ride
+     * the selected group as usual (each group gets its own index sequence;
+     * calls targeting a group too small to rotate are left unplanned).
+     *
+     * @param batch the spawn calls of one batch, in emission order
+     *   (blockId, toolName, argsJson).
+     */
+    private fun planSpawnBatchSpread(
+        batch: List<Triple<String, String, String>>,
+        pendingBlockIds: Set<String>,
+    ) {
+        // [T-subagent-model-spread] Fail-open by design: any surprise here
+        // must degrade to "no spread" (the pre-feature behaviour), never take
+        // down the Pass-2 tool dispatch this runs inside.
+        try {
+            planSpawnBatchSpreadInner(batch, pendingBlockIds)
+        } catch (e: Exception) {
+            AppLogger.warning(TAG, "[Subagent] spread plan failed — batch runs uninfluenced: ${e.message}")
+        }
+    }
+
+    private fun planSpawnBatchSpreadInner(
+        batch: List<Triple<String, String, String>>,
+        pendingBlockIds: Set<String>,
+    ) {
+        val spawnCalls = batch.filter { it.second == SubagentSkill.NAME }
+        if (spawnCalls.isEmpty()) return
+        // Bound the retained-assignment map: entries only matter while their
+        // run is live (or a sibling of the same batch may still consult its
+        // own). Past a ceiling, drop entries whose run is no longer active.
+        if (spawnSpreadAssignments.size > 256) {
+            val active = subagentRunRegistry.runs.value
+                .filter { it.isActive }
+                .map { it.blockId }
+                .toSet()
+            spawnSpreadAssignments.keys.retainAll { it in active }
+        }
+
+        // Which group does each call target? Empty model → the selected group
+        // of this chat; resolvable group name → that group; single model or
+        // nothing resolvable → no plan (runner handles/fails on its own).
+        val selectedGroupId = _selectedGroupId.value
+        val targetGroupByCall = spawnCalls.mapNotNull { triple ->
+            val raw = try {
+                org.json.JSONObject(triple.third).optString("model", "").trim()
+            } catch (_: Exception) {
+                ""
+            }
+            val gidOrNull: String? = if (raw.isEmpty()) {
+                selectedGroupId
+            } else {
+                val parsed = com.openminis.app.tools.SubagentModelArg.parse(raw)
+                if (parsed is com.openminis.app.tools.SubagentModelArg.Result.Spread) {
+                    // A bare token might be a single MODEL — that decides at
+                    // spawn time via the resolver's precedence. For planning
+                    // we only claim it when it is NOT a model but IS a group.
+                    val isModel = com.openminis.app.tools.SubagentModelResolver
+                        .resolve(parsed.query, subagentModelCatalog())
+                        .let { it is com.openminis.app.tools.SubagentModelResolver.Result.Resolved }
+                    if (isModel) {
+                        null
+                    } else {
+                        providerRepository.config.value.modelGroups
+                            .firstOrNull { g ->
+                                g.name.equals(parsed.query, ignoreCase = true) ||
+                                    g.id.equals(parsed.query, ignoreCase = true)
+                            }?.id
+                    }
+                } else {
+                    null
+                }
+            }
+            val gid = gidOrNull ?: return@mapNotNull null
+            triple to gid
+        }
+        if (targetGroupByCall.isEmpty()) return
+
+        targetGroupByCall.groupBy({ it.second }, { it.first }).forEach { (gid, calls) ->
+            if (calls.size < 2) return@forEach
+            val group = providerRepository.group(gid) ?: return@forEach
+            // [T-subagent-model-spread] Validate members at PLAN time: try
+            // building each member's provider NOW and keep only the ones that
+            // build. providerForCandidate is a cheap local operation (config
+            // lookup + key read), and doing it here — before assignments are
+            // published — closes the walk-forward collision: a member whose
+            // key vanished can never be assigned, so execution never needs to
+            // walk onto a sibling's slot. plan == execution snapshot.
+            val members = routableMembersOf(group).filter { m ->
+                spreadMemberCanBuild(m)
+            }
+            if (members.size < 2) return@forEach
+            // The parent's own active member anchors the rotation when it is
+            // one of this group's members (the first child then runs where the
+            // parent already is — the least-surprise pick); otherwise the
+            // group's declaration order applies. coerceAtLeast(0) maps the
+            // "not found" -1 to the declaration anchor.
+            val anchor = members.indexOfFirst { it.entryId == _activeEntryId.value }
+                .coerceAtLeast(0)
+            // [T-subagent-model-spread] Occupied members = live runs' assigned
+            // members PLUS the assignments already published for EARLIER
+            // batches of THIS turn. Multiple spawn batches per turn are
+            // planned sequentially before any run starts, so the registry is
+            // still empty for them — without the pending set, batch 2 would
+            // rotate onto batch 1's members and the "every running child on
+            // a distinct member" guarantee would silently break.
+            val liveBlockIds = subagentRunRegistry.runs.value
+                .filter { it.isActive }
+                .map { it.blockId }
+                .toSet()
+            val live = (liveBlockIds + pendingBlockIds)
+                .mapNotNull { spawnSpreadAssignments[it]?.member?.entryId }
+                .toSet()
+            val indexes = com.openminis.app.tools.SubagentGroupSpread.planBatchMemberIndexes(
+                members = members,
+                anchorIndex = anchor,
+                callCount = calls.size,
+                liveEntryIds = live,
+            )
+            calls.forEachIndexed { slot, triple ->
+                val idx = indexes.getOrNull(slot) ?: return@forEachIndexed
+                spawnSpreadAssignments[triple.first] =
+                    com.openminis.app.tools.SubagentGroupSpread.Assignment(
+                        groupId = group.id,
+                        groupName = group.name,
+                        members = members,
+                        memberIndex = idx,
+                    )
+            }
+            AppLogger.info(
+                TAG,
+                "[Subagent] spread plan '${group.name}': ${calls.size} spawn(s) over " +
+                    "${members.size} member(s), assignments=" +
+                    indexes.joinToString(",") { (it + 1).toString() },
+            )
+        }
+    }
+
+    /**
+     * [T-subagent-model-spread] Single source of truth for "the routable
+     * member list of a group" — used by the runner's Deps adapter
+     * (modelGroupMembers) AND by the batch planner ([routableMembersOf] at
+     * dispatch time). One definition so the resolver's error text, the
+     * schema's spread behaviour, and the rotation all see the SAME member
+     * set. Aligned with the parent path: hidden entries stay routable
+     * (isHidden only removes a model from the pickers).
+     */
+    private fun routableMembersOf(
+        group: com.openminis.app.data.model.ModelGroup,
+    ): List<com.openminis.app.tools.SubagentModelResolver.Candidate> {
+        val instances = providerRepository.instances.filter { it.isEnabled }
+        return group.memberEntryIds.mapNotNull { entryId ->
+            val entry = providerRepository.config.value.modelEntries
+                .firstOrNull { it.id == entryId } ?: return@mapNotNull null
+            val instance = instances.firstOrNull { it.id == entry.providerInstanceId }
+                ?: return@mapNotNull null
+            com.openminis.app.tools.SubagentModelResolver.Candidate(
+                instanceId = instance.id,
+                entryId = entry.uuid,
+                modelId = entry.model.id,
+                displayName = entry.model.displayName,
+            )
+        }
+    }
+
+    /**
      * [T-subagent-orchestration] Scope for DETACHED sub-agent runs
      * (run_until="detach"). Supervisor semantics: one background run's
      * failure must not cancel siblings. NOT a child of streamJob — a user
@@ -1007,18 +1231,40 @@ class ChatViewModel(
 
             override fun providerForCandidate(
                 candidate: com.openminis.app.tools.SubagentModelResolver.Candidate,
-            ): LLMProvider? {
-                val instance = providerRepository.instance(candidate.instanceId) ?: return null
-                val entry = providerRepository.entriesFor(candidate.instanceId)
-                    .firstOrNull { it.uuid == candidate.entryId } ?: return null
-                val apiKey = providerRepository.loadAnyUsableApiKey(instance.id) ?: return null
-                return runCatching { ProviderFactory.create(instance, apiKey, entry.model, context) }
-                    .onFailure { AppLogger.warning(TAG, "[Subagent] failed to build provider for ${candidate.describe()}: ${it.message}") }
-                    .getOrNull()
-            }
+            ): LLMProvider? = buildProviderForCandidate(candidate)
 
             override fun providerLabel(provider: LLMProvider): String =
                 provider.model.displayName.ifBlank { provider.model.id }
+
+            // ── [T-subagent-model-spread] Batch spreads over the chat's
+            // model group ────────────────────────────────────────────────
+            //
+            // Read back by the runner per spawn. Only batches of >1 spawn get
+            // entries (see planSpawnBatchSpread at the dispatch site); a lone
+            // spawn never appears and behaves exactly as before.
+            override fun groupSpreadAssignments() =
+                spawnSpreadAssignments
+
+            override fun recordSpreadAssignment(blockId: String, detail: String) {
+                AppLogger.info(TAG, "[Subagent] spawn_agent model resolution ${blockId.take(12)}: $detail")
+            }
+
+            override fun findModelGroup(query: String): Pair<String, String>? {
+                val groups = providerRepository.config.value.modelGroups
+                val g = groups.firstOrNull { it.name.equals(query, ignoreCase = true) }
+                    ?: groups.firstOrNull { it.id.equals(query, ignoreCase = true) }
+                return g?.let { it.id to it.name }
+            }
+
+            override fun modelGroupMembers(
+                groupId: String,
+            ): List<com.openminis.app.tools.SubagentModelResolver.Candidate> {
+                val group = providerRepository.group(groupId) ?: return emptyList()
+                return routableMembersOf(group)
+            }
+
+            override fun modelGroupNames(): List<String> =
+                providerRepository.config.value.modelGroups.map { it.name }
 
             // [T-subagent-budget-inheritance] Per-spawn guard over the parent
             // loop's active budget (null between runs). A fresh guard object
@@ -1335,6 +1581,12 @@ class ChatViewModel(
             // Budgeted: capped at MAX_CATALOG_HINT_MODELS names because this
             // rides in every request's tool schema.
             modelCatalogHint = SubagentSkill.buildCatalogHint(subagentModelCatalog()),
+            // [T-subagent-model-spread] Embed the group names too, so a spawn
+            // CAN name a group ('group:<name>' / bare name) instead of having
+            // to discover them by failing. Same budget discipline as above.
+            groupHint = SubagentSkill.buildGroupHint(
+                providerRepository.config.value.modelGroups.map { it.name },
+            ),
             // [OPT-browser-websearch-tool] Embed the CURRENT engine/template
             // in the schema so the model's web_search calls (and its mental
             // model of "how search works here") always match the user's
@@ -5130,6 +5382,9 @@ class ChatViewModel(
         // wiped conversation instead of leaking past it.
         subagentRunRegistry.clear()
         subagentOrchestration.clear()
+        // [T-subagent-model-spread] Spread plans are batch-scoped scratch —
+        // clear with the rest so a long chat's map cannot grow unbounded.
+        spawnSpreadAssignments.clear()
         subagentOrchestrationScope.cancel(kotlinx.coroutines.CancellationException("chat cleared"))
         // Drop any browser tabs the agent spawned for this session, and
         // delete the persisted tab snapshot so a future open starts clean.
@@ -9661,7 +9916,15 @@ class ChatViewModel(
             // executor uses), so join_subagents / wait_any / cancel_subagents
             // can address the whole batch by group_id. A single spawn forms a
             // group of one. Membership attaches in executeSpawnAgent.
+            //
+            // [T-subagent-model-spread] Same pass also precomputes the model
+            // member each spawn of the batch runs on (when the chat is bound
+            // to a multi-member group): "1 号 → a, 2 号 → b" is decided HERE,
+            // in emission order, before the async fan-out races. Batches are
+            // planned IN ORDER; earlier batches' published assignments count
+            // as occupied for the later ones (pendingBlockIds tracks them).
             val spawnGroupIds = HashMap<String, String>()
+            val spreadPending = HashSet<String>()
             ToolConcurrencyPolicy.partitionToolCalls(
                 pending.map { p -> Triple(p.id, p.name, p.argsStr) },
             ).forEach { batch ->
@@ -9669,6 +9932,10 @@ class ChatViewModel(
                     val groupId = subagentOrchestration.nextGroupId()
                     batch.forEach { triple ->
                         if (triple.second == SubagentSkill.NAME) spawnGroupIds[triple.first] = groupId
+                    }
+                    planSpawnBatchSpread(batch, spreadPending)
+                    batch.forEach { triple ->
+                        if (triple.second == SubagentSkill.NAME) spreadPending.add(triple.first)
                     }
                 }
             }
@@ -11587,7 +11854,7 @@ Available tools:
 - spawn_agent: Spawn a sub-agent (副 agent) to execute a delegated sub-task with its own context, system prompt, and budget. The sub-agent is a skill marked `subagent: true` (e.g. the built-in `general-agent`) and has the SAME tool capabilities as you — shell, browser, file read/write/edit — minus spawning further agents and memory. Use it when a sub-task is complex and self-contained (deep research, large codebase exploration, multi-step file processing, focused investigation). Rules:
   * The task message (`query`) must be self-contained — the sub-agent cannot see this conversation. Include the goal, constraints, relevant file paths, and what the final report should contain.
   * While a sub-agent runs, the user sees a prompt pill under the chat and can open a second-level page streaming the sub-agent's execution process (every tool call + live output). Do not narrate sub-agent progress yourself — the UI already shows it; just summarize when the run returns.
-  * Multiple spawn_agent calls emitted in ONE turn run in PARALLEL (bounded by the scheduler — over-limit spawns queue automatically and show as "queued" in the UI). Each spawn batch forms a group (group_id).
+  * Multiple spawn_agent calls emitted in ONE turn run in PARALLEL (bounded by the scheduler — over-limit spawns queue automatically and show as "queued" in the UI). Each spawn batch forms a group (group_id). When the chat is bound to a MODEL GROUP, a batch of ≥2 inherited-model spawns automatically spreads across the group's members (1 号 → member a, 2 号 → member b, …), skipping members already occupied by other live sub-agents; each spawn result names the member it got. The `model` argument may also name a group directly ('group:<name>' or a bare name/id) to spread over it.
   * Default (run_until omitted or 'done'): the call blocks until the sub-agent finishes and returns its full report. run_until='turn_complete': early readout after turn 1. run_until='detach': the call returns IMMEDIATELY with a run_id while the sub-agent keeps running — collect results later with join_subagents (all members' reports), race them with wait_any (first winner), or discard with cancel_subagents. Detached spawns in one turn are the way to run N agents truly concurrently.
   * When the result comes back, verify it against your own knowledge before presenting it to the user — you own the final answer.
 - join_subagents: Wait for detached sub-agent runs to finish and collect all their reports (by run_ids, group_id, or default-most-recent-group). Safe to re-call: still-running members time out with a note instead of blocking forever.
@@ -12939,6 +13206,8 @@ Environment variables:
         // the orchestration scope (detached runs) is cancelled — background
         // runs never outlive their chat.
         subagentOrchestration.clear()
+        // [T-subagent-model-spread] Batch assignment scratch goes too.
+        spawnSpreadAssignments.clear()
         subagentOrchestrationScope.cancel(kotlinx.coroutines.CancellationException("ViewModel cleared"))
         // [T-subagent-approval] A dialog nobody can see must not keep a parent
         // turn parked: deny every outstanding ask. (Waiters cancelled along
