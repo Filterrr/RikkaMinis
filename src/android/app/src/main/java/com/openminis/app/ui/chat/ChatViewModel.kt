@@ -868,6 +868,30 @@ class ChatViewModel(
         java.util.concurrent.ConcurrentHashMap<String, com.openminis.app.tools.SubagentGroupSpread.Assignment>()
 
     /**
+     * [T-subagent-model-spread] Single source of truth for "build a provider
+     * for this catalog candidate" — used by the runner's Deps adapter AND by
+     * plan-time member validation ([spreadMemberCanBuild]). One definition so
+     * plan-time and execution-time member checks can never drift.
+     */
+    private fun buildProviderForCandidate(
+        candidate: com.openminis.app.tools.SubagentModelResolver.Candidate,
+    ): LLMProvider? {
+        val instance = providerRepository.instance(candidate.instanceId) ?: return null
+        val entry = providerRepository.entriesFor(candidate.instanceId)
+            .firstOrNull { it.uuid == candidate.entryId } ?: return null
+        val apiKey = providerRepository.loadAnyUsableApiKey(instance.id) ?: return null
+        return runCatching { ProviderFactory.create(instance, apiKey, entry.model, context) }
+            .onFailure {
+                AppLogger.warning(TAG, "[Subagent] failed to build provider for ${candidate.describe()}: ${it.message}")
+            }
+            .getOrNull()
+    }
+
+    /** [T-subagent-model-spread] Plan-time member validation — same logic as execution. */
+    private fun spreadMemberCanBuild(candidate: com.openminis.app.tools.SubagentModelResolver.Candidate): Boolean =
+        buildProviderForCandidate(candidate) != null
+
+    /**
      * [T-subagent-model-spread] Compute the member assignment for every spawn
      * call in one dispatch batch, and publish it under each call's block id.
      *
@@ -896,9 +920,34 @@ class ChatViewModel(
      */
     private fun planSpawnBatchSpread(
         batch: List<Triple<String, String, String>>,
+        pendingBlockIds: Set<String>,
+    ) {
+        // [T-subagent-model-spread] Fail-open by design: any surprise here
+        // must degrade to "no spread" (the pre-feature behaviour), never take
+        // down the Pass-2 tool dispatch this runs inside.
+        try {
+            planSpawnBatchSpreadInner(batch, pendingBlockIds)
+        } catch (e: Exception) {
+            AppLogger.warning(TAG, "[Subagent] spread plan failed — batch runs uninfluenced: ${e.message}")
+        }
+    }
+
+    private fun planSpawnBatchSpreadInner(
+        batch: List<Triple<String, String, String>>,
+        pendingBlockIds: Set<String>,
     ) {
         val spawnCalls = batch.filter { it.second == SubagentSkill.NAME }
         if (spawnCalls.isEmpty()) return
+        // Bound the retained-assignment map: entries only matter while their
+        // run is live (or a sibling of the same batch may still consult its
+        // own). Past a ceiling, drop entries whose run is no longer active.
+        if (spawnSpreadAssignments.size > 256) {
+            val active = subagentRunRegistry.runs.value
+                .filter { it.isActive }
+                .map { it.blockId }
+                .toSet()
+            spawnSpreadAssignments.keys.retainAll { it in active }
+        }
 
         // Which group does each call target? Empty model → the selected group
         // of this chat; resolvable group name → that group; single model or
@@ -942,7 +991,16 @@ class ChatViewModel(
         targetGroupByCall.groupBy({ it.second }, { it.first }).forEach { (gid, calls) ->
             if (calls.size < 2) return@forEach
             val group = providerRepository.group(gid) ?: return@forEach
-            val members = routableMembersOf(group)
+            // [T-subagent-model-spread] Validate members at PLAN time: try
+            // building each member's provider NOW and keep only the ones that
+            // build. providerForCandidate is a cheap local operation (config
+            // lookup + key read), and doing it here — before assignments are
+            // published — closes the walk-forward collision: a member whose
+            // key vanished can never be assigned, so execution never needs to
+            // walk onto a sibling's slot. plan == execution snapshot.
+            val members = routableMembersOf(group).filter { m ->
+                spreadMemberCanBuild(m)
+            }
             if (members.size < 2) return@forEach
             // The parent's own active member anchors the rotation when it is
             // one of this group's members (the first child then runs where the
@@ -951,11 +1009,18 @@ class ChatViewModel(
             // "not found" -1 to the declaration anchor.
             val anchor = members.indexOfFirst { it.entryId == _activeEntryId.value }
                 .coerceAtLeast(0)
+            // [T-subagent-model-spread] Occupied members = live runs' assigned
+            // members PLUS the assignments already published for EARLIER
+            // batches of THIS turn. Multiple spawn batches per turn are
+            // planned sequentially before any run starts, so the registry is
+            // still empty for them — without the pending set, batch 2 would
+            // rotate onto batch 1's members and the "every running child on
+            // a distinct member" guarantee would silently break.
             val liveBlockIds = subagentRunRegistry.runs.value
                 .filter { it.isActive }
                 .map { it.blockId }
                 .toSet()
-            val live = liveBlockIds
+            val live = (liveBlockIds + pendingBlockIds)
                 .mapNotNull { spawnSpreadAssignments[it]?.member?.entryId }
                 .toSet()
             val indexes = com.openminis.app.tools.SubagentGroupSpread.planBatchMemberIndexes(
@@ -984,9 +1049,13 @@ class ChatViewModel(
     }
 
     /**
-     * [T-subagent-model-spread] Routable members of [group] as catalog
-     * candidates: enabled instance + non-hidden entry + entry still exists.
-     * Declaration order (memberEntryIds) is the rotation's base order.
+     * [T-subagent-model-spread] Single source of truth for "the routable
+     * member list of a group" — used by the runner's Deps adapter
+     * (modelGroupMembers) AND by the batch planner ([routableMembersOf] at
+     * dispatch time). One definition so the resolver's error text, the
+     * schema's spread behaviour, and the rotation all see the SAME member
+     * set. Aligned with the parent path: hidden entries stay routable
+     * (isHidden only removes a model from the pickers).
      */
     private fun routableMembersOf(
         group: com.openminis.app.data.model.ModelGroup,
@@ -994,7 +1063,7 @@ class ChatViewModel(
         val instances = providerRepository.instances.filter { it.isEnabled }
         return group.memberEntryIds.mapNotNull { entryId ->
             val entry = providerRepository.config.value.modelEntries
-                .firstOrNull { it.id == entryId && !it.isHidden } ?: return@mapNotNull null
+                .firstOrNull { it.id == entryId } ?: return@mapNotNull null
             val instance = instances.firstOrNull { it.id == entry.providerInstanceId }
                 ?: return@mapNotNull null
             com.openminis.app.tools.SubagentModelResolver.Candidate(
@@ -1162,15 +1231,7 @@ class ChatViewModel(
 
             override fun providerForCandidate(
                 candidate: com.openminis.app.tools.SubagentModelResolver.Candidate,
-            ): LLMProvider? {
-                val instance = providerRepository.instance(candidate.instanceId) ?: return null
-                val entry = providerRepository.entriesFor(candidate.instanceId)
-                    .firstOrNull { it.uuid == candidate.entryId } ?: return null
-                val apiKey = providerRepository.loadAnyUsableApiKey(instance.id) ?: return null
-                return runCatching { ProviderFactory.create(instance, apiKey, entry.model, context) }
-                    .onFailure { AppLogger.warning(TAG, "[Subagent] failed to build provider for ${candidate.describe()}: ${it.message}") }
-                    .getOrNull()
-            }
+            ): LLMProvider? = buildProviderForCandidate(candidate)
 
             override fun providerLabel(provider: LLMProvider): String =
                 provider.model.displayName.ifBlank { provider.model.id }
@@ -1199,19 +1260,7 @@ class ChatViewModel(
                 groupId: String,
             ): List<com.openminis.app.tools.SubagentModelResolver.Candidate> {
                 val group = providerRepository.group(groupId) ?: return emptyList()
-                val instances = providerRepository.instances.filter { it.isEnabled }
-                return group.memberEntryIds.mapNotNull { entryId ->
-                    val entry = providerRepository.config.value.modelEntries
-                        .firstOrNull { it.id == entryId && !it.isHidden } ?: return@mapNotNull null
-                    val instance = instances.firstOrNull { it.id == entry.providerInstanceId }
-                        ?: return@mapNotNull null
-                    com.openminis.app.tools.SubagentModelResolver.Candidate(
-                        instanceId = instance.id,
-                        entryId = entry.uuid,
-                        modelId = entry.model.id,
-                        displayName = entry.model.displayName,
-                    )
-                }
+                return routableMembersOf(group)
             }
 
             override fun modelGroupNames(): List<String> =
@@ -9871,8 +9920,11 @@ class ChatViewModel(
             // [T-subagent-model-spread] Same pass also precomputes the model
             // member each spawn of the batch runs on (when the chat is bound
             // to a multi-member group): "1 号 → a, 2 号 → b" is decided HERE,
-            // in emission order, before the async fan-out races.
+            // in emission order, before the async fan-out races. Batches are
+            // planned IN ORDER; earlier batches' published assignments count
+            // as occupied for the later ones (pendingBlockIds tracks them).
             val spawnGroupIds = HashMap<String, String>()
+            val spreadPending = HashSet<String>()
             ToolConcurrencyPolicy.partitionToolCalls(
                 pending.map { p -> Triple(p.id, p.name, p.argsStr) },
             ).forEach { batch ->
@@ -9881,7 +9933,10 @@ class ChatViewModel(
                     batch.forEach { triple ->
                         if (triple.second == SubagentSkill.NAME) spawnGroupIds[triple.first] = groupId
                     }
-                    planSpawnBatchSpread(batch)
+                    planSpawnBatchSpread(batch, spreadPending)
+                    batch.forEach { triple ->
+                        if (triple.second == SubagentSkill.NAME) spreadPending.add(triple.first)
+                    }
                 }
             }
             val resultsById = LinkedHashMap<String, ToolExecutionResult>()
