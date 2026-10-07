@@ -493,7 +493,14 @@ internal fun ToolDetailSheet(
                                     .background(Color.Black)
                                     .border(
                                         width = 0.5.dp,
-                                        color = Color(0xFF404040),
+                                        // [ui-polish-E] Was 0xFF404040 — on the
+                                        // pure-black card body that hairline
+                                        // measured 2.03:1, under the 3:1
+                                        // non-text threshold, so the card edge
+                                        // was effectively invisible. #5A5A5A
+                                        // lifts it to 3.04:1 while staying a
+                                        // hairline rather than a hard frame.
+                                        color = Color(0xFF5A5A5A),
                                         shape = RoundedCornerShape(10.dp),
                                     ),
                             ) {
@@ -554,7 +561,12 @@ internal fun ToolDetailSheet(
                                         modifier = Modifier
                                             .align(Alignment.BottomCenter)
                                             .fillMaxWidth()
-                                            .background(Color(0xFF141414))
+                                            // [ui-polish-E] Was 0xFF141414 — only
+                                            // 1.14:1 against the black card body,
+                                            // so the HUD never read as a separate
+                                            // strip. #1F1F1F keeps it quiet but
+                                            // makes the layer edge legible.
+                                            .background(Color(0xFF1F1F1F))
                                             .padding(vertical = 2.5.dp),
                                         horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
                                         verticalAlignment = Alignment.CenterVertically,
@@ -603,11 +615,19 @@ internal fun ToolDetailSheet(
                         // override, isSystemInDarkTheme() doesn't.
                         val isDark = ChatColors.isDark
                         val cardBg = if (isDark) Color(0xFF1A1A1A) else Color(0xFFF0F0F0)
-                        val cardBorder = if (isDark) Color(0xFF404040) else Color(0xFFD1D1D1)
+                        // [ui-polish-E] cardBorder / greenText were below their
+                        // thresholds against cardBg:
+                        //   border #404040 on #1A1A1A = 1.68:1 (needs 3:1) -> #5A5A5A
+                        //   border #D1D1D1 on #F0F0F0 = 1.34:1 (needs 3:1) -> #B8B8B8
+                        //   dark green #66FF66 on #144D14 = 7.64 OK, but the
+                        //   LIGHT green #1A991A on #E5FFE5 was 3.52:1 (needs 4.5)
+                        //   -> #14803C = 4.73:1. Dark red/green nudged for a
+                        //   matching pair, both still well above threshold.
+                        val cardBorder = if (isDark) Color(0xFF5A5A5A) else Color(0xFFB8B8B8)
                         val redBg = if (isDark) Color(0xFF4D1414) else Color(0xFFFFE5E5)
-                        val redText = if (isDark) Color(0xFFFF6666) else Color(0xFFCC1A1A)
+                        val redText = if (isDark) Color(0xFFFF8080) else Color(0xFFB81414)
                         val greenBg = if (isDark) Color(0xFF144D14) else Color(0xFFE5FFE5)
-                        val greenText = if (isDark) Color(0xFF66FF66) else Color(0xFF1A991A)
+                        val greenText = if (isDark) Color(0xFF7EE787) else Color(0xFF14803C)
 
                         val bytes = (oldStr.toByteArray(Charsets.UTF_8).size +
                             newStr.toByteArray(Charsets.UTF_8).size)
@@ -1546,13 +1566,24 @@ private fun EditorCard(
     //               border white:0.25 (#404040)
     //   iOS light : body white:0.94 (#F0F0F0), header white:0.92 (#EBEBEB),
     //               border white:0.82 (#D1D1D1)
+    // [ui-polish-E] The iOS reference values above are kept for provenance but
+    // are no longer used verbatim: measured against their own backgrounds they
+    // put the header at 1.08:1 and the border at 1.68:1, i.e. below what the
+    // eye (or the 3:1 non-text threshold) can resolve. The ramp below keeps
+    // the same *intent* — header one notch lighter than body, border brighter
+    // than both — with each step actually perceptible.
     // T126-fix: use ChatPalette.isDark so the in-app theme override (Settings →
     // Appearance) wins over the system setting. Otherwise users on Light system
     // + Dark in-app would see white card on black chat.
     val isDark = ChatColors.isDark
     val cardBg = if (isDark) Color(0xFF1A1A1A) else Color(0xFFF0F0F0)
-    val headerBg = if (isDark) Color(0xFF212121) else Color(0xFFEBEBEB)
-    val cardBorder = if (isDark) Color(0xFF404040) else Color(0xFFD1D1D1)
+    // [ui-polish-E] header vs body was 1.08:1 (dark) / 1.05:1 (light) — i.e.
+    // the header strip did not read as a separate band at all. border was
+    // 1.68:1 / 1.34:1 against the body, under the 3:1 non-text threshold.
+    // Nudged so the band and the edge are both perceptible without turning
+    // the card into a high-contrast panel.
+    val headerBg = if (isDark) Color(0xFF2E2E2E) else Color(0xFFDCDCDC)
+    val cardBorder = if (isDark) Color(0xFF5A5A5A) else Color(0xFFB8B8B8)
 
     Column(
         modifier = Modifier

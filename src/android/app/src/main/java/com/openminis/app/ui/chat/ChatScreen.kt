@@ -515,6 +515,9 @@ fun ChatScreen(
     val canResume by viewModel.canResume.collectAsState()
     val error by viewModel.error.collectAsState()
     val modelName by viewModel.modelName.collectAsState()
+    // [ui-polish-C] Backing state for the composer status strip.
+    val thinkingLevel by viewModel.thinkingLevel.collectAsState()
+    val queuedPrompts by viewModel.promptQueue.collectAsState()
     val sessionCategory by viewModel.sessionCategory.collectAsState()
     val attachments by viewModel.attachments.collectAsState()
     val availableGroups by viewModel.availableGroups.collectAsState()
@@ -5793,6 +5796,21 @@ private fun ChatInputArea(
                     }
                     .padding(top = if (attachments.isNotEmpty()) 8.dp else 4.dp),
             ) {
+                // [ui-polish-C] Composer status strip. Three states the
+                // composer previously gave no sign of: which model the next
+                // message will go to, whether extended thinking is armed, and
+                // whether a prompt is already queued behind the running turn.
+                // The queue one mattered most — enqueuePrompt() appends a
+                // dashed bubble into the *message list*, but the user's eyes
+                // are on the composer when they hit send, so the feedback
+                // landed outside the field of view. All three reads are
+                // already-collected state; no new plumbing.
+                ComposerStatusStrip(
+                    modelName = modelName,
+                    thinkingLevel = thinkingLevel,
+                    queuedCount = queuedPrompts.size,
+                )
+
                 // T185: Move-to capsule lives INSIDE the composer card,
                 // pinned 8dp from the top-right corner, mirroring iOS
                 // AIChatView.swift:1816 (.overlay(alignment: .topTrailing)
@@ -6592,7 +6610,7 @@ private fun ChatInputArea(
                             modifier = Modifier
                                 .size(38.dp)
                                 .background(
-                                    if (canActivate) ChatColors.sendButton
+                                    if (canActivate) ChatColors.sendButtonFill
                                     else ChatColors.sendButtonDisabled,
                                     CircleShape,
                                 )

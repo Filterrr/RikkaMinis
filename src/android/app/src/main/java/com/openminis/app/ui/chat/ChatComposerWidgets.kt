@@ -912,6 +912,106 @@ internal fun FloatingToolStatusBar(
  * Mirrors iOS `thinkingLevelPicker`: the active level shows a filled pill;
  * the OFF pill uses a muted background, the others use the accent color.
  */
+/**
+ * [ui-polish-C] Single-line status strip pinned to the top of the composer card.
+ *
+ * Shows what the composer previously never said out loud:
+ *   - which model the next turn is bound to,
+ *   - whether extended thinking is armed (and at which tier),
+ *   - how many prompts are already queued behind the running turn.
+ *
+ * The queue count is the load-bearing one. `enqueuePrompt()` does surface the
+ * queued state, but only as a dashed bubble appended to the *message list* —
+ * the user is looking at the composer when they hit send, so the confirmation
+ * arrived off-screen. Mirroring it here puts the receipt where the action was.
+ *
+ * Renders nothing when every field is empty (fresh draft with no model yet),
+ * so a bare composer does not grow a blank strip.
+ *
+ * @param modelName display name of the currently routed model; blank hides it
+ * @param thinkingLevel current tier; [ThinkingLevel.OFF] hides the segment
+ * @param queuedCount number of prompts waiting behind the running turn
+ */
+@Composable
+internal fun ComposerStatusStrip(
+    modelName: String,
+    thinkingLevel: ThinkingLevel,
+    queuedCount: Int,
+) {
+    val context = LocalContext.current
+    if (modelName.isBlank() && !thinkingLevel.isEnabled && queuedCount <= 0) return
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            // Left inset lines the strip up with the attachment row and the
+            // typed text below it (both 12dp); the right side matches so a
+            // long model name ellipsizes against a symmetric margin.
+            .padding(start = 12.dp, end = 12.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        if (modelName.isNotBlank()) {
+            Text(
+                text = modelName,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+                color = ChatColors.secondaryText,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                // Absorbs the leftover width so a long model id truncates
+                // rather than shoving the thinking/queue chips off the edge.
+                modifier = Modifier.weight(1f, fill = false),
+            )
+        }
+
+        if (thinkingLevel.isEnabled) {
+            if (modelName.isNotBlank()) StatusStripSeparator()
+            Text(
+                text = thinkingLevel.localizedName(context),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+                // ChatColors.thinking is the system blue (007AFF / 0A84FF),
+                // the same token the thinking affordances already use, so the
+                // strip agrees with the badge on the message it describes.
+                color = ChatColors.thinking,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+
+        if (queuedCount > 0) {
+            if (modelName.isNotBlank() || thinkingLevel.isEnabled) StatusStripSeparator()
+            Text(
+                // Reuses the swipe gesture's existing string so the strip and
+                // the drag hint name the same state with the same word.
+                text = stringResource(R.string.composer_swipe_release_to_queue) +
+                    " ×$queuedCount",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+                color = ChatColors.secondaryText,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+
+        // Pushes the content left when the model name did not take weight(1f),
+        // so the chips stay tucked against the leading edge instead of
+        // floating mid-row.
+        if (modelName.isBlank()) Spacer(modifier = Modifier.weight(1f))
+    }
+}
+
+/** [ui-polish-C] Hairline dot between status-strip segments. */
+@Composable
+private fun StatusStripSeparator() {
+    Text(
+        text = "·",
+        fontSize = 11.sp,
+        color = ChatColors.tertiaryText,
+    )
+}
+
 @Composable
 internal fun ThinkingLevelPicker(
     current: ThinkingLevel,

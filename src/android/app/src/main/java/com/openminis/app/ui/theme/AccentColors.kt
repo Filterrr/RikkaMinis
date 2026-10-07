@@ -21,19 +21,55 @@ import androidx.compose.ui.graphics.Color
  */
 
 /**
- * Accent colour for a tool pill / duration / status, mirroring the iOS
- * AIChatView tool-type tints (SystemGreen/SystemBlue/SystemOrange/SystemPink…).
+ * Accent colour for a tool pill / duration / status.
+ *
+ * [ui-polish-A] Split into a light and a dark table. The single table that
+ * used to live here was lifted verbatim from iOS, whose system colours are
+ * tuned for dark backgrounds; on white they lose their hue at small sizes.
+ * Measured against #FFFFFF, four of the eight fell under the 3:1 WCAG
+ * non-text threshold — and these values are drawn as 14dp glyphs and 3dp
+ * rails, which is exactly the "large-scale" exemption they cannot claim:
+ *
+ *     shell (#34C759) 2.22   fileRead/search (#32ADE6) 2.54
+ *     fileEdit (#FF9500) 2.20   fileWrite (#007AFF) 4.02
+ *
+ * The light table keeps each hue but darkens it until it clears 4.5:1, which
+ * also makes the values safe for the places that use them as *text* (the
+ * duration label, the tool-detail header). The dark table is the original
+ * iOS set, which already measured >=4.5:1 on the #1C1C1E card — read it via
+ * [ToolAccentsDark]. Pick between them with `ChatColors.isDark`, as
+ * `toolAccentColor()` does.
  */
 object ToolAccents {
-    val shell = Color(0xFF34C759)
-    val fileRead = Color(0xFF32ADE6)
-    val fileWrite = Color(0xFF007AFF)
-    val fileEdit = Color(0xFFFF9500)
-    val browser = Color(0xFF007AFF)
-    val image = Color(0xFFAF52DE)
-    val memory = Color(0xFFFF2D55)
-    val search = Color(0xFF32ADE6) // iOS: .cyan for search
-    val fallback = Color(0xFF8E8E93)
+    // Light mode. Same hue family as the iOS originals, darkened to clear
+    // 4.5:1 on white (values in the comment are the measured ratios).
+    val shell = Color(0xFF15803D)     // was #34C759 -> 5.02
+    val fileRead = Color(0xFF0E7490)  // was #32ADE6 -> 5.36
+    val fileWrite = Color(0xFF0B5FCC) // was #007AFF -> 5.96
+    val fileEdit = Color(0xFFB45309)  // was #FF9500 -> 5.02
+    val browser = Color(0xFF0B5FCC)
+    val image = Color(0xFF7E22CE)     // was #AF52DE -> 6.98
+    val memory = Color(0xFFBE123C)    // was #FF2D55 -> 6.29
+    val search = Color(0xFF0E7490)
+    val fallback = Color(0xFF6B7280)  // was #8E8E93 -> 4.83
+}
+
+/**
+ * Dark-mode counterpart of [ToolAccents] — the original iOS system colours,
+ * which were already above threshold on the dark card (#1C1C1E / #000):
+ * shell 8.42, fileRead 9.89, fileWrite 6.01, fileEdit 8.28, image 4.83,
+ * memory 4.83, fallback 5.93.
+ */
+object ToolAccentsDark {
+    val shell = Color(0xFF30D158)
+    val fileRead = Color(0xFF64D2FF)
+    val fileWrite = Color(0xFF409CFF)
+    val fileEdit = Color(0xFFFF9F0A)
+    val browser = Color(0xFF409CFF)
+    val image = Color(0xFFBF5AF2)
+    val memory = Color(0xFFFF375F)
+    val search = Color(0xFF64D2FF)
+    val fallback = Color(0xFF98989D)
 }
 
 /**

@@ -1006,7 +1006,7 @@ internal fun SwipeToSendHint(
 ) {
     if (progress <= 0f) return
     val palette = ChatColors
-    val chipBg = palette.sendButton
+    val chipBg = palette.sendButtonFill
     val chipFg = palette.background
     // Capsule full opacity at `armFraction`. Linear from
     // `armFraction - 0.4` -> `armFraction`.

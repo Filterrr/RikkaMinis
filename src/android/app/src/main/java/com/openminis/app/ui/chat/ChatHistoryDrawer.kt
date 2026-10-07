@@ -43,6 +43,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+// [ui-polish-B] Needed by the selected-row rail drawn in drawBehind.
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -322,7 +326,13 @@ fun ChatHistoryDrawer(
                 LazyColumn(modifier = Modifier.weight(1f)) {
                     grouped.forEach { (period, group) ->
                         item(key = "header-${period.name}") {
-                            DrawerSectionHeader(period)
+                            // [ui-polish-B] Pass the group size so the header
+                            // can state "Today 3". The grouped list already
+                            // holds the sessions here, so this is free — and in
+                            // a long scrolled list it is the only thing telling
+                            // the user how much is in a section they have not
+                            // finished reading.
+                            DrawerSectionHeader(period, group.size)
                         }
                         items(group, key = { it.id }) { session ->
                             val lineage = remember(session.source) {
@@ -460,7 +470,7 @@ private fun deleteSessionAndCleanup(chatRepository: ChatRepository, id: String) 
 }
 
 @Composable
-private fun DrawerSectionHeader(period: DatePeriod) {
+private fun DrawerSectionHeader(period: DatePeriod, count: Int) {
     val title = when (period) {
         DatePeriod.PINNED -> stringResource(R.string.sessionlist_section_pinned)
         DatePeriod.TODAY -> stringResource(R.string.sessionlist_section_today)
@@ -497,6 +507,18 @@ private fun DrawerSectionHeader(period: DatePeriod) {
             fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        // [ui-polish-B] Section count, e.g. "Today 3". Derived from the group
+        // the caller already has, so it costs nothing — and in a long scrolled
+        // drawer it is the only cue telling the user how much sits in a
+        // section they have not finished reading. Shown at every count
+        // (including 1) so the header reads consistently rather than
+        // appearing and disappearing between sections.
+        Spacer(modifier = Modifier.width(5.dp))
+        Text(
+            text = count.toString(),
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+        )
     }
 }
 
@@ -519,6 +541,9 @@ private fun DrawerSessionRow(
     val timeText = remember(session.updatedAt, ctx) { relativeDate(ctx, session.updatedAt) }
     val activeSessions by SessionActivityTracker.activeSessions.collectAsState()
     val isActive = session.id in activeSessions
+    // [ui-polish-B] Resolved here because drawBehind's lambda is not a
+    // composable scope, so it cannot read MaterialTheme itself.
+    val railColor = MaterialTheme.colorScheme.primary
 
     Row(
         modifier = Modifier
@@ -529,6 +554,23 @@ private fun DrawerSessionRow(
                 if (selected) MaterialTheme.colorScheme.secondaryContainer
                 else androidx.compose.ui.graphics.Color.Transparent,
             )
+            // [ui-polish-B] Selected row previously differed from the others
+            // only by a pale fill. In a 300dp-wide drawer that is a weak
+            // anchor when the list is scrolled — and secondaryContainer
+            // (#CCE8E4) sits close enough to the white row that at a glance
+            // the eye has to hunt for it. A 2.5dp primary rail on the leading
+            // edge gives the current session an unambiguous marker. Drawn
+            // inside the clip so it follows the 12dp row shape.
+            .drawBehind {
+                if (selected) {
+                    val railWidth = 2.5.dp.toPx()
+                    drawRect(
+                        color = railColor,
+                        topLeft = Offset(0f, 0f),
+                        size = Size(railWidth, size.height),
+                    )
+                }
+            }
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 10.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -537,7 +579,14 @@ private fun DrawerSessionRow(
         Box(
             modifier = Modifier
                 .size(34.dp)
-                .background(color = style.color.copy(alpha = 0.18f), shape = CircleShape),
+                // [ui-polish-B] Was CircleShape. All 16 categories drew the
+                // same circle and differed only by hue at 18% alpha — for
+                // red/green colour-blind users `code` (orange), `writing`
+                // (blue) and `research` (cyan) were effectively the same chip.
+                // A rounded square adds a second, orthogonal cue: which shape
+                // the row's glyph sits in. Kept at 34dp so the row rhythm
+                // (and its 17dp glyph) is unchanged.
+                .background(color = style.color.copy(alpha = 0.18f), shape = RoundedCornerShape(10.dp)),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -569,7 +618,13 @@ private fun DrawerSessionRow(
                 Text(
                     text = preview,
                     fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    // [ui-polish-B] Was onSurfaceVariant at full opacity, i.e.
+                    // the same colour as the title's supporting text everywhere
+                    // else — the preview competed with the title instead of
+                    // sitting behind it. 0.85 keeps the hierarchy while staying
+                    // above 4.5:1 on both the plain card (6.07) and the
+                    // selected-row tint (4.99).
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -608,7 +663,14 @@ private fun DrawerSessionRow(
         Text(
             text = timeText,
             fontSize = 11.sp,
-            color = MaterialTheme.colorScheme.outline,
+            // [ui-polish-B] Was `outline`, which in the light scheme is
+            // #D1D1D6 — a *separator* colour being used as an 11sp text
+            // colour. Measured against the white row it came out at 1.52:1,
+            // so the timestamp was legible as a shape but not as a value.
+            // onSurfaceVariant is #3F4947 light / #BEC9C6 dark, i.e. 9.31 and
+            // 10.01 on their respective rows — well clear of AA, and it is
+            // already the token every other secondary label in the app uses.
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
         // Pin toggle — inline icon, same style as the provider's favorite
@@ -623,7 +685,14 @@ private fun DrawerSessionRow(
                     if (isPinned) R.string.sessionlist_unpin else R.string.sessionlist_pin,
                 ),
                 tint = if (isPinned) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.outlineVariant,
+                // [ui-polish-B] Was `outlineVariant` — #D1D1D6 light /
+                // #38383A dark, measuring 1.52:1 and 1.58:1. This is a
+                // *tappable* control (28dp IconButton), not decoration, so it
+                // has to clear the 3:1 non-text threshold before the user can
+                // know it is there. Deriving from onSurfaceVariant at 0.7 gives
+                // 4.04:1 (light, on white) and 5.85:1 (dark, on the #0E1514
+                // drawer) from one expression that follows both palettes.
+                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                 modifier = Modifier.size(16.dp),
             )
         }

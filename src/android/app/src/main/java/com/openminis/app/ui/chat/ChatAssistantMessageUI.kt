@@ -818,12 +818,23 @@ internal fun ToolCallPill(
       Box(modifier = Modifier.weight(1f, fill = false)) {
         Row(
             modifier = Modifier
+                // [ui-polish-A] Was a flat grey capsule: every tool rendered
+                // the same #F2F2F7 pill and the only identity cue was a 14dp
+                // tinted glyph. Measured, 4 of the 8 ToolAccents sit under the
+                // 3:1 non-text threshold against white (shell #34C759 = 2.22,
+                // fileRead/search #32ADE6 = 2.54, fileEdit #FF9500 = 2.20), so
+                // at 14dp the accent frequently did not resolve at all and a
+                // run of tool calls read as one undifferentiated grey block.
+                // Give the identity a full-height carrier instead: a 3dp accent
+                // rail down the leading edge, the icon on a tinted 22dp chip,
+                // and an explicit status dot at the trailing edge so success /
+                // failure is visible without expanding the detail sheet.
                 .background(
                     ChatColors.toolCapsuleBg,
-                    CircleShape,
+                    RoundedCornerShape(12.dp),
                 )
-                .border(0.5.dp, ChatColors.toolBorder, CircleShape)
-                .clip(CircleShape)
+                .border(0.5.dp, ChatColors.toolBorder, RoundedCornerShape(12.dp))
+                .clip(RoundedCornerShape(12.dp))
                 .then(
                     if (shimmerTranslate != null) {
                         Modifier.drawWithContent {
@@ -851,20 +862,44 @@ internal fun ToolCallPill(
                         { showToolMenu = true }
                     } else null,
                 )
-                .padding(horizontal = 12.dp)
                 .height(36.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // [ui-polish-A] Accent rail — carries the "which tool is this"
+            // signal for the pill's full height instead of for a 14dp glyph.
+            // Clipped by the parent's 12dp shape so it follows the silhouette.
+            Box(
+                modifier = Modifier
+                    .width(3.dp)
+                    .fillMaxHeight()
+                    .background(toolAccent),
+            )
+
+            Spacer(modifier = Modifier.width(9.dp))
+
             // Status icon — always the typed tool icon. Color shifts to
             // reflect terminal status (success / failed / cancelled); while
             // running it stays in the tool's accent color so the user can
             // still recognize the tool at a glance.
-            Icon(
-                displayIcon,
-                contentDescription = null,
-                tint = iconTint,
-                modifier = Modifier.size(14.dp),
-            )
+            // [ui-polish-A] Now sits on a 22dp tinted chip: the chip's plate
+            // gives the icon a contrasting ground, so the glyph stays legible
+            // even for the accents that are too light to read on plain white.
+            Box(
+                modifier = Modifier
+                    .size(22.dp)
+                    .background(
+                        toolAccent.copy(alpha = 0.12f),
+                        RoundedCornerShape(6.dp),
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    displayIcon,
+                    contentDescription = null,
+                    tint = iconTint,
+                    modifier = Modifier.size(14.dp),
+                )
+            }
 
             Spacer(modifier = Modifier.width(8.dp))
 
@@ -919,6 +954,37 @@ internal fun ToolCallPill(
                 Spacer(modifier = Modifier.width(8.dp))
                 ToolStopButton(onStop = onStop)
             }
+
+            // [ui-polish-A] Terminal-state dot. Success / failure used to be
+            // readable only by opening the detail sheet or by noticing that the
+            // 14dp glyph had changed colour — and the success colour is the
+            // same green used for shell_execute, so "done" and "is a shell
+            // tool" were indistinguishable at a glance. One explicit dot at
+            // the trailing edge makes the outcome part of the collapsed row.
+            // Running keeps no dot (its affordance is the stop button + the
+            // shimmer); cancelled reuses the neutral cancel colour rather than
+            // an error red, matching the DEDUPLICATED-CANCELLED bucket.
+            if (!isRunning) {
+                val statusDotColor: Color? = when {
+                    isFailed -> ToolErrorColor
+                    isCancelled -> ToolCancelColor
+                    isDone -> ToolCheckColor
+                    else -> null
+                }
+                if (statusDotColor != null) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .background(statusDotColor, CircleShape),
+                    )
+                }
+            }
+
+            // [ui-polish-A] Trailing inset. The rail + chip carry the leading
+            // padding now (3dp rail + 9dp + 22dp chip + 8dp), so only the
+            // trailing edge keeps the old 12dp breathing room.
+            Spacer(modifier = Modifier.width(12.dp))
         }
         // [T-android-tool-bubble-longpress-menu] Long-press menu anchored to
         // the pill. Items mirror the user-bubble menu's style (MinisMenu +
