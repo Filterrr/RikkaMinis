@@ -285,7 +285,10 @@ private fun HeaderCard(entry: MountedFoldersStore.Entry) {
                 Text(
                     text = "← $source",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline,
+                    // [ui-polish-B] `outline` used as labelSmall text —
+                    // 1.52:1 light. onSurfaceVariant is the app's standard
+                    // secondary-text slot and passes.
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )

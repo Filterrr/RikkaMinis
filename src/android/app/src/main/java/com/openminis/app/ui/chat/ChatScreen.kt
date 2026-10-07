@@ -299,16 +299,39 @@ import com.openminis.app.ui.components.MinisTextButton
 
 // iOS ChatColors equivalent — semantic status colors read from the chat
 // palette so they follow the active light/dark theme.
+//
+// [ui-polish-A] Light mode needs its own ramp. The success/error slots hold
+// the iOS system green/red, tuned for dark surfaces; on the light tool
+// capsule (#F2F2F7) they measured 1.99:1 (green) and 3.18:1 (red) — under
+// the 3:1 non-text bar for the status dots and 14dp glyphs that render
+// from these accessors. They also land on a 12% self-tinted chip in the
+// pill, where the raw green fell to 1.82:1. The light values are the same
+// hues darkened past the bar (measured: green 4.49, red 5.24, amber 4.50
+// on the capsule; ≥3.8 on the chip). The DARK palette keeps the iOS
+// colours — they already measured 4.3-9.7:1 there.
+//
+// Why not recolor ChatPalette.success/error directly: the same green is the
+// *terminal output text* in ToolDetailSheet (13sp monospace on black, where
+// it measures 9.46:1) — darkening the palette slot for the pill's sake
+// would drop the terminal body to 4.19:1. These accessors exist precisely
+// so the pill/status layer can pick its ramp without touching the
+// terminal's.
 internal val ToolCheckColor: Color
     @Composable
     @ReadOnlyComposable
-    get() = ChatColors.success
+    get() = if (ChatColors.isDark) ChatColors.success else Color(0xFF15803D)
 internal val ToolErrorColor: Color
     @Composable
     @ReadOnlyComposable
-    get() = ChatColors.error
-// iOS .yellow / .pink have no chat-palette slot; keep fixed.
-internal val ToolCancelColor = Color(0xFFFFCC00) // iOS .yellow
+    get() = if (ChatColors.isDark) ChatColors.error else Color(0xFFC4202B)
+// iOS .yellow has no chat-palette slot; light mode darkens it to an amber
+// that keeps the yellow hue distinct from fileEdit's orange (#B45309) —
+// #946B00 measured 4.31 on the capsule and 3.73 on the chip. Dark keeps the
+// fixed iOS yellow (9.71 on the dark capsule).
+internal val ToolCancelColor: Color
+    @Composable
+    @ReadOnlyComposable
+    get() = if (ChatColors.isDark) Color(0xFFFFCC00) else Color(0xFF946B00)
 internal val ToolMemoryAccent = Color(0xFFFF2D55) // iOS .pink
 // Sparkle gradient colors (iOS uses linear gradient)
 internal val SparkleColor1 = Color(0xFFB8B096) // rgb(0.72, 0.69, 0.59)

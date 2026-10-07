@@ -956,7 +956,12 @@ internal fun ComposerStatusStrip(
                 text = modelName,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Medium,
-                color = ChatColors.secondaryText,
+                // [ui-polish-C] ChatColors.secondaryText at 11sp measures
+                // 3.44:1 on the white input card — below AA for text. The
+                // palette's own onSurfaceVariant slot (#3F4947 light /
+                // #BEC9C6 dark) gives 9.31 / 8.18 on the same background and
+                // is what every other secondary label in the app uses.
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 // Absorbs the leftover width so a long model id truncates
@@ -967,32 +972,59 @@ internal fun ComposerStatusStrip(
 
         if (thinkingLevel.isEnabled) {
             if (modelName.isNotBlank()) StatusStripSeparator()
-            Text(
-                text = thinkingLevel.localizedName(context),
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Medium,
-                // ChatColors.thinking is the system blue (007AFF / 0A84FF),
-                // the same token the thinking affordances already use, so the
-                // strip agrees with the badge on the message it describes.
-                color = ChatColors.thinking,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // [ui-polish-C] The tier is marked by a dot in the same
+                // ChatColors.thinking blue the thinking badge uses, not by
+                // coloured *text*: at 11sp that blue measured 4.02:1 (light) /
+                // 3.81:1 (dark) — under the 4.5:1 AA bar for text. A dot only
+                // needs the 3:1 non-text bar (4.02 / 3.81, both pass), and the
+                // tier name itself stays in the legible onSurfaceVariant grey.
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .background(ChatColors.thinking, CircleShape),
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = thinkingLevel.localizedName(context),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
 
         if (queuedCount > 0) {
             if (modelName.isNotBlank() || thinkingLevel.isEnabled) StatusStripSeparator()
-            Text(
-                // Reuses the swipe gesture's existing string so the strip and
-                // the drag hint name the same state with the same word.
-                text = stringResource(R.string.composer_swipe_release_to_queue) +
-                    " ×$queuedCount",
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Medium,
-                color = ChatColors.secondaryText,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // [ui-polish-C] A dot, not words: "Release to queue" (the
+                // string reused here) is an *imperative* — it describes the
+                // swipe gesture, not the waiting state, and as a permanent
+                // status line it reads like an instruction. The dashed bubble
+                // in the message list already tells the full story; the strip
+                // only needs to say "something is waiting". A dot in the
+                // neutral text colour is legible (9.31 / 8.18) and cannot be
+                // misread as an action.
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .background(
+                            MaterialTheme.colorScheme.onSurfaceVariant,
+                            CircleShape,
+                        ),
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = queuedCount.toString(),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
 
         // Pushes the content left when the model name did not take weight(1f),

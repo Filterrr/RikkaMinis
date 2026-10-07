@@ -173,7 +173,11 @@ private fun ConfirmRow(item: PendingConfigChangeItem, onToggle: (Boolean) -> Uni
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowForward,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.outline,
+                    // [ui-polish-B] outline (#D1D1D6 light) on the white
+                    // dialog is 1.52:1 — under the 3:1 non-text bar for an
+                    // icon that signals "this goes somewhere". onSurfaceVariant
+                    // reads in both themes.
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 2.dp),
                 )
                 Spacer(Modifier.width(6.dp))

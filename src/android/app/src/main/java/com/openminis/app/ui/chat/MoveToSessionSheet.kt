@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -136,7 +135,17 @@ private fun MoveToPickerRow(
         Box(
             modifier = Modifier
                 .size(40.dp)
-                .background(color = style.color.copy(alpha = 0.18f), shape = CircleShape),
+                // [ui-polish-B] Rounded square, matching DrawerSessionRow —
+                // this sheet lists the same sessions with the same category
+                // accents, and it drew them in a different shape (circle vs
+                // the drawer's rounded square), so the same category read as
+                // two different visual objects depending on which surface you
+                // were on. Same shape everywhere: shape is the second,
+                // colour-independent cue this polish pass exists to add.
+                .background(
+                    color = style.color.copy(alpha = 0.18f),
+                    shape = RoundedCornerShape(12.dp),
+                ),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -161,7 +170,11 @@ private fun MoveToPickerRow(
             Text(
                 text = timeText,
                 fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.outline,
+                // [ui-polish-B] Same fix as DrawerSessionRow: `outline` is a
+                // separator colour (#D1D1D6 light) used as 12sp text here —
+                // 1.52:1. onSurfaceVariant gives 9.31 / 8.18 on this sheet's
+                // white / dark surfaces.
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
             )
         }
