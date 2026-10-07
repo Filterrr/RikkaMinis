@@ -36,25 +36,30 @@ import com.openminis.app.ui.theme.ToolAccentsDark
 @Composable
 @ReadOnlyComposable
 internal fun toolAccentColor(toolName: String): Color {
-    val a = if (ChatColors.isDark) ToolAccentsDark else ToolAccents
+    // [ui-polish-A] The two accent sets are separate objects, so the branches
+    // below select the member from each rather than picking an object first:
+    // `if (dark) A else B` would unify to Any and lose every property. Each
+    // `if` therefore reads the palette itself.
+    val dark = ChatColors.isDark
     return when (toolName) {
-        "shell_execute" -> a.shell
-        "file_read" -> a.fileRead
-        "file_write" -> a.fileWrite
-        "file_edit" -> a.fileEdit
-        "browser_use" -> a.browser
-        "read_image" -> a.image
-        "memory_write", "memory_get" -> a.memory
-        "web_search" -> a.search
+        "shell_execute" -> if (dark) ToolAccentsDark.shell else ToolAccents.shell
+        "file_read" -> if (dark) ToolAccentsDark.fileRead else ToolAccents.fileRead
+        "file_write" -> if (dark) ToolAccentsDark.fileWrite else ToolAccents.fileWrite
+        "file_edit" -> if (dark) ToolAccentsDark.fileEdit else ToolAccents.fileEdit
+        "browser_use" -> if (dark) ToolAccentsDark.browser else ToolAccents.browser
+        "read_image" -> if (dark) ToolAccentsDark.image else ToolAccents.image
+        "memory_write", "memory_get" ->
+            if (dark) ToolAccentsDark.memory else ToolAccents.memory
+        "web_search" -> if (dark) ToolAccentsDark.search else ToolAccents.search
         // [T-subagent-ui] Sub-agent runs get a distinct violet accent so they
         // read as "another agent", not another tool. Orchestration tools share
         // the family accent. Both halves of the pair clear 3:1 on their own
         // background, so they stay literal rather than going through the table.
         "spawn_agent", "join_subagents", "wait_any" ->
-            if (ChatColors.isDark) Color(0xFF7C5CFF) else Color(0xFF6D4AE0)
+            if (dark) Color(0xFF7C5CFF) else Color(0xFF6D4AE0)
         "cancel_subagents" ->
-            if (ChatColors.isDark) Color(0xFFE5484D) else Color(0xFFC4202B)
-        else -> a.fallback
+            if (dark) Color(0xFFE5484D) else Color(0xFFC4202B)
+        else -> if (dark) ToolAccentsDark.fallback else ToolAccents.fallback
     }
 }
 

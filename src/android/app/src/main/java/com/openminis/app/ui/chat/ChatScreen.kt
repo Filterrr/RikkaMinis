@@ -515,9 +515,6 @@ fun ChatScreen(
     val canResume by viewModel.canResume.collectAsState()
     val error by viewModel.error.collectAsState()
     val modelName by viewModel.modelName.collectAsState()
-    // [ui-polish-C] Backing state for the composer status strip.
-    val thinkingLevel by viewModel.thinkingLevel.collectAsState()
-    val queuedPrompts by viewModel.promptQueue.collectAsState()
     val sessionCategory by viewModel.sessionCategory.collectAsState()
     val attachments by viewModel.attachments.collectAsState()
     val availableGroups by viewModel.availableGroups.collectAsState()
@@ -4530,6 +4527,9 @@ fun ChatScreen(
                 onPreviewImageGallery = { items, idx -> previewImageGallery = items to idx },
                 onOpenWebAppSheet = { target -> webAppSheetTarget = target },
                 chatInputFontScale = chatInputFontScale,
+                modelName = modelName,
+                thinkingLevel = viewModel.thinkingLevel.collectAsState().value,
+                queuedPromptCount = viewModel.promptQueue.collectAsState().value.size,
                 onPickMedia = { mediaPickerLauncher.launch(
                     androidx.activity.result.PickVisualMediaRequest(
                         ActivityResultContracts.PickVisualMedia.ImageAndVideo,
@@ -5125,6 +5125,13 @@ private fun ChatInputArea(
     onPreviewImageGallery: (List<com.openminis.app.ui.components.ImageGalleryItem>, Int) -> Unit,
     onOpenWebAppSheet: (InputAttachment) -> Unit,
     chatInputFontScale: Float,
+    // [ui-polish-C] Composer status strip inputs. Passed in rather than
+    // re-collected here so this composable stays a pure function of its
+    // parameters (and so the strip reads the same value the rest of the chat
+    // screen is already rendering).
+    modelName: String,
+    thinkingLevel: ThinkingLevel,
+    queuedPromptCount: Int,
     onPickMedia: () -> Unit,
     onPickFile: () -> Unit,
     onLaunchCamera: () -> Unit,
@@ -5808,7 +5815,7 @@ private fun ChatInputArea(
                 ComposerStatusStrip(
                     modelName = modelName,
                     thinkingLevel = thinkingLevel,
-                    queuedCount = queuedPrompts.size,
+                    queuedCount = queuedPromptCount,
                 )
 
                 // T185: Move-to capsule lives INSIDE the composer card,
