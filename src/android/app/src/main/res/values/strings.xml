@@ -1555,6 +1555,9 @@
     <string name="image_budget_request_elided">Older %1$d image(s) elided from request to fit 25MB budget</string>
     <string name="composer_swipe_release_to_send">Release to send</string>
     <string name="composer_swipe_release_to_queue">Release to queue</string>
+    <!-- [ui-polish-C] Composer status bar. "%1$d" is the number of prompts
+         waiting behind the running turn. -->
+    <string name="composer_queued_count">%1$d queued</string>
 
     <!-- T-android-gc-storm-issue17: render-side safe mode for large messages -->
     <string name="chat_message_large_collapsed_title">Large content (%1$s)</string>

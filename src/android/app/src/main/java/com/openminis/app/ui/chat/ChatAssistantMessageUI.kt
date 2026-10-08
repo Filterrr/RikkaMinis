@@ -865,23 +865,34 @@ internal fun ToolCallPill(
                 .height(36.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // [ui-polish-A] Accent rail — carries the "which tool is this"
+            // [fix-rail-round] Accent rail — carries the "which tool is this"
             // signal for the pill's full height instead of for a 14dp glyph.
-            // Drawn as a rounded bar inset from the pill edge rather than a
-            // full-bleed strip: a 3dp strip hugging the 12dp-corner silhouette
-            // gets sheared into a sliver by the parent clip, and its ends
-            // render as straight cuts instead of rounds. A 2dp-radius capsule
-            // inset 3dp keeps the full-height identity signal with clean
-            // rounded ends in both themes.
+            //
+            // It must NOT sit flush against the pill's leading edge. The pill
+            // clips at RoundedCornerShape(12.dp) and is only 36dp tall, so a
+            // strip pinned at x=0 with its ends at y=[5,31] falls OUTSIDE the
+            // corner arc on both ends — the top-left corner centre is (12,12)
+            // with r=12, and (0,5) is 193 > 144 = r² away from it — so the
+            // parent clip shears each end into a diagonal sliver instead of
+            // letting the radius show. Pixel-measured before this fix: the
+            // rail's right edge stayed pinned while only the left edge moved,
+            // which is the signature of a parent clip, not of a rounded cap.
+            //
+            // Insetting 3dp horizontally puts both ends inside the arc
+            // ((3,5) = 130 <= 144), so the 1.5dp cap actually renders. The
+            // rail block therefore occupies 6dp (3dp inset + 3dp bar); the
+            // spacer below drops 9dp -> 6dp so the icon chip keeps its
+            // previous 12dp offset from the pill's leading edge.
             Box(
                 modifier = Modifier
                     .fillMaxHeight()
                     .padding(vertical = 5.dp)
+                    .padding(start = 3.dp)
                     .width(3.dp)
-                    .background(toolAccent, RoundedCornerShape(2.dp)),
+                    .background(toolAccent, RoundedCornerShape(1.5.dp)),
             )
 
-            Spacer(modifier = Modifier.width(9.dp))
+            Spacer(modifier = Modifier.width(6.dp))
 
             // Status icon — always the typed tool icon. Color shifts to
             // reflect terminal status (success / failed / cancelled); while

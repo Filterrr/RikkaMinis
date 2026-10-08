@@ -272,6 +272,9 @@ import com.openminis.app.data.repository.MemoryRepository
 import com.openminis.app.data.repository.ProviderRepository
 import com.openminis.app.ui.browser.BrowserSheet
 import com.openminis.app.ui.theme.ChatColors
+// [ui-polish-C] providerDotColor — same brand-dot token the model picker uses,
+// so the composer's dot and the picker's dot are the same colour per vendor.
+import com.openminis.app.ui.components.providerDotColor
 import com.openminis.app.ui.components.MinisTextButton
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -913,134 +916,169 @@ internal fun FloatingToolStatusBar(
  * the OFF pill uses a muted background, the others use the accent color.
  */
 /**
- * [ui-polish-C] Single-line status strip pinned to the top of the composer card.
+ * [ui-polish-C] Composer status bar — mirrors the "ctx" band in sample-c.
  *
- * Shows what the composer previously never said out loud:
- *   - which model the next turn is bound to,
- *   - whether extended thinking is armed (and at which tier),
- *   - how many prompts are already queued behind the running turn.
+ * A distinct tinted band across the top of the composer card, separated from
+ * the text field by a hairline, carrying up to three reads:
+ *   - the model the next turn binds to (with its provider's brand dot),
+ *   - whether extended thinking is armed and at which tier,
+ *   - how many prompts are queued behind the running turn.
  *
  * The queue count is the load-bearing one. `enqueuePrompt()` does surface the
  * queued state, but only as a dashed bubble appended to the *message list* —
  * the user is looking at the composer when they hit send, so the confirmation
  * arrived off-screen. Mirroring it here puts the receipt where the action was.
  *
- * Renders nothing when every field is empty (fresh draft with no model yet),
- * so a bare composer does not grow a blank strip.
+ * Renders nothing when every field is empty, so a bare composer (fresh draft,
+ * no model chosen yet) does not grow an empty band.
  *
  * @param modelName display name of the currently routed model; blank hides it
+ * @param providerType drives the brand dot colour; null renders a neutral dot
  * @param thinkingLevel current tier; [ThinkingLevel.OFF] hides the segment
+ * @param contextUsedTokens last reported prompt size, 0 when never run
+ * @param contextWindowTokens the model's effective window, null when unknown
  * @param queuedCount number of prompts waiting behind the running turn
  */
 @Composable
 internal fun ComposerStatusStrip(
     modelName: String,
+    providerType: ProviderType?,
     thinkingLevel: ThinkingLevel,
+    contextUsedTokens: Int,
+    contextWindowTokens: Int?,
     queuedCount: Int,
 ) {
     val context = LocalContext.current
-    if (modelName.isBlank() && !thinkingLevel.isEnabled && queuedCount <= 0) return
+    val showContext = contextWindowTokens != null && contextWindowTokens > 0
+    if (modelName.isBlank() && !thinkingLevel.isEnabled && queuedCount <= 0 && !showContext) {
+        return
+    }
 
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            // Left inset lines the strip up with the attachment row and the
-            // typed text below it (both 12dp); the right side matches so a
-            // long model name ellipsizes against a symmetric margin.
-            .padding(start = 12.dp, end = 12.dp, bottom = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+            // [ui-polish-C] The card's 20dp silhouette is painted by the
+            // caller's drawBehind (a rounded rect of the card colour), NOT by
+            // a clip — so children are not automatically contained by it. A
+            // full-bleed band at the top of the column would therefore square
+            // off the card's top corners. Clipping this subtree with matching
+            // top corners keeps the card silhouette intact; the bottom corners
+            // are left square because the band sits flush against the field
+            // below it, not against the card's bottom edge.
+            .clip(
+                androidx.compose.foundation.shape.RoundedCornerShape(
+                    topStart = 20.dp,
+                    topEnd = 20.dp,
+                    bottomStart = 0.dp,
+                    bottomEnd = 0.dp,
+                ),
+            ),
     ) {
-        if (modelName.isNotBlank()) {
-            Text(
-                text = modelName,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Medium,
-                // [ui-polish-C] ChatColors.secondaryText at 11sp measures
-                // 3.44:1 on the white input card — below AA for text. The
-                // palette's own onSurfaceVariant slot (#3F4947 light /
-                // #BEC9C6 dark) gives 9.31 / 8.18 on the same background and
-                // is what every other secondary label in the app uses.
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                // Absorbs the leftover width so a long model id truncates
-                // rather than shoving the thinking/queue chips off the edge.
-                modifier = Modifier.weight(1f, fill = false),
-            )
-        }
-
-        if (thinkingLevel.isEnabled) {
-            if (modelName.isNotBlank()) StatusStripSeparator()
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                // [ui-polish-C] The tier is marked by a dot in the same
-                // ChatColors.thinking blue the thinking badge uses, not by
-                // coloured *text*: at 11sp that blue measured 4.02:1 (light) /
-                // 3.81:1 (dark) — under the 4.5:1 AA bar for text. A dot only
-                // needs the 3:1 non-text bar (4.02 / 3.81, both pass), and the
-                // tier name itself stays in the legible onSurfaceVariant grey.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                // [ui-polish-C] Full-bleed band, like sample-c's `.ctx`: the
+                // tinted strip runs edge to edge and the card's own top corners
+                // round it off (the caller clips this subtree). 12dp horizontal
+                // matches the text field, attachment row and button row below,
+                // so every left edge in the composer lines up.
+                .background(ChatColors.secondaryBg)
+                .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            if (modelName.isNotBlank()) {
+                // Provider brand dot — same token as the model picker, so the
+                // colour tells the user *which vendor* is answering without
+                // spelling it out. 7dp: reads as a brand mark without
+                // overpowering the name beside it.
                 Box(
                     modifier = Modifier
-                        .size(6.dp)
-                        .background(ChatColors.thinking, CircleShape),
+                        .size(7.dp)
+                        .background(providerDotColor(providerType), CircleShape),
                 )
-                Spacer(modifier = Modifier.width(4.dp))
+                Spacer(modifier = Modifier.width(1.dp))
+                Text(
+                    text = modelName,
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    // Absorbs leftover width so a long id truncates rather
+                    // than shoving the trailing readout off the band.
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+            }
+
+            if (thinkingLevel.isEnabled) {
+                if (modelName.isNotBlank()) StatusStripSeparator()
                 Text(
                     text = thinkingLevel.localizedName(context),
-                    fontSize = 11.sp,
+                    fontSize = 11.5.sp,
                     fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    // Light #0B5FCC = 5.34:1 on the #F2F2F7 band; dark #64B5F6
+                    // = 6.81:1 on #26262A. Both clear AA for text, which the
+                    // system-blue this replaced (4.02 / 3.81) did not.
+                    color = if (ChatColors.isDark) Color(0xFF64B5F6) else Color(0xFF0B5FCC),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-        }
 
-        if (queuedCount > 0) {
-            if (modelName.isNotBlank() || thinkingLevel.isEnabled) StatusStripSeparator()
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                // [ui-polish-C] A dot, not words: "Release to queue" (the
-                // string reused here) is an *imperative* — it describes the
-                // swipe gesture, not the waiting state, and as a permanent
-                // status line it reads like an instruction. The dashed bubble
-                // in the message list already tells the full story; the strip
-                // only needs to say "something is waiting". A dot in the
-                // neutral text colour is legible (9.31 / 8.18) and cannot be
-                // misread as an action.
-                Box(
-                    modifier = Modifier
-                        .size(6.dp)
-                        .background(
-                            MaterialTheme.colorScheme.onSurfaceVariant,
-                            CircleShape,
-                        ),
-                )
-                Spacer(modifier = Modifier.width(4.dp))
+            // Context readout, pushed to the trailing edge. Hidden entirely when
+            // the window is unknown rather than showing "0 / ?".
+            //
+            // The null test is written inline on a local copy rather than
+            // reusing `showContext`: Kotlin only smart-casts a nullable through
+            // a *direct* check, not through a separate boolean that was derived
+            // from one — funnelling it via `showContext` leaves the argument
+            // typed Int? and the call fails to resolve.
+            val windowTokens = contextWindowTokens
+            if (windowTokens != null && windowTokens > 0) {
+                Spacer(modifier = Modifier.weight(1f))
                 Text(
-                    text = queuedCount.toString(),
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium,
+                    text = formatCompactTokens(contextUsedTokens) +
+                        " / " + formatCompactTokens(windowTokens),
+                    fontSize = 11.5.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                    softWrap = false,
                 )
+            } else if (modelName.isBlank()) {
+                Spacer(modifier = Modifier.weight(1f))
             }
         }
 
-        // Pushes the content left when the model name did not take weight(1f),
-        // so the chips stay tucked against the leading edge instead of
-        // floating mid-row.
-        if (modelName.isBlank()) Spacer(modifier = Modifier.weight(1f))
+        // Hairline between the band and the text field — the `.ctx` rule's
+        // border-bottom. Drawn in the palette's hairline slot so it reads as a
+        // seam in both themes rather than a drawn border.
+        HorizontalDivider(
+            thickness = 0.5.dp,
+            color = ChatColors.toolBorder,
+        )
     }
 }
 
-/** [ui-polish-C] Hairline dot between status-strip segments. */
+/**
+ * [ui-polish-C] Compact token/queue count — "12.4k", "200k", "3".
+ *
+ * Matches TokenUsageSheet's iOS-style formatting so the composer and the
+ * Token Usage sheet agree on how the same number is written.
+ */
+private fun formatCompactTokens(n: Int): String = when {
+    n >= 1_000_000 -> String.format("%.1fM", n / 1_000_000.0)
+    n >= 1_000 -> String.format("%.1fk", n / 1_000.0).replace(".0k", "k")
+    else -> n.toString()
+}
+
+/** [ui-polish-C] Separator between status-bar segments. */
 @Composable
 private fun StatusStripSeparator() {
     Text(
         text = "·",
-        fontSize = 11.sp,
-        color = ChatColors.tertiaryText,
+        fontSize = 11.5.sp,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
 }
 

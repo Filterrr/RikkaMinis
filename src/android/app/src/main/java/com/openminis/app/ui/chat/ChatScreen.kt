@@ -4553,6 +4553,14 @@ fun ChatScreen(
                 modelName = modelName,
                 thinkingLevel = viewModel.thinkingLevel.collectAsState().value,
                 queuedPromptCount = viewModel.promptQueue.collectAsState().value.size,
+                // [ui-polish-C] Provider brand dot + context readout for the
+                // composer status bar. Collected here (not inside
+                // ChatInputArea) so that composable stays a pure function of
+                // its parameters, matching how the other composer state is
+                // already threaded through.
+                providerType = viewModel.activeProviderType.collectAsState().value,
+                contextUsedTokens = viewModel.composerContextUsedTokens.collectAsState().value,
+                contextWindowTokens = viewModel.composerContextWindowTokens.collectAsState().value,
                 onPickMedia = { mediaPickerLauncher.launch(
                     androidx.activity.result.PickVisualMediaRequest(
                         ActivityResultContracts.PickVisualMedia.ImageAndVideo,
@@ -5155,6 +5163,10 @@ private fun ChatInputArea(
     modelName: String,
     thinkingLevel: ThinkingLevel,
     queuedPromptCount: Int,
+    // [ui-polish-C] Composer status bar: provider brand dot + context readout.
+    providerType: ProviderType?,
+    contextUsedTokens: Int,
+    contextWindowTokens: Int?,
     onPickMedia: () -> Unit,
     onPickFile: () -> Unit,
     onLaunchCamera: () -> Unit,
@@ -5824,7 +5836,26 @@ private fun ChatInputArea(
                             shadowPaint,
                         )
                     }
-                    .padding(top = if (attachments.isNotEmpty()) 8.dp else 4.dp),
+                    // [ui-polish-C] Top inset is skipped when the status band
+                    // renders, so the band sits flush against the card's top
+                    // edge instead of floating below a strip of card colour.
+                    // The predicate mirrors ComposerStatusStrip's own early
+                    // return exactly — if the two ever disagree the band would
+                    // either be glued to a gap or the card would lose its
+                    // normal breathing room.
+                    .padding(
+                        top = if (modelName.isNotBlank() ||
+                            thinkingLevel.isEnabled ||
+                            queuedPromptCount > 0 ||
+                            (contextWindowTokens != null && contextWindowTokens > 0)
+                        ) {
+                            0.dp
+                        } else if (attachments.isNotEmpty()) {
+                            8.dp
+                        } else {
+                            4.dp
+                        },
+                    ),
             ) {
                 // [ui-polish-C] Composer status strip. Three states the
                 // composer previously gave no sign of: which model the next
@@ -5837,7 +5868,10 @@ private fun ChatInputArea(
                 // already-collected state; no new plumbing.
                 ComposerStatusStrip(
                     modelName = modelName,
+                    providerType = providerType,
                     thinkingLevel = thinkingLevel,
+                    contextUsedTokens = contextUsedTokens,
+                    contextWindowTokens = contextWindowTokens,
                     queuedCount = queuedPromptCount,
                 )
 
@@ -6479,6 +6513,40 @@ private fun ChatInputArea(
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                             )
                         }
+                    }
+
+                    // [ui-polish-C] Queued-prompt chip, mirroring sample-c's
+                    // `.q` pill: it belongs in the button row (where the send
+                    // affordance lives) rather than in the status band, because
+                    // "how many are waiting" is about the action the user just
+                    // took. Amber on a 10% self-tint, matching the light/dark
+                    // values measured in the C sample notes.
+                    if (queuedPromptCount > 0) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = stringResource(
+                                R.string.composer_queued_count,
+                                queuedPromptCount,
+                            ),
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            // Light #A54C08 on the 10% amber tint = 5.05:1;
+                            // dark #FFB86B on the 16% tint = 7.16:1. (The
+                            // sample's raw #B45309 measured 4.39:1 on its own
+                            // tint, i.e. just under AA — hence the nudge.)
+                            color = if (ChatColors.isDark) Color(0xFFFFB86B) else Color(0xFFA54C08),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(
+                                    if (ChatColors.isDark) {
+                                        Color(0x29B45309)
+                                    } else {
+                                        Color(0x1AB45309)
+                                    },
+                                )
+                                .padding(horizontal = 7.dp, vertical = 2.dp),
+                            maxLines = 1,
+                        )
                     }
 
                     Spacer(modifier = Modifier.weight(1f))
