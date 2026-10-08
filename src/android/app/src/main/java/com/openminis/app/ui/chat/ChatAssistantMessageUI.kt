@@ -825,10 +825,12 @@ internal fun ToolCallPill(
                 // fileRead/search #32ADE6 = 2.54, fileEdit #FF9500 = 2.20), so
                 // at 14dp the accent frequently did not resolve at all and a
                 // run of tool calls read as one undifferentiated grey block.
-                // Give the identity a full-height carrier instead: a 3dp accent
-                // rail down the leading edge, the icon on a tinted 22dp chip,
-                // and an explicit status dot at the trailing edge so success /
+                // The identity cues now are the icon on a tinted 22dp chip
+                // and an explicit status dot at the trailing edge, so success /
                 // failure is visible without expanding the detail sheet.
+                // (An earlier iteration also ran a 3dp accent rail down the
+                // leading edge; dropped as visually noisy next to the chip —
+                // the chip's plate already carries the same accent.)
                 .background(
                     ChatColors.toolCapsuleBg,
                     RoundedCornerShape(12.dp),
@@ -862,42 +864,23 @@ internal fun ToolCallPill(
                         { showToolMenu = true }
                     } else null,
                 )
+                // Symmetric 12dp: the original v1 pill's padding, restored now
+                // that the leading rail (and its asymmetric compensation) is
+                // gone — icon chip and trailing dot sit equidistant from the
+                // pill's edges again.
+                .padding(horizontal = 12.dp)
                 .height(36.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // [fix-rail-round] Accent rail — carries the "which tool is this"
-            // signal for the pill's full height instead of for a 14dp glyph.
-            //
-            // Deliberately flush against the pill's leading edge with NO
-            // radius of its own: the pill clips at RoundedCornerShape(12.dp),
-            // and the corner arc IS the rail's end cap. The visible taper
-            // (full 3dp width from y≈4 down to 0 at the very corner) is the
-            // border-left-on-a-rounded-card look — same treatment as the
-            // sample note card. An earlier iteration tried inset floating
-            // capsules with their own 1.5dp radius; on a 3dp-wide bar that
-            // radius is sub-pixel detail and the bar read as a detached
-            // stick, which is exactly what this replaces.
-            //
-            // Geometry note: a rail that is NOT full-height must not sit at
-            // x=0 — its horizontal top/bottom edge would cross the corner arc
-            // diagonally and get sheared. Full-height rails have no such
-            // edge, so the arc shapes them cleanly.
-            Box(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .width(3.dp)
-                    .background(toolAccent),
-            )
-
-            Spacer(modifier = Modifier.width(9.dp))
-
             // Status icon — always the typed tool icon. Color shifts to
             // reflect terminal status (success / failed / cancelled); while
             // running it stays in the tool's accent color so the user can
             // still recognize the tool at a glance.
-            // [ui-polish-A] Now sits on a 22dp tinted chip: the chip's plate
+            // [ui-polish-A] Sits on a 22dp tinted chip: the chip's plate
             // gives the icon a contrasting ground, so the glyph stays legible
-            // even for the accents that are too light to read on plain white.
+            // even for the accents that are too light to read on plain white,
+            // and the chip is now the pill's ONLY accent carrier after the
+            // leading rail was dropped.
             Box(
                 modifier = Modifier
                     .size(22.dp)
@@ -995,10 +978,9 @@ internal fun ToolCallPill(
                 }
             }
 
-            // [ui-polish-A] Trailing inset. The rail + chip carry the leading
-            // padding now (3dp rail + 9dp + 22dp chip + 8dp), so only the
-            // trailing edge keeps the old 12dp breathing room.
-            Spacer(modifier = Modifier.width(12.dp))
+            // [ui-polish-A] Trailing inset — the pill's symmetric 12dp padding
+            // covers the trailing edge; the spacers here only space between
+            // the dot and the elements before it.
         }
         // [T-android-tool-bubble-longpress-menu] Long-press menu anchored to
         // the pill. Items mirror the user-bubble menu's style (MinisMenu +

@@ -43,10 +43,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-// [ui-polish-B] Needed by the selected-row rail drawn in drawBehind.
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -541,9 +537,6 @@ private fun DrawerSessionRow(
     val timeText = remember(session.updatedAt, ctx) { relativeDate(ctx, session.updatedAt) }
     val activeSessions by SessionActivityTracker.activeSessions.collectAsState()
     val isActive = session.id in activeSessions
-    // [ui-polish-B] Resolved here because drawBehind's lambda is not a
-    // composable scope, so it cannot read MaterialTheme itself.
-    val railColor = MaterialTheme.colorScheme.primary
 
     Row(
         modifier = Modifier
@@ -554,24 +547,6 @@ private fun DrawerSessionRow(
                 if (selected) MaterialTheme.colorScheme.secondaryContainer
                 else androidx.compose.ui.graphics.Color.Transparent,
             )
-            // [fix-rail-round] Selected row marker: a full-height bar flush
-            // against the row's leading edge. The row clips at
-            // RoundedCornerShape(12.dp) and draws this inside that clip, so
-            // the corner arc shapes the bar's ends — the same border-left-on-
-            // a-rounded-card look as the sample note card. An earlier
-            // iteration inset the bar 4dp with its own 1.25dp radius; on a
-            // 3dp-wide bar that radius is sub-pixel detail and the marker
-            // read as a detached stick floating in the tint, not as the
-            // card's edge — which is exactly what this replaces.
-            .drawBehind {
-                if (selected) {
-                    drawRect(
-                        color = railColor,
-                        topLeft = Offset(0f, 0f),
-                        size = Size(3.dp.toPx(), size.height),
-                    )
-                }
-            }
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 10.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
