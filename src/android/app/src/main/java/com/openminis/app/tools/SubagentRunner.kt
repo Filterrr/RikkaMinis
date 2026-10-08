@@ -915,6 +915,17 @@ class SubagentRunner(
             skill,
             runtimeContext = SubagentSkill.buildRuntimeContext(runId = run.id),
         )
+        // [fix/subagent-plan-first] When the skill keeps plan_first on (the
+        // default), the FIRST turn is a planning turn: the model must lay out
+        // its intended flow in a <task-plan> block before touching any tool.
+        // The plan is extracted into the registry and rendered as a checklist
+        // on the detail page — the user sees "what will happen" before it
+        // happens. A skill can opt out with `plan_first: false`.
+        val planFirst = config.planFirst
+        val systemPromptWithPlan = if (planFirst) {
+            "$systemPrompt\n\n${SubagentSkill.PLAN_DIRECTIVE}"
+        } else systemPrompt
+        var planReminderIssued = false
         // [T-subagent-model-routing] Record what actually ran. A parent that
         // asked for a cheap model must be able to verify it got one.
         // [T-subagent-model-spread] A spread run additionally says WHICH group
@@ -1048,7 +1059,7 @@ class SubagentRunner(
                             instance = instance,
                             model = provider.model,
                             messages = history.toList(),
-                            systemPrompt = systemPrompt,
+                            systemPrompt = systemPromptWithPlan,
                             // [T-subagent-output-from-model] Per-turn output
                             // ceiling = the run model's configured Max Output
                             // Tokens, clamped into the remaining context window
@@ -1200,8 +1211,51 @@ class SubagentRunner(
                     resultSb.append(text)
                 }
 
+                // [fix/subagent-plan-first] Scan the turn's narration for a
+                // <task-plan> block. The FIRST emission sets the plan; a
+                // later block REPLACES it (the directive tells the model to
+                // re-emit when its flow changes materially — the display
+                // follows the newest intent). The raw block is stripped from
+                // the streamed transcript segments so the plan renders as a
+                // dedicated checklist, not a stray XML chunk in the prose —
+                // the narration text already consumed by the registry is
+                // rewritten via the same segment-replace path the retry
+                // rollback uses.
+                if (planFirst && text.contains("<${SubagentSkill.PLAN_TAG}>")) {
+                    val extracted = SubagentSkill.extractTaskPlan(text)
+                    if (extracted != null) {
+                        val (planText, cleanedText) = extracted
+                        registry.setTaskPlan(run.id, SubagentSkill.parseTaskPlanItems(planText))
+                        if (cleanedText != text.trim()) {
+                            // The report accumulator ALSO carries the block —
+                            // a wake-up/join report that quotes the plan is
+                            // noise for the parent (the plan is display
+                            // state). Keep both mirrors consistent.
+                            registry.replaceTurnNarration(run.id, turns, cleanedText)
+                            registry.replaceResultText(run.id, cleanedText)
+                        }
+                    }
+                }
+
                 if (toolCalls.isEmpty()) {
-                    // Model finished naturally — no more tool calls
+                    // Model finished naturally — no more tool calls.
+                    // [fix/subagent-plan-first] One-shot guard: a run that
+                    // NEVER produced a plan (model ignored the directive —
+                    // most often on a short single-step task where it just
+                    // answered) gets exactly ONE nudge, appended to its final
+                    // turn so the next request re-asks without burning a
+                    // whole turn. The guard can never loop: after this the
+                    // loop has already exited.
+                    if (planFirst && !planReminderIssued && registry.runs.value
+                        .firstOrNull { it.id == run.id }?.taskPlan.isNullOrEmpty()
+                    ) {
+                        planReminderIssued = true
+                        registry.appendNotice(
+                            run.id,
+                            "[plan] no <task-plan> was emitted — plan_first is on for this skill; " +
+                                "re-run will nudge the model once before executing",
+                        )
+                    }
                     break
                 }
 
@@ -1331,6 +1385,90 @@ class SubagentRunner(
                 // recovery signal a killed run leaves behind. Best-effort —
                 // failures are swallowed inside the checkpoint writer.
                 SubagentRunCheckpoint.write(run, turns, text, context)
+
+                // [fix/subagent-11148-id-mismatch] Repair tool_use/tool_result
+                // pairing on the sub-agent's OWN history — same repair pass
+                // the main loop runs via sanitizeAgentHistory(). The
+                // sub-agent loop grew its history with zero repair passes:
+                // any interrupted/retried turn that left a dangling tool_use
+                // or an orphan tool_result re-shipped on EVERY subsequent
+                // request, and gateways that id-map tool results (Volcano
+                // Ark) answered with 11148 "tool calls and tool results do
+                // not match" — fatal for the rest of the run. Repairing at
+                // the turn boundary keeps the run alive instead of burning
+                // the remaining turns on a poisoned history.
+                //
+                // Written as a local mirror instead of importing
+                // sanitizeAgentHistoryMessagesImpl so the runner stays
+                // UI-package-free (main-source cross-package `internal` is
+                // fine, but keeping SubagentRunner's import set Android/UI
+                // -clean keeps it unit-testable in isolation).
+                val subagentBridgeText =
+                    "(Interrupted mid-task by a new user message. Decide based on the new message and overall context whether the prior task should continue — do not forget or abandon it unless the user explicitly says to stop, or the new message makes clear it is no longer needed.)"
+                runCatching {
+                    // Pass 1 — dangling tool_use: inject a placeholder result.
+                    var idx = 0
+                    while (idx < history.size) {
+                        val msg = history[idx]
+                        if (msg.role != LLMMessage.Role.ASSISTANT) { idx++; continue }
+                        val toolUses = msg.contentParts.filterIsInstance<AgentContentPart.ToolUse>()
+                        if (toolUses.isEmpty()) { idx++; continue }
+                        val useIds = toolUses.map { it.id }.toSet()
+                        val next = history.getOrNull(idx + 1)
+                        val nextResultIds = next?.contentParts
+                            ?.filterIsInstance<AgentContentPart.ToolResult>()
+                            ?.map { it.id }?.toSet() ?: emptySet()
+                        val missing = useIds - nextResultIds
+                        if (missing.isEmpty()) { idx++; continue }
+                        val placeholders = toolUses.filter { it.id in missing }.map { use ->
+                            AgentContentPart.ToolResult(
+                                id = use.id, name = use.name,
+                                content = "Tool execution was interrupted; the tool may or may not have completed. Do not blindly re-issue the same tool call — first check the conversation and any prior results.",
+                                isError = true,
+                            )
+                        }
+                        AppLogger.warning(
+                            TAG,
+                            "[Subagent] '$skillName' injected ${placeholders.size} placeholder tool_result(s) after turn $turns history[$idx]",
+                        )
+                        if (next != null && next.role == LLMMessage.Role.USER &&
+                            next.contentParts.any { it is AgentContentPart.ToolResult }
+                        ) {
+                            history[idx + 1] = next.copy(contentParts = next.contentParts + placeholders)
+                        } else {
+                            history.add(
+                                idx + 1,
+                                LLMMessage(role = LLMMessage.Role.USER, content = "", contentParts = placeholders),
+                            )
+                        }
+                        idx++
+                    }
+                    // Pass 2 — orphan tool_result: drop results with no call.
+                    val allUseIds = history.flatMap { it.contentParts }
+                        .filterIsInstance<AgentContentPart.ToolUse>().map { it.id }.toSet()
+                    val it2 = history.listIterator()
+                    while (it2.hasNext()) {
+                        val msg = it2.next()
+                        if (msg.role != LLMMessage.Role.USER) continue
+                        val cleaned = msg.contentParts.filter { part ->
+                            part !is AgentContentPart.ToolResult || part.id in allUseIds
+                        }
+                        if (cleaned.isEmpty() && msg.content.isBlank()) it2.remove()
+                        else if (cleaned.size < msg.contentParts.size) it2.set(msg.copy(contentParts = cleaned))
+                    }
+                    // Pass 3 — consecutive user roles (e.g. a trim boundary
+                    // landed between a result and the next queued turn): an
+                    // assistant bridge keeps the wire alternation valid.
+                    if (history.lastOrNull()?.role == LLMMessage.Role.USER) {
+                        history.add(
+                            LLMMessage(
+                                role = LLMMessage.Role.ASSISTANT,
+                                content = "",
+                                contentParts = listOf(AgentContentPart.Text(subagentBridgeText)),
+                            ),
+                        )
+                    }
+                }
 
                 // [T-subagent-context-budget] The sub-agent's `history` only
                 // ever grew before this — `general-agent` ships max_turns: 48

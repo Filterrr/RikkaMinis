@@ -454,6 +454,40 @@ private fun SubagentTaskHeader(run: SubagentRunRegistry.Run) {
                 overflow = TextOverflow.Ellipsis,
             )
         }
+        // [fix/subagent-plan-first] The run's task plan as a checklist. Steps
+        // are DISPLAY state only — completion tracking would need per-step
+        // tool attribution the model never promises, so all rows render the
+        // same. Hidden entirely until a plan exists (plan_first off, or the
+        // model never emitted one).
+        if (run.taskPlan.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                stringResource(R.string.subagent_task_plan_label),
+                fontSize = 10.sp,
+                fontWeight = FontWeight.SemiBold,
+                fontFamily = FontFamily.Monospace,
+                color = ChatColors.tertiaryText,
+                letterSpacing = 1.sp,
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            run.taskPlan.forEachIndexed { idx, step ->
+                Row(modifier = Modifier.padding(top = 3.dp)) {
+                    Text(
+                        text = "${idx + 1}.",
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = SubagentAccent,
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = step,
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp,
+                        color = ChatColors.secondaryText,
+                    )
+                }
+            }
+        }
     }
 }
 

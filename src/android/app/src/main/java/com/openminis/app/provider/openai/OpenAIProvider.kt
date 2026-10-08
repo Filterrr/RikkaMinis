@@ -18,6 +18,7 @@ import com.openminis.app.provider.LLMProvider
 import com.openminis.app.sandbox.offload.FirstChunkTimeoutPolicy
 import com.openminis.app.provider.applyUserAgentOverride
 import com.openminis.app.provider.safeOptString
+import com.openminis.app.provider.normalizeToolCallIds
 import com.openminis.app.provider.sanitizeToolPairing
 import com.openminis.app.provider.clampOutboundMaxTokens
 import com.openminis.app.provider.clampOutboundTemperature
@@ -1687,7 +1688,13 @@ class OpenAIProvider constructor(
         // OpenAI rejects an unanswered `tool_calls` entry (no following
         // role:"tool" message) and a role:"tool" message with an unknown
         // tool_call_id — both deterministic 400s.
-        val sanitizedMessages = sanitizeToolPairing(messages) { detail ->
+        // [fix/subagent-11148-id-mismatch] THEN make every tool id wire-exact:
+        // deduped AND un-mangled (Responses "|"-combined ids must not leak
+        // into tool_call_id while the assistant side got split — the exact
+        // half-pair Volcano Ark reports as 11148 "tool calls and tool results
+        // do not match"). Applied to BOTH builders so Chat and Responses
+        // requests share one id authority.
+        val sanitizedMessages = normalizeToolPairing(messages) { detail ->
             android.util.Log.i("OpenAIProvider", detail)
         }
         val body = JSONObject()
@@ -2436,7 +2443,9 @@ class OpenAIProvider constructor(
         // API rejects an unanswered function_call and a function_call_output
         // with an unknown call_id). Sanitize BEFORE deriving the prompt cache
         // key so the key reflects the payload that actually goes on the wire.
-        val sanitizedMessages = sanitizeToolPairing(messages) { detail ->
+        // [fix/subagent-11148-id-mismatch] Same id normalization as the Chat
+        // builder — see normalizeToolPairing().
+        val sanitizedMessages = normalizeToolPairing(messages) { detail ->
             android.util.Log.i("OpenAIProvider", detail)
         }
         val body = JSONObject()
