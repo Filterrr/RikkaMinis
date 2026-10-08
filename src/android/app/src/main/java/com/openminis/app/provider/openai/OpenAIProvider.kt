@@ -18,8 +18,7 @@ import com.openminis.app.provider.LLMProvider
 import com.openminis.app.sandbox.offload.FirstChunkTimeoutPolicy
 import com.openminis.app.provider.applyUserAgentOverride
 import com.openminis.app.provider.safeOptString
-import com.openminis.app.provider.normalizeToolCallIds
-import com.openminis.app.provider.sanitizeToolPairing
+import com.openminis.app.provider.normalizeToolPairing
 import com.openminis.app.provider.clampOutboundMaxTokens
 import com.openminis.app.provider.clampOutboundTemperature
 import kotlinx.coroutines.CancellationException

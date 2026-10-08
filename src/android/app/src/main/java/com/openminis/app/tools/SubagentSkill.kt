@@ -683,8 +683,12 @@ object SubagentSkill {
      * CHEAP — outline only, no tool calls — and so a plan that changes
      * mid-run is expected, not forbidden: the list is communication, not a
      * contract the model must obey after reality disagrees with it.
+     *
+     * `val` not `const val`: trimMargin() is a runtime call, which the const
+     * initializer rules reject (CI: "Const 'val' initializer should be a
+     * constant value").
      */
-    const val PLAN_DIRECTIVE: String = """
+    val PLAN_DIRECTIVE: String = """
         |# Task plan (required first)
         |
         |Before doing ANY work, output your plan for this task inside a <task-plan> block:
