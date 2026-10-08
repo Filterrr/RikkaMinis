@@ -64,6 +64,9 @@ import com.openminis.app.R
 import com.openminis.app.data.db.ChatSessionEntity
 import com.openminis.app.ui.components.MinisTextButton
 import com.openminis.app.ui.theme.CategoryAccents
+// [ui-contrast] Dark counterpart of CategoryAccents, selected by
+// categoryStyle's isDark parameter.
+import com.openminis.app.ui.theme.CategoryAccentsDark
 // [ui-contrast] Category accent palette follows the in-app theme.
 import com.openminis.app.ui.theme.ChatColors
 import java.util.Calendar
