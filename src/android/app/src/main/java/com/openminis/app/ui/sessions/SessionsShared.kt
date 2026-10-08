@@ -83,25 +83,29 @@ internal data class CategoryStyle(val icon: ImageVector, val color: Color)
 // remember key, otherwise a cached style survives an in-app theme switch
 // with the previous palette's colours.
 internal fun categoryStyle(category: String?, isDark: Boolean): CategoryStyle {
-    val a = if (isDark) CategoryAccentsDark else CategoryAccents
+    // [ui-contrast] Branches select the member from each table directly:
+    // `val a = if (isDark) CategoryAccentsDark else CategoryAccents` would
+    // unify the two distinct objects to Any and lose every property — the
+    // same compile failure toolAccentColor already hit and fixed.
+    val dark = isDark
     return when (category?.lowercase()) {
-        "code"         -> CategoryStyle(Icons.Outlined.Code, a.code)
-        "writing"      -> CategoryStyle(Icons.Outlined.Description, a.writing)
-        "research"     -> CategoryStyle(Icons.Outlined.Language, a.research)
-        "analysis"     -> CategoryStyle(Icons.Outlined.BarChart, a.analysis)
-        "creative"     -> CategoryStyle(Icons.Outlined.Brush, a.creative)
-        "chat"         -> CategoryStyle(Icons.Outlined.Forum, a.chat)
-        "math"         -> CategoryStyle(Icons.Outlined.Calculate, a.math)
-        "translation"  -> CategoryStyle(Icons.Outlined.Translate, a.translation)
-        "health"       -> CategoryStyle(Icons.Outlined.Favorite, a.health)
-        "finance"      -> CategoryStyle(Icons.Outlined.Payments, a.finance)
-        "travel"       -> CategoryStyle(Icons.Outlined.Map, a.travel)
-        "education"    -> CategoryStyle(Icons.Outlined.Book, a.education)
-        "design"       -> CategoryStyle(Icons.Outlined.Palette, a.design)
-        "productivity" -> CategoryStyle(Icons.Outlined.CalendarMonth, a.productivity)
-        "support"      -> CategoryStyle(Icons.Outlined.Settings, a.support)
-        "other"        -> CategoryStyle(Icons.Outlined.GridView, a.other)
-        else           -> CategoryStyle(Icons.Outlined.Forum, a.fallback)
+        "code"         -> CategoryStyle(Icons.Outlined.Code, if (dark) CategoryAccentsDark.code else CategoryAccents.code)
+        "writing"      -> CategoryStyle(Icons.Outlined.Description, if (dark) CategoryAccentsDark.writing else CategoryAccents.writing)
+        "research"     -> CategoryStyle(Icons.Outlined.Language, if (dark) CategoryAccentsDark.research else CategoryAccents.research)
+        "analysis"     -> CategoryStyle(Icons.Outlined.BarChart, if (dark) CategoryAccentsDark.analysis else CategoryAccents.analysis)
+        "creative"     -> CategoryStyle(Icons.Outlined.Brush, if (dark) CategoryAccentsDark.creative else CategoryAccents.creative)
+        "chat"         -> CategoryStyle(Icons.Outlined.Forum, if (dark) CategoryAccentsDark.chat else CategoryAccents.chat)
+        "math"         -> CategoryStyle(Icons.Outlined.Calculate, if (dark) CategoryAccentsDark.math else CategoryAccents.math)
+        "translation"  -> CategoryStyle(Icons.Outlined.Translate, if (dark) CategoryAccentsDark.translation else CategoryAccents.translation)
+        "health"       -> CategoryStyle(Icons.Outlined.Favorite, if (dark) CategoryAccentsDark.health else CategoryAccents.health)
+        "finance"      -> CategoryStyle(Icons.Outlined.Payments, if (dark) CategoryAccentsDark.finance else CategoryAccents.finance)
+        "travel"       -> CategoryStyle(Icons.Outlined.Map, if (dark) CategoryAccentsDark.travel else CategoryAccents.travel)
+        "education"    -> CategoryStyle(Icons.Outlined.Book, if (dark) CategoryAccentsDark.education else CategoryAccents.education)
+        "design"       -> CategoryStyle(Icons.Outlined.Palette, if (dark) CategoryAccentsDark.design else CategoryAccents.design)
+        "productivity" -> CategoryStyle(Icons.Outlined.CalendarMonth, if (dark) CategoryAccentsDark.productivity else CategoryAccents.productivity)
+        "support"      -> CategoryStyle(Icons.Outlined.Settings, if (dark) CategoryAccentsDark.support else CategoryAccents.support)
+        "other"        -> CategoryStyle(Icons.Outlined.GridView, if (dark) CategoryAccentsDark.other else CategoryAccents.other)
+        else           -> CategoryStyle(Icons.Outlined.Forum, if (dark) CategoryAccentsDark.fallback else CategoryAccents.fallback)
     }
 }
 
