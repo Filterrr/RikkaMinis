@@ -217,6 +217,14 @@ class SubagentRunRegistry {
         val steps: List<Step> = emptyList(),
         /** True when the user opened the detail page at least once. */
         val opened: Boolean = false,
+        /**
+         * [fix/subagent-plan-first] The run's task plan — extracted from the
+         * planning turn's `<task-plan>` block (later blocks REPLACE it, so a
+         * mid-run re-plan updates the display). Empty until the model emits
+         * one, or forever when the skill disabled plan_first. Rendered as a
+         * checklist under the task header on the detail page.
+         */
+        val taskPlan: List<String> = emptyList(),
     ) {
         val isActive: Boolean get() = status == RunStatus.RUNNING || status == RunStatus.QUEUED
         val isExecuting: Boolean get() = status == RunStatus.RUNNING
@@ -653,6 +661,39 @@ class SubagentRunRegistry {
     }
 
     /**
+     * [fix/subagent-plan-first] Replace the run's accumulated report text
+     * when a `<task-plan>` block was stripped from the narration — keeps
+     * [Run.resultText] (the parent-facing report fallback) consistent with
+     * the transcript. Bounded by the same cap as append.
+     */
+    fun replaceResultText(runId: String, cleaned: String) {
+        updateRun(runId) { run ->
+            run.copy(resultText = cleaned.takeLast(MAX_RESULT_TEXT_CHARS))
+        }
+    }
+
+    /**
+     * [fix/subagent-plan-first] Replace the trailing narration TEXT of
+     * [turn]'s LAST text segment with [cleaned] — the segment-replace path
+     * the transient-retry rollback also uses. Called after a `<task-plan>`
+     * block was extracted from the turn's narration so the XML chunk does
+     * not ALSO render inside the prose: the plan lives in [Run.taskPlan]
+     * (rendered as a checklist), the prose keeps only what the model said
+     * around it. Content-only rewrite: segment identity (seq) is preserved
+     * so the LazyColumn keeps its scroll position.
+     */
+    fun replaceTurnNarration(runId: String, turn: Int, cleaned: String) {
+        updateRun(runId) { run ->
+            val lastTextIdx = run.segments.indexOfLast { it is Segment.Text && it.turn == turn }
+            if (lastTextIdx < 0) return@updateRun run
+            val seg = run.segments[lastTextIdx] as Segment.Text
+            run.copy(segments = run.segments.toMutableList().apply {
+                set(lastTextIdx, seg.copy(content = cleaned))
+            })
+        }
+    }
+
+    /**
      * Shared tail-append for streamed prose: extend the trailing segment of
      * the same turn + kind, else start a new one. Deltas interleaved with a
      * tool call land in a NEW segment, which is exactly how the alternation
@@ -699,6 +740,17 @@ class SubagentRunRegistry {
     /** [T-subagent-thinking] Record whether reasoning actually ran (see Run). */
     fun setReasoningEnabled(runId: String, enabled: Boolean) {
         updateRun(runId) { if (it.reasoningEnabled == enabled) it else it.copy(reasoningEnabled = enabled) }
+    }
+
+    /**
+     * [fix/subagent-plan-first] Store / replace the run's task plan. Called
+     * by the runner after each turn's narration is scanned for a
+     * `<task-plan>` block — the first emission sets it, a later material
+     * re-plan replaces it. No-op when [steps] is empty (nothing to show).
+     */
+    fun setTaskPlan(runId: String, steps: List<String>) {
+        if (steps.isEmpty()) return
+        updateRun(runId) { if (it.taskPlan == steps) it else it.copy(taskPlan = steps) }
     }
 
     /**

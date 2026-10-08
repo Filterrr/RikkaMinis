@@ -306,6 +306,16 @@ object SubagentSkill {
          * [com.openminis.app.tools.resolveSubagentThinkingLevel].
          */
         val thinkingLevel: ThinkingLevel = ThinkingLevel.OFF,
+        /**
+         * [fix/subagent-plan-first] `plan_first: true|false` in the
+         * frontmatter (default TRUE). When on, the run's first model turn is
+         * a PLANNING turn: the system prompt requires the model to emit a
+         * `<task-plan>` list BEFORE any tool call, the runner extracts it
+         * into the registry, and the detail page renders it as a task
+         * checklist. The user sees the intended flow before execution starts
+         * instead of reverse-engineering it from the tool pills.
+         */
+        val planFirst: Boolean = true,
     )
 
     // ── Tool definition ──────────────────────────────────────────────────
@@ -456,6 +466,8 @@ object SubagentSkill {
         // couple of obvious synonyms; an unrecognised value stays OFF rather
         // than guessing a level the user did not ask for.
         var thinkingLevel = ThinkingLevel.OFF
+        // [fix/subagent-plan-first] Default ON — see SubagentConfig.planFirst.
+        var planFirst = true
 
         var i = 0
         while (i < lines.size) {
@@ -484,6 +496,12 @@ object SubagentSkill {
                 }
                 trimmed.startsWith("thinking:") -> {
                     thinkingLevel = parseThinkingLevelName(trimmed.substringAfter(":").trim())
+                }
+                // [fix/subagent-plan-first] `plan_first:` — opt OUT is the
+                // only non-default value an author needs to know about.
+                trimmed.startsWith("plan_first:") -> {
+                    val value = trimmed.substringAfter(":").trim().lowercase()
+                    planFirst = value != "false" && value != "no" && value != "off"
                 }
                 trimmed.startsWith("allowed_tools:") -> {
                     val listStr = trimmed.substringAfter(":").trim()
@@ -514,6 +532,7 @@ object SubagentSkill {
             allowedTools = allowedTools,
             maxParallel = maxParallel,
             thinkingLevel = thinkingLevel,
+            planFirst = planFirst,
         )
     }
 
@@ -646,6 +665,94 @@ object SubagentSkill {
 
     /** Per-run artifacts root — one subdirectory per run id below it. */
     const val ARTIFACTS_DIR = "/var/minis/workspace/subagents"
+
+    // ── [fix/subagent-plan-first] Plan-first flow ───────────────────────────
+
+    /**
+     * The `<task-plan>` tag the planning turn MUST wrap its task list in.
+     * Chosen as a plain XML-ish marker because every model family the app
+     * routes through emits it reliably, and the runner strips it from the
+     * visible narration either way — a model that ignores the instruction
+     * costs nothing but the plan display.
+     */
+    const val PLAN_TAG = "task-plan"
+
+    /**
+     * Directive appended to the sub-agent's system prompt when the skill has
+     * `plan_first` on (the default). Phrased so the planning turn is
+     * CHEAP — outline only, no tool calls — and so a plan that changes
+     * mid-run is expected, not forbidden: the list is communication, not a
+     * contract the model must obey after reality disagrees with it.
+     *
+     * `val` not `const val`: trimMargin() is a runtime call, which the const
+     * initializer rules reject (CI: "Const 'val' initializer should be a
+     * constant value").
+     */
+    val PLAN_DIRECTIVE: String = """
+        |# Task plan (required first)
+        |
+        |Before doing ANY work, output your plan for this task inside a <task-plan> block:
+        |
+        |<task-plan>
+        |- step one
+        |- step two
+        |- step three
+        |</task-plan>
+        |
+        |Rules:
+        |- 3-7 steps, one line each, verb-first and concrete ("Search X", "Compare A vs B", "Write report to <path>").
+        |- The plan turn makes NO tool calls — outline only, then STOP. Execution starts next turn.
+        |- The list shows the user what you intend to do; deviate when the work demands it, but if the plan changes materially, emit an updated <task-plan> block before continuing.
+    """.trimMargin()
+
+    /** Marker prepended to the run transcript when the planning turn begins. */
+    const val PLAN_TURN_NOTICE = "[planning]"
+
+    /**
+     * Extract the FIRST `<task-plan>…</task-plan>` block from [text] and
+     * return (planText, textWithoutBlock). Returns (null, [text]) when no
+     * complete block exists. Opened-but-never-closed tags are left alone —
+     * a stream may legitimately be cut mid-tag, and stripping a half block
+     * would eat narration around it.
+     *
+     * Pure + JVM-testable. Whitespace inside the tag name is not tolerated
+     * (the directive pins the exact spelling); case follows the directive.
+     */
+    fun extractTaskPlan(text: String): Pair<String, String>? {
+        val open = "<$PLAN_TAG>"
+        val close = "</$PLAN_TAG>"
+        val start = text.indexOf(open)
+        if (start < 0) return null
+        val contentStart = start + open.length
+        val end = text.indexOf(close, contentStart)
+        if (end < 0) return null
+        val plan = text.substring(contentStart, end).trim()
+        if (plan.isEmpty()) return null
+        val cleaned = text.removeRange(start, end + close.length)
+            .replace(Regex("\\n{3,}"), "\n\n")
+            .trim()
+        return plan to cleaned
+    }
+
+    /**
+     * Parse a plan's body into item lines: `- step` / `* step` / `1. step`
+     * bullets, one per line. Non-bullet prose inside the block is kept as a
+     * single trailing "note" item only when there are NO bullets at all
+     * (prose-only plans still deserve display); with bullets present, stray
+     * prose is dropped rather than guessed into steps.
+     */
+    fun parseTaskPlanItems(planText: String): List<String> {
+        val items = planText.lines().mapNotNull { raw ->
+            val line = raw.trim()
+            if (line.isEmpty()) return@mapNotNull null
+            val bulleted = Regex("^[-*•]\\s+(.*)$").find(line)
+                ?: Regex("^\\d+[.)]\\s+(.*)$").find(line)
+            bulleted?.groupValues?.get(1)?.trim()?.takeIf { it.isNotEmpty() }
+        }
+        if (items.isNotEmpty()) return items.take(12)
+        val prose = planText.trim()
+        return if (prose.isEmpty()) emptyList() else listOf(prose.take(500))
+    }
 
 
     // ── Helpers ──────────────────────────────────────────────────────────

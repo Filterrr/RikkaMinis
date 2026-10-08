@@ -141,3 +141,132 @@ fun sanitizeToolPairing(
     // NOT be dropped (Gemini's serializer replaces "" with " ").
     return result
 }
+
+/**
+ * [fix/subagent-11148-id-mismatch] Normalize EVERY tool_use / tool_result id
+ * in an outbound message list so the wire pairing is id-exact.
+ *
+ * WHY THIS EXISTS: server-issued tool_call ids routinely collide with ids the
+ * client minted (or an earlier server turn minted) elsewhere in the same
+ * conversation, and several OpenAI-compatible gateways (Volcano Ark being the
+ * trigger for error 11148 "tool calls and tool results do not match") do NOT
+ * match a role:"tool" reply to its assistant tool_call positionally — they
+ * build an id→result map for the whole request. Two shapes break that map:
+ *
+ *   1. Duplicate ids. Ark is observed to reject or mis-map the SECOND
+ *      tool_call whose id repeats an earlier one, even when
+ *      call/result/answer stay positionally correct. OpenAI Chat Completions
+ *      rejects duplicates outright with 400 "Duplicate value for tool_call_id".
+ *      (OpenAIProvider already renames duplicates on the Chat path via
+ *      globallyDedupeToolCallIds — but only after its own builder ran, and
+ *      the Responses path never saw the same pass.)
+ *   2. The Responses-API combined id "call_…|fc_…" replayed on a Chat
+ *      Completions request. capChatToolCallId keeps the pre-'|' half for the
+ *      assistant tool_call, but the old tool-message branch forwarded
+ *      tr.id VERBATIM — so the assistant announced id "call_abc" while the
+ *      following role:"tool" message carried tool_call_id "call_abc|fc_def".
+ *      A positional matcher tolerates that; an id-map matcher reports the
+ *      result as missing and the call as unanswered → 11148 / 400.
+ *
+ * Strategy — deterministic ONE-TO-ONE renames, applied to tool_use and
+ * tool_result parts TOGETHER so each pair keeps matching, and every call id
+ * stays unique within the request:
+ *
+ *   - duplicate raw id → "raw-2", "raw-3", … (same convention the existing
+ *     OpenAI Chat dedupe pass uses, so history produced by an older build
+ *     renames identically)
+ *   - an id that is NOT valid as-is on a plain chat-completions wire
+ *     (longer than 64 chars, or containing the Responses-API '|' separator)
+ *     → "call_" + 24 hex chars of SHA-256("v2|<raw id>")
+ *
+ * Idempotence matters: the SAME raw id must always map to the SAME normalized
+ * id (hash names and -N suffixes are both deterministic), so a history
+ * re-sent on the next request renames to the same values and the model's
+ * learned id references stay stable. Pure + JVM-testable; operates on a copy.
+ *
+ * Callers that already rename duplicates downstream (OpenAIProvider's Chat
+ * builder) stay correct: after this pass no id collides, so their counters
+ * never fire — the pass here is the single authority.
+ */
+fun normalizeToolCallIds(messages: List<LLMMessage>): List<LLMMessage> {
+    // Occurrence count per raw id across tool_use parts — the Nth duplicate
+    // tool_call gets the Nth distinct name.
+    val useCounts = HashMap<String, Int>()
+    // Pending (unanswered) new ids per raw id, FIFO: a tool_result takes the
+    // OLDEST pending occurrence of its raw id, so each result is renamed to
+    // exactly the id its paired tool_use received — even when several calls
+    // share one raw id.
+    val pending = HashMap<String, ArrayDeque<String>>()
+
+    // Hash-mangle an id that cannot ride a plain chat-completions wire:
+    // longer than 64 chars, or carrying the Responses-API '|' separator.
+    fun baseFor(raw: String): String =
+        if (raw.length <= 64 && !raw.contains('|')) raw
+        else "call_" + java.security.MessageDigest.getInstance("SHA-256")
+            .digest("v2|$raw".toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+            .take(24)
+
+    // Collect first (a part id may appear on many messages), rewrite second.
+    data class Rewrite(val msgIdx: Int, val partIdx: Int, val newId: String)
+    val rewrites = ArrayList<Rewrite>()
+    for ((mi, msg) in messages.withIndex()) {
+        msg.contentParts.forEachIndexed { pi, part ->
+            val raw = when (part) {
+                is AgentContentPart.ToolUse -> part.id
+                is AgentContentPart.ToolResult -> part.id
+                else -> null
+            } ?: return@forEachIndexed
+            if (raw.isEmpty()) return@forEachIndexed
+            val newId: String = when (part) {
+                is AgentContentPart.ToolUse -> {
+                    val n = useCounts.getOrDefault(raw, 0)
+                    useCounts[raw] = n + 1
+                    val base = baseFor(raw)
+                    val id = when {
+                        n == 0 -> base
+                        // The suffixed duplicate must itself stay wire-valid.
+                        "$base-${n + 1}".length <= 64 && !base.contains('|') -> "$base-${n + 1}"
+                        else -> baseFor("$base-${n + 1}")
+                    }
+                    pending.getOrPut(raw) { ArrayDeque() }.addLast(id)
+                    id
+                }
+                else -> {
+                    // tool_result: renamed to exactly what its paired call got.
+                    val q = pending[raw]
+                    if (q != null && q.isNotEmpty()) q.removeFirst() else raw
+                }
+            }
+            rewrites.add(Rewrite(mi, pi, newId))
+        }
+    }
+    if (rewrites.isEmpty()) return messages
+
+    val touched = rewrites.groupBy { it.msgIdx }
+    return messages.mapIndexed { mi, msg ->
+        val rw = touched[mi] ?: return@mapIndexed msg
+        val parts = msg.contentParts.toMutableList()
+        for ((_, pi, newId) in rw) {
+            when (val part = parts[pi]) {
+                is AgentContentPart.ToolUse -> parts[pi] = part.copy(id = newId)
+                is AgentContentPart.ToolResult -> parts[pi] = part.copy(id = newId)
+                else -> Unit
+            }
+        }
+        msg.copy(contentParts = parts)
+    }
+}
+
+/**
+ * [fix/subagent-11148-id-mismatch] Composed outbound hardening used by the
+ * OpenAI-family builders: orphan-pairing strip FIRST (sanitizeToolPairing —
+ * a result whose call was stripped must not influence rename counters), then
+ * id normalization (normalizeToolCallIds — dedupe + de-mangle). The [log]
+ * sink receives both passes' diagnostics.
+ */
+fun normalizeToolPairing(
+    messages: List<LLMMessage>,
+    log: (String) -> Unit = {},
+): List<LLMMessage> =
+    normalizeToolCallIds(sanitizeToolPairing(messages, log))
