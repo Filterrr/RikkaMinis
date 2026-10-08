@@ -45,7 +45,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 // [ui-polish-B] Needed by the selected-row rail drawn in drawBehind.
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.platform.LocalContext
@@ -555,21 +554,21 @@ private fun DrawerSessionRow(
                 if (selected) MaterialTheme.colorScheme.secondaryContainer
                 else androidx.compose.ui.graphics.Color.Transparent,
             )
-            // [ui-polish-B] Selected row marker drawn as a rounded bar inset
-            // from the row edge — not a full-bleed strip. A strip flush with
-            // the 12dp row silhouette gets its ends sheared off by the clip
-            // and reads as a straight-cut sliver; a 1.25dp-radius capsule
-            // inset 4dp keeps the anchor signal with clean rounded ends.
+            // [fix-rail-round] Selected row marker: a full-height bar flush
+            // against the row's leading edge. The row clips at
+            // RoundedCornerShape(12.dp) and draws this inside that clip, so
+            // the corner arc shapes the bar's ends — the same border-left-on-
+            // a-rounded-card look as the sample note card. An earlier
+            // iteration inset the bar 4dp with its own 1.25dp radius; on a
+            // 3dp-wide bar that radius is sub-pixel detail and the marker
+            // read as a detached stick floating in the tint, not as the
+            // card's edge — which is exactly what this replaces.
             .drawBehind {
                 if (selected) {
-                    val railWidth = 3.dp.toPx()
-                    val inset = 4.dp.toPx()
-                    val radius = 1.25.dp.toPx()
-                    drawRoundRect(
+                    drawRect(
                         color = railColor,
-                        topLeft = Offset(inset, inset),
-                        size = Size(railWidth, size.height - inset * 2),
-                        cornerRadius = CornerRadius(radius, radius),
+                        topLeft = Offset(0f, 0f),
+                        size = Size(3.dp.toPx(), size.height),
                     )
                 }
             }

@@ -868,31 +868,28 @@ internal fun ToolCallPill(
             // [fix-rail-round] Accent rail — carries the "which tool is this"
             // signal for the pill's full height instead of for a 14dp glyph.
             //
-            // It must NOT sit flush against the pill's leading edge. The pill
-            // clips at RoundedCornerShape(12.dp) and is only 36dp tall, so a
-            // strip pinned at x=0 with its ends at y=[5,31] falls OUTSIDE the
-            // corner arc on both ends — the top-left corner centre is (12,12)
-            // with r=12, and (0,5) is 193 > 144 = r² away from it — so the
-            // parent clip shears each end into a diagonal sliver instead of
-            // letting the radius show. Pixel-measured before this fix: the
-            // rail's right edge stayed pinned while only the left edge moved,
-            // which is the signature of a parent clip, not of a rounded cap.
+            // Deliberately flush against the pill's leading edge with NO
+            // radius of its own: the pill clips at RoundedCornerShape(12.dp),
+            // and the corner arc IS the rail's end cap. The visible taper
+            // (full 3dp width from y≈4 down to 0 at the very corner) is the
+            // border-left-on-a-rounded-card look — same treatment as the
+            // sample note card. An earlier iteration tried inset floating
+            // capsules with their own 1.5dp radius; on a 3dp-wide bar that
+            // radius is sub-pixel detail and the bar read as a detached
+            // stick, which is exactly what this replaces.
             //
-            // Insetting 3dp horizontally puts both ends inside the arc
-            // ((3,5) = 130 <= 144), so the 1.5dp cap actually renders. The
-            // rail block therefore occupies 6dp (3dp inset + 3dp bar); the
-            // spacer below drops 9dp -> 6dp so the icon chip keeps its
-            // previous 12dp offset from the pill's leading edge.
+            // Geometry note: a rail that is NOT full-height must not sit at
+            // x=0 — its horizontal top/bottom edge would cross the corner arc
+            // diagonally and get sheared. Full-height rails have no such
+            // edge, so the arc shapes them cleanly.
             Box(
                 modifier = Modifier
                     .fillMaxHeight()
-                    .padding(vertical = 5.dp)
-                    .padding(start = 3.dp)
                     .width(3.dp)
-                    .background(toolAccent, RoundedCornerShape(1.5.dp)),
+                    .background(toolAccent),
             )
 
-            Spacer(modifier = Modifier.width(6.dp))
+            Spacer(modifier = Modifier.width(9.dp))
 
             // Status icon — always the typed tool icon. Color shifts to
             // reflect terminal status (success / failed / cancelled); while
