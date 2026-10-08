@@ -74,26 +74,68 @@ object ToolAccentsDark {
 
 /**
  * Session category icon tint. Mirrors the iOS 16-category table
- * (ContentView.swift) — same RGB in the session list and the "Move to…" sheet.
+ * (ContentView.swift) — same category keeps the same hue across the session
+ * drawer, the "Move to…" sheet and the edit sheet's category grid.
+ *
+ * [ui-contrast] Split into a light and a dark table, same rationale as
+ * [ToolAccents]: the single table was lifted verbatim from iOS, whose system
+ * colours are tuned for dark surfaces. Rendered as a 17dp glyph on an 18%
+ * self-tinted chip over the white drawer card, 9 of the 16 fell under the
+ * 3:1 WCAG non-text threshold — chat green measured 1.92:1, productivity
+ * yellow 1.39:1, finance teal 1.82:1. The light table darkens each hue
+ * (per-value factor, hue preserved) until it clears 3:1 on its own chip;
+ * the dark table keeps iOS dark-variant system colours, which all measure
+ * >= 5.9:1 on the dark cards.
+ *
+ * Pick between them with `ChatColors.isDark` — [categoryStyle] does this via
+ * its `isDark` parameter.
  */
 object CategoryAccents {
-    val code = Color(0xFFF09A37)
-    val writing = Color(0xFF3478F6)
-    val research = Color(0xFF30B0C7)
-    val analysis = Color(0xFF5856D6)
-    val creative = Color(0xFFFF2D55)
-    val chat = Color(0xFF34C759)
-    val math = Color(0xFF9B59B6)
-    val translation = Color(0xFF00BCD4)
-    val health = Color(0xFFFF3B30)
-    val finance = Color(0xFF00C7BE)
-    val travel = Color(0xFFF09A37)
-    val education = Color(0xFF3478F6)
-    val design = Color(0xFFFF2D55)
-    val productivity = Color(0xFFFFCC00)
-    val support = Color(0xFF8B6914)
-    val other = Color(0xFF8E8E93)
-    val fallback = Color(0xFF8E8E93)
+    // Light mode. Same hue family as the iOS originals, darkened just enough
+    // for the 17dp glyph to clear 3:1 on its own 18% chip over white.
+    val code = Color(0xFFB67529)         // was #F09A37 (1.95) -> 3.07
+    val writing = Color(0xFF3478F6)      // unchanged — 3.26
+    val research = Color(0xFF2790A3)     // was #30B0C7 (2.19) -> 3.04
+    val analysis = Color(0xFF5856D6)     // unchanged — 4.39
+    val creative = Color(0xFFF42B51)     // was #FF2D55 (2.82) -> 3.05
+    val chat = Color(0xFF279743)         // was #34C759 (1.92) -> 3.03
+    val math = Color(0xFF9B59B6)         // unchanged — 3.70
+    val translation = Color(0xFF008EA1)  // was #00BCD4 (1.95) -> 3.13
+    val health = Color(0xFFEF372D)       // was #FF3B30 (2.79) -> 3.10
+    val finance = Color(0xFF00938C)      // was #00C7BE (1.82) -> 3.04
+    val travel = code
+    val education = writing
+    val design = creative
+    val productivity = Color(0xFF9E7E00) // was #FFCC00 (1.39) -> 3.14
+    val support = Color(0xFF8B6914)      // unchanged — 4.01
+    val other = Color(0xFF85858A)        // was #8E8E93 (2.74) -> 3.03
+    val fallback = other
+}
+
+/**
+ * Dark-mode counterpart of [CategoryAccents] — iOS dark-variant system
+ * colours, all well above threshold on the dark cards (#1C1C1E / #000):
+ * code 9.54, research 8.55, creative 5.99, chat 9.25, health 6.03,
+ * finance 11.27, productivity 12.05, other 5.93.
+ */
+object CategoryAccentsDark {
+    val code = Color(0xFFFFB340)
+    val writing = Color(0xFF6CA6FF)
+    val research = Color(0xFF40C8E0)
+    val analysis = Color(0xFF8C8AF0)
+    val creative = Color(0xFFFF6482)
+    val chat = Color(0xFF4CD964)
+    val math = Color(0xFFC085E0)
+    val translation = Color(0xFF40C8E0)
+    val health = Color(0xFFFF6961)
+    val finance = Color(0xFF4AE8E0)
+    val travel = code
+    val education = writing
+    val design = creative
+    val productivity = Color(0xFFFFD60A)
+    val support = Color(0xFFC0A468)
+    val other = Color(0xFF98989D)
+    val fallback = other
 }
 
 /**

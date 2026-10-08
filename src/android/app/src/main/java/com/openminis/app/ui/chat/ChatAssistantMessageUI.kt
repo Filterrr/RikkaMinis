@@ -938,7 +938,12 @@ internal fun ToolCallPill(
                     text = durationText,
                     fontSize = 11.sp,
                     fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    // [ui-contrast] Was onSurfaceVariant@0.6 — #878D8D on the
+                    // toolCapsuleBg pill, 3.02:1, well under the 4.5:1 an 11sp
+                    // readout needs. 0.8 measures 4.90 (light) / 6.10 (dark)
+                    // on the same backgrounds, from one expression that tracks
+                    // both palettes.
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
                     softWrap = false,
                     maxLines = 1,
                 )
@@ -1151,7 +1156,10 @@ internal fun ToolCallRunGroup(
                         text = totalDurationText,
                         fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        // [ui-contrast] Was @0.6 (3.02:1 on the group card) —
+                        // same fix as the per-pill duration above: 0.8 clears
+                        // 4.5:1 in both themes.
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
                         softWrap = false,
                         maxLines = 1,
                     )
@@ -1160,7 +1168,10 @@ internal fun ToolCallRunGroup(
                 Icon(
                     imageVector = if (effectiveExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
                     contentDescription = if (effectiveExpanded) "Collapse tools" else "Expand tools",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    // [ui-contrast] Was @0.7 — a chevron is a tappable
+                    // affordance (the whole header toggles expansion), so it
+                    // clears the 3:1 non-text bar with margin at 0.8.
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
                     modifier = Modifier.size(16.dp),
                 )
             }
@@ -1175,7 +1186,10 @@ internal fun ToolCallRunGroup(
                     Text(
                         text = summary,
                         fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        // [ui-contrast] Was @0.7 — this is a *sentence*
+                        // (the last tool's title), not decoration; 0.8 puts it
+                        // at 4.90 / 6.10 on the group card.
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(start = 22.dp),

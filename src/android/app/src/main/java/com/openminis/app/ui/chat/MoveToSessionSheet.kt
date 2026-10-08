@@ -37,6 +37,8 @@ import com.openminis.app.R
 import com.openminis.app.data.db.ChatSessionEntity
 import com.openminis.app.data.repository.ChatRepository
 import com.openminis.app.ui.sessions.categoryStyle
+// [ui-contrast] Category accent palette follows the in-app theme.
+import com.openminis.app.ui.theme.ChatColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.Calendar
@@ -121,7 +123,10 @@ private fun MoveToPickerRow(
     onClick: () -> Unit,
 ) {
     val context = LocalContext.current
-    val style = remember(session.category) { categoryStyle(session.category) }
+    // [ui-contrast] isDark goes into the remember key so a cached style never
+    // survives an in-app theme switch carrying the other palette's colours.
+    val isDark = ChatColors.isDark
+    val style = remember(session.category, isDark) { categoryStyle(session.category, isDark) }
     val timeText = remember(session.updatedAt, context) { relativeDate(context, session.updatedAt) }
     val untitled = stringResource(R.string.move_to_sheet_untitled)
     Row(

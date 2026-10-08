@@ -64,6 +64,11 @@ import com.openminis.app.R
 import com.openminis.app.data.db.ChatSessionEntity
 import com.openminis.app.ui.components.MinisTextButton
 import com.openminis.app.ui.theme.CategoryAccents
+// [ui-contrast] Dark counterpart of CategoryAccents, selected by
+// categoryStyle's isDark parameter.
+import com.openminis.app.ui.theme.CategoryAccentsDark
+// [ui-contrast] Category accent palette follows the in-app theme.
+import com.openminis.app.ui.theme.ChatColors
 import java.util.Calendar
 import java.util.Date
 import java.util.concurrent.TimeUnit
@@ -71,25 +76,36 @@ import java.util.concurrent.TimeUnit
 internal data class CategoryStyle(val icon: ImageVector, val color: Color)
 
 // 16 categories matching iOS (ContentView.swift:1897-1916)
-internal fun categoryStyle(category: String?): CategoryStyle {
+//
+// [ui-contrast] `isDark` selects between [CategoryAccents] and
+// [CategoryAccentsDark] — plain parameter, not a @Composable read, so callers
+// can keep this inside `remember`. Callers MUST include `isDark` in the
+// remember key, otherwise a cached style survives an in-app theme switch
+// with the previous palette's colours.
+internal fun categoryStyle(category: String?, isDark: Boolean): CategoryStyle {
+    // [ui-contrast] Branches select the member from each table directly:
+    // `val a = if (isDark) CategoryAccentsDark else CategoryAccents` would
+    // unify the two distinct objects to Any and lose every property — the
+    // same compile failure toolAccentColor already hit and fixed.
+    val dark = isDark
     return when (category?.lowercase()) {
-        "code"         -> CategoryStyle(Icons.Outlined.Code, CategoryAccents.code)
-        "writing"      -> CategoryStyle(Icons.Outlined.Description, CategoryAccents.writing)
-        "research"     -> CategoryStyle(Icons.Outlined.Language, CategoryAccents.research)
-        "analysis"     -> CategoryStyle(Icons.Outlined.BarChart, CategoryAccents.analysis)
-        "creative"     -> CategoryStyle(Icons.Outlined.Brush, CategoryAccents.creative)
-        "chat"         -> CategoryStyle(Icons.Outlined.Forum, CategoryAccents.chat)
-        "math"         -> CategoryStyle(Icons.Outlined.Calculate, CategoryAccents.math)
-        "translation"  -> CategoryStyle(Icons.Outlined.Translate, CategoryAccents.translation)
-        "health"       -> CategoryStyle(Icons.Outlined.Favorite, CategoryAccents.health)
-        "finance"      -> CategoryStyle(Icons.Outlined.Payments, CategoryAccents.finance)
-        "travel"       -> CategoryStyle(Icons.Outlined.Map, CategoryAccents.travel)
-        "education"    -> CategoryStyle(Icons.Outlined.Book, CategoryAccents.education)
-        "design"       -> CategoryStyle(Icons.Outlined.Palette, CategoryAccents.design)
-        "productivity" -> CategoryStyle(Icons.Outlined.CalendarMonth, CategoryAccents.productivity)
-        "support"      -> CategoryStyle(Icons.Outlined.Settings, CategoryAccents.support)
-        "other"        -> CategoryStyle(Icons.Outlined.GridView, CategoryAccents.other)
-        else           -> CategoryStyle(Icons.Outlined.Forum, CategoryAccents.fallback)
+        "code"         -> CategoryStyle(Icons.Outlined.Code, if (dark) CategoryAccentsDark.code else CategoryAccents.code)
+        "writing"      -> CategoryStyle(Icons.Outlined.Description, if (dark) CategoryAccentsDark.writing else CategoryAccents.writing)
+        "research"     -> CategoryStyle(Icons.Outlined.Language, if (dark) CategoryAccentsDark.research else CategoryAccents.research)
+        "analysis"     -> CategoryStyle(Icons.Outlined.BarChart, if (dark) CategoryAccentsDark.analysis else CategoryAccents.analysis)
+        "creative"     -> CategoryStyle(Icons.Outlined.Brush, if (dark) CategoryAccentsDark.creative else CategoryAccents.creative)
+        "chat"         -> CategoryStyle(Icons.Outlined.Forum, if (dark) CategoryAccentsDark.chat else CategoryAccents.chat)
+        "math"         -> CategoryStyle(Icons.Outlined.Calculate, if (dark) CategoryAccentsDark.math else CategoryAccents.math)
+        "translation"  -> CategoryStyle(Icons.Outlined.Translate, if (dark) CategoryAccentsDark.translation else CategoryAccents.translation)
+        "health"       -> CategoryStyle(Icons.Outlined.Favorite, if (dark) CategoryAccentsDark.health else CategoryAccents.health)
+        "finance"      -> CategoryStyle(Icons.Outlined.Payments, if (dark) CategoryAccentsDark.finance else CategoryAccents.finance)
+        "travel"       -> CategoryStyle(Icons.Outlined.Map, if (dark) CategoryAccentsDark.travel else CategoryAccents.travel)
+        "education"    -> CategoryStyle(Icons.Outlined.Book, if (dark) CategoryAccentsDark.education else CategoryAccents.education)
+        "design"       -> CategoryStyle(Icons.Outlined.Palette, if (dark) CategoryAccentsDark.design else CategoryAccents.design)
+        "productivity" -> CategoryStyle(Icons.Outlined.CalendarMonth, if (dark) CategoryAccentsDark.productivity else CategoryAccents.productivity)
+        "support"      -> CategoryStyle(Icons.Outlined.Settings, if (dark) CategoryAccentsDark.support else CategoryAccents.support)
+        "other"        -> CategoryStyle(Icons.Outlined.GridView, if (dark) CategoryAccentsDark.other else CategoryAccents.other)
+        else           -> CategoryStyle(Icons.Outlined.Forum, if (dark) CategoryAccentsDark.fallback else CategoryAccents.fallback)
     }
 }
 
@@ -277,7 +293,7 @@ internal fun SessionEditSheet(
             ) {
                 items(allCategories) { cat ->
                     val isSelected = selectedCategory?.equals(cat, ignoreCase = true) == true
-                    val style = categoryStyle(cat.lowercase())
+                    val style = categoryStyle(cat.lowercase(), ChatColors.isDark)
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(10.dp))
