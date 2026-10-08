@@ -272,6 +272,9 @@ import com.openminis.app.data.repository.MemoryRepository
 import com.openminis.app.data.repository.ProviderRepository
 import com.openminis.app.ui.browser.BrowserSheet
 import com.openminis.app.ui.theme.ChatColors
+// [ui-polish-C] providerDotColor — same brand-dot token the model picker uses,
+// so the composer's dot and the picker's dot are the same colour per vendor.
+import com.openminis.app.ui.components.providerDotColor
 import com.openminis.app.ui.components.MinisTextButton
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -912,6 +915,173 @@ internal fun FloatingToolStatusBar(
  * Mirrors iOS `thinkingLevelPicker`: the active level shows a filled pill;
  * the OFF pill uses a muted background, the others use the accent color.
  */
+/**
+ * [ui-polish-C] Composer status bar — mirrors the "ctx" band in sample-c.
+ *
+ * A distinct tinted band across the top of the composer card, separated from
+ * the text field by a hairline, carrying up to three reads:
+ *   - the model the next turn binds to (with its provider's brand dot),
+ *   - whether extended thinking is armed and at which tier,
+ *   - how many prompts are queued behind the running turn.
+ *
+ * The queue count is the load-bearing one. `enqueuePrompt()` does surface the
+ * queued state, but only as a dashed bubble appended to the *message list* —
+ * the user is looking at the composer when they hit send, so the confirmation
+ * arrived off-screen. Mirroring it here puts the receipt where the action was.
+ *
+ * Renders nothing when every field is empty, so a bare composer (fresh draft,
+ * no model chosen yet) does not grow an empty band.
+ *
+ * @param modelName display name of the currently routed model; blank hides it
+ * @param providerType drives the brand dot colour; null renders a neutral dot
+ * @param thinkingLevel current tier; [ThinkingLevel.OFF] hides the segment
+ * @param contextUsedTokens last reported prompt size, 0 when never run
+ * @param contextWindowTokens the model's effective window, null when unknown
+ * @param queuedCount number of prompts waiting behind the running turn
+ */
+@Composable
+internal fun ComposerStatusStrip(
+    modelName: String,
+    providerType: ProviderType?,
+    thinkingLevel: ThinkingLevel,
+    contextUsedTokens: Int,
+    contextWindowTokens: Int?,
+    queuedCount: Int,
+) {
+    val context = LocalContext.current
+    val showContext = contextWindowTokens != null && contextWindowTokens > 0
+    if (modelName.isBlank() && !thinkingLevel.isEnabled && queuedCount <= 0 && !showContext) {
+        return
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            // [ui-polish-C] The card's 20dp silhouette is painted by the
+            // caller's drawBehind (a rounded rect of the card colour), NOT by
+            // a clip — so children are not automatically contained by it. A
+            // full-bleed band at the top of the column would therefore square
+            // off the card's top corners. Clipping this subtree with matching
+            // top corners keeps the card silhouette intact; the bottom corners
+            // are left square because the band sits flush against the field
+            // below it, not against the card's bottom edge.
+            .clip(
+                androidx.compose.foundation.shape.RoundedCornerShape(
+                    topStart = 20.dp,
+                    topEnd = 20.dp,
+                    bottomStart = 0.dp,
+                    bottomEnd = 0.dp,
+                ),
+            ),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                // [ui-polish-C] Full-bleed band, like sample-c's `.ctx`: the
+                // tinted strip runs edge to edge and the card's own top corners
+                // round it off (the caller clips this subtree). 12dp horizontal
+                // matches the text field, attachment row and button row below,
+                // so every left edge in the composer lines up.
+                .background(ChatColors.secondaryBg)
+                .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            if (modelName.isNotBlank()) {
+                // Provider brand dot — same token as the model picker, so the
+                // colour tells the user *which vendor* is answering without
+                // spelling it out. 7dp: reads as a brand mark without
+                // overpowering the name beside it.
+                Box(
+                    modifier = Modifier
+                        .size(7.dp)
+                        .background(providerDotColor(providerType), CircleShape),
+                )
+                Spacer(modifier = Modifier.width(1.dp))
+                Text(
+                    text = modelName,
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    // Absorbs leftover width so a long id truncates rather
+                    // than shoving the trailing readout off the band.
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+            }
+
+            if (thinkingLevel.isEnabled) {
+                if (modelName.isNotBlank()) StatusStripSeparator()
+                Text(
+                    text = thinkingLevel.localizedName(context),
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.Medium,
+                    // Light #0B5FCC = 5.34:1 on the #F2F2F7 band; dark #64B5F6
+                    // = 6.81:1 on #26262A. Both clear AA for text, which the
+                    // system-blue this replaced (4.02 / 3.81) did not.
+                    color = if (ChatColors.isDark) Color(0xFF64B5F6) else Color(0xFF0B5FCC),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+
+            // Context readout, pushed to the trailing edge. Hidden entirely when
+            // the window is unknown rather than showing "0 / ?".
+            //
+            // The null test is written inline on a local copy rather than
+            // reusing `showContext`: Kotlin only smart-casts a nullable through
+            // a *direct* check, not through a separate boolean that was derived
+            // from one — funnelling it via `showContext` leaves the argument
+            // typed Int? and the call fails to resolve.
+            val windowTokens = contextWindowTokens
+            if (windowTokens != null && windowTokens > 0) {
+                Spacer(modifier = Modifier.weight(1f))
+                Text(
+                    text = formatCompactTokens(contextUsedTokens) +
+                        " / " + formatCompactTokens(windowTokens),
+                    fontSize = 11.5.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    softWrap = false,
+                )
+            } else if (modelName.isBlank()) {
+                Spacer(modifier = Modifier.weight(1f))
+            }
+        }
+
+        // Hairline between the band and the text field — the `.ctx` rule's
+        // border-bottom. Drawn in the palette's hairline slot so it reads as a
+        // seam in both themes rather than a drawn border.
+        HorizontalDivider(
+            thickness = 0.5.dp,
+            color = ChatColors.toolBorder,
+        )
+    }
+}
+
+/**
+ * [ui-polish-C] Compact token/queue count — "12.4k", "200k", "3".
+ *
+ * Matches TokenUsageSheet's iOS-style formatting so the composer and the
+ * Token Usage sheet agree on how the same number is written.
+ */
+private fun formatCompactTokens(n: Int): String = when {
+    n >= 1_000_000 -> String.format("%.1fM", n / 1_000_000.0)
+    n >= 1_000 -> String.format("%.1fk", n / 1_000.0).replace(".0k", "k")
+    else -> n.toString()
+}
+
+/** [ui-polish-C] Separator between status-bar segments. */
+@Composable
+private fun StatusStripSeparator() {
+    Text(
+        text = "·",
+        fontSize = 11.5.sp,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
 @Composable
 internal fun ThinkingLevelPicker(
     current: ThinkingLevel,

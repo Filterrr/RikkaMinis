@@ -496,7 +496,9 @@ private fun MountRow(
             Text(
                 text = "← $source",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline,
+                // [ui-polish-B] `outline` used as labelSmall text — 1.52:1
+                // light. Same onSurfaceVariant fix as MountDetailScreen.
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )

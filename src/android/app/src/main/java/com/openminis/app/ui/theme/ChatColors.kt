@@ -40,6 +40,19 @@ data class ChatPalette(
     val separator: Color,
     val sendButton: Color,
     val sendButtonDisabled: Color,
+    /**
+     * [ui-polish-C] Fill for the send button and the swipe-to-send capsule.
+     *
+     * Split out of [sendButton], which is tri-duty: it also colours the
+     * *text and icons* of active rows in the slash/plus menus
+     * (ChatScreen.kt, isThinkingActive / memoryOnState branches). Those need a
+     * near-black in light mode to stay legible on a white sheet — the old
+     * #000000 gave ~21:1. Repainting the shared token teal for the sake of the
+     * send button would have dropped that text to 4.05:1 and its 0.7-alpha
+     * subtitle to 2.53:1, i.e. below AA. So the accent lives here instead and
+     * [sendButton] keeps its original meaning for text.
+     */
+    val sendButtonFill: Color,
     val codeBlockBg: Color,
     val codeBlockText: Color,
     val inlineCodeBg: Color,
@@ -80,6 +93,11 @@ val LightChatPalette = ChatPalette(
     separator = Color(0x4D3C3C43),
     sendButton = Color(0xFF000000),
     sendButtonDisabled = Color(0x2E3C3C43),
+    // [ui-polish-C] Brand teal (TealPrimary) instead of the neutral black the
+    // send button used before. White glyph on it measures 4.05:1, clear of the
+    // 3:1 non-text bar, and it ties the composer to the app's own accent
+    // rather than to a generic system black. Disabled state is unchanged.
+    sendButtonFill = Color(0xFF2E8B8B),
     codeBlockBg = Color(0xFF000000),
     codeBlockText = Color(0xFF34C759),
     inlineCodeBg = Color(0xFFF2F2F7),
@@ -135,6 +153,12 @@ val DarkChatPalette = ChatPalette(
     separator = Color(0x99545458),
     sendButton = Color(0xFFFFFFFF),
     sendButtonDisabled = Color(0x2EEBEBF5),
+    // [ui-polish-C] TealDarkPrimary. The dark glyph on it measures 12.24:1
+    // (vs 21:1 for the old white on black, but that read as a generic system
+    // control rather than the app's accent). Chosen over a dark teal fill
+    // precisely so the existing `tint = ChatColors.background` glyph keeps
+    // working unchanged in both themes.
+    sendButtonFill = Color(0xFF4DD9D9),
     codeBlockBg = Color(0xFF262626),
     codeBlockText = Color(0xFF8CF38C),
     // [T-inline-code-dark-bg-android] Lifted into the T153 ramp — the old

@@ -48,6 +48,9 @@ import com.openminis.app.data.model.LLMModel
 import com.openminis.app.data.model.LLMStreamChunk
 import com.openminis.app.data.model.LLMUsage
 import com.openminis.app.data.model.ModelGroup
+// [ui-polish-C] Composer status bar reads the active provider's brand type to
+// colour its dot (same token the model picker uses).
+import com.openminis.app.data.model.ProviderType
 import com.openminis.app.data.model.ThinkingLevel
 import com.openminis.app.sandbox.offload.ModelStreamErrorException
 import com.openminis.app.sandbox.offload.ProviderExecutionGateway
@@ -2146,6 +2149,62 @@ class ChatViewModel(
     // their real 1M window instead of showing blank.
     val currentModelContextWindow: Int?
         get() = effectiveContextWindowTokens()
+
+    /**
+     * [ui-polish-C] Brand type of the provider currently bound to the composer,
+     * for the status bar's brand dot. Same resolve path as
+     * [showEnhancedCacheToggle] — active entry -> its instance -> providerType —
+     * and exposed as a StateFlow rather than a getter so switching provider
+     * actually recomposes the composer. Null when no entry is active yet
+     * (fresh draft); the dot then falls back to the neutral accent, matching
+     * the model picker's treatment.
+     */
+    val activeProviderType: StateFlow<ProviderType?> =
+        kotlinx.coroutines.flow.combine(
+            _activeEntryId,
+            providerRepository.config,
+        ) { entryId, config ->
+            config.modelEntries.find { it.id == entryId }
+                ?.let { entry -> config.instances.find { it.id == entry.providerInstanceId } }
+                ?.providerType
+        }.stateIn(
+            viewModelScope,
+            kotlinx.coroutines.flow.SharingStarted.Eagerly,
+            null,
+        )
+
+    /**
+     * [ui-polish-C] Last reported prompt size for this session, in tokens — the
+     * numerator of the composer's "used / window" readout. Zero until the first
+     * turn completes, which the status bar renders as "0 / 200k".
+     */
+    val composerContextUsedTokens: StateFlow<Int> = _lastTurnContextTokens.asStateFlow()
+
+    /**
+     * [ui-polish-C] The model's effective context window for the composer
+     * readout, as a StateFlow. [currentModelContextWindow] resolves the same
+     * value but is a plain getter, so it only reflects changes when its caller
+     * happens to recompose for some other reason; the status bar needs the
+     * window to re-evaluate when the user swaps to a model with a different
+     * window. Recomputed off the active entry + config, i.e. the same inputs
+     * [effectiveContextWindowTokens] reads.
+     */
+    val composerContextWindowTokens: StateFlow<Int?> =
+        kotlinx.coroutines.flow.combine(
+            _activeEntryId,
+            providerRepository.config,
+            _selectedGroupId,
+        ) { _, _, _ ->
+            effectiveContextWindowTokens()
+        }.stateIn(
+            viewModelScope,
+            kotlinx.coroutines.flow.SharingStarted.Eagerly,
+            // null rather than a construction-time probe: every input above is
+            // a StateFlow, so `combine` emits immediately on subscription and
+            // the real value lands in the same frame. Probing here instead
+            // would read properties whose initialisers may not have run yet.
+            null,
+        )
 
     /**
      * [T-context-window-sources] Effective context window for capacity

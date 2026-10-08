@@ -567,7 +567,9 @@ private fun GroupRow(
                 Text(
                     text = preview,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.outline,
+                    // [ui-polish-B] `outline` is a separator colour used as
+                    // bodySmall text (1.52:1 light). onSurfaceVariant passes.
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                 )
             }

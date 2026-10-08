@@ -299,16 +299,39 @@ import com.openminis.app.ui.components.MinisTextButton
 
 // iOS ChatColors equivalent — semantic status colors read from the chat
 // palette so they follow the active light/dark theme.
+//
+// [ui-polish-A] Light mode needs its own ramp. The success/error slots hold
+// the iOS system green/red, tuned for dark surfaces; on the light tool
+// capsule (#F2F2F7) they measured 1.99:1 (green) and 3.18:1 (red) — under
+// the 3:1 non-text bar for the status dots and 14dp glyphs that render
+// from these accessors. They also land on a 12% self-tinted chip in the
+// pill, where the raw green fell to 1.82:1. The light values are the same
+// hues darkened past the bar (measured: green 4.49, red 5.24, amber 4.50
+// on the capsule; ≥3.8 on the chip). The DARK palette keeps the iOS
+// colours — they already measured 4.3-9.7:1 there.
+//
+// Why not recolor ChatPalette.success/error directly: the same green is the
+// *terminal output text* in ToolDetailSheet (13sp monospace on black, where
+// it measures 9.46:1) — darkening the palette slot for the pill's sake
+// would drop the terminal body to 4.19:1. These accessors exist precisely
+// so the pill/status layer can pick its ramp without touching the
+// terminal's.
 internal val ToolCheckColor: Color
     @Composable
     @ReadOnlyComposable
-    get() = ChatColors.success
+    get() = if (ChatColors.isDark) ChatColors.success else Color(0xFF15803D)
 internal val ToolErrorColor: Color
     @Composable
     @ReadOnlyComposable
-    get() = ChatColors.error
-// iOS .yellow / .pink have no chat-palette slot; keep fixed.
-internal val ToolCancelColor = Color(0xFFFFCC00) // iOS .yellow
+    get() = if (ChatColors.isDark) ChatColors.error else Color(0xFFC4202B)
+// iOS .yellow has no chat-palette slot; light mode darkens it to an amber
+// that keeps the yellow hue distinct from fileEdit's orange (#B45309) —
+// #946B00 measured 4.31 on the capsule and 3.73 on the chip. Dark keeps the
+// fixed iOS yellow (9.71 on the dark capsule).
+internal val ToolCancelColor: Color
+    @Composable
+    @ReadOnlyComposable
+    get() = if (ChatColors.isDark) Color(0xFFFFCC00) else Color(0xFF946B00)
 internal val ToolMemoryAccent = Color(0xFFFF2D55) // iOS .pink
 // Sparkle gradient colors (iOS uses linear gradient)
 internal val SparkleColor1 = Color(0xFFB8B096) // rgb(0.72, 0.69, 0.59)
@@ -4527,6 +4550,17 @@ fun ChatScreen(
                 onPreviewImageGallery = { items, idx -> previewImageGallery = items to idx },
                 onOpenWebAppSheet = { target -> webAppSheetTarget = target },
                 chatInputFontScale = chatInputFontScale,
+                modelName = modelName,
+                thinkingLevel = viewModel.thinkingLevel.collectAsState().value,
+                queuedPromptCount = viewModel.promptQueue.collectAsState().value.size,
+                // [ui-polish-C] Provider brand dot + context readout for the
+                // composer status bar. Collected here (not inside
+                // ChatInputArea) so that composable stays a pure function of
+                // its parameters, matching how the other composer state is
+                // already threaded through.
+                providerType = viewModel.activeProviderType.collectAsState().value,
+                contextUsedTokens = viewModel.composerContextUsedTokens.collectAsState().value,
+                contextWindowTokens = viewModel.composerContextWindowTokens.collectAsState().value,
                 onPickMedia = { mediaPickerLauncher.launch(
                     androidx.activity.result.PickVisualMediaRequest(
                         ActivityResultContracts.PickVisualMedia.ImageAndVideo,
@@ -5122,6 +5156,17 @@ private fun ChatInputArea(
     onPreviewImageGallery: (List<com.openminis.app.ui.components.ImageGalleryItem>, Int) -> Unit,
     onOpenWebAppSheet: (InputAttachment) -> Unit,
     chatInputFontScale: Float,
+    // [ui-polish-C] Composer status strip inputs. Passed in rather than
+    // re-collected here so this composable stays a pure function of its
+    // parameters (and so the strip reads the same value the rest of the chat
+    // screen is already rendering).
+    modelName: String,
+    thinkingLevel: ThinkingLevel,
+    queuedPromptCount: Int,
+    // [ui-polish-C] Composer status bar: provider brand dot + context readout.
+    providerType: ProviderType?,
+    contextUsedTokens: Int,
+    contextWindowTokens: Int?,
     onPickMedia: () -> Unit,
     onPickFile: () -> Unit,
     onLaunchCamera: () -> Unit,
@@ -5791,8 +5836,45 @@ private fun ChatInputArea(
                             shadowPaint,
                         )
                     }
-                    .padding(top = if (attachments.isNotEmpty()) 8.dp else 4.dp),
+                    // [ui-polish-C] Top inset is skipped when the status band
+                    // renders, so the band sits flush against the card's top
+                    // edge instead of floating below a strip of card colour.
+                    // The predicate mirrors ComposerStatusStrip's own early
+                    // return exactly — if the two ever disagree the band would
+                    // either be glued to a gap or the card would lose its
+                    // normal breathing room.
+                    .padding(
+                        top = if (modelName.isNotBlank() ||
+                            thinkingLevel.isEnabled ||
+                            queuedPromptCount > 0 ||
+                            (contextWindowTokens != null && contextWindowTokens > 0)
+                        ) {
+                            0.dp
+                        } else if (attachments.isNotEmpty()) {
+                            8.dp
+                        } else {
+                            4.dp
+                        },
+                    ),
             ) {
+                // [ui-polish-C] Composer status strip. Three states the
+                // composer previously gave no sign of: which model the next
+                // message will go to, whether extended thinking is armed, and
+                // whether a prompt is already queued behind the running turn.
+                // The queue one mattered most — enqueuePrompt() appends a
+                // dashed bubble into the *message list*, but the user's eyes
+                // are on the composer when they hit send, so the feedback
+                // landed outside the field of view. All three reads are
+                // already-collected state; no new plumbing.
+                ComposerStatusStrip(
+                    modelName = modelName,
+                    providerType = providerType,
+                    thinkingLevel = thinkingLevel,
+                    contextUsedTokens = contextUsedTokens,
+                    contextWindowTokens = contextWindowTokens,
+                    queuedCount = queuedPromptCount,
+                )
+
                 // T185: Move-to capsule lives INSIDE the composer card,
                 // pinned 8dp from the top-right corner, mirroring iOS
                 // AIChatView.swift:1816 (.overlay(alignment: .topTrailing)
@@ -6433,6 +6515,40 @@ private fun ChatInputArea(
                         }
                     }
 
+                    // [ui-polish-C] Queued-prompt chip, mirroring sample-c's
+                    // `.q` pill: it belongs in the button row (where the send
+                    // affordance lives) rather than in the status band, because
+                    // "how many are waiting" is about the action the user just
+                    // took. Amber on a 10% self-tint, matching the light/dark
+                    // values measured in the C sample notes.
+                    if (queuedPromptCount > 0) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = stringResource(
+                                R.string.composer_queued_count,
+                                queuedPromptCount,
+                            ),
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            // Light #A54C08 on the 10% amber tint = 5.05:1;
+                            // dark #FFB86B on the 16% tint = 7.16:1. (The
+                            // sample's raw #B45309 measured 4.39:1 on its own
+                            // tint, i.e. just under AA — hence the nudge.)
+                            color = if (ChatColors.isDark) Color(0xFFFFB86B) else Color(0xFFA54C08),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(
+                                    if (ChatColors.isDark) {
+                                        Color(0x29B45309)
+                                    } else {
+                                        Color(0x1AB45309)
+                                    },
+                                )
+                                .padding(horizontal = 7.dp, vertical = 2.dp),
+                            maxLines = 1,
+                        )
+                    }
+
                     Spacer(modifier = Modifier.weight(1f))
 
                     // Attach (+): moved from the left edge to sit
@@ -6592,7 +6708,7 @@ private fun ChatInputArea(
                             modifier = Modifier
                                 .size(38.dp)
                                 .background(
-                                    if (canActivate) ChatColors.sendButton
+                                    if (canActivate) ChatColors.sendButtonFill
                                     else ChatColors.sendButtonDisabled,
                                     CircleShape,
                                 )
