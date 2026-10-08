@@ -45,6 +45,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 // [ui-polish-B] Needed by the selected-row rail drawn in drawBehind.
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.platform.LocalContext
@@ -554,20 +555,21 @@ private fun DrawerSessionRow(
                 if (selected) MaterialTheme.colorScheme.secondaryContainer
                 else androidx.compose.ui.graphics.Color.Transparent,
             )
-            // [ui-polish-B] Selected row previously differed from the others
-            // only by a pale fill. In a 300dp-wide drawer that is a weak
-            // anchor when the list is scrolled — and secondaryContainer
-            // (#CCE8E4) sits close enough to the white row that at a glance
-            // the eye has to hunt for it. A 2.5dp primary rail on the leading
-            // edge gives the current session an unambiguous marker. Drawn
-            // inside the clip so it follows the 12dp row shape.
+            // [ui-polish-B] Selected row marker drawn as a rounded bar inset
+            // from the row edge — not a full-bleed strip. A strip flush with
+            // the 12dp row silhouette gets its ends sheared off by the clip
+            // and reads as a straight-cut sliver; a 1.25dp-radius capsule
+            // inset 4dp keeps the anchor signal with clean rounded ends.
             .drawBehind {
                 if (selected) {
-                    val railWidth = 2.5.dp.toPx()
-                    drawRect(
+                    val railWidth = 3.dp.toPx()
+                    val inset = 4.dp.toPx()
+                    val radius = 1.25.dp.toPx()
+                    drawRoundRect(
                         color = railColor,
-                        topLeft = Offset(0f, 0f),
-                        size = Size(railWidth, size.height),
+                        topLeft = Offset(inset, inset),
+                        size = Size(railWidth, size.height - inset * 2),
+                        cornerRadius = CornerRadius(radius, radius),
                     )
                 }
             }

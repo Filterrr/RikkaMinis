@@ -867,12 +867,18 @@ internal fun ToolCallPill(
         ) {
             // [ui-polish-A] Accent rail — carries the "which tool is this"
             // signal for the pill's full height instead of for a 14dp glyph.
-            // Clipped by the parent's 12dp shape so it follows the silhouette.
+            // Drawn as a rounded bar inset from the pill edge rather than a
+            // full-bleed strip: a 3dp strip hugging the 12dp-corner silhouette
+            // gets sheared into a sliver by the parent clip, and its ends
+            // render as straight cuts instead of rounds. A 2dp-radius capsule
+            // inset 3dp keeps the full-height identity signal with clean
+            // rounded ends in both themes.
             Box(
                 modifier = Modifier
-                    .width(3.dp)
                     .fillMaxHeight()
-                    .background(toolAccent),
+                    .padding(vertical = 5.dp)
+                    .width(3.dp)
+                    .background(toolAccent, RoundedCornerShape(2.dp)),
             )
 
             Spacer(modifier = Modifier.width(9.dp))
