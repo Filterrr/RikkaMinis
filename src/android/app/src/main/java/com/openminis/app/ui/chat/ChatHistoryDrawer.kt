@@ -59,6 +59,8 @@ import com.openminis.app.ui.sessions.DatePeriod
 import com.openminis.app.ui.sessions.categoryStyle
 import com.openminis.app.ui.sessions.groupSessionsByDate
 import com.openminis.app.ui.sessions.relativeDate
+// [ui-contrast] Category accent palette follows the in-app theme.
+import com.openminis.app.ui.theme.ChatColors
 import kotlinx.coroutines.launch
 
 /**
@@ -532,7 +534,10 @@ private fun DrawerSessionRow(
     forkLineage: ForkMapper.ForkLineage? = null,
     onOpenForkParent: ((String, String) -> Unit)? = null,
 ) {
-    val style = remember(session.category) { categoryStyle(session.category) }
+    // [ui-contrast] isDark goes into the remember key so a cached style never
+    // survives an in-app theme switch carrying the other palette's colours.
+    val isDark = ChatColors.isDark
+    val style = remember(session.category, isDark) { categoryStyle(session.category, isDark) }
     val ctx = LocalContext.current
     val timeText = remember(session.updatedAt, ctx) { relativeDate(ctx, session.updatedAt) }
     val activeSessions by SessionActivityTracker.activeSessions.collectAsState()
