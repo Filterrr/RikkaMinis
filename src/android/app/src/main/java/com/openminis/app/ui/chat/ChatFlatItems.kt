@@ -815,7 +815,14 @@ internal fun buildFlatChatItems(
         }
 
         val blocks = message.toolBlocks
-        val toolPillBlocks = blocks.filter { it.kind == "tool_use" }
+        // [T-dedup-pill-hide] Same-turn dedupe drops (ToolBlockStatus.DEDUPLICATED)
+        // are bookkeeping, not work: the identical call already ran and its
+        // result is in the transcript. Rendering them as pills made one logical
+        // tool step appear 2-3 times ("更新任务清单" × N). Hide them from the
+        // pill list — the detail sheet / trace still shows them.
+        val toolPillBlocks = blocks.filter {
+            it.kind == "tool_use" && it.toolStatus != ToolBlockStatus.DEDUPLICATED
+        }
         val lastTextIdx = blocks.indexOfLast { it.kind == "text" }
         val hasAnyTextBlock = lastTextIdx >= 0
         // Only the last cancelled tool_use in the message gets the Retry button —
