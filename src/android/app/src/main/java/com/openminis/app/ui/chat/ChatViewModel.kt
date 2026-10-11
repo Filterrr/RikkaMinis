@@ -8568,31 +8568,16 @@ class ChatViewModel(
                         lastOtherToolInputMs = 0L
                         // Guard: only add if not already present (prevent duplicate blocks from repeated ToolUseStart)
                         if (allToolBlocks.none { it.id == toolUseId }) {
-                            // [T-dedup-pill-early] Parallel tool_calls in one
-                            // assistant message frequently repeat the same call
-                            // (identical name + args, only tool_title may vary).
-                            // The dispatch-time same-turn dedupe would later
-                            // flip this block to DEDUPLICATED, but between now
-                            // and then the pill already streamed on screen —
-                            // the "multiple 更新任务清单 pills" symptom. Check
-                            // the same fingerprint here and skip creating a
-                            // block for an already-known call entirely.
-                            val earlyFingerprint = toolCallDedupeFingerprint(chunk.name, org.json.JSONObject(chunk.args.toString()))
-                            if (earlyFingerprint in turnToolFingerprints) {
-                                android.util.Log.d("ToolChain[VM]", "[turn=$turn] ToolUseStart suppressed (same-turn duplicate, early): name=${chunk.name}")
-                            } else {
-                                turnToolFingerprints[earlyFingerprint] = toolUseId
-                                allToolBlocks.add(AssistantBlock(
-                                    id = toolUseId,
-                                    kind = "tool_use",
-                                    toolName = chunk.name,
-                                    toolStatus = ToolBlockStatus.STREAMING,
-                                    toolTitle = friendlyToolTitle(chunk.name),
-                                    startTimeMs = System.currentTimeMillis(),
-                                ))
-                                withContext(Dispatchers.Main) {
-                                    updateAssistantMessage(assistantId, accumulatedText + turnTextSb.toString(), true, allToolBlocks)
-                                }
+                            allToolBlocks.add(AssistantBlock(
+                                id = toolUseId,
+                                kind = "tool_use",
+                                toolName = chunk.name,
+                                toolStatus = ToolBlockStatus.STREAMING,
+                                toolTitle = friendlyToolTitle(chunk.name),
+                                startTimeMs = System.currentTimeMillis(),
+                            ))
+                            withContext(Dispatchers.Main) {
+                                updateAssistantMessage(assistantId, accumulatedText + turnTextSb.toString(), true, allToolBlocks)
                             }
                         }
                     }
@@ -9801,11 +9786,6 @@ class ChatViewModel(
             // balanced and the model is told not to re-issue. Cross-turn
             // duplicates remain ToolLoopDetector's job (10-warn / 20-block).
             val sameTurnFingerprints = mutableMapOf<String, String>()
-            // [T-dedup-pill-early] Mirrors sameTurnFingerprints but consulted at
-            // ToolUseStart (stream) time, before a pill block is ever created.
-            // Populated by the early check; dispatch-time dedupe below still
-            // owns the authoritative mapping and the synthetic tool_result.
-            val turnToolFingerprints = mutableMapOf<String, String>()
             for ((id, name, args, _) in toolCalls) {
                 // [T-android-tool-dedupe] Same-turn dedupe check FIRST —
                 // identical calls are dropped before any preflight, tool
