@@ -13,8 +13,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         MessageEntity::class,
         CompactMarkerEntity::class,
         WebAppShortcutEntity::class,
+        FolderEntity::class,
     ],
-    version = 12,
+    version = 15,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -256,6 +257,72 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // ---- [backup-upstream-1.14] Migrations 12→15 ------------------------
+        // Ported from upstream 1.13/1.14 (version 12→14 there) so the upstream
+        // backup/restore module's data-layer expectations hold in this fork.
+        // The fork keeps its own usage-attribution columns (usage_model_id /
+        // usage_entry_id, v11→12 above) alongside these.
+
+        /**
+         * [T-p1-delegate-task] sessions.parent_session_id / parent_tool_use_id —
+         * child-session links for delegated sub-agent runs. Pure additive,
+         * nullable; a build that does not know them ignores them (documented
+         * skew behaviour, not data loss).
+         */
+        val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE sessions ADD COLUMN parent_session_id TEXT")
+                db.execSQL("ALTER TABLE sessions ADD COLUMN parent_tool_use_id TEXT")
+            }
+        }
+
+        /** [T-android-moveto-perf] Index for ORDER BY updated_at DESC listings. */
+        val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_sessions_updated_at " +
+                        "ON sessions(updated_at)",
+                )
+            }
+        }
+
+        /**
+         * [backup-upstream-1.14] folders table (session groups) — the storage
+         * the upstream 1.14 backup/restore module syncs (BackupCategory.FOLDERS
+         * → ChatDao folder methods). Column-for-column upstream FolderEntity;
+         * plus the folder_id index upstream declares on ChatSessionEntity.
+         */
+        val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS folders (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        icon TEXT,
+                        color TEXT,
+                        origin TEXT NOT NULL,
+                        sort_index INTEGER NOT NULL,
+                        pinned_at INTEGER,
+                        description TEXT,
+                        created_at INTEGER NOT NULL,
+                        updated_at INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_sessions_folder_id " +
+                        "ON sessions(folder_id)",
+                )
+                // [backup-upstream-1.14] per-turn attribution snapshot columns
+                // (upstream 1.14's MessageEntity) — additive, nullable.
+                db.execSQL("ALTER TABLE messages ADD COLUMN model_id TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN model_display_name TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN provider_type TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN provider_instance_id TEXT")
+            }
+        }
+
         val MIGRATION_3_4 = object : Migration(3, 4) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 // sessions: add iOS-parity columns
@@ -293,7 +360,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "minis.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15)
                     .build()
                     .also { INSTANCE = it }
             }

@@ -79,6 +79,29 @@ jobs:
       - name: Build proot from source
         run: ./deps/build_proot.sh clean
 
+      # [backup-upstream-1.14] Build rclone.aar (gomobile binding) into
+      # app/libs/ — the backup feature's remote destinations (SMB / WebDAV /
+      # SFTP / S3 / FTP). Needs the Go toolchain (setup-go below) and the NDK
+      # installed by the step above (ANDROID_NDK_HOME is exported there).
+      # gomobile bind output is deterministic per source tree; cache via
+      # setup-go's module cache. If the build fails the APK loses remote
+      # backup destinations only — keep going is NOT set: a broken rclone build
+      # must fail loudly, not ship a half-featured backup screen.
+      - name: Set up Go (rclone aar toolchain)
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.23'
+
+      - name: Build rclone aar (backup remote destinations)
+        run: |
+          export PATH="$PATH:$(go env GOPATH)/bin"
+          command -v gomobile >/dev/null || go install golang.org/x/mobile/cmd/gomobile@latest
+          gomobile init 2>/dev/null || true
+          ./deps/build_rclone_android.sh
+          mkdir -p src/android/app/libs
+          cp deps/build/rclone/rclone.aar src/android/app/libs/rclone.aar
+          ls -la src/android/app/libs/
+
       # ExternalNativeBuild (CMake) is disabled in-build: proot is built by
       # build_proot.sh above (a W^X prebuilt), and enabling CMake would
       # overwrite it. Consequently crash_handler.cpp is NOT compiled by Gradle

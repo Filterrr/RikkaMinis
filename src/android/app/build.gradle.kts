@@ -321,6 +321,13 @@ dependencies {
     // filesDir/logs/ where LogManagementScreen surfaces them.
     implementation("ch.acra:acra-core:5.12.0")
 
+    // [backup-upstream-1.14] rclone, via its official gomobile binding, for
+    // backup destinations (SMB / WebDAV / SFTP / S3 / FTP). Built with
+    // `deps/build_rclone_android.sh` — the .aar is a build artifact under
+    // app/libs/ (flatDir repo in settings.gradle.kts), not a checked-in
+    // binary. Backends are decided by deps/rclone-mobile/backends/backends.go.
+    implementation(group = "", name = "rclone", ext = "aar")
+
     // Terminal emulation — Termux engine replaces the hand-rolled emulator
     // for full ANSI/CSI/OSC support, TUI compatibility, and mature text
     // selection / keyboard handling.

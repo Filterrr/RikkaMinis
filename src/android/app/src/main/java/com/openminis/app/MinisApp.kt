@@ -89,6 +89,23 @@ class MinisApp : Application(), ImageLoaderFactory {
 
     /** [T-antigravity-keepalive] True once providerRepository is assigned (onCreate). */
     val providerRepositoryReady: Boolean get() = ::providerRepository.isInitialized
+
+    // ---- [backup-upstream-1.14] safe accessors for the backup module -------
+    // Upstream MinisApp exposes `providerRepositoryOrNull` /
+    // `subsystemsReady()` so the backup exporter/importer never trip a
+    // lateinit UninitializedPropertyAccessException when a backup/restore is
+    // triggered before the app-layer dependencies exist (upstream
+    // T-android-safemode-lateinit-crash-147). Same semantics here: return
+    // null / false until the lateinit repositories are assigned.
+
+    /** Null until [providerRepository] is initialized — see upstream note. */
+    val providerRepositoryOrNull: ProviderRepository?
+        get() = if (::providerRepository.isInitialized) providerRepository else null
+
+    /** True when the app-layer dependencies are usable (see upstream note). */
+    fun subsystemsReady(): Boolean =
+        ::providerRepository.isInitialized && ::envVarRepository.isInitialized &&
+            ::skillRepository.isInitialized
     lateinit var envVarRepository: EnvVarRepository
         private set
     lateinit var skillRepository: SkillRepository

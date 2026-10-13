@@ -4,7 +4,16 @@ import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
-@Entity(tableName = "sessions")
+@Entity(
+    tableName = "sessions",
+    indices = [
+        // [backup-upstream-1.14] both indices ported from upstream 1.14 — the
+        // entity MUST match what MIGRATION_13_14 / MIGRATION_14_15 create or
+        // Room's open-time validation aborts startup.
+        androidx.room.Index(value = ["folder_id"], name = "index_sessions_folder_id"),
+        androidx.room.Index(value = ["updated_at"], name = "index_sessions_updated_at"),
+    ],
+)
 data class ChatSessionEntity(
     @PrimaryKey val id: String,
     val title: String? = null,
@@ -25,4 +34,13 @@ data class ChatSessionEntity(
     // ("OFF"/"LOW"/"MEDIUM"/"HIGH"/"XHIGH") and represents an explicit user
     // choice that survives cold-start.
     @ColumnInfo(name = "thinking_override") val thinkingOverride: String? = null,
-)
+    // ---- [backup-upstream-1.14] ported from upstream 1.14 ----------------
+    /** Session group (folders table) this session is filed under. Null = none. */
+    @ColumnInfo(name = "folder_id") val folderId: String? = null,
+    /** Parent session of a delegated child run (T-p1-delegate-task). */
+    @ColumnInfo(name = "parent_session_id") val parentSessionId: String? = null,
+    /** Tool-use id of the spawn call that created this child session. */
+    @ColumnInfo(name = "parent_tool_use_id") val parentToolUseId: String? = null,
+) {
+    val isChild: Boolean get() = parentSessionId != null
+}

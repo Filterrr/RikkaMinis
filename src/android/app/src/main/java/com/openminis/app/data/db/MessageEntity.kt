@@ -40,4 +40,15 @@ data class MessageEntity(
     // session's current model_id.
     @ColumnInfo(name = "usage_model_id") val usageModelId: String? = null,
     @ColumnInfo(name = "usage_entry_id") val usageEntryId: String? = null,
+    // ---- [backup-upstream-1.14] per-turn attribution snapshot columns ----
+    // Ported from upstream 1.14 (their T-token-attribution-snapshot): the
+    // backup/restore record mapper restores these per-message fields. The
+    // fork keeps its own usage_model_id/usage_entry_id (v11→12) alongside —
+    // both column sets coexist; new columns are additive and nullable.
+    // MIGRATION_14_15 also adds these columns to existing installs.
+    @ColumnInfo(name = "model_id") val modelId: String? = null,
+    @ColumnInfo(name = "model_display_name") val modelDisplayName: String? = null,
+    /** `ProviderType` rawValue (e.g. `openAI`), never a display name. */
+    @ColumnInfo(name = "provider_type") val providerType: String? = null,
+    @ColumnInfo(name = "provider_instance_id") val providerInstanceId: String? = null,
 )

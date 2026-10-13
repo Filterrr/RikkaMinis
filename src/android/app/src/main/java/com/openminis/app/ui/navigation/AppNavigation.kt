@@ -233,6 +233,15 @@ object Routes {
     /** T235: Shared folders (Shared / Skills / Memory) — fixed list. */
     const val SHARED_FOLDERS = "shared_folders"
     const val BACKUP = "backup"
+    // ---- [backup-upstream-1.14] backup/restore routes ----------------------
+    const val BACKUP_INITIAL_TAB_KEY = "backup_initial_tab"
+    const val BACKUP_DESTINATIONS = "backup_destinations"
+    const val BACKUP_HISTORY_DETAIL = "backup_history_detail"
+    const val BACKUP_DESTINATION_BROWSE = "backup_destination_browse"
+    const val RESTORE_BROWSE = "restore_browse"
+    // Reached from the restore tab's "Choose from Server…" — always, configured
+    // or not, so an Add Server entry exists in that flow.
+    const val RESTORE_SERVERS = "restore_servers"
     const val SHARED_FOLDERS_DETAIL = "shared_folders_detail/{folderId}"
     fun sharedFoldersDetail(folderId: String) = "shared_folders_detail/$folderId"
     fun logDetail(fileName: String) = "log_detail/$fileName"
@@ -705,14 +714,153 @@ fun AppNavigation(
             )
         }
 
-        composable(Routes.BACKUP) {
-            com.openminis.app.ui.settings.BackupSettingsScreen(
-                providerRepository = providerRepository,
-                envVarRepository = envVarRepository,
-                skillRepository = skillRepository,
-                memoryRepository = memoryRepository,
-                mcpRepository = mcpRepository,
-                chatRepository = chatRepository,
+        // [backup-upstream-1.14] The fork's WebDAV-only BackupSettingsScreen
+        // route was replaced by the upstream BackupAndRestoreScreen below.
+        // BackupSettingsScreen.kt stays in the tree (ConfigBackup / WebDavSync
+        // remain reachable from it) but is no longer routed.
+
+        composable(Routes.BACKUP) { entry ->
+            // [backup-upstream-1.14] Upstream 1.14 backup & restore (rclone /
+            // folder destinations, encrypted package, history). Replaces the
+            // fork's earlier WebDAV-only BackupSettingsScreen entry point.
+            // Read once per entry and consumed, so a later visit from Settings
+            // opens on Backup again.
+            val initialTab = remember(entry) {
+                navController.previousBackStackEntry?.savedStateHandle
+                    ?.remove<Int>(Routes.BACKUP_INITIAL_TAB_KEY) ?: 0
+            }
+            com.openminis.app.ui.settings.backup.BackupAndRestoreScreen(
+                initialTab = initialTab,
+                onBack = { navController.safePopBackStack() },
+                onManageDestinations = { navController.safeNavigate(Routes.BACKUP_DESTINATIONS) },
+                onChooseRestoreServer = { navController.safeNavigate(Routes.RESTORE_SERVERS) },
+                onOpenHistoryRecord = { id ->
+                    navController.safeNavigate("${Routes.BACKUP_HISTORY_DETAIL}/$id")
+                },
+                onBrowseDestination = { name ->
+                    navController.safeNavigate(
+                        "${Routes.RESTORE_BROWSE}/" + android.net.Uri.encode(name),
+                    )
+                },
+            )
+        }
+
+        composable(
+            "${Routes.BACKUP_HISTORY_DETAIL}/{recordId}",
+            arguments = listOf(navArgument("recordId") { type = NavType.StringType }),
+        ) { entry ->
+            val id = entry.arguments?.getString("recordId").orEmpty()
+            val ctx = androidx.compose.ui.platform.LocalContext.current
+            val history = remember { com.openminis.app.backup.BackupHistory.get(ctx) }
+            val record = remember(id) { history.records().firstOrNull { it.id == id } }
+            if (record == null) {
+                // The record was removed (or pruned) while this screen was on
+                // the stack; leave rather than render an empty shell.
+                androidx.compose.runtime.LaunchedEffect(Unit) { navController.safePopBackStack() }
+            } else {
+                // ViewModel for the delete-with-files path (talks to rclone);
+                // scoped to this entry so it dies with the screen.
+                val vm: com.openminis.app.ui.settings.backup.BackupViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel()
+                com.openminis.app.ui.settings.backup.BackupHistoryDetailScreen(
+                    record = record,
+                    onBack = { navController.safePopBackStack() },
+                    onRemove = {
+                        history.remove(id)
+                        navController.safePopBackStack()
+                    },
+                    // Await the delete and hand the screen its outcome —
+                    // popping before the IO block runs cancels the ViewModel
+                    // scope and deletes nothing (upstream T-android-backup-
+                    // delete-files-feedback). The screen pops itself via
+                    // onRemoved once the record is really gone.
+                    onRemoveWithFiles = { vm.removeHistoryRecordWithFiles(id) },
+                    onRemoved = { navController.safePopBackStack() },
+                    onOpenDestination = { name ->
+                        navController.safeNavigate(
+                            "${Routes.BACKUP_DESTINATION_BROWSE}/" +
+                                android.net.Uri.encode(name),
+                        )
+                    },
+                )
+            }
+        }
+
+        composable(
+            "${Routes.BACKUP_DESTINATION_BROWSE}/{remoteName}",
+            arguments = listOf(navArgument("remoteName") { type = NavType.StringType }),
+        ) { entry ->
+            val name = entry.arguments?.getString("remoteName").orEmpty()
+            val ctx = androidx.compose.ui.platform.LocalContext.current
+            val remote = remember(name) {
+                com.openminis.app.backup.remote.RcloneRemoteStore(ctx).remote(name)
+            }
+            if (remote == null) {
+                // The destination was removed since the record was written.
+                androidx.compose.runtime.LaunchedEffect(Unit) { navController.safePopBackStack() }
+            } else {
+                val vm: com.openminis.app.ui.settings.backup.BackupViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel()
+                com.openminis.app.ui.settings.backup.BackupDestinationBrowseScreen(
+                    remote = remote,
+                    vm = vm,
+                    onBack = { navController.safePopBackStack() },
+                )
+            }
+        }
+
+        // Reached from the restore tab's "Choose from Server…" — always,
+        // configured or not, so picking a row (or finishing an add) continues
+        // to that server's package browser.
+        composable(Routes.RESTORE_SERVERS) {
+            com.openminis.app.ui.settings.backup.RestoreServersScreen(
+                onBack = { navController.safePopBackStack() },
+                onPickServer = { name ->
+                    navController.safeNavigate(
+                        "${Routes.RESTORE_BROWSE}/" + android.net.Uri.encode(name),
+                    )
+                },
+            )
+        }
+
+        composable(
+            "${Routes.RESTORE_BROWSE}/{remoteName}",
+            arguments = listOf(navArgument("remoteName") { type = NavType.StringType }),
+        ) { entry ->
+            val name = entry.arguments?.getString("remoteName").orEmpty()
+            val ctx = androidx.compose.ui.platform.LocalContext.current
+            val remote = remember(name) {
+                com.openminis.app.backup.remote.RcloneRemoteStore(ctx).remote(name)
+            }
+            if (remote == null) {
+                androidx.compose.runtime.LaunchedEffect(Unit) { navController.safePopBackStack() }
+            } else {
+                // Scoped to the BACKUP entry so the browser and the restore
+                // screen share one ViewModel — the picked package has to be
+                // visible to the screen that restores it.
+                val parent = remember(entry) { navController.getBackStackEntry(Routes.BACKUP) }
+                val vm: com.openminis.app.ui.settings.backup.BackupViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(parent)
+                com.openminis.app.ui.settings.backup.RestoreBrowseScreen(
+                    remote = remote,
+                    vm = vm,
+                    onBack = { navController.safePopBackStack() },
+                    // Pop to BACKUP, not one level up: this screen is reachable
+                    // at two depths (direct or via RESTORE_SERVERS), and after
+                    // a multi-GB restore the user must land on the Backup
+                    // screen where the opened package renders.
+                    onPicked = {
+                        navController.safePopBackStack(
+                            route = Routes.BACKUP,
+                            inclusive = false,
+                        )
+                    },
+                )
+            }
+        }
+
+        composable(Routes.BACKUP_DESTINATIONS) {
+            com.openminis.app.ui.settings.backup.RcloneDestinationsScreen(
                 onBack = { navController.safePopBackStack() },
             )
         }

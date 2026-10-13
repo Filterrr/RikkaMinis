@@ -398,6 +398,13 @@ data class ProviderConfig(
     // command) — mirrors iOS agentLoopModelEntryIds / agentLoopGroupIds.
     val agentLoopModelEntryIds: MutableList<String> = mutableListOf(),
     val agentLoopGroupIds: MutableList<String> = mutableListOf(),
+    // ---- [backup-upstream-1.14] sub-agent roster --------------------------
+    // Ported from upstream 1.14: the backup/restore module syncs this roster
+    // (BackupCategory.SUB_AGENTS → ProviderRepository.restoreBackupSubAgents).
+    // Old persisted JSON lacks the key and deserializes to an empty list
+    // (ignoreUnknownKeys + declared default), so adding it is downgrade- and
+    // round-trip-safe.
+    val subAgents: MutableList<SubAgentDefinition> = mutableListOf(),
     // T273: bumped by ProviderRepository.saveConfig on every mutation so
     // data-class structural equals returns false even when callers mutate
     // inner MutableLists in place. Without this, MutableStateFlow's
