@@ -90,7 +90,9 @@ jobs:
       - name: Set up Go (rclone aar toolchain)
         uses: actions/setup-go@v6
         with:
-          go-version: '1.23'
+          # gomobile@latest (x/mobile) requires go >= 1.26 — pin a current
+          # toolchain, not the older 1.23 LTS.
+          go-version: '1.26'
 
       - name: Build rclone aar (backup remote destinations)
         run: |
