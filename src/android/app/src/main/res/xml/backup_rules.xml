@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Full-backup content rules (android:fullBackupContent, API <= 30 devices).
+  Excludes credentials the app manages itself: provider API keys live in
+  EncryptedSharedPreferences (Keystore-bound, non-restorable to another
+  device) and OAuth tokens likewise. The in-app backup/restore feature
+  (BackupExporter/BackupImporter) carries its own encrypted secrets.json —
+  this file only governs the silent Android auto-backup, which must never
+  smuggle credentials into Google's cloud unencrypted.
+-->
+<full-backup-content>
+    <exclude
+        domain="sharedpref"
+        path="provider_config.xml" />
+    <exclude
+        domain="sharedpref"
+        path="env_vars.xml" />
+    <exclude
+        domain="file"
+        path="no_backup/" />
+</full-backup-content>

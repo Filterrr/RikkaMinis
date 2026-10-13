@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cloud-backup / device-transfer rules (android:dataExtractionRules,
+  API 31+). Same credential policy as backup_rules.xml: Keystore-bound
+  secrets do not survive a restore on another device, so excluding them
+  avoids corrupt encrypted blobs after a transfer.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude
+            domain="sharedpref"
+            path="provider_config.xml" />
+        <exclude
+            domain="sharedpref"
+            path="env_vars.xml" />
+        <exclude
+            domain="file"
+            path="no_backup/" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude
+            domain="sharedpref"
+            path="provider_config.xml" />
+        <exclude
+            domain="sharedpref"
+            path="env_vars.xml" />
+        <exclude
+            domain="file"
+            path="no_backup/" />
+    </device-transfer>
+</data-extraction-rules>
