@@ -2096,4 +2096,6 @@
 <string name="backup_notif_running_title">Backing up…</string>
 <string name="backup_notif_stopped_text">The backup was stopped before it finished.</string>
 <string name="backup_notif_stopped_title">Backup stopped</string>
+<string name="sub_agent_builtin_description">Open-ended work that needs its own tool loop: exploring a codebase or the web over many rounds, digesting bulk output into a conclusion, or running independent branches in parallel.</string>
+<string name="sub_agent_builtin_name">General Sub Agent</string>
 </resources>
