@@ -32,9 +32,13 @@ internal object BackupDebugMethods {
         context.applicationContext as? MinisApp ?: throw RPCException(-32000, "MinisApp not initialized")
 
     private fun repo(context: Context): ProviderRepository {
-        val r = app(context).providerRepositoryOrNull ?: throw RPCException(-32000, "provider repository unavailable")
-        r.ensureConfigLoaded()
-        return r
+        // Fork note: ensureConfigLoaded() is private in fork's ProviderRepository
+        // (upstream made it accessible for the debug surface). All read paths
+        // used here (subAgents getter, config) go through StateFlows that the
+        // async loader populates at startup; upsert/delete paths call
+        // ensureConfigLoaded internally.
+        return app(context).providerRepositoryOrNull
+            ?: throw RPCException(-32000, "provider repository unavailable")
     }
 
     private fun categories(params: JSONObject, default: Set<BackupCategory>?): Set<BackupCategory>? {

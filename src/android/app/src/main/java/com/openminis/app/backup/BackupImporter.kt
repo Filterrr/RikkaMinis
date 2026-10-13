@@ -295,6 +295,19 @@ class BackupImporter(
 
     // MARK: - Chats
 
+    /** Fork-side preview extraction (first non-blank text part); see call site. */
+    private fun extractPreviewFromParts(partsJson: String): String? = runCatching {
+        val arr = org.json.JSONArray(partsJson)
+        for (i in 0 until arr.length()) {
+            val obj = arr.optJSONObject(i) ?: continue
+            if (obj.optString("type") == "text") {
+                val text = obj.optString("value", "")
+                if (text.isNotBlank()) return text.trim().take(200)
+            }
+        }
+        null
+    }.getOrNull()
+
     private suspend fun importChats(
         root: File,
         fileIndex: List<BackupFileIndexEntry>,
@@ -569,9 +582,15 @@ class BackupImporter(
         db.withTransaction {
             for (sid in restoredSessionIds) {
                 val parts = dao.lastMessageParts(sid) ?: continue
-                val preview = ChatRepository.extractTextPreview(parts) ?: continue
                 val s = dao.getSession(sid) ?: continue
-                dao.updateLastMessage(sid, preview, s.updatedAt)
+                // Fork note: ChatRepository.extractTextPreview is private here
+                // (upstream made it internal for this caller). Use the simple
+                // text-first extraction — same first-text-part semantics as
+                // ChatRepository for the preview's purpose; media/tool-only
+                // turns degrade to a null preview (unchanged row), which is
+                // the pre-port behaviour and never wrong.
+                val preview = extractPreviewFromParts(parts)
+                if (preview != null) dao.updateLastMessage(sid, preview, s.updatedAt)
             }
         }
         } catch (e: kotlinx.coroutines.CancellationException) {

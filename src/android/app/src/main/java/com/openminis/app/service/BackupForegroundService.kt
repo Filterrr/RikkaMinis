@@ -158,7 +158,9 @@ class BackupForegroundService : Service() {
                 getString(R.string.backup_notif_stopped_title) to getString(R.string.backup_notif_stopped_text)
         }
         val n = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_notification_completed)
+            // Fork note: fork has no ic_notification_completed drawable — use
+            // the launcher icon like every other fork notifier does.
+            .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(title)
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))

@@ -111,6 +111,8 @@ class BackupExporter(
         val backupId = UUID.randomUUID().toString()
         // Read once, so the filename and the manifest cannot disagree if the
         // user renames the device mid-run.
+        // Fork note: fork's DeviceIdentity now has displayName (custom name or
+        // automatic) — see the [backup-upstream-1.14] block in DeviceIdentity.
         val deviceName = com.openminis.app.data.DeviceIdentity.displayName(context)
 
         // Staging lives in filesDir, not cacheDir: the system may evict the
@@ -538,8 +540,22 @@ class BackupExporter(
         val providerSecrets =
             if (BackupCategory.PROVIDERS in categories) {
                 val repo = app?.providerRepositoryOrNull
-                repo?.config?.value?.instances.orEmpty()
-                    .mapNotNull { repo?.collectBackupProviderSecret(it) }
+                // Fork note: upstream's collectBackupProviderSecret also
+                // carries OAuth-token paths behind fork-absent OAuthManager
+                // surfaces. Fork collects the API key only — the restore side
+                // (restoreBackupProviderSecret) applies exactly the same
+                // subset, so the package stays round-trip-consistent.
+                repo?.config?.value?.instances.orEmpty().mapNotNull { inst ->
+                    val key = repo?.loadApiKey(inst.id) ?: return@mapNotNull null
+                    com.openminis.app.backup.BackupSecrets.ProviderSecret(
+                        instanceId = inst.id,
+                        label = inst.label,
+                        providerType = inst.providerType.name,
+                        apiKey = android.util.Base64.encodeToString(
+                            key.toByteArray(), android.util.Base64.NO_WRAP
+                        ),
+                    )
+                }
             } else emptyList()
 
         val envSecrets =

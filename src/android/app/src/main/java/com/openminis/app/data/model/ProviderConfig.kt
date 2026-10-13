@@ -13,6 +13,11 @@ enum class ProviderType(val displayName: String) {
     openAI("OpenAI"),
     openRouter("OpenRouter"),
     xAI("xAI (Grok)"),
+    // [backup-upstream-1.14] Sentinel for a providerType a package carried
+    // that this build does not know (upstream has the same member). Kept
+    // first-class so the backup importer can decode-and-preserve unknown
+    // entries instead of dropping them; nothing routes through it.
+    unsupported("Unsupported"),
     // [T-kimi-oauth] Kimi Code (Coding Plan) — RFC 8628 device-code OAuth,
     // OpenAI-compatible upstream at api.kimi.com/coding/v1. DB round-trip is
     // name-based (ProviderCredential.valueOf), so appending is migration-safe.
@@ -46,6 +51,8 @@ enum class ProviderType(val displayName: String) {
             // bundled list (their entitlement differs per tenant) and stay
             // empty until the first successful fetch.
             workBuddy -> WorkBuddyConstants.BUNDLED_INTERNATIONAL
+            // [backup-upstream-1.14] Decode-only sentinel: no bundled catalog.
+            unsupported -> emptyList()
         }
 
     /**
@@ -91,6 +98,15 @@ enum class ThinkingLevel {
     val rank: Int get() = ordinal
 
     companion object {
+        /**
+         * [backup-upstream-1.14] Case-insensitive parse, null when unknown —
+         * ported from upstream 1.14 for the backup debug surface and the
+         * sub-agent record mapper (a hand-edited or newer package may carry a
+         * level name this build does not know).
+         */
+        fun parseOrNull(raw: String): ThinkingLevel? =
+            entries.firstOrNull { it.name.equals(raw.trim(), ignoreCase = true) }
+
         /**
          * [T-android-thinking-level-arch] Safe deserialization fallback for a
          * level string that this app build doesn't recognize — e.g. an older

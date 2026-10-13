@@ -52,6 +52,35 @@ object DeviceIdentity {
     /** Stable sync-zone namespace — mirrors iOS `"device-\(deviceId)"`. */
     fun zoneName(context: Context): String = "device-${deviceId(context)}"
 
+    // ---- [backup-upstream-1.14] user-overridable device name ---------------
+    // Upstream's backup screens let the user set a custom display name that
+    // travels in the package manifest ("backed up from <name>"). Fork adds
+    // the same members here; default falls back to [deviceName].
+
+    const val CUSTOM_NAME_MAX_LENGTH = 40
+
+    private const val KEY_CUSTOM_NAME = "customName"
+
+    /** User-set name, or null when on the automatic [deviceName]. */
+    fun customName(context: Context): String? {
+        val prefs = encryptedPrefs(context)
+        return prefs.getString(KEY_CUSTOM_NAME, null)?.takeIf { it.isNotBlank() }
+    }
+
+    /** What the UI shows by default ("Pixel 8 Pro · A3F7"). */
+    fun automaticName(context: Context): String = deviceName(context)
+
+    /** Persist the user-set name; blank clears the override. */
+    fun setCustomName(context: Context, name: String) {
+        encryptedPrefs(context).edit()
+            .putString(KEY_CUSTOM_NAME, name.trim().take(CUSTOM_NAME_MAX_LENGTH).ifBlank { null })
+            .apply()
+    }
+
+    /** Effective display name — custom when set, else automatic. */
+    fun displayName(context: Context): String =
+        customName(context) ?: automaticName(context)
+
     // T-android-keystore-aead-fail: self-healing wrapper handles
     // master-key invalidation on Samsung One UI / Android 16.
     private fun encryptedPrefs(context: Context) =

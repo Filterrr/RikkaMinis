@@ -20,6 +20,8 @@ import com.openminis.app.data.model.ProviderCredential
 import com.openminis.app.data.model.ProviderCredentialMeta
 import com.openminis.app.data.model.ProviderInstance
 import com.openminis.app.data.model.ProviderType
+import com.openminis.app.data.model.SubAgentDefinition
+import com.openminis.app.data.model.SubAgentRoster
 import com.openminis.app.data.model.RoutingStrategy
 import com.openminis.app.data.model.SystemVoiceIds
 import com.openminis.app.data.model.ThinkingLevel
@@ -59,9 +61,6 @@ private const val MODALITY_BIT_AUD_OUT = 1 shl 7
 private const val MODALITY_BIT_VID_OUT = 1 shl 8
 
 class ProviderRepository(private val context: Context) {
-
-    /** [backup-upstream-1.14] Log tag for sub-agent restore diagnostics. */
-    private val SUB_AGENT_LOG = "SubAgents"
 
     // [T-android-thinking-level-arch] coerceInputValues makes kotlinx.serialization
     // fall back to a property's DEFAULT when it can't decode the wire value —
@@ -2906,6 +2905,40 @@ class ProviderRepository(private val context: Context) {
     // DB table) and persists config through saveConfig (DB + JSON mirror).
     // Declared as members (not extensions) because they touch the private
     // configLock / _config / saveConfig internals.
+
+    /** Log tag for sub-agent restore diagnostics (upstream parity). */
+    private val SUB_AGENT_LOG = "SubAgents"
+
+    /** Normalized sub-agent roster view (upstream parity, BackupDebugMethods). */
+    val subAgents: List<SubAgentDefinition>
+        get() = SubAgentRoster.normalize(_config.value.subAgents) { android.util.Log.i(SUB_AGENT_LOG, it) }
+
+    fun subAgent(id: String): SubAgentDefinition? = subAgents.find { it.id == id }
+
+    /** Insert or update one sub-agent definition (upsert semantics). */
+    fun upsertSubAgent(def: SubAgentDefinition): Unit = synchronized(configLock) {
+        ensureConfigLoaded()
+        val stamped = def.copy(updatedAt = System.currentTimeMillis())
+        val config = _config.value
+        val idx = config.subAgents.indexOfFirst { it.id == stamped.id }
+        if (idx >= 0) config.subAgents[idx] = stamped else config.subAgents.add(stamped)
+        val normalized = SubAgentRoster.normalize(config.subAgents) { android.util.Log.i(SUB_AGENT_LOG, it) }
+        config.subAgents.clear()
+        config.subAgents.addAll(normalized)
+        saveConfig(config)
+    }
+
+    /** Delete one custom sub agent. The built-in is not deletable. */
+    fun deleteSubAgent(id: String): Unit = synchronized(configLock) {
+        if (id == SubAgentDefinition.BUILT_IN_ID) return
+        ensureConfigLoaded()
+        val config = _config.value
+        config.subAgents.removeAll { it.id == id }
+        val normalized = SubAgentRoster.normalize(config.subAgents) { android.util.Log.i(SUB_AGENT_LOG, it) }
+        config.subAgents.clear()
+        config.subAgents.addAll(normalized)
+        saveConfig(config)
+    }
 
     /**
      * Merge the custom sub agents a backup package carried in
