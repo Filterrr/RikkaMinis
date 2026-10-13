@@ -200,6 +200,32 @@ fun SettingsSection(
 // ─── Row primitives ────────────────────────────────────────────────────────────
 
 /**
+ * [backup-upstream-1.14] Bare switch with the 48dp minimum-touch-target
+ * requirement relaxed — ported from upstream 1.14 SettingsComponents so the
+ * backup screens' compact destination rows can inline a switch next to text.
+ */
+@Composable
+fun SettingsSwitch(
+    checked: Boolean,
+    onCheckedChange: ((Boolean) -> Unit)?,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    colors: androidx.compose.material3.SwitchColors = androidx.compose.material3.SwitchDefaults.colors(),
+) {
+    androidx.compose.runtime.CompositionLocalProvider(
+        androidx.compose.material3.LocalMinimumInteractiveComponentSize provides androidx.compose.ui.unit.Dp.Unspecified,
+    ) {
+        androidx.compose.material3.Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            modifier = modifier,
+            enabled = enabled,
+            colors = colors,
+        )
+    }
+}
+
+/**
  * Generic row: left icon (optional colored circle) + title/subtitle + trailing slot + optional chevron.
  * Pass `showDivider = false` on the last row of a section.
  */
