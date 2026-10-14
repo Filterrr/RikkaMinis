@@ -1872,7 +1872,11 @@
 <string name="restore_stop_title">停止還原</string>
 <string name="restore_time_left">大約還剩 %1$s</string>
 
-    <!-- [backup-upstream-1.14] WebDAV setting row -->
-    <string name="settings_webdav">WebDAV 同步</string>
-    <string name="settings_webdav_subtitle">跨裝置自動同步，並將備份推送至 WebDAV 伺服器</string>
+
+    <string name="webdav_scope_title">備份內容</string>
+    <string name="webdav_scope_footer">選擇 WebDAV 備份應包含哪些內容。未勾選的部分不會寫入備份檔案；還原時也不會影響本機對應的部分。</string>
+    <string name="webdav_scope_settings">設定</string>
+    <string name="webdav_scope_all">全部內容</string>
+    <string name="webdav_scope_count">已選 %1$d / %2$d 項</string>
+    <string name="webdav_scope_none">未選擇任何項</string>
 </resources>

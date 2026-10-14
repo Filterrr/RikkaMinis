@@ -2013,7 +2013,11 @@
 <string name="restore_stop_title">停止恢复</string>
 <string name="restore_time_left">约剩 %1$s</string>
 
-    <!-- [backup-upstream-1.14] WebDAV setting row -->
-    <string name="settings_webdav">WebDAV 同步</string>
-    <string name="settings_webdav_subtitle">跨设备自动同步，并将备份推送到 WebDAV 服务器</string>
+
+    <string name="webdav_scope_title">备份内容</string>
+    <string name="webdav_scope_footer">选择 WebDAV 备份应包含哪些内容。未勾选的部分不会写入备份文件；恢复时也不会影响本机对应的部分。</string>
+    <string name="webdav_scope_settings">设置</string>
+    <string name="webdav_scope_all">全部内容</string>
+    <string name="webdav_scope_count">已选 %1$d / %2$d 项</string>
+    <string name="webdav_scope_none">未选择任何项</string>
 </resources>

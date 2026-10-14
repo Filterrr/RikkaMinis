@@ -24,7 +24,6 @@ import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.Backup
 import androidx.compose.material.icons.outlined.BatteryFull
-import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.Dashboard
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.MonitorHeart
@@ -90,13 +89,6 @@ fun SettingsScreen(
     onAppearanceClick: () -> Unit = {},
     onLogsClick: () -> Unit = {},
     onBackupClick: () -> Unit = {},
-    // [backup-upstream-1.14] Fork's own WebDAV feature (multi-device auto-sync
-    // + manual push/restore via the standalone WebDAV client) keeps its own
-    // entry next to the upstream backup screen: the two are complementary —
-    // the rclone-backed screen handles full-package backup/restore to many
-    // backends, this one handles the light-weight JSON config sync and the
-    // auto-sync toggle MinisApp reads at startup.
-    onWebDavClick: () -> Unit = {},
     // T219-2: Mount External Folders entry. Default no-op for any caller
     // that hasn't wired the route yet.
     onMountedFoldersClick: () -> Unit = {},
@@ -259,20 +251,6 @@ fun SettingsScreen(
                     title = stringResource(R.string.settings_backup),
                     subtitle = stringResource(R.string.settings_backup_subtitle),
                     onClick = onBackupClick,
-                    showDivider = true,
-                )
-                // [backup-upstream-1.14] The fork's WebDAV screen, restored as
-                // its own row: multi-device auto-sync toggle + manual
-                // WebDAV push/restore. MinisApp reads MultiDeviceSync.isEnabled
-                // at startup, so without this entry a user could neither turn
-                // it on nor fix a broken server — the config screen was
-                // unrouted when the upstream backup screen took over BACKUP.
-                SettingsItem(
-                    icon = Icons.Outlined.Cloud,
-                    iconColor = Color(0xFF34C759),
-                    title = stringResource(R.string.settings_webdav),
-                    subtitle = stringResource(R.string.settings_webdav_subtitle),
-                    onClick = onWebDavClick,
                     showDivider = false,
                 )
             }

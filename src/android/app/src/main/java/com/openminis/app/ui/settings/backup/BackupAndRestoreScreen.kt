@@ -225,6 +225,16 @@ fun BackupAndRestoreScreen(
     // 0 = Backup, 1 = Restore. The onboarding restore link opens on Restore
     // (iOS `BackupAndRestoreView(initialTab: .restore)`); Settings keeps Backup.
     initialTab: Int = 0,
+    // [T-webdav-in-backup-screen] Repositories for the embedded WebDAV
+    // section (its upload builds a ConfigBackup document and its restore
+    // feeds ConfigBackup.import). Nullable so previews / tests can render the
+    // screen without them; the section is only shown when they are present.
+    providerRepository: com.openminis.app.data.repository.ProviderRepository? = null,
+    envVarRepository: com.openminis.app.data.repository.EnvVarRepository? = null,
+    skillRepository: com.openminis.app.data.repository.SkillRepository? = null,
+    memoryRepository: com.openminis.app.data.repository.MemoryRepository? = null,
+    mcpRepository: com.openminis.app.data.repository.MCPRepository? = null,
+    chatRepository: com.openminis.app.data.repository.ChatRepository? = null,
 ) {
     val vm: BackupViewModel = viewModel()
     // 0 = Backup, 1 = Restore. Saveable, not plain `remember`: navigating to
@@ -275,6 +285,13 @@ fun BackupAndRestoreScreen(
                 onPassphraseChange = { backupPassphrase = it },
                 confirm = backupConfirm,
                 onConfirmChange = { backupConfirm = it },
+                // [T-webdav-in-backup-screen]
+                providerRepository = providerRepository,
+                envVarRepository = envVarRepository,
+                skillRepository = skillRepository,
+                memoryRepository = memoryRepository,
+                mcpRepository = mcpRepository,
+                chatRepository = chatRepository,
             )
         } else {
             RestoreTab(
@@ -301,6 +318,15 @@ private fun BackupTab(
     onPassphraseChange: (String) -> Unit,
     confirm: String,
     onConfirmChange: (String) -> Unit,
+    // [T-webdav-in-backup-screen] Nullable repository set for the embedded
+    // WebDAV section; the section renders only when the provider repository
+    // is present (its upload/restore need it).
+    providerRepository: com.openminis.app.data.repository.ProviderRepository? = null,
+    envVarRepository: com.openminis.app.data.repository.EnvVarRepository? = null,
+    skillRepository: com.openminis.app.data.repository.SkillRepository? = null,
+    memoryRepository: com.openminis.app.data.repository.MemoryRepository? = null,
+    mcpRepository: com.openminis.app.data.repository.MCPRepository? = null,
+    chatRepository: com.openminis.app.data.repository.ChatRepository? = null,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val selected by vm.selected.collectAsState()
@@ -512,6 +538,23 @@ private fun BackupTab(
         onManage = onManageDestinations,
         onToggle = vm::setDestinationEnabled,
     )
+
+    // [T-webdav-in-backup-screen] The fork's WebDAV push/restore + multi-device
+    // auto-sync, embedded here rather than on a screen of its own — the user
+    // thinks "where do my backups go", and a WebDAV server is one of the
+    // answers, next to the rclone destinations above. Gated on the provider
+    // repository because its upload/restore build and apply a ConfigBackup
+    // document.
+    providerRepository?.let { providerRepo ->
+        WebDavBackupSection(
+            providerRepository = providerRepo,
+            envVarRepo = envVarRepository,
+            skillRepo = skillRepository,
+            memoryRepo = memoryRepository,
+            mcpRepo = mcpRepository,
+            chatRepo = chatRepository,
+        )
+    }
 
     // -- Action --
     Column(Modifier.padding(16.dp)) {
