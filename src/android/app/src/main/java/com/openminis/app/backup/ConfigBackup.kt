@@ -89,13 +89,37 @@ object ConfigBackup {
         const val MCP = "mcp"
         const val CHATS = "chats"
 
-        /** Every key, in the order the picker lists them. */
+        /** Every key, in the section order the document writes them. */
         val ALL: List<String> = listOf(
             SETTINGS, PROVIDERS, ENV_VARS, SKILLS, MEMORY, MCP, CHATS,
         )
 
-        /** [ALL] minus nothing — what a fresh install backs up. */
-        val DEFAULT: Set<String> = ALL.toSet()
+        /**
+         * [T-webdav-scope-unified] Map the Backup & Restore screen's "Include"
+         * category selection to this document's section keys. The WebDAV push
+         * uses the SAME selection the local package export does, so the two
+         * paths cannot disagree about what "backed up" contains — there is no
+         * second picker to keep in sync.
+         *
+         * Two deliberate asymmetries between the two vocabularies:
+         *  - [SETTINGS] has no counterpart in the package categories. The
+         *    registry-backed config scalars (appearance / chat prefs /
+         *    defaults / soul / …) are always carried: they are the document's
+         *    reason to exist, and a settings-only push is a legitimate config
+         *    sync rather than an empty backup.
+         *  - `SHARED_FILES` is package-only. The light JSON document embeds no
+         *    file trees, so that category maps to nothing here.
+         */
+        fun keysFor(categories: Set<BackupCategory>): Set<String> {
+            val out = mutableSetOf(SETTINGS)
+            if (BackupCategory.PROVIDERS in categories) out += PROVIDERS
+            if (BackupCategory.ENVIRONMENT_VARIABLES in categories) out += ENV_VARS
+            if (BackupCategory.SKILLS in categories) out += SKILLS
+            if (BackupCategory.MEMORY in categories) out += MEMORY
+            if (BackupCategory.MCP_SERVERS in categories) out += MCP
+            if (BackupCategory.CHATS in categories) out += CHATS
+            return out
+        }
     }
 
     /** Outcome of an import: what landed, and what needs the user's attention. */

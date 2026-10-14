@@ -522,7 +522,7 @@
     <string name="webdav_server">伺服器</string>
     <string name="webdav_server_not_configured">未設定</string>
     <string name="webdav_upload">上傳備份</string>
-    <string name="webdav_upload_sub">產生備份並推送到伺服器</string>
+    <string name="webdav_upload_sub">推送「包含內容」中所選內容的備份（%1$s）</string>
     <string name="webdav_remote">遠端備份</string>
     <string name="webdav_remote_sub">還原或刪除伺服器上的備份</string>
     <string name="webdav_config_title">WebDAV 伺服器</string>
@@ -1873,10 +1873,6 @@
 <string name="restore_time_left">大約還剩 %1$s</string>
 
 
-    <string name="webdav_scope_title">備份內容</string>
-    <string name="webdav_scope_footer">選擇 WebDAV 備份應包含哪些內容。未勾選的部分不會寫入備份檔案；還原時也不會影響本機對應的部分。</string>
-    <string name="webdav_scope_settings">設定</string>
-    <string name="webdav_scope_all">全部內容</string>
-    <string name="webdav_scope_count">已選 %1$d / %2$d 項</string>
-    <string name="webdav_scope_none">未選擇任何項</string>
+    <string name="webdav_scope_all">全部類別</string>
+    <string name="webdav_scope_count">已選 %1$d/%2$d 項</string>
 </resources>

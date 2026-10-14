@@ -2,52 +2,131 @@ package com.openminis.app.backup
 
 import com.openminis.app.ProductionSources
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * [T-backup-scope-picker] The WebDAV upload lets the user choose what the
- * pushed document contains. Two halves have to hold:
+ * [T-webdav-scope-unified] The WebDAV upload pushes a document whose sections
+ * follow the Backup & Restore screen's "Include" selection — the SAME
+ * checkboxes the local package export uses. There is exactly one place a user
+ * states what "backed up" means; this test pins that there is no second
+ * picker hiding in the WebDAV panel, and that the two vocabularies still
+ * translate cleanly.
  *
- *  1. the picker's keys and the exporter's gates agree — a key that gates
- *     nothing (or a section reading a different key) silently ships a section
- *     the user unchecked, which is a privacy problem, not a cosmetic one (a
- *     user who unchecks Providers does not want their API keys on a
- *     third-party server);
- *  2. every gated section is genuinely optional on import — the importer
- *     reads each with optJSONArray and skips nulls, so a scoped document
- *     restores cleanly and simply leaves the omitted sections alone.
- *
- * ConfigBackup.export needs Android repositories to run, so the first half is
- * pinned as a source-level contract (the same technique the other backup
- * source-grep tests use).
+ * ConfigBackup.export needs Android repositories to run, so the contract is
+ * pinned at source level (the technique the other backup source-grep tests
+ * use).
  */
 class BackupScopeGatingTest {
 
     private val src by lazy { ProductionSources.read("backup/ConfigBackup.kt") }
+    private val screen by lazy {
+        ProductionSources.read("ui/settings/backup/WebDavBackupSection.kt")
+    }
+    private val shell by lazy {
+        ProductionSources.read("ui/settings/backup/BackupAndRestoreScreen.kt")
+    }
 
-    // -- The key set --------------------------------------------------------
+    // -- The unified selection ---------------------------------------------
 
     @Test
-    fun `scope keys are stable persisted strings`() {
-        for (key in listOf("settings", "providers", "envVars", "skills", "memory", "mcp", "chats")) {
-            assertTrue("BackupScope must define '$key'", src.contains("\"$key\""))
+    fun `the WebDAV panel takes the Include selection instead of its own`() {
+        assertTrue(
+            "the panel must accept the Backup tab's category selection",
+            screen.contains("selectedCategories: Set<BackupCategory>"),
+        )
+        assertTrue(
+            "the backup screen must pass its `selected` set down",
+            shell.contains("selectedCategories = selected"),
+        )
+        assertTrue(
+            "the panel must derive its section keys from that selection",
+            screen.contains("keysFor(selectedCategories)"),
+        )
+    }
+
+    @Test
+    fun `there is no second content picker in the WebDAV panel`() {
+        // The regression this guards: two pickers that disagree, so a user who
+        // unchecked Providers locally still ships API keys to a server.
+        for (marker in listOf(
+            "BackupScope.ALL",          // the picker's option list
+            "putStringSet(\"webdav_scope\"",
+            "WebDavScopeDialog",
+            "webdav_scope_title",
+        )) {
+            assertFalse("the scope picker must not come back: $marker", screen.contains(marker))
         }
     }
 
     @Test
-    fun `the default is everything`() {
+    fun `the upload reports what it will contain`() {
+        // The row's subtitle states the scope, so "upload" is not a black box.
         assertTrue(
-            "DEFAULT must be ALL.toSet()",
-            src.contains("val DEFAULT: Set<String> = ALL.toSet()"),
+            "the upload row must show the derived scope summary",
+            screen.contains("webdav_upload_sub") && screen.contains("webDavScopeSummary(selectedCategories)"),
         )
         assertTrue(
-            "null categories must mean no gating",
-            src.contains("categories == null || key in categories"),
+            "the summary must count the same categories the picker shows",
+            screen.contains("BackupCategory.backupable"),
         )
     }
 
-    // -- Gate / section agreement -------------------------------------------
+    @Test
+    fun `the upload still confirms credentials`() {
+        // The remote copy is as sensitive as a local file; the confirmation
+        // must survive the move into this screen.
+        assertTrue("a credentials confirmation must gate the upload", screen.contains("showSecretWarning"))
+        assertTrue("both answers must be offered", screen.contains("backup_secret_without"))
+    }
+
+    // -- Category → section mapping ----------------------------------------
+
+    @Test
+    fun `every package category maps to a document section`() {
+        // keysFor is the single translation point between the two
+        // vocabularies; each category it knows must name a real section key.
+        val body = src.substringAfter("fun keysFor(categories: Set<BackupCategory>)")
+            .substringBefore("return out")
+        assertTrue("keysFor must map providers", body.contains("BackupCategory.PROVIDERS in categories"))
+        assertTrue("keysFor must map env vars", body.contains("BackupCategory.ENVIRONMENT_VARIABLES in categories"))
+        assertTrue("keysFor must map skills", body.contains("BackupCategory.SKILLS in categories"))
+        assertTrue("keysFor must map memory", body.contains("BackupCategory.MEMORY in categories"))
+        assertTrue("keysFor must map MCP", body.contains("BackupCategory.MCP_SERVERS in categories"))
+        assertTrue("keysFor must map chats", body.contains("BackupCategory.CHATS in categories"))
+    }
+
+    @Test
+    fun `settings always travel`() {
+        // The registry-backed scalars have no package category; they are the
+        // document's reason to exist, so keysFor seeds them unconditionally.
+        val body = src.substringAfter("fun keysFor(categories: Set<BackupCategory>)")
+            .substringBefore("return out")
+        assertTrue(
+            "settings must be seeded before the category checks",
+            body.indexOf("out += SETTINGS") in 0..body.indexOf("BackupCategory.PROVIDERS"),
+        )
+    }
+
+    @Test
+    fun `shared files map to nothing`() {
+        // The light JSON document embeds no file trees, so SHARED_FILES has no
+        // counterpart — and must not silently gate some other section.
+        val body = src.substringAfter("fun keysFor(categories: Set<BackupCategory>)")
+            .substringBefore("return out")
+        assertFalse(
+            "SHARED_FILES must not map to a document section",
+            body.contains("SHARED_FILES"),
+        )
+    }
+
+    // -- Exporter side -----------------------------------------------------
+
+    @Test
+    fun `null categories still mean no gating`() {
+        assertTrue(src.contains("categories == null || key in categories"))
+    }
 
     @Test
     fun `every gate names a real scope key`() {
@@ -55,9 +134,8 @@ class BackupScopeGatingTest {
             .map { it.groupValues[1] }.toSet()
         val declared = Regex("""const val ([A-Z_]+) = """).findAll(src)
             .map { it.groupValues[1] }.toSet()
-        val unknown = gates - declared
-        assertTrue("gates referencing undeclared scopes: $unknown", unknown.isEmpty())
-        assertTrue("no gates found at all", gates.isNotEmpty())
+        assertTrue("unknown scopes: ${gates - declared}", (gates - declared).isEmpty())
+        assertTrue("no gates found", gates.isNotEmpty())
     }
 
     @Test
@@ -72,21 +150,16 @@ class BackupScopeGatingTest {
             "CHATS" to "wanted(BackupScope.CHATS)",
         )
         for ((scope, guard) in expectations) {
-            assertTrue(
-                "scope $scope has no guard - add `$guard` to ConfigBackup.export",
-                src.contains(guard),
-            )
+            assertTrue("scope $scope has no guard — add `$guard`", src.contains(guard))
         }
     }
 
     @Test
-    fun `the chat gate keeps its existing window check`() {
+    fun `the chat gate keeps its window check`() {
         assertTrue(
             src.contains("chatRepo != null && chatWindowDays > 0 && wanted(BackupScope.CHATS)"),
         )
     }
-
-    // -- Import tolerance ---------------------------------------------------
 
     @Test
     fun `the importer reads every section defensively`() {
@@ -94,47 +167,7 @@ class BackupScopeGatingTest {
             "providers", "groups", "envVars", "skills",
             "memoryFiles", "mcpServers", "chatSessions",
         )) {
-            assertTrue(
-                "import must tolerate a missing '$key' array",
-                src.contains("optJSONArray(\"$key\")"),
-            )
+            assertTrue("import must tolerate a missing '$key' array", src.contains("optJSONArray(\"$key\")"))
         }
-    }
-
-    // -- Picker / exporter agreement (screen side) --------------------------
-
-    @Test
-    fun `the picker persists the selection and passes it to the exporter`() {
-        val screen = ProductionSources.read("ui/settings/backup/WebDavBackupSection.kt")
-        assertTrue(
-            "the selection must be persisted under webdav_scope",
-            screen.contains("\"webdav_scope\""),
-        )
-        assertTrue(
-            "the upload must pass the selection as categories",
-            screen.contains("categories = selectedScope"),
-        )
-        assertTrue(
-            "the scope dialog must not allow an empty selection",
-            screen.contains("enabled = working.isNotEmpty()"),
-        )
-    }
-
-    @Test
-    fun `every picker key maps to a label`() {
-        val screen = ProductionSources.read("ui/settings/backup/WebDavBackupSection.kt")
-        val labels = Regex("""BackupScope\.([A-Z_]+) ->""").findAll(screen)
-            .map { it.groupValues[1] }.toSet()
-        val all = setOf("SETTINGS", "PROVIDERS", "ENV_VARS", "SKILLS", "MEMORY", "MCP", "CHATS")
-        assertEquals("every scope needs a picker label", all, labels)
-    }
-
-    @Test
-    fun `the WebDAV panel lives inside the backup screen`() {
-        val shell = ProductionSources.read("ui/settings/backup/BackupAndRestoreScreen.kt")
-        assertTrue(
-            "the backup tab must render the WebDAV section",
-            shell.contains("WebDavBackupSection("),
-        )
     }
 }

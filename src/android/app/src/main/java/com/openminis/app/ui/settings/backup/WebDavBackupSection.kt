@@ -2,7 +2,6 @@ package com.openminis.app.ui.settings.backup
 
 import android.content.Context
 import android.widget.Toast
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -40,6 +39,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.openminis.app.MinisApp
 import com.openminis.app.R
+import com.openminis.app.backup.BackupCategory
 import com.openminis.app.backup.ConfigBackup
 import com.openminis.app.backup.WebDavBackupItem
 import com.openminis.app.backup.WebDavClient
@@ -95,6 +95,11 @@ fun WebDavBackupSection(
     memoryRepo: MemoryRepository?,
     mcpRepo: MCPRepository?,
     chatRepo: ChatRepository?,
+    // [T-webdav-scope-unified] The Backup tab's "Include" selection — the
+    // SAME set the local package export uses. The WebDAV push has no picker of
+    // its own; what the user ticked there is what gets pushed (see
+    // ConfigBackup.BackupScope.keysFor for the category → section mapping).
+    selectedCategories: Set<BackupCategory> = BackupCategory.backupable.toSet(),
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -114,23 +119,17 @@ fun WebDavBackupSection(
     var webDavConfig by remember { mutableStateOf(webDavStore.load()) }
     var showWebDavConfig by remember { mutableStateOf(false) }
     var showRemoteList by remember { mutableStateOf(false) }
-    var showScopePicker by remember { mutableStateOf(false) }
+    var showSecretWarning by remember { mutableStateOf(false) }
     var multiDeviceSyncEnabled by remember {
         mutableStateOf(com.openminis.app.backup.MultiDeviceSync.isEnabled(context))
     }
     var showSyncSecretsWarning by remember { mutableStateOf(false) }
 
-    // [T-backup-scope-picker] Selected content, persisted as a string set.
-    // A null value in prefs (never configured) means "everything", matching
-    // the historical behaviour of the upload button.
-    var selectedScope by remember {
-        mutableStateOf(
-            prefs.getStringSet("webdav_scope", null)
-                ?.intersect(ConfigBackup.BackupScope.ALL.toSet())
-                ?.takeIf { it.isNotEmpty() }
-                ?: ConfigBackup.BackupScope.DEFAULT,
-        )
-    }
+    // [T-webdav-scope-unified] The document's section keys, derived from the
+    // Backup tab's category selection on every recomposition — nothing extra
+    // to persist, and the two can never drift.
+    val effectiveScope = com.openminis.app.backup.ConfigBackup.BackupScope
+        .keysFor(selectedCategories)
 
     var remoteItems by remember { mutableStateOf<List<WebDavBackupItem>>(emptyList()) }
     var remoteLoading by remember { mutableStateOf(false) }
@@ -216,7 +215,7 @@ fun WebDavBackupSection(
         }
     }
 
-    /** Upload with the CURRENT scope selection. */
+    /** Upload with the Backup tab's current category selection. */
     val uploadWithScope: (Boolean) -> Unit = upload@{ withSecrets ->
         application.applicationScope.launch {
             try {
@@ -230,7 +229,7 @@ fun WebDavBackupSection(
                         mcpRepo = mcpRepo,
                         chatRepo = chatRepo,
                         chatWindowDays = chatWindowDays,
-                        categories = selectedScope,
+                        categories = effectiveScope,
                     )
                 }
                 val cfg = webDavConfig
@@ -341,19 +340,21 @@ fun WebDavBackupSection(
             icon = Icons.Filled.Cloud,
             onClick = { showWebDavConfig = true },
         )
-        // [T-backup-scope-picker] Content selection for the upload.
-        SettingsRow(
-            title = stringResource(R.string.webdav_scope_title),
-            subtitle = webDavScopeSummary(selectedScope),
-            icon = Icons.Outlined.CloudDownload,
-            onClick = { showScopePicker = true },
-        )
+        // [T-webdav-scope-unified] No picker here any more: the pushed document
+        // carries exactly what the Backup tab's "Include" section selects. The
+        // subtitle spells that out so the upload row is not a black box.
         SettingsRow(
             title = stringResource(R.string.webdav_upload),
-            subtitle = stringResource(R.string.webdav_upload_sub),
+            subtitle = stringResource(
+                R.string.webdav_upload_sub,
+                webDavScopeSummary(selectedCategories),
+            ),
             icon = Icons.Filled.CloudUpload,
             onClick = if (webDavConfig != null) {
-                { uploadWithScope(true) }
+                // Credentials default to INCLUDED, and the remote copy is as
+                // sensitive as a local file — same confirmation the local
+                // export path uses.
+                { showSecretWarning = true }
             } else null,
         )
         SettingsRow(
@@ -362,6 +363,29 @@ fun WebDavBackupSection(
             icon = Icons.Outlined.CloudDownload,
             onClick = if (webDavConfig != null) openRemoteList else null,
             showDivider = false,
+        )
+    }
+
+    // Credentials confirmation before an upload — mirrors the local export
+    // flow ("include keys" vs "without keys") because the remote copy is just
+    // as sensitive as a file on disk.
+    if (showSecretWarning) {
+        AlertDialog(
+            onDismissRequest = { showSecretWarning = false },
+            title = { Text(stringResource(R.string.backup_secret_title)) },
+            text = { Text(stringResource(R.string.backup_secret_body)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    showSecretWarning = false
+                    uploadWithScope(true)
+                }) { Text(stringResource(R.string.backup_secret_confirm)) }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showSecretWarning = false
+                    uploadWithScope(false)
+                }) { Text(stringResource(R.string.backup_secret_without)) }
+            },
         )
     }
 
@@ -395,19 +419,6 @@ fun WebDavBackupSection(
     }
 
     // ---- Dialogs ----------------------------------------------------------
-
-    if (showScopePicker) {
-        WebDavScopeDialog(
-            selected = selectedScope,
-            onDismiss = { showScopePicker = false },
-            onSave = { next ->
-                val normalized = next.intersect(ConfigBackup.BackupScope.ALL.toSet())
-                selectedScope = normalized
-                prefs.edit().putStringSet("webdav_scope", normalized).apply()
-                showScopePicker = false
-            },
-        )
-    }
 
     if (showWebDavConfig) {
         WebDavConfigDialog(
@@ -567,90 +578,19 @@ fun WebDavBackupSection(
 }
 
 /**
- * [T-backup-scope-picker] "Back up these" checkbox dialog. "Settings" is the
- * registry-backed scalar set (appearance / chat / defaults / soul / …); the
- * rest map 1:1 to [ConfigBackup.BackupScope]. At least one section must stay
- * checked — an empty document would restore to nothing and look like data
- * loss, so the confirm button is disabled until the user picks one.
+ * [T-webdav-scope-unified] One-line description of what the push will contain,
+ * derived from the Backup tab's "Include" selection — "Everything" when every
+ * backupable category is on, else "N of M categories". Reads as a sentence
+ * fragment because it is spliced into the upload row's subtitle.
  */
 @Composable
-private fun WebDavScopeDialog(
-    selected: Set<String>,
-    onDismiss: () -> Unit,
-    onSave: (Set<String>) -> Unit,
-) {
-    var working by remember { mutableStateOf(selected) }
-    val order = ConfigBackup.BackupScope.ALL
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.webdav_scope_title)) },
-        text = {
-            Column {
-                Text(
-                    stringResource(R.string.webdav_scope_footer),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(bottom = 8.dp),
-                )
-                for (key in order) {
-                    val checked = key in working
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                working = if (checked) working - key else working + key
-                            }
-                            .padding(vertical = 10.dp),
-                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-                    ) {
-                        androidx.compose.material3.Checkbox(
-                            checked = checked,
-                            onCheckedChange = { on ->
-                                working = if (on) working + key else working - key
-                            },
-                        )
-                        Text(
-                            stringResource(scopeLabelRes(key)),
-                            style = MaterialTheme.typography.bodyLarge,
-                            modifier = Modifier.padding(start = 4.dp),
-                        )
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = { onSave(working) },
-                enabled = working.isNotEmpty(),
-            ) { Text(stringResource(R.string.save)) }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
-        },
-    )
-}
-
-/** String resource for one scope key (reuses the existing category labels). */
-@Composable
-private fun scopeLabelRes(key: String): Int = when (key) {
-    ConfigBackup.BackupScope.SETTINGS -> R.string.webdav_scope_settings
-    ConfigBackup.BackupScope.PROVIDERS -> R.string.backup_category_providers
-    ConfigBackup.BackupScope.ENV_VARS -> R.string.backup_category_env_vars
-    ConfigBackup.BackupScope.SKILLS -> R.string.backup_category_skills
-    ConfigBackup.BackupScope.MEMORY -> R.string.backup_category_memory
-    ConfigBackup.BackupScope.MCP -> R.string.backup_category_mcp
-    ConfigBackup.BackupScope.CHATS -> R.string.backup_category_chats
-    else -> R.string.webdav_scope_settings
-}
-
-/** "Everything" when all selected, else a count of the chosen sections. */
-@Composable
-private fun webDavScopeSummary(selected: Set<String>): String {
-    val all = ConfigBackup.BackupScope.ALL.toSet()
-    return if (selected.containsAll(all)) {
+private fun webDavScopeSummary(selected: Set<BackupCategory>): String {
+    val all = BackupCategory.backupable
+    val chosen = all.count { it in selected }
+    return if (chosen >= all.size) {
         stringResource(R.string.webdav_scope_all)
     } else {
-        stringResource(R.string.webdav_scope_count, selected.size, all.size)
+        stringResource(R.string.webdav_scope_count, chosen, all.size)
     }
 }
 

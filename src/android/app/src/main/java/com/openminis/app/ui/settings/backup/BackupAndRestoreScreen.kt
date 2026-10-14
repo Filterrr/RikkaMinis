@@ -553,6 +553,9 @@ private fun BackupTab(
             memoryRepo = memoryRepository,
             mcpRepo = mcpRepository,
             chatRepo = chatRepository,
+            // [T-webdav-scope-unified] The push carries what the "Include"
+            // section above selects — one selection, two destinations.
+            selectedCategories = selected,
         )
     }
 

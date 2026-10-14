@@ -1308,7 +1308,7 @@
     <string name="webdav_server">Server</string>
     <string name="webdav_server_not_configured">Not configured</string>
     <string name="webdav_upload">Upload backup</string>
-    <string name="webdav_upload_sub">Generate a backup and push it to the server</string>
+    <string name="webdav_upload_sub">Push a backup of the content selected in Include above (%1$s)</string>
     <string name="webdav_remote">Remote backups</string>
     <string name="webdav_remote_sub">Restore or delete backups on the server</string>
     <string name="webdav_config_title">WebDAV server</string>
@@ -2098,12 +2098,9 @@
 <string name="backup_notif_stopped_title">Backup stopped</string>
 <string name="sub_agent_builtin_description">Open-ended work that needs its own tool loop: exploring a codebase or the web over many rounds, digesting bulk output into a conclusion, or running independent branches in parallel.</string>
 <string name="sub_agent_builtin_name">General Sub Agent</string>
-    <!-- [T-backup-scope-picker] Content picker for the WebDAV upload — which
-         sections the pushed backup document should contain. -->
-    <string name="webdav_scope_title">Back Up Content</string>
-    <string name="webdav_scope_footer">Choose what the WebDAV backup should contain. Unchecked sections are left out of the document; restoring it leaves those sections on this device untouched.</string>
-    <string name="webdav_scope_settings">Settings</string>
-    <string name="webdav_scope_all">Everything</string>
-    <string name="webdav_scope_count">%1$d of %2$d sections</string>
-    <string name="webdav_scope_none">None selected</string>
+    <!-- [T-webdav-scope-unified] Upload-row summary. The pushed document
+         carries the same selection as the Backup tab's Include section; these
+         strings only describe it (no picker of its own any more). -->
+    <string name="webdav_scope_all">All categories</string>
+    <string name="webdav_scope_count">%1$d of %2$d categories</string>
 </resources>
