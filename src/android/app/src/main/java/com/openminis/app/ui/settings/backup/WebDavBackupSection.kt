@@ -2,6 +2,7 @@ package com.openminis.app.ui.settings.backup
 
 import android.content.Context
 import android.widget.Toast
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -106,7 +107,12 @@ fun WebDavBackupSection(
     val prefs = remember {
         context.getSharedPreferences("backup_prefs", Context.MODE_PRIVATE)
     }
-    val chatWindowDays = remember { prefs.getInt("chat_window_days", 90) }
+    // [T-chat-window-control] How far back chat history reaches when Chats is
+    // included. Lived on the old WebDAV screen; it moved here with the rest —
+    // without it the setting is unchangeable (the value is still read by the
+    // local export path and by this panel's push).
+    var chatWindowDays by remember { mutableStateOf(prefs.getInt("chat_window_days", 90)) }
+    var showWindowDialog by remember { mutableStateOf(false) }
 
     // ---- WebDAV remote backup state ----
     val webDavStore = remember { WebDavConfigStore(context) }
@@ -340,6 +346,20 @@ fun WebDavBackupSection(
             icon = Icons.Filled.Cloud,
             onClick = { showWebDavConfig = true },
         )
+        // How far back chat history reaches, when Chats is included. Its
+        // subtitle doubles as the readout, so the current window is visible
+        // without opening the picker. The LOCAL export path reads the same
+        // preference, so this is one setting for both destinations.
+        SettingsRow(
+            title = stringResource(R.string.backup_chat_window_title),
+            subtitle = if (chatWindowDays == 0) {
+                stringResource(R.string.backup_chat_window_off)
+            } else {
+                stringResource(R.string.backup_chat_window_sub, chatWindowDays)
+            },
+            icon = Icons.Filled.Cloud,
+            onClick = { showWindowDialog = true },
+        )
         // [T-webdav-scope-unified] No picker here any more: the pushed document
         // carries exactly what the Backup tab's "Include" section selects. The
         // subtitle spells that out so the upload row is not a black box.
@@ -363,6 +383,45 @@ fun WebDavBackupSection(
             icon = Icons.Outlined.CloudDownload,
             onClick = if (webDavConfig != null) openRemoteList else null,
             showDivider = false,
+        )
+    }
+
+    // Chat-history window picker (same options and the same persisted
+    // preference the local export path reads).
+    if (showWindowDialog) {
+        AlertDialog(
+            onDismissRequest = { showWindowDialog = false },
+            title = { Text(stringResource(R.string.backup_chat_window_title)) },
+            text = {
+                Column {
+                    listOf(0, 30, 90, 180, 365).forEach { days ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    chatWindowDays = days
+                                    prefs.edit().putInt("chat_window_days", days).apply()
+                                    showWindowDialog = false
+                                }
+                                .padding(vertical = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Text(
+                                if (days == 0) {
+                                    stringResource(R.string.backup_chat_window_off)
+                                } else {
+                                    stringResource(R.string.backup_chat_window_days, days)
+                                },
+                                style = MaterialTheme.typography.bodyLarge,
+                            )
+                            if (days == chatWindowDays) {
+                                Text("✓", style = MaterialTheme.typography.bodyLarge)
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
         )
     }
 

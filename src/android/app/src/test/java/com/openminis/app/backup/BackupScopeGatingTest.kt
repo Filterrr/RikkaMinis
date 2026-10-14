@@ -74,6 +74,18 @@ class BackupScopeGatingTest {
     }
 
     @Test
+    fun `the chat window control survived the panel move`() {
+        // The old WebDAV screen owned the "Chat history window" picker; the
+        // panel read the preference but had no way to change it after the
+        // move. Both halves must be here: the row, and the persistence.
+        assertTrue("the window row must be present", screen.contains("backup_chat_window_title"))
+        assertTrue(
+            "the selection must persist under chat_window_days",
+            screen.contains("putInt(\"chat_window_days\""),
+        )
+    }
+
+    @Test
     fun `the upload still confirms credentials`() {
         // The remote copy is as sensitive as a local file; the confirmation
         // must survive the move into this screen.
