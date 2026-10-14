@@ -51,6 +51,12 @@ class BackupCompactMarkerVersionParityTest {
         while (dir != null && !File(dir, "src/ios").isDirectory) dir = dir.parentFile
         requireNotNull(dir) { "repo root with src/ios not found" }
     }
+    private fun requireIosTree() {
+        var dir: File? = ProductionSources.mainRoot()
+        while (dir != null && !File(dir, "src/ios").isDirectory) dir = dir.parentFile
+        org.junit.Assume.assumeTrue("src/ios not present in this fork", dir != null)
+    }
+
     private val chatStore by lazy { File(repoRoot, "src/ios/Agent/Chat/ChatStore.swift").readText() }
 
     /**
@@ -104,6 +110,9 @@ class BackupCompactMarkerVersionParityTest {
 
     @Test
     fun `the Swift declarations parse, including defaulted vars`() {
+        // [backup-upstream-1.14] Fork deleted src/ios (SYNCING_UPSTREAM.md);
+        // skip the Swift-parity half when the tree is absent.
+        requireIosTree()
         val marker = storedProps("struct CompactMarker: ").map { it.name }
         assertTrue("CompactMarker.version must be seen: $marker", "version" in marker)
         val raw = storedProps("struct RawMessage: ").map { it.name }
@@ -117,6 +126,9 @@ class BackupCompactMarkerVersionParityTest {
 
     @Test
     fun `BUG - a compact marker carries every key iOS's synthesized Codable requires`() {
+        // [backup-upstream-1.14] Fork deleted src/ios (SYNCING_UPSTREAM.md);
+        // skip the Swift-parity half when the tree is absent.
+        requireIosTree()
         val rec = BackupExporter.markerRecord(v2Marker).jsonObject
         val missing = requiredKeys("struct CompactMarker: ").filter { k -> rec[k] == null || rec[k] is JsonNull }
         assertTrue(
@@ -128,6 +140,9 @@ class BackupCompactMarkerVersionParityTest {
 
     @Test
     fun `a message carries every key iOS's synthesized Codable requires`() {
+        // [backup-upstream-1.14] Fork deleted src/ios (SYNCING_UPSTREAM.md);
+        // skip the Swift-parity half when the tree is absent.
+        requireIosTree()
         val rec = BackupExporter.messageRecord(message).jsonObject
         val missing = requiredKeys("struct RawMessage: ").filter { k -> rec[k] == null || rec[k] is JsonNull }
         assertTrue("messageRecord omits required iOS RawMessage keys $missing", missing.isEmpty())
@@ -135,6 +150,9 @@ class BackupCompactMarkerVersionParityTest {
 
     @Test
     fun `message keys are camelCase Swift property names, never snake_case`() {
+        // [backup-upstream-1.14] Fork deleted src/ios (SYNCING_UPSTREAM.md);
+        // skip the Swift-parity half when the tree is absent.
+        requireIosTree()
         val iosNames = storedProps("struct RawMessage: ").map { it.name }.toSet()
         val rec = BackupExporter.messageRecord(
             message.copy(modelId = "m", modelDisplayName = "M", providerType = "openAI", providerInstanceId = "P"),

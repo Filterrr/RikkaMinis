@@ -90,6 +90,13 @@ class BackupThinkingLevelRestoreTest {
      */
     @Test
     fun everyIosRawValue_decodesToTheSameLevel() {
+        // [backup-upstream-1.14] Fork deleted src/ios (SYNCING_UPSTREAM.md);
+        // skip the Swift-enum comparison when the tree is absent — the
+        // lowercase-decode coverage stays in androidEncoding_isUnchanged and
+        // iosLowercaseLevels_surviveProviderConfigRestore.
+        var iosDir: File? = ProductionSources.mainRoot()
+        while (iosDir != null && !File(iosDir, "src/ios").isDirectory) iosDir = iosDir.parentFile
+        org.junit.Assume.assumeTrue("src/ios not present in this fork", iosDir != null)
         val iosCases = swiftThinkingLevelCases()
         assertEquals(
             "iOS and Android must define the same levels",

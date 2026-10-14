@@ -41,6 +41,17 @@ class BackupIosWireShapeTest {
 
     private fun swiftSource(rel: String): String = File(repoRoot, rel).readText()
 
+    /**
+     * [backup-upstream-1.14] Fork note: this fork deleted the iOS tree (see
+     * docs/SYNCING_UPSTREAM.md — "iOS sources | Deleted"), so the Swift
+     * declarations the parity assertions read do not exist here. Skip (not
+     * fail) only the tests that need them; the Android-only ones still run.
+     */
+    private fun assumeIos() {
+        var dir: File? = ProductionSources.mainRoot()
+        while (dir != null && !File(dir, "src/ios").isDirectory) dir = dir.parentFile
+        org.junit.Assume.assumeTrue("src/ios not present in this fork", dir != null)
+    }
     /** Stored properties of `struct <name>` (computed `{ … }` ones excluded). */
     private fun storedProps(source: String, header: String): List<SwiftProp> {
         val start = source.indexOf(header)
@@ -116,6 +127,7 @@ class BackupIosWireShapeTest {
 
     @Test
     fun `the Swift declarations were found`() {
+        assumeIos()
         assertTrue(iosSession.any { it.name == "folderId" })
         assertEquals(listOf("session", "memoryEnabled", "modelBinding"), iosSessionRecord.map { it.name })
         assertTrue(iosFolder.any { it.name == "desc" })
@@ -123,6 +135,7 @@ class BackupIosWireShapeTest {
 
     @Test
     fun `a session is nested under session, as iOS's SessionRecord requires`() {
+        assumeIos()
         assertNotNull("iOS decodes rec.session — the key is required", record["session"] as? JsonObject)
         assertNull("nothing of the ChatSession proper may sit at the top", record["id"])
         for (p in iosSessionRecord.filter { !it.optional }) {
@@ -134,6 +147,7 @@ class BackupIosWireShapeTest {
 
     @Test
     fun `the inner object carries every required ChatSession field, non-null`() {
+        assumeIos()
         val inner = record["session"]!!.jsonObject
         for (p in iosSession.filter { !it.optional }) {
             val v = inner[p.name]
@@ -143,6 +157,7 @@ class BackupIosWireShapeTest {
 
     @Test
     fun `the inner object only uses ChatSession's own names`() {
+        assumeIos()
         val known = iosSession.map { it.name }.toSet()
         val strays = record["session"]!!.jsonObject.keys - known
         assertTrue("keys iOS's ChatSession does not declare: $strays", strays.isEmpty())
@@ -175,6 +190,7 @@ class BackupIosWireShapeTest {
 
     @Test
     fun `a folder carries every required ChatFolder field, and desc for iOS`() {
+        assumeIos()
         for (p in iosFolder.filter { !it.optional }) {
             val v = folderRec[p.name]
             assertTrue("iOS ChatFolder requires '${p.name}'", v != null && v !is JsonNull)

@@ -71,9 +71,17 @@ class RestoreSourceEntriesTest {
     @Test
     fun `its strings are gone from every locale`() {
         val dead = listOf("backup_choose_shared", "backup_shared_title", "backup_shared_empty")
-        for (locale in listOf("values", "values-zh", "values-es")) {
+        // Fork note: fork ships 8 locales; upstream's list named es (not
+        // shipped here). Check default + every locale directory THIS repo
+        // actually has, so a newly added locale is covered automatically.
+        val locales = listOf("values") + File("src/main/res").listFiles()
+            .orEmpty()
+            .filter { it.isDirectory && it.name.startsWith("values-") && it.name != "values-night" }
+            .map { it.name }
+            .sorted()
+        for (locale in locales) {
             val f = File("src/main/res/$locale/strings.xml")
-            assertTrue("missing $locale/strings.xml", f.isFile)
+            if (!f.isFile) continue
             val xml = f.readText()
             for (key in dead) {
                 assertFalse("$locale still declares $key", xml.contains("\"$key\""))

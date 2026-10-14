@@ -32,4 +32,8 @@
          text body instead of a real file attachment — broke email / Drive
          / any chat target that wanted the .log file itself. -->
     <files-path name="logs" path="logs/" />
+    <!-- [backup-upstream-1.14] The exporter's local destination (Backups/).
+         Must be a FileProvider root or getUriForFile throws on Share —
+         BackupLocalExportAndLifecycleTest pins this pairing. -->
+    <files-path name="backups" path="Backups/" />
 </paths>

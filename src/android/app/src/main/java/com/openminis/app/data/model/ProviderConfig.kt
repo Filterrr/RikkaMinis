@@ -66,7 +66,7 @@ enum class ProviderCredential {
     oauth,
 }
 
-@Serializable
+@Serializable(with = ThinkingLevelSerializer::class)
 enum class ThinkingLevel {
     // [T-android-thinking-level-arch] New cases MUST be appended at the end.
     // Kotlinx Serialization encodes enums by NAME string ("OFF"/"LOW"/...),
@@ -112,8 +112,37 @@ enum class ThinkingLevel {
          * this for every "read from persisted data" path.
          */
         fun decoded(raw: String): ThinkingLevel =
-            runCatching { valueOf(raw) }.getOrElse { XHIGH }
+            // [backup-upstream-1.14] Case-insensitive via parseOrNull: iOS's
+            // raw values are lowercase ("high"), Android's enum names upper —
+            // a package or JSON mirror from either side must decode.
+            parseOrNull(raw) ?: XHIGH
     }
+}
+
+/**
+ * [backup-upstream-1.14] Plain-string codec for [ThinkingLevel] (upstream
+ * T-android-restore-thinking-level). Used wherever the level rides a
+ * persisted/wire structure (ModelOverrides.maxThinkingLevel,
+ * SubAgentDefinition.thinkingLevelOverride, the ProviderConfig JSON mirror):
+ * a plain string descriptor cannot be coerced to null, and an unrecognized
+ * value (a level from a newer build, or iOS's lowercase spelling) decodes
+ * through [ThinkingLevel.decoded] to the XHIGH clamp rather than failing the
+ * whole document — kotlinx.serialization aborts the entire decode on one bad
+ * element, which would drop every provider/group in the same file.
+ */
+object ThinkingLevelSerializer : kotlinx.serialization.KSerializer<ThinkingLevel> {
+    override val descriptor: kotlinx.serialization.descriptors.SerialDescriptor =
+        kotlinx.serialization.descriptors.PrimitiveSerialDescriptor(
+            "com.openminis.app.data.model.ThinkingLevel",
+            kotlinx.serialization.descriptors.PrimitiveKind.STRING,
+        )
+
+    override fun serialize(encoder: kotlinx.serialization.encoding.Encoder, value: ThinkingLevel) =
+        encoder.encodeString(value.name)
+
+    override fun deserialize(
+        decoder: kotlinx.serialization.encoding.Decoder,
+    ): ThinkingLevel = ThinkingLevel.decoded(decoder.decodeString())
 }
 
 @Serializable
@@ -209,6 +238,16 @@ data class ProviderInstance(
     val providerType: ProviderType,
     val credentialType: ProviderCredential,
     var isEnabled: Boolean = true,
+    /**
+     * [backup-upstream-1.14][T-android-provider-iso8601-wire] Epoch millis in
+     * memory, but serialized as an ISO-8601 string. iOS
+     * `ProviderInstance.createdAt` is a `Date` decoded with `.iso8601`, so a
+     * bare epoch number made iOS's `importProviders` fail to decode the whole
+     * `provider_config.json` and report `Unreadable: 1` for the Providers
+     * category. Reads both forms, so the existing local JSON mirror and older
+     * Android backups still load.
+     */
+    @Serializable(with = com.openminis.app.backup.Iso8601MillisSerializer::class)
     val createdAt: Long = System.currentTimeMillis(),
     var customBaseURL: String? = null,
     var appendV1Suffix: Boolean = true,
@@ -385,6 +424,10 @@ data class ModelEntry(
     val isCustom: Boolean = false,
     val isHidden: Boolean = false,
     val uuid: String = UUID.randomUUID().toString(),
+    /** [backup-upstream-1.14][T-android-provider-iso8601-wire] See
+     *  ProviderInstance.createdAt — iOS `ModelEntry.userModifiedAt` is a
+     *  `Date?` decoded with `.iso8601`. */
+    @Serializable(with = com.openminis.app.backup.Iso8601MillisNullableSerializer::class)
     val userModifiedAt: Long? = null,
     /**
      * [T-recovery] Optional cost tier used by groups with
