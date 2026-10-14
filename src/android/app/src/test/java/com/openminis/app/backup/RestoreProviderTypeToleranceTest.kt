@@ -24,9 +24,12 @@ import org.junit.Test
  * discarded — credentials included. The user was then shown "this backup
  * contains no API keys", which was never true: nothing had been read at all.
  *
- * Two layers are tested because either alone is insufficient. Adding the
- * missing enum case fixes today's package; only per-instance tolerance stops
- * the NEXT iOS-only type from reproducing it exactly.
+ * Fork note: upstream rewrites an unknown type to an `unsupported` sentinel
+ * and keeps the row visible-but-unusable. This fork's ProviderType has no
+ * `unsupported` member (adding one flips 13 exhaustive `when`s across
+ * provider/UI code), so an unknown type is DROPPED and counted instead —
+ * same per-instance containment, no placeholder row. The tests below pin
+ * that behaviour.
  */
 class RestoreProviderTypeToleranceTest {
 
@@ -43,9 +46,10 @@ class RestoreProviderTypeToleranceTest {
     // ─── The exact field regression ──────────────────────────────────────
 
     @Test
-    fun `openAIResponses no longer fails the whole file`() {
+    fun `unknown type no longer fails the whole file`() {
         // The reported package shape: the unknown type sat at instances[0], so
-        // it aborted the decode before any sibling was reached.
+        // it aborted the decode before any sibling was reached. Now only that
+        // one instance is dropped and every sibling survives.
         val parsed = parse(
             config(
                 instance("a", "openAIResponses"),
@@ -58,68 +62,30 @@ class RestoreProviderTypeToleranceTest {
                 instance("h", "openAI"),
             ),
         )
-        assertEquals("all 8 instances survive", 8, parsed.config.instances.size)
-        assertEquals("nothing dropped", 0, parsed.droppedInstances)
+        assertEquals("7 siblings survive", 7, parsed.config.instances.size)
+        assertEquals("the unknown one is counted", 1, parsed.droppedInstances)
     }
 
-    @Test
-    fun `openAIResponses decodes to its own type, not a fallback`() {
-        // It is a real case now, so it must round-trip as itself — mapping it
-        // to `unsupported` would silently strip a provider the user can use.
-        val parsed = parse(config(instance("a", "openAIResponses")))
-        assertEquals(
-            ProviderType.openAIResponses,
-            parsed.config.instances.single().providerType,
-        )
-    }
+    // ─── Unknown types are dropped, not rewritten ────────────────────────
 
     @Test
-    fun `openAIResponses is usable, antigravity is not`() {
-        // openAIResponses routes through the OpenAI provider with the Responses
-        // endpoint forced on, so a restored instance actually works.
-        assertTrue(ProviderType.openAIResponses.isUsable)
-        assertTrue(!ProviderType.antigravity.isUsable)
-        assertTrue(!ProviderType.unsupported.isUsable)
-    }
-
-    // ─── Layer 2: unknown types survive as `unsupported` ─────────────────
-
-    @Test
-    fun `a type from a newer build imports as unsupported instead of failing`() {
-        // This is the case the enum fix alone cannot cover: a value that does
-        // not exist in ANY current build.
+    fun `a type from a newer build is dropped and counted`() {
+        // This is the case a hand-edited enum could not cover: a value that
+        // does not exist in ANY current build.
         val parsed = parse(
             config(
                 instance("a", "someFutureProvider"),
                 instance("b", "anthropic"),
             ),
         )
-        assertEquals("both kept", 2, parsed.config.instances.size)
-        assertEquals("kept, not dropped", 0, parsed.droppedInstances)
-        assertEquals(
-            ProviderType.unsupported,
-            parsed.config.instances.first { it.id == "a" }.providerType,
-        )
-        assertEquals(
-            ProviderType.anthropic,
-            parsed.config.instances.first { it.id == "b" }.providerType,
-        )
-    }
-
-    @Test
-    fun `an unknown type keeps the rest of its instance intact`() {
-        // The instance must survive as a real, identifiable row — not a
-        // placeholder — so the user can see what it was.
-        val parsed = parse(config(instance("a", "someFutureProvider", label = "My Relay")))
-        val kept = parsed.config.instances.single()
-        assertEquals("My Relay", kept.label)
-        assertEquals("a", kept.id)
+        assertEquals("known sibling kept", 1, parsed.config.instances.size)
+        assertEquals("b", parsed.config.instances.single().id)
+        assertEquals("unknown counted", 1, parsed.droppedInstances)
     }
 
     @Test
     fun `every known type still decodes as itself`() {
-        // Guards against the normalizer over-reaching and rewriting valid
-        // types to `unsupported`.
+        // Guards against the normalizer over-reaching and dropping valid types.
         for (type in ProviderType.entries) {
             val parsed = parse(config(instance("x", type.name)))
             assertEquals(
@@ -130,7 +96,7 @@ class RestoreProviderTypeToleranceTest {
         }
     }
 
-    // ─── Layer 2b: genuinely malformed instances drop individually ───────
+    // ─── Genuinely malformed instances drop individually ─────────────────
 
     @Test
     fun `a malformed instance is dropped alone and counted`() {
@@ -177,11 +143,9 @@ class RestoreProviderTypeToleranceTest {
     // ─── Top-level fields are preserved ──────────────────────────────────
 
     @Test
-    fun `sibling top-level fields survive an instance rewrite`() {
-        // The instances array is patched in place; everything else in the
-        // document must come through untouched.
+    fun `sibling top-level fields survive an instance drop`() {
         val parsed = parse(
-            """{"instances":[${instance("a", "openAIResponses")}],
+            """{"instances":[${instance("a", "someFutureProvider")}],
                 "modelEntries":[],"modelGroups":[],
                 "defaultPrimaryGroupId":"grp-1"}""",
         )
@@ -201,16 +165,5 @@ class RestoreProviderTypeToleranceTest {
         val parsed = parse(config())
         assertTrue(parsed.config.instances.isEmpty())
         assertEquals(0, parsed.droppedInstances)
-    }
-
-    // ─── decoded() helper ────────────────────────────────────────────────
-
-    @Test
-    fun `decoded maps known names and falls back for unknown ones`() {
-        assertEquals(ProviderType.openAI, ProviderType.decoded("openAI"))
-        assertEquals(ProviderType.openAIResponses, ProviderType.decoded("openAIResponses"))
-        assertEquals(ProviderType.antigravity, ProviderType.decoded("antigravity"))
-        assertEquals(ProviderType.unsupported, ProviderType.decoded("nonesuch"))
-        assertEquals(ProviderType.unsupported, ProviderType.decoded(""))
     }
 }

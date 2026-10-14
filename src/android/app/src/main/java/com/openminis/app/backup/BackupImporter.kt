@@ -1118,27 +1118,30 @@ class BackupImporter(
                 val obj = element as? JsonObject ?: run { dropped++; null } ?: continue
                 val rawType = (obj["providerType"] as? kotlinx.serialization.json.JsonPrimitive)
                     ?.contentOrNull
-                val normalized = if (rawType != null && rawType !in knownTypes) {
+                // Fork note: upstream rewrites an unknown providerType to the
+                // `unsupported` sentinel and keeps the row visible (unusable).
+                // Fork's ProviderType has no such member (adding one flips 13
+                // exhaustive `when`s across provider/UI code), so an unknown
+                // type is DROPPED and counted instead — the same per-instance
+                // containment, just without the visible placeholder row.
+                if (rawType != null && rawType !in knownTypes) {
                     AppLogger.warning(
                         TAG,
                         "[Restore] provider instance ${obj["id"]?.jsonPrimitive?.contentOrNull}: " +
-                            "unknown providerType '$rawType' — importing as unsupported",
+                            "unknown providerType '$rawType' — instance dropped",
                     )
-                    JsonObject(
-                        obj + ("providerType" to kotlinx.serialization.json.JsonPrimitive(
-                            com.openminis.app.data.model.ProviderType.unsupported.name,
-                        )),
-                    )
-                } else obj
+                    dropped++
+                    continue
+                }
                 // Prove it decodes before keeping it, so a malformed sibling is
                 // rejected here rather than at the whole-document decode below.
                 val decodes = runCatching {
                     BackupFormat.json.decodeFromJsonElement(
-                        com.openminis.app.data.model.ProviderInstance.serializer(), normalized,
+                        com.openminis.app.data.model.ProviderInstance.serializer(), obj,
                     )
                 }
                 if (decodes.isSuccess) {
-                    kept.add(normalized)
+                    kept.add(obj)
                 } else {
                     dropped++
                     AppLogger.warning(

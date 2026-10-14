@@ -13,11 +13,6 @@ enum class ProviderType(val displayName: String) {
     openAI("OpenAI"),
     openRouter("OpenRouter"),
     xAI("xAI (Grok)"),
-    // [backup-upstream-1.14] Sentinel for a providerType a package carried
-    // that this build does not know (upstream has the same member). Kept
-    // first-class so the backup importer can decode-and-preserve unknown
-    // entries instead of dropping them; nothing routes through it.
-    unsupported("Unsupported"),
     // [T-kimi-oauth] Kimi Code (Coding Plan) — RFC 8628 device-code OAuth,
     // OpenAI-compatible upstream at api.kimi.com/coding/v1. DB round-trip is
     // name-based (ProviderCredential.valueOf), so appending is migration-safe.
@@ -51,8 +46,6 @@ enum class ProviderType(val displayName: String) {
             // bundled list (their entitlement differs per tenant) and stay
             // empty until the first successful fetch.
             workBuddy -> WorkBuddyConstants.BUNDLED_INTERNATIONAL
-            // [backup-upstream-1.14] Decode-only sentinel: no bundled catalog.
-            unsupported -> emptyList()
         }
 
     /**
