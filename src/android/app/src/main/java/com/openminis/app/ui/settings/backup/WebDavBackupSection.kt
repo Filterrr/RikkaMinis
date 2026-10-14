@@ -142,6 +142,13 @@ fun WebDavBackupSection(
     var remoteError by remember { mutableStateOf<String?>(null) }
     var deletePending by remember { mutableStateOf<WebDavBackupItem?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    // [refactor-backup-gate] SINGLE mutual-exclusion flag for every backup /
+    // restore path in this section (upload, remote restore, snapshot restore,
+    // remote delete). Two concurrent payload builds stack two 70MB+ documents
+    // and blow the heap — this is the class of bug the old screen's gate
+    // existed for, and it moves here with the feature. Snapshot exports are
+    // the one intentional exception: they are short and best-effort.
+    var operationBusy by remember { mutableStateOf(false) }
 
     // [fix-audit-p0-2] Local pre-restore snapshots, newest first. Every
     // WebDAV restore writes one (see [restoreWithSnapshot]) so a mistaken
@@ -163,6 +170,13 @@ fun WebDavBackupSection(
      * rolled back from the Backup & Restore screen's snapshot list.
      */
     val restoreWithSnapshot: (String) -> Unit = doRestore@{ json ->
+        // The gate is the last line of defense behind the button-level guards:
+        // reject while another payload build is in flight.
+        if (operationBusy) {
+            errorMessage = context.getString(R.string.backup_err_busy)
+            return@doRestore
+        }
+        operationBusy = true
         application.applicationScope.launch {
             try {
                 val payload = withContext(Dispatchers.Default) {
@@ -177,9 +191,18 @@ fun WebDavBackupSection(
                         chatWindowDays = chatWindowDays,
                     )
                 }
+                var snapshotNote: String? = null
                 runCatching {
                     val dir = File(context.filesDir, "backup-snapshots")
                     ConfigBackup.writeSnapshot(dir, payload)
+                }.onFailure {
+                    // [fix-audit-p0-2] The safety net's absence is itself worth
+                    // knowing: a user restoring without a rollback point should
+                    // hear about it (the old screen surfaced this too).
+                    snapshotNote = context.getString(R.string.backup_snapshot_failed)
+                }
+                if (snapshotNote != null) {
+                    withContext(Dispatchers.Main) { errorMessage = snapshotNote }
                 }
             } catch (_: Throwable) {
                 // Best-effort: a failed snapshot never blocks the restore.
@@ -203,6 +226,20 @@ fun WebDavBackupSection(
                     report?.providersImported ?: 0,
                     report?.groupsImported ?: 0,
                 )
+                // [fix-audit-p0-4] import() catches its own mid-way failures and
+                // reports them through ImportResult.fatal — it does not throw.
+                // A fatal means SOME stages landed and the restore did not
+                // complete; reporting it as a clean success would hide exactly
+                // the state the snapshot exists to roll back. Surface it and
+                // push the user at the rollback entry point.
+                if (report?.fatal != null) {
+                    restoredOk = false
+                    restoredMsg = context.getString(R.string.backup_done_fatal) +
+                        "\n" + report.fatal
+                    withContext(Dispatchers.Main) {
+                        errorMessage = restoredMsg
+                    }
+                }
             } catch (t: Throwable) {
                 restoredOk = false
                 restoredMsg = t.message ?: context.getString(R.string.backup_err_import)
@@ -218,11 +255,21 @@ fun WebDavBackupSection(
                 ),
                 body = restoredMsg ?: "",
             )
+            // The restore just wrote a fresh pre-restore snapshot — refresh
+            // the list so the new rollback point is visible without leaving
+            // and re-entering the screen.
+            snapshotFiles = withContext(Dispatchers.IO) { ConfigBackup.listSnapshots(snapshotDir) }
+            withContext(Dispatchers.Main) { operationBusy = false }
         }
     }
 
     /** Upload with the Backup tab's current category selection. */
     val uploadWithScope: (Boolean) -> Unit = upload@{ withSecrets ->
+        if (operationBusy) {
+            errorMessage = context.getString(R.string.backup_err_busy)
+            return@upload
+        }
+        operationBusy = true
         application.applicationScope.launch {
             try {
                 val payload = withContext(Dispatchers.Default) {
@@ -279,6 +326,8 @@ fun WebDavBackupSection(
                         body = webDavErrorMessage(context, t),
                     )
                 }
+            } finally {
+                withContext(Dispatchers.Main) { operationBusy = false }
             }
         }
     }
@@ -286,19 +335,27 @@ fun WebDavBackupSection(
     val openRemoteList: () -> Unit = {
         val cfg = webDavConfig
         if (cfg != null) {
-            showRemoteList = true
-            remoteLoading = true
-            remoteError = null
+            // [fix-audit-p1-1] This is also invoked from the delete flow's
+            // IO-context coroutine, so every Compose state write below hops to
+            // Main explicitly — writing snapshot state from Dispatchers.IO
+            // races recomposition.
             scope.launch {
+                withContext(Dispatchers.Main) {
+                    showRemoteList = true
+                    remoteLoading = true
+                    remoteError = null
+                }
                 try {
                     val items = withContext(Dispatchers.IO) {
                         WebDavSync.listBackupFiles(cfg, webDavHttpClient)
                     }
-                    remoteItems = items
+                    withContext(Dispatchers.Main) { remoteItems = items }
                 } catch (t: Throwable) {
-                    remoteError = webDavErrorMessage(context, t)
+                    withContext(Dispatchers.Main) {
+                        remoteError = webDavErrorMessage(context, t)
+                    }
                 } finally {
-                    remoteLoading = false
+                    withContext(Dispatchers.Main) { remoteLoading = false }
                 }
             }
         }
@@ -370,7 +427,7 @@ fun WebDavBackupSection(
                 webDavScopeSummary(selectedCategories),
             ),
             icon = Icons.Filled.CloudUpload,
-            onClick = if (webDavConfig != null) {
+            onClick = if (webDavConfig != null && !operationBusy) {
                 // Credentials default to INCLUDED, and the remote copy is as
                 // sensitive as a local file — same confirmation the local
                 // export path uses.
@@ -381,7 +438,7 @@ fun WebDavBackupSection(
             title = stringResource(R.string.webdav_remote),
             subtitle = stringResource(R.string.webdav_remote_sub),
             icon = Icons.Outlined.CloudDownload,
-            onClick = if (webDavConfig != null) openRemoteList else null,
+            onClick = if (webDavConfig != null && !operationBusy) openRemoteList else null,
             showDivider = false,
         )
     }
@@ -500,29 +557,36 @@ fun WebDavBackupSection(
                 items = remoteItems,
                 loading = remoteLoading,
                 error = remoteError,
-                busy = false,
+                busy = operationBusy,
                 onDismiss = { showRemoteList = false },
                 onRefresh = openRemoteList,
                 onRestore = { item ->
-                    remoteLoading = true
-                    application.applicationScope.launch {
-                        try {
-                            val json = withContext(Dispatchers.IO) {
-                                WebDavSync.restore(cfg, item, webDavHttpClient)
+                    // [refactor-backup-gate] The download itself must not hold
+                    // the gate (restoreWithSnapshot claims it once the payload
+                    // arrives — holding it across the network gap would make
+                    // that check see "busy" and refuse this very restore). The
+                    // sheet's own busy flag prevents double-taps meanwhile.
+                    if (!operationBusy) {
+                        withContext(Dispatchers.Main) { remoteLoading = true }
+                        application.applicationScope.launch {
+                            try {
+                                val json = withContext(Dispatchers.IO) {
+                                    WebDavSync.restore(cfg, item, webDavHttpClient)
+                                }
+                                withContext(Dispatchers.Main) { showRemoteList = false }
+                                restoreWithSnapshot(json)
+                            } catch (t: Throwable) {
+                                withContext(Dispatchers.Main) {
+                                    errorMessage = webDavErrorMessage(context, t)
+                                    notifier.notifyWorkCompleted(
+                                        tag = "webdav-restore",
+                                        title = context.getString(R.string.webdav_notify_title_failed),
+                                        body = webDavErrorMessage(context, t),
+                                    )
+                                }
+                            } finally {
+                                withContext(Dispatchers.Main) { remoteLoading = false }
                             }
-                            withContext(Dispatchers.Main) { showRemoteList = false }
-                            restoreWithSnapshot(json)
-                        } catch (t: Throwable) {
-                            withContext(Dispatchers.Main) {
-                                errorMessage = webDavErrorMessage(context, t)
-                                notifier.notifyWorkCompleted(
-                                    tag = "webdav-restore",
-                                    title = context.getString(R.string.webdav_notify_title_failed),
-                                    body = webDavErrorMessage(context, t),
-                                )
-                            }
-                        } finally {
-                            withContext(Dispatchers.Main) { remoteLoading = false }
                         }
                     }
                 },
@@ -538,22 +602,30 @@ fun WebDavBackupSection(
             text = { Text(stringResource(R.string.webdav_delete_confirm_body, item.displayName)) },
             confirmButton = {
                 TextButton(
+                    enabled = !operationBusy,
                     onClick = {
                         val cfg = webDavConfig ?: return@TextButton
                         deletePending = null
+                        operationBusy = true
                         scope.launch {
                             try {
                                 withContext(Dispatchers.IO) {
                                     WebDavSync.deleteBackupFile(cfg, item, webDavHttpClient)
                                 }
-                                Toast.makeText(
-                                    context,
-                                    context.getString(R.string.webdav_deleted),
-                                    Toast.LENGTH_SHORT,
-                                ).show()
+                                withContext(Dispatchers.Main) {
+                                    Toast.makeText(
+                                        context,
+                                        context.getString(R.string.webdav_deleted),
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                }
                                 openRemoteList()
                             } catch (t: Throwable) {
-                                errorMessage = webDavErrorMessage(context, t)
+                                withContext(Dispatchers.Main) {
+                                    errorMessage = webDavErrorMessage(context, t)
+                                }
+                            } finally {
+                                withContext(Dispatchers.Main) { operationBusy = false }
                             }
                         }
                     },

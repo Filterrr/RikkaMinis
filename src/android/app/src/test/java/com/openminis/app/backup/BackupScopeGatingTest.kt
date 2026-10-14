@@ -96,6 +96,37 @@ class BackupScopeGatingTest {
     // -- Category → section mapping ----------------------------------------
 
     @Test
+    fun `the panel keeps the single mutual-exclusion gate`() {
+        // [refactor-backup-gate] The old screen's gate existed because two
+        // concurrent payload builds stack two 70MB+ documents and blow the
+        // heap. It moves with the feature: one flag, claimed before each
+        // launch, cleared in a finally on Main, and the entry buttons read it.
+        assertTrue("the panel must have the gate", screen.contains("var operationBusy"))
+        assertEquals(
+            "three guarded paths (upload / restore / delete)",
+            3, Regex(Regex.escape("operationBusy = true")).findAll(screen).count(),
+        )
+        assertEquals(
+            "every claim has a matching Main-thread clear",
+            3,
+            Regex(Regex.escape("withContext(Dispatchers.Main) { operationBusy = false }"))
+                .findAll(screen).count(),
+        )
+        assertTrue(
+            "the upload button must read the gate",
+            screen.contains("!operationBusy"),
+        )
+        assertTrue(
+            "the remote-restore path must check the gate",
+            screen.contains("if (!operationBusy) {"),
+        )
+        assertTrue(
+            "the gate rejects with the busy message",
+            screen.contains("backup_err_busy"),
+        )
+    }
+
+    @Test
     fun `every package category maps to a document section`() {
         // keysFor is the single translation point between the two
         // vocabularies; each category it knows must name a real section key.
