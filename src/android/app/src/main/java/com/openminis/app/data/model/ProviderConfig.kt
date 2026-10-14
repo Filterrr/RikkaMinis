@@ -4,6 +4,7 @@ import androidx.compose.runtime.Stable
 import com.openminis.app.provider.workbuddy.WorkBuddyConstants
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 import java.util.UUID
 
 @Serializable
@@ -339,6 +340,22 @@ data class ModelOverrides(
     // of older JSON (unlike adding an enum case) — old configs simply lack the
     // key and it defaults to null.
     val maxThinkingLevel: ThinkingLevel? = null,
+    // [backup-upstream-1.14][T-android-model-custom-params] Per-model request
+    // tuning, ported from upstream 1.14. All four are nullable with a `= null`
+    // default, which is what lets an OLDER config or backup — written before
+    // these keys existed — decode without throwing MissingFieldException.
+    // kotlinx.serialization only tolerates a missing key when the property has
+    // a default, so the default is load-bearing, not decoration.
+    //
+    // null means "inherit / send nothing", NOT "use 0". That distinction
+    // matters for temperature especially: 0.0 is a legitimate, meaningful value
+    // (fully deterministic), so it cannot double as the absent marker.
+    val temperature: Double? = null,
+    val topP: Double? = null,
+    /** Extra headers merged into this model's requests. null = none. */
+    val customHeaders: Map<String, String>? = null,
+    /** Raw JSON merged into the request body for provider-specific knobs. */
+    val extraBodyParams: JsonObject? = null,
 ) {
     val isEmpty: Boolean
         get() = displayName == null
@@ -348,6 +365,14 @@ data class ModelOverrides(
             && inputModalities == null
             && outputModalities == null
             && maxThinkingLevel == null
+            // The four new fields MUST be part of this predicate: `isEmpty`
+            // gates whether the overrides object is written at all on export,
+            // so omitting them would make an entry carrying ONLY a temperature
+            // look empty and get dropped on backup/round-trip.
+            && temperature == null
+            && topP == null
+            && customHeaders == null
+            && extraBodyParams == null
 }
 
 @Serializable
