@@ -567,7 +567,9 @@ fun WebDavBackupSection(
                     // that check see "busy" and refuse this very restore). The
                     // sheet's own busy flag prevents double-taps meanwhile.
                     if (!operationBusy) {
-                        withContext(Dispatchers.Main) { remoteLoading = true }
+                        // onClick runs on Main — the assignment is safe here;
+                        // only the launched coroutine's writes need hopping.
+                        remoteLoading = true
                         application.applicationScope.launch {
                             try {
                                 val json = withContext(Dispatchers.IO) {
