@@ -115,9 +115,16 @@ class BackupScopeGatingTest {
         // document's reason to exist, so keysFor seeds them unconditionally.
         val body = src.substringAfter("fun keysFor(categories: Set<BackupCategory>)")
             .substringBefore("return out")
+        // Seeded in the set's initialiser, before any category check runs —
+        // pinned as "the first thing the function does", not as a particular
+        // syntax (`mutableSetOf(SETTINGS)` vs `out += SETTINGS`).
+        val seed = body.indexOf("SETTINGS")
+        val firstCategoryCheck = body.indexOf("BackupCategory.")
+        assertTrue("SETTINGS must be seeded at all", seed >= 0)
         assertTrue(
-            "settings must be seeded before the category checks",
-            body.indexOf("out += SETTINGS") in 0..body.indexOf("BackupCategory.PROVIDERS"),
+            "settings must be seeded before the first category check " +
+                "(seed=$seed, firstCheck=$firstCategoryCheck)",
+            firstCategoryCheck < 0 || seed < firstCategoryCheck,
         )
     }
 
