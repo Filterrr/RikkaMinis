@@ -233,6 +233,9 @@ object Routes {
     /** T235: Shared folders (Shared / Skills / Memory) — fixed list. */
     const val SHARED_FOLDERS = "shared_folders"
     const val BACKUP = "backup"
+    // [backup-upstream-1.14] Fork's own WebDAV screen (multi-device auto-sync
+    // + manual WebDAV push/restore), reached from its own Settings row.
+    const val WEBDAV = "webdav"
     // ---- [backup-upstream-1.14] backup/restore routes ----------------------
     const val BACKUP_INITIAL_TAB_KEY = "backup_initial_tab"
     const val BACKUP_DESTINATIONS = "backup_destinations"
@@ -702,6 +705,7 @@ fun AppNavigation(
                 onMountedFoldersClick = { navController.safeNavigate(Routes.MOUNTED_FOLDERS) },
                 onSharedFoldersClick = { navController.safeNavigate(Routes.SHARED_FOLDERS) },
                 onBackupClick = { navController.safeNavigate(Routes.BACKUP) },
+                onWebDavClick = { navController.safeNavigate(Routes.WEBDAV) },
             )
         }
 
@@ -714,10 +718,29 @@ fun AppNavigation(
             )
         }
 
-        // [backup-upstream-1.14] The fork's WebDAV-only BackupSettingsScreen
-        // route was replaced by the upstream BackupAndRestoreScreen below.
-        // BackupSettingsScreen.kt stays in the tree (ConfigBackup / WebDavSync
-        // remain reachable from it) but is no longer routed.
+        // [backup-upstream-1.14] BackupSettingsScreen moved OFF Routes.BACKUP
+        // (the upstream BackupAndRestoreScreen took that route over) onto its
+        // own Routes.WEBDAV — see the composable below. Both live side by side:
+        // upstream's screen does full-package backup/restore to rclone
+        // backends, this one keeps the fork's WebDAV config + multi-device
+        // auto-sync (MinisApp reads MultiDeviceSync.isEnabled at startup).
+
+        // [backup-upstream-1.14] Fork's own WebDAV screen — its former
+        // BackupSettingsScreen, unrouted when the upstream backup screen took
+        // over Routes.BACKUP. Kept reachable on its own route so the
+        // multi-device auto-sync toggle (read at startup by MinisApp) and the
+        // manual WebDAV push/restore path stay configurable.
+        composable(Routes.WEBDAV) {
+            com.openminis.app.ui.settings.BackupSettingsScreen(
+                providerRepository = providerRepository,
+                envVarRepository = envVarRepository,
+                skillRepository = skillRepository,
+                memoryRepository = memoryRepository,
+                mcpRepository = mcpRepository,
+                chatRepository = chatRepository,
+                onBack = { navController.safePopBackStack() },
+            )
+        }
 
         composable(Routes.BACKUP) { entry ->
             // [backup-upstream-1.14] Upstream 1.14 backup & restore (rclone /

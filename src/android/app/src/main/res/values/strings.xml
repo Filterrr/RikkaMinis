@@ -1296,6 +1296,10 @@
     <string name="settings_mount_external_folders_subtitle">Bind picked folders into /var/minis/mounts/</string>
     <string name="settings_backup">Backup &amp; Restore</string>
     <string name="settings_backup_subtitle">Export or import settings and providers</string>
+    <!-- [backup-upstream-1.14] Fork's own WebDAV screen row (manual push /
+         restore + multi-device auto-sync toggle). -->
+    <string name="settings_webdav">WebDAV Sync</string>
+    <string name="settings_webdav_subtitle">Auto-sync across devices and push backups to a WebDAV server</string>
     <string name="backup_section_local">Local backup</string>
     <string name="backup_section_footer">Includes providers, appearance, agent runtime defaults, environment variables, skills, memory, MCP servers and chat history (text-only, media excluded).</string>
     <string name="webdav_section">WebDAV backup</string>

@@ -1871,4 +1871,8 @@
 <string name="restore_stop_message">確定要停止目前的還原過程嗎？已還原的內容將保留，未還原的內容將中止。</string>
 <string name="restore_stop_title">停止還原</string>
 <string name="restore_time_left">大約還剩 %1$s</string>
+
+    <!-- [backup-upstream-1.14] WebDAV setting row -->
+    <string name="settings_webdav">WebDAV 同步</string>
+    <string name="settings_webdav_subtitle">跨裝置自動同步，並將備份推送至 WebDAV 伺服器</string>
 </resources>

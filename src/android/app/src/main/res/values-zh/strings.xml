@@ -2012,4 +2012,8 @@
 <string name="restore_stop_message">确定要停止当前的恢复过程吗？已恢复的内容将保留，未恢复的内容将中止。</string>
 <string name="restore_stop_title">停止恢复</string>
 <string name="restore_time_left">约剩 %1$s</string>
+
+    <!-- [backup-upstream-1.14] WebDAV setting row -->
+    <string name="settings_webdav">WebDAV 同步</string>
+    <string name="settings_webdav_subtitle">跨设备自动同步，并将备份推送到 WebDAV 服务器</string>
 </resources>

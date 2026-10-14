@@ -408,7 +408,12 @@ fun BackupSettingsScreen(
     }
 
     // top-level page: rely on system back gesture / bottom nav (no back arrow)
-    SettingsScaffold(title = stringResource(R.string.settings_backup), onBack = null) {
+    // [backup-upstream-1.14] Now a routed sub-screen reachable from Settings,
+    // so it gets an explicit back arrow; the parameter is threaded from the
+    // composable call site (onBack = { navController.safePopBackStack() }).
+    // Title switched to "WebDAV Sync" so it is distinguishable from the
+    // upstream Backup & Restore screen it sits next to in Settings.
+    SettingsScaffold(title = stringResource(R.string.settings_webdav), onBack = onBack) {
         SettingsSection(
             header = stringResource(R.string.backup_section_local),
             footer = stringResource(R.string.backup_section_footer),
