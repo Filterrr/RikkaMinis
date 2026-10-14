@@ -8,7 +8,6 @@ import com.openminis.app.data.model.ThinkingLevel
 import com.openminis.app.provider.effectiveMaxThinkingLevel
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
@@ -62,21 +61,26 @@ class ThinkingLevelTest {
     }
 
     @Test
-    fun modelGroup_unknownThinkingLevel_coercesToNull_notThrow() {
-        // Simulate JSON a NEWER build wrote: defaultThinkingLevel="ULTRA" is a
-        // value this test's enum DOES know, so also throw in a truly-unknown one.
+    fun modelGroup_unknownThinkingLevel_clampsToXHigh_notThrow() {
+        // [backup-upstream-1.14] Behaviour change from upstream's
+        // ThinkingLevelSerializer: an unknown level is no longer coerced to
+        // null by coerceInputValues — the serializer decodes it through
+        // ThinkingLevel.decoded, which clamps to the highest level THIS build
+        // knows. Still never throws, and still leaves the rest of the
+        // document intact, which is what this test exists to prove.
         val wire = """{"id":"g1","name":"G","memberEntryIds":[],"defaultThinkingLevel":"SUPREME"}"""
         val group = json.decodeFromString(ModelGroup.serializer(), wire)
-        // Unknown enum value on a nullable-with-default field coerces to null.
-        assertNull(group.defaultThinkingLevel)
+        assertEquals(ThinkingLevel.XHIGH, group.defaultThinkingLevel)
         assertEquals("G", group.name) // other fields intact — config NOT wiped
     }
 
     @Test
-    fun modelOverrides_unknownMaxThinkingLevel_coercesToNull() {
+    fun modelOverrides_unknownMaxThinkingLevel_clampsToXHigh() {
+        // Same serializer-driven change as above: the clamp replaces the
+        // null coercion (a plain-string descriptor can no longer be coerced).
         val wire = """{"maxThinkingLevel":"SUPREME","displayName":"X"}"""
         val ov = json.decodeFromString(ModelOverrides.serializer(), wire)
-        assertNull(ov.maxThinkingLevel)
+        assertEquals(ThinkingLevel.XHIGH, ov.maxThinkingLevel)
         assertEquals("X", ov.displayName)
     }
 
