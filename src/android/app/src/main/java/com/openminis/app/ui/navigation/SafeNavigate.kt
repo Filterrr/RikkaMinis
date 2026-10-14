@@ -47,3 +47,14 @@ fun NavController.safePopBackStack(): Boolean {
     if (!state.isAtLeast(Lifecycle.State.STARTED)) return false
     return popBackStack()
 }
+
+/**
+ * [backup-upstream-1.14] Route-targeted pop with the same lifecycle guard as
+ * [safePopBackStack] — used by the restore flow to land on the Backup screen
+ * from two different stack depths (upstream T-android-restore-picked-lands-home).
+ */
+fun NavController.safePopBackStack(route: String, inclusive: Boolean): Boolean {
+    val state = currentBackStackEntry?.lifecycle?.currentState ?: return false
+    if (!state.isAtLeast(Lifecycle.State.STARTED)) return false
+    return popBackStack(route, inclusive)
+}

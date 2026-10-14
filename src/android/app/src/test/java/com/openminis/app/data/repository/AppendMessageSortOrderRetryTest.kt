@@ -2,6 +2,7 @@ package com.openminis.app.data.repository
 
 import android.database.sqlite.SQLiteConstraintException
 import com.openminis.app.data.db.ChatDao
+import com.openminis.app.data.db.FolderEntity
 import com.openminis.app.data.db.ChatSessionEntity
 import com.openminis.app.data.db.CompactMarkerEntity
 import com.openminis.app.data.db.MessageEntity
@@ -112,6 +113,11 @@ class AppendMessageSortOrderRetryTest {
         override suspend fun messageCountForSession(sessionId: String): Int = 0
         override fun messageCountsPerSession(): Flow<Map<String, Int>> = flowOf(emptyMap())
         override suspend fun deleteEmptySessions(activeIds: List<String>, staleBefore: Long): Int = 0
+        override fun observeFolders(): Flow<List<FolderEntity>> = flowOf(emptyList())
+        override suspend fun listFolders(): List<FolderEntity> = emptyList()
+        override suspend fun getFolder(id: String): FolderEntity? = null
+        override suspend fun insertFolder(folder: FolderEntity) = Unit
+        override suspend fun deleteFolder(id: String) = Unit
     }
 
     @Test

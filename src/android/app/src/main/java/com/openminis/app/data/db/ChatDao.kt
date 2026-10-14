@@ -396,4 +396,24 @@ interface ChatDao {
           AND updated_at < :staleBefore
     """)
     suspend fun deleteEmptySessions(activeIds: List<String>, staleBefore: Long): Int
+
+    // ---- [backup-upstream-1.14] folders (session groups) ------------------
+    // Ported from upstream 1.14 — the backup/restore module syncs these rows
+    // (BackupCategory.FOLDERS) and the restore path calls getFolder /
+    // insertFolder directly.
+
+    @Query("SELECT * FROM folders WHERE id != '' ORDER BY updated_at DESC")
+    fun observeFolders(): Flow<List<FolderEntity>>
+
+    @Query("SELECT * FROM folders WHERE id != '' ORDER BY updated_at DESC")
+    suspend fun listFolders(): List<FolderEntity>
+
+    @Query("SELECT * FROM folders WHERE id = :id")
+    suspend fun getFolder(id: String): FolderEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertFolder(folder: FolderEntity)
+
+    @Query("DELETE FROM folders WHERE id = :id")
+    suspend fun deleteFolder(id: String)
 }

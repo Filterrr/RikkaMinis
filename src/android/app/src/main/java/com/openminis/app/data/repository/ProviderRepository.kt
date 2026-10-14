@@ -20,6 +20,8 @@ import com.openminis.app.data.model.ProviderCredential
 import com.openminis.app.data.model.ProviderCredentialMeta
 import com.openminis.app.data.model.ProviderInstance
 import com.openminis.app.data.model.ProviderType
+import com.openminis.app.data.model.SubAgentDefinition
+import com.openminis.app.data.model.SubAgentRoster
 import com.openminis.app.data.model.RoutingStrategy
 import com.openminis.app.data.model.SystemVoiceIds
 import com.openminis.app.data.model.ThinkingLevel
@@ -2896,6 +2898,238 @@ class ProviderRepository(private val context: Context) {
         val bits = obj.optInt("modalityOverride", 0)
         return modalityListsFromBitfield(bits)
     }
+
+    // ==== [backup-upstream-1.14] restore hooks for the backup module ========
+    // Ported from upstream 1.14 ProviderRepository, adapted to this fork's
+    // internals: fork stores thinking overrides per-session (no thinking-rule
+    // DB table) and persists config through saveConfig (DB + JSON mirror).
+    // Declared as members (not extensions) because they touch the private
+    // configLock / _config / saveConfig internals.
+
+    /** Log tag for sub-agent restore diagnostics (upstream parity). */
+    private val SUB_AGENT_LOG = "SubAgents"
+
+    /** Normalized sub-agent roster view (upstream parity, BackupDebugMethods). */
+    val subAgents: List<SubAgentDefinition>
+        get() = SubAgentRoster.normalize(_config.value.subAgents) { android.util.Log.i(SUB_AGENT_LOG, it) }
+
+    fun subAgent(id: String): SubAgentDefinition? = subAgents.find { it.id == id }
+
+    /** Insert or update one sub-agent definition (upsert semantics). */
+    fun upsertSubAgent(def: SubAgentDefinition): Unit = synchronized(configLock) {
+        ensureConfigLoaded()
+        val stamped = def.copy(updatedAt = System.currentTimeMillis())
+        val config = _config.value
+        val idx = config.subAgents.indexOfFirst { it.id == stamped.id }
+        if (idx >= 0) config.subAgents[idx] = stamped else config.subAgents.add(stamped)
+        val normalized = SubAgentRoster.normalize(config.subAgents) { android.util.Log.i(SUB_AGENT_LOG, it) }
+        config.subAgents.clear()
+        config.subAgents.addAll(normalized)
+        saveConfig(config)
+    }
+
+    /** Delete one custom sub agent. The built-in is not deletable. */
+    fun deleteSubAgent(id: String): Unit = synchronized(configLock) {
+        if (id == SubAgentDefinition.BUILT_IN_ID) return
+        ensureConfigLoaded()
+        val config = _config.value
+        config.subAgents.removeAll { it.id == id }
+        val normalized = SubAgentRoster.normalize(config.subAgents) { android.util.Log.i(SUB_AGENT_LOG, it) }
+        config.subAgents.clear()
+        config.subAgents.addAll(normalized)
+        saveConfig(config)
+    }
+
+    /**
+     * Merge the custom sub agents a backup package carried in
+     * `data/sub_agents.jsonl` (iOS writes them only there). Rules in
+     * [SubAgentRoster.mergeBackup]. Returns (written, skipped).
+     */
+    fun restoreBackupSubAgents(incoming: List<SubAgentDefinition>): Pair<Int, Int> =
+        synchronized(configLock) {
+            if (incoming.isEmpty()) return@synchronized 0 to 0
+            ensureConfigLoaded()
+            val config = _config.value
+            val merged = SubAgentRoster.mergeBackup(config.subAgents, incoming) {
+                android.util.Log.i(SUB_AGENT_LOG, it)
+            }
+            if (merged.written > 0) {
+                config.subAgents.clear()
+                config.subAgents.addAll(merged.roster)
+                saveConfig(config)
+            }
+            merged.written to merged.skipped
+        }
+
+    /**
+     * Fork note: this fork has no thinking-rule DB table (upstream's
+     * provider_thinking_rules storage was never ported). Restoring rule
+     * records is therefore a no-op that reports everything skipped — the
+     * report counts stay honest without pretending data landed.
+     */
+    fun restoreBackupThinkingRules(
+        rules: List<com.openminis.app.backup.BackupThinkingRuleRecord>,
+    ): Pair<Int, Int> {
+        android.util.Log.i(
+            "ProviderRepo",
+            "[Restore] thinking rules: ${rules.size} record(s) skipped — this fork does not store thinking rules",
+        )
+        return 0 to rules.size
+    }
+
+    /**
+     * Restore one instance's credentials from a backup `secrets.json` entry.
+     * Returns true if any credential was WRITTEN, false if the instance
+     * already had a key (kept) or the secret was empty. Keep-existing policy
+     * mirrors upstream/iOS: an API key already on this device is NOT
+     * overwritten.
+     *
+     * Fork note: only the API-key path is applied. Upstream's OAuth token
+     * stores (manual bearer / OAuth JSON / Gemini email+project) live behind
+     * an OAuthManager surface this fork does not have; those fields are
+     * accepted on the wire (wire-frozen to iOS) but not applied — reporting
+     * "kept" is more honest than writing half-understood state.
+     */
+    fun restoreBackupProviderSecret(
+        secret: com.openminis.app.backup.BackupSecrets.ProviderSecret,
+    ): Boolean {
+        fun deb64(s: String?): String? = s?.let {
+            runCatching { String(android.util.Base64.decode(it, android.util.Base64.NO_WRAP)) }.getOrNull()
+        }
+        val inst = instance(secret.instanceId) ?: return false
+        var wrote = false
+        deb64(secret.apiKey)?.let { key ->
+            if (loadApiKey(inst.id) == null) {
+                saveApiKey(inst.id, key)
+                wrote = true
+            }
+        }
+        return wrote
+    }
+
+    // ---- [backup-upstream-1.14] mergeBackupProviderConfig ------------------
+    // (inserted verbatim from upstream, see the doc comment below)
+
+    /**
+     * [backup-upstream-1.14] Non-destructive, ORDER-PRESERVING union merge of
+     * a restored [remote] ProviderConfig into the live config. Android port of
+     * iOS `mergeProviderConfigFallback` (BackupImporter+Categories.swift),
+     * including the fix `T-backup-restore-order` (b33eb1ff6): the package
+     * decides POSITION for the items it carries, so a restore reproduces the
+     * backed-up arrangement instead of re-sorting by createdAt.
+     *
+     * Rules (identical to upstream/iOS):
+     *  - instances / modelGroups: rebuilt in PACKAGE order. For each remote id,
+     *    if the id already exists locally keep the LOCAL element (content
+     *    wins), else take the remote element. Local-only ids are appended
+     *    afterwards in their original relative order.
+     *  - modelEntries: additive by id (append remote ids not present locally);
+     *    order not significant (entries are looked up by id, ordered per group).
+     *  - agentLoop bindings: set-union.
+     *  - subAgents (fork: roster now lives on ProviderConfig): merged by
+     *    SubAgentRoster.mergeBackup rules — handled separately in
+     *    [restoreBackupSubAgents]; NOT touched here.
+     *  - per-device pointers (default / voice group ids, session bindings)
+     *    are untouched.
+     *
+     * Returns (beforeInstances, afterInstances) so the caller derives
+     * imported = after-before and skipped = package.count - imported.
+     */
+    fun mergeBackupProviderConfig(remote: ProviderConfig): Pair<Int, Int> {
+        ensureConfigLoaded()
+        return synchronized(configLock) {
+            val local = _config.value
+            val before = local.instances.size
+
+            // [DIAG-restore] Snapshot of the incoming backup payload, before any
+            // merging happens, to compare against what actually lands post-merge.
+            android.util.Log.i(
+                "ProviderRepo",
+                "[Restore][DIAG] remote.instances count=${remote.instances.size}: " +
+                    remote.instances.joinToString { ri -> "(id=${ri.id}, label=${ri.label}, type=${ri.providerType})" },
+            )
+            android.util.Log.i(
+                "ProviderRepo",
+                "[Restore][DIAG] remote.modelEntries count=${remote.modelEntries.size}",
+            )
+            for (re in remote.modelEntries) {
+                android.util.Log.i(
+                    "ProviderRepo",
+                    "[Restore][DIAG] remote entry providerInstanceId=${re.providerInstanceId} " +
+                        "baseModel.id=${re.baseModel.id} baseModel.displayName=${re.baseModel.displayName} uuid=${re.id}",
+                )
+            }
+
+            val orderedInstances = mutableListOf<ProviderInstance>()
+            val placedInstances = mutableSetOf<String>()
+            for (ri in remote.instances) {
+                val existing = local.instances.firstOrNull { it.id == ri.id }
+                orderedInstances.add(existing ?: ri)
+                placedInstances.add(ri.id)
+            }
+            for (li in local.instances) {
+                if (li.id !in placedInstances) orderedInstances.add(li)
+            }
+
+            val orderedGroups = mutableListOf<ModelGroup>()
+            val placedGroups = mutableSetOf<String>()
+            for (rg in remote.modelGroups) {
+                val existing = local.modelGroups.firstOrNull { it.id == rg.id }
+                orderedGroups.add(existing ?: rg)
+                placedGroups.add(rg.id)
+            }
+            for (lg in local.modelGroups) {
+                if (lg.id !in placedGroups) orderedGroups.add(lg)
+            }
+
+            val mergedEntries = mutableListOf<ModelEntry>()
+            val placedEntryIds = mutableSetOf<String>()
+            for (le in local.modelEntries) {
+                if (le.id !in placedEntryIds) { mergedEntries.add(le); placedEntryIds.add(le.id) }
+            }
+            for (re in remote.modelEntries) {
+                if (re.id !in placedEntryIds) { mergedEntries.add(re); placedEntryIds.add(re.id) }
+            }
+
+            val merged = ProviderConfig(
+                instances = orderedInstances,
+                modelGroups = orderedGroups,
+                modelEntries = mergedEntries,
+                defaultPrimaryGroupId = local.defaultPrimaryGroupId,
+                defaultSubGroupId = local.defaultSubGroupId,
+                voiceInputGroupId = local.voiceInputGroupId,
+                voiceOutputGroupId = local.voiceOutputGroupId,
+                agentLoopModelEntryIds =
+                    (local.agentLoopModelEntryIds + remote.agentLoopModelEntryIds).distinct().toMutableList(),
+                agentLoopGroupIds =
+                    (local.agentLoopGroupIds + remote.agentLoopGroupIds).distinct().toMutableList(),
+                subAgents = local.subAgents,
+                revision = local.revision + 1, // T273: force StateFlow emission
+            )
+            saveConfig(merged)
+            val after = merged.instances.size
+
+            // [DIAG-restore] Final merged state actually persisted to disk.
+            android.util.Log.i(
+                "ProviderRepo",
+                "[Restore][DIAG] orderedInstances count=${orderedInstances.size}: " +
+                    orderedInstances.joinToString { oi -> "(id=${oi.id}, label=${oi.label}, type=${oi.providerType})" },
+            )
+            android.util.Log.i(
+                "ProviderRepo",
+                "[Restore][DIAG] mergedEntries count=${mergedEntries.size}",
+            )
+            for (me in mergedEntries) {
+                android.util.Log.i(
+                    "ProviderRepo",
+                    "[Restore][DIAG] merged entry providerInstanceId=${me.providerInstanceId} " +
+                        "baseModel.id=${me.baseModel.id} baseModel.displayName=${me.baseModel.displayName} uuid=${me.id}",
+                )
+            }
+            before to after
+        }
+    }
+
 }
 
 /** Outcome of a [ProviderRepository.refreshModels] call, surfaced to the UI
@@ -3122,3 +3356,4 @@ internal fun decodeExportedSecret(raw: String): String? {
         raw
     }
 }
+

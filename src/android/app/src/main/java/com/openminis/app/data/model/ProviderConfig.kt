@@ -4,6 +4,7 @@ import androidx.compose.runtime.Stable
 import com.openminis.app.provider.workbuddy.WorkBuddyConstants
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 import java.util.UUID
 
 @Serializable
@@ -65,7 +66,7 @@ enum class ProviderCredential {
     oauth,
 }
 
-@Serializable
+@Serializable(with = ThinkingLevelSerializer::class)
 enum class ThinkingLevel {
     // [T-android-thinking-level-arch] New cases MUST be appended at the end.
     // Kotlinx Serialization encodes enums by NAME string ("OFF"/"LOW"/...),
@@ -92,6 +93,15 @@ enum class ThinkingLevel {
 
     companion object {
         /**
+         * [backup-upstream-1.14] Case-insensitive parse, null when unknown —
+         * ported from upstream 1.14 for the backup debug surface and the
+         * sub-agent record mapper (a hand-edited or newer package may carry a
+         * level name this build does not know).
+         */
+        fun parseOrNull(raw: String): ThinkingLevel? =
+            entries.firstOrNull { it.name.equals(raw.trim(), ignoreCase = true) }
+
+        /**
          * [T-android-thinking-level-arch] Safe deserialization fallback for a
          * level string that this app build doesn't recognize — e.g. an older
          * build reading a token a NEWER build persisted (Room DB / JSON mirror).
@@ -102,8 +112,37 @@ enum class ThinkingLevel {
          * this for every "read from persisted data" path.
          */
         fun decoded(raw: String): ThinkingLevel =
-            runCatching { valueOf(raw) }.getOrElse { XHIGH }
+            // [backup-upstream-1.14] Case-insensitive via parseOrNull: iOS's
+            // raw values are lowercase ("high"), Android's enum names upper —
+            // a package or JSON mirror from either side must decode.
+            parseOrNull(raw) ?: XHIGH
     }
+}
+
+/**
+ * [backup-upstream-1.14] Plain-string codec for [ThinkingLevel] (upstream
+ * T-android-restore-thinking-level). Used wherever the level rides a
+ * persisted/wire structure (ModelOverrides.maxThinkingLevel,
+ * SubAgentDefinition.thinkingLevelOverride, the ProviderConfig JSON mirror):
+ * a plain string descriptor cannot be coerced to null, and an unrecognized
+ * value (a level from a newer build, or iOS's lowercase spelling) decodes
+ * through [ThinkingLevel.decoded] to the XHIGH clamp rather than failing the
+ * whole document — kotlinx.serialization aborts the entire decode on one bad
+ * element, which would drop every provider/group in the same file.
+ */
+object ThinkingLevelSerializer : kotlinx.serialization.KSerializer<ThinkingLevel> {
+    override val descriptor: kotlinx.serialization.descriptors.SerialDescriptor =
+        kotlinx.serialization.descriptors.PrimitiveSerialDescriptor(
+            "com.openminis.app.data.model.ThinkingLevel",
+            kotlinx.serialization.descriptors.PrimitiveKind.STRING,
+        )
+
+    override fun serialize(encoder: kotlinx.serialization.encoding.Encoder, value: ThinkingLevel) =
+        encoder.encodeString(value.name)
+
+    override fun deserialize(
+        decoder: kotlinx.serialization.encoding.Decoder,
+    ): ThinkingLevel = ThinkingLevel.decoded(decoder.decodeString())
 }
 
 @Serializable
@@ -199,6 +238,16 @@ data class ProviderInstance(
     val providerType: ProviderType,
     val credentialType: ProviderCredential,
     var isEnabled: Boolean = true,
+    /**
+     * [backup-upstream-1.14][T-android-provider-iso8601-wire] Epoch millis in
+     * memory, but serialized as an ISO-8601 string. iOS
+     * `ProviderInstance.createdAt` is a `Date` decoded with `.iso8601`, so a
+     * bare epoch number made iOS's `importProviders` fail to decode the whole
+     * `provider_config.json` and report `Unreadable: 1` for the Providers
+     * category. Reads both forms, so the existing local JSON mirror and older
+     * Android backups still load.
+     */
+    @Serializable(with = com.openminis.app.backup.Iso8601MillisSerializer::class)
     val createdAt: Long = System.currentTimeMillis(),
     var customBaseURL: String? = null,
     var appendV1Suffix: Boolean = true,
@@ -330,6 +379,22 @@ data class ModelOverrides(
     // of older JSON (unlike adding an enum case) — old configs simply lack the
     // key and it defaults to null.
     val maxThinkingLevel: ThinkingLevel? = null,
+    // [backup-upstream-1.14][T-android-model-custom-params] Per-model request
+    // tuning, ported from upstream 1.14. All four are nullable with a `= null`
+    // default, which is what lets an OLDER config or backup — written before
+    // these keys existed — decode without throwing MissingFieldException.
+    // kotlinx.serialization only tolerates a missing key when the property has
+    // a default, so the default is load-bearing, not decoration.
+    //
+    // null means "inherit / send nothing", NOT "use 0". That distinction
+    // matters for temperature especially: 0.0 is a legitimate, meaningful value
+    // (fully deterministic), so it cannot double as the absent marker.
+    val temperature: Double? = null,
+    val topP: Double? = null,
+    /** Extra headers merged into this model's requests. null = none. */
+    val customHeaders: Map<String, String>? = null,
+    /** Raw JSON merged into the request body for provider-specific knobs. */
+    val extraBodyParams: JsonObject? = null,
 ) {
     val isEmpty: Boolean
         get() = displayName == null
@@ -339,6 +404,14 @@ data class ModelOverrides(
             && inputModalities == null
             && outputModalities == null
             && maxThinkingLevel == null
+            // The four new fields MUST be part of this predicate: `isEmpty`
+            // gates whether the overrides object is written at all on export,
+            // so omitting them would make an entry carrying ONLY a temperature
+            // look empty and get dropped on backup/round-trip.
+            && temperature == null
+            && topP == null
+            && customHeaders == null
+            && extraBodyParams == null
 }
 
 @Serializable
@@ -351,6 +424,10 @@ data class ModelEntry(
     val isCustom: Boolean = false,
     val isHidden: Boolean = false,
     val uuid: String = UUID.randomUUID().toString(),
+    /** [backup-upstream-1.14][T-android-provider-iso8601-wire] See
+     *  ProviderInstance.createdAt — iOS `ModelEntry.userModifiedAt` is a
+     *  `Date?` decoded with `.iso8601`. */
+    @Serializable(with = com.openminis.app.backup.Iso8601MillisNullableSerializer::class)
     val userModifiedAt: Long? = null,
     /**
      * [T-recovery] Optional cost tier used by groups with
@@ -398,6 +475,13 @@ data class ProviderConfig(
     // command) — mirrors iOS agentLoopModelEntryIds / agentLoopGroupIds.
     val agentLoopModelEntryIds: MutableList<String> = mutableListOf(),
     val agentLoopGroupIds: MutableList<String> = mutableListOf(),
+    // ---- [backup-upstream-1.14] sub-agent roster --------------------------
+    // Ported from upstream 1.14: the backup/restore module syncs this roster
+    // (BackupCategory.SUB_AGENTS → ProviderRepository.restoreBackupSubAgents).
+    // Old persisted JSON lacks the key and deserializes to an empty list
+    // (ignoreUnknownKeys + declared default), so adding it is downgrade- and
+    // round-trip-safe.
+    val subAgents: MutableList<SubAgentDefinition> = mutableListOf(),
     // T273: bumped by ProviderRepository.saveConfig on every mutation so
     // data-class structural equals returns false even when callers mutate
     // inner MutableLists in place. Without this, MutableStateFlow's

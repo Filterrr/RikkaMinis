@@ -331,7 +331,7 @@ private fun ColumnScope.ApiKeyConfigSection(
     // the fetch the moment onSaved() pops the route (composition disposal),
     // leaving a freshly-added provider with an empty model list. The
     // application-scoped scope outlives composition (same pattern as the
-    // WebDAV backup transfer in BackupSettingsScreen).
+    // WebDAV backup transfer section in the backup screen).
     val appContext = LocalContext.current.applicationContext
     var showApiKeyPlaintext by remember { mutableStateOf(false) }
     // /v1 is appended automatically for all non-Gemini providers (Gemini uses

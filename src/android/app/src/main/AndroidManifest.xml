@@ -353,6 +353,15 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <!-- [backup-upstream-1.14] Keeps a running backup alive in the
+             background (progress notification + wake lock). Started by
+             BackupRunController, stops itself when the run ends. dataSync type
+             requires FOREGROUND_SERVICE_DATA_SYNC (declared above). -->
+        <service
+            android:name=".service.BackupForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <!-- [native-oom Phase 1] Isolated process for native_offload socket
              server + handler registry. Keeps the heavy per-tool native/mmap
              load out of the main process. See ToolExecutionService. -->

@@ -71,6 +71,57 @@ object ConfigBackup {
     // throws "No active session" and the reader returns empty/null. Carrying
     // them only produced guaranteed skip entries on every restore.
 
+    /**
+     * [T-backup-scope-picker] Selectable backup content, for callers that let
+     * the user choose (currently the WebDAV upload panel). Keys are stable
+     * strings so they can be persisted in SharedPreferences verbatim.
+     *
+     * "settings" covers everything the registry-backed `fields` section
+     * carries (appearance / chat prefs / background / defaults / soul /
+     * memory toggles / logs / runtime knobs).
+     */
+    object BackupScope {
+        const val SETTINGS = "settings"
+        const val PROVIDERS = "providers"
+        const val ENV_VARS = "envVars"
+        const val SKILLS = "skills"
+        const val MEMORY = "memory"
+        const val MCP = "mcp"
+        const val CHATS = "chats"
+
+        /** Every key, in the section order the document writes them. */
+        val ALL: List<String> = listOf(
+            SETTINGS, PROVIDERS, ENV_VARS, SKILLS, MEMORY, MCP, CHATS,
+        )
+
+        /**
+         * [T-webdav-scope-unified] Map the Backup & Restore screen's "Include"
+         * category selection to this document's section keys. The WebDAV push
+         * uses the SAME selection the local package export does, so the two
+         * paths cannot disagree about what "backed up" contains — there is no
+         * second picker to keep in sync.
+         *
+         * Two deliberate asymmetries between the two vocabularies:
+         *  - [SETTINGS] has no counterpart in the package categories. The
+         *    registry-backed config scalars (appearance / chat prefs /
+         *    defaults / soul / …) are always carried: they are the document's
+         *    reason to exist, and a settings-only push is a legitimate config
+         *    sync rather than an empty backup.
+         *  - `SHARED_FILES` is package-only. The light JSON document embeds no
+         *    file trees, so that category maps to nothing here.
+         */
+        fun keysFor(categories: Set<BackupCategory>): Set<String> {
+            val out = mutableSetOf(SETTINGS)
+            if (BackupCategory.PROVIDERS in categories) out += PROVIDERS
+            if (BackupCategory.ENVIRONMENT_VARIABLES in categories) out += ENV_VARS
+            if (BackupCategory.SKILLS in categories) out += SKILLS
+            if (BackupCategory.MEMORY in categories) out += MEMORY
+            if (BackupCategory.MCP_SERVERS in categories) out += MCP
+            if (BackupCategory.CHATS in categories) out += CHATS
+            return out
+        }
+    }
+
     /** Outcome of an import: what landed, and what needs the user's attention. */
     data class ImportResult(
         val fieldsApplied: Int,
@@ -120,12 +171,23 @@ object ConfigBackup {
         chatWindowDays: Int = 90,
         includeHiddenModels: Boolean = true,
         memoryFileNames: Set<String>? = null,
+        // [T-backup-scope-picker] Optional content selection — null keeps the
+        // historical "everything" behaviour, so every existing caller is
+        // unchanged. Keys match [BackupScope] (settings / providers / envVars /
+        // skills / memory / mcp / chats). Import tolerates any missing section
+        // (it reads each with optJSONArray and skips nulls), so a scoped
+        // payload restores cleanly and simply does not touch what it omits.
+        categories: Set<String>? = null,
     ): String {
+        // A section writes only when the caller did not scope it out.
+        fun wanted(key: String): Boolean = categories == null || key in categories
+
         val registry = ConfigRegistry.get()
 
         val fields = JSONObject()
         var readFailures = 0
         for (path in registry.allVisibleFieldPaths()) {
+            if (!wanted(BackupScope.SETTINGS)) continue
             val field = registry.resolveField(path) ?: continue
             if (field.scope !in BACKED_UP_SCOPES) continue
             // READONLY fields would fail on the way back in, so there is no
@@ -150,6 +212,7 @@ object ConfigBackup {
 
         val providers = JSONArray()
         for (instance in providerRepo.instances) {
+            if (!wanted(BackupScope.PROVIDERS)) continue
             val json = providerRepo.exportInstanceJSON(instance.id) ?: continue
             val obj = try {
                 JSONObject(json)
@@ -218,6 +281,7 @@ object ConfigBackup {
         // them through the per-provider old→new entry map before creating groups.
         val groups = JSONArray()
         for (group in providerRepo.config.value.modelGroups) {
+            if (!wanted(BackupScope.PROVIDERS)) break
             groups.put(JSONObject().apply {
                 put("id", group.id)
                 put("name", group.name)
@@ -239,7 +303,7 @@ object ConfigBackup {
         // provider apiKeys: without secrets we carry key+note only and the user
         // refills the value after import.
         val envVars = JSONArray()
-        if (envVarRepo != null) {
+        if (envVarRepo != null && wanted(BackupScope.ENV_VARS)) {
             for (entry in envVarRepo.entries.value) {
                 envVars.put(JSONObject().apply {
                     put("key", entry.key)
@@ -259,7 +323,7 @@ object ConfigBackup {
         // installed but fails the moment it runs, which is a worse outcome than
         // a larger backup file. [T-backup-skills]
         val skills = JSONArray()
-        if (skillRepo != null) {
+        if (skillRepo != null && wanted(BackupScope.SKILLS)) {
             for (skill in skillRepo.skills.value) {
                 val entry = JSONObject().apply {
                     put("id", skill.id)
@@ -315,7 +379,7 @@ object ConfigBackup {
         // MemoryRepository, which is why restoring a backup used to come back
         // with the switch in the right position and nothing behind it.
         val memoryFiles = JSONArray()
-        if (memoryRepo != null) {
+        if (memoryRepo != null && wanted(BackupScope.MEMORY)) {
             for (info in runCatching { memoryRepo.listAllFiles() }.getOrDefault(emptyList())) {
                 // [T-sync-memory-scope] Auto-sync passes an explicit allow-list
                 // of shared stable files (currently only GLOBAL.md) and
@@ -338,7 +402,7 @@ object ConfigBackup {
         // out of the payload entirely and are reported on import as needing
         // re-authorization.
         val mcpServers = JSONArray()
-        if (mcpRepo != null) {
+        if (mcpRepo != null && wanted(BackupScope.MCP)) {
             for (server in mcpRepo.servers.value) {
                 val raw = runCatching { mcpRepo.exportServerJSON(server) }.getOrNull() ?: continue
                 val obj = runCatching { JSONObject(raw) }.getOrNull() ?: continue
@@ -354,7 +418,7 @@ object ConfigBackup {
         // small enough to embed directly in this JSON document.
         val chatSessions = JSONArray()
         val chatMessages = JSONArray()
-        if (chatRepo != null && chatWindowDays > 0) {
+        if (chatRepo != null && chatWindowDays > 0 && wanted(BackupScope.CHATS)) {
             val cutoff = System.currentTimeMillis() - chatWindowDays * 24L * 3600 * 1000
             val sessions = runCatching {
                 chatRepo.dao.sessionsUpdatedSince(cutoff)
