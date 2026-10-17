@@ -28,13 +28,29 @@ object OpenCodeFree {
     /** Cleartext marker the upstream expects in place of a real account key. */
     const val PUBLIC_KEY = "public"
 
+    // ------------------------------------------------------- version identity
+
     /**
-     * Reported CLI version. The upstream answers **426 Upgrade Required** to
-     * any identity below the v2 line (`2.0.0`), and npm's `opencode-ai`
-     * stable channel is still on 1.x — so probing npm yields a version that
-     * is guaranteed to be rejected. Pin a known-good floor instead.
+     * Pinned known-good CLI version — the last-resort fallback.
+     *
+     * The upstream enforces a **floor**, not an exact match, and it states that
+     * floor in its own 426 body ("OpenCode 1.18.0 or newer is required…").
+     * Probing confirmed there is **no upper bound**: `999.0.0` is accepted.
+     * That is the property which makes the self-healing below sound — any
+     * version at or above the floor works, so tracking the newest published
+     * version is always safe.
      */
-    const val CLIENT_VERSION = "2.0.29"
+    const val DEFAULT_CLIENT_VERSION = "1.19.3"
+
+    /** Lowest version the free tier has been observed to accept. */
+    const val MIN_SUPPORTED_CLIENT_VERSION = "1.18.0"
+
+    /**
+     * Where the newest published CLI version is advertised. The `/latest`
+     * endpoint is ~2 KB (the full packument is ~25 MB), which is why we read
+     * the former.
+     */
+    const val VERSION_ENDPOINT = "https://registry.npmjs.org/opencode-ai/latest"
 
     /** UA channel segment (official release line). */
     private const val UA_CHANNEL = "prod"
@@ -45,12 +61,155 @@ object OpenCodeFree {
     /** `x-opencode-project` when there is no real project context (the CLI default). */
     private const val PROJECT = "global"
 
+    private val adoptedVersion = java.util.concurrent.atomic.AtomicReference<String?>(null)
+    private val advertisedVersion = java.util.concurrent.atomic.AtomicReference<String?>(null)
+    private val refreshStarted = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    private val CORE_VERSION_RE = Regex("""\d+(?:\.\d+){1,3}""")
+    private val REQUIRED_VERSION_RE =
+        Regex("""[Oo]pen[Cc]ode\s+(\d+(?:\.\d+){1,3})""")
+
+    /** Strip a leading `v` and any prerelease/build suffix: `v1.20.0-beta.3` -> `1.20.0`. */
+    fun normalizeVersion(raw: String?): String? {
+        val trimmed = raw?.trim()?.removePrefix("v") ?: return null
+        val core = trimmed.substringBefore('-').substringBefore('+')
+        return core.takeIf { CORE_VERSION_RE.matches(it) }
+    }
+
+    /** Numeric dotted comparison. Garbage input is treated as "not at least". */
+    fun isVersionAtLeast(candidate: String, floor: String): Boolean {
+        val a = normalizeVersion(candidate) ?: return false
+        val b = normalizeVersion(floor) ?: return false
+        val ap = a.split('.').map { it.toInt() }
+        val bp = b.split('.').map { it.toInt() }
+        for (i in 0 until maxOf(ap.size, bp.size)) {
+            val x = ap.getOrElse(i) { 0 }
+            val y = bp.getOrElse(i) { 0 }
+            if (x != y) return x > y
+        }
+        return true
+    }
+
+    /** `2.0.0` -> `2.0.1`. Adopt a hair ABOVE the demanded floor, never exactly at it. */
+    fun bumpPatch(version: String): String {
+        val parts = version.split('.').toMutableList()
+        val last = parts.last().toIntOrNull() ?: 0
+        parts[parts.size - 1] = (last + 1).toString()
+        return parts.joinToString(".")
+    }
+
     /**
-     * v2 identity UA. The upstream matches `[Oo]penCode/…` and requires a
-     * numeric version; a three-segment form is what the current CLI sends and
-     * is what we emit.
+     * Pull the demanded version out of a 426 body, e.g.
+     * `{"type":"UpgradeRequired","message":"OpenCode 1.18.0 or newer is required…"}`
+     * returns `1.18.0`. Null when the body says nothing usable.
      */
-    fun userAgent(): String = "opencode/$UA_CHANNEL/$CLIENT_VERSION/$UA_CLIENT"
+    fun parseRequiredVersion(body: String): String? {
+        val match = REQUIRED_VERSION_RE.find(body) ?: return null
+        return normalizeVersion(match.groupValues[1])
+    }
+
+    /**
+     * Adopt a version the server explicitly demanded. Called when a request
+     * comes back 426, so the very next attempt (the retry) is already above
+     * the floor instead of failing the same way again.
+     *
+     * @return true when this call raised the effective version.
+     */
+    fun adoptRequiredVersion(body: String): Boolean {
+        val required = parseRequiredVersion(body) ?: return false
+        if (!isVersionAtLeast(required, MIN_SUPPORTED_CLIENT_VERSION)) return false
+        val next = bumpPatch(required)
+        while (true) {
+            val current = adoptedVersion.get()
+            if (current != null && isVersionAtLeast(current, next)) return false
+            if (adoptedVersion.compareAndSet(current, next)) return true
+        }
+    }
+
+    /**
+     * Record the newest version the registry advertises. Only ever moves
+     * forward, and only once past the known floor.
+     *
+     * @return true when this call raised the advertised version.
+     */
+    fun resolveAdvertisedVersion(raw: String?): Boolean {
+        val version = normalizeVersion(raw) ?: return false
+        if (!isVersionAtLeast(version, MIN_SUPPORTED_CLIENT_VERSION)) return false
+        while (true) {
+            val current = advertisedVersion.get()
+            if (current != null && isVersionAtLeast(current, version)) return false
+            if (advertisedVersion.compareAndSet(current, version)) return true
+        }
+    }
+
+    /**
+     * Effective version, highest wins:
+     *  1. what the server demanded (most recent, most authoritative),
+     *  2. what the registry advertises,
+     *  3. [DEFAULT_CLIENT_VERSION].
+     *
+     * Layer 3 alone works today; 1 and 2 are what keep working after the floor
+     * moves, so this can no longer rot into a permanent 426.
+     */
+    fun currentVersion(): String {
+        val demanded = adoptedVersion.get()
+        val advertised = advertisedVersion.get()
+        return when {
+            demanded != null && (advertised == null || isVersionAtLeast(demanded, advertised)) -> demanded
+            advertised != null -> advertised
+            else -> DEFAULT_CLIENT_VERSION
+        }
+    }
+
+    /**
+     * Probe the registry once per process, off the request path.
+     *
+     * Deliberately fire-and-forget: the happy path must not pay a network
+     * round-trip for a value it usually does not need. The 426 path
+     * ([adoptRequiredVersion]) is the one that has to be instantaneous, and it
+     * needs no network at all — the server hands us the answer in the error.
+     */
+    fun refreshAdvertisedVersionAsync(fetch: ((String) -> String?)? = null) {
+        if (!refreshStarted.compareAndSet(false, true)) return
+        val job = Runnable {
+            val payload = runCatching { (fetch ?: ::httpGet)(VERSION_ENDPOINT) }.getOrNull()
+            val raw = runCatching {
+                payload?.let { org.json.JSONObject(it).optString("version") }
+            }.getOrNull()
+            resolveAdvertisedVersion(raw)
+        }
+        Thread(job, "opencode-free-version").apply { isDaemon = true }.start()
+    }
+
+    /** Reset discovered state. Test seam only. */
+    fun resetVersionStateForTest() {
+        adoptedVersion.set(null)
+        advertisedVersion.set(null)
+        refreshStarted.set(false)
+    }
+
+    private fun httpGet(url: String): String? {
+        val conn = (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
+            connectTimeout = 4_000
+            readTimeout = 4_000
+            requestMethod = "GET"
+            setRequestProperty("Accept", "application/json")
+            setRequestProperty("User-Agent", userAgent())
+        }
+        return try {
+            if (conn.responseCode !in 200..299) null
+            else conn.inputStream.bufferedReader().use { it.readText() }
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /**
+     * Identity UA. The upstream matches `[Oo]penCode/…` followed by a numeric
+     * version; any shape with a version and no channel segment is accepted, and
+     * we emit the three-segment form the official CLI sends.
+     */
+    fun userAgent(): String = "opencode/$UA_CHANNEL/${currentVersion()}/$UA_CLIENT"
 
     // ---------------------------------------------------------------- session
 

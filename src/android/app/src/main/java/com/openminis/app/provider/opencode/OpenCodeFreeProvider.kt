@@ -36,6 +36,14 @@ class OpenCodeFreeProvider(
 
     override val name = "OpenCode 免费"
 
+    init {
+        // [T-opencode-free] Learn the newest published CLI version off the
+        // request path, so a request sent later in this process already
+        // carries a version above a floor that may have moved since release.
+        // Non-blocking: the first request just uses the pinned default.
+        OpenCodeFree.refreshAdvertisedVersionAsync()
+    }
+
     /**
      * One session identity per provider instance, reused for every request.
      *
@@ -58,5 +66,39 @@ class OpenCodeFreeProvider(
     /** Apply the free-tier body contract (forced stream + gate tools). */
     override fun gateBodyForInstance(body: JSONObject) {
         OpenCodeFree.applyBodyGate(body)
+    }
+
+    /**
+     * [T-opencode-free] Self-heal on an upgrade demand.
+     *
+     * When the upstream raises its floor it answers 426 with the version it
+     * wants in the body. The parent maps that to a retryable error, so this
+     * callback runs first and adopts the demanded version — which means the
+     * automatic retry re-builds its UA ([extraHeadersForInstance] runs per
+     * build) already above the new floor and succeeds, without the user
+     * updating the app.
+     */
+    override fun onHttpErrorResponse(statusCode: Int, body: String) {
+        if (statusCode == HTTP_UPGRADE_REQUIRED) {
+            val adopted = OpenCodeFree.adoptRequiredVersion(body)
+            com.openminis.app.logging.AppLogger.warning(
+                "OpenCodeFree",
+                "[T-opencode-free] upstream demanded a newer client (426); " +
+                    "adoptedVersion=$adopted effective=${OpenCodeFree.currentVersion()}",
+            )
+        } else if (statusCode == HTTP_FORBIDDEN && body.contains("FreeTierError")) {
+            // The gate rejected our identity outright (e.g. the UA shape
+            // changed). The registry probe is the only lever we have left.
+            com.openminis.app.logging.AppLogger.warning(
+                "OpenCodeFree",
+                "[T-opencode-free] identity rejected (403 FreeTierError); " +
+                    "effective=${OpenCodeFree.currentVersion()} body=${body.take(200)}",
+            )
+        }
+    }
+
+    private companion object {
+        const val HTTP_UPGRADE_REQUIRED = 426
+        const val HTTP_FORBIDDEN = 403
     }
 }

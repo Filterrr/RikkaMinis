@@ -49,25 +49,61 @@ value everywhere, and so do we.
 required; the current client dropped it, and sending it is harmless but
 pointless.)
 
-### User-Agent is version-gated
+### User-Agent is version-gated — by a FLOOR, with no upper bound
 
-The UA is parsed, and the version inside it is checked against a floor:
+The UA is parsed, and the version inside it is checked against a floor. The
+floor is **not** pinned to a major line: the endpoint accepts anything at or
+above it, including versions far beyond what has been published.
 
 | UA | Result |
 | --- | --- |
 | `opencode/1.19.0` | 200 |
 | `opencode/prod/2.0.29/cli` | 200 |
-| `OpenCode/prod/2.0.29/cli` | 200 (prefix match is case-insensitive) |
+| `opencode/prod/999.0.0/cli` | **200 — no upper bound** |
+| `opencode/1.18.0` | 200 (exactly at the floor) |
+| `opencode/1.0.0` | **426 Upgrade Required** |
 | `opencode/0.0.1` | **426 Upgrade Required** |
-| `opencode/prod/1.0.0/cli` | **426 Upgrade Required** |
-| `opencode/x/y` | **403** (version not parseable) |
-| `opencode/prod/x/cli` | **403** |
-| `opencode/prod/2.0.29/cli/extra` | **403** (extra segment) |
+| `OpenCode/1.19.0` | 200 (prefix match is case-insensitive) |
+| `opencode` bare | **403 `FreeTierError`** |
+| `opencode/x.y.z` | **403** (version not parseable) |
+| `curl/8.5.0` | **403** (no `opencode` prefix) |
 
-Note the trap: npm's `opencode-ai` **stable** channel was still on 1.x when
-this was written, so probing npm for "the current version" yields a value
-guaranteed to be rejected. The floor is v2, so `CLIENT_VERSION` is pinned to a
-known-good v2 value rather than derived from the registry.
+The 426 body names the floor it wants, verbatim:
+
+```json
+{"type":"error","error":{"type":"UpgradeRequired",
+ "message":"OpenCode 1.18.0 or newer is required to use the free tier"}}
+```
+
+> **Correction (superseded an earlier claim in this doc).** An earlier revision
+> of this file asserted the floor was **v2** (`2.0.0`) and concluded that npm
+> could not be used as a version source. Both were wrong: the observed floor is
+> **1.18.0**, and while npm's `latest` (1.19.3) is *below* old `2.0.29` pins it
+> is perfectly acceptable. Re-probing is what caught this; the tables above
+> are the re-probed values.
+
+Because the gate is a floor with no ceiling, "use the newest published
+version" is always a safe answer — which is what makes the self-healing in
+`OpenCodeFree` sound. Three layers, highest wins:
+
+1. **Server demand** — a 426 body states the floor. `adoptRequiredVersion`
+   parses it, validates it against `MIN_SUPPORTED_CLIENT_VERSION`, and steps
+   one patch *above* it (`1.18.0` → `1.18.1`) so the value is strictly greater
+   than the demand rather than exactly at it. This costs no network I/O — the
+   server hands over the answer in the error body — so the retry that follows
+   immediately is already above the new floor.
+2. **Registry advertisement** — `https://registry.npmjs.org/opencode-ai/latest`
+   is probed once per process, off the request path. Use `/latest`, **not** the
+   full packument: `/latest` is ~2 KB, the packument is ~25 MB and contains
+   12k+ versions.
+3. **Pinned default** — `DEFAULT_CLIENT_VERSION` (1.19.3). Works on its own;
+   1 and 2 are what keep it working after the floor moves.
+
+Note that npm's `stable`/`latest` channel tracks the **1.x** line (12,253
+published versions, none ≥ 2.0.0 when this was written), so a naive "use npm
+`latest`" would have produced a version that an old v2-floor assumption
+rejected. Under the real floor it is fine — but the point stands that the
+version must be validated against a *known-accepted* floor, never assumed.
 
 ### Session id prefix is decoded
 

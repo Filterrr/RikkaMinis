@@ -418,6 +418,20 @@ open class OpenAIProvider constructor(
      */
     protected open fun gateBodyForInstance(body: JSONObject) {}
 
+    /**
+     * [T-opencode-free] Observe a non-2xx response BEFORE it is classified.
+     *
+     * Extension seam for providers that can repair a failed request in flight
+     * (e.g. the OpenCode free tier, whose upstream answers 426 with the client
+     * version it wants — adopt it here and the caller's automatic retry
+     * succeeds without a user-visible failure). Default: no-op, so no existing
+     * provider is affected.
+     *
+     * Called for every non-2xx, including the ones handled inline above (image
+     * retry, SSE error events). Implementations must not block on network I/O.
+     */
+    protected open fun onHttpErrorResponse(statusCode: Int, body: String) {}
+
     private fun Request.Builder.applyKeyAuth(token: String): Request.Builder =
         if (isAzure) header("api-key", token) else header("Authorization", "Bearer $token")
 
@@ -2885,6 +2899,11 @@ open class OpenAIProvider constructor(
     }
 
     private fun mapHttpError(statusCode: Int, body: String, retryAfterMs: Long? = null): LLMError {
+        // [T-opencode-free] Let a provider observe/repair the failure before
+        // classification. No-op by default; the OpenCode free tier uses it to
+        // adopt a server-demanded client version so the retry succeeds.
+        onHttpErrorResponse(statusCode, body)
+
         // [T-multi-api-key] Quota classification MUST run before the 401/403/429
         // split. OpenAI reports "out of credit" as 429 + `insufficient_quota`,
         // and several relays report it as 403 or 402 — all of which the
@@ -2896,6 +2915,23 @@ open class OpenAIProvider constructor(
         }
         if (statusCode == 401 || statusCode == 403) return LLMError.InvalidApiKey()
         if (statusCode == 429) return LLMError.RateLimited(retryAfterMs = retryAfterMs)
+
+        // [T-opencode-free] 426 Upgrade Required is a *client-version* problem,
+        // not a server fault. The OpenCode free tier answers it when its floor
+        // moves, and the body names the version it wants. Retryable is the
+        // load-bearing part: [onHttpErrorResponse] has just adopted that
+        // version (or will have, for providers that use this hook), so the
+        // bounded retry reconnects with a fresh UA and recovers on its own.
+        // Before this, 426 fell through to ProviderError below — a dead end
+        // that also filed the failure as server-side.
+        if (statusCode == 426) {
+            val demanded = try {
+                JSONObject(body).optJSONObject("error")?.safeOptString("message", "") ?: body
+            } catch (_: Exception) {
+                body
+            }
+            return LLMError.TransientError("HTTP 426 Upgrade Required: ${demanded.take(200)}")
+        }
 
         val message = try {
             val json = JSONObject(body)
