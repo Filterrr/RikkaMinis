@@ -105,35 +105,47 @@ object OpenCodeFreeModelsApi {
     fun fetchFreeCandidates(
         connectTimeoutMs: Int = 10_000,
         readTimeoutMs: Int = 15_000,
-    ): List<LLMModel>? = try {
-        val url = URL("${OpenCodeFree.BASE_URL}/models")
-        val conn = (url.openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            connectTimeout = connectTimeoutMs
-            readTimeout = readTimeoutMs
-            instanceFollowRedirects = true
-            // The identity block is required even for /models: omitting it
-            // yields 403 FreeTierError.
-            for ((k, v) in OpenCodeFree.identityHeaders(OpenCodeFree.newSessionId())) {
-                setRequestProperty(k, v)
+    ): List<LLMModel>? {
+        // Block body (not `= try { ... }`): a non-local `return` is prohibited
+        // inside a function declared with an expression body, and the early
+        // exits below need one. The expression chain here is if/else only.
+        return try {
+            val url = URL("${OpenCodeFree.BASE_URL}/models")
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = connectTimeoutMs
+                readTimeout = readTimeoutMs
+                instanceFollowRedirects = true
+                // The identity block is required even for /models: omitting it
+                // yields 403 FreeTierError.
+                for ((k, v) in OpenCodeFree.identityHeaders(OpenCodeFree.newSessionId())) {
+                    setRequestProperty(k, v)
+                }
             }
-        }
-        try {
-            val status = conn.responseCode
-            if (status !in 200..299) return null
-            val text = conn.inputStream.bufferedReader().use { it.readText() }
-            val data = JSONObject(text).optJSONArray("data") ?: return null
-            val out = ArrayList<LLMModel>()
-            for (i in 0 until data.length()) {
-                val id = data.optJSONObject(i)?.optString("id", "") ?: continue
-                if (!looksFree(id)) continue
-                out += OpenCodeFree.modelForId(id)
+            try {
+                val status = conn.responseCode
+                if (status !in 200..299) {
+                    null
+                } else {
+                    val text = conn.inputStream.bufferedReader().use { it.readText() }
+                    val data = JSONObject(text).optJSONArray("data")
+                    if (data == null) {
+                        null
+                    } else {
+                        val out = ArrayList<LLMModel>()
+                        for (i in 0 until data.length()) {
+                            val id = data.optJSONObject(i)?.optString("id", "") ?: continue
+                            if (!looksFree(id)) continue
+                            out += OpenCodeFree.modelForId(id)
+                        }
+                        out
+                    }
+                }
+            } finally {
+                conn.disconnect()
             }
-            out
-        } finally {
-            conn.disconnect()
+        } catch (_: Exception) {
+            null
         }
-    } catch (_: Exception) {
-        null
     }
 }
