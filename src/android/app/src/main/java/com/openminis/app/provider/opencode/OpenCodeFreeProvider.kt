@@ -95,17 +95,39 @@ class OpenCodeFreeProvider(
     override fun classifyHttpError(statusCode: Int, body: String): com.openminis.app.data.model.LLMError? {
         if (statusCode != HTTP_FORBIDDEN) return null
         if (!body.contains("FreeTierError")) return null
-        return if (OpenCodeFree.identityLooksValid()) {
-            // Valid identity ⇒ the rejection is environmental (rate limiting),
-            // not a contract failure: retry rather than declare a bad key.
-            com.openminis.app.data.model.LLMError.TransientError(
-                "OpenCode free tier throttled the request (403 FreeTierError); retrying",
-            )
-        } else {
-            com.openminis.app.data.model.LLMError.ProviderError(
-                "OpenCode free tier rejected this client's identity (403 FreeTierError)",
-            )
-        }
+        // [T-opencode-free] 403 FreeTierError is an ENTITLEMENT decision, not a
+        // throttle. Measured on the live endpoint:
+        //
+        //   free model    -> 403 FreeTierError
+        //   paid model    -> 401 AuthError        <- identity accepted, just needs an account
+        //   bogus model   -> 400 server_error     <- the id was validated first
+        //
+        // The 401/400 outcomes prove the request reached the origin and was
+        // understood; only free-tier entitlement is being refused. The response
+        // also carries `Cf-Placement: remote-<IAD>` and a stable
+        // x-opencode-log-id, and it is byte-identical across every header, UA,
+        // session-id and path variation tried. A throttled request would not
+        // return the same 401 for a sibling model.
+        //
+        // So this must NOT be reported as retryable. Doing so burned the whole
+        // 1s/2s/4s retry ladder on a verdict that cannot change, and told the
+        // user "throttled; retrying" — which is both wrong and misleading.
+        //
+        // ProviderError, not InvalidApiKey: this provider is keyless, so
+        // "invalid key" would be nonsense to the user and would send them
+        // hunting for a credential that does not exist. ProviderError is
+        // isFallbackable, so a model group still moves on to the next member.
+        //
+        // Deliberately not phrased as permanent: the refusal correlates with
+        // the originating network (the observed case came from a datacenter
+        // egress with `Cf-Placement: remote-*`), so a normal mobile/wifi
+        // connection may be served fine. The wording tells the user what
+        // happened without asserting it will always happen.
+        return com.openminis.app.data.model.LLMError.ProviderError(
+            "OpenCode 免费通道拒绝了本次请求（403 FreeTierError）。" +
+                "该端点仅为官方客户端提供免费额度，你的当前网络出口可能不在其允许范围内。" +
+                "换用其他网络后重试，或在模型分组中改用其他提供商。",
+        )
     }
 
     /**

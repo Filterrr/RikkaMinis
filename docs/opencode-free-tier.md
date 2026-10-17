@@ -29,58 +29,118 @@ receiving 200 from all four.
 
 ## Identity headers
 
-Every header below must be **present**. Dropping `x-opencode-client` or
-`x-opencode-project` drove the pass rate to **0/4** in a repeated-trial probe,
-so those two are hard requirements, not decoration. The four session headers
-must exist too, but are *not* required to carry equal values — mixing them
-still passes; the official CLI sends one value everywhere and so do we.
+The header block is copied from the official client, recovered from
+`opencode-linux-arm64-musl` (see "What the official client actually sends"). For
+its own provider it sends the first five rows below and **omits**
+`x-session-affinity`/`x-session-id`, which belong to the other branch.
 
-| Header | Value | Required? |
-| --- | --- | --- |
-| `Authorization` | `Bearer public` | yes |
-| `User-Agent` | `opencode/prod/1.19.3/cli` | yes |
-| `x-opencode-client` | `cli` | **yes (0/4 without)** |
-| `x-opencode-project` | `global` | **yes (0/4 without)** |
-| `x-opencode-session` | session id | yes (existence) |
-| `x-opencode-session-id` | session id | yes (existence) |
-| `x-session-affinity` | session id | yes (existence) |
-| `x-session-id` | session id | yes (existence) |
-| `Accept` | `text/event-stream` | yes |
-
-`x-opencode-request` must **not** be sent. (Older write-ups list it as
-required; the current client dropped it, and sending it is harmless but
-pointless.)
-
-### 403 is overloaded — measure a PASS RATE, never a single shot
-
-This is the most important operational fact about the endpoint, and it was
-learned the hard way. A single request proves nothing about the gate, because
-the same request alternates between success and `403 FreeTierError`:
-
-| Variant | Pass rate (4 trials) |
+| Header | Value |
 | --- | --- |
-| full identity + gate tools | **3/4** |
-| no `tools` at all | **0/4** |
-| gate tools, `x-opencode-project` removed | **0/4** |
-| gate tools, `x-opencode-client` removed | **0/4** |
+| `Authorization` | `Bearer public` |
+| `User-Agent` | `opencode/<version>` — **not** `opencode/<ver>/prod/cli` |
+| `x-opencode-client` | `cli` |
+| `x-opencode-project` | `global` |
+| `x-opencode-request` | request/user id (the client sends `user.id`) |
+| `x-opencode-session` | session id |
+| `x-opencode-session-id` | session id |
+| `Accept` | `text/event-stream` |
 
-So `403 FreeTierError` means one of two different things: *your request
-violates the contract* (deterministic, 0/4) or *you are being throttled*
-(intermittent). Sending the same payload twice and observing 403 then 200 does
-**not** mean "sometimes it is allowed" — it means one of the two trials was
-throttled.
+> **Retracted claim.** An earlier edition asserted that dropping
+> `x-opencode-client` or `x-opencode-project` "drove the pass rate to 0/4" and
+> therefore that both were load-bearing. That measurement was taken while the
+> endpoint was refusing the free tier for this egress (see the 403 section), so
+> the 0/4 was the entitlement refusal, not the missing header. Removing either
+> header makes no measurable difference to the outcome. They are still sent,
+> because matching the official client is the safest posture, but this file no
+> longer claims they are individually required.
+>
+> Likewise, the earlier advice that "`x-opencode-request` must **not** be sent"
+> is **wrong** — the current client sends it on this branch. Sending it is
+> harmless either way.
 
-Two consequences:
+### 403 `FreeTierError` is an ENTITLEMENT refusal, not a throttle
 
-1. **Any probe must repeat.** Earlier editions of this document recorded
-   single-shot results (including one that blamed a missing
-   `x-opencode-project` without noticing the same request also passed 2/4 in a
-   later run). Single-shot 403s are not evidence. The pass-rate table above is
-   the corrected reading.
-2. **The client must not treat 403 as a dead end.** Mapping it to a bad-API-key
-   error is actively harmful for a keyless provider — there is no key for the
-   user to fix, and the request would have succeeded on retry. The provider
-   classifies a 403-with-valid-identity as retryable instead.
+**This section replaces an earlier, wrong reading.** A previous edition claimed
+403 was "overloaded" (contract violation *or* throttle) and advised treating it
+as retryable. That was based on observing the same request return 200 and 403
+at different times, and inferring throttling. The real explanation is different.
+
+The decisive test is to vary the MODEL while holding identity fixed:
+
+| Request (same headers, same connection) | Result |
+| --- | --- |
+| free model (`deepseek-v4.1-flash-free`) | **403 `FreeTierError`** |
+| paid model (`claude-opus-4-6`, `gpt-5`) | **401 `AuthError`** — "Missing API key" |
+| nonexistent model id | **400 `server_error`** — "Model is unavailable" |
+
+A throttled request could not return `401` for a sibling model, and a blocked
+client could not get as far as validating a model id. So the request **is**
+reaching the origin and **is** understood: identity is accepted, and only
+*free-tier entitlement* is being refused.
+
+Two more observations support this:
+
+- The refusal is byte-identical across every variation tried: UA (`1.19.3`,
+  `2.0.29`, `999.0.0`, `opencode/1.19.3`, no UA), `x-opencode-project` present
+  or absent, `x-opencode-client` present or absent, all four session headers,
+  five session-id formats, and five request paths. Reproducing the **exact**
+  header block the official binary builds (recovered from
+  `opencode-linux-arm64-musl`, see below) also returns 403.
+- The response carries `Cf-Placement: remote-<IAD>` and a stable
+  `x-opencode-log-id`, i.e. Cloudflare routed it to a remote datacentre edge.
+
+The correlation is with the **originating network**, not with any header:
+the case studied here came from a datacentre egress
+(`AS400618 Prime Security Corp.`, Tokyo) while Cloudflare reported
+`remote-IAD`. A residential/mobile connection may well be served. That is why
+the user-facing message says the current network may not be permitted rather
+than asserting the provider is dead.
+
+#### What the official client actually sends
+
+Recovered by downloading `opencode-linux-arm64-musl` and reading the header
+construction out of the binary — the authoritative source, since the npm
+package is only a 4-file stub that fetches this binary:
+
+```js
+headers: {
+  "x-opencode-session-id": sessionID,
+  ...(model.providerID.startsWith("opencode")
+    ? { "x-opencode-project": project.id,
+        "x-opencode-session": sessionID,
+        "x-opencode-request": user.id,
+        "x-opencode-client": flags.client,
+        "User-Agent": `opencode/${version}` }      // NOT opencode/<ver>/prod/cli
+    : { "x-session-affinity": ...,
+        "X-Session-Id": ... })
+}
+```
+
+So for its own provider the client sends `x-opencode-request` and **omits**
+`x-session-affinity`/`X-Session-Id` — the opposite of what an earlier edition
+of this file asserted ("`x-opencode-request` must not be sent"). Both branches
+were tried against the live endpoint; neither changes the 403.
+
+#### Consequence for error handling
+
+The provider classifies this as a **non-retryable** `ProviderError`:
+
+- Not retryable, because the verdict cannot change within a request. Reporting
+  it as transient burned the whole 1 s/2 s/4 s ladder and surfaced the
+  misleading text *"throttled the request; retrying"*.
+- Not `InvalidApiKey`, because this provider is keyless — telling the user their
+  key is bad would send them looking for a credential that does not exist.
+  `ProviderError` is `isFallbackable`, so a model group still advances to the
+  next member.
+
+### Probing discipline
+
+Because the free tier can be refused wholesale depending on network egress,
+**any probe result is only meaningful alongside the egress it came from**, and
+a single observation never establishes a rule. Earlier single-shot probes in
+this feature produced two claims that later had to be retracted (that dropping
+`x-opencode-project` was tolerated; that empty tool schemas are rejected).
+Report a pass rate over repeated trials, and record the network context.
 
 ### User-Agent is version-gated — by a FLOOR, with no upper bound
 
@@ -152,15 +212,15 @@ bitwise-inverted before encoding.
 | --- | --- |
 | `stream` | Must be `true`. The endpoint forces streaming. |
 | Gate tools | `shell`, `glob`, `grep`, `read` must all be declared — **0/4 without them**. |
-| Schema depth | Ambiguous, and deliberately not relied upon: a mixed-shape probe (bare names, empty `properties`, real schemas) could not separate the variants, because 403 is also what a throttle returns. We ship full real schemas, which is what the official client declares, so the uncertainty is moot. |
+| Schema depth | Ambiguous, and deliberately not relied upon: a mixed-shape probe (bare names, empty `properties`, real schemas) could not separate the variants, because a wholesale 403 masks the difference. We ship full real schemas, which is what the official client declares, so the uncertainty is moot. |
 | Placement | When the caller passed no tools at all, the gate set is the whole `tools` array. When the caller passed tools, the gate set is appended to them; the app's own tools are preserved. |
 
 > Earlier editions of this file asserted flatly that an empty-`properties`
 > schema is rejected. That claim came from a single-shot probe and does **not**
 > survive repetition: in a spaced re-run, four gate tools with *empty* schemas
 > returned 200 and the same request with full schemas returned 403 moments
-> later. The variable was the throttle, not the schema. Recorded here as
-> unresolved rather than stated as fact, per the pass-rate rule above.
+> later. The variable was the entitlement refusal described above, not the
+> schema. Recorded here as unresolved rather than stated as fact.
 
 Because the gate tools are advertised to the model, they can be *called* by a
 model that does not realize they are inert. When we inject them into a request
@@ -197,7 +257,8 @@ A probe found the endpoint *does* distinguish them, just not in the listing: a
 request for a **paid** model answers **401** (an account is required), while a
 free model is served without one. `OpenCodeFreeModelsApi.classifyProbe` encodes
 exactly that, and treats **403 as UNKNOWN** rather than as a verdict — because
-403 is the overloaded code described above, and reading it as "this model is
+a wholesale 403 can mean the whole tier is being refused right now, so reading
+it as "this model is
 unavailable" would drop a good model every time the endpoint was busy.
 
 ### What ships
@@ -238,12 +299,9 @@ probing and pinned, with the version floor self-healed at runtime.
 Limits are enforced per session id, which is why one session id is minted per
 provider instance and reused for every request rather than rotated per call:
 rotating buys a marginally different fingerprint at the cost of immediate 429s.
-Expect occasional 429s regardless; they are load-related, not a contract
-violation.
+Expect occasional 429s; they are load-related, not a contract violation.
 
-⚠️ Because throttling surfaces as `403 FreeTierError` rather than 429, a
-throttled request is indistinguishable from a contract violation **by body**.
-The client separates them by checking that its own identity block is complete
-(`OpenCodeFree.identityLooksValid()`) and treats a 403-with-valid-identity as
-retryable. See the pass-rate table above.
+Real throttling arrives as **429**, not as `403 FreeTierError`. A 403 with that
+body is the entitlement refusal described above and is treated as
+**non-retryable**; it is not a rate-limit signal.
 

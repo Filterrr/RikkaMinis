@@ -81,18 +81,32 @@ object OpenCodeFreeModelsApi {
      *
      * The discriminator is the status code, not the body: the endpoint answers
      * **401** for a paid model (an account is required) and does not answer 401
-     * for a free one. 200 means served. 403 is ambiguous on this upstream — it
-     * covers both a contract violation and a throttle — so it is reported as
-     * unknown rather than as a verdict.
+     * for a free one. 200 means served.
+     *
+     * 403 is reported as UNKNOWN, not as a verdict. Measured on the live
+     * endpoint, 403 `FreeTierError` is an *entitlement* refusal for the whole
+     * tier on the current network egress (a sibling paid model still returns
+     * 401 and a bogus id returns 400, so the request was understood). Reading
+     * it as "this model is unavailable" would drop every good model whenever
+     * the tier happens to be refused, so it must not decide anything.
      */
     fun classifyProbe(statusCode: Int): ProbeVerdict = when (statusCode) {
         in 200..299 -> ProbeVerdict.SERVED
         401 -> ProbeVerdict.PAID
-        403 -> ProbeVerdict.UNKNOWN   // throttle or contract — not decisive
-        else -> ProbeVerdict.UNKNOWN
+        else -> ProbeVerdict.UNKNOWN   // 403 = tier refused for this egress
     }
 
     enum class ProbeVerdict { SERVED, PAID, UNKNOWN }
+
+    /**
+     * True when an error status means the whole free tier is being refused for
+     * this network egress, as opposed to a per-model answer.
+     *
+     * Exists so the refresh path can keep the cached/curated catalogue instead
+     * of overwriting it with an empty list when the tier is unavailable.
+     */
+    fun isTierRefusal(statusCode: Int, body: String): Boolean =
+        statusCode == 403 && body.contains("FreeTierError")
 
     /**
      * Fetch the endpoint's model list and reduce it to free-tier candidates.
@@ -116,8 +130,9 @@ object OpenCodeFreeModelsApi {
                 connectTimeout = connectTimeoutMs
                 readTimeout = readTimeoutMs
                 instanceFollowRedirects = true
-                // The identity block is required even for /models: omitting it
-                // yields 403 FreeTierError.
+                // Send the full identity block even for /models, to match the
+                // official client. (Measured: /models answers 200 with or
+                // without it, so this is faithfulness, not a requirement.)
                 for ((k, v) in OpenCodeFree.identityHeaders(OpenCodeFree.newSessionId())) {
                     setRequestProperty(k, v)
                 }

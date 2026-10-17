@@ -275,32 +275,6 @@ object OpenCodeFree {
         "Accept" to "text/event-stream",
     )
 
-    /**
-     * [T-opencode-free] True when the identity block we emit is complete and
-     * self-consistent — i.e. a 403 arriving alongside it cannot be blamed on
-     * our headers.
-     *
-     * This is what lets the provider tell a throttle apart from a genuine
-     * contract violation, both of which arrive as `403 FreeTierError`. Every
-     * header below was confirmed load-bearing by a 4-trial pass-rate probe:
-     * dropping `x-opencode-project` or `x-opencode-client` drove the pass rate
-     * to 0/4, while the full block passed 3/4 (the single failure being the
-     * throttle this method exists to identify).
-     */
-    fun identityLooksValid(): Boolean {
-        val session = newSessionId()
-        val headers = identityHeaders(session)
-        val required = listOf(
-            "Authorization", "User-Agent", "x-opencode-client", "x-opencode-project",
-            "x-opencode-session", "x-opencode-session-id", "x-session-affinity", "x-session-id",
-        )
-        return required.all { headers[it].isNullOrBlank().not() } &&
-            // The UA must carry a version the endpoint can parse; a header
-            // block with an unparseable version is a deterministic 403.
-            headers["User-Agent"]?.contains('/') == true &&
-            isVersionAtLeast(headers.getValue("User-Agent").split('/').getOrNull(2).orEmpty(), MIN_SUPPORTED_CLIENT_VERSION)
-    }
-
     // -------------------------------------------------------------- body gate
 
     /**

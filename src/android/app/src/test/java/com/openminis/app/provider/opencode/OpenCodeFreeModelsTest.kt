@@ -71,7 +71,8 @@ class OpenCodeFreeModelsTest {
 
     @Test
     fun `403 is not treated as a verdict`() {
-        // 403 covers both a throttle and a contract violation, so it must not
+        // 403 FreeTierError refuses the whole tier for the current network
+        // egress, so it must not
         // be read as "this model is unavailable" -- doing so would drop a
         // perfectly good model every time the endpoint was busy.
         assertEquals(
@@ -85,6 +86,21 @@ class OpenCodeFreeModelsTest {
     }
 
     @Test
+    fun `tier refusal is recognised so the catalogue is not wiped`() {
+        // The refresh path keeps the cached/curated list when this is true;
+        // otherwise a refused tier would empty the model picker.
+        assertTrue(
+            OpenCodeFreeModelsApi.isTierRefusal(
+                403,
+                """{"type":"error","error":{"type":"FreeTierError","message":"..."}}""",
+            ),
+        )
+        assertFalse(OpenCodeFreeModelsApi.isTierRefusal(403, """{"error":"something else"}"""))
+        assertFalse(OpenCodeFreeModelsApi.isTierRefusal(401, "FreeTierError"))
+        assertFalse(OpenCodeFreeModelsApi.isTierRefusal(200, "FreeTierError"))
+    }
+
+    @Test
     fun `modelForId reuses curated display names and falls back to the id`() {
         val known = OpenCodeFree.modelForId("beam-free")
         assertTrue("curated id keeps its friendly name", known.displayName.contains("Beam"))
@@ -93,12 +109,5 @@ class OpenCodeFreeModelsTest {
         assertEquals("some-brand-new-model-free", discovered.displayName)
         assertEquals(OpenCodeFree.MODEL_PROVIDER_TAG, discovered.provider)
         assertTrue(discovered.contextWindow != null && discovered.contextWindow!! > 0)
-    }
-
-    @Test
-    fun `identity self-check passes for the shipped header block`() {
-        // A 403 arriving with a valid identity is a throttle, so this predicate
-        // is what keeps a busy endpoint from being reported as a bad key.
-        assertTrue(OpenCodeFree.identityLooksValid())
     }
 }
