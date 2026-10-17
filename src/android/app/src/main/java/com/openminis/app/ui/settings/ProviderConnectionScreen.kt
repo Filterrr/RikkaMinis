@@ -102,7 +102,8 @@ fun ProviderConnectionScreen(
         // generic /v1 append must be skipped for it too.
         val appendV1 = instance.providerType != ProviderType.gemini &&
             instance.providerType != ProviderType.antigravity &&
-            instance.providerType != ProviderType.workBuddy
+            instance.providerType != ProviderType.workBuddy &&
+            instance.providerType != ProviderType.openCodeFree
         providerRepository.updateInstance(
             instance.copy(
                 customBaseURL = customBaseURL.ifBlank { null },
@@ -255,6 +256,8 @@ fun ProviderConnectionScreen(
                 // contradicts the account.
                 ProviderType.workBuddy -> com.openminis.app.provider.workbuddy.WorkBuddyConstants
                     .Region.from(instance.workBuddyRegion).backend
+                // [T-opencode-free] Full base including /v1.
+                ProviderType.openCodeFree -> com.openminis.app.provider.opencode.OpenCodeFree.BASE_URL
                 else -> stringResource(R.string.provider_detail_https_api_example_placeholder)
             }
             SettingsSection(header = stringResource(R.string.provider_detail_custom_api_base)) {

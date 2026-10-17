@@ -1473,7 +1473,7 @@ class ModelUseOffloadHandler(
             // xAI (Grok) / Kimi Coding / Antigravity have no image-output
             // models in the current catalog — fall through to empty hint
             // like Anthropic.
-            ProviderType.anthropic, ProviderType.xAI, ProviderType.kimiCode, ProviderType.antigravity, ProviderType.workBuddy, null -> ""
+            ProviderType.anthropic, ProviderType.xAI, ProviderType.kimiCode, ProviderType.antigravity, ProviderType.workBuddy, ProviderType.openCodeFree, null -> ""
         }
     }
 

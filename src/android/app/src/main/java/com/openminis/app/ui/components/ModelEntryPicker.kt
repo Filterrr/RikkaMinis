@@ -407,5 +407,6 @@ fun providerDotColor(providerType: ProviderType?): Color = when (providerType) {
     ProviderType.kimiCode -> ProviderAccents.kimiCode // indigo — Kimi accent
     ProviderType.antigravity -> ProviderAccents.antigravity // blue-violet — Antigravity accent
     ProviderType.workBuddy -> ProviderAccents.workBuddy // blue — WorkBuddy accent
+    ProviderType.openCodeFree -> ProviderAccents.openCodeFree // amber — free tier
     null -> ProviderAccents.fallback
 }

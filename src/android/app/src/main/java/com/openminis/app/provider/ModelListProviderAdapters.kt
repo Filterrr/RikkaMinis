@@ -188,6 +188,11 @@ fun registerModelListProviders() {
     ModelListProviderRegistry.register(ProviderType.kimiCode, KimiModelListAdapter)
     ModelListProviderRegistry.register(ProviderType.antigravity, AntigravityModelListAdapter)
     ModelListProviderRegistry.register(ProviderType.workBuddy, WorkBuddyModelListAdapter)
+    // [T-opencode-free] No adapter: the free tier's live model list mixes ~75
+    // PAID entries with the 9 free ones, and every paid id 403s on send. The
+    // static OpenCodeFree.builtInModels catalogue (wired via
+    // ProviderType.builtInModels) is the picker's source instead, so a user
+    // can never select a model this provider cannot serve.
 }
 
 /**

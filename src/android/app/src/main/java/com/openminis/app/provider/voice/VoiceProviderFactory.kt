@@ -100,6 +100,9 @@ object VoiceProviderFactory {
             // [T-workbuddy-oauth] WorkBuddy's catalog is text/chat only —
             // no audio-in or audio-out models, so no voice shadow provider.
             ProviderType.workBuddy -> null
+
+            // [T-opencode-free] Free tier serves text/chat only.
+            ProviderType.openCodeFree -> null
         }
     }
 

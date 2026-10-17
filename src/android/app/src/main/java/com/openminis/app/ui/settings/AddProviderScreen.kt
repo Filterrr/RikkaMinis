@@ -142,6 +142,9 @@ private val providerDisplayOrder = listOf(
     ProviderType.antigravity,
     // [T-workbuddy-oauth] Tencent CodeBuddy / WorkBuddy.
     ProviderType.workBuddy,
+    // [T-opencode-free] OpenCode keyless free tier — surfaces right after the
+    // paid "OpenAI / Compatible API" row so the no-key option is easy to find.
+    ProviderType.openCodeFree,
     ProviderType.openRouter,
 )
 
@@ -158,6 +161,8 @@ private fun providerIcon(type: ProviderType): Pair<ImageVector, Color> = when (t
     ProviderType.antigravity -> Icons.Default.RocketLaunch to ProviderAccents.antigravity
     // [T-workbuddy-oauth] Cloud — CodeBuddy is a hosted coding assistant.
     ProviderType.workBuddy -> Icons.Default.Cloud to ProviderAccents.workBuddy
+    // [T-opencode-free] Flash — signals "instantly available, no signup".
+    ProviderType.openCodeFree -> Icons.Default.FlashOn to ProviderAccents.openCodeFree
 }
 
 // -- Step 1: Choose Provider Type --
@@ -186,6 +191,7 @@ private fun ChooseProviderScreen(
                     ProviderType.kimiCode -> "Kimi Code"
                     ProviderType.antigravity -> "Antigravity"
                     ProviderType.workBuddy -> "WorkBuddy (CodeBuddy)"
+                    ProviderType.openCodeFree -> "OpenCode Free"
                 }
                 // Describe which vendors each protocol supports, rather than a
                 // raw built-in model count.
@@ -198,6 +204,8 @@ private fun ChooseProviderScreen(
                     ProviderType.kimiCode -> R.string.add_provider_subtitle_kimi
                     ProviderType.antigravity -> R.string.add_provider_subtitle_antigravity
                     ProviderType.workBuddy -> R.string.add_provider_subtitle_workbuddy
+                    // [T-opencode-free] Keyless free tier.
+                    ProviderType.openCodeFree -> R.string.add_provider_subtitle_opencode_free
                 }
                 val (icon, iconColor) = providerIcon(type)
                 SettingsRow(
@@ -343,7 +351,8 @@ private fun ColumnScope.ApiKeyConfigSection(
     // /v2/v1/chat/completions. Same no-append rule as Gemini/Antigravity.
     val appendV1Suffix = providerType != ProviderType.gemini &&
         providerType != ProviderType.antigravity &&
-        providerType != ProviderType.workBuddy
+        providerType != ProviderType.workBuddy &&
+        providerType != ProviderType.openCodeFree
     // OpenAI API Format: false = Chat Completions, true = Responses API
     var useResponsesAPI by remember { mutableStateOf(false) }
 
@@ -357,12 +366,28 @@ private fun ColumnScope.ApiKeyConfigSection(
         ProviderType.kimiCode -> "sk-..."
         ProviderType.antigravity -> "OAuth 登录后自动获取"
         ProviderType.workBuddy -> "OAuth 登录后自动获取"
+        ProviderType.openCodeFree -> "无需密钥"
     }
     // [T-antigravity-oauth] [T-workbuddy-oauth] OAuth-only providers take no
     // API key. The credential section becomes a notice pointing at the in-app
     // login (ProviderConnectionScreen owns the actual sign-in button, since
     // the browser handoff lives there for re-login too).
-    if (providerType.isOAuthOnly) {
+    if (providerType == ProviderType.openCodeFree) {
+        // [T-opencode-free] Keyless by design: the endpoint authenticates with
+        // a literal "public" marker, so there is nothing for the user to
+        // paste. Show a notice instead of an empty key field that would
+        // otherwise block the Save button.
+        SettingsSection(header = stringResource(R.string.add_provider_credential)) {
+            SettingsCardBlock {
+                Text(
+                    text = "OpenCode 免费通道无需 API 密钥。保存后即可直接使用；\n" +
+                        "上游按会话限额，偶发限流时稍后重试即可。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
+        }
+    } else if (providerType.isOAuthOnly) {
         SettingsSection(
             header = stringResource(R.string.add_provider_credential),
             footer = stringResource(
@@ -477,6 +502,8 @@ private fun ColumnScope.ApiKeyConfigSection(
             // the placeholder default.
             ProviderType.workBuddy -> com.openminis.app.provider.workbuddy.WorkBuddyConstants
                 .DEFAULT_REGION.backend
+            // [T-opencode-free] Full base including /v1 (no append).
+            ProviderType.openCodeFree -> com.openminis.app.provider.opencode.OpenCodeFree.BASE_URL
             else -> "https://api.example.com"
         }
         // T-mimo-anthropic-endpoint-android: Anthropic third-party
@@ -576,6 +603,11 @@ private fun ColumnScope.ApiKeyConfigSection(
                     providerRepository.saveApiKey(instance.id, ProviderRepository.ANTIGRAVITY_OAUTH_MARKER)
                 ProviderType.workBuddy ->
                     providerRepository.saveApiKey(instance.id, ProviderRepository.WORKBUDDY_OAUTH_MARKER)
+                // [T-opencode-free] Store the public marker rather than an
+                // empty string: refreshModels() treats "no key" as NO_KEY and
+                // would report a failure for a provider that needs no key.
+                ProviderType.openCodeFree ->
+                    providerRepository.saveApiKey(instance.id, com.openminis.app.provider.opencode.OpenCodeFree.PUBLIC_KEY)
                 else -> providerRepository.saveApiKey(instance.id, apiKey.trim())
             }
             // Auto-refresh models in background (fetches from API or falls back to models.dev).
@@ -620,7 +652,9 @@ private fun ColumnScope.ApiKeyConfigSection(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp),
-        enabled = providerType.isOAuthOnly || apiKey.isNotBlank(),
+        enabled = providerType.isOAuthOnly ||
+            providerType == ProviderType.openCodeFree ||
+            apiKey.isNotBlank(),
     ) {
         Text(stringResource(R.string.provider_list_add_provider))
     }

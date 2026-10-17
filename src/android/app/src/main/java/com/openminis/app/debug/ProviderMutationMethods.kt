@@ -211,6 +211,8 @@ internal object ProviderMutationMethods {
             // is used for a bare reachability probe.
             ProviderType.workBuddy -> com.openminis.app.provider.workbuddy.WorkBuddyConstants
                 .DEFAULT_REGION.backend
+            // [T-opencode-free] Fixed free-tier endpoint.
+            ProviderType.openCodeFree -> com.openminis.app.provider.opencode.OpenCodeFree.BASE_URL
         }
         val probeURL = when (instance.providerType) {
             ProviderType.anthropic -> "$baseURL/v1/models"
@@ -228,6 +230,10 @@ internal object ProviderMutationMethods {
             // console path, not under /v1. Probing it verifies the host AND
             // the credential in one call.
             ProviderType.workBuddy -> "$baseURL/console/enterprises/personal/models"
+            // [T-opencode-free] OpenAI-compatible /models under the /v1 base.
+            // Unauthenticated beyond the public marker, so a GET is a valid
+            // host-only reachability probe.
+            ProviderType.openCodeFree -> if (baseURL.endsWith("/v1")) "$baseURL/models" else "$baseURL/v1/models"
         }
         val client = okhttp3.OkHttpClient.Builder()
             .connectTimeout(timeoutMs.toLong(), java.util.concurrent.TimeUnit.MILLISECONDS)
@@ -252,6 +258,16 @@ internal object ProviderMutationMethods {
             // identity headers the backend routes by. Without them the
             // catalog route answers as an unauthenticated caller even with a
             // valid token, so the probe would report a healthy host as broken.
+            // [T-opencode-free] Bearer public. The instance carries no real
+            // key (that is the point of the free tier), so a missing key is
+            // expected and the identity headers are supplied verbatim —
+            // otherwise the probe would report a healthy host as broken.
+            ProviderType.openCodeFree -> {
+                val ses = com.openminis.app.provider.opencode.OpenCodeFree.newSessionId()
+                for ((k, v) in com.openminis.app.provider.opencode.OpenCodeFree.identityHeaders(ses)) {
+                    builder.header(k, v)
+                }
+            }
             ProviderType.workBuddy -> {
                 val inst = repo.instance(id)
                 if (!key.isNullOrEmpty()) builder.header("Authorization", "Bearer $key")

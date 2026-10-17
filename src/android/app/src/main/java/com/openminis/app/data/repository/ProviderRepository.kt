@@ -1867,6 +1867,23 @@ class ProviderRepository(private val context: Context) {
 
         android.util.Log.i("ProviderRepo", "refreshModels: id=${instance.id} type=${instance.providerType} credential=${instance.credentialType} hasKey=${apiKey != null} keyLen=${apiKey?.length ?: 0} baseURL=${instance.effectiveBaseURL} forceRefresh=$forceRefresh")
 
+        // [T-opencode-free] Keyless free tier: the shipped catalogue IS the
+        // model list. There is deliberately no upstream adapter, because the
+        // endpoint's live /models reply mixes ~75 PAID ids in with the free
+        // ones and every paid id 403s on send — offering them would let a user
+        // pick a model that cannot work. Seeding here (rather than at
+        // addInstance time) means a re-refresh after a catalogue update
+        // replaces stale ids, and it short-circuits before the NO_KEY path,
+        // which would otherwise report a setup error for a provider that is
+        // correctly configured with no key at all.
+        if (instance.providerType == ProviderType.openCodeFree) {
+            val builtIns = instance.providerType.builtInModels
+            if (builtIns.isNotEmpty()) {
+                replaceEntries(instance.id, builtIns)
+                return ModelRefreshResult.SUCCESS_API
+            }
+        }
+
         // Step 1: Try provider API (requires API key)
         val customBase = instance.customBaseURL
         val isThirdParty = customBase != null

@@ -82,6 +82,8 @@ internal object ProviderDebugMethods {
         // for a diagnostic probe.
         ProviderType.workBuddy -> com.openminis.app.provider.workbuddy.WorkBuddyConstants
             .DEFAULT_REGION.backend
+        // [T-opencode-free] Fixed free-tier endpoint.
+        ProviderType.openCodeFree -> com.openminis.app.provider.opencode.OpenCodeFree.BASE_URL
     }
 
     fun instancesList(context: Context, params: JSONObject): JSONObject {

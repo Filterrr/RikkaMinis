@@ -152,5 +152,8 @@ object ProviderAccents {
     val antigravity = Color(0xFF4A90D9) // blue-violet — Antigravity accent
     // [T-workbuddy-oauth] WorkBuddy — the CodeBuddy brand blue.
     val workBuddy = Color(0xFF2E7CE0)
+    // [T-opencode-free] Warm amber — "free / instant", distinct from the
+    // green OpenAI-compatible accent next to it in the provider list.
+    val openCodeFree = Color(0xFFF5A623)
     val fallback = Color(0xFF8E8E93)   // gray
 }

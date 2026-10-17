@@ -28,7 +28,16 @@ enum class ProviderType(val displayName: String) {
     // Credentials live in WorkBuddyCredentialStore, keyed by instance id.
     // Appended last for the same name-based (de)serialization reason as
     // antigravity above.
-    workBuddy("WorkBuddy");
+    workBuddy("WorkBuddy"),
+    // [T-opencode-free] OpenCode's keyless free tier — no account, no API key.
+    // OpenAI chat-completions wire format with a mandatory identity/body
+    // contract (see OpenCodeFree). Appended last for the same name-based
+    // (de)serialization reason as antigravity / workBuddy above: enum values
+    // serialize by NAME, never by ordinal, so appending cannot rewrite
+    // already-persisted provider rows. Also NOT inserted next to openAI
+    // despite being OpenAI-compatible, because `isOAuthOnly` below and the
+    // UI's provider ordering are both order-sensitive.
+    openCodeFree("OpenCode Free");
 
     val builtInModels: List<LLMModel>
         get() = when (this) {
@@ -47,6 +56,10 @@ enum class ProviderType(val displayName: String) {
             // bundled list (their entitlement differs per tenant) and stay
             // empty until the first successful fetch.
             workBuddy -> WorkBuddyConstants.BUNDLED_INTERNATIONAL
+            // [T-opencode-free] Static free-tier catalogue: the endpoint's live
+            // model list is dominated by ~75 PAID entries this provider cannot
+            // serve, so we ship only the free ones rather than fetch-and-filter.
+            openCodeFree -> com.openminis.app.provider.opencode.OpenCodeFree.builtInModels
         }
 
     /**

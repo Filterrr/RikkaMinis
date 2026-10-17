@@ -132,6 +132,14 @@ object ProviderFactory {
                     basePath = base,
                 )
             }
+            ProviderType.openCodeFree -> {
+                // [T-opencode-free] Keyless free tier. The `apiKey` argument is
+                // intentionally ignored: this endpoint authenticates with the
+                // literal "public" marker, and the whole point of the provider
+                // is that the user has no key to paste. The constructor pins
+                // both the endpoint and that marker.
+                com.openminis.app.provider.opencode.OpenCodeFreeProvider(model = model)
+            }
             ProviderType.kimiCode -> {
                 // Kimi Coding Plan — OpenAI-compatible upstream.
                 // ⚠️ The `/v1` is load-bearing: /coding/chat/completions 404s;
@@ -257,5 +265,7 @@ object ProviderFactory {
         // hint (the real host depends on the instance's region).
         ProviderType.workBuddy -> com.openminis.app.provider.workbuddy.WorkBuddyConstants
             .DEFAULT_REGION.backend
+        // [T-opencode-free] Fixed free-tier endpoint.
+        ProviderType.openCodeFree -> com.openminis.app.provider.opencode.OpenCodeFree.BASE_URL
     }
 }

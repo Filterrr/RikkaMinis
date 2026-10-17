@@ -237,7 +237,7 @@ internal fun scanThinkTags(
 
 // -- End of think-tag extraction --
 
-class OpenAIProvider constructor(
+open class OpenAIProvider constructor(
     private val apiKey: String?,
     override var model: LLMModel = LLMModel.gpt4oMini,
     private val basePath: String = "https://api.openai.com/v1",
@@ -396,6 +396,28 @@ class OpenAIProvider constructor(
      * Bearer`. Centralized so the Azure branch can't accidentally set the wrong
      * one. Mirrors iOS OpenAIProvider.applyKeyAuth.
      */
+    /**
+     * [T-opencode-free] Extension seam for instances that need to inject extra
+     * identity headers on top of the generic auth block. Default: none, so
+     * every existing provider's outbound bytes are unchanged. Overridden by
+     * providers whose upstream fingerprints the client (currently the OpenCode
+     * free tier, which requires a specific header shape).
+     *
+     * Applied after [applyKeyAuth] and AFTER the ctor [extraHeaders], so an
+     * override here wins over both.
+     */
+    protected open fun extraHeadersForInstance(): Map<String, String> = emptyMap()
+
+    /**
+     * [T-opencode-free] Extension seam for providers whose upstream validates
+     * the REQUEST BODY shape (not just auth). Called after the shared body is
+     * assembled and before it is serialized. Default: no-op, so every existing
+     * provider's body is unchanged. Overridden by the OpenCode free tier, which
+     * must force `stream:true` and declare four "gate" tools the endpoint
+     * requires.
+     */
+    protected open fun gateBodyForInstance(body: JSONObject) {}
+
     private fun Request.Builder.applyKeyAuth(token: String): Request.Builder =
         if (isAzure) header("api-key", token) else header("Authorization", "Bearer $token")
 
@@ -1731,6 +1753,13 @@ class OpenAIProvider constructor(
             body.put("tool_choice", "auto")
         }
 
+        // [T-opencode-free] Provider-specific body contract. No-op by default
+        // (every existing provider's request body is byte-for-byte unchanged);
+        // overridden by the OpenCode free tier, which must force streaming and
+        // declare a fixed set of gate tools regardless of whether the caller
+        // passed any.
+        gateBodyForInstance(body)
+
         val messagesArray = JSONArray()
         if (systemPrompt != null) {
             messagesArray.put(JSONObject().apply {
@@ -2106,6 +2135,11 @@ class OpenAIProvider constructor(
         // /responses (this builder serves both). Applied after extraHeaders
         // so the per-provider override wins. null/blank → default UA.
         builder.applyUserAgentOverride(customUserAgent)
+        // [T-opencode-free] Provider-specific identity headers last, so they
+        // replace any same-named default (incl. Authorization / Accept).
+        for ((key, value) in extraHeadersForInstance()) {
+            builder.header(key, value)
+        }
         return builder.build()
     }
 
