@@ -432,6 +432,21 @@ open class OpenAIProvider constructor(
      */
     protected open fun onHttpErrorResponse(statusCode: Int, body: String) {}
 
+    /**
+     * [T-opencode-free] Provider-specific classification override.
+     *
+     * Return non-null to replace the default ladder in [mapHttpError]. Default
+     * (null) means "use the shared classification", so no existing provider's
+     * error handling changes.
+     *
+     * Exists because a status code is not universally self-describing: the
+     * OpenCode free tier returns 403 for BOTH "your request violates the free
+     * tier contract" and "you are being rate-limited", and the caller needs to
+     * know which (one is permanent, the other retryable).
+     */
+    protected open fun classifyHttpError(statusCode: Int, body: String): LLMError? = null
+
+
     private fun Request.Builder.applyKeyAuth(token: String): Request.Builder =
         if (isAzure) header("api-key", token) else header("Authorization", "Bearer $token")
 
@@ -2903,6 +2918,11 @@ open class OpenAIProvider constructor(
         // classification. No-op by default; the OpenCode free tier uses it to
         // adopt a server-demanded client version so the retry succeeds.
         onHttpErrorResponse(statusCode, body)
+
+        // [T-opencode-free] Provider-specific classification first: some
+        // upstreams overload a status code to mean two different things (the
+        // free tier returns 403 for both a contract violation and a throttle).
+        classifyHttpError(statusCode, body)?.let { return it }
 
         // [T-multi-api-key] Quota classification MUST run before the 401/403/429
         // split. OpenAI reports "out of credit" as 429 + `insufficient_quota`,

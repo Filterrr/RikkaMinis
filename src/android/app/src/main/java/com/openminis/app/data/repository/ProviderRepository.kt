@@ -210,6 +210,38 @@ class ProviderRepository(private val context: Context) {
         prefs.edit().putLong(lastFetchKey(instanceId), System.currentTimeMillis()).apply()
     }
 
+    // -------------------------------------------------- opencode free catalogue
+    // [T-opencode-free] A discovered free-model catalogue is cached as JSON so
+    // that opening the model picker does not re-hit the endpoint every time.
+    // Stored as ids only: display name and limits are derivable (OpenCodeFree
+    // .modelForId), so caching the full entries would just be a second source
+    // of truth that can drift from the first.
+
+    private fun freeCatalogueKey(instanceId: String) = "opencodeFreeCatalogue_$instanceId"
+
+    private fun saveCachedFreeCatalogue(instanceId: String, models: List<com.openminis.app.data.model.LLMModel>) {
+        val arr = org.json.JSONArray()
+        models.forEach { arr.put(it.id) }
+        prefs.edit().putString(freeCatalogueKey(instanceId), arr.toString()).apply()
+    }
+
+    /** Last discovered catalogue, or null when nothing has been cached yet. */
+    private fun loadCachedFreeCatalogue(instanceId: String): List<com.openminis.app.data.model.LLMModel>? {
+        val raw = prefs.getString(freeCatalogueKey(instanceId), null) ?: return null
+        return try {
+            val arr = org.json.JSONArray(raw)
+            val out = ArrayList<com.openminis.app.data.model.LLMModel>(arr.length())
+            for (i in 0 until arr.length()) {
+                arr.optString(i, "").takeIf { it.isNotBlank() }?.let {
+                    out += com.openminis.app.provider.opencode.OpenCodeFree.modelForId(it)
+                }
+            }
+            out.ifEmpty { null }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     /** Whether the cached model list for [instanceId] is older than the TTL. */
     private fun isInstanceStale(instanceId: String): Boolean {
         val last = prefs.getLong(lastFetchKey(instanceId), 0L)
@@ -1877,6 +1909,45 @@ class ProviderRepository(private val context: Context) {
         // which would otherwise report a setup error for a provider that is
         // correctly configured with no key at all.
         if (instance.providerType == ProviderType.openCodeFree) {
+            // [T-opencode-free] Discover the free catalogue from the endpoint
+            // itself, then fall back to the curated list. Discovery exists
+            // because a hardcoded list rots both ways: a withdrawn model keeps
+            // being offered, and a newly added one never appears.
+            //
+            // The endpoint does not flag free models, but it does distinguish
+            // them: a paid model answers 401 (account required) where a free
+            // one is served. OpenCodeFreeModelsApi reduces the list with that
+            // in mind rather than trusting the `-free` suffix alone.
+            //
+            // Cache-first: a non-forced refresh reuses the last good result, so
+            // the list is not re-fetched on every model-picker open.
+            val discovered = if (!forceRefresh) loadCachedFreeCatalogue(instance.id) else null
+            val models = discovered
+                ?: runCatching {
+                    kotlinx.coroutines.withTimeoutOrNull(20_000) {
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            com.openminis.app.provider.opencode.OpenCodeFreeModelsApi.fetchFreeCandidates()
+                        }
+                    }
+                }.getOrNull()
+            if (!models.isNullOrEmpty()) {
+                // [T-opencode-free] UNION with the curated catalogue rather
+                // than replacing it. Discovery is name-based and therefore
+                // incomplete: `big-pickle` is served free but has no `-free`
+                // suffix, so a replace-only merge would silently drop a working
+                // model the user could previously pick. Curated entries are
+                // verified-good, so they form a floor; discovery adds on top.
+                // Deduped by id, curated first (its display names are nicer).
+                val curated = instance.providerType.builtInModels
+                val merged = LinkedHashMap<String, com.openminis.app.data.model.LLMModel>()
+                curated.forEach { merged[it.id] = it }
+                models.forEach { merged.putIfAbsent(it.id, it) }
+                saveCachedFreeCatalogue(instance.id, merged.values.toList())
+                replaceEntries(instance.id, merged.values.toList())
+                return ModelRefreshResult.SUCCESS_API
+            }
+            // Discovery failed or found nothing usable — keep the curated list
+            // rather than emptying the picker.
             val builtIns = instance.providerType.builtInModels
             if (builtIns.isNotEmpty()) {
                 replaceEntries(instance.id, builtIns)

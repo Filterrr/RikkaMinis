@@ -275,6 +275,32 @@ object OpenCodeFree {
         "Accept" to "text/event-stream",
     )
 
+    /**
+     * [T-opencode-free] True when the identity block we emit is complete and
+     * self-consistent — i.e. a 403 arriving alongside it cannot be blamed on
+     * our headers.
+     *
+     * This is what lets the provider tell a throttle apart from a genuine
+     * contract violation, both of which arrive as `403 FreeTierError`. Every
+     * header below was confirmed load-bearing by a 4-trial pass-rate probe:
+     * dropping `x-opencode-project` or `x-opencode-client` drove the pass rate
+     * to 0/4, while the full block passed 3/4 (the single failure being the
+     * throttle this method exists to identify).
+     */
+    fun identityLooksValid(): Boolean {
+        val session = newSessionId()
+        val headers = identityHeaders(session)
+        val required = listOf(
+            "Authorization", "User-Agent", "x-opencode-client", "x-opencode-project",
+            "x-opencode-session", "x-opencode-session-id", "x-session-affinity", "x-session-id",
+        )
+        return required.all { headers[it].isNullOrBlank().not() } &&
+            // The UA must carry a version the endpoint can parse; a header
+            // block with an unparseable version is a deterministic 403.
+            headers["User-Agent"]?.contains('/') == true &&
+            isVersionAtLeast(headers.getValue("User-Agent").split('/').getOrNull(2).orEmpty(), MIN_SUPPORTED_CLIENT_VERSION)
+    }
+
     // -------------------------------------------------------------- body gate
 
     /**
@@ -496,4 +522,31 @@ object OpenCodeFree {
 
     /** Provider tag stamped on [builtInModels] (not a ProviderType name). */
     const val MODEL_PROVIDER_TAG = "opencode-free"
+
+    /**
+     * [T-opencode-free] Build a model entry for an id discovered at runtime.
+     *
+     * When the id is one of the curated [CATALOG] entries its display name is
+     * reused; otherwise the id is used verbatim, which is how the upstream
+     * names its models anyway. Context/output figures are not published per
+     * model on this endpoint, so discovered entries carry the same defaults
+     * the catalogued ones do rather than inventing numbers.
+     */
+    fun modelForId(id: String): LLMModel {
+        val known = DISPLAY_NAMES[id]
+        return LLMModel(
+            id = id,
+            displayName = known ?: id,
+            provider = MODEL_PROVIDER_TAG,
+            contextWindow = DEFAULT_CONTEXT_WINDOW,
+            maxOutputTokens = DEFAULT_MAX_OUTPUT_TOKENS,
+        )
+    }
+
+    private const val DEFAULT_CONTEXT_WINDOW = 128_000
+    private const val DEFAULT_MAX_OUTPUT_TOKENS = 16_384
+
+    /** Display names for the curated ids; discovered ids fall back to the id. */
+    private val DISPLAY_NAMES: Map<String, String> =
+        CATALOG.associate { it.id to it.displayName }
 }

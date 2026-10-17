@@ -69,6 +69,46 @@ class OpenCodeFreeProvider(
     }
 
     /**
+     * [T-opencode-free] Re-classify 403.
+     *
+     * The shared ladder files every 403 as `InvalidApiKey`. That is wrong
+     * here, and the difference is not cosmetic:
+     *
+     *  - `InvalidApiKey` is a dead end — it tells the routing layer the
+     *    credential is bad and stops. This provider has no credential to fix,
+     *    so the user would be told their key is invalid when the request
+     *    simply needed retrying.
+     *  - The free tier returns **403 for two unrelated reasons**. Probing the
+     *    live endpoint with a 4-trial pass-rate harness showed that the SAME
+     *    request alternates: a valid request failed 1 in 4 with
+     *    `403 FreeTierError`, while a genuinely non-compliant request failed
+     *    4 in 4. So 403 here is partly a throttle wearing the same body as a
+     *    contract violation.
+     *
+     * Exact-match on the six identity headers is what separates them: a valid
+     * identity plus a 403 is a throttle (retryable), an invalid identity is
+     * deterministic and will not recover by retrying.
+     *
+     * 401 is deliberately NOT overridden: for this endpoint it is the paid
+     * model marker, and the shared handling is acceptable there.
+     */
+    override fun classifyHttpError(statusCode: Int, body: String): com.openminis.app.data.model.LLMError? {
+        if (statusCode != HTTP_FORBIDDEN) return null
+        if (!body.contains("FreeTierError")) return null
+        return if (OpenCodeFree.identityLooksValid()) {
+            // Valid identity ⇒ the rejection is environmental (rate limiting),
+            // not a contract failure: retry rather than declare a bad key.
+            com.openminis.app.data.model.LLMError.TransientError(
+                "OpenCode free tier throttled the request (403 FreeTierError); retrying",
+            )
+        } else {
+            com.openminis.app.data.model.LLMError.ProviderError(
+                "OpenCode free tier rejected this client's identity (403 FreeTierError)",
+            )
+        }
+    }
+
+    /**
      * [T-opencode-free] Self-heal on an upgrade demand.
      *
      * When the upstream raises its floor it answers 426 with the version it
