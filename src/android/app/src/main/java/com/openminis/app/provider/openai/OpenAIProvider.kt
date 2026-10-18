@@ -1608,6 +1608,12 @@ class OpenAIProvider constructor(
                 throw LLMError.ProviderError(
                     com.openminis.app.data.model.providerErrorMessage(responseBody)
                         .ifBlank { "images/generations returned a non-JSON body (${e.message})" },
+                    // [T-provider-verbatim-errors] A 2xx that isn't JSON is
+                    // usually a gateway interstitial (captive portal, auth
+                    // redirect) rather than the route being absent — so it
+                    // keeps the real status and does NOT get the synthetic 404
+                    // that drives the chat-completions fallback below.
+                    httpStatus = statusCode,
                 )
             }
             return@withContext parseImageGenerationsResult(json)
