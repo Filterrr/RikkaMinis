@@ -260,14 +260,68 @@ fun providerErrorMessage(body: String, limit: Int = 500): String {
             err?.safeString("message"),
             err?.safeString("msg"),
             err?.safeString("detail"),
-            json.optString("error").takeIf { !json.isNull("error") && it.isNotBlank() },
+            err?.safeString("description"),
             json.safeString("message"),
             json.safeString("msg"),
             json.safeString("detail"),
+            // Google OAuth puts the actionable sentence in `error_description`
+            // and leaves a terse code in `error` ("invalid_grant"). Without
+            // this, the Antigravity re-login path showed only the code — the
+            // one case where the reason (expired vs revoked) is the whole
+            // point.
+            json.safeString("error_description"),
+            json.safeString("error_message"),
+            // `error` may itself be a plain string ({"error":"boom"}). Only
+            // that shape is accepted here: an error OBJECT must never be
+            // stringified, or an empty {"error":{}} would be returned as the
+            // literal "{}" and — being non-blank — would shadow a perfectly
+            // good flat `message` sitting right next to it. Tried last because
+            // it is usually the terse code rather than a sentence.
+            stringError(json),
         ).firstOrNull { !it.isNullOrBlank() }
     }.getOrNull()
     val text = extracted?.trim().orEmpty()
-    return (text.ifEmpty { trimmed }).take(limit)
+    val usable = text.takeIf { it.isNotBlank() && !looksLikeRawJson(it) }
+    return usable ?: rawBodyText(trimmed, limit)
+}
+
+/**
+ * The top-level `error` field when it is a JSON *string*; null when it is an
+ * object/array/null (those are handled by the nested lookups above).
+ */
+private fun stringError(json: JSONObject): String? {
+    if (!json.has("error") || json.isNull("error")) return null
+    val value = json.opt("error")
+    return (value as? String)?.takeIf { it.isNotBlank() }
+}
+
+/**
+ * A whole JSON document (object or array) is never the provider's
+ * human-readable message — it means the body was an *error envelope* whose
+ * inner text we failed to locate. Showing "{...}" tells the user nothing, so
+ * such a value is rejected and the caller falls back to app copy.
+ *
+ * String-form bodies stay usable: a bare `"rate limited"` is a real sentence.
+ */
+private fun looksLikeRawJson(text: String): Boolean = when (text.first()) {
+    '{' -> runCatching { JSONObject(text) }.isSuccess
+    '[' -> runCatching { org.json.JSONArray(text) }.isSuccess
+    else -> false
+}
+
+/**
+ * Last resort: when the body is not JSON at all it is usually still
+ * informative (a proxy's HTML page, a CDN's one-liner), so it is quoted —
+ * truncated to [limit] so a multi-MB page cannot reach the banner.
+ *
+ * A JSON-looking body that yielded no message is deliberately reduced to "":
+ * it is an envelope we could not read, and no sentence in it is addressable.
+ * "" lets the caller fall back to app copy for the blank-detail cases, which
+ * is strictly more useful than "{...}".
+ */
+private fun rawBodyText(trimmed: String, limit: Int): String {
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) return ""
+    return trimmed.take(limit)
 }
 
 /**

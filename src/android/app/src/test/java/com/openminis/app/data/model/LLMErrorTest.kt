@@ -191,6 +191,33 @@ class LLMErrorTest {
     // ─── the provider-body reader ─────────────────────────────────────────
 
     @Test
+    fun `providerErrorMessage - rejects whole JSON envelopes`() {
+        // [T-provider-verbatim-errors] A JSON document is never the provider's
+        // human-readable message. Returning one would put "{"code":123}" on the
+        // banner — less useful than app copy, and it would SILENCE the flat
+        // `message` sitting next to it (`{"error":{},"message":"real"}`).
+        assertEquals("", providerErrorMessage("""{"error":{"code":123}}"""))
+        assertEquals("", providerErrorMessage("""{"error":{}}"""))
+        assertEquals("", providerErrorMessage("[1,2,3]"))
+        assertEquals("", providerErrorMessage("""{"unexpected":"envelope"}"""))
+        // …while a bare JSON *string* is still a real sentence.
+        assertEquals("\"just a string\"", providerErrorMessage("\"just a string\""))
+    }
+
+    @Test
+    fun `providerErrorMessage - empty nested error does not shadow the flat message`() {
+        // Regression: `optString("error")` stringifies the error OBJECT, so an
+        // empty {"error":{}} used to be returned as "{}" and — being non-blank —
+        // won the firstOrNull() race against a perfectly good flat `message`.
+        assertEquals("flat wins too?", providerErrorMessage("""{"error":{},"message":"flat wins too?"}"""))
+        assertEquals("after null msg", providerErrorMessage("""{"error":{"message":null},"message":"after null msg"}"""))
+        assertEquals(
+            "blank nested falls through",
+            providerErrorMessage("""{"error":{"message":""},"msg":"blank nested falls through"}"""),
+        )
+    }
+
+    @Test
     fun `providerErrorMessage - extracts the message from every known shape`() {
         assertEquals(
             "The model does not exist",
@@ -218,8 +245,26 @@ class LLMErrorTest {
         val html = "<html><body><h1>502 Bad Gateway</h1></body></html>"
         assertEquals(html, providerErrorMessage(html))
         assertEquals("upstream says no", providerErrorMessage("upstream says no"))
-        // A JSON body with no recognisable message field keeps the raw text.
-        assertEquals("""{"status":"failed"}""", providerErrorMessage("""{"status":"failed"}"""))
+        // A JSON envelope with no locatable message field yields "" instead of
+        // the raw JSON — "{...}" on the banner would tell the user nothing, and
+        // "" lets the app's blank-detail copy take over. See the
+        // `rejects whole JSON envelopes` case above.
+        assertEquals("", providerErrorMessage("""{"status":"failed"}"""))
+    }
+
+    @Test
+    fun `providerErrorMessage - prefers the explanatory field over a terse error code`() {
+        // Google OAuth shape (Antigravity refresh): `error` is a bare code and
+        // `error_description` holds the sentence. Showing "invalid_grant" alone
+        // hides whether the token expired or was revoked.
+        assertEquals(
+            "Token has been expired or revoked.",
+            providerErrorMessage("""{"error":"invalid_grant","error_description":"Token has been expired or revoked."}"""),
+        )
+        assertEquals("model is disabled", providerErrorMessage("""{"error_message":"model is disabled"}"""))
+        assertEquals("region blocked", providerErrorMessage("""{"error":{"description":"region blocked"}}"""))
+        // A terse code with nothing better available is still used.
+        assertEquals("invalid_grant", providerErrorMessage("""{"error":"invalid_grant"}"""))
     }
 
     @Test
