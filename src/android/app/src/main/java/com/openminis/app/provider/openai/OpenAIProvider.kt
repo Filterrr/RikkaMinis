@@ -6,6 +6,7 @@ import com.openminis.app.data.model.AgentToolDefinition
 import com.openminis.app.data.model.LLMError
 import com.openminis.app.data.model.isQuotaExhaustedResponse
 import com.openminis.app.data.model.parseRetryAfterMs
+import com.openminis.app.data.model.providerErrorMessage
 import com.openminis.app.network.GzipRequestInterceptor
 import com.openminis.app.data.model.LLMMediaAttachment
 import com.openminis.app.data.model.LLMMessage
@@ -1098,6 +1099,15 @@ class OpenAIProvider constructor(
                             // so retry/fallback classification can act on it).
                             // Official shape: response.status == "failed",
                             // response.error = {code, message}. Mirrors iOS 637cd890.
+                            //
+                            // [T-provider-verbatim-errors] The provider's
+                            // `message` is thrown VERBATIM — no "[code] "
+                            // prefix. The code is neither part of the
+                            // provider's sentence nor needed for
+                            // classification (the transient family is decided
+                            // by the same `code` comparison right here), so
+                            // prefixing it only put app-authored noise in
+                            // front of the text the user has to read.
                             val resp = event.optJSONObject("response")
                             val err = resp?.optJSONObject("error")
                             val code = err?.optString("code")?.takeIf { it.isNotEmpty() } ?: "unknown"
@@ -1110,9 +1120,9 @@ class OpenAIProvider constructor(
                             if (code == "server_error" || code == "rate_limit_exceeded") {
                                 // Transient family: retry on the same model
                                 // rather than falling back through the group.
-                                throw LLMError.TransientError("[$code] $message")
+                                throw LLMError.TransientError(message)
                             }
-                            throw LLMError.ProviderError("[$code] $message")
+                            throw LLMError.ProviderError(message)
                         }
                         type == "response.incomplete" -> {
                             // [T-responses-terminal-events] The server ended the
@@ -1182,13 +1192,16 @@ class OpenAIProvider constructor(
                     }
                 } else {
                     // Chat Completions API SSE parsing
-                    // Check for inline error (OpenRouter sends error inside SSE with empty choices)
+                    // [T-provider-verbatim-errors] An inline SSE error carries its own
+                    // message; mapHttpError forwards it verbatim. The status it is
+                    // classified with is the nested `code` of a stream that opened with
+                    // HTTP 200 — that is the only status present in this shape, and it is
+                    // what the relay uses to say WHY it aborted (429 / 503 inside an
+                    // accepted SSE stream).
                     val inlineError = event.optJSONObject("error")
                     if (inlineError != null) {
                         val code = inlineError.optInt("code", 0)
-                        val msg = inlineError.optString("message", "Unknown SSE error")
-                        val err = mapHttpError(code, event.toString())
-                        throw err
+                        throw mapHttpError(code, event.toString())
                     }
                     val choices = event.optJSONArray("choices")
                     if (choices != null && choices.length() > 0) {
@@ -1588,7 +1601,20 @@ class OpenAIProvider constructor(
             val json = try {
                 JSONObject(responseBody)
             } catch (e: Exception) {
-                throw LLMError.ProviderError("images/generations returned non-JSON body: ${e.message}")
+                // [T-provider-verbatim-errors] Quote what the endpoint actually
+                // sent instead of only the Jackson-style parse complaint: a 2xx
+                // that isn't JSON is usually a proxy's HTML page or a plain
+                // "ok", and that IS the provider's answer.
+                throw LLMError.ProviderError(
+                    com.openminis.app.data.model.providerErrorMessage(responseBody)
+                        .ifBlank { "images/generations returned a non-JSON body (${e.message})" },
+                    // [T-provider-verbatim-errors] A 2xx that isn't JSON is
+                    // usually a gateway interstitial (captive portal, auth
+                    // redirect) rather than the route being absent — so it
+                    // keeps the real status and does NOT get the synthetic 404
+                    // that drives the chat-completions fallback below.
+                    httpStatus = statusCode,
+                )
             }
             return@withContext parseImageGenerationsResult(json)
         }
@@ -1609,8 +1635,15 @@ class OpenAIProvider constructor(
         val dataArray = json.optJSONArray("data")
         if (dataArray == null) {
             if (json.has("choices")) {
+                // [T-provider-verbatim-errors] The route is missing (the
+                // gateway answered a chat-completions body). The sentence is
+                // app-authored, but this is a 2xx-shaped response with no
+                // error field to quote — so the status is carried structurally
+                // (404) instead of being spliced into the text, which is what
+                // looksLikeEndpointMissing now reads.
                 throw LLMError.ProviderError(
-                    "[404] /images/generations not supported (got chat completions response)",
+                    "/images/generations not supported (got chat completions response)",
+                    httpStatus = 404,
                 )
             }
             return LLMResponse("", "end_turn", null, emptyList())
@@ -2851,6 +2884,11 @@ class OpenAIProvider constructor(
     }
 
     private fun mapHttpError(statusCode: Int, body: String, retryAfterMs: Long? = null): LLMError {
+        // [T-provider-verbatim-errors] The HTTP status is carried STRUCTURALLY
+        // (LLMError.httpStatus), never spliced into the displayed text: the
+        // banner shows the provider's own sentence, and classification reads
+        // the status off the error object instead of pattern-matching digits.
+        val detail = providerErrorMessage(body)
         // [T-multi-api-key] Quota classification MUST run before the 401/403/429
         // split. OpenAI reports "out of credit" as 429 + `insufficient_quota`,
         // and several relays report it as 403 or 402 — all of which the
@@ -2858,32 +2896,27 @@ class OpenAIProvider constructor(
         // RateLimited would make the routing layer *wait* on a key that will
         // never come back; QuotaExhausted tells it to swap credentials instead.
         if (isQuotaExhaustedResponse(statusCode, body)) {
-            return LLMError.QuotaExhausted(body.take(300))
+            return LLMError.QuotaExhausted(detail, httpStatus = statusCode)
         }
-        if (statusCode == 401 || statusCode == 403) return LLMError.InvalidApiKey()
-        if (statusCode == 429) return LLMError.RateLimited(retryAfterMs = retryAfterMs)
-
-        val message = try {
-            val json = JSONObject(body)
-            val error = json.optJSONObject("error")
-            val errorMessage = error?.safeOptString("message", "") ?: body
-            "[$statusCode] $errorMessage"
-        } catch (_: Exception) {
-            "HTTP $statusCode: ${body.take(500)}"
+        if (statusCode == 401 || statusCode == 403) {
+            return LLMError.InvalidApiKey(detail, httpStatus = statusCode)
+        }
+        if (statusCode == 429) {
+            return LLMError.RateLimited(detail, retryAfterMs = retryAfterMs, httpStatus = statusCode)
         }
 
         val transientCodes = setOf(500, 502, 503, 504, 529)
         if (statusCode in transientCodes) {
             // 503 with permanent failure indicators → ProviderError (trigger group fallback)
             if (statusCode == 503 && (body.contains("no_available_providers") || body.contains("model_not_found"))) {
-                return LLMError.ProviderError(message)
+                return LLMError.ProviderError(detail, httpStatus = statusCode)
             }
             // [OPT2-retry-after] Carry the provider's Retry-After on transient
             // 5xx bodies too (OpenRouter relays 429-style Retry-After on 503
             // overload); the retry scheduler consumes it for the countdown.
-            return LLMError.TransientError(message, retryAfterMs)
+            return LLMError.TransientError(detail, retryAfterMs, httpStatus = statusCode)
         }
-        return LLMError.ProviderError(message)
+        return LLMError.ProviderError(detail, httpStatus = statusCode)
     }
 
     private fun mapError(error: Throwable): LLMError {

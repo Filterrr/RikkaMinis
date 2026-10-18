@@ -386,13 +386,36 @@ class GeminiProviderTest {
     }
 
     @Test
-    fun `sendMessage throws TransientError with message on 500`() = runBlocking {
-        server.enqueue(MockResponse().setResponseCode(500).setBody("Internal Server Error"))
+    fun `sendMessage throws TransientError with verbatim body on 500`() = runBlocking {
+        server.enqueue(
+            MockResponse().setResponseCode(500)
+                .setBody("""{"error":{"message":"The engine is currently overloaded, please try again later"}}"""),
+        )
 
         try {
             provider.sendMessage(listOf(LLMMessage(LLMMessage.Role.USER, "test")), null, 100)
         } catch (e: LLMError.TransientError) {
-            assertTrue(e.message!!.contains("500"))
+            // [T-provider-verbatim-errors] No "Gemini API error 500: " prefix —
+            // the engine-overloaded sentence is the actionable part.
+            assertEquals("The engine is currently overloaded, please try again later", e.message)
+            assertEquals(500, e.httpStatus)
+            assertTrue(e.isServerError)
+            return@runBlocking
+        }
+        throw AssertionError("Expected TransientError")
+    }
+
+    @Test
+    fun `sendMessage preserves text on a non-JSON 500 body`() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(502).setBody("<html><h1>502 Bad Gateway</h1></html>"))
+
+        try {
+            provider.sendMessage(listOf(LLMMessage(LLMMessage.Role.USER, "test")), null, 100)
+        } catch (e: LLMError.TransientError) {
+            // A proxy's HTML page is what the provider returned; quoting it
+            // beats a canned sentence, and the status is still structural.
+            assertTrue(e.message!!.contains("502 Bad Gateway"))
+            assertEquals(502, e.httpStatus)
             return@runBlocking
         }
         throw AssertionError("Expected TransientError")

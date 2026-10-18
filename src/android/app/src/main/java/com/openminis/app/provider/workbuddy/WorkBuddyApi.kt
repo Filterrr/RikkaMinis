@@ -176,17 +176,20 @@ object WorkBuddyApi {
         client.newCall(request).execute().use { response ->
             val text = response.body?.string().orEmpty()
             if (!allowHttpError && !response.isSuccessful) {
-                // Surface the upstream message when the body is JSON, so the
-                // user sees why (quota, disabled model, …) instead of "HTTP 4xx".
-                val detail = runCatching {
-                    val obj = JSONObject(text)
-                    val inner = obj.optJSONObject("error") ?: obj
-                    inner.optString("message", inner.optString("msg", text))
-                }.getOrNull() ?: text
-                throw IOException("HTTP ${response.code}: ${detail.take(240)}")
+                // [T-provider-verbatim-errors] Surface the upstream message
+                // VERBATIM — no "HTTP 4xx: " prefix. The backend's own sentence
+                // ("quota exhausted", "model disabled", "余额不足") is what the
+                // user has to act on; the status number only got in its way.
+                val detail = com.openminis.app.data.model.providerErrorMessage(text)
+                throw IOException(detail.ifBlank { "HTTP ${response.code}" })
             }
             return runCatching { JSONObject(text) }.getOrElse {
-                throw IOException("服务器返回非 JSON：${text.take(160)}")
+                // Same rule: quote what the server actually sent rather than
+                // describing the parse failure in app-authored copy.
+                throw IOException(
+                    com.openminis.app.data.model.providerErrorMessage(text)
+                        .ifBlank { "服务器返回非 JSON(HTTP ${response.code})" },
+                )
             }
         }
     }

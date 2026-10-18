@@ -949,6 +949,9 @@ class AnthropicProvider(
     }
 
     private fun mapHttpError(statusCode: Int, body: String, retryAfterMs: Long? = null): LLMError {
+        // [T-provider-verbatim-errors] The provider's own message is the banner
+        // text; the status stays structured on the error object.
+        val detail = com.openminis.app.data.model.providerErrorMessage(body)
         // [T-multi-api-key] Anthropic itself reports credit exhaustion as
         // 400 `invalid_request_error: Your credit balance is too low`, and
         // OpenAI-compatible relays fronting Claude reuse 402 / 429
@@ -956,27 +959,21 @@ class AnthropicProvider(
         // credential is never filed as a rate limit (which would only make the
         // router wait for a key that is never coming back).
         if (isQuotaExhaustedResponse(statusCode, body)) {
-            return LLMError.QuotaExhausted(body.take(300))
+            return LLMError.QuotaExhausted(detail, httpStatus = statusCode)
         }
-        if (statusCode == 401 || statusCode == 403) return LLMError.InvalidApiKey()
-        if (statusCode == 429) return LLMError.RateLimited(retryAfterMs = retryAfterMs)
-
-        val message = try {
-            val json = JSONObject(body)
-            val error = json.optJSONObject("error")
-            val errorType = error?.safeOptString("type", "") ?: "error"
-            val errorMessage = error?.safeOptString("message", "") ?: body
-            "[$errorType] $errorMessage"
-        } catch (_: Exception) {
-            "HTTP $statusCode: ${body.take(500)}"
+        if (statusCode == 401 || statusCode == 403) {
+            return LLMError.InvalidApiKey(detail, httpStatus = statusCode)
+        }
+        if (statusCode == 429) {
+            return LLMError.RateLimited(detail, retryAfterMs = retryAfterMs, httpStatus = statusCode)
         }
 
         val transientCodes = setOf(500, 502, 503, 504, 529)
         if (statusCode in transientCodes) {
             // [OPT2-retry-after] Carry Retry-After on transient 5xx bodies.
-            return LLMError.TransientError(message, retryAfterMs)
+            return LLMError.TransientError(detail, retryAfterMs, httpStatus = statusCode)
         }
-        return LLMError.ProviderError(message)
+        return LLMError.ProviderError(detail, httpStatus = statusCode)
     }
 
     private fun mapError(error: Throwable): LLMError {

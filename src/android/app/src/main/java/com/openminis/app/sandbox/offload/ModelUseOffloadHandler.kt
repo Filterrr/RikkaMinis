@@ -1058,8 +1058,17 @@ class ModelUseOffloadHandler(
      * does auto-mode fall back to chat completions — real errors (auth, content
      * moderation, model-not-found) propagate unchanged. Mirrors iOS
      * looksLikeEndpointMissing.
+     *
+     * [T-provider-verbatim-errors] [status] is consulted FIRST. This used to
+     * scrape "404"/"405" out of the message, which worked only because the
+     * provider layer prefixed the status into the text ("[404] ..."). Now that
+     * the message is the provider's verbatim body, a 404 with an empty or
+     * non-numeric body would have silently stopped triggering the fallback —
+     * and the text heuristics below would keep working for gateways that
+     * answer 200 with an error sentence. Both signals are kept, status first.
      */
-    private fun looksLikeEndpointMissing(message: String): Boolean {
+    private fun looksLikeEndpointMissing(message: String, status: Int? = null): Boolean {
+        if (status == 404 || status == 405) return true
         val m = message.lowercase()
         return m.contains("404") ||
             m.contains("not found") ||
@@ -1207,8 +1216,13 @@ class ModelUseOffloadHandler(
             }
         } catch (e: Throwable) {
             val msg = e.message ?: ""
+            // [T-provider-verbatim-errors] Prefer the error's own HTTP status
+            // over the message text — the message is now the provider's
+            // verbatim body, which need not mention the number.
+            val status = (e as? com.openminis.app.data.model.LLMError)?.httpStatus
             val routeMissing = (e is com.openminis.app.data.model.LLMError.ProviderError ||
-                e is com.openminis.app.data.model.LLMError.InvalidApiKey) && looksLikeEndpointMissing(msg)
+                e is com.openminis.app.data.model.LLMError.InvalidApiKey) &&
+                looksLikeEndpointMissing(msg, status)
             if (routeMissing) {
                 Log.i(TAG, "[ModelUseRoute] auto probe → route missing (${msg.take(120)}) — caching chat_completions, falling back")
                 providerRepository.setImageEndpointResolved(

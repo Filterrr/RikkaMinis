@@ -376,11 +376,52 @@ class OpenAIProviderTest {
         try {
             provider.sendMessage(listOf(LLMMessage(LLMMessage.Role.USER, "test")), null, 100)
         } catch (e: LLMError.ProviderError) {
-            assertTrue(e.message!!.contains("400"))
-            assertTrue(e.message!!.contains("The model does not exist"))
+            // [T-provider-verbatim-errors] The provider's sentence IS the
+            // message the user reads — no "[400] " prefix, no re-wording.
+            assertEquals("The model does not exist", e.message)
+            assertEquals("The model does not exist", e.detail)
+            // The status is carried structurally so classification (and the
+            // technical-details view) never depends on text the app spliced in.
+            assertEquals(400, e.httpStatus)
             return@runBlocking
         }
         throw AssertionError("Expected ProviderError")
+    }
+
+    @Test
+    fun `sendMessage surfaces provider text verbatim on 401`() = runBlocking {
+        server.enqueue(
+            MockResponse().setResponseCode(401)
+                .setBody("""{"error":{"message":"Incorrect API key provided: sk-***","code":"invalid_api_key"}}"""),
+        )
+
+        try {
+            provider.sendMessage(listOf(LLMMessage(LLMMessage.Role.USER, "test")), null, 100)
+        } catch (e: LLMError.InvalidApiKey) {
+            // "Incorrect API key provided" is actionable; the old code showed
+            // the canned "API key is invalid or expired" and threw this away.
+            assertEquals("Incorrect API key provided: sk-***", e.message)
+            assertEquals(401, e.httpStatus)
+            return@runBlocking
+        }
+        throw AssertionError("Expected InvalidApiKey")
+    }
+
+    @Test
+    fun `sendMessage surfaces provider text verbatim on 429`() = runBlocking {
+        server.enqueue(
+            MockResponse().setResponseCode(429)
+                .setBody("""{"error":{"message":"Rate limit reached for gpt-4o-mini in organization org-abc"}}"""),
+        )
+
+        try {
+            provider.sendMessage(listOf(LLMMessage(LLMMessage.Role.USER, "test")), null, 100)
+        } catch (e: LLMError.RateLimited) {
+            assertTrue(e.message!!.contains("org-abc"))
+            assertEquals(429, e.httpStatus)
+            return@runBlocking
+        }
+        throw AssertionError("Expected RateLimited")
     }
 
     // -- Provider metadata --

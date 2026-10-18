@@ -549,20 +549,28 @@ class GeminiProvider(
     }
 
     private fun mapHttpError(statusCode: Int, body: String, retryAfterMs: Long? = null): LLMError {
+        // [T-provider-verbatim-errors] Gemini's own message text is the banner
+        // text; the status stays structured on the error object.
+        val detail = com.openminis.app.data.model.providerErrorMessage(body)
         // [T-multi-api-key] Gemini reports a spent key as 429 RESOURCE_EXHAUSTED
         // with `quota` / `billing` in the status. Classify before the 429 rung
         // so a hard quota wall (which no amount of waiting clears) is not
         // mistaken for a per-minute rate limit.
         if (isQuotaExhaustedResponse(statusCode, body)) {
-            return LLMError.QuotaExhausted(body.take(300))
+            return LLMError.QuotaExhausted(detail, httpStatus = statusCode)
         }
-        if (statusCode == 401 || statusCode == 403) return LLMError.InvalidApiKey()
-        if (statusCode == 429) return LLMError.RateLimited(retryAfterMs = retryAfterMs)
-        val message = "Gemini API error $statusCode: ${body.take(200)}"
+        if (statusCode == 401 || statusCode == 403) {
+            return LLMError.InvalidApiKey(detail, httpStatus = statusCode)
+        }
+        if (statusCode == 429) {
+            return LLMError.RateLimited(detail, retryAfterMs = retryAfterMs, httpStatus = statusCode)
+        }
         val transientCodes = setOf(500, 502, 503, 504, 529)
         // [OPT2-retry-after] Carry Retry-After on transient 5xx bodies.
-        if (statusCode in transientCodes) return LLMError.TransientError(message, retryAfterMs)
-        return LLMError.ProviderError(message)
+        if (statusCode in transientCodes) {
+            return LLMError.TransientError(detail, retryAfterMs, httpStatus = statusCode)
+        }
+        return LLMError.ProviderError(detail, httpStatus = statusCode)
     }
 
     private fun mapError(error: Throwable): LLMError {

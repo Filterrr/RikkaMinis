@@ -333,11 +333,33 @@ class AnthropicProviderTest {
         try {
             provider.sendMessage(listOf(LLMMessage(LLMMessage.Role.USER, "test")), null, 100)
         } catch (e: LLMError.ProviderError) {
-            assertTrue(e.message!!.contains("invalid_request_error"))
-            assertTrue(e.message!!.contains("max_tokens too large"))
+            // [T-provider-verbatim-errors] Verbatim provider message; the
+            // `type` field is no longer pasted in as a "[invalid_request_error]"
+            // prefix, and the status is structural.
+            assertEquals("max_tokens too large", e.message)
+            assertEquals(400, e.httpStatus)
             return@runBlocking
         }
         throw AssertionError("Expected ProviderError")
+    }
+
+    @Test
+    fun `sendMessage surfaces Anthropic credit-exhaustion text verbatim`() = runBlocking {
+        // Anthropic's real shape: 400 invalid_request_error whose message names
+        // the remedy. The old code showed a generic quota line; the balance
+        // sentence is what tells the user to top up.
+        val errorBody =
+            """{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Claude API."}}"""
+        server.enqueue(MockResponse().setResponseCode(400).setBody(errorBody))
+
+        try {
+            provider.sendMessage(listOf(LLMMessage(LLMMessage.Role.USER, "test")), null, 100)
+        } catch (e: LLMError.QuotaExhausted) {
+            assertTrue(e.message!!.contains("credit balance is too low"))
+            assertEquals(400, e.httpStatus)
+            return@runBlocking
+        }
+        throw AssertionError("Expected QuotaExhausted")
     }
 
     // -- Claude version parsing (temperature rejection / thinking) --

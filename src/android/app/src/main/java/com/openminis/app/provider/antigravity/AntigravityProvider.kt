@@ -238,8 +238,8 @@ class AntigravityProvider(
             // fingerprint version so users know what Google rejected.
             if (responseBody.contains("VERSION_CHECK_FAILED", ignoreCase = true)) {
                 throw LLMError.ProviderError(
-                    "Antigravity 客户端指纹被上游拒绝（VERSION_CHECK_FAILED，当前版本 " +
-                        AntigravityOAuth.effectiveVersion() + "）。请更新应用或等待版本指纹文件刷新。",
+                    com.openminis.app.data.model.providerErrorMessage(responseBody),
+                    httpStatus = response.code,
                 )
             }
             val projectish = responseBody.contains("project", ignoreCase = true)
@@ -350,8 +350,8 @@ class AntigravityProvider(
                 if (errorBody.contains("VERSION_CHECK_FAILED", ignoreCase = true)) {
                     response.close()
                     throw LLMError.ProviderError(
-                        "Antigravity 客户端指纹被上游拒绝（VERSION_CHECK_FAILED，当前版本 " +
-                            AntigravityOAuth.effectiveVersion() + "）。请更新应用或等待版本指纹文件刷新。",
+                        com.openminis.app.data.model.providerErrorMessage(errorBody),
+                        httpStatus = response.code,
                     )
                 }
                 // One repair round, same shape as the non-streaming path above.
@@ -809,30 +809,45 @@ class AntigravityProvider(
     }
 
     private fun mapHttpError(statusCode: Int, body: String, retryAfterMs: Long? = null): LLMError {
+        // [T-provider-verbatim-errors] Same rule as every other provider: the
+        // relay's own message is the banner text. The app-authored Chinese
+        // guidance below survives ONLY as the blank-body fallback — a 401
+        // carrying a real reason ("invalid credential", "invalid_grant") says
+        // more than any sentence written here could.
+        val detail = com.openminis.app.data.model.providerErrorMessage(body)
         if (statusCode == 401) {
             // [fix-antigravity-401-refresh-retry] Reachable only after the
             // refresh+retry round failed, i.e. the refresh token itself is
             // dead (revoked / password change / >6h Google rotation grace).
-            // "重新登录" is then genuinely the only remedy.
-            return LLMError.InvalidApiKey("Antigravity 登录已过期，请在 Provider 连接页重新登录")
+            // "重新登录" is then genuinely the only remedy — the diagnosis
+            // survives as the fallback for a body that carries no text at all
+            // (see the [fix-antigravity-refresh-failure-classify] test in
+            // AntigravityProviderRetryTest).
+            return LLMError.InvalidApiKey(
+                detail.ifBlank { "Antigravity 登录已过期,请在 Provider 连接页重新登录" },
+                httpStatus = statusCode,
+            )
         }
         if (statusCode == 403) {
             // 403 frequently means a missing/invalid project id rather than
             // an expired credential — surface the upstream detail either way.
-            return LLMError.InvalidApiKey("Antigravity 访问被拒：${body.take(300)}")
+            return LLMError.InvalidApiKey(detail, httpStatus = statusCode)
         }
-        if (statusCode == 429) return LLMError.RateLimited(retryAfterMs = retryAfterMs)
+        if (statusCode == 429) {
+            return LLMError.RateLimited(detail, retryAfterMs = retryAfterMs, httpStatus = statusCode)
+        }
         // [T-multi-api-key] Antigravity is OAuth-backed, so a spent credential
         // is not the usual cause — but the shared classifier also catches
         // upstream "out of credit" bodies surfaced through the relay, which
         // must not be filed as a rate limit.
         if (isQuotaExhaustedResponse(statusCode, body)) {
-            return LLMError.QuotaExhausted(body.take(300))
+            return LLMError.QuotaExhausted(detail, httpStatus = statusCode)
         }
-        val message = "Antigravity API error $statusCode: ${body.take(200)}"
         val transientCodes = setOf(500, 502, 503, 504, 529)
-        if (statusCode in transientCodes) return LLMError.TransientError(message, retryAfterMs)
-        return LLMError.ProviderError(message)
+        if (statusCode in transientCodes) {
+            return LLMError.TransientError(detail, retryAfterMs, httpStatus = statusCode)
+        }
+        return LLMError.ProviderError(detail, httpStatus = statusCode)
     }
 
     private fun mapError(error: Throwable): LLMError {

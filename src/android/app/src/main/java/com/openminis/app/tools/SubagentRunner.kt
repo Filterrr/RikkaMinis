@@ -1151,8 +1151,10 @@ class SubagentRunner(
                     } catch (e: Exception) {
                         if (e is CancellationException) throw e
                         val actual = deps.unwrapFlowException(e)
-                        val is5xx = actual is com.openminis.app.data.model.LLMError.ProviderError &&
-                            actual.detail.contains(Regex("\\b[5][0-9]{2}\\b"))
+                        // [T-provider-verbatim-errors] Structured status, not a
+                        // regex over the displayed text — see the matching
+                        // comment in ChatViewModel's runAgentLoop catch block.
+                        val is5xx = (actual as? com.openminis.app.data.model.LLMError)?.isServerError == true
                         val workerDiedZeroChunk =
                             ((actual is ModelWorkerDiedException) ||
                                 (actual is ModelStreamErrorException)) &&
