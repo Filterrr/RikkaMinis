@@ -1,11 +1,80 @@
 package com.openminis.app.data.model
 
+import org.json.JSONObject
+
+/**
+ * [T-provider-verbatim-errors] Rule for every provider failure: **what the
+ * provider said is what the user sees.**
+ *
+ * Every variant carries [detail] — the provider's own error text, copied
+ * verbatim (SSE `{"error":{"message":...}}`, HTTP body, or the transport
+ * exception's message when no body exists). That string is BOTH the exception
+ * message and the banner text ([userMessage]); the app no longer substitutes a
+ * canned sentence ("Provider returned an error", "Rate limited — try again in
+ * a moment") for a provider message the user needs to act on. The provider is
+ * the only party that knows whether the key is out of credit, the model was
+ * retired, the prompt tripped a content filter, or a region is blocked — so
+ * its text is the actionable one, and re-wording it locally destroys the one
+ * piece of information the user was supposed to read.
+ *
+ * A local fallback survives ONLY for the cases where the provider said
+ * nothing at all (a 401 with an empty body, a dead socket with a null
+ * message). Those see [localFallback], and they are the exception — never the
+ * rule.
+ *
+ * Why the exception message matters as much as [userMessage]: the chat turn
+ * streams through the `:modelservice` worker, which serialises the failure as
+ * a single string (`ChatStreamJsonl.errorLine`). The typed [LLMError] does not
+ * cross that process boundary — only `message` does — so a canned message here
+ * would reach the banner even on paths that never consult [userMessage].
+ *
+ * Classification is deliberately kept OUT of the displayed text: the HTTP
+ * status lives in [httpStatus], so retry/fallback decisions no longer depend
+ * on an app-injected "[500] " prefix that would also have polluted the
+ * banner.
+ */
 sealed class LLMError(message: String, cause: Throwable? = null) : Exception(message, cause) {
-    class InvalidApiKey(val detail: String = "") : LLMError(if (detail.isBlank()) "Invalid API key" else "Invalid API key: $detail")
-    class NetworkError(cause: Throwable) : LLMError("Network error: ${cause.message}", cause)
-    class ProviderError(val detail: String) : LLMError("Provider error: $detail")
-    class DecodingError(cause: Throwable) : LLMError("Decoding error: ${cause.message}", cause)
-    class RateLimited(val retryAfterMs: Long? = null) : LLMError("Rate limited — please try again later")
+
+    /**
+     * The provider's error text, verbatim. Empty when the provider genuinely
+     * supplied nothing (empty body / no response at all) — the only case in
+     * which the UI is allowed to show app-authored copy.
+     */
+    abstract val detail: String
+
+    /**
+     * HTTP status of the response that produced this failure, when there was
+     * one. Kept structured (instead of being spliced into [detail] as a
+     * "[503] " prefix) so error classification never depends on — or leaks
+     * into — the text the user reads.
+     */
+    open val httpStatus: Int? get() = null
+
+    class InvalidApiKey(
+        override val detail: String = "",
+        override val httpStatus: Int? = null,
+    ) : LLMError(fallbackText(detail, "Invalid API key"), null)
+
+    class NetworkError(
+        cause: Throwable,
+        override val detail: String = cause.message.orEmpty(),
+    ) : LLMError(fallbackText(detail, "Connection failed"), cause)
+
+    class ProviderError(
+        override val detail: String,
+        override val httpStatus: Int? = null,
+    ) : LLMError(fallbackText(detail, "Provider returned an error"), null)
+
+    class DecodingError(
+        cause: Throwable,
+        override val detail: String = cause.message.orEmpty(),
+    ) : LLMError(fallbackText(detail, "Unexpected response from provider"), cause)
+
+    class RateLimited(
+        override val detail: String = "",
+        val retryAfterMs: Long? = null,
+        override val httpStatus: Int? = null,
+    ) : LLMError(fallbackText(detail, "Rate limited — try again in a moment"), null)
 
     /**
      * [T-multi-api-key] The credential itself is out of quota / balance
@@ -27,24 +96,49 @@ sealed class LLMError(message: String, cause: Throwable? = null) : Exception(mes
      * 429 → RateLimited, else → ProviderError) into [ProviderError] →
      * [com.openminis.app.data.routing.RouteOutcome.ServerError], i.e. it was
      * recorded as a *server-side* fault: the circuit opened for
-     * CIRCUIT_OPEN_MS (5 min) and then retried the same dead key forever,
-     * surfacing as "Provider returned an error". See
-     * [com.openminis.app.data.routing.RouteOutcome.QuotaExhausted].
+     * CIRCUIT_OPEN_MS (5 min) and then retried the same dead key forever.
+     * See [com.openminis.app.data.routing.RouteOutcome.QuotaExhausted].
      *
-     * @param detail provider-supplied message, verbatim (shown behind the
-     *   technical-details disclosure only).
+     * @param detail provider-supplied message, verbatim — this is the banner
+     *   text ("余额不足,请充值" is far more actionable than "quota exhausted").
      */
-    class QuotaExhausted(val detail: String = "") : LLMError(if (detail.isBlank()) "Quota exhausted" else "Quota exhausted: $detail")
+    class QuotaExhausted(
+        override val detail: String = "",
+        override val httpStatus: Int? = null,
+    ) : LLMError(fallbackText(detail, "API key is out of quota"), null)
 
-    class TransientError(val detail: String, val retryAfterMs: Long? = null) : LLMError("Transient error: $detail")
-    class Cancelled : LLMError("Request was cancelled")
-    class Unknown(cause: Throwable?) : LLMError("Unknown error: ${cause?.message}", cause)
+    class TransientError(
+        override val detail: String,
+        val retryAfterMs: Long? = null,
+        override val httpStatus: Int? = null,
+    ) : LLMError(fallbackText(detail, "Service temporarily unavailable"), null)
+
+    /**
+     * User-initiated cancellation. The only variant whose text is
+     * legitimately app-authored: there is no provider message to carry, so
+     * [detail] stays empty until a caller supplies one.
+     */
+    class Cancelled(override val detail: String = "") : LLMError(fallbackText(detail, "Request was cancelled"), null)
+
+    class Unknown(
+        cause: Throwable?,
+        override val detail: String = cause?.message.orEmpty(),
+        override val httpStatus: Int? = null,
+    ) : LLMError(fallbackText(detail, "Something went wrong"), cause)
 
     /** Pure connectivity failure — the request didn't land at all. */
     val isNetworkError: Boolean get() = this is NetworkError
 
     /** Worth retrying on the same provider (bounded backoff). */
     val isRetryable: Boolean get() = this is NetworkError || this is TransientError
+
+    /**
+     * The provider answered with an HTTP 5xx. Derived from [httpStatus], NOT
+     * from pattern-matching digits out of the displayed text — so the banner
+     * can show the provider's own wording without the classifier losing the
+     * server-vs-client distinction.
+     */
+    val isServerError: Boolean get() = (httpStatus ?: 0) in 500..599
 
     /**
      * Should fall back to the next model in the group — same model won't help.
@@ -91,38 +185,99 @@ sealed class LLMError(message: String, cause: Throwable? = null) : Exception(mes
         get() = this is RateLimited || this is InvalidApiKey || this is QuotaExhausted
 
     /**
-     * Human-readable, user-facing summary of the failure — NO raw error codes
-     * (no "stream was reset: CANCEL", no HTTP status numbers). This is what
-     * the inline error banner shows; the technical detail (raw message, fallback
-     * trail) is collapsed behind the "technical details" disclosure instead of
-     * being pasted into the chat record. [T-error-no-permanent-scars]
+     * [T-provider-verbatim-errors] What the inline error banner shows: the
+     * provider's own message, unmodified.
+     *
+     * The "technical details" disclosure is reserved for the fallback trail
+     * (which model failed with what); it is no longer the only place the real
+     * reason could be found, because the reason is now the banner itself.
+     *
+     * A canned sentence is returned only when [detail] is blank — i.e. the
+     * provider sent no text at all. Every branch below is a last resort, not a
+     * summary.
      */
     val userMessage: String
         get() = when (this) {
-            is RateLimited -> "Rate limited — try again in a moment"
-            is InvalidApiKey -> "API key is invalid or expired"
-            is QuotaExhausted -> "API key is out of quota"
-            is ProviderError -> "Provider returned an error"
-            is NetworkError -> "Connection failed"
-            is TransientError -> "Service temporarily unavailable"
-            is DecodingError -> "Unexpected response from provider"
-            is Cancelled -> "Request was cancelled"
-            is Unknown -> "Something went wrong"
+            is RateLimited -> detail.ifBlank { "Rate limited — try again in a moment" }
+            is InvalidApiKey -> detail.ifBlank { "API key is invalid or expired" }
+            is QuotaExhausted -> detail.ifBlank { "API key is out of quota" }
+            is ProviderError -> detail.ifBlank { "Provider returned an error" }
+            is NetworkError -> detail.ifBlank { "Connection failed" }
+            is TransientError -> detail.ifBlank { "Service temporarily unavailable" }
+            is DecodingError -> detail.ifBlank { "Unexpected response from provider" }
+            is Cancelled -> detail.ifBlank { "Request was cancelled" }
+            is Unknown -> detail.ifBlank { "Something went wrong" }
         }
 
-    /** Short user-facing reason shown when a fallback engages. */
-    val fallbackReason: String
-        get() = when (this) {
-            is RateLimited -> "Rate limited"
-            is InvalidApiKey -> "Invalid API key"
-            is QuotaExhausted -> "Quota exhausted"
-            is ProviderError -> "Provider error"
-            is TransientError -> "Transient error"
-            is NetworkError -> "Network error"
-            is DecodingError -> "Decoding error"
-            is Cancelled -> "Cancelled"
-            is Unknown -> "Unknown error"
-        }
+    /**
+     * Short reason shown in the per-model fallback trail (technical details).
+     * Also the provider's text when there is one — the trail exists to explain
+     * WHY each member was skipped, so a generic "Provider error" there would
+     * defeat its purpose.
+     */
+    val fallbackReason: String get() = userMessage
+}
+
+/**
+ * [T-provider-verbatim-errors] Exception message = provider text when there is
+ * one, app copy only when the provider sent nothing (and an exception must
+ * still carry a non-blank message — several call sites do
+ * `e.message ?: "fallback"`, which does not guard against "").
+ */
+private fun fallbackText(detail: String, fallback: String): String =
+    detail.ifBlank { fallback }
+
+/**
+ * [T-provider-verbatim-errors] Pull the provider's own human-readable error
+ * message out of a raw response body.
+ *
+ * This SELECTS the provider's text; it never rewrites it. Every
+ * OpenAI-compatible stack, Anthropic, Gemini and the Antigravity relay put the
+ * actionable sentence in one of a handful of well-known places, so one helper
+ * covers them all:
+ *
+ *  - `{"error":{"message":"..."}}`        — OpenAI / Anthropic / most relays
+ *  - `{"error":{"msg":"..."}}`            — some Chinese relays
+ *  - `{"error":"..."}`                    — string-form error
+ *  - `{"message":"..."}` / `{"msg":"..."}`— flat shapes, Gemini-style bodies
+ *
+ * When none of them parses (HTML error page, plain text, empty body) the raw
+ * body is returned trimmed — verbatim, because a proxy's HTML or a CDN's
+ * one-liner is still more informative than a canned sentence. An empty/blank
+ * body yields "" so the caller falls back to app copy, which is the only
+ * honest option left.
+ *
+ * @param body raw response body (caller may pre-truncate).
+ * @param limit hard cap so a multi-MB error page cannot be pasted into the UI.
+ */
+fun providerErrorMessage(body: String, limit: Int = 500): String {
+    val trimmed = body.trim()
+    if (trimmed.isEmpty()) return ""
+    val extracted = runCatching {
+        val json = JSONObject(trimmed)
+        val err = json.optJSONObject("error")
+        sequenceOf(
+            err?.safeString("message"),
+            err?.safeString("msg"),
+            err?.safeString("detail"),
+            json.optString("error").takeIf { !json.isNull("error") && it.isNotBlank() },
+            json.safeString("message"),
+            json.safeString("msg"),
+            json.safeString("detail"),
+        ).firstOrNull { !it.isNullOrBlank() }
+    }.getOrNull()
+    val text = extracted?.trim().orEmpty()
+    return (text.ifEmpty { trimmed }).take(limit)
+}
+
+/**
+ * `optString` returns the literal "null" for a JSON null in some Android
+ * versions, and "" is indistinguishable from a missing key; both must be
+ * treated as "not present" so the next candidate shape is consulted.
+ */
+private fun JSONObject.safeString(key: String): String? {
+    if (!has(key) || isNull(key)) return null
+    return optString(key, "").takeIf { it.isNotBlank() && it != "null" }
 }
 
 /**
@@ -172,11 +327,11 @@ fun isQuotaExhaustedResponse(statusCode: Int, body: String): Boolean {
 
 /**
  * [T-error-no-permanent-scars] Thrown when the group-fallback chain is fully
- * exhausted (every member failed). Carries a HUMAN-READABLE `summary` (what
- * the error banner shows) separately from the raw `detail` (per-model failure
- * trail + original error codes, shown only behind the "technical details"
- * disclosure). Splitting the two at the throw site keeps the banner text
- * clean without losing debuggability.
+ * exhausted (every member failed). Carries the provider's verbatim failure text
+ * as `summary` (what the error banner shows) separately from the raw `detail`
+ * (per-model failure trail, shown behind the "technical details" disclosure).
+ * Splitting the two at the throw site keeps the banner free of the trail
+ * without replacing the one message the provider actually wrote.
  */
 class FallbackExhaustedError(
     val summary: String,

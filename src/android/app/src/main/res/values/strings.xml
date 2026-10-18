@@ -1622,8 +1622,6 @@
     <string name="error_empty_response_generic">Model returned an empty response. Please try again or switch models.</string>
     <!-- [T-error-no-permanent-scars] Human-readable terminal errors (raw error codes are collapsed behind the technical-details disclosure). -->
     <string name="error_all_models_failed">Connection failed — tried %1$d models, none available.</string>
-    <string name="error_all_models_rate_limited">Rate limited on every model in this group.</string>
-    <string name="error_all_models_bad_key">The API key is invalid or expired on every model in this group.</string>
     <string name="error_tech_detail">Technical details</string>
     <!-- [T-error-no-permanent-scars] Lightweight note shown when a model-group fallback switches models mid-turn. -->
     <string name="fallback_switched_to">Switched to %1$s</string>

@@ -163,9 +163,38 @@ class AntigravityProviderRetryTest {
     // ── 3b: fatal refresh failure → honest re-login error ──
 
     @Test
-    fun `fatal refresh failure surfaces InvalidApiKey`() = runBlocking {
+    fun `fatal refresh failure surfaces the provider 401 text`() = runBlocking {
         server.enqueue(unauthorized())
         server.enqueue(okBody()) // replay target — never consumed when refresh fails
+
+        val p = provider(refreshToken = {
+            AntigravityCredentialStore.lastRefreshFailure =
+                AntigravityCredentialStore.RefreshFailure.Fatal(400, "invalid_grant")
+            null
+        })
+        try {
+            p.sendOrThrow()
+            fail("expected InvalidApiKey")
+        } catch (e: LLMError.InvalidApiKey) {
+            // [T-provider-verbatim-errors] The relay's own 401 body is what the
+            // user reads ("invalid credential"), rather than an app-authored
+            // re-login sentence shadowing it — the upstream text is what
+            // distinguishes a revoked grant from a bad project id.
+            assertTrue(
+                "should carry the provider's 401 text",
+                e.message!!.contains("invalid credential"),
+            )
+            assertEquals(401, e.httpStatus)
+        }
+    }
+
+    @Test
+    fun `blank 401 body keeps the re-login guidance as the fallback`() = runBlocking {
+        // The one case where app copy is still correct: Google answered 401
+        // with nothing at all, so there is no provider sentence to show and
+        // "重新登录" IS the remaining information.
+        server.enqueue(unauthorized(""))
+        server.enqueue(okBody())
 
         val p = provider(refreshToken = {
             AntigravityCredentialStore.lastRefreshFailure =

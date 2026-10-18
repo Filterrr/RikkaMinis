@@ -7341,9 +7341,12 @@ class ChatViewModel(
             setInlineError(e.summary, e.detail)
         } else {
             val errActual = unwrapFlowException(e)
+            // [T-provider-verbatim-errors] LLMError.userMessage IS the
+            // provider's text (the app fallback survives only for the
+            // blank-body case), so this call site no longer re-words it.
             val errSummary = (errActual as? com.openminis.app.data.model.LLMError)?.userMessage
                 ?: errActual.message?.takeIf { it.isNotBlank() }
-                ?: "Unknown error"
+                ?: context.getString(R.string.error_empty_response_generic)
             setInlineError(errSummary, errActual.message)
         }
     }
@@ -8747,8 +8750,18 @@ class ChatViewModel(
                     if (e is CancellationException && e.cause == null) throw e  // real job cancellation
                     val actual = unwrapFlowException(e)
                     val isRateLimit = actual is com.openminis.app.data.model.LLMError.RateLimited
-                    val is5xx = actual is com.openminis.app.data.model.LLMError.ProviderError &&
-                        actual.detail.contains(Regex("\\b[5][0-9]{2}\\b"))
+                    // [T-provider-verbatim-errors] Server-fault detection reads
+                    // the structured status, NOT digits scraped out of the
+                    // displayed text. The old regex matched the "[503] "
+                    // prefix the provider layer used to splice into `detail`;
+                    // now that the banner shows only the provider's own
+                    // sentence, pattern-matching the text would (a) miss every
+                    // real 5xx whose body doesn't happen to mention a number
+                    // and (b) false-positive on a provider that writes "500"
+                    // in a 4xx message. A 5xx also surfaces as TransientError
+                    // (transient codes) or ProviderError (503 with permanent
+                    // indicators), so both are consulted.
+                    val is5xx = (actual as? com.openminis.app.data.model.LLMError)?.isServerError == true
                     // Auto-retry on transient network/5xx/transient errors on the SAME provider
                     // before considering a fallback (mirrors iOS streamWithAutoRetry).
                     // Rate limits are provider-level signals that should trigger fallback immediately,
@@ -8812,10 +8825,12 @@ class ChatViewModel(
                             maxAttempts = AUTO_RETRY_DELAYS_SEC.size,
                             willRetry = true,
                         )
-                        // [T-error-no-permanent-scars] The transient banner shows a
-                        // human summary too ("Connection failed — retrying 1/3…"),
-                        // not the raw "stream was reset: CANCEL" text. The log line
-                        // above keeps the full detail for debugging.
+                        // [T-provider-verbatim-errors] The banner keeps the provider's
+                        // own sentence ("Connection failed", "stream was reset: CANCEL",
+                        // or whatever the endpoint actually wrote); only the retry
+                        // progress appended below is the app's own state. The previous
+                        // wording replaced the provider text with a canned summary, which
+                        // hid the very reason the retry was happening.
                         val errSummary = (actual as? com.openminis.app.data.model.LLMError)?.userMessage
                             ?: actual.message?.takeIf { it.isNotBlank() }
                             ?: actual.javaClass.simpleName
@@ -9089,11 +9104,18 @@ class ChatViewModel(
                     }
                     val next = if (shouldFallback) remainingFallbacks.removeFirstOrNull() else null
                     if (next != null) {
-                        val reason = when {
-                            isRateLimit -> "Rate limited"
-                            actual is com.openminis.app.data.model.LLMError.ProviderError -> actual.detail
-                            else -> actual.message ?: "Error"
-                        }
+                        // [T-provider-verbatim-errors] The per-model failure
+                        // trail (technical details) records WHY this member was
+                        // abandoned. It used to short-circuit RateLimited to the
+                        // literal "Rate limited", which threw away the
+                        // provider's explanation exactly when the user was
+                        // trying to find out which key or endpoint was
+                        // throttled. RateLimited now carries its detail like
+                        // every other variant, so the trail is uniformly the
+                        // provider's text.
+                        val reason = (actual as? com.openminis.app.data.model.LLMError)?.fallbackReason
+                            ?: actual.message?.takeIf { it.isNotBlank() }
+                            ?: actual.javaClass.simpleName
                         // [T-android-model-indicator-flash-on-endpoint-retry]
                         // Same-model recovery is a TRANSPARENT retry, not a real
                         // model switch. A model group can hold several entries
@@ -9302,18 +9324,21 @@ class ChatViewModel(
                                 // technical-details disclosure — it never becomes the
                                 // primary visible error text.
                                 val triedCount = fallbackReasons.size + 1  // primary + fallback members
-                                val summary = when (actual) {
-                                    is com.openminis.app.data.model.LLMError.NetworkError,
-                                    is com.openminis.app.data.model.LLMError.TransientError ->
-                                        context.getString(R.string.error_all_models_failed, triedCount)
-                                    is com.openminis.app.data.model.LLMError.RateLimited ->
-                                        context.getString(R.string.error_all_models_rate_limited)
-                                    is com.openminis.app.data.model.LLMError.InvalidApiKey ->
-                                        context.getString(R.string.error_all_models_bad_key)
-                                    else -> (actual as? com.openminis.app.data.model.LLMError)?.userMessage
-                                        ?: actual.message?.takeIf { it.isNotBlank() }
-                                        ?: "Unknown error"
-                                }
+                                // [T-provider-verbatim-errors] The banner shows
+                                // THE PROVIDER'S OWN TEXT. It used to be
+                                // re-worded here into "Connection failed — tried
+                                // N models" / "Rate limited on every model in
+                                // this group", which told the user how many
+                                // members had failed but not WHY — discarding
+                                // the one sentence that said what to fix.
+                                //
+                                // The tried-count is not lost: it is already
+                                // the first thing in `detail`, which the user
+                                // expands under "technical details" to see the
+                                // per-model trail.
+                                val summary = (actual as? com.openminis.app.data.model.LLMError)?.userMessage
+                                    ?: actual.message?.takeIf { it.isNotBlank() }
+                                    ?: context.getString(R.string.error_all_models_failed, triedCount)
                                 // TF-H: reducer must leave FALLING_BACK before
                                 // finalizing — otherwise RunFinalized is REJECTED
                                 // with "requires FINALIZING (current=FALLING_BACK)".

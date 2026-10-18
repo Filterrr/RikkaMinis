@@ -1256,8 +1256,6 @@
     <string name="session_mcps_empty_subtitle">Добавьте серверы в Настройки → Интеграции MCP.</string>
     <string name="error_empty_response_generic">Модель вернула пустой ответ. Попробуйте ещё раз или смените модель.</string>
     <string name="error_all_models_failed">Соединение не удалось — опробовано моделей: %1$d, ни одна недоступна.</string>
-    <string name="error_all_models_rate_limited">Превышен лимит запросов для всех моделей в этой группе.</string>
-    <string name="error_all_models_bad_key">Недействительный или истёкший API-ключ у всех моделей в этой группе.</string>
     <string name="error_tech_detail">Технические детали</string>
     <string name="fallback_switched_to">Переключено на %1$s</string>
     <string name="error_output_truncated_repeated">Модель неоднократно достигала предела длины вывода. Попробуйте снизить лимит контекста в настройках модели или разбейте вопрос на более мелкие части.</string>
