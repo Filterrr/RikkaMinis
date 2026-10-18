@@ -282,7 +282,7 @@ fun providerErrorMessage(body: String, limit: Int = 500): String {
     }.getOrNull()
     val text = extracted?.trim().orEmpty()
     val usable = text.takeIf { it.isNotBlank() && !looksLikeRawJson(it) }
-    return usable ?: rawBodyText(trimmed, limit)
+    return usable?.take(limit) ?: rawBodyText(trimmed, limit)
 }
 
 /**

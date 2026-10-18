@@ -279,6 +279,12 @@ class LLMErrorTest {
         val huge = "x".repeat(5000)
         assertEquals(500, providerErrorMessage(huge).length)
         assertEquals(200, providerErrorMessage(huge, limit = 200).length)
+        // The cap applies to an EXTRACTED message too, not just the raw-body
+        // fallback: a relay that echoes a multi-KB validation dump inside
+        // {"error":{"message":...}} must not be pasted into the banner whole.
+        val hugeNested = """{"error":{"message":"${"y".repeat(5000)}"}}"""
+        assertEquals(500, providerErrorMessage(hugeNested).length)
+        assertEquals(200, providerErrorMessage(hugeNested, limit = 200).length)
     }
 
     // ─── exhausted chain carries provider text separately from the trail ──
