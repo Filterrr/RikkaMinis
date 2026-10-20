@@ -925,7 +925,6 @@ class SubagentRunner(
         val systemPromptWithPlan = if (planFirst) {
             "$systemPrompt\n\n${SubagentSkill.PLAN_DIRECTIVE}"
         } else systemPrompt
-        var planReminderIssued = false
         // [T-subagent-model-routing] Record what actually ran. A parent that
         // asked for a cheap model must be able to verify it got one.
         // [T-subagent-model-spread] A spread run additionally says WHICH group
@@ -949,6 +948,16 @@ class SubagentRunner(
         val artifacts = mutableListOf<String>()
         var turns = 0
         var lastText = ""
+        // [fix/subagent-plan-execute] True once a tool-less PLAN turn was
+        // answered with an execution nudge. Bounds the nudge to one per run.
+        var planNudgeIssued = false
+        // [fix/subagent-plan-execute] Count of tool calls that actually
+        // EXECUTED (not merely proposed). Terminal reporting uses it to
+        // refuse to call a plan-only run a success: before this, a run that
+        // never touched a tool reached the parent as "completed" with a plan
+        // as its findings, and the parent had no machine-visible signal that
+        // nothing had been done.
+        var executedToolCalls = 0
         // [T-subagent-thinking] Resolve the reasoning level ONCE, before the
         // loop, and record the outcome on the run. The value that reaches the
         // provider may legitimately differ from the skill's request (the
@@ -1223,10 +1232,12 @@ class SubagentRunner(
                 // the narration text already consumed by the registry is
                 // rewritten via the same segment-replace path the retry
                 // rollback uses.
+                var planEmittedThisTurn = false
                 if (planFirst && text.contains("<${SubagentSkill.PLAN_TAG}>")) {
                     val extracted = SubagentSkill.extractTaskPlan(text)
                     if (extracted != null) {
                         val (planText, cleanedText) = extracted
+                        planEmittedThisTurn = true
                         registry.setTaskPlan(run.id, SubagentSkill.parseTaskPlanItems(planText))
                         if (cleanedText != text.trim()) {
                             // The report accumulator ALSO carries the block —
@@ -1235,28 +1246,74 @@ class SubagentRunner(
                             // state). Keep both mirrors consistent.
                             registry.replaceTurnNarration(run.id, turns, cleanedText)
                             registry.replaceResultText(run.id, cleanedText)
+                            // [fix/subagent-plan-execute] Keep the REPORT
+                            // accumulator in sync too. `resultSb` was appended
+                            // before extraction, so a plan-only run handed the
+                            // parent a literal "<task-plan>…</task-plan>"
+                            // block as its findings. Rewriting the tail (not
+                            // appending) preserves earlier turns' text.
+                            if (resultSb.isNotEmpty()) {
+                                val tailStart = resultSb.length - text.length
+                                if (tailStart >= 0) {
+                                    resultSb.setLength(tailStart)
+                                    if (cleanedText.isNotBlank()) resultSb.append(cleanedText)
+                                }
+                            }
                         }
                     }
                 }
 
                 if (toolCalls.isEmpty()) {
-                    // Model finished naturally — no more tool calls.
-                    // [fix/subagent-plan-first] One-shot guard: a run that
-                    // NEVER produced a plan (model ignored the directive —
-                    // most often on a short single-step task where it just
-                    // answered) gets exactly ONE nudge, appended to its final
-                    // turn so the next request re-asks without burning a
-                    // whole turn. The guard can never loop: after this the
-                    // loop has already exited.
-                    if (planFirst && !planReminderIssued && registry.runs.value
-                        .firstOrNull { it.id == run.id }?.taskPlan.isNullOrEmpty()
-                    ) {
-                        planReminderIssued = true
+                    // [fix/subagent-plan-execute] A tool-less turn is NOT
+                    // automatically "done". plan_first tells the model to stop
+                    // after outlining, so the FIRST tool-less turn of a
+                    // plan-first run is the plan turn — breaking here ended
+                    // the run before a single tool ran (the model obeyed the
+                    // directive and the parent got a plan as its only
+                    // deliverable). The gate keeps that turn non-terminal and
+                    // injects a directive nudge; it fires at most once per
+                    // run, so a model that keeps talking still terminates.
+                    val planCaptured = registry.runs.value
+                        .firstOrNull { it.id == run.id }?.taskPlan.orEmpty().isNotEmpty()
+                    val decision = SubagentPlanGate.decide(
+                        planFirst = planFirst,
+                        planCaptured = planCaptured,
+                        emittedPlanThisTurn = planEmittedThisTurn,
+                        nudgeIssued = planNudgeIssued,
+                        maxTurnsReached = turns >= config.maxTurns,
+                    )
+                    if (decision == SubagentPlanGate.Decision.NUDGE_TO_EXECUTE) {
+                        planNudgeIssued = true
+                        val nudge = SubagentPlanGate.nudgeText(planEmittedThisTurn)
+                        AppLogger.info(
+                            TAG,
+                            "[Subagent] '$skillName' plan-only turn $turns — nudging to execute " +
+                                "(planEmitted=$planEmittedThisTurn)",
+                        )
                         registry.appendNotice(
                             run.id,
-                            "[plan] no <task-plan> was emitted — plan_first is on for this skill; " +
-                                "re-run will nudge the model once before executing",
+                            if (planEmittedThisTurn) {
+                                "[plan] recorded — execution nudge issued (turn $turns produced no tool call)"
+                            } else {
+                                "[plan] none emitted — execution nudge issued (turn $turns produced no tool call)"
+                            },
                         )
+                        // Balanced history: the assistant's tool-less turn must
+                        // be followed by a user turn, otherwise the wire
+                        // alternation breaks on the next request.
+                        history.add(
+                            LLMMessage(
+                                role = LLMMessage.Role.ASSISTANT,
+                                content = text,
+                            ),
+                        )
+                        history.add(
+                            LLMMessage(
+                                role = LLMMessage.Role.USER,
+                                content = nudge,
+                            ),
+                        )
+                        continue
                     }
                     break
                 }
@@ -1310,6 +1367,7 @@ class SubagentRunner(
                         executeSubagentTool(call.name, call.argsJson, call.id, run.id, artifacts)
                     }
                 }
+                executedToolCalls += toolCalls.size
                 for ((call, result) in toolCalls.zip(results)) {
                     val resultContent = if (result.success) result.output else "Error: ${result.output}"
                     registry.stepFinished(
@@ -1612,10 +1670,25 @@ class SubagentRunner(
             )
         }
 
-        registry.finishIfActive(run.id, SubagentRunRegistry.RunStatus.SUCCESS, resultText = finalText)
+        // [fix/subagent-plan-execute] A run that executed ZERO tool calls did
+        // not do any work, whatever its prose says. Before this the parent
+        // received "Sub-agent completed in 1 turn(s)" plus a plan and had no
+        // way to tell that nothing was read, run, or written — the report was
+        // indistinguishable from a real one at the header level. Say it out
+        // loud so a parent (or the user) cannot mistake it for a deliverable.
+        val noWorkWarning = if (executedToolCalls == 0) {
+            "\n\n⚠️ [no tool calls were executed in this run — this report contains " +
+                "no gathered data, no command output and no files written. Treat it " +
+                "as an unstarted task, not as findings.]"
+        } else ""
+
+        registry.finishIfActive(
+            run.id, SubagentRunRegistry.RunStatus.SUCCESS,
+            resultText = finalText + noWorkWarning,
+        )
         val result = SubagentResult(
             status = SubagentResult.Status.SUCCESS,
-            report = finalText,
+            report = finalText + noWorkWarning,
             declaredStatus = SubagentSkill.parseReportStatus(finalText),
             turns = turns,
             maxTurns = config.maxTurns,

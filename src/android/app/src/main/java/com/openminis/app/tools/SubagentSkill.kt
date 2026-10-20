@@ -701,8 +701,9 @@ object SubagentSkill {
         |
         |Rules:
         |- 3-7 steps, one line each, verb-first and concrete ("Search X", "Compare A vs B", "Write report to <path>").
-        |- The plan turn makes NO tool calls — outline only, then STOP. Execution starts next turn.
+        |- The plan turn makes NO tool calls — outline only, then stop the turn. The run does NOT end here: execution starts automatically on the next turn, so do not treat a finished plan as a finished task.
         |- The list shows the user what you intend to do; deviate when the work demands it, but if the plan changes materially, emit an updated <task-plan> block before continuing.
+        |- After the plan turn, every turn must actually advance the work with a tool call until the task is complete.
     """.trimMargin()
 
     /** Marker prepended to the run transcript when the planning turn begins. */
