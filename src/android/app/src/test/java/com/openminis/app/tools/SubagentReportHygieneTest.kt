@@ -137,14 +137,13 @@ class SubagentReportHygieneTest {
     }
 
     @Test
-    fun `empty run produces no work warning from the report gate`() {
-        // Interaction with [fix/subagent-plan-execute]: a zero-tool run also
-        // gets a "no tool calls were executed" warning from the runner. The
-        // hygiene gate must not stack a second warning on top of it, so the
-        // runner suppresses the no-work warning when the report was degenerate.
-        // This pins the gate's half of that contract: a degenerate report from
-        // an EMPTY run yields no digest, leaving the runner's own warning as
-        // the single message.
+    fun `empty run produces no digest`() {
+        // [fix/subagent-run-assessment] The "nothing was done" signal now lives
+        // in the run-assessment headline (`[unstarted] 0 tool calls executed`),
+        // not in a warning appended to the report body. This pins the gate's
+        // half of that contract: a degenerate report from an EMPTY run yields
+        // no digest — there is nothing to rebuild from — so the headline is the
+        // single place the parent learns the run did nothing.
         assertNull(SubagentReportHygiene.assembleFromTools(emptyList()))
         assertTrue(SubagentReportHygiene.isDegenerate("<parameter name=\"status\">done</parameter>"))
     }
