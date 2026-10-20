@@ -1,6 +1,6 @@
 ---
 name: general-agent
-version: 1.4.5
+version: 1.4.6
 description: General-purpose sub-agent with the same tool capabilities as the main agent (shell, browser, file read/write/edit, image reading). Spawn via spawn_agent for delegating complex sub-tasks — research, code exploration, multi-step file operations, parallel investigation. The sub-agent works in an isolated context and returns a structured, anchor-verifiable final report.
 subagent: true
 max_turns: 40
@@ -100,3 +100,11 @@ parent's language if the task indicates one. Exactly these four fields:
 - `artifacts`: file paths produced, each with a one-line description
 
 Never silently drop a field, even when empty.
+
+**This report is PLAIN TEXT, not XML.** Write `status: done` on its own
+line — never `<status>done</status>`, `<parameter name="status">done</parameter>`,
+or any other tag form. The `<task-plan>` block earlier in the run is the ONLY
+tagged structure you may emit; it belongs to the plan, not to the report.
+A report that is only a tag carries no findings and will be discarded, and
+the runtime will substitute a raw tool-output digest in its place — which
+loses every conclusion you drew.

@@ -1670,33 +1670,96 @@ class SubagentRunner(
             )
         }
 
+        // [fix/subagent-report-hygiene] A non-blank final message is not
+        // automatically a REPORT. Observed: a run executed five tool calls,
+        // gathered real data, and closed with the single line
+        // `<parameter name="status">done</parameter>` — the model merged the
+        // plan directive's XML-block convention with the plain-text report
+        // contract. The parent received that line as the findings and the run
+        // still reported SUCCESS.
+        //
+        // Two-step handling: when the run DID work, rebuild a digest from the
+        // tool evidence so the parent gets the facts that were gathered;
+        // when it did not, say so instead of passing the husk through.
+        val verdict = SubagentReportHygiene.judge(finalText)
+        val executedSteps = registry.runs.value.firstOrNull { it.id == run.id }?.steps.orEmpty()
+        val digest = if (verdict.degenerate && executedSteps.isNotEmpty()) {
+            SubagentReportHygiene.assembleFromTools(
+                executedSteps.map { step ->
+                    SubagentReportHygiene.ToolDigest(
+                        toolName = step.toolName,
+                        toolTitle = step.toolTitle,
+                        success = step.status == SubagentRunRegistry.ToolStepStatus.SUCCESS,
+                        output = step.output,
+                    )
+                },
+            )
+        } else null
+        val reportText = when {
+            digest != null -> {
+                AppLogger.warning(
+                    TAG,
+                    "[Subagent] '$skillName' final message was a husk (${finalText.length} chars, " +
+                        "${verdict.stripped.length} after tag strip) — rebuilt from " +
+                        "${executedSteps.size} tool step(s)",
+                )
+                registry.appendNotice(
+                    run.id,
+                    "[report] the model's final message carried no findings — " +
+                        "runtime assembled a digest from the tool output instead",
+                )
+                digest
+            }
+            verdict.degenerate -> {
+                // No tool evidence to fall back on: the husk IS all there is.
+                // Still refuse to hand the parent a bare tag as a "report".
+                registry.appendNotice(
+                    run.id,
+                    "[report] the model's final message carried no findings and no tool " +
+                        "output was recorded",
+                )
+                finalText + "\n\n⚠️ [no usable findings: the model's final message contained " +
+                    "no substantive text (only structural tags were present) and this run " +
+                    "recorded no tool output to reconstruct from.]"
+            }
+            else -> finalText
+        }
+
         // [fix/subagent-plan-execute] A run that executed ZERO tool calls did
         // not do any work, whatever its prose says. Before this the parent
         // received "Sub-agent completed in 1 turn(s)" plus a plan and had no
         // way to tell that nothing was read, run, or written — the report was
         // indistinguishable from a real one at the header level. Say it out
         // loud so a parent (or the user) cannot mistake it for a deliverable.
-        val noWorkWarning = if (executedToolCalls == 0) {
+        //
+        // [fix/subagent-report-hygiene] Suppressed when the hygiene branch
+        // already said it: a degenerate report from a zero-tool run carries
+        // the "no usable findings / no tool output" warning, and stacking a
+        // second warning on top of it is noise, not emphasis. A digest also
+        // implies executed tool calls, so the two conditions cannot both be
+        // true in a way that leaves the parent uninformed.
+        val noWorkWarning = if (executedToolCalls == 0 && !verdict.degenerate) {
             "\n\n⚠️ [no tool calls were executed in this run — this report contains " +
                 "no gathered data, no command output and no files written. Treat it " +
                 "as an unstarted task, not as findings.]"
         } else ""
 
+        val deliveredText = reportText + noWorkWarning
         registry.finishIfActive(
             run.id, SubagentRunRegistry.RunStatus.SUCCESS,
-            resultText = finalText + noWorkWarning,
+            resultText = deliveredText,
         )
         val result = SubagentResult(
             status = SubagentResult.Status.SUCCESS,
-            report = finalText + noWorkWarning,
-            declaredStatus = SubagentSkill.parseReportStatus(finalText),
+            report = deliveredText,
+            declaredStatus = SubagentSkill.parseReportStatus(deliveredText),
             turns = turns,
             maxTurns = config.maxTurns,
             skillId = skill.id,
             skillName = skill.name,
             journalPath = journal(
                 run, SubagentResult.journalTerminal(SubagentResult.Status.SUCCESS, stoppedEarly = false),
-                finalText, turns, error = null, artifacts, sessionId,
+                deliveredText, turns, error = null, artifacts, sessionId,
             ),
             artifacts = artifacts.toList(),
         )
