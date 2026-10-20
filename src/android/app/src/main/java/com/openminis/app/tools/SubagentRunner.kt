@@ -1012,6 +1012,11 @@ class SubagentRunner(
                     val timedOutResult = SubagentResult(
                         status = SubagentResult.Status.FAILED,
                         report = partial,
+                        outcome = SubagentRunAssessment.Outcome.TIMED_OUT,
+                        reportSource = if (partial.isBlank()) {
+                            SubagentRunAssessment.ReportSource.NONE
+                        } else SubagentRunAssessment.ReportSource.PARTIAL,
+                        executedToolCalls = executedToolCalls,
                         turns = turns,
                         maxTurns = config.maxTurns,
                         skillId = skill.id,
@@ -1606,6 +1611,11 @@ class SubagentRunner(
                         status = SubagentResult.Status.SUCCESS,
                         report = partial,
                         declaredStatus = SubagentSkill.parseReportStatus(partial),
+                        outcome = SubagentRunAssessment.Outcome.STOPPED_EARLY,
+                        reportSource = if (partial.isBlank()) {
+                            SubagentRunAssessment.ReportSource.NONE
+                        } else SubagentRunAssessment.ReportSource.PARTIAL,
+                        executedToolCalls = executedToolCalls,
                         turns = turns,
                         maxTurns = config.maxTurns,
                         skillId = skill.id,
@@ -1646,6 +1656,11 @@ class SubagentRunner(
             val result = SubagentResult(
                 status = SubagentResult.Status.FAILED,
                 report = partial,
+                outcome = SubagentRunAssessment.Outcome.FAILED,
+                reportSource = if (partial.isBlank()) {
+                    SubagentRunAssessment.ReportSource.NONE
+                } else SubagentRunAssessment.ReportSource.PARTIAL,
+                executedToolCalls = executedToolCalls,
                 turns = turns,
                 maxTurns = config.maxTurns,
                 skillId = skill.id,
@@ -1664,8 +1679,24 @@ class SubagentRunner(
         val finalText = resultSb.toString().trim()
         if (finalText.isBlank()) {
             registry.finishIfActive(run.id, SubagentRunRegistry.RunStatus.SUCCESS, resultText = "")
+            // [fix/subagent-run-assessment] This exit used to return a bare
+            // string with no verdict, so a run that produced nothing looked
+            // like a normal completion carrying "(no output)". Route it
+            // through the same assessment so the parent sees why.
+            val blankOutcome = SubagentRunAssessment.assess(
+                loopFailed = false,
+                timedOut = false,
+                stoppedEarly = false,
+                executedToolCalls = executedToolCalls,
+                reportSource = SubagentRunAssessment.ReportSource.NONE,
+                declaredStatus = null,
+            )
             return ToolExecutionResult(
-                "Sub-agent '$skillName' completed in $turns turn(s) with no output.",
+                "Sub-agent '$skillName' ran $turns turn(s)." +
+                    "\n" + SubagentRunAssessment.headline(
+                        blankOutcome, executedToolCalls, SubagentRunAssessment.ReportSource.NONE,
+                    ) +
+                    "\n\n(no text output produced)",
                 true, toolTitle = "Sub-agent: ${skill.name}",
             )
         }
@@ -1738,13 +1769,36 @@ class SubagentRunner(
         // second warning on top of it is noise, not emphasis. A digest also
         // implies executed tool calls, so the two conditions cannot both be
         // true in a way that leaves the parent uninformed.
-        val noWorkWarning = if (executedToolCalls == 0 && !verdict.degenerate) {
-            "\n\n⚠️ [no tool calls were executed in this run — this report contains " +
-                "no gathered data, no command output and no files written. Treat it " +
-                "as an unstarted task, not as findings.]"
-        } else ""
-
-        val deliveredText = reportText + noWorkWarning
+        // [fix/subagent-report-hygiene] Suppressed when the report gate already
+        // spoke: a degenerate report carries its own "no usable findings"
+        // warning, and stacking a second warning on top is noise.
+        //
+        // [fix/subagent-run-assessment] The warning MOVED to the headline:
+        // `headline()` now says "[unstarted] 0 tool calls executed - nothing
+        // was read, run or written" for exactly this case. Keeping the old
+        // paragraph as well repeated the same fact twice in one message AND
+        // injected an English warning into the middle of the report body,
+        // where a model quoting the report would treat it as a finding.
+        // One statement, in the header, is enough.
+        val deliveredText = reportText
+        // [fix/subagent-run-assessment] One verdict for the whole run, derived
+        // from facts already in hand: how many tools actually ran and where the
+        // delivered text came from. The parent triages from this instead of
+        // re-deriving "did it actually do anything?" from the header.
+        val reportSource = when {
+            digest != null -> SubagentRunAssessment.ReportSource.RUNTIME_DIGEST
+            deliveredText.isBlank() -> SubagentRunAssessment.ReportSource.NONE
+            else -> SubagentRunAssessment.ReportSource.MODEL
+        }
+        val declared = SubagentSkill.parseReportStatus(deliveredText)
+        val outcome = SubagentRunAssessment.assess(
+            loopFailed = false,
+            timedOut = false,
+            stoppedEarly = false,
+            executedToolCalls = executedToolCalls,
+            reportSource = reportSource,
+            declaredStatus = declared,
+        )
         registry.finishIfActive(
             run.id, SubagentRunRegistry.RunStatus.SUCCESS,
             resultText = deliveredText,
@@ -1752,7 +1806,10 @@ class SubagentRunner(
         val result = SubagentResult(
             status = SubagentResult.Status.SUCCESS,
             report = deliveredText,
-            declaredStatus = SubagentSkill.parseReportStatus(deliveredText),
+            declaredStatus = declared,
+            outcome = outcome,
+            reportSource = reportSource,
+            executedToolCalls = executedToolCalls,
             turns = turns,
             maxTurns = config.maxTurns,
             skillId = skill.id,
@@ -1763,6 +1820,11 @@ class SubagentRunner(
             ),
             artifacts = artifacts.toList(),
         )
+        // [fix/subagent-run-assessment] The loop's `success` flag is the
+        // ToolExecutionResult contract the agent loop keys off: an UNSTARTED
+        // run is not a failure (nothing errored) but the parent must not treat
+        // it as a normal result either, so it stays `true` and the outcome
+        // line carries the signal.
         return ToolExecutionResult(result.toPromptText(), true, toolTitle = "Sub-agent: ${skill.name}")
     }
 

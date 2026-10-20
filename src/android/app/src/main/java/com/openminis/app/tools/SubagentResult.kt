@@ -44,6 +44,21 @@ data class SubagentResult(
      * the full report.
      */
     val declaredStatus: String? = null,
+    /**
+     * [fix/subagent-run-assessment] The single verdict about the WORK, as
+     * opposed to [status], which only says whether the LOOP finished.
+     *
+     * Before this field the parent saw "Sub-agent 'X' completed in 5 turn(s)"
+     * for runs that had gathered nothing, failed to write a report, or been
+     * rebuilt by the runtime — three different situations behind one header.
+     * Rendered first in [toPromptText] so triage needs no reading.
+     */
+    val outcome: SubagentRunAssessment.Outcome = SubagentRunAssessment.Outcome.COMPLETED,
+    /** Where the report text came from — a model account or a runtime rebuild. */
+    val reportSource: SubagentRunAssessment.ReportSource =
+        SubagentRunAssessment.ReportSource.MODEL,
+    /** Tool calls that actually executed (not merely proposed). */
+    val executedToolCalls: Int = 0,
 ) {
     enum class Status { SUCCESS, FAILED }
 
@@ -61,13 +76,20 @@ data class SubagentResult(
      */
     fun toPromptText(stoppedEarly: Boolean = false): String = when {
         stoppedEarly && status == Status.SUCCESS -> buildString {
-            append("Sub-agent '$skillName' first-turn readout (1/$maxTurns turns):\n\n---\n")
+            append("Sub-agent '$skillName' first-turn readout (1/$maxTurns turns):")
+            append("\n\n").append(SubagentRunAssessment.headline(outcome, executedToolCalls, reportSource))
+            append("\n\n---\n")
             append(report.ifBlank { "(no text output produced)" })
             append("\n---")
             journalPath?.let { append("\n\nFull journal: $it") }
         }
         status == Status.SUCCESS -> buildString {
-            append("Sub-agent '$skillName' completed in $turns turn(s).")
+            // [fix/subagent-run-assessment] The verdict comes FIRST — before
+            // the turn count, before artifacts. The parent must be able to
+            // triage without reading the report body; "completed in 5
+            // turn(s)" alone was identical for a real run and an empty one.
+            append("Sub-agent '$skillName' ran $turns turn(s).")
+            append("\n").append(SubagentRunAssessment.headline(outcome, executedToolCalls, reportSource))
             declaredStatusAnnotation()?.let { append(it) }
             if (artifacts.isNotEmpty()) {
                 append("\nArtifacts written: ")
@@ -83,11 +105,12 @@ data class SubagentResult(
             }
         }
         else -> buildString {
-            append("Sub-agent '$skillName' encountered an error after $turns turn(s).\n")
+            append("Sub-agent '$skillName' ended after $turns turn(s).")
+            append("\n").append(SubagentRunAssessment.headline(outcome, executedToolCalls, reportSource))
             if (report.isNotBlank()) {
-                append("\nPartial output:\n---\n").append(report).append("\n---\n")
+                append("\n\nPartial output:\n---\n").append(report).append("\n---")
             }
-            append("\nError: ").append(error ?: "unknown error")
+            append("\n\nError: ").append(error ?: "unknown error")
             journalPath?.let {
                 append("\n\nRecoverable: the full partial report is journaled at $it — file_read it to retrieve everything the sub-agent produced before failing.")
             }
