@@ -1461,13 +1461,30 @@ class SubagentRunner(
                     // Pass 3 — consecutive user roles (e.g. a trim boundary
                     // landed between a result and the next queued turn): an
                     // assistant bridge keeps the wire alternation valid.
-                    if (history.lastOrNull()?.role == LLMMessage.Role.USER) {
-                        history.add(
-                            LLMMessage(
-                                role = LLMMessage.Role.ASSISTANT,
-                                content = "",
-                                contentParts = listOf(AgentContentPart.Text(subagentBridgeText)),
-                            ),
+                    //
+                    // [fix/subagent-phantom-bridge] The guard here used to be
+                    // `history.last()?.role == USER`, which is ALWAYS true at
+                    // this point — a tool result is itself a USER-role message,
+                    // so every tool-executing turn appended a fabricated
+                    // "you were interrupted by a new user message" assistant
+                    // turn. The predicate was ported from the main loop's
+                    // ensureRoleAlternationBeforeUserAppend, where it is only
+                    // evaluated immediately before a REAL user prompt is
+                    // appended; copied here it lost that precondition and
+                    // inverted its meaning. Observed: sub-agents burning turns
+                    // reasoning about a non-existent new user message.
+                    //
+                    // The real violation is two consecutive USER messages —
+                    // never produced by the assistant(tool_use) →
+                    // user(tool_result) cycle. Repair every such pair, not
+                    // just the tail (a trim can leave one mid-history), and
+                    // stay idempotent so the pass cannot accumulate bridges.
+                    val bridgesAdded = SubagentHistoryRepair.applyBridges(history, subagentBridgeText)
+                    if (bridgesAdded > 0) {
+                        AppLogger.info(
+                            TAG,
+                            "[Subagent] '$skillName' inserted $bridgesAdded assistant bridge(s) " +
+                                "to restore role alternation after turn $turns",
                         )
                     }
                 }
