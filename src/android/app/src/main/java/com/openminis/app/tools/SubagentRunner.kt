@@ -1373,38 +1373,6 @@ class SubagentRunner(
                     }
                 }
                 executedToolCalls += toolCalls.size
-                // [fix/subagent-parallel-results] Collect the turn's results
-                // and send them as ONE user message.
-                //
-                // The runner used to append a separate USER message for every
-                // tool call, so a turn with N parallel calls produced N
-                // CONSECUTIVE user messages. Two mechanisms broke on that
-                // shape:
-                //
-                // 1. The provider-side `sanitizeToolPairing` answers an
-                //    assistant's tool_use blocks from the IMMEDIATELY
-                //    FOLLOWING user message only. With N separate messages,
-                //    only the first result answered the assistant turn, so
-                //    the other N-1 calls were stripped as orphans — their
-                //    real output never reached the model. Measured against
-                //    the real sanitizer: 3 parallel calls → 1 tool_use + 1
-                //    tool_result survived, 2 calls silently dropped.
-                // 2. The runner's own Pass 1 repair then saw the same shape
-                //    and injected "Tool execution was interrupted"
-                //    placeholders for the results that were no longer
-                //    adjacent to their call — so the model was told its
-                //    calls had been interrupted and never saw their output.
-                //
-                // The main loop has always sent one user message per turn
-                // (`contentParts = resultParts`), which is the shape the
-                // sanitizer documents and expects. The wire format is
-                // unchanged for every provider family: OpenAI emits each
-                // ToolResult of a user message as its own `role:"tool"`
-                // entry, Anthropic takes them as N tool_result blocks in one
-                // content array, Gemini as N functionResponse parts in one
-                // user turn.
-                val turnResults = mutableListOf<Pair<SubagentToolCall, ToolExecutionResult>>()
-                val turnResultTexts = mutableListOf<String>()
                 for ((call, result) in toolCalls.zip(results)) {
                     val resultContent = if (result.success) result.output else "Error: ${result.output}"
                     registry.stepFinished(
@@ -1462,19 +1430,18 @@ class SubagentRunner(
                     // model keeps working exactly as before. When the bytes are
                     // elided by an image budget, imageLinuxPath keeps the image
                     // re-fetchable — the same contract the main loop relies on.
-                    //
-                    // [fix/subagent-parallel-results] Collect for the turn's
-                    // single batched message (appended below).
-                    turnResults.add(call to result)
-                    turnResultTexts.add(contentForModel)
+                    history.add(LLMMessage(
+                        role = LLMMessage.Role.USER,
+                        content = "Result of ${call.name} (${call.id}):\n$contentForModel",
+                        contentParts = listOf(AgentContentPart.ToolResult(
+                            id = call.id, name = call.name,
+                            content = contentForModel, isError = !result.success,
+                            imageData = result.imageData,
+                            imageMimeType = result.imageMimeType,
+                            imageLinuxPath = result.imageLinuxPath,
+                        )),
+                    ))
                 }
-
-                // [fix/subagent-parallel-results] One user message for the
-                // whole turn — see the note on `turnResults` above.
-                SubagentToolResultBatch.buildToolResultMessage(
-                    results = turnResults,
-                    contents = turnResultTexts,
-                )?.let { history.add(it) }
 
                 // [T-subagent-checkpoint] Persist a mid-run progress anchor
                 // after every completed turn. Process death never executes
@@ -1734,28 +1701,18 @@ class SubagentRunner(
             )
         }
 
-        // [fix/subagent-report-gate-final-message] The hygiene gate must
-        // judge the model's FINAL MESSAGE, not the run's accumulated text.
+        // [fix/subagent-report-hygiene] A non-blank final message is not
+        // automatically a REPORT. Observed: a run executed five tool calls,
+        // gathered real data, and closed with the single line
+        // `<parameter name="status">done</parameter>` — the model merged the
+        // plan directive's XML-block convention with the plain-text report
+        // contract. The parent received that line as the findings and the run
+        // still reported SUCCESS.
         //
-        // `resultSb` holds EVERY turn's narration, and the gate's rule is
-        // "carries synthetic tags AND keeps almost no substance once they
-        // are stripped" (a 12-meaningful-character floor). Judging the
-        // accumulated text meant that ANY earlier narration pushed the husk
-        // over that floor and the gate never fired — the parent received the
-        // bare tag as the findings, which is the exact failure the gate
-        // exists to prevent. Measured: a plan turn's prose ("I will gather
-        // the evidence.") plus a closing husk left 41 meaningful characters
-        // — three times the threshold — so degenerate=false.
-        //
-        // That interaction is not hypothetical: PR #66 made the plan turn
-        // non-terminal, and a plan turn ALWAYS carries prose, so the two
-        // fixes cancelled each other out for exactly the runs they were
-        // written for.
-        //
-        // `lastText` is the model's most recent message (assigned per turn
-        // above) — the thing the report contract actually describes.
-        val finalMessage = lastText.trim()
-        val verdict = SubagentReportGate.judge(finalMessage, finalText)
+        // Two-step handling: when the run DID work, rebuild a digest from the
+        // tool evidence so the parent gets the facts that were gathered;
+        // when it did not, say so instead of passing the husk through.
+        val verdict = SubagentReportHygiene.judge(finalText)
         val executedSteps = registry.runs.value.firstOrNull { it.id == run.id }?.steps.orEmpty()
         val digest = if (verdict.degenerate && executedSteps.isNotEmpty()) {
             SubagentReportHygiene.assembleFromTools(
@@ -1773,9 +1730,9 @@ class SubagentRunner(
             digest != null -> {
                 AppLogger.warning(
                     TAG,
-                    "[Subagent] '$skillName' final message was a husk " +
-                        "(${finalMessage.length} chars, ${verdict.stripped.length} after tag strip) " +
-                        "— rebuilt from ${executedSteps.size} tool step(s)",
+                    "[Subagent] '$skillName' final message was a husk (${finalText.length} chars, " +
+                        "${verdict.stripped.length} after tag strip) — rebuilt from " +
+                        "${executedSteps.size} tool step(s)",
                 )
                 registry.appendNotice(
                     run.id,
@@ -1792,9 +1749,6 @@ class SubagentRunner(
                     "[report] the model's final message carried no findings and no tool " +
                         "output was recorded",
                 )
-                // Keep the run's earlier narration — it may hold real
-                // findings — but mark clearly that the closing message
-                // carried none.
                 finalText + "\n\n⚠️ [no usable findings: the model's final message contained " +
                     "no substantive text (only structural tags were present) and this run " +
                     "recorded no tool output to reconstruct from.]"
