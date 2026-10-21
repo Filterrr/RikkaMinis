@@ -120,6 +120,90 @@ class SubagentRunAssessmentTest {
         assertEquals(SubagentRunAssessment.Outcome.UNSTARTED, o)
     }
 
+    // ─── Regressions found in audit (all four were live before these tests) ──
+
+    @Test
+    fun `a model-declared failure is not completed`() {
+        // AUDIT BUG 1: a run with healthy tool counts that closed with
+        // `status: failed` was reported as COMPLETED and isDeliverable=true —
+        // the parent was told to trust a report in which the model said it
+        // could not do the job. Tool count must not override the model's own
+        // verdict about the work.
+        val o = SubagentRunAssessment.assess(
+            loopFailed = false, timedOut = false, stoppedEarly = false,
+            executedToolCalls = 3,
+            reportSource = SubagentRunAssessment.ReportSource.MODEL,
+            declaredStatus = "failed",
+        )
+        assertEquals(SubagentRunAssessment.Outcome.DECLARED_FAILED, o)
+        assertFalse(SubagentRunAssessment.isDeliverable(o))
+        assertEquals(
+            "declared status comparison must be case-insensitive",
+            SubagentRunAssessment.Outcome.DECLARED_FAILED,
+            SubagentRunAssessment.assess(
+                loopFailed = false, timedOut = false, stoppedEarly = false,
+                executedToolCalls = 3,
+                reportSource = SubagentRunAssessment.ReportSource.MODEL,
+                declaredStatus = "FAILED",
+            ),
+        )
+    }
+
+    @Test
+    fun `tools ran but no text delivered is not completed`() {
+        // AUDIT BUG 2: the blank-output exit passed reportSource=NONE with a
+        // healthy tool count, and the assessment fell through to COMPLETED —
+        // so the parent got a deliverable whose body literally said "(no text
+        // output produced)".
+        val o = SubagentRunAssessment.assess(
+            loopFailed = false, timedOut = false, stoppedEarly = false,
+            executedToolCalls = 3,
+            reportSource = SubagentRunAssessment.ReportSource.NONE,
+            declaredStatus = null,
+        )
+        assertEquals(SubagentRunAssessment.Outcome.NO_OUTPUT, o)
+        assertFalse(SubagentRunAssessment.isDeliverable(o))
+    }
+
+    @Test
+    fun `no-tool run outranks no-output`() {
+        // Both conditions hold; UNSTARTED is the better message because the
+        // cause is "never ran", not "ran and produced nothing".
+        val o = SubagentRunAssessment.assess(
+            loopFailed = false, timedOut = false, stoppedEarly = false,
+            executedToolCalls = 0,
+            reportSource = SubagentRunAssessment.ReportSource.NONE,
+            declaredStatus = null,
+        )
+        assertEquals(SubagentRunAssessment.Outcome.UNSTARTED, o)
+    }
+
+    @Test
+    fun `a runtime digest is not treated as the model's self-assessment`() {
+        // AUDIT BUG 3: the digest writes its own `status: partial` line. The
+        // result surface annotated that as "the sub-agent's report declares
+        // status: partial", attributing the runtime's wording to the model.
+        assertFalse(SubagentRunAssessment.isModelAuthored(SubagentRunAssessment.ReportSource.RUNTIME_DIGEST))
+        assertTrue(SubagentRunAssessment.isModelAuthored(SubagentRunAssessment.ReportSource.MODEL))
+        assertTrue(
+            "salvaged model narration is still the model's words",
+            SubagentRunAssessment.isModelAuthored(SubagentRunAssessment.ReportSource.PARTIAL),
+        )
+        assertFalse(SubagentRunAssessment.isModelAuthored(SubagentRunAssessment.ReportSource.NONE))
+    }
+
+    @Test
+    fun `a timed-out run with nothing delivered does not promise partial output`() {
+        // AUDIT BUG 4: the headline said "What follows is partial output" and
+        // the next line said "(no text was produced)".
+        val text = SubagentRunAssessment.headline(
+            SubagentRunAssessment.Outcome.TIMED_OUT, 3,
+            SubagentRunAssessment.ReportSource.NONE,
+        )
+        assertTrue(text, text.contains("Nothing was delivered"))
+        assertFalse(text, text.contains("What follows is partial output"))
+    }
+
     // ─── Delivery surfaces ────────────────────────────────────────────────
 
     @Test

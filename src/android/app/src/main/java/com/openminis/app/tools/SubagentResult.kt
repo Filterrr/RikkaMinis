@@ -90,7 +90,14 @@ data class SubagentResult(
             // turn(s)" alone was identical for a real run and an empty one.
             append("Sub-agent '$skillName' ran $turns turn(s).")
             append("\n").append(SubagentRunAssessment.headline(outcome, executedToolCalls, reportSource))
-            declaredStatusAnnotation()?.let { append(it) }
+            // [fix/subagent-run-assessment] Only annotate a declaration the
+            // MODEL made. A runtime-assembled digest writes its own
+            // `status: partial` line; forwarding that as "the sub-agent's
+            // report declares status: partial" would attribute the runtime's
+            // wording to the model and read as if the model had judged itself.
+            if (SubagentRunAssessment.isModelAuthored(reportSource)) {
+                declaredStatusAnnotation()?.let { append(it) }
+            }
             if (artifacts.isNotEmpty()) {
                 append("\nArtifacts written: ")
                 append(artifacts.joinToString(", "))
