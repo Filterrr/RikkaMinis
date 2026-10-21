@@ -86,6 +86,23 @@ object SubagentOrchestration {
         val error: String? = null,
         /** True when the run terminated because of an explicit cancel. */
         val cancelled: Boolean = false,
+        /**
+         * [fix/subagent-verdict-delivery] The run's verdict — what the work
+         * actually achieved, in one line.
+         *
+         * Why this field exists: the verdict (outcome + tool count + report
+         * source) was computed for the INLINE path only, where the runner
+         * returns a [SubagentResult] to the parent directly. Every pull path
+         * — `join_subagents`, `wait_any`, and the detached background
+         * wake-up — built its outcome from the registry's `resultText`,
+         * which carries the report but NOT the verdict. So a detached run
+         * that executed ZERO tools and produced only a plan read as an
+         * ordinary success carrying that plan as its findings.
+         *
+         * Blank when the run has no verdict (a run that never started, or a
+         * legacy run restored without one).
+         */
+        val verdict: String = "",
     )
 
     /**

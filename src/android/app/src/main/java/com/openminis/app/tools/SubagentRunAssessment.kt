@@ -156,8 +156,8 @@ object SubagentRunAssessment {
                     "the task. What follows is its error report, not a deliverable - read its " +
                     "gaps before deciding whether to re-spawn."
             Outcome.STOPPED_EARLY ->
-                "[stopped early] $tools executed in the first turn, as requested. This is a " +
-                    "readout, not a finished task."
+                "[stopped early] $tools executed before the caller-requested early stop. This " +
+                    "is a readout, not a finished task."
             Outcome.UNSTARTED ->
                 "[unstarted] 0 tool calls executed - nothing was read, run or written. Any text " +
                     "below is planning, not findings. Re-spawn with an explicit instruction to " +
