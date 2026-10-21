@@ -40,11 +40,17 @@ object SubagentRunAssessment {
         /** The model declared `status: partial` — some scope remains. */
         PARTIAL,
 
+        /** The model declared `status: failed` — it could not do the task. */
+        DECLARED_FAILED,
+
         /** The caller asked for a first-turn readout and got it. */
         STOPPED_EARLY,
 
         /** No tool call executed. Whatever text exists is planning, not findings. */
         UNSTARTED,
+
+        /** Tools ran but nothing was delivered — not even salvaged narration. */
+        NO_OUTPUT,
 
         /** The run exceeded its wall-clock budget. */
         TIMED_OUT,
@@ -79,13 +85,19 @@ object SubagentRunAssessment {
      * 3. `executedToolCalls == 0` is UNSTARTED **before** any report-shape
      *    signal. If nothing ran, no amount of confident prose changes what the
      *    parent should do next: start the work, not resume it.
-     * 4. A runtime digest is DEGRADED — the evidence is real but the
+     * 4. A run that executed tools but delivered no text at all is NO_OUTPUT.
+     *    Checked here, before the report-shape signals, because there is no
+     *    report to shape — and calling it COMPLETED would hand the parent a
+     *    deliverable that is literally empty.
+     * 5. A runtime digest is DEGRADED — the evidence is real but the
      *    interpretation is missing, which is exactly what the parent needs to
      *    know before quoting it as a conclusion.
-     * 5. A model-declared `partial` is PARTIAL.
-     * 6. A caller-requested first-turn stop is STOPPED_EARLY — expected, not a
+     * 6. A model-declared `failed` is DECLARED_FAILED. The model said it could
+     *    not do the task; a healthy tool count does not override that.
+     * 7. A model-declared `partial` is PARTIAL.
+     * 8. A caller-requested first-turn stop is STOPPED_EARLY — expected, not a
      *    defect, but not a completed run either.
-     * 7. Otherwise COMPLETED.
+     * 9. Otherwise COMPLETED.
      */
     fun assess(
         loopFailed: Boolean,
@@ -98,17 +110,28 @@ object SubagentRunAssessment {
         loopFailed -> Outcome.FAILED
         timedOut -> Outcome.TIMED_OUT
         executedToolCalls <= 0 -> Outcome.UNSTARTED
+        reportSource == ReportSource.NONE -> Outcome.NO_OUTPUT
         reportSource == ReportSource.RUNTIME_DIGEST -> Outcome.DEGRADED
+        declaredStatus?.lowercase() == "failed" -> Outcome.DECLARED_FAILED
         declaredStatus?.lowercase() == "partial" -> Outcome.PARTIAL
         stoppedEarly -> Outcome.STOPPED_EARLY
         else -> Outcome.COMPLETED
     }
 
     /**
+     * True when [source] IS the model's own words — either its finished report
+     * or the narration it managed to produce before an abort. A runtime digest
+     * is excluded: it is assembled by the runtime, so any `status:` line in it
+     * is the runtime's, and must not be reported as the model's self-assessment.
+     */
+    fun isModelAuthored(source: ReportSource): Boolean =
+        source == ReportSource.MODEL || source == ReportSource.PARTIAL
+
+    /**
      * True when the parent may treat this run's report as the work it asked
      * for. Only COMPLETED qualifies: DEGRADED still needs the parent to draw
-     * its own conclusions, PARTIAL is explicitly unfinished, and the rest did
-     * not deliver.
+     * its own conclusions, PARTIAL and DECLARED_FAILED say the task is
+     * unfinished or impossible, and the rest did not deliver.
      */
     fun isDeliverable(outcome: Outcome): Boolean = outcome == Outcome.COMPLETED
 
@@ -128,6 +151,10 @@ object SubagentRunAssessment {
             Outcome.PARTIAL ->
                 "[partial] $tools executed; the model declared the task unfinished. The report " +
                     "states what remains."
+            Outcome.DECLARED_FAILED ->
+                "[declared failed] $tools executed, but the model reports it could not complete " +
+                    "the task. What follows is its error report, not a deliverable - read its " +
+                    "gaps before deciding whether to re-spawn."
             Outcome.STOPPED_EARLY ->
                 "[stopped early] $tools executed in the first turn, as requested. This is a " +
                     "readout, not a finished task."
@@ -135,11 +162,18 @@ object SubagentRunAssessment {
                 "[unstarted] 0 tool calls executed - nothing was read, run or written. Any text " +
                     "below is planning, not findings. Re-spawn with an explicit instruction to " +
                     "execute before reporting."
+            Outcome.NO_OUTPUT ->
+                "[no output] $tools executed, but the run delivered no text at all. The work " +
+                    "may or may not have happened; re-spawn, or read the journal for the raw " +
+                    "tool output."
             Outcome.TIMED_OUT ->
-                "[timed out] $tools executed before the run exceeded its time budget. What " +
-                    "follows is partial output."
+                "[timed out] $tools executed before the run exceeded its time budget." +
+                    if (reportSource == ReportSource.NONE) " Nothing was delivered."
+                    else " What follows is partial output."
             Outcome.FAILED ->
-                "[failed] $tools executed before the run errored. What follows is partial output."
-        }.let { if (reportSource == ReportSource.NONE) "$it\n(no text was produced)" else it }
+                "[failed] $tools executed before the run errored." +
+                    if (reportSource == ReportSource.NONE) " Nothing was delivered."
+                    else " What follows is partial output."
+        }
     }
 }
