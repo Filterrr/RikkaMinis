@@ -779,6 +779,9 @@ class SubagentRunner(
             journalPath = snapshot?.journalPath,
             error = snapshot?.error,
             cancelled = snapshot?.status == SubagentRunRegistry.RunStatus.CANCELLED,
+            // [fix/subagent-verdict-delivery] Carry the verdict so the pull
+            // paths say what the inline path says.
+            verdict = snapshot?.verdict ?: "",
         )
         return if (job.deferred.complete(outcome)) outcome else null
     }
@@ -1008,6 +1011,20 @@ class SubagentRunner(
                         run.id, SubagentRunRegistry.RunStatus.TIMED_OUT,
                         resultText = partial,
                         error = "exceeded the $timeoutSeconds-second run budget after $turns turn(s)",
+                    )
+                    // [fix/subagent-verdict-delivery] Record the verdict for
+                    // the registry-reading paths (see the success exit).
+                    registry.setVerdict(
+                        run.id,
+                        SubagentRunAssessment.headline(
+                            SubagentRunAssessment.Outcome.TIMED_OUT,
+                            executedToolCalls,
+                            if (partial.isBlank()) {
+                                SubagentRunAssessment.ReportSource.NONE
+                            } else {
+                                SubagentRunAssessment.ReportSource.PARTIAL
+                            },
+                        ),
                     )
                     val timedOutResult = SubagentResult(
                         status = SubagentResult.Status.FAILED,
@@ -1344,6 +1361,24 @@ class SubagentRunner(
                 // so a stuck loop stops COSTING instead of merely being
                 // warned about. WARNING outcomes are appended to the result so
                 // the model sees them on its next turn.
+                // [fix/subagent-blocked-call-count] Count only the calls that
+                // ACTUALLY RAN.
+                //
+                // `executedToolCalls += toolCalls.size` counted every PROPOSED
+                // call, including the ones the loop detector BLOCKED at
+                // CRITICAL level — which never executed at all. A run whose
+                // every call was blocked therefore reported a healthy tool
+                // count, and the assessment called it COMPLETED: the parent
+                // was told "N tool calls executed; the report below is the
+                // model's own account" about a run where nothing ran. The
+                // field's own comment promised the opposite ("actually
+                // EXECUTED (not merely proposed)").
+                //
+                // The blocked call is still reported to the model (it gets an
+                // error result and can react) and still counted in the
+                // registry's step list — what changes is only the "did work
+                // happen" signal the verdict is built from.
+                val blockedCallIds = mutableSetOf<String>()
                 val calls = toolCalls.map { ToolBatchExecutor.Call(it.id, it.name, it.args.toString()) }
                 val results = ToolBatchExecutor.executeBatched(calls) { call ->
                     val paramsMap = try {
@@ -1367,12 +1402,13 @@ class SubagentRunner(
                                 "name=${call.name} reason=$blocked",
                         )
                         registry.appendNotice(run.id, "[loop blocked: ${call.name}]")
+                        blockedCallIds.add(call.id)
                         ToolExecutionResult(blocked, false, toolTitle = call.name)
                     } else {
                         executeSubagentTool(call.name, call.argsJson, call.id, run.id, artifacts)
                     }
                 }
-                executedToolCalls += toolCalls.size
+                executedToolCalls += toolCalls.size - blockedCallIds.size
                 // [fix/subagent-parallel-results] Collect the turn's results
                 // and send them as ONE user message.
                 //
@@ -1640,14 +1676,46 @@ class SubagentRunner(
                         resultText = partial,
                         error = "Stopped early (run_until=$runUntil)",
                     )
+                    // [fix/subagent-first-turn-verdict] The outcome used to be
+                    // a hardcoded STOPPED_EARLY and the assessment was never
+                    // consulted, so PR #70's precedence rule (a model that
+                    // declares `status: failed` must win over a healthy tool
+                    // count) did not apply on this path: a first-turn
+                    // readout whose model said "failed" still read as a
+                    // cheerful "stopped early".
+                    //
+                    // STOPPED_EARLY remains the base verdict — the caller
+                    // asked for a readout, not a finished task — but the
+                    // assessment decides which signal actually leads, and
+                    // the report source is derived rather than assumed.
+                    val partialSource = if (partial.isBlank()) {
+                        SubagentRunAssessment.ReportSource.NONE
+                    } else {
+                        SubagentRunAssessment.ReportSource.PARTIAL
+                    }
+                    val partialDeclared = SubagentSkill.parseReportStatus(partial)
+                    val partialOutcome = SubagentRunAssessment.assess(
+                        loopFailed = false,
+                        timedOut = false,
+                        stoppedEarly = true,
+                        executedToolCalls = executedToolCalls,
+                        reportSource = partialSource,
+                        declaredStatus = partialDeclared,
+                    )
+                    // [fix/subagent-verdict-delivery] Record the verdict so
+                    // the registry-reading paths show it too.
+                    registry.setVerdict(
+                        run.id,
+                        SubagentRunAssessment.headline(
+                            partialOutcome, executedToolCalls, partialSource,
+                        ),
+                    )
                     val result = SubagentResult(
                         status = SubagentResult.Status.SUCCESS,
                         report = partial,
-                        declaredStatus = SubagentSkill.parseReportStatus(partial),
-                        outcome = SubagentRunAssessment.Outcome.STOPPED_EARLY,
-                        reportSource = if (partial.isBlank()) {
-                            SubagentRunAssessment.ReportSource.NONE
-                        } else SubagentRunAssessment.ReportSource.PARTIAL,
+                        declaredStatus = partialDeclared,
+                        outcome = partialOutcome,
+                        reportSource = partialSource,
                         executedToolCalls = executedToolCalls,
                         turns = turns,
                         maxTurns = config.maxTurns,
@@ -1684,6 +1752,20 @@ class SubagentRunner(
             registry.finishIfActive(
                 run.id, SubagentRunRegistry.RunStatus.FAILED,
                 resultText = resultSb.toString(), error = msg,
+            )
+            // [fix/subagent-verdict-delivery] Record the verdict for the
+            // registry-reading paths (see the success exit).
+            registry.setVerdict(
+                run.id,
+                SubagentRunAssessment.headline(
+                    SubagentRunAssessment.Outcome.FAILED,
+                    executedToolCalls,
+                    if (resultSb.toString().isBlank()) {
+                        SubagentRunAssessment.ReportSource.NONE
+                    } else {
+                        SubagentRunAssessment.ReportSource.PARTIAL
+                    },
+                ),
             )
             val partial = resultSb.toString()
             val result = SubagentResult(
@@ -1724,12 +1806,33 @@ class SubagentRunner(
                 reportSource = SubagentRunAssessment.ReportSource.NONE,
                 declaredStatus = null,
             )
+            // [fix/subagent-no-output-journal] Journal this exit too.
+            //
+            // The NO_OUTPUT verdict tells the parent to "read the journal for
+            // the raw tool output" — but this was the ONE terminal path that
+            // never wrote a journal, so the advice pointed at a file that did
+            // not exist. The tools DID run (the count is non-zero); only
+            // their output was lost to the model, and the journal is where
+            // that output survives.
+            val blankJournalPath = journal(
+                run, SubagentResult.journalTerminal(SubagentResult.Status.SUCCESS, stoppedEarly = false),
+                "", turns, error = "the run produced no text output", artifacts, sessionId,
+            )
+            // [fix/subagent-verdict-delivery] Record the verdict for the
+            // registry-reading paths (see the success exit for the why).
+            registry.setVerdict(
+                run.id,
+                SubagentRunAssessment.headline(
+                    blankOutcome, executedToolCalls, SubagentRunAssessment.ReportSource.NONE,
+                ),
+            )
             return ToolExecutionResult(
                 "Sub-agent '$skillName' ran $turns turn(s)." +
                     "\n" + SubagentRunAssessment.headline(
                         blankOutcome, executedToolCalls, SubagentRunAssessment.ReportSource.NONE,
                     ) +
-                    "\n\n(no text output produced)",
+                    "\n\n(no text output produced)" +
+                    (blankJournalPath?.let { "\n\nFull journal: $it" } ?: ""),
                 true, toolTitle = "Sub-agent: ${skill.name}",
             )
         }
@@ -1848,6 +1951,17 @@ class SubagentRunner(
         registry.finishIfActive(
             run.id, SubagentRunRegistry.RunStatus.SUCCESS,
             resultText = deliveredText,
+        )
+        // [fix/subagent-verdict-delivery] Record the verdict so the paths
+        // that read the registry (detached wake-up, join_subagents,
+        // wait_any) can show it too. Without this, only the inline
+        // `run_until=done` path — which gets the SubagentResult back
+        // directly — ever saw the verdict; a detached run that executed
+        // ZERO tools and produced only a plan read as an ordinary success
+        // carrying that plan as its findings.
+        registry.setVerdict(
+            run.id,
+            SubagentRunAssessment.headline(outcome, executedToolCalls, reportSource),
         )
         val result = SubagentResult(
             status = SubagentResult.Status.SUCCESS,
@@ -2262,6 +2376,13 @@ class SubagentRunner(
             } else {
                 sb.append("\n(no report text)")
             }
+            // [fix/subagent-verdict-delivery] State what the work achieved.
+            // The report alone cannot say it: a run that executed zero tools
+            // and produced only a plan arrives here as a plan, which reads
+            // like findings unless the verdict names the state.
+            if (outcome.verdict.isNotBlank()) {
+                sb.append("\n\nverdict: ").append(outcome.verdict)
+            }
             outcome.error?.let { sb.append("\nError: ").append(it) }
             outcome.journalPath?.let { sb.append("\nJournal: ").append(it) }
         }
@@ -2287,29 +2408,6 @@ class SubagentRunner(
     }
 }
 
-/** [T-subagent-delivery] Cap on how much report text rides into the parent turn. */
-private const val WAKE_REPORT_MAX_CHARS = 4000
-
-/**
- * [T-subagent-report-budget] Cap on ONE joined run's report in a
- * `join_subagents` / `wait_any` result. Slightly larger than the wake-up cap
- * (a join is an explicit "give me the results" call, so a little more depth is
- * warranted) but still bounded: N reports share one parent turn, so an
- * unbounded per-report cap is an unbounded turn.
- */
-internal const val JOIN_REPORT_MAX_CHARS = 6000
-
-/**
- * [T-subagent-report-budget] Bound one report for parent-turn delivery.
- *
- * A truncation is only acceptable when the full text remains reachable, so
- * every cut names its recovery path: the journal when one exists, else an
- * explicit "re-run with a smaller scope / file_read the artifact" hint. Silent
- * truncation would let the parent treat a partial report as the whole finding
- * — the failure mode this whole subsystem's report hygiene exists to prevent.
- *
- * Top-level + pure so the wording contract is unit-testable.
- */
 /**
  * [T-subagent-thinking] Effective reasoning level for a sub-agent run.
  *
@@ -2390,70 +2488,3 @@ internal fun subagentContextTokensFromUsage(usage: com.openminis.app.data.model.
         else -> 0
     }
 
-internal fun boundReportForParent(
-    report: String,
-    journalPath: String?,
-    maxChars: Int,
-): String {
-    if (report.length <= maxChars) return report
-    val recovery = if (!journalPath.isNullOrBlank()) {
-        "full text: file_read $journalPath"
-    } else {
-        "the run was not journaled — re-spawn with a narrower scope to get the rest"
-    }
-    return report.take(maxChars) +
-        "\n…[report truncated at $maxChars chars — $recovery]"
-}
-
-/**
- * [T-subagent-report-budget] Render the wait_any winner's report with the SAME
- * budget as join/wake. wait_any was the third unbounded sink for the same
- * text: it fires during competitive fan-outs, i.e. exactly when several large
- * reports exist, and it returned one of them verbatim.
- */
-internal fun boundWaitAnyReport(
-    outcome: SubagentOrchestration.JobOutcome,
-    maxChars: Int = JOIN_REPORT_MAX_CHARS,
-): String = boundReportForParent(
-    report = outcome.report.ifBlank { "(no report text)" },
-    journalPath = outcome.journalPath,
-    maxChars = maxChars,
-)
-
-/**
- * [T-subagent-delivery] Render the parent-facing turn for a detached run's
- * terminal outcome.
- *
- * Framed as an EVENT, not a user request, so the parent model folds it into
- * its plan instead of answering it conversationally. The report is bounded — a
- * detached run that produced a 50 KB dump must not spend the parent's whole
- * window on it; the journal holds the full text and is named so the parent can
- * read selectively.
- *
- * Top-level + pure (no runner state) so the wording contract is unit-testable.
- */
-internal fun buildWakePrompt(
-    outcome: SubagentOrchestration.JobOutcome,
-    snapshot: SubagentRunRegistry.Run?,
-    maxReportChars: Int = WAKE_REPORT_MAX_CHARS,
-): String = buildString {
-    val status = snapshot?.status?.name ?: if (outcome.success) "SUCCESS" else "FAILED"
-    appendLine("[Sub-agent '${outcome.skillName}' finished in the background — status $status]")
-    appendLine("run_id: ${outcome.runId}")
-    snapshot?.let { run ->
-        if (run.modelLabel.isNotBlank()) appendLine("model: ${run.modelLabel}")
-        if (run.tokensIn >= 0 || run.tokensOut >= 0) {
-            appendLine("tokens: in=${run.tokensIn.coerceAtLeast(0)} out=${run.tokensOut.coerceAtLeast(0)}")
-        }
-        appendLine("turns: ${run.turn}/${run.maxTurns}")
-    }
-    if (!outcome.error.isNullOrBlank()) appendLine("error: ${outcome.error}")
-    if (outcome.report.isNotBlank()) {
-        appendLine()
-        appendLine(boundReportForParent(outcome.report, outcome.journalPath, maxReportChars))
-    }
-    outcome.journalPath?.let {
-        appendLine()
-        append("Full report: $it (file_read it for anything truncated above).")
-    }
-}.trim()

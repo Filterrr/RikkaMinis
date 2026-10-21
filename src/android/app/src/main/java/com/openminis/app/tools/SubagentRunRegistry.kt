@@ -171,6 +171,30 @@ class SubagentRunRegistry {
         /** Final or streaming text produced by the sub-agent. */
         val resultText: String = "",
         /**
+         * [fix/subagent-verdict-delivery] The run's VERDICT — what the work
+         * actually achieved — as a single renderable line.
+         *
+         * Why this field exists: the verdict (outcome + tool count + report
+         * source) used to live ONLY on the inline [SubagentResult], which the
+         * runner returns to a parent that spawned the run with
+         * `run_until=done`. Every OTHER delivery path read the registry's
+         * `resultText` instead:
+         *
+         * - the detached wake-up ([buildWakePrompt]),
+         * - `join_subagents` / `wait_any` (via [SubagentOrchestration.JobOutcome]),
+         * - the background-wake path.
+         *
+         * Those paths therefore never saw the verdict: a detached run that
+         * executed ZERO tools and produced only a plan read as an ordinary
+         * success carrying that plan as its findings. Storing the verdict
+         * here makes it reachable from every path — and it is the same
+         * signal the inline path shows, so the two can no longer disagree.
+         *
+         * Blank when the run has not reached a verdict yet (still running, or
+         * a legacy run restored without one).
+         */
+        val verdict: String = "",
+        /**
          * [T-subagent-chat-stream] Interleaved transcript — narration,
          * reasoning and tool calls in arrival order. Empty for runs that
          * produced nothing yet (and for runs restored from a journal written
@@ -900,6 +924,21 @@ class SubagentRunRegistry {
     fun setModelLabel(runId: String, label: String) {
         if (label.isBlank()) return
         updateRun(runId) { if (it.modelLabel == label) it else it.copy(modelLabel = label) }
+    }
+
+    /**
+     * [fix/subagent-verdict-delivery] Record the run's verdict line so every
+     * delivery path (detached wake-up, join_subagents, wait_any) can show
+     * the same thing the inline path shows.
+     *
+     * Written SEPARATELY from [finish] because the verdict is computed
+     * AFTER the terminal transition — the runner needs the registry's final
+     * step list to build the digest — and because the cancel cascade can
+     * finish a run before the runner ever reaches its verdict.
+     */
+    fun setVerdict(runId: String, verdict: String) {
+        if (verdict.isBlank()) return
+        updateRun(runId) { if (it.verdict == verdict) it else it.copy(verdict = verdict) }
     }
 
     /** Wipe all state (clearChat / session switch). */
