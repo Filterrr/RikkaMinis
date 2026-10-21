@@ -76,13 +76,7 @@ data class SubagentResult(
      */
     fun toPromptText(stoppedEarly: Boolean = false): String = when {
         stoppedEarly && status == Status.SUCCESS -> buildString {
-            // [fix/subagent-first-turn-count] The turn count is REAL, not
-            // hardcoded to 1. PR #66 made the plan turn non-terminal: a run
-            // whose first turn produced only a plan gets a nudge and
-            // continues, so the "early readout" can actually be produced on
-            // turn 2. Saying "1/$maxTurns" there was a claim the parent
-            // could not verify.
-            append("Sub-agent '$skillName' early readout ($turns/$maxTurns turns):")
+            append("Sub-agent '$skillName' first-turn readout (1/$maxTurns turns):")
             append("\n\n").append(SubagentRunAssessment.headline(outcome, executedToolCalls, reportSource))
             append("\n\n---\n")
             append(report.ifBlank { "(no text output produced)" })
