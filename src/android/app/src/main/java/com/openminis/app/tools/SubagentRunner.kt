@@ -547,7 +547,12 @@ class SubagentRunner(
                         // plain success.
                         outcome = SubagentRunAssessment.Outcome.FAILED,
                         reportSource = SubagentRunAssessment.ReportSource.NONE,
-                        executedToolCalls = executedToolCalls,
+                        // [fix/subagent-verdict-and-report-gate] The loop's
+                        // counter is not in scope here (it lives inside the
+                        // run loop); the detached path reads its state from
+                        // the registry snapshot, so read it from there too.
+                        executedToolCalls = registry.runs.value
+                            .firstOrNull { it.id == run.id }?.executedToolCalls ?: 0,
                     )
                     journal(run, "CANCELLED", "", 0, e.message ?: "cancelled", emptyList(), sessionId)
                 } catch (e: Exception) {
@@ -559,7 +564,10 @@ class SubagentRunner(
                         // crashed detached run.
                         outcome = SubagentRunAssessment.Outcome.FAILED,
                         reportSource = SubagentRunAssessment.ReportSource.NONE,
-                        executedToolCalls = executedToolCalls,
+                        // [fix/subagent-verdict-and-report-gate] Same scope
+                        // reason as the cancel path above.
+                        executedToolCalls = registry.runs.value
+                            .firstOrNull { it.id == run.id }?.executedToolCalls ?: 0,
                     )
                 } finally {
                     // Complete the job from the registry's terminal snapshot if
@@ -1827,7 +1835,7 @@ class SubagentRunner(
         // This matters because PR #66 made the plan turn non-terminal, and a
         // plan turn ALWAYS carries prose: the two fixes cancelled each other
         // out for exactly the runs they were written for.
-        val executedSteps = registry.runs.value.firstOrNull { it.id = run.id }?.steps.orEmpty()
+        val executedSteps = registry.runs.value.firstOrNull { it.id == run.id }?.steps.orEmpty()
         // [fix/subagent-verdict-and-report-gate] The whole report decision
         // lives in SubagentReportDecision — which text is judged, what is
         // delivered, and what the verdict is. Keeping the choice of INPUT
