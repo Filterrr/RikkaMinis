@@ -86,6 +86,26 @@ object SubagentOrchestration {
         val error: String? = null,
         /** True when the run terminated because of an explicit cancel. */
         val cancelled: Boolean = false,
+        /**
+         * [fix/subagent-verdict-and-report-gate] The verdict about the WORK,
+         * carried all the way to the detached paths (join / wait_any /
+         * background wake-up).
+         *
+         * Before this field the verdict existed only on the INLINE path
+         * ([SubagentResult]). A detached run built its [JobOutcome] from the
+         * registry snapshot, where the only signal was
+         * `status == SUCCESS` → `success = true`. So a run that executed
+         * nothing (UNSTARTED), delivered a runtime digest (DEGRADED) or
+         * produced no text at all (NO_OUTPUT) was reported to the parent as
+         * an ordinary success on every detached path.
+         *
+         * Defaults preserve the pre-existing meaning of a bare JobOutcome:
+         * a successful run with a model-written report.
+         */
+        val outcome: SubagentRunAssessment.Outcome = SubagentRunAssessment.Outcome.COMPLETED,
+        val reportSource: SubagentRunAssessment.ReportSource =
+            SubagentRunAssessment.ReportSource.MODEL,
+        val executedToolCalls: Int = 0,
     )
 
     /**

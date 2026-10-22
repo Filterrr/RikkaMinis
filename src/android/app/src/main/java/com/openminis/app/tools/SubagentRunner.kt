@@ -541,6 +541,13 @@ class SubagentRunner(
                     registry.finishIfActive(
                         run.id, SubagentRunRegistry.RunStatus.CANCELLED,
                         error = e.message ?: "detached run cancelled",
+                        // [fix/subagent-verdict-and-report-gate] A cancelled
+                        // run delivered nothing — say so on the detached
+                        // paths instead of letting the snapshot read as a
+                        // plain success.
+                        outcome = SubagentRunAssessment.Outcome.FAILED,
+                        reportSource = SubagentRunAssessment.ReportSource.NONE,
+                        executedToolCalls = executedToolCalls,
                     )
                     journal(run, "CANCELLED", "", 0, e.message ?: "cancelled", emptyList(), sessionId)
                 } catch (e: Exception) {
@@ -548,6 +555,11 @@ class SubagentRunner(
                     registry.finishIfActive(
                         run.id, SubagentRunRegistry.RunStatus.FAILED,
                         error = e.message ?: e.javaClass.simpleName,
+                        // [fix/subagent-verdict-and-report-gate] Same for a
+                        // crashed detached run.
+                        outcome = SubagentRunAssessment.Outcome.FAILED,
+                        reportSource = SubagentRunAssessment.ReportSource.NONE,
+                        executedToolCalls = executedToolCalls,
                     )
                 } finally {
                     // Complete the job from the registry's terminal snapshot if
@@ -616,6 +628,20 @@ class SubagentRunner(
                                 registry.runs.value.firstOrNull { it.id == rid }?.journalPath
                             },
                             error = if (result.success) null else result.output.take(300),
+                            // [fix/subagent-verdict-and-report-gate] Carry
+                            // the verdict on the inline path too — the same
+                            // JobOutcome type serves both paths, and a
+                            // detached run that was joined later must not
+                            // lose the verdict on the way through. The
+                            // verdict is not on ToolExecutionResult; the
+                            // runner wrote it into the registry snapshot on
+                            // its terminal write, so read it from there.
+                            outcome = registry.runs.value.firstOrNull { it.id == run.id }?.runOutcome
+                                ?: SubagentRunAssessment.Outcome.COMPLETED,
+                            reportSource = registry.runs.value.firstOrNull { it.id == run.id }?.reportSource
+                                ?: SubagentRunAssessment.ReportSource.MODEL,
+                            executedToolCalls = registry.runs.value
+                                .firstOrNull { it.id == run.id }?.executedToolCalls ?: 0,
                         ),
                     )
                     result
@@ -643,6 +669,11 @@ class SubagentRunner(
             registry.finishIfActive(
                 run.id, SubagentRunRegistry.RunStatus.TIMED_OUT,
                 error = e.message,
+                // [fix/subagent-verdict-and-report-gate] The run never
+                // started — it consumed no tokens and did no work.
+                outcome = SubagentRunAssessment.Outcome.TIMED_OUT,
+                reportSource = SubagentRunAssessment.ReportSource.NONE,
+                executedToolCalls = 0,
             )
             job.deferred.complete(
                 SubagentOrchestration.JobOutcome(
@@ -779,6 +810,15 @@ class SubagentRunner(
             journalPath = snapshot?.journalPath,
             error = snapshot?.error,
             cancelled = snapshot?.status == SubagentRunRegistry.RunStatus.CANCELLED,
+            // [fix/subagent-verdict-and-report-gate] Read the verdict back
+            // from the registry snapshot. Without this the detached path
+            // could only see `status == SUCCESS`, so every detached run
+            // reached the parent as an ordinary success — UNSTARTED,
+            // DEGRADED and NO_OUTPUT were all flattened into "succeeded".
+            outcome = snapshot?.runOutcome ?: SubagentRunAssessment.Outcome.COMPLETED,
+            reportSource = snapshot?.reportSource
+                ?: SubagentRunAssessment.ReportSource.MODEL,
+            executedToolCalls = snapshot?.executedToolCalls ?: 0,
         )
         return if (job.deferred.complete(outcome)) outcome else null
     }
@@ -1008,6 +1048,14 @@ class SubagentRunner(
                         run.id, SubagentRunRegistry.RunStatus.TIMED_OUT,
                         resultText = partial,
                         error = "exceeded the $timeoutSeconds-second run budget after $turns turn(s)",
+                        // [fix/subagent-verdict-and-report-gate] Persist the
+                        // verdict so the detached paths report TIMED_OUT
+                        // rather than a bare success.
+                        outcome = SubagentRunAssessment.Outcome.TIMED_OUT,
+                        reportSource = if (partial.isBlank()) {
+                            SubagentRunAssessment.ReportSource.NONE
+                        } else SubagentRunAssessment.ReportSource.PARTIAL,
+                        executedToolCalls = executedToolCalls,
                     )
                     val timedOutResult = SubagentResult(
                         status = SubagentResult.Status.FAILED,
@@ -1040,6 +1088,10 @@ class SubagentRunner(
                     registry.finishIfActive(
                         run.id, SubagentRunRegistry.RunStatus.FAILED,
                         error = "No provider instance context",
+                        // [fix/subagent-verdict-and-report-gate]
+                        outcome = SubagentRunAssessment.Outcome.FAILED,
+                        reportSource = SubagentRunAssessment.ReportSource.NONE,
+                        executedToolCalls = executedToolCalls,
                     )
                     return ToolExecutionResult(
                         "Error: No provider instance context for sub-agent remote execution",
@@ -1345,6 +1397,17 @@ class SubagentRunner(
                 // warned about. WARNING outcomes are appended to the result so
                 // the model sees them on its next turn.
                 val calls = toolCalls.map { ToolBatchExecutor.Call(it.id, it.name, it.args.toString()) }
+                // [fix/subagent-verdict-and-report-gate] Calls the loop
+                // detector short-circuited at CRITICAL level. The detector
+                // returns a synthesized error result WITHOUT running the tool,
+                // so these calls are NOT "executed" — counting them as such
+                // made a run that never touched the filesystem report
+                // COMPLETED. Measured: 3 calls all blocked → executedToolCalls
+                // was 3 → outcome COMPLETED (deliverable), while the truth is
+                // UNSTARTED (nothing ran). The counter's own comment claimed
+                // it counted "actually EXECUTED" calls — the implementation
+                // did not match the comment.
+                val blockedCallIds = java.util.Collections.synchronizedSet(mutableSetOf<String>())
                 val results = ToolBatchExecutor.executeBatched(calls) { call ->
                     val paramsMap = try {
                         val o = call.argsJson.let { org.json.JSONObject(it) }
@@ -1367,12 +1430,23 @@ class SubagentRunner(
                                 "name=${call.name} reason=$blocked",
                         )
                         registry.appendNotice(run.id, "[loop blocked: ${call.name}]")
+                        // [fix/subagent-verdict-and-report-gate] Record the
+                        // short-circuit so the executed-call count can exclude
+                        // it — the tool below never ran.
+                        blockedCallIds.add(call.id)
                         ToolExecutionResult(blocked, false, toolTitle = call.name)
                     } else {
                         executeSubagentTool(call.name, call.argsJson, call.id, run.id, artifacts)
                     }
                 }
-                executedToolCalls += toolCalls.size
+                // [fix/subagent-verdict-and-report-gate] Count only the calls
+                // that ACTUALLY executed. A CRITICAL short-circuit never ran
+                // its tool, so it must not push the run out of UNSTARTED.
+                executedToolCalls = SubagentExecutedCallCount.add(
+                    current = executedToolCalls,
+                    proposedCallIds = toolCalls.map { it.id },
+                    blockedCallIds = blockedCallIds,
+                )
                 for ((call, result) in toolCalls.zip(results)) {
                     val resultContent = if (result.success) result.output else "Error: ${result.output}"
                     registry.stepFinished(
@@ -1606,6 +1680,14 @@ class SubagentRunner(
                         run.id, SubagentRunRegistry.RunStatus.SUCCESS,
                         resultText = partial,
                         error = "Stopped early (run_until=$runUntil)",
+                        // [fix/subagent-verdict-and-report-gate] A first-turn
+                        // readout is not a finished task — the detached
+                        // paths must say so.
+                        outcome = SubagentRunAssessment.Outcome.STOPPED_EARLY,
+                        reportSource = if (partial.isBlank()) {
+                            SubagentRunAssessment.ReportSource.NONE
+                        } else SubagentRunAssessment.ReportSource.PARTIAL,
+                        executedToolCalls = executedToolCalls,
                     )
                     val result = SubagentResult(
                         status = SubagentResult.Status.SUCCESS,
@@ -1641,6 +1723,12 @@ class SubagentRunner(
                 run.id, SubagentRunRegistry.RunStatus.CANCELLED,
                 resultText = partial,
                 error = e.message ?: "cancelled",
+                // [fix/subagent-verdict-and-report-gate]
+                outcome = SubagentRunAssessment.Outcome.FAILED,
+                reportSource = if (partial.isBlank()) {
+                    SubagentRunAssessment.ReportSource.NONE
+                } else SubagentRunAssessment.ReportSource.PARTIAL,
+                executedToolCalls = executedToolCalls,
             )
             journal(run, "CANCELLED", partial, turns, e.message ?: "cancelled by user", artifacts, sessionId)
             AppLogger.warning(TAG, "[Subagent] '$skillName' cancelled after $turns turn(s); partial report journaled")
@@ -1650,6 +1738,9 @@ class SubagentRunner(
             AppLogger.warning(TAG, "[Subagent] '$skillName' error after $turns turn(s): $msg")
             registry.finishIfActive(
                 run.id, SubagentRunRegistry.RunStatus.FAILED,
+                outcome = SubagentRunAssessment.Outcome.FAILED,
+                reportSource = SubagentRunAssessment.ReportSource.NONE,
+                executedToolCalls = executedToolCalls,
                 resultText = resultSb.toString(), error = msg,
             )
             val partial = resultSb.toString()
@@ -1678,7 +1769,15 @@ class SubagentRunner(
 
         val finalText = resultSb.toString().trim()
         if (finalText.isBlank()) {
-            registry.finishIfActive(run.id, SubagentRunRegistry.RunStatus.SUCCESS, resultText = "")
+            registry.finishIfActive(
+                run.id, SubagentRunRegistry.RunStatus.SUCCESS,
+                resultText = "",
+                // [fix/subagent-verdict-and-report-gate] A run that
+                // produced no text delivered nothing.
+                outcome = SubagentRunAssessment.Outcome.NO_OUTPUT,
+                reportSource = SubagentRunAssessment.ReportSource.NONE,
+                executedToolCalls = executedToolCalls,
+            )
             // [fix/subagent-run-assessment] This exit used to return a bare
             // string with no verdict, so a run that produced nothing looked
             // like a normal completion carrying "(no output)". Route it
@@ -1712,11 +1811,36 @@ class SubagentRunner(
         // Two-step handling: when the run DID work, rebuild a digest from the
         // tool evidence so the parent gets the facts that were gathered;
         // when it did not, say so instead of passing the husk through.
-        val verdict = SubagentReportHygiene.judge(finalText)
-        val executedSteps = registry.runs.value.firstOrNull { it.id == run.id }?.steps.orEmpty()
-        val digest = if (verdict.degenerate && executedSteps.isNotEmpty()) {
-            SubagentReportHygiene.assembleFromTools(
-                executedSteps.map { step ->
+        // [fix/subagent-verdict-and-report-gate] The gate judges the model's
+        // FINAL MESSAGE (`lastText`), not `finalText` — the accumulation of
+        // every turn's narration. Judging the accumulation meant any earlier
+        // prose pushed the husk past the substance threshold, so the gate
+        // never fired and the parent received the bare tag as the findings.
+        //
+        // Reproduced with a real sub-agent run (2026-10-22): the closing
+        // message was `<status>done</status>` plus a paragraph of English
+        // narration. The closing message alone strips down to 4 meaningful
+        // characters (a husk); the accumulation reached 69 (not a husk). The
+        // gate therefore did not fire and the journal recorded no
+        // "runtime-assembled report" — the parent got the raw husk.
+        //
+        // This matters because PR #66 made the plan turn non-terminal, and a
+        // plan turn ALWAYS carries prose: the two fixes cancelled each other
+        // out for exactly the runs they were written for.
+        val executedSteps = registry.runs.value.firstOrNull { it.id = run.id }?.steps.orEmpty()
+        // [fix/subagent-verdict-and-report-gate] The whole report decision
+        // lives in SubagentReportDecision — which text is judged, what is
+        // delivered, and what the verdict is. Keeping the choice of INPUT
+        // here in the runner is exactly what made the defect untestable:
+        // the pure function was never wrong, the call site passed the wrong
+        // text to it. See SubagentReportDecision's doc for the measurements.
+        val decision = SubagentReportDecision.decide(
+            SubagentReportDecision.Input(
+                finalMessage = lastText,
+                accumulatedText = finalText,
+                executedToolCalls = executedToolCalls,
+                hasToolEvidence = executedSteps.isNotEmpty(),
+                toolSteps = executedSteps.map { step ->
                     SubagentReportHygiene.ToolDigest(
                         toolName = step.toolName,
                         toolTitle = step.toolTitle,
@@ -1724,14 +1848,23 @@ class SubagentRunner(
                         output = step.output,
                     )
                 },
-            )
+            ),
+        )
+        val finalMessage = lastText.trim()
+        // [fix/subagent-verdict-and-report-gate] `decision` is the single
+        // source of truth: it already decided what is delivered, where it
+        // came from, and what the verdict is. The runner only adds the
+        // logging and the registry notice around it.
+        val digest = if (decision.reportSource == SubagentRunAssessment.ReportSource.RUNTIME_DIGEST) {
+            decision.reportText
         } else null
         val reportText = when {
             digest != null -> {
                 AppLogger.warning(
                     TAG,
-                    "[Subagent] '$skillName' final message was a husk (${finalText.length} chars, " +
-                        "${verdict.stripped.length} after tag strip) — rebuilt from " +
+                    "[Subagent] '$skillName' final message was a husk (${finalMessage.length} chars, " +
+                        "${SubagentReportHygiene.stripSyntheticTags(finalMessage).length} after tag strip) " +
+                        "— rebuilt from " +
                         "${executedSteps.size} tool step(s)",
                 )
                 registry.appendNotice(
@@ -1741,7 +1874,7 @@ class SubagentRunner(
                 )
                 digest
             }
-            verdict.degenerate -> {
+            decision.degenerate -> {
                 // No tool evidence to fall back on: the husk IS all there is.
                 // Still refuse to hand the parent a bare tag as a "report".
                 registry.appendNotice(
@@ -1749,11 +1882,9 @@ class SubagentRunner(
                     "[report] the model's final message carried no findings and no tool " +
                         "output was recorded",
                 )
-                finalText + "\n\n⚠️ [no usable findings: the model's final message contained " +
-                    "no substantive text (only structural tags were present) and this run " +
-                    "recorded no tool output to reconstruct from.]"
+                decision.reportText
             }
-            else -> finalText
+            else -> decision.reportText
         }
 
         // [fix/subagent-plan-execute] A run that executed ZERO tool calls did
@@ -1785,23 +1916,25 @@ class SubagentRunner(
         // from facts already in hand: how many tools actually ran and where the
         // delivered text came from. The parent triages from this instead of
         // re-deriving "did it actually do anything?" from the header.
-        val reportSource = when {
-            digest != null -> SubagentRunAssessment.ReportSource.RUNTIME_DIGEST
-            deliveredText.isBlank() -> SubagentRunAssessment.ReportSource.NONE
-            else -> SubagentRunAssessment.ReportSource.MODEL
-        }
-        val declared = SubagentSkill.parseReportStatus(deliveredText)
-        val outcome = SubagentRunAssessment.assess(
-            loopFailed = false,
-            timedOut = false,
-            stoppedEarly = false,
-            executedToolCalls = executedToolCalls,
-            reportSource = reportSource,
-            declaredStatus = declared,
-        )
+        val reportSource = decision.reportSource
+        // [fix/subagent-verdict-and-report-gate] The declared status is a
+        // property of the model's FINAL MESSAGE, so it is read from there.
+        // Reading it out of `deliveredText` (the accumulated narration) let a
+        // `status: partial` the model wrote in an EARLIER turn be taken as
+        // this turn's self-assessment — the contract pins `status:` to the
+        // report tail, but the tail of the accumulation is not the model's
+        // closing message.
+        val declared = decision.declaredStatus
+        val outcome = decision.outcome
         registry.finishIfActive(
             run.id, SubagentRunRegistry.RunStatus.SUCCESS,
             resultText = deliveredText,
+            // [fix/subagent-verdict-and-report-gate] Persist the verdict so
+            // the detached paths can read it back — they build their result
+            // from this snapshot.
+            outcome = outcome,
+            reportSource = reportSource,
+            executedToolCalls = executedToolCalls,
         )
         val result = SubagentResult(
             status = SubagentResult.Status.SUCCESS,
@@ -2122,6 +2255,9 @@ class SubagentRunner(
                     registry.finishIfActive(
                         job.runId, SubagentRunRegistry.RunStatus.CANCELLED,
                         error = reason,
+                        // [fix/subagent-verdict-and-report-gate]
+                        outcome = SubagentRunAssessment.Outcome.FAILED,
+                        reportSource = SubagentRunAssessment.ReportSource.NONE,
                     )
                     job.coroutineJob?.let { cj ->
                         if (cj.isActive) {
