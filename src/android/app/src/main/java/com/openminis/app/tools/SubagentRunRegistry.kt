@@ -171,6 +171,20 @@ class SubagentRunRegistry {
         /** Final or streaming text produced by the sub-agent. */
         val resultText: String = "",
         /**
+         * [fix/subagent-verdict-and-report-gate] The verdict about the WORK,
+         * persisted with the run so the detached paths can read it.
+         *
+         * The detached paths build their result from this snapshot, so a
+         * verdict that is not stored here cannot reach them: an UNSTARTED or
+         * DEGRADED run was reported as an ordinary success. `null` until the
+         * runner writes a terminal verdict.
+         */
+        val runOutcome: SubagentRunAssessment.Outcome? = null,
+        /** Where the delivered report text came from (see [runOutcome]). */
+        val reportSource: SubagentRunAssessment.ReportSource? = null,
+        /** Tool calls that actually executed (see [runOutcome]). */
+        val executedToolCalls: Int = 0,
+        /**
          * [T-subagent-chat-stream] Interleaved transcript — narration,
          * reasoning and tool calls in arrival order. Empty for runs that
          * produced nothing yet (and for runs restored from a journal written
@@ -821,8 +835,18 @@ class SubagentRunRegistry {
      * terminal transitions. See [finishOnce] for the rationale; kept as its
      * own name because most call sites do not care whether they won.
      */
-    fun finishIfActive(runId: String, status: RunStatus, resultText: String = "", error: String? = null) {
-        finishOnce(runId, status, resultText, error)
+    fun finishIfActive(
+        runId: String,
+        status: RunStatus,
+        resultText: String = "",
+        error: String? = null,
+        // [fix/subagent-verdict-and-report-gate] The verdict travels with
+        // the terminal write so the detached paths can read it back.
+        outcome: SubagentRunAssessment.Outcome? = null,
+        reportSource: SubagentRunAssessment.ReportSource? = null,
+        executedToolCalls: Int = 0,
+    ) {
+        finishOnce(runId, status, resultText, error, outcome, reportSource, executedToolCalls)
     }
 
     /**
@@ -842,7 +866,15 @@ class SubagentRunRegistry {
      * when a terminal state already existed (the caller then knows its
      * outcome was discarded).
      */
-    fun finishOnce(runId: String, status: RunStatus, resultText: String = "", error: String? = null): Boolean {
+    fun finishOnce(
+        runId: String,
+        status: RunStatus,
+        resultText: String = "",
+        error: String? = null,
+        outcome: SubagentRunAssessment.Outcome? = null,
+        reportSource: SubagentRunAssessment.ReportSource? = null,
+        executedToolCalls: Int = 0,
+    ): Boolean {
         var applied = false
         updateRun(runId) { run ->
             if (!run.isActive) {
@@ -854,19 +886,33 @@ class SubagentRunRegistry {
                     endedAtMs = System.currentTimeMillis(),
                     resultText = resultText.ifBlank { run.resultText },
                     error = error,
+                    runOutcome = outcome ?: run.runOutcome,
+                    reportSource = reportSource ?: run.reportSource,
+                    executedToolCalls = if (executedToolCalls > 0) executedToolCalls else run.executedToolCalls,
                 )
             }
         }
         return applied
     }
 
-    fun finish(runId: String, status: RunStatus, resultText: String = "", error: String? = null) {
+    fun finish(
+        runId: String,
+        status: RunStatus,
+        resultText: String = "",
+        error: String? = null,
+        outcome: SubagentRunAssessment.Outcome? = null,
+        reportSource: SubagentRunAssessment.ReportSource? = null,
+        executedToolCalls: Int = 0,
+    ) {
         updateRun(runId) { run ->
             run.copy(
                 status = status,
                 endedAtMs = System.currentTimeMillis(),
                 resultText = resultText.ifBlank { run.resultText },
                 error = error,
+                runOutcome = outcome ?: run.runOutcome,
+                reportSource = reportSource ?: run.reportSource,
+                executedToolCalls = if (executedToolCalls > 0) executedToolCalls else run.executedToolCalls,
             )
         }
     }
