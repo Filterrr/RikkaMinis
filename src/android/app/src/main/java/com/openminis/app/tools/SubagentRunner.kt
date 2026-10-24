@@ -1065,9 +1065,10 @@ class SubagentRunner(
                         } else SubagentRunAssessment.ReportSource.PARTIAL,
                         executedToolCalls = executedToolCalls,
                     )
+                    val reconciledPartial = reconcileArtifactPaths(partial, artifacts, run.id)
                     val timedOutResult = SubagentResult(
                         status = SubagentResult.Status.FAILED,
-                        report = partial,
+                        report = reconciledPartial,
                         outcome = SubagentRunAssessment.Outcome.TIMED_OUT,
                         reportSource = if (partial.isBlank()) {
                             SubagentRunAssessment.ReportSource.NONE
@@ -1078,7 +1079,7 @@ class SubagentRunner(
                         skillId = skill.id,
                         skillName = skill.name,
                         journalPath = journal(
-                            run, "TIMED_OUT", partial, turns,
+                            run, "TIMED_OUT", reconciledPartial, turns,
                             "timed out after ${timeoutSeconds}s", artifacts, sessionId,
                         ),
                         artifacts = artifacts.toList(),
@@ -1697,9 +1698,10 @@ class SubagentRunner(
                         } else SubagentRunAssessment.ReportSource.PARTIAL,
                         executedToolCalls = executedToolCalls,
                     )
+                    val reconciledPartial = reconcileArtifactPaths(partial, artifacts, run.id)
                     val result = SubagentResult(
                         status = SubagentResult.Status.SUCCESS,
-                        report = partial,
+                        report = reconciledPartial,
                         declaredStatus = SubagentSkill.parseReportStatus(partial),
                         outcome = SubagentRunAssessment.Outcome.STOPPED_EARLY,
                         reportSource = if (partial.isBlank()) {
@@ -1712,7 +1714,7 @@ class SubagentRunner(
                         skillName = skill.name,
                         journalPath = journal(
                             run, SubagentResult.journalTerminal(SubagentResult.Status.SUCCESS, stoppedEarly = true),
-                            partial, turns, error = "stopped early (run_until=$runUntil)", artifacts, sessionId,
+                            reconciledPartial, turns, error = "stopped early (run_until=$runUntil)", artifacts, sessionId,
                         ),
                         artifacts = artifacts.toList(),
                     )
@@ -1738,7 +1740,10 @@ class SubagentRunner(
                 } else SubagentRunAssessment.ReportSource.PARTIAL,
                 executedToolCalls = executedToolCalls,
             )
-            journal(run, "CANCELLED", partial, turns, e.message ?: "cancelled by user", artifacts, sessionId)
+            journal(
+                run, "CANCELLED", reconcileArtifactPaths(partial, artifacts, run.id),
+                turns, e.message ?: "cancelled by user", artifacts, sessionId,
+            )
             AppLogger.warning(TAG, "[Subagent] '$skillName' cancelled after $turns turn(s); partial report journaled")
             throw e
         } catch (e: Exception) {
@@ -1752,9 +1757,10 @@ class SubagentRunner(
                 resultText = resultSb.toString(), error = msg,
             )
             val partial = resultSb.toString()
+            val reconciledPartial = reconcileArtifactPaths(partial, artifacts, run.id)
             val result = SubagentResult(
                 status = SubagentResult.Status.FAILED,
-                report = partial,
+                report = reconciledPartial,
                 outcome = SubagentRunAssessment.Outcome.FAILED,
                 reportSource = if (partial.isBlank()) {
                     SubagentRunAssessment.ReportSource.NONE
@@ -1764,7 +1770,7 @@ class SubagentRunner(
                 maxTurns = config.maxTurns,
                 skillId = skill.id,
                 skillName = skill.name,
-                journalPath = journal(run, "FAILED", partial, turns, msg, artifacts, sessionId),
+                journalPath = journal(run, "FAILED", reconciledPartial, turns, msg, artifacts, sessionId),
                 artifacts = artifacts.toList(),
                 error = msg,
             )
@@ -1919,7 +1925,13 @@ class SubagentRunner(
         // injected an English warning into the middle of the report body,
         // where a model quoting the report would treat it as a finding.
         // One statement, in the header, is enough.
-        val deliveredText = reportText
+        // [fix/subagent-artifact-path-truth] The model's closing message
+        // describes its own deliverables in prose, and prose drifts. The
+        // runtime knows the truth — the canonical paths of the successful
+        // writes — so reconcile BEFORE the text is delivered, journaled and
+        // written into the registry snapshot. All three consumers then see
+        // the same paths, and a parent that follows them finds the files.
+        val deliveredText = reconcileArtifactPaths(reportText, artifacts, run.id)
         // [fix/subagent-run-assessment] One verdict for the whole run, derived
         // from facts already in hand: how many tools actually ran and where the
         // delivered text came from. The parent triages from this instead of
@@ -2003,7 +2015,19 @@ class SubagentRunner(
             FileWriteTool.NAME, FileEditTool.NAME -> {
                 val result = executeFileTool(name, argsJson)
                 if (result.success) {
-                    extractPath(argsJson)?.let { artifacts?.add(it) }
+                    // [fix/subagent-artifact-path-truth] Store the CANONICAL
+                    // path, not the raw `path` argument. A relative path (or
+                    // one with `./` / `a//b` segments) is not a resolvable
+                    // anchor — the parent would have to guess the base. The
+                    // run's artifacts directory is the only sensible base for
+                    // a relative path, and it is fixed for the whole run.
+                    extractPath(argsJson)?.let { raw ->
+                        val canonical = SubagentArtifactTruth.canonicalize(
+                            raw,
+                            SubagentSkill.artifactsDirFor(runId),
+                        )
+                        if (canonical.isNotEmpty()) artifacts?.add(canonical)
+                    }
                     deps.maybeReloadSkillsForPath(argsJson)
                 }
                 result
@@ -2026,6 +2050,36 @@ class SubagentRunner(
         args.optString("path", "").ifBlank { args.optString("file_path", "").ifBlank { null } }
     } catch (_: Exception) {
         null
+    }
+
+    /**
+     * [fix/subagent-artifact-path-truth] Reconcile a report's self-declared
+     * artifact paths against the runtime's write log before the parent sees
+     * it.
+     *
+     * The model writes prose about its own deliverables, and prose drifts:
+     * a misspelled directory, a relative path, a level dropped. The runtime
+     * knows the truth (the canonical paths of the successful writes). This
+     * rewrites the model's paths to the real ones and flags any path the
+     * runtime never recorded, instead of handing the parent two contradictory
+     * sets of paths with no indication of which to trust.
+     *
+     * Deliberately applied on EVERY exit path (success, timeout, early stop,
+     * cancellation, exception): a report that drifted is just as useless to a
+     * parent reading a partial result as to one reading a complete one.
+     */
+    private fun reconcileArtifactPaths(
+        report: String,
+        artifacts: List<String>,
+        runId: String,
+    ): String {
+        if (report.isBlank() || artifacts.isEmpty()) return report
+        val reconciliation = SubagentArtifactTruth.reconcile(
+            report = report,
+            recordedPaths = artifacts,
+            artifactsDir = SubagentSkill.artifactsDirFor(runId),
+        )
+        return reconciliation.report
     }
 
     /**
