@@ -961,7 +961,15 @@ class SubagentRunner(
         }
         val systemPrompt = SubagentSkill.buildSystemPrompt(
             skill,
-            runtimeContext = SubagentSkill.buildRuntimeContext(runId = run.id),
+            runtimeContext = SubagentSkill.buildRuntimeContext(
+                runId = run.id,
+                // [fix/subagent-budget-visibility] The skill body tells the
+                // model to stay within its turn budget, but the budget lives
+                // in the frontmatter that buildSystemPrompt strips — so the
+                // model was told to respect a limit it was never given.
+                maxTurns = config.maxTurns,
+                timeoutSeconds = timeoutSeconds,
+            ),
         )
         // [fix/subagent-plan-first] When the skill keeps plan_first on (the
         // default), the FIRST turn is a planning turn: the model must lay out

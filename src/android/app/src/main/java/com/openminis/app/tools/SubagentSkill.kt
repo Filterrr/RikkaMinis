@@ -639,11 +639,45 @@ object SubagentSkill {
      * entirely and makes every path in the final report self-attributing.
      * Blank [runId] (tests, callers outside a run) keeps the shared root.
      */
-    fun buildRuntimeContext(now: LocalDateTime = LocalDateTime.now(), runId: String = ""): String {
+    /**
+     * The runtime preamble the sub-agent's system prompt starts with.
+     *
+     * @param now local wall-clock time.
+     * @param runId the run's id, or blank outside a run.
+     * @param maxTurns the run's TURN budget — how many model turns the run
+     *   gets before the runtime stops it. The skill body tells the model to
+     *   "stay within your turn budget" (general-agent SKILL.md), but the
+     *   budget itself lives in the frontmatter, which
+     *   [buildSystemPrompt] STRIPS before the body reaches the model. The
+     *   model was therefore told to respect a limit it was never told.
+     * @param timeoutSeconds the run's WALL-CLOCK budget in seconds, or null
+     *   when unknown. Same problem, same fix: the model cannot pace itself
+     *   against a deadline it cannot see.
+     */
+    fun buildRuntimeContext(
+        now: LocalDateTime = LocalDateTime.now(),
+        runId: String = "",
+        maxTurns: Int? = null,
+        timeoutSeconds: Int? = null,
+    ): String {
         val dir = artifactsDirFor(runId)
+        val budget = buildString {
+            if (maxTurns != null && maxTurns > 0) {
+                append(" Your turn budget is $maxTurns model turns ")
+                append("(including the planning turn), so pace the work to fit ")
+                append("and write intermediate findings to disk early.")
+            }
+            if (timeoutSeconds != null && timeoutSeconds > 0) {
+                val minutes = timeoutSeconds / 60
+                append(" Your wall-clock budget is ")
+                append(if (minutes >= 1) "$minutes minute(s)" else "$timeoutSeconds second(s)")
+                append("; the run stops when either limit is reached, so leave time to report.")
+            }
+        }
         return "Current date/time: " + now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")) +
             " (local time). Durable artifacts directory: $dir (persists across the session — " +
             "write deliverables there, reference them by path)." +
+            budget +
             if (runId.isBlank()) ""
             else " This directory belongs to THIS sub-agent run; other agents have their own — " +
                 "never write outside it, and reference your deliverables by these paths in the report."
