@@ -1444,7 +1444,18 @@ class SubagentRunner(
                         blockedCallIds.add(call.id)
                         ToolExecutionResult(blocked, false, toolTitle = call.name)
                     } else {
-                        executeSubagentTool(call.name, call.argsJson, call.id, run.id, artifacts)
+                        executeSubagentTool(
+                            name = call.name,
+                            argsJson = call.argsJson,
+                            callId = call.id,
+                            runId = run.id,
+                            artifacts = artifacts,
+                            // [fix/subagent-allowed-tools-enforcement] The
+                            // skill's allowlist travels with the run, so the
+                            // runtime gate sees the same list the schema
+                            // filter used.
+                            allowedTools = config.allowedTools,
+                        )
                     }
                 }
                 // [fix/subagent-verdict-and-report-gate] Count only the calls
@@ -1455,6 +1466,10 @@ class SubagentRunner(
                     proposedCallIds = toolCalls.map { it.id },
                     blockedCallIds = blockedCallIds,
                 )
+                // [fix/subagent-parallel-tool-results] Collect the turn's
+                // results; they are emitted as ONE user message after the
+                // loop (see the comment at the append site below).
+                val resultParts = mutableListOf<AgentContentPart.ToolResult>()
                 for ((call, result) in toolCalls.zip(results)) {
                     val resultContent = if (result.success) result.output else "Error: ${result.output}"
                     registry.stepFinished(
@@ -1512,18 +1527,38 @@ class SubagentRunner(
                     // model keeps working exactly as before. When the bytes are
                     // elided by an image budget, imageLinuxPath keeps the image
                     // re-fetchable — the same contract the main loop relies on.
-                    history.add(LLMMessage(
-                        role = LLMMessage.Role.USER,
-                        content = "Result of ${call.name} (${call.id}):\n$contentForModel",
-                        contentParts = listOf(AgentContentPart.ToolResult(
-                            id = call.id, name = call.name,
-                            content = contentForModel, isError = !result.success,
-                            imageData = result.imageData,
-                            imageMimeType = result.imageMimeType,
-                            imageLinuxPath = result.imageLinuxPath,
-                        )),
-                    ))
+                    //
+                    // [fix/subagent-parallel-tool-results] The result is NOT
+                    // appended here. A turn with N parallel calls used to
+                    // append N consecutive USER messages, and BOTH the
+                    // provider-side `sanitizeToolPairing` and the runner's own
+                    // Pass 1 repair then treated every result but the first as
+                    // an orphan: the sanitizer stripped it from the wire, and
+                    // Pass 1 replaced it with a fake "Tool execution was
+                    // interrupted" placeholder. Measured on the real
+                    // production classes: 3 parallel reads → the model saw
+                    // 1 real output + 2 fake interruptions. The results are
+                    // collected below and emitted as ONE user message — the
+                    // shape the main loop uses and the sanitizer expects.
+                    resultParts += AgentContentPart.ToolResult(
+                        id = call.id,
+                        name = call.name,
+                        content = contentForModel,
+                        isError = !result.success,
+                        imageData = result.imageData,
+                        imageMimeType = result.imageMimeType,
+                        imageLinuxPath = result.imageLinuxPath,
+                    )
                 }
+                // [fix/subagent-parallel-tool-results] One USER message for the
+                // whole turn's results. The wire format is identical for every
+                // provider family (OpenAI emits one `role:"tool"` per part,
+                // Anthropic one tool_result block per part, Gemini one
+                // functionResponse per part) — only the LOCAL message grouping
+                // changes, and the grouping is what the pairing sanitizer and
+                // the Pass 1 repair read.
+                SubagentToolResultBatch.buildToolResultMessage(resultParts)
+                    ?.let { history.add(it) }
 
                 // [T-subagent-checkpoint] Persist a mid-run progress anchor
                 // after every completed turn. Process death never executes
@@ -1978,6 +2013,17 @@ class SubagentRunner(
      * forbidden tools, but this refuse-with-explanation path guarantees a
      * stale allowlist or future regression can never EXECUTE them
      * (defense in depth — capability checks must fail closed twice).
+     *
+     * [fix/subagent-allowed-tools-enforcement] The skill's `allowed_tools`
+     * allowlist is enforced HERE too, not only in the schema filter. The
+     * schema filter governs what the model is TOLD it may call; this
+     * governs what actually HAPPENS. Measured on the real runtime
+     * (2026-10-22): a `read-only-researcher` run (allowlist = file_read /
+     * read_image / browser_use) still wrote files with `file_write` and
+     * created files with `shell_execute` — both landed on disk. The schema
+     * looked safe; the runtime was not.
+     *
+     * @param allowedTools the skill's allowlist, or null when unrestricted.
      */
     suspend fun executeSubagentTool(
         name: String,
@@ -1985,6 +2031,7 @@ class SubagentRunner(
         callId: String,
         runId: String,
         artifacts: MutableList<String>? = null,
+        allowedTools: Set<String>? = null,
     ): ToolExecutionResult {
         if (name in SubagentSkill.FORBIDDEN_TOOLS) {
             return forbiddenToolResult(name)
@@ -1992,6 +2039,22 @@ class SubagentRunner(
         val capability = AgentCapabilities.capabilityOf(name)
         if (capability == null || capability !in AgentCapabilities.SUBAGENT_BASE) {
             return forbiddenToolResult(name)
+        }
+        // [fix/subagent-allowed-tools-enforcement] The allowlist gate. A
+        // null allowlist means the skill declared none — unrestricted, as
+        // before. A non-null allowlist means EXACTLY those tools, and
+        // everything else is refused even if the capability catalog grants
+        // it and the schema filter should already have hidden it.
+        if (!SubagentAllowedTools.isAllowed(name, allowedTools)) {
+            AppLogger.warning(
+                TAG,
+                "[Subagent] '$name' REFUSED — not in this skill's allowed_tools list",
+            )
+            return ToolExecutionResult(
+                SubagentAllowedTools.refusalText(name, allowedTools),
+                false,
+                toolTitle = name,
+            )
         }
         return when (name) {
             "shell_execute" -> executeSubagentShell(argsJson, callId, runId)
