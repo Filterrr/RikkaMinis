@@ -86,6 +86,7 @@ import com.openminis.app.tools.SubagentRunRegistry
 import com.openminis.app.tools.SubagentRunner
 import com.openminis.app.tools.SubagentScheduler
 import com.openminis.app.tools.SubagentSkill
+import com.openminis.app.tools.SubagentStepOutputTrim
 import com.openminis.app.tools.ToolBatchExecutor
 import com.openminis.app.tools.ToolConcurrencyPolicy
 import com.openminis.app.tools.SpawnApprovalQueue
@@ -10033,8 +10034,22 @@ class ChatViewModel(
                     // dedicated branch (AIChatViewModel.swift:5229) and avoids
                     // this; mirror that intent by gating the trim to shell_execute.
                     val existingContent = allToolBlocks[blockIdx].content
-                    val resultContent = if (name == "shell_execute") {
-                        result.output.lines().takeLast(80).joinToString("\n")
+                    // [fix/subagent-step-output-parity] The rule now lives in
+                    // one shared object, used by the main loop AND the
+                    // sub-agent. The two had drifted: the main loop gated
+                    // the tail trim to shell_execute (T263), while the
+                    // sub-agent still clipped EVERY tool with takeLast(60)
+                    // — which dropped file_read's
+                    // "[path | N bytes | M lines | showing A-B of M]" banner
+                    // and made a recovered step unable to say which file it
+                    // came from.
+                    //
+                    // The main loop keeps its exact previous behaviour: only
+                    // shell_execute is clipped (to the tail), every other
+                    // tool is shown whole — its output is already bounded
+                    // upstream (file_read 15 KB, browser_use 64 KB).
+                    val resultContent = if (SubagentStepOutputTrim.isShell(name)) {
+                        SubagentStepOutputTrim.trim(name, result.output)
                     } else {
                         result.output
                     }
@@ -13428,7 +13443,20 @@ Environment variables:
                                 toolName = part.name,
                                 toolTitle = part.description,
                                 toolArgs = part.input,
-                                content = result?.output?.lines()?.takeLast(80)?.joinToString("\n") ?: "",
+                                content = result?.output?.let {
+                                    // [fix/subagent-step-output-parity] This
+                                    // path restores blocks from the DB after
+                                    // a restart, so it re-applied the trim
+                                    // that T263 had already gated to
+                                    // shell_execute — the third site with
+                                    // the same uniform tail-clip. It now
+                                    // uses the shared rule.
+                                    if (SubagentStepOutputTrim.isShell(part.name)) {
+                                        SubagentStepOutputTrim.trim(part.name, it)
+                                    } else {
+                                        it
+                                    }
+                                } ?: "",
                                 toolStatus = when {
                                     result == null -> ToolBlockStatus.SUCCESS
                                     !result.success && (

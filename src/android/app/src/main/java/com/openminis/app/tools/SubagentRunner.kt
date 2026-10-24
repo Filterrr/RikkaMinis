@@ -1531,9 +1531,15 @@ class SubagentRunner(
                     val resultContent = if (result.success) result.output else "Error: ${result.output}"
                     registry.stepFinished(
                         run.id, call.id, result.success,
-                        output = resultContent.lines().takeLast(
-                            SubagentRunRegistry.MAX_STEP_OUTPUT_LINES,
-                        ).joinToString("\n"),
+                        // [fix/subagent-step-output-parity] The PREVIEW keeps
+                        // the head for every tool except shell_execute, which
+                        // keeps the tail — mirroring the main loop's T263
+                        // fix. A uniform takeLast() dropped the first line,
+                        // which is where file_read's
+                        // "[path | N bytes | M lines | showing A-B of M]"
+                        // banner lives, so a recovered step could not say
+                        // WHICH file was read or how much of it was shown.
+                        output = SubagentStepOutputTrim.trim(call.name, resultContent),
                     )
                     // [T-subagent-loop-detector] Record post-execution and fold
                     // a WARNING into the text the model receives, mirroring the
@@ -2211,9 +2217,9 @@ class SubagentRunner(
         if (runId.isNotEmpty()) {
             registry.stepFinished(
                 runId, stepId, result.exitCode == 0,
-                output = redactedOut.lines().takeLast(
-                    SubagentRunRegistry.MAX_STEP_OUTPUT_LINES,
-                ).joinToString("\n"),
+                // [fix/subagent-step-output-parity] Same rule as every other
+                // tool — this one is shell_execute, so it keeps the TAIL.
+                output = SubagentStepOutputTrim.trim("shell_execute", redactedOut),
             )
         }
         return ToolExecutionResult(
