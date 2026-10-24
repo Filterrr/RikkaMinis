@@ -708,8 +708,14 @@ object SubagentSkill {
      * routes through emits it reliably, and the runner strips it from the
      * visible narration either way — a model that ignores the instruction
      * costs nothing but the plan display.
+     *
+     * [fix/subagent-plan-contract] The plan contract now lives in
+     * [SubagentPlanContract] — one source of truth shared by the system
+     * prompt, the execution nudge and the skill body, so the three cannot
+     * contradict each other. These two remain as delegates so every
+     * existing caller and test keeps working.
      */
-    const val PLAN_TAG = "task-plan"
+    const val PLAN_TAG = SubagentPlanContract.PLAN_TAG
 
     /**
      * Directive appended to the sub-agent's system prompt when the skill has
@@ -718,30 +724,13 @@ object SubagentSkill {
      * mid-run is expected, not forbidden: the list is communication, not a
      * contract the model must obey after reality disagrees with it.
      *
-     * `val` not `const val`: trimMargin() is a runtime call, which the const
-     * initializer rules reject (CI: "Const 'val' initializer should be a
-     * constant value").
+     * [fix/subagent-plan-contract] Delegates to
+     * [SubagentPlanContract.DIRECTIVE] — the single source of truth.
      */
-    val PLAN_DIRECTIVE: String = """
-        |# Task plan (required first)
-        |
-        |Before doing ANY work, output your plan for this task inside a <task-plan> block:
-        |
-        |<task-plan>
-        |- step one
-        |- step two
-        |- step three
-        |</task-plan>
-        |
-        |Rules:
-        |- 3-7 steps, one line each, verb-first and concrete ("Search X", "Compare A vs B", "Write report to <path>").
-        |- The plan turn makes NO tool calls — outline only, then stop the turn. The run does NOT end here: execution starts automatically on the next turn, so do not treat a finished plan as a finished task.
-        |- The list shows the user what you intend to do; deviate when the work demands it, but if the plan changes materially, emit an updated <task-plan> block before continuing.
-        |- After the plan turn, every turn must actually advance the work with a tool call until the task is complete.
-    """.trimMargin()
+    val PLAN_DIRECTIVE: String = SubagentPlanContract.DIRECTIVE
 
     /** Marker prepended to the run transcript when the planning turn begins. */
-    const val PLAN_TURN_NOTICE = "[planning]"
+    const val PLAN_TURN_NOTICE = SubagentPlanContract.PLAN_TURN_NOTICE
 
     /**
      * Extract the FIRST `<task-plan>…</task-plan>` block from [text] and

@@ -413,6 +413,19 @@ class SubagentRunner(
         // freeze, not background progress.
         val timeoutSeconds = args.optInt("timeout_seconds", SubagentSkill.DEFAULT_TIMEOUT_SECONDS)
             .coerceIn(1, SubagentSkill.MAX_TIMEOUT_SECONDS)
+        // [fix/subagent-queue-budget] The run's wall-clock budget is NOT
+        // consumed by the time it spends waiting for a concurrency slot. The
+        // old code computed one absolute deadline at spawn time and handed it
+        // to the scheduler, which used it for BOTH the queue wait and the
+        // run — so a task that waited ten minutes for a slot started with
+        // only five minutes of its fifteen-minute budget left, and then died
+        // of "timeout" after doing almost nothing. The wait is a property of
+        // the QUEUE; the run budget is a property of the TASK.
+        //
+        // `deadlineNanos` below is therefore only the QUEUE deadline: how
+        // long this spawn may sit waiting for a slot. The run's own clock
+        // starts when the run actually starts (see
+        // [SubagentBudgetClock.startRun]).
         val deadlineNanos = System.nanoTime() + timeoutSeconds * 1_000_000_000L
 
         // [T-subagent-budget-inheritance] Pure check before any run exists
@@ -527,7 +540,12 @@ class SubagentRunner(
                                 query = query, title = title, runUntil = SubagentSkill.RUN_UNTIL_DONE,
                                 sessionId = sessionId, provider = provider, subagentTools = subagentTools,
                                 timeoutSeconds = timeoutSeconds,
-                                deadlineNanos = deadlineNanos,
+                                // [fix/subagent-queue-budget] The run's own
+                                // clock starts HERE — when the run actually
+                                // begins — not when the spawn was requested.
+                                // The time spent waiting for a concurrency
+                                // slot is the queue's cost, not the task's.
+                                deadlineNanos = SubagentBudgetClock.startRun(timeoutSeconds).runDeadlineNanos,
                                 modelMaxOutputTokens = modelMaxOutputTokens,
                                 spreadLabel = spreadLabel,
                             )
@@ -621,7 +639,12 @@ class SubagentRunner(
                             query = query, title = title, runUntil = runUntil,
                             sessionId = sessionId, provider = provider, subagentTools = subagentTools,
                             timeoutSeconds = timeoutSeconds,
-                            deadlineNanos = deadlineNanos,
+                            // [fix/subagent-queue-budget] The run's own
+                            // clock starts HERE — when the run actually
+                            // begins — not when the spawn was requested.
+                            // The time spent waiting for a concurrency
+                            // slot is the queue's cost, not the task's.
+                            deadlineNanos = SubagentBudgetClock.startRun(timeoutSeconds).runDeadlineNanos,
                             modelMaxOutputTokens = modelMaxOutputTokens,
                             spreadLabel = spreadLabel,
                         )
@@ -993,12 +1016,14 @@ class SubagentRunner(
         val history = mutableListOf(LLMMessage(role = LLMMessage.Role.USER, content = query))
 
         // [T-subagent-run-timeout] The absolute [deadlineNanos] arrives from
-        // the spawn site — measured from SPAWN time and inclusive of queue
-        // wait. Enforced at TURN boundaries only: a single hung shell_execute
-        // is already capped at 900s by executeSubagentShell, and an interrupt
-        // mid-stream would corrupt the history. The guard this adds is the
-        // missing one — an unbounded number of turns, which nothing capped
-        // before.
+        // the spawn site — but since [fix/subagent-queue-budget] it is
+        // measured from the moment the RUN STARTED, not from the spawn
+        // request, so time spent queueing for a concurrency slot does not
+        // eat the run's budget. Enforced at TURN boundaries only: a single
+        // hung shell_execute is already capped at 900s by
+        // executeSubagentShell, and an interrupt mid-stream would corrupt the
+        // history. The guard this adds is the missing one — an unbounded
+        // number of turns, which nothing capped before.
 
         val resultSb = StringBuilder()
         val artifacts = mutableListOf<String>()
@@ -1452,18 +1477,42 @@ class SubagentRunner(
                         blockedCallIds.add(call.id)
                         ToolExecutionResult(blocked, false, toolTitle = call.name)
                     } else {
-                        executeSubagentTool(
-                            name = call.name,
-                            argsJson = call.argsJson,
-                            callId = call.id,
-                            runId = run.id,
-                            artifacts = artifacts,
-                            // [fix/subagent-allowed-tools-enforcement] The
-                            // skill's allowlist travels with the run, so the
-                            // runtime gate sees the same list the schema
-                            // filter used.
-                            allowedTools = config.allowedTools,
-                        )
+                        // [fix/subagent-tool-preflight] Validate the call
+                        // BEFORE dispatching it, exactly like the main agent
+                        // does. The sub-agent runner had no preflight: a
+                        // malformed call was dispatched and only failed
+                        // inside the tool, so the model spent a turn (of a
+                        // scarce budget) learning that `path` was missing.
+                        // The error comes back as the tool result, so the
+                        // model can correct itself on the NEXT turn — the
+                        // same feedback loop the main agent has.
+                        val preflightError = preflightErrorFor(call, subagentTools)
+                        if (preflightError != null) {
+                            AppLogger.warning(
+                                TAG,
+                                "[Subagent] '$skillName' tool REJECTED by preflight " +
+                                    "name=${call.name} reason=$preflightError",
+                            )
+                            registry.appendNotice(run.id, "[preflight rejected: ${call.name}]")
+                            // The tool did NOT run — exclude it from the
+                            // executed-call count, same as a loop-detector
+                            // short-circuit.
+                            blockedCallIds.add(call.id)
+                            ToolExecutionResult(preflightError, false, toolTitle = call.name)
+                        } else {
+                            executeSubagentTool(
+                                name = call.name,
+                                argsJson = call.argsJson,
+                                callId = call.id,
+                                runId = run.id,
+                                artifacts = artifacts,
+                                // [fix/subagent-allowed-tools-enforcement] The
+                                // skill's allowlist travels with the run, so the
+                                // runtime gate sees the same list the schema
+                                // filter used.
+                                allowedTools = config.allowedTools,
+                            )
+                        }
                     }
                 }
                 // [fix/subagent-verdict-and-report-gate] Count only the calls
@@ -2014,6 +2063,34 @@ class SubagentRunner(
 
 
     // ── Sub-agent tool dispatch ──────────────────────────────────────────
+
+    /**
+     * [fix/subagent-tool-preflight] Validate one tool call against the tool
+     * schemas the model was shown, returning null when the call is
+     * well-formed or a human-readable reason when it should be rejected.
+     *
+     * The rule is the SAME one the main agent applies
+     * ([ToolCallPreflight]) — one implementation, two callers, so the two
+     * loops cannot drift apart.
+     *
+     * [tools] is the SUB-AGENT's filtered schema, not the main agent's: the
+     * sub-agent only ever sees its own capabilities, and a tool it was not
+     * offered must not be validated against a schema it never received.
+     */
+    private fun preflightErrorFor(
+        call: ToolBatchExecutor.Call,
+        tools: List<AgentToolDefinition>,
+    ): String? {
+        val args = try {
+            org.json.JSONObject(call.argsJson)
+        } catch (_: Exception) {
+            // Malformed JSON — the tool itself would fail on this. Report it
+            // as a preflight failure so the model gets a clear correction
+            // instead of a stack-shaped tool error.
+            return "Tool '${call.name}' was called with malformed arguments that are not valid JSON."
+        }
+        return ToolCallPreflight.validate(call.name, args, tools)
+    }
 
     /**
      * Execute a tool inside a sub-agent's loop. [T-subagent-capability]
