@@ -353,10 +353,66 @@ class SubagentRunRegistry {
         )
         // Newest first — the pill shows the freshest run; detail page lists
         // history the same way.
+        //
+        // [fix/subagent-registry-prune-active-runs] The prune used to drop
+        // the OLDEST entry regardless of its status. Because the list is
+        // newest-first, the oldest entry is the one that has been running
+        // LONGEST — so the prune preferentially killed exactly the runs that
+        // were still working. A long-running detached run (15-minute
+        // research is normal) silently vanished from the registry as soon as
+        // 20 newer runs appeared, and the consequences cascaded:
+        //   - `finishOnce` / `updateRun` match by runId, so the run's real
+        //     terminal write found no row and was DISCARDED — the pill never
+        //     showed how it ended;
+        //   - `completeJobFromRegistry` read a null snapshot, so the parent
+        //     received an empty report and a COMPLETED verdict for a run that
+        //     may have failed;
+        //   - the run could no longer be cancelled from the UI.
+        //
+        // The prune now drops TERMINAL runs first — their outcome has
+        // already been delivered, so nothing is lost. LIVE runs are kept
+        // even when that means the list temporarily exceeds
+        // [MAX_RETAINED_RUNS]: the cap exists to bound the UI's history
+        // list, and a live run's row is load-bearing for its result. The
+        // overshoot is bounded by [MAX_LIVE_RUNS] and is self-healing —
+        // those runs become terminal and the next registration prunes them.
         mutateRuns { current ->
-            listOf(run) + current.let { list ->
-                if (list.size >= MAX_RETAINED_RUNS) list.take(MAX_RETAINED_RUNS - 1) else list
+            val combined = listOf(run) + current
+            if (combined.size <= MAX_RETAINED_RUNS) return@mutateRuns combined
+            var excess = combined.size - MAX_RETAINED_RUNS
+            val dropIdx = mutableSetOf<Int>()
+            // `combined` is newest-first, so the OLDEST run is the LAST
+            // element. Walk from the oldest end and drop TERMINAL runs only.
+            for (i in combined.indices.reversed()) {
+                if (excess <= 0) break
+                if (!combined[i].isActive) {
+                    dropIdx += i
+                    excess--
+                }
             }
+            // Whatever is left over is still live — keep it. Losing a live
+            // run's result is worse than exceeding the retention budget.
+            //
+            // The overshoot is bounded by [MAX_LIVE_RUNS]: a parent that
+            // spawns hundreds of tasks at once would otherwise grow the list
+            // without limit. Past that hard cap the oldest live run is
+            // dropped as a last resort — genuinely pathological, and the
+            // scheduler's global concurrency cap (4) means a healthy session
+            // never comes close.
+            val liveSurvivors = combined.indices.count { i ->
+                i !in dropIdx && combined[i].isActive
+            }
+            if (liveSurvivors > MAX_LIVE_RUNS) {
+                var toDrop = liveSurvivors - MAX_LIVE_RUNS
+                for (i in combined.indices.reversed()) {
+                    if (toDrop <= 0) break
+                    if (i !in dropIdx && combined[i].isActive) {
+                        dropIdx += i
+                        toDrop--
+                    }
+                }
+            }
+            combined.filterIndexed { idx, _ -> idx !in dropIdx }
         }
         return run
     }
@@ -956,6 +1012,14 @@ class SubagentRunRegistry {
     companion object {
         /** Bounded history so a long session can't grow the list forever. */
         const val MAX_RETAINED_RUNS = 20
+
+        /**
+         * [fix/subagent-registry-prune-active-runs] Hard cap on how many
+         * LIVE runs may sit above [MAX_RETAINED_RUNS] before the oldest live
+         * one is dropped as a last resort. The scheduler's global concurrency
+         * cap is 4, so a healthy session never comes close.
+         */
+        const val MAX_LIVE_RUNS = 40
         const val MAX_STEP_OUTPUT_LINES = 60
         const val MAX_RESULT_TEXT_CHARS = 24_000
         private const val MAX_NOTICE_CHARS = 2_000

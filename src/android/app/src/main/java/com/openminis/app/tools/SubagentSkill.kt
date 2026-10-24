@@ -639,11 +639,45 @@ object SubagentSkill {
      * entirely and makes every path in the final report self-attributing.
      * Blank [runId] (tests, callers outside a run) keeps the shared root.
      */
-    fun buildRuntimeContext(now: LocalDateTime = LocalDateTime.now(), runId: String = ""): String {
+    /**
+     * The runtime preamble the sub-agent's system prompt starts with.
+     *
+     * @param now local wall-clock time.
+     * @param runId the run's id, or blank outside a run.
+     * @param maxTurns the run's TURN budget — how many model turns the run
+     *   gets before the runtime stops it. The skill body tells the model to
+     *   "stay within your turn budget" (general-agent SKILL.md), but the
+     *   budget itself lives in the frontmatter, which
+     *   [buildSystemPrompt] STRIPS before the body reaches the model. The
+     *   model was therefore told to respect a limit it was never told.
+     * @param timeoutSeconds the run's WALL-CLOCK budget in seconds, or null
+     *   when unknown. Same problem, same fix: the model cannot pace itself
+     *   against a deadline it cannot see.
+     */
+    fun buildRuntimeContext(
+        now: LocalDateTime = LocalDateTime.now(),
+        runId: String = "",
+        maxTurns: Int? = null,
+        timeoutSeconds: Int? = null,
+    ): String {
         val dir = artifactsDirFor(runId)
+        val budget = buildString {
+            if (maxTurns != null && maxTurns > 0) {
+                append(" Your turn budget is $maxTurns model turns ")
+                append("(including the planning turn), so pace the work to fit ")
+                append("and write intermediate findings to disk early.")
+            }
+            if (timeoutSeconds != null && timeoutSeconds > 0) {
+                val minutes = timeoutSeconds / 60
+                append(" Your wall-clock budget is ")
+                append(if (minutes >= 1) "$minutes minute(s)" else "$timeoutSeconds second(s)")
+                append("; the run stops when either limit is reached, so leave time to report.")
+            }
+        }
         return "Current date/time: " + now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")) +
             " (local time). Durable artifacts directory: $dir (persists across the session — " +
             "write deliverables there, reference them by path)." +
+            budget +
             if (runId.isBlank()) ""
             else " This directory belongs to THIS sub-agent run; other agents have their own — " +
                 "never write outside it, and reference your deliverables by these paths in the report."
@@ -674,8 +708,14 @@ object SubagentSkill {
      * routes through emits it reliably, and the runner strips it from the
      * visible narration either way — a model that ignores the instruction
      * costs nothing but the plan display.
+     *
+     * [fix/subagent-plan-contract] The plan contract now lives in
+     * [SubagentPlanContract] — one source of truth shared by the system
+     * prompt, the execution nudge and the skill body, so the three cannot
+     * contradict each other. These two remain as delegates so every
+     * existing caller and test keeps working.
      */
-    const val PLAN_TAG = "task-plan"
+    const val PLAN_TAG = SubagentPlanContract.PLAN_TAG
 
     /**
      * Directive appended to the sub-agent's system prompt when the skill has
@@ -684,30 +724,13 @@ object SubagentSkill {
      * mid-run is expected, not forbidden: the list is communication, not a
      * contract the model must obey after reality disagrees with it.
      *
-     * `val` not `const val`: trimMargin() is a runtime call, which the const
-     * initializer rules reject (CI: "Const 'val' initializer should be a
-     * constant value").
+     * [fix/subagent-plan-contract] Delegates to
+     * [SubagentPlanContract.DIRECTIVE] — the single source of truth.
      */
-    val PLAN_DIRECTIVE: String = """
-        |# Task plan (required first)
-        |
-        |Before doing ANY work, output your plan for this task inside a <task-plan> block:
-        |
-        |<task-plan>
-        |- step one
-        |- step two
-        |- step three
-        |</task-plan>
-        |
-        |Rules:
-        |- 3-7 steps, one line each, verb-first and concrete ("Search X", "Compare A vs B", "Write report to <path>").
-        |- The plan turn makes NO tool calls — outline only, then stop the turn. The run does NOT end here: execution starts automatically on the next turn, so do not treat a finished plan as a finished task.
-        |- The list shows the user what you intend to do; deviate when the work demands it, but if the plan changes materially, emit an updated <task-plan> block before continuing.
-        |- After the plan turn, every turn must actually advance the work with a tool call until the task is complete.
-    """.trimMargin()
+    val PLAN_DIRECTIVE: String = SubagentPlanContract.DIRECTIVE
 
     /** Marker prepended to the run transcript when the planning turn begins. */
-    const val PLAN_TURN_NOTICE = "[planning]"
+    const val PLAN_TURN_NOTICE = SubagentPlanContract.PLAN_TURN_NOTICE
 
     /**
      * Extract the FIRST `<task-plan>…</task-plan>` block from [text] and

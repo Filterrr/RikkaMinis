@@ -76,6 +76,7 @@ import com.openminis.app.tools.AgentTools
 import com.openminis.app.tools.FileEditTool
 import com.openminis.app.tools.FileReadTool
 import com.openminis.app.tools.FileWriteTool
+import com.openminis.app.tools.ToolCallPreflight
 import com.openminis.app.tools.MemoryRollupTool
 import com.openminis.app.tools.MemoryTools
 import com.openminis.app.tools.ReadImageTool
@@ -85,6 +86,7 @@ import com.openminis.app.tools.SubagentRunRegistry
 import com.openminis.app.tools.SubagentRunner
 import com.openminis.app.tools.SubagentScheduler
 import com.openminis.app.tools.SubagentSkill
+import com.openminis.app.tools.SubagentStepOutputTrim
 import com.openminis.app.tools.ToolBatchExecutor
 import com.openminis.app.tools.ToolConcurrencyPolicy
 import com.openminis.app.tools.SpawnApprovalQueue
@@ -152,23 +154,12 @@ class ChatViewModel(
         // whole call over a missing one is pure downside. Preflight skips these
         // when checking for missing required fields. Mirrors iOS
         // AIChatViewModel.preflightNonBlockingFields.
+        //
+        // [fix/subagent-tool-preflight] The rule now lives in
+        // [ToolCallPreflight] so the main agent and the sub-agent runner
+        // enforce exactly the same contract.
         private val PREFLIGHT_NON_BLOCKING_FIELDS = setOf("tool_title")
 
-        /**
-         * (tool name → field names) where an EMPTY STRING is a semantically
-         * valid value and must not be treated as "missing".
-         *
-         * Distinct from [PREFLIGHT_NON_BLOCKING_FIELDS], which skips the
-         * missing-field check entirely: these fields must still be PRESENT in
-         * args — they are just allowed to hold "" as their content.
-         *
-         * The canonical case is `file_edit.new_string`, whose schema documents
-         * "Use empty string to delete old_string". Blocking it broke a promised
-         * deletion workflow and pushed the model into shell_execute + python
-         * file-rewrite workarounds. Mirrors iOS
-         * AIChatViewModel.preflightEmptyStringAllowedFields.
-         * [T-preflight-empty-string-allowed]
-         */
         /** T9: trace retention cap per session (oldest pruned first). */
         const val MAX_TRACE_FILES_PER_SESSION = 20
 
@@ -239,85 +230,34 @@ class ChatViewModel(
             AgentTerminalReason.OUTCOME_UNKNOWN -> "process_interrupted"
         }
 
-        private val PREFLIGHT_EMPTY_STRING_ALLOWED_FIELDS: Map<String, Set<String>> = mapOf(
-            "file_edit" to setOf("new_string"),
-        )
-
-        /** True when "" is a legal value for this exact (tool, field) pair. */
-        internal fun preflightEmptyStringAllowed(tool: String, field: String): Boolean =
-            PREFLIGHT_EMPTY_STRING_ALLOWED_FIELDS[tool]?.contains(field) == true
-
         /**
-         * Reject tool calls that have empty args or are missing required fields
-         * BEFORE [executeTool] runs. Returns null when the call is well-formed,
-         * or a human-readable reason string when it should be blocked.
+         * [fix/subagent-tool-preflight] Preflight is implemented ONCE, in
+         * [com.openminis.app.tools.ToolCallPreflight], and shared by the main
+         * agent and the sub-agent runner. The sub-agent runner had no
+         * preflight at all: a malformed call was dispatched and only failed
+         * inside the tool, wasting a turn of a scarce budget.
          *
-         * Driven off the canonical [AgentToolDefinition.required] list so the
-         * validator never drifts from the schema published to the model. For
-         * string fields we additionally require non-blank content — the model
-         * occasionally emits `{"path": ""}` which passes the "key exists" check
-         * but is just as broken as a missing key. We do NOT validate type beyond
-         * string-emptiness here; richer schema checks (enum, regex, integer
-         * range) belong in each tool's own helper because they need tool-specific
-         * context.
-         *
-         * Mirror of iOS preflightValidateToolCall in AIChatViewModel.swift.
-         *
-         * Lives in the companion (and is `internal`) because it is PURE — it reads
-         * only its parameters and companion constants — so unit tests can exercise
-         * it without constructing a ChatViewModel and its dependency graph. Mirrors
-         * the same `nonisolated static` move on iOS.
+         * The delegate below stays so every existing caller and test keeps
+         * working unchanged. The behaviour is byte-for-byte the pre-fix
+         * behaviour of this method (same non-blocking fields, same
+         * empty-string allowances, same messages).
          */
         internal fun preflightValidateToolCallImpl(
             name: String,
             args: JSONObject,
             tools: List<AgentToolDefinition>,
-        ): String? {
-            // Unknown tool names go through to the existing `else` branch in
-            // executeTool() which returns "Unknown tool: …". Preflight stays
-            // silent so we don't double-fail.
-            val toolDef = tools.firstOrNull { it.name == name } ?: return null
-            // Required fields that actually gate execution (everything except the
-            // non-blocking ones like tool_title — see PREFLIGHT_NON_BLOCKING_FIELDS).
-            val enforced = toolDef.required.filter { it !in PREFLIGHT_NON_BLOCKING_FIELDS }
-            // Empty args on a tool that requires anything → block. Gate on
-            // `enforced` so a tool whose only required field is non-blocking isn't
-            // rejected for empty args, and the message lists only real blockers.
-            if (args.length() == 0 && enforced.isNotEmpty()) {
-                return "Tool '$name' was called with empty arguments {} but requires: ${enforced.joinToString(", ")}."
-            }
-            val missing = mutableListOf<String>()
-            for (field in enforced) {
-                // Absent — or present as an explicit JSON null. org.json reports
-                // has() == true for `{"x": null}` and opt() hands back
-                // JSONObject.NULL, which is not a String, so a null previously
-                // slipped through BOTH checks and reached the tool as a non-String
-                // value. Both spellings are genuinely missing.
-                if (!args.has(field) || args.isNull(field)) {
-                    missing.add(field)
-                    continue
-                }
-                val raw = args.opt(field)
-                // Only the truly-empty literal "" is rejected — NOT whitespace.
-                // The earlier `.trim().isEmpty()` over-rejected legitimate payloads,
-                // most notably file_edit with `new_string: "\n"` (replace a block
-                // with a newline) or `old_string: "  "` (match consecutive spaces).
-                // Both are valid edits, neither is stream corruption.
-                //
-                // And even "" is legal for whitelisted (tool, field) pairs:
-                // file_edit.new_string == "" is the documented "delete old_string"
-                // form, not a missing value. [T-preflight-empty-string-allowed]
-                if (raw is String && raw.isEmpty() &&
-                    !preflightEmptyStringAllowed(name, field)
-                ) {
-                    missing.add(field)
-                }
-            }
-            if (missing.isNotEmpty()) {
-                return "Tool '$name' is missing required parameter(s): ${missing.joinToString(", ")}."
-            }
-            return null
-        }
+        ): String? = ToolCallPreflight.validate(name, args, tools)
+
+        /**
+         * True when "" is a legal value for this exact (tool, field) pair.
+         *
+         * [fix/subagent-tool-preflight] The rule now lives in
+         * [ToolCallPreflight] so the main agent and the sub-agent runner
+         * enforce exactly the same contract. This delegate keeps the
+         * existing callers and tests working.
+         */
+        internal fun preflightEmptyStringAllowed(tool: String, field: String): Boolean =
+            ToolCallPreflight.emptyStringAllowed(tool, field)
         // [T-android-stream-flush-dualpath] Newline fast-path thresholds (iOS parity).
         private const val NEWLINE_FLUSH_MIN_CHARS = 50
         private const val NEWLINE_FLUSH_MAX_LEN = 5_000
@@ -10094,8 +10034,22 @@ class ChatViewModel(
                     // dedicated branch (AIChatViewModel.swift:5229) and avoids
                     // this; mirror that intent by gating the trim to shell_execute.
                     val existingContent = allToolBlocks[blockIdx].content
-                    val resultContent = if (name == "shell_execute") {
-                        result.output.lines().takeLast(80).joinToString("\n")
+                    // [fix/subagent-step-output-parity] The rule now lives in
+                    // one shared object, used by the main loop AND the
+                    // sub-agent. The two had drifted: the main loop gated
+                    // the tail trim to shell_execute (T263), while the
+                    // sub-agent still clipped EVERY tool with takeLast(60)
+                    // — which dropped file_read's
+                    // "[path | N bytes | M lines | showing A-B of M]" banner
+                    // and made a recovered step unable to say which file it
+                    // came from.
+                    //
+                    // The main loop keeps its exact previous behaviour: only
+                    // shell_execute is clipped (to the tail), every other
+                    // tool is shown whole — its output is already bounded
+                    // upstream (file_read 15 KB, browser_use 64 KB).
+                    val resultContent = if (SubagentStepOutputTrim.isShell(name)) {
+                        SubagentStepOutputTrim.trim(name, result.output)
                     } else {
                         result.output
                     }
@@ -13489,7 +13443,20 @@ Environment variables:
                                 toolName = part.name,
                                 toolTitle = part.description,
                                 toolArgs = part.input,
-                                content = result?.output?.lines()?.takeLast(80)?.joinToString("\n") ?: "",
+                                content = result?.output?.let {
+                                    // [fix/subagent-step-output-parity] This
+                                    // path restores blocks from the DB after
+                                    // a restart, so it re-applied the trim
+                                    // that T263 had already gated to
+                                    // shell_execute — the third site with
+                                    // the same uniform tail-clip. It now
+                                    // uses the shared rule.
+                                    if (SubagentStepOutputTrim.isShell(part.name)) {
+                                        SubagentStepOutputTrim.trim(part.name, it)
+                                    } else {
+                                        it
+                                    }
+                                } ?: "",
                                 toolStatus = when {
                                     result == null -> ToolBlockStatus.SUCCESS
                                     !result.success && (

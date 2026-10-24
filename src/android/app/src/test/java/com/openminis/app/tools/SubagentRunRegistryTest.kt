@@ -92,7 +92,17 @@ class SubagentRunRegistryTest {
             last = registry.register("b$it", "s", "s", "q$it", "t$it", 4)
         }
         val runs = registry.runs.value
-        assertEquals(SubagentRunRegistry.MAX_RETAINED_RUNS, runs.size)
+        // [fix/subagent-registry-prune-active-runs] The cap now applies to
+        // TERMINAL history. These 25 runs are all still live (never
+        // finished), so the list is allowed to exceed the cap by the live
+        // budget — dropping a live run's row would silently destroy its
+        // result (see SubagentRunRegistryPruneTest). Once the runs finish,
+        // the list prunes back to the cap (asserted in
+        // SubagentRunRegistryPruneTest).
+        assertTrue(
+            "live runs may exceed the cap: ${runs.size}",
+            runs.size <= SubagentRunRegistry.MAX_RETAINED_RUNS + SubagentRunRegistry.MAX_LIVE_RUNS,
+        )
         assertEquals(last!!.id, runs.first().id)
     }
 
