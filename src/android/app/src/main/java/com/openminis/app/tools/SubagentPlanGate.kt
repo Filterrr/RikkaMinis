@@ -45,26 +45,19 @@ object SubagentPlanGate {
      * that treats "plan recorded" as "task complete". It also states the stop
      * condition explicitly (no tool call → the run ends), because that is the
      * mechanic the model was reasoning incorrectly about.
+     *
+     * [fix/subagent-plan-contract] Delegates to [SubagentPlanContract] — the
+     * single source of truth shared with the system prompt directive, so the
+     * two cannot state opposite stop conditions.
      */
-    const val EXECUTION_NUDGE: String =
-        "Your plan is recorded and shown to the user as a checklist. Now EXECUTE " +
-            "it — call a tool this turn (shell_execute, file_read, file_write, " +
-            "browser_use, web_search …). Do NOT restate the plan, do NOT ask for " +
-            "confirmation, and do NOT end the turn with an acknowledgement: a " +
-            "turn that contains no tool call terminates this run, and a plan " +
-            "alone delivers nothing to the agent that spawned you."
+    const val EXECUTION_NUDGE: String = SubagentPlanContract.EXECUTION_NUDGE
 
     /**
      * The user-role message used when NO plan was emitted either — the model
      * answered in prose and stopped. Same mechanic, different wording: there
      * is no checklist to point at, so it points at the task instead.
      */
-    const val NO_PLAN_NUDGE: String =
-        "No <task-plan> block was emitted, and this turn contained no tool call. " +
-            "The task is not finished — a prose answer is not a deliverable. " +
-            "Call a tool now to make progress on it (shell_execute, file_read, " +
-            "file_write, browser_use, web_search …); a turn with no tool call " +
-            "terminates this run."
+    const val NO_PLAN_NUDGE: String = SubagentPlanContract.NO_PLAN_NUDGE
 
     /**
      * Decide whether a tool-less turn should end the run.

@@ -424,6 +424,62 @@ class SubagentSkillTest {
         assertFalse("no traversal", dir.contains(".."))
     }
 
+    // ── budget visibility ─────────────────────────────────────────────────
+
+    /**
+     * [fix/subagent-budget-visibility] The skill body tells the model to
+     * "stay within your turn budget" — but the budget lives in the
+     * frontmatter, which [buildSystemPrompt] strips before the body reaches
+     * the model. The model was told to respect a limit it was never given.
+     */
+    @Test
+    fun `the runtime context states the turn budget`() {
+        val ctx = SubagentSkill.buildRuntimeContext(
+            LocalDateTime.of(2026, 9, 8, 10, 30),
+            runId = "subagent-1",
+            maxTurns = 40,
+        )
+        assertTrue(
+            "the model must be told its turn budget: $ctx",
+            ctx.contains("40 model turns"),
+        )
+    }
+
+    @Test
+    fun `the runtime context states the wall-clock budget`() {
+        val ctx = SubagentSkill.buildRuntimeContext(
+            LocalDateTime.of(2026, 9, 8, 10, 30),
+            runId = "subagent-1",
+            maxTurns = 40,
+            timeoutSeconds = 900,
+        )
+        assertTrue(
+            "the model must be told its wall-clock budget: $ctx",
+            ctx.contains("15 minute"),
+        )
+    }
+
+    @Test
+    fun `a sub-minute timeout is stated in seconds`() {
+        val ctx = SubagentSkill.buildRuntimeContext(
+            LocalDateTime.of(2026, 9, 8, 10, 30),
+            runId = "subagent-1",
+            maxTurns = 40,
+            timeoutSeconds = 45,
+        )
+        assertTrue(ctx.contains("45 second"))
+    }
+
+    @Test
+    fun `an unknown budget is simply not stated`() {
+        val ctx = SubagentSkill.buildRuntimeContext(
+            LocalDateTime.of(2026, 9, 8, 10, 30),
+            runId = "subagent-1",
+        )
+        assertFalse(ctx.contains("model turns"))
+        assertFalse(ctx.contains("budget"))
+    }
+
     @Test
     fun `runtime preamble wraps description fallback for blank body`() {
         val skill = TestSkill(description = "Fallback description", body = "")
