@@ -575,9 +575,16 @@ class SubagentRunner(
                     journal(run, "CANCELLED", "", 0, e.message ?: "cancelled", emptyList(), sessionId)
                 } catch (e: Exception) {
                     AppLogger.warning(TAG, "[Subagent] detached '$skillName' crashed: ${e.message}")
+                    // [fix/subagent-verdict-consistency-v3] The cancel branch
+                    // above journals its terminal record; this branch did not,
+                    // so a crashed detached run left NO durable trace — the
+                    // registry said FAILED while `.subagent/<runId>.md` did not
+                    // exist and the `.ckpt` was never swept. The failure
+                    // reason was unrecoverable after the fact.
+                    val crashError = e.message ?: e.javaClass.simpleName
                     registry.finishIfActive(
                         run.id, SubagentRunRegistry.RunStatus.FAILED,
-                        error = e.message ?: e.javaClass.simpleName,
+                        error = crashError,
                         // [fix/subagent-verdict-and-report-gate] Same for a
                         // crashed detached run.
                         outcome = SubagentRunAssessment.Outcome.FAILED,
@@ -587,6 +594,9 @@ class SubagentRunner(
                         executedToolCalls = registry.runs.value
                             .firstOrNull { it.id == run.id }?.executedToolCalls ?: 0,
                     )
+                    // Journal the crash so the durable record matches the
+                    // registry's FAILED state.
+                    journal(run, "FAILED", "", 0, crashError, emptyList(), sessionId)
                 } finally {
                     // Complete the job from the registry's terminal snapshot if
                     // nobody else did (cancel path completes the deferred BEFORE
@@ -682,6 +692,12 @@ class SubagentRunner(
                             runId = run.id, success = false, report = "",
                             skillName = skill.name, cancelled = true,
                             error = e.message ?: "cancelled",
+                            // [fix/subagent-verdict-consistency-v3] A cancelled
+                            // run delivered no work. Leaving the default
+                            // (COMPLETED + MODEL) would tell a later join
+                            // that the model wrote a report.
+                            outcome = SubagentRunAssessment.Outcome.FAILED,
+                            reportSource = SubagentRunAssessment.ReportSource.NONE,
                         ),
                     )
                     throw e
@@ -691,6 +707,15 @@ class SubagentRunner(
                             runId = run.id, success = false, report = "",
                             skillName = skill.name,
                             error = e.message ?: e.javaClass.simpleName,
+                            // [fix/subagent-verdict-consistency-v3] The
+                            // default JobOutcome verdict is COMPLETED/MODEL
+                            // — "the model wrote a report". This branch is
+                            // the opposite: the loop threw, nothing was
+                            // delivered. Carry the truth so a later join or
+                            // wait_any does not report the crash as a
+                            // successful run.
+                            outcome = SubagentRunAssessment.Outcome.FAILED,
+                            reportSource = SubagentRunAssessment.ReportSource.NONE,
                         ),
                     )
                     throw e
@@ -846,9 +871,17 @@ class SubagentRunner(
             // could only see `status == SUCCESS`, so every detached run
             // reached the parent as an ordinary success — UNSTARTED,
             // DEGRADED and NO_OUTPUT were all flattened into "succeeded".
-            outcome = snapshot?.runOutcome ?: SubagentRunAssessment.Outcome.COMPLETED,
+            //
+            // [fix/subagent-verdict-consistency-v3] A MISSING snapshot is a
+            // third case, distinct from both: the registry row was pruned
+            // before the terminal write could be read back. The old
+            // fallback said COMPLETED + MODEL while `success` was false —
+            // "failed, but the model wrote a report". Unknown is the honest
+            // answer, and UNKNOWN tells the parent not to trust any text
+            // that arrives with it.
+            outcome = snapshot?.runOutcome ?: SubagentRunAssessment.Outcome.UNKNOWN,
             reportSource = snapshot?.reportSource
-                ?: SubagentRunAssessment.ReportSource.MODEL,
+                ?: SubagentRunAssessment.ReportSource.NONE,
             executedToolCalls = snapshot?.executedToolCalls ?: 0,
         )
         return if (job.deferred.complete(outcome)) outcome else null
@@ -2421,19 +2454,36 @@ class SubagentRunner(
                     )
                 } else {
                     val losers = jobs.filter { it.runId != winner.runId }
+                    // [fix/subagent-verdict-consistency-v3] The winner line
+                    // and the success flag both read the binary `success`
+                    // field, which flattens every non-COMPLETED verdict
+                    // into "FAILED" — the parent could not tell an
+                    // UNSTARTED run from a crashed one, and (worse) a
+                    // success_only race would treat a DEGRADED digest as a
+                    // usable winner. Use the verdict.
+                    val winnerLabel = if (winner.cancelled) {
+                        "CANCELLED"
+                    } else {
+                        SubagentRunAssessment.statusLabel(winner.effectiveOutcome)
+                    }
+                    val winnerDelivered = winner.delivered
                     ToolExecutionResult(
                         buildString {
                             append("wait_any: first completion in group ${group.id} → run ")
                             append(winner.runId)
                             append(" (").append(winner.skillName).append(")")
-                            append(if (winner.cancelled) " CANCELLED" else if (winner.success) " SUCCESS" else " FAILED")
+                            append(" ").append(winnerLabel)
                             append("\n\n---\n").append(boundWaitAnyReport(winner))
                             winner.journalPath?.let { append("\n\nJournal: $it") }
                             append("\n\n---\nStill running (NOT waited on): ")
                             append(losers.joinToString(", ") { it.runId }.ifEmpty { "(none)" })
                             append(". Reap losers with cancel_subagents when you no longer need them.")
                         },
-                        success = !winner.cancelled && (winner.success || !successOnly),
+                        // success_only=true promises "the first one that
+                        // SUCCEEDS". A DEGRADED digest, a PARTIAL report or
+                        // an UNSTARTED run is not a success — the race must
+                        // keep going for a run that actually delivered.
+                        success = !winner.cancelled && (winnerDelivered || !successOnly),
                         toolTitle = toolTitle,
                     )
                 }
@@ -2552,8 +2602,15 @@ class SubagentRunner(
                 .append(
                     when {
                         outcome.cancelled -> "CANCELLED"
-                        outcome.success -> "SUCCESS"
-                        else -> "FAILED"
+                        // [fix/subagent-verdict-consistency-v3] The old
+                        // three-way split (cancelled / success / failed)
+                        // collapsed every verdict the runtime knows about
+                        // into "FAILED" — an UNSTARTED run, a DEGRADED
+                        // runtime digest and a model-declared PARTIAL all
+                        // reached the parent as the same word. The parent
+                        // then had to re-read the body to learn whether the
+                        // run did anything. Use the verdict label.
+                        else -> SubagentRunAssessment.statusLabel(outcome.effectiveOutcome)
                     },
                 )
                 .append(" ===")
@@ -2743,7 +2800,17 @@ internal fun buildWakePrompt(
     snapshot: SubagentRunRegistry.Run?,
     maxReportChars: Int = WAKE_REPORT_MAX_CHARS,
 ): String = buildString {
-    val status = snapshot?.status?.name ?: if (outcome.success) "SUCCESS" else "FAILED"
+    // [fix/subagent-verdict-consistency-v3] The status word is the VERDICT,
+    // not the registry's status name and not the binary `success` flag. A
+    // run that finished without throwing but delivered a runtime digest
+    // (DEGRADED) or a partial report (PARTIAL) used to be announced to the
+    // parent as "SUCCESS" — the parent folded the digest into its plan as
+    // if it were the answer.
+    val status = if (outcome.cancelled) {
+        "CANCELLED"
+    } else {
+        SubagentRunAssessment.statusLabel(outcome.effectiveOutcome)
+    }
     appendLine("[Sub-agent '${outcome.skillName}' finished in the background — status $status]")
     appendLine("run_id: ${outcome.runId}")
     snapshot?.let { run ->

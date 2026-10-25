@@ -154,11 +154,29 @@ class SubagentScheduler(
      * Rollback note: giving up on the GLOBAL permit releases the skill permit
      * again, so a spawn that timed out waiting for a global slot cannot
      * strand a skill-level slot either.
+     *
+     * [fix/subagent-verdict-consistency-v3] The budget is a TOTAL, not a
+     * per-level allowance. The two acquisitions used to receive the same
+     * [waitBudgetMs] each, so a spawn that waited the full budget for the
+     * skill permit then waited the full budget again for the global one —
+     * twice the deadline the caller was promised. The budget is now
+     * measured against a single deadline that both levels share.
      */
     suspend fun tryAcquire(skillId: String, skillLimit: Int, waitBudgetMs: Long): Boolean {
         val skillSemaphore = skillSemaphore(skillId, skillLimit)
-        if (!acquireWithin(skillSemaphore, waitBudgetMs)) return false
-        if (!acquireWithin(global, waitBudgetMs)) {
+        if (waitBudgetMs <= 0) {
+            // Immediate-try semantics: no waiting at either level.
+            if (!skillSemaphore.tryAcquire()) return false
+            if (!global.tryAcquire()) {
+                skillSemaphore.release()
+                return false
+            }
+            return true
+        }
+        val deadlineNanos = System.nanoTime() + waitBudgetMs * 1_000_000L
+        if (!acquireWithin(skillSemaphore, deadlineNanos)) return false
+        val remainingMs = ((deadlineNanos - System.nanoTime()) / 1_000_000L).coerceAtLeast(0L)
+        if (!acquireWithin(global, deadlineNanos, remainingMs)) {
             skillSemaphore.release()
             return false
         }
@@ -171,11 +189,22 @@ class SubagentScheduler(
         skillSemaphore(skillId, skillLimit).release()
     }
 
-    private suspend fun acquireWithin(semaphore: Semaphore, waitBudgetMs: Long): Boolean =
-        if (waitBudgetMs <= 0) {
+    /**
+     * Acquire one permit, waiting at most until [deadlineNanos].
+     *
+     * [remainingMs] is the slice of the shared budget still available; the
+     * deadline is authoritative so two consecutive acquisitions cannot each
+     * consume the full budget.
+     */
+    private suspend fun acquireWithin(
+        semaphore: Semaphore,
+        deadlineNanos: Long,
+        remainingMs: Long = ((deadlineNanos - System.nanoTime()) / 1_000_000L).coerceAtLeast(0L),
+    ): Boolean =
+        if (remainingMs <= 0) {
             semaphore.tryAcquire()
         } else {
-            kotlinx.coroutines.withTimeoutOrNull(waitBudgetMs) {
+            kotlinx.coroutines.withTimeoutOrNull(remainingMs) {
                 semaphore.acquire()
                 true
             } ?: false

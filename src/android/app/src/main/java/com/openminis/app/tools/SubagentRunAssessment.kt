@@ -57,6 +57,19 @@ object SubagentRunAssessment {
 
         /** The loop threw. */
         FAILED,
+
+        /**
+         * The run's terminal state could not be determined.
+         *
+         * The registry row was pruned (or never written) before the terminal
+         * verdict could be read back, so the runtime knows the run existed
+         * but not what became of it. Conservative by construction: the parent
+         * must not treat any text that arrives with this verdict as findings.
+         *
+         * Distinct from FAILED on purpose — "we don't know" and "it errored"
+         * call for different follow-ups (re-spawn vs. read the error).
+         */
+        UNKNOWN,
     }
 
     /** Where the delivered report text came from. */
@@ -136,6 +149,49 @@ object SubagentRunAssessment {
     fun isDeliverable(outcome: Outcome): Boolean = outcome == Outcome.COMPLETED
 
     /**
+     * The verdict a run ACTUALLY has, once the binary `success` flag and the
+     * [Outcome] are reconciled.
+     *
+     * [fix/subagent-verdict-consistency-v3] The two fields can disagree:
+     * `JobOutcome`'s defaults are `success = false` with
+     * `outcome = COMPLETED`, so a caller that sets only `success = false`
+     * produces the contradictory pair "the model wrote a report / the run
+     * failed". Reading either field alone then tells the parent something
+     * false — a DEGRADED digest labelled SUCCESS, or a crashed run
+     * labelled COMPLETED.
+     *
+     * The reconciliation rule is deliberately narrow: only the pair
+     * (success = false, COMPLETED) is contradictory, because COMPLETED is
+     * the single verdict that claims the model delivered a report. Every
+     * other verdict already says something about the work, and a
+     * `success = false` alongside it is consistent (a TIMED_OUT run is
+     * still a timed-out run).
+     */
+    fun effective(outcome: Outcome, success: Boolean): Outcome =
+        if (!success && outcome == Outcome.COMPLETED) Outcome.FAILED else outcome
+
+    /**
+     * A short UPPER-CASE token for [outcome].
+     *
+     * Used in compact status lines — the per-run header of a join section,
+     * the wait_any winner line — where the full [headline] would be too
+     * verbose. COMPLETED maps to "SUCCESS" so the common case keeps the
+     * word every parent already reads.
+     */
+    fun statusLabel(outcome: Outcome): String = when (outcome) {
+        Outcome.COMPLETED -> "SUCCESS"
+        Outcome.DEGRADED -> "DEGRADED"
+        Outcome.PARTIAL -> "PARTIAL"
+        Outcome.DECLARED_FAILED -> "DECLARED_FAILED"
+        Outcome.STOPPED_EARLY -> "STOPPED_EARLY"
+        Outcome.UNSTARTED -> "UNSTARTED"
+        Outcome.NO_OUTPUT -> "NO_OUTPUT"
+        Outcome.TIMED_OUT -> "TIMED_OUT"
+        Outcome.FAILED -> "FAILED"
+        Outcome.UNKNOWN -> "UNKNOWN"
+    }
+
+    /**
      * One line naming the state, for the prompt text the parent reads. Kept
      * short — it sits above the report and must not compete with it.
      */
@@ -174,6 +230,10 @@ object SubagentRunAssessment {
                 "[failed] $tools executed before the run errored." +
                     if (reportSource == ReportSource.NONE) " Nothing was delivered."
                     else " What follows is partial output."
+            Outcome.UNKNOWN ->
+                "[unknown] the run's terminal state could not be determined — its record was " +
+                    "dropped before the verdict was written. Nothing below is confirmed as " +
+                    "findings; re-spawn, or read the journal for whatever the run left behind."
         }
     }
 }
