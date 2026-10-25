@@ -192,6 +192,39 @@ object SubagentRunAssessment {
     }
 
     /**
+     * The status word a parent-facing summary should show.
+     *
+     * [fix/subagent-verdict-consistency-v3] A run has TWO independent facts
+     * and a summary that shows only one of them is misleading:
+     *
+     *   - the RUNTIME status: how the run ENDED — it ran out of clock, the
+     *     user stopped it, the loop threw.
+     *   - the WORK verdict: what the run DELIVERED — a full report, a
+     *     runtime digest, a partial result, nothing.
+     *
+     * A timed-out run that left usable notes is TIMED_OUT, not FAILED; a
+     * run that finished cleanly but only produced a digest is DEGRADED, not
+     * SUCCESS. Conflating them is how a digest reached a parent as if it
+     * were the answer.
+     *
+     * The runtime status wins when it carries information the verdict cannot
+     * (TIMED_OUT, CANCELLED); otherwise the verdict speaks for the work.
+     *
+     * @param runtimeStatus the registry's RunStatus name, or null when the
+     *   registry row is gone.
+     * @param verdict the reconciled work verdict.
+     * @param hasReport whether any report text came back.
+     */
+    fun summaryStatus(runtimeStatus: String?, verdict: Outcome, hasReport: Boolean): String {
+        val label = statusLabel(verdict)
+        return when (runtimeStatus) {
+            "TIMED_OUT" -> if (hasReport) "TIMED_OUT (partial)" else "TIMED_OUT"
+            "CANCELLED" -> "CANCELLED"
+            else -> label
+        }
+    }
+
+    /**
      * One line naming the state, for the prompt text the parent reads. Kept
      * short — it sits above the report and must not compete with it.
      */

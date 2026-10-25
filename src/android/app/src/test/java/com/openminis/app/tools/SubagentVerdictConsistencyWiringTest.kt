@@ -30,6 +30,14 @@ class SubagentVerdictConsistencyWiringTest {
         ProductionSources.read("tools/SubagentRunJournal.kt")
     }
 
+    /**
+     * The parent-facing delivery helpers live in their own file (they were
+     * moved out of SubagentRunner so they could be unit-tested on the JVM).
+     */
+    private val deliverySource: String by lazy {
+        ProductionSources.read("tools/SubagentParentDelivery.kt")
+    }
+
     // ── The journal must be written on the crash path ───────────────────
 
     @Test
@@ -111,7 +119,11 @@ class SubagentVerdictConsistencyWiringTest {
     fun `the join prompt renders the verdict label, not a binary success word`() {
         assertTrue(
             "the join prompt must use the verdict label",
-            runnerSource.contains("SubagentRunAssessment.statusLabel(outcome.effectiveOutcome)"),
+            runnerSource.contains(
+                "SubagentRunAssessment.summaryStatus(\n" +
+                    "                            runtimeStatus = null,\n" +
+                    "                            verdict = outcome.effectiveOutcome,",
+            ),
         )
         assertFalse(
             "the join prompt must not collapse every verdict into SUCCESS/FAILED",
@@ -123,7 +135,11 @@ class SubagentVerdictConsistencyWiringTest {
     fun `the wait_any winner line renders the verdict label`() {
         assertTrue(
             "the wait_any winner line must use the verdict label",
-            runnerSource.contains("SubagentRunAssessment.statusLabel(winner.effectiveOutcome)"),
+            runnerSource.contains(
+                "SubagentRunAssessment.summaryStatus(\n" +
+                    "                            runtimeStatus = null,\n" +
+                    "                            verdict = winner.effectiveOutcome,",
+            ),
         )
     }
 
@@ -131,13 +147,28 @@ class SubagentVerdictConsistencyWiringTest {
     fun `the background wake prompt renders the verdict label`() {
         assertTrue(
             "the wake prompt must use the verdict label",
-            runnerSource.contains("SubagentRunAssessment.statusLabel(outcome.effectiveOutcome)"),
+            deliverySource.contains(
+                "val status = SubagentRunAssessment.summaryStatus(\n" +
+                    "        runtimeStatus = runtimeStatus,\n" +
+                    "        verdict = verdict,",
+            ),
         )
         assertFalse(
             "the wake prompt must not fall back to the binary success flag",
-            runnerSource.contains(
+            deliverySource.contains(
                 "val status = snapshot?.status?.name ?: if (outcome.success) \"SUCCESS\" else \"FAILED\"",
             ),
+        )
+    }
+
+    @Test
+    fun `the wake prompt keeps the runtime status alongside the verdict`() {
+        // The runtime status says HOW the run ended (it ran out of clock);
+        // the verdict says WHAT it delivered. Both must reach the parent —
+        // a timeout that left usable notes is not a plain failure.
+        assertTrue(
+            "the wake prompt must read the registry's runtime status",
+            deliverySource.contains("val runtimeStatus = snapshot?.status?.name"),
         )
     }
 

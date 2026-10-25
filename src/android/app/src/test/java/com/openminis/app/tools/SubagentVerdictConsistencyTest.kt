@@ -249,4 +249,74 @@ class SubagentVerdictConsistencyTest {
             SubagentRunAssessment.statusLabel(SubagentRunAssessment.Outcome.COMPLETED),
         )
     }
+
+    // ── The summary status: runtime status AND work verdict ─────────────
+
+    @Test
+    fun `a timeout is announced as a timeout even when the verdict is FAILED`() {
+        // The runtime status says WHY the run ended; the verdict says what
+        // it delivered. A timeout that left nothing behind is still a
+        // TIMEOUT — announcing "FAILED" hides the fact that the run ran out
+        // of clock rather than crashing.
+        assertEquals(
+            "TIMED_OUT",
+            SubagentRunAssessment.summaryStatus(
+                runtimeStatus = "TIMED_OUT",
+                verdict = SubagentRunAssessment.Outcome.FAILED,
+                hasReport = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `a timeout with notes is announced as a partial timeout`() {
+        assertEquals(
+            "TIMED_OUT (partial)",
+            SubagentRunAssessment.summaryStatus(
+                runtimeStatus = "TIMED_OUT",
+                verdict = SubagentRunAssessment.Outcome.FAILED,
+                hasReport = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `a cancelled run is announced as cancelled`() {
+        assertEquals(
+            "CANCELLED",
+            SubagentRunAssessment.summaryStatus(
+                runtimeStatus = "CANCELLED",
+                verdict = SubagentRunAssessment.Outcome.FAILED,
+                hasReport = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `a digest that finished cleanly is announced as DEGRADED not SUCCESS`() {
+        // The regression this whole change exists for: the old code read
+        // the binary success flag and called a runtime digest "SUCCESS".
+        assertEquals(
+            "DEGRADED",
+            SubagentRunAssessment.summaryStatus(
+                runtimeStatus = "SUCCESS",
+                verdict = SubagentRunAssessment.Outcome.DEGRADED,
+                hasReport = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `a missing registry row falls back to the verdict`() {
+        // The row was pruned — the runtime cannot say HOW the run ended,
+        // so it says WHAT it delivered and nothing more.
+        assertEquals(
+            "PARTIAL",
+            SubagentRunAssessment.summaryStatus(
+                runtimeStatus = null,
+                verdict = SubagentRunAssessment.Outcome.PARTIAL,
+                hasReport = true,
+            ),
+        )
+    }
 }
