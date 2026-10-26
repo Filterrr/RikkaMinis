@@ -1211,7 +1211,25 @@ class SubagentRunner(
                 // means the partial report is always coherent: whatever the
                 // run learned so far survives into the TIMED_OUT result below.
                 if (System.nanoTime() >= deadlineNanos) {
-                    val partial = resultSb.toString().trim()
+                    // [feat/subagent-roster-routing] P1-4 — a TIMED OUT run
+                    // must deliver its evidence too. Same defect class as
+                    // the crash path: the accumulated text is often empty for
+                    // a tool-driven run, so the parent received "timed out,
+                    // no report" and the journal held the only copy.
+                    val timeoutSteps = registry.runs.value.firstOrNull { it.id == run.id }?.steps.orEmpty()
+                    val recovered = SubagentPartialRecovery.recover(
+                        accumulatedText = resultSb.toString(),
+                        steps = timeoutSteps.map { step ->
+                            SubagentPartialRecovery.Step(
+                                toolName = step.toolName,
+                                toolTitle = step.toolTitle,
+                                success = step.status == SubagentRunRegistry.ToolStepStatus.SUCCESS,
+                                output = step.output,
+                            )
+                        },
+                        stopReason = "TIMED OUT after ${timeoutSeconds}s",
+                    )
+                    val partial = recovered.report
                     AppLogger.warning(TAG, "[Subagent] '$skillName' exceeded ${timeoutSeconds}s run budget at turn $turns")
                     registry.finishIfActive(
                         run.id, SubagentRunRegistry.RunStatus.TIMED_OUT,
@@ -1221,9 +1239,7 @@ class SubagentRunner(
                         // verdict so the detached paths report TIMED_OUT
                         // rather than a bare success.
                         outcome = SubagentRunAssessment.Outcome.TIMED_OUT,
-                        reportSource = if (partial.isBlank()) {
-                            SubagentRunAssessment.ReportSource.NONE
-                        } else SubagentRunAssessment.ReportSource.PARTIAL,
+                        reportSource = recovered.source,
                         executedToolCalls = executedToolCalls,
                     )
                     val reconciledPartial = reconcileArtifactPaths(partial, artifacts, run.id)
@@ -1231,9 +1247,7 @@ class SubagentRunner(
                         status = SubagentResult.Status.FAILED,
                         report = reconciledPartial,
                         outcome = SubagentRunAssessment.Outcome.TIMED_OUT,
-                        reportSource = if (partial.isBlank()) {
-                            SubagentRunAssessment.ReportSource.NONE
-                        } else SubagentRunAssessment.ReportSource.PARTIAL,
+                        reportSource = recovered.source,
                         executedToolCalls = executedToolCalls,
                         turns = turns,
                         maxTurns = config.maxTurns,
@@ -1954,16 +1968,32 @@ class SubagentRunner(
             // the partial report, reconcile the registry to CANCELLED (the
             // pill must not spin forever), then rethrow so the framework's
             // cancel cleanup can attach the recovery pointer.
-            val partial = resultSb.toString()
+            //
+            // [feat/subagent-roster-routing] P1-4 — a CANCELLED run also
+            // keeps its evidence. The user cancelled because the run was
+            // taking too long; the work it DID do is exactly the part worth
+            // keeping.
+            val cancelSteps = registry.runs.value.firstOrNull { it.id == run.id }?.steps.orEmpty()
+            val recovered = SubagentPartialRecovery.recover(
+                accumulatedText = resultSb.toString(),
+                steps = cancelSteps.map { step ->
+                    SubagentPartialRecovery.Step(
+                        toolName = step.toolName,
+                        toolTitle = step.toolTitle,
+                        success = step.status == SubagentRunRegistry.ToolStepStatus.SUCCESS,
+                        output = step.output,
+                    )
+                },
+                stopReason = "was cancelled",
+            )
+            val partial = recovered.report
             registry.finishIfActive(
                 run.id, SubagentRunRegistry.RunStatus.CANCELLED,
                 resultText = partial,
                 error = e.message ?: "cancelled",
                 // [fix/subagent-verdict-and-report-gate]
                 outcome = SubagentRunAssessment.Outcome.FAILED,
-                reportSource = if (partial.isBlank()) {
-                    SubagentRunAssessment.ReportSource.NONE
-                } else SubagentRunAssessment.ReportSource.PARTIAL,
+                reportSource = recovered.source,
                 executedToolCalls = executedToolCalls,
             )
             journal(
@@ -1975,22 +2005,52 @@ class SubagentRunner(
         } catch (e: Exception) {
             val msg = e.message ?: e.javaClass.simpleName
             AppLogger.warning(TAG, "[Subagent] '$skillName' error after $turns turn(s): $msg")
+            // [feat/subagent-roster-routing] P1-4 — a CRASHED run must still
+            // deliver its evidence.
+            //
+            // The bug this closes: the normal path rebuilds a digest from the
+            // tool calls when the model's closing message carries no
+            // findings (SubagentReportDecision), but the EXCEPTION path did
+            // not. A run that executed 16 turns of real tool calls and then
+            // hit a stream error delivered "FAILED" with an EMPTY report to
+            // the parent — 16 turns of work silently reduced to nothing,
+            // while the journal (which the parent had to go and read by
+            // hand) held the only copy.
+            //
+            // Measured on a live run: 3 audit sub-agents, 0 reports
+            // delivered, 100% of the evidence stranded in the journals.
+            val crashSteps = registry.runs.value.firstOrNull { it.id == run.id }?.steps.orEmpty()
+            val recovered = SubagentPartialRecovery.recover(
+                accumulatedText = resultSb.toString(),
+                steps = crashSteps.map { step ->
+                    SubagentPartialRecovery.Step(
+                        toolName = step.toolName,
+                        toolTitle = step.toolTitle,
+                        success = step.status == SubagentRunRegistry.ToolStepStatus.SUCCESS,
+                        output = step.output,
+                    )
+                },
+                stopReason = "CRASHED ($msg)",
+            )
+            // The guard in SubagentArtifactPathWiringTest pins the name
+            // `partial` for the variable that carries a partial report out
+            // of every terminal exit — keep it: the guard is what stops a
+            // new exit from skipping the artifact reconciliation.
+            val partial = recovered.report
+            val reportSource = recovered.source
             registry.finishIfActive(
                 run.id, SubagentRunRegistry.RunStatus.FAILED,
                 outcome = SubagentRunAssessment.Outcome.FAILED,
-                reportSource = SubagentRunAssessment.ReportSource.NONE,
+                reportSource = reportSource,
                 executedToolCalls = executedToolCalls,
-                resultText = resultSb.toString(), error = msg,
+                resultText = partial, error = msg,
             )
-            val partial = resultSb.toString()
             val reconciledPartial = reconcileArtifactPaths(partial, artifacts, run.id)
             val result = SubagentResult(
                 status = SubagentResult.Status.FAILED,
                 report = reconciledPartial,
                 outcome = SubagentRunAssessment.Outcome.FAILED,
-                reportSource = if (partial.isBlank()) {
-                    SubagentRunAssessment.ReportSource.NONE
-                } else SubagentRunAssessment.ReportSource.PARTIAL,
+                reportSource = reportSource,
                 executedToolCalls = executedToolCalls,
                 turns = turns,
                 maxTurns = config.maxTurns,

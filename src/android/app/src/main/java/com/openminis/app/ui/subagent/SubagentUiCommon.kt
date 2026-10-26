@@ -13,6 +13,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
+import com.openminis.app.tools.SubagentRunFormat
 import com.openminis.app.tools.SubagentRunRegistry
 import com.openminis.app.ui.chat.ToolCancelColor
 import com.openminis.app.ui.chat.ToolCheckColor

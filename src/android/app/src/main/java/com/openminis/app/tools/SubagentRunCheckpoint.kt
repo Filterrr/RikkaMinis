@@ -33,8 +33,12 @@ import com.openminis.app.sandbox.PRootKernel
 /**
  * One interrupted run recovered from disk. Re-exported from the pure
  * [SubagentCheckpointFormat] so callers can keep importing it from here.
+ *
+ * `internal` because the aliased type is internal: a public typealias over
+ * an internal type is itself an error ("public type exposes its internal
+ * type argument"), and the only caller is inside the module.
  */
-typealias InterruptedRun = SubagentCheckpointFormat.InterruptedRun
+internal typealias InterruptedRun = SubagentCheckpointFormat.InterruptedRun
 
 object SubagentRunCheckpoint {
 
@@ -107,7 +111,7 @@ object SubagentRunCheckpoint {
      *    flood the prompt; the newest are preferred.
      *  - failures are swallowed: recovery reporting must never break a session.
      */
-    fun scanInterruptedRuns(
+    internal fun scanInterruptedRuns(
         sessionId: String,
         context: Context?,
         maxReported: Int = MAX_REPORTED,
@@ -135,7 +139,7 @@ object SubagentRunCheckpoint {
      * parent should do, because the parent sees this as part of a normal turn
      * and must not mistake it for a live result.
      */
-    fun buildRecoveryPrompt(runs: List<InterruptedRun>): String? =
+    internal fun buildRecoveryPrompt(runs: List<InterruptedRun>): String? =
         SubagentCheckpointFormat.buildRecoveryPrompt(runs)
 
     /**
