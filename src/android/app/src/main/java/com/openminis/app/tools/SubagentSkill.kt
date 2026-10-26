@@ -320,7 +320,11 @@ object SubagentSkill {
 
     // ── Tool definition ──────────────────────────────────────────────────
 
-    fun definition(modelCatalogHint: String = "", groupHint: String = ""): AgentToolDefinition = AgentToolDefinition(
+    fun definition(
+        modelCatalogHint: String = "",
+        groupHint: String = "",
+        rosterHint: String = "",
+    ): AgentToolDefinition = AgentToolDefinition(
         name = NAME,
         description = "Spawn a sub-agent with its own system prompt, tool set, " +
             "and budget. The sub-agent runs independently and returns its final " +
@@ -342,7 +346,8 @@ object SubagentSkill {
             "returns that existing run_id instead of creating a duplicate — " +
             "join or wait on it rather than spawning the same task again. " +
             "With run_until='detach' the call returns immediately and the " +
-            "result is collected later via join_subagents / wait_any.",
+            "result is collected later via join_subagents / wait_any." +
+            rosterHint,
         parameters = mapOf(
             "tool_title" to AgentToolParam(
                 "string",
@@ -351,7 +356,11 @@ object SubagentSkill {
             ),
             "skill_name" to AgentToolParam(
                 "string",
-                "The name (or id) of the sub-agent skill to invoke",
+                "The name (or id) of the sub-agent skill to invoke. " +
+                    "The sub-agents you can spawn are listed in this tool's " +
+                    "description — pick one of those exact names. " +
+                    "Do NOT invent a name: an unknown name is rejected and the " +
+                    "delegation is lost for this turn.",
             ),
             "query" to AgentToolParam(
                 "string",
@@ -588,7 +597,11 @@ object SubagentSkill {
      * parameter is optional so existing callers (and exact-match prompt
      * tests) keep their old behaviour by default.
      */
-    fun buildSystemPrompt(skill: SkillInfo, runtimeContext: String? = null): String {
+    fun buildSystemPrompt(
+        skill: SkillInfo,
+        runtimeContext: String? = null,
+        extraInstructions: String? = null,
+    ): String {
         val body = skill.body
         val base = when {
             body.isBlank() -> skill.description
@@ -617,8 +630,19 @@ object SubagentSkill {
                 }
             }
         }
-        if (runtimeContext.isNullOrBlank()) return base
-        return "$RUNTIME_PREAMBLE_MARKER\n$runtimeContext\n\n# Task from the parent agent\n\n$base"
+        // [feat/subagent-roster-routing] A CONFIGURED roster entry carries
+        // INSTRUCTIONS — the speciality the user wrote for that agent. It
+        // is APPENDED, not substituted: the skill body is the runtime
+        // contract (how to work, what to report), the instructions are the
+        // mission. Appending keeps both, and putting the mission last
+        // means it is the part the model remembers when the prompt is long.
+        val withInstructions = if (extraInstructions.isNullOrBlank()) {
+            base
+        } else {
+            "$base\n\n# Mission from the configured sub-agent roster\n\n$extraInstructions"
+        }
+        if (runtimeContext.isNullOrBlank()) return withInstructions
+        return "$RUNTIME_PREAMBLE_MARKER\n$runtimeContext\n\n# Task from the parent agent\n\n$withInstructions"
     }
 
     /**

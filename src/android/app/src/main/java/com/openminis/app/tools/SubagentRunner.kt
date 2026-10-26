@@ -43,6 +43,20 @@ class SubagentRunner(
     private val deps: Deps,
 ) {
     /**
+     * [feat/subagent-roster-routing] The roster as a trailing note, for the
+     * errors where the skill EXISTS but cannot be spawned (not a sub-agent
+     * skill, disabled for this session). The parent's instruction says not
+     * to retry the SAME spawn — so the note has to offer a DIFFERENT one.
+     *
+     * Empty when no roster is known (tests, or a chat with no sub-agent
+     * installed): the message then says nothing extra, exactly as before.
+     */
+    private fun rosterSuffix(): String {
+        val roster = SubagentRosterHint.build(deps.subagentRoster())
+        return if (roster.isEmpty()) "" else "\n\n$roster"
+    }
+
+    /**
      * Conversation-layer dependencies. Deliberately narrow: no ChatViewModel
      * or SkillRepository reference leaks into the sub-agent runtime — skill
      * access goes through [findSkill]/[isSkillEnabledForSession] so this
@@ -51,6 +65,38 @@ class SubagentRunner(
     interface Deps {
         fun findSkill(skillName: String): SkillInfo?
         fun isSkillEnabledForSession(skillId: String): Boolean
+
+        /**
+         * [feat/subagent-roster-routing] The sub-agents that are spawnable
+         * RIGHT NOW — installed, enabled for this session, and marked
+         * `subagent: true`.
+         *
+         * Used for two things:
+         *  - the roster the parent sees (discoverability — the parent must
+         *    not have to guess a `skill_name`);
+         *  - the error message when the parent names one that does not exist:
+         *    it lists the valid names so the model can CORRECT THE NAME IN
+         *    THE SAME RESPONSE. Without it the model's own rule ("do not
+         *    retry the same spawn") turned one bad name into a lost
+         *    delegation.
+         *
+         * Default empty = no roster known (tests / a VM without the
+         * repository) → the old behaviour, no listing.
+         */
+        fun subagentRoster(): List<SubagentRosterHint.Entry> = emptyList()
+
+        /**
+         * [feat/subagent-roster-routing] The CONFIGURED roster — the
+         * user's own sub-agent definitions (name, description, the
+         * instructions that make that agent what it is).
+         *
+         * These entries name a SPECIALITY, not a runtime: they say WHEN to
+         * delegate somewhere and WHAT that agent must do. The runtime
+         * comes from a skill. Default empty = no configured roster (the
+         * common case for a fresh install).
+         */
+        fun configuredSubagents(): List<SubagentDelegation.ConfiguredAgent> = emptyList()
+
         fun agentTools(): List<AgentToolDefinition>
         fun currentProvider(): com.openminis.app.provider.LLMProvider?
         fun activeSessionId(): String
@@ -236,25 +282,60 @@ class SubagentRunner(
             )
         }
 
-        val skill = deps.findSkill(skillName) ?: return ToolExecutionResult(
-            "Error: Skill '$skillName' not found. Make sure it is installed and the name is correct.",
-            false, toolTitle = title,
+        // [feat/subagent-roster-routing] Resolve the requested name against
+        // BOTH routes:
+        //  1. a SKILL — the runtime (tool set, budget, instructions);
+        //  2. a CONFIGURED roster entry — the speciality the user defined.
+        //
+        // A configured entry is a NAME + DESCRIPTION, not a runtime, so it
+        // needs a skill to run on. The pairing rule is deliberate:
+        //  - same name as a sub-agent skill → that skill, with the
+        //    configured DESCRIPTION as the routing text (the user wrote it
+        //    to say WHEN to delegate there);
+        //  - otherwise → the DEFAULT sub-agent skill (general-agent), with
+        //    the configured INSTRUCTIONS appended as the mission.
+        //
+        // Before this, `SubAgentRoster.resolve` had ZERO call sites and
+        // the `subagent_task` tool was never registered: the configured
+        // roster was a complete data model with no runtime behind it.
+        val delegation = SubagentDelegation.resolve(
+            requested = skillName,
+            skillRoster = deps.subagentRoster(),
+            configured = deps.configuredSubagents(),
+            skillExists = { n -> deps.findSkill(n) != null },
         )
+        val skill = delegation?.let { deps.findSkill(it.skillName) }
+            ?: deps.findSkill(skillName)
+            ?: return ToolExecutionResult(
+                // Name the valid alternatives. The parent's standing
+                // instruction is "do not retry the same spawn", so a bare
+                // "not found" makes it give up on the delegation entirely;
+                // listing the roster lets it pick a real one in the SAME
+                // turn.
+                SubagentRosterHint.unknownAgentMessage(skillName, deps.subagentRoster()),
+                false, toolTitle = title,
+            )
         val config = SubagentSkill.parseSubagentConfig(skill)
         if (!config.isSubagent) {
             return ToolExecutionResult(
                 "Error: Skill '$skillName' is not a sub-agent skill. " +
-                    "Add `subagent: true` to its SKILL.md frontmatter to enable sub-agent mode.",
+                    "Add `subagent: true` to its SKILL.md frontmatter to enable sub-agent mode." +
+                    rosterSuffix(),
                 false, toolTitle = title,
             )
         }
 
         if (!deps.isSkillEnabledForSession(skill.id)) {
             return ToolExecutionResult(
-                "Error: Skill '$skillName' is disabled for this session",
+                "Error: Skill '$skillName' is disabled for this session" + rosterSuffix(),
                 false, toolTitle = title,
             )
         }
+
+        // [feat/subagent-roster-routing] The mission for this run: the
+        // configured roster entry's instructions when the parent named a
+        // configured speciality, empty for an ordinary skill spawn.
+        val extraInstructions = delegation?.extraInstructions.orEmpty()
 
         // Fail-closed capability filter + explicit allowlist (validated
         // BEFORE registration so a misconfigured skill never creates a run).
@@ -548,6 +629,7 @@ class SubagentRunner(
                                 deadlineNanos = SubagentBudgetClock.startRun(timeoutSeconds).runDeadlineNanos,
                                 modelMaxOutputTokens = modelMaxOutputTokens,
                                 spreadLabel = spreadLabel,
+                                extraInstructions = extraInstructions,
                             )
                         }
                     }
@@ -657,6 +739,7 @@ class SubagentRunner(
                             deadlineNanos = SubagentBudgetClock.startRun(timeoutSeconds).runDeadlineNanos,
                             modelMaxOutputTokens = modelMaxOutputTokens,
                             spreadLabel = spreadLabel,
+                            extraInstructions = extraInstructions,
                         )
                     }
                     job.deferred.complete(
@@ -991,6 +1074,13 @@ class SubagentRunner(
          */
         modelMaxOutputTokens: Int,
         /**
+         * [feat/subagent-roster-routing] The CONFIGURED roster entry's
+         * instructions for this delegation. Empty for an ordinary skill
+         * spawn. Appended to the skill body in the system prompt, so the
+         * mission the user configured reaches the model that does the work.
+         */
+        extraInstructions: String = "",
+        /**
          * [T-subagent-model-spread] "group:<name> member k/n" when this run
          * landed on a group member via the batch plan; empty for ordinary
          * spawns. Folded into the run's model label so the detail page and
@@ -1026,6 +1116,11 @@ class SubagentRunner(
                 maxTurns = config.maxTurns,
                 timeoutSeconds = timeoutSeconds,
             ),
+            // [feat/subagent-roster-routing] The CONFIGURED roster entry's
+            // instructions — the speciality the user wrote for this agent.
+            // Appended to the skill body, so the runtime contract (how to
+            // work) and the mission (what to do) both survive.
+            extraInstructions = extraInstructions,
         )
         // [fix/subagent-plan-first] When the skill keeps plan_first on (the
         // default), the FIRST turn is a planning turn: the model must lay out

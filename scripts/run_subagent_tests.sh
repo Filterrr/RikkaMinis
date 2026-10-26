@@ -87,6 +87,8 @@ for f in \
   tools/SubagentRunFormat.kt \
   tools/SubagentContextTokens.kt \
   tools/SubagentCheckpointFormat.kt \
+  tools/SubagentRosterHint.kt \
+  tools/SubagentDelegation.kt \
   notification/NotificationDecisionRouter.kt \
   ; do
   if [ -f "$SRC/$f" ]; then PROD="$PROD $SRC/$f"; fi

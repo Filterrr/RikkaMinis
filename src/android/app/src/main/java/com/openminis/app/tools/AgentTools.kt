@@ -35,6 +35,12 @@ object AgentTools {
         // the configured groups so a spawn can target one. Empty default
         // keeps the schema unchanged for callers that don't supply it.
         groupHint: String = "",
+        // [feat/subagent-roster-routing] Same pattern for the SUB-AGENT
+        // ROSTER: the names + descriptions of the sub-agents that can be
+        // spawned right now, so the parent can pick one instead of
+        // guessing a `skill_name`. Empty default keeps the schema unchanged
+        // for callers that don't supply it.
+        rosterHint: String = "",
     ): List<AgentToolDefinition> = buildList {
         add(shellExecuteDefinition())
         add(FileReadTool.definition())
@@ -59,7 +65,7 @@ object AgentTools {
         // Always exposed — the sub-agent's own tool set is filtered inside
         // SubagentSkill.buildFilteredTools (spawn_agent itself is FORBIDDEN
         // there, so recursion is structurally impossible).
-        add(SubagentSkill.definition(modelCatalogHint, groupHint))
+        add(SubagentSkill.definition(modelCatalogHint, groupHint, rosterHint))
         // [T-subagent-orchestration] Parent-side orchestration: join / wait-any
         // / cancel for detached spawns. Sub-agents never see these (capability
         // catalog + FORBIDDEN_TOOLS fail closed twice).

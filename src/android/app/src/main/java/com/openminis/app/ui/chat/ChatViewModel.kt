@@ -1149,6 +1149,26 @@ class ChatViewModel(
                 this@ChatViewModel.skillRepository?.isEnabledForSession(
                     skillId, this@ChatViewModel.activeSessionId,
                 ) ?: false
+
+            // [feat/subagent-roster-routing] The spawnable roster — used to
+            // list the valid sub-agent names in the "not found" error, so the
+            // parent can correct the name in the SAME turn instead of
+            // writing the delegation off (its standing rule is "do not
+            // retry the same spawn").
+            //
+            // The SAME merged list the parent sees in the tool schema —
+            // the error must not offer names the schema did not list.
+            override fun subagentRoster() =
+                SubagentRosterHint.merge(
+                    this@ChatViewModel.skillRepository
+                        ?.subagentRoster(this@ChatViewModel.activeSessionId).orEmpty(),
+                    configuredSubagentRoster(),
+                )
+
+            // [feat/subagent-roster-routing] The configured roster WITH its
+            // instructions — the runtime resolves a configured speciality to
+            // a skill + a mission.
+            override fun configuredSubagents() = this@ChatViewModel.configuredSubagentDefinitions()
             override fun agentTools() = this@ChatViewModel.agentTools
             override fun currentProvider() = this@ChatViewModel.currentProvider
             override fun activeSessionId() = this@ChatViewModel.activeSessionId
@@ -1524,6 +1544,32 @@ class ChatViewModel(
             // Budgeted: capped at MAX_CATALOG_HINT_MODELS names because this
             // rides in every request's tool schema.
             modelCatalogHint = SubagentSkill.buildCatalogHint(subagentModelCatalog()),
+            // [feat/subagent-roster-routing] The spawnable sub-agent roster.
+            // Without it the parent had no way to know what it could spawn:
+            // `skill_name` said only "the name of the sub-agent skill", and
+            // the skills fragment mixed sub-agent skills with ordinary ones
+            // behind a 20-entry cap. The parent had to GUESS a name, and a
+            // guess that missed lost the delegation for the whole turn.
+            //
+            // Recomputed per read (a getter), so a skill installed or
+            // enabled mid-chat becomes spawnable on the next request with no
+            // restart. Same budget discipline as the model catalogue — this
+            // rides in every request's tool schema.
+            rosterHint = SubagentRosterHint.build(
+                // [feat/subagent-roster-routing] Two routes, one roster:
+                //  - SKILLS: the installed `subagent: true` skills. These
+                //    are the SPAWNABLE things — each has a runtime, a
+                //    tool set and a budget.
+                //  - the CONFIGURED roster (TRAE-shaped): the user names
+                //    a speciality and says WHEN to delegate there.
+                // The skill wins on a name clash (it is the thing that can
+                // actually run), but the configured description is the
+                // routing text — the user wrote it for that purpose.
+                SubagentRosterHint.merge(
+                    skillRepository?.subagentRoster(activeSessionId).orEmpty(),
+                    configuredSubagentRoster(),
+                ),
+            ),
             // [T-subagent-model-spread] Embed the group names too, so a spawn
             // CAN name a group ('group:<name>' / bare name) instead of having
             // to discover them by failing. Same budget discipline as above.
@@ -1552,6 +1598,44 @@ class ChatViewModel(
             instances = providerRepository.instances,
             entriesPerInstance = { providerRepository.visibleEntries(it) },
         )
+
+    /**
+     * [feat/subagent-roster-routing] The USER-CONFIGURED sub-agent roster,
+     * read from the provider configuration.
+     *
+     * This list had a complete data model — name, description, model group,
+     * thinking override, a built-in entry, normalization and backup merge —
+     * but NO runtime: `SubAgentRoster.resolve` had zero call sites, the
+     * `subagent_task` tool was never registered, and there was no UI. So
+     * the parent only ever saw skills.
+     *
+     * Now it is merged into the parent's roster. The configured entry names
+     * a SPECIALITY and its description says WHEN to delegate there — the
+     * TRAE routing shape. A skill names an IMPLEMENTATION. When both
+     * exist for one name, the skill wins (it can actually run) and the
+     * configured description becomes the routing text.
+     */
+    private fun configuredSubagentRoster(): List<com.openminis.app.tools.SubagentRosterHint.Entry> =
+        configuredSubagentDefinitions().map { def ->
+            com.openminis.app.tools.SubagentRosterHint.Entry(
+                name = def.name,
+                description = def.description,
+            )
+        }
+
+    /**
+     * [feat/subagent-roster-routing] The configured roster in the shape the
+     * runtime consumes — including the INSTRUCTIONS, which are what make a
+     * configured entry an agent rather than a label.
+     */
+    private fun configuredSubagentDefinitions(): List<com.openminis.app.tools.SubagentDelegation.ConfiguredAgent> =
+        providerRepository.subAgents.map { def ->
+            com.openminis.app.tools.SubagentDelegation.ConfiguredAgent(
+                name = def.name,
+                description = def.description,
+                instructions = def.instructions,
+            )
+        }
 
     /**
      * Per-session loop detector. Reset alongside [agentHistory] whenever the
