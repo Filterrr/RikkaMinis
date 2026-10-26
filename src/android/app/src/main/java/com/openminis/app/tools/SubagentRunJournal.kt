@@ -47,7 +47,20 @@ object SubagentRunJournal {
         sandboxPath
     }.getOrNull()
 
-    /** Render the markdown journal body (exposed for tests). */
+    /**
+     * [fix/subagent-journal-redaction] Render the markdown journal body with
+     * every env-var secret masked.
+     *
+     * The journal is durable and `file_read`-able long after the run ends,
+     * so it must not become the resting place of a secret the shell path
+     * already scrubbed. Every free-text field goes through
+     * [SubagentJournalRedaction]; the structural fields (ids, skill name,
+     * terminal status, artifact paths) are left alone because they are
+     * runtime-generated and carry no user data.
+     *
+     * [secretValues] is injectable so the rule is unit-testable on the plain
+     * JVM without an Android Context.
+     */
     fun render(
         run: SubagentRunRegistry.Run,
         terminal: String,
@@ -55,70 +68,74 @@ object SubagentRunJournal {
         turns: Int,
         error: String? = null,
         artifacts: List<String> = emptyList(),
-    ): String = buildString {
-        appendLine("# Sub-agent run: ${run.title.ifBlank { run.skillName }}")
-        appendLine()
-        appendLine("- run id: ${run.id}")
-        appendLine("- skill: ${run.skillId}")
-        appendLine("- terminal status: $terminal")
-        appendLine("- turns: $turns/${run.maxTurns}")
-        appendLine("- started: ${java.time.Instant.ofEpochMilli(run.startedAtMs)}")
-        error?.let { appendLine("- note: $it") }
-        if (artifacts.isNotEmpty()) {
-            appendLine("- artifacts: ${artifacts.joinToString(", ")}")
-        }
-        appendLine()
-        appendLine("## Task")
-        appendLine()
-        appendLine(run.query)
-        appendLine()
-        // [T-subagent-chat-stream] The ORDERED transcript — narration,
-        // reasoning and tool calls in the order they happened. This is what
-        // actually occurred; `## Steps` below is the flat tool-only index
-        // kept for readers (and tests) that expect it. Reasoning is included
-        // here because the journal is the durable record of the run and the
-        // page only holds a bounded tail of it.
-        if (run.segments.isNotEmpty()) {
-            appendLine("## Transcript")
+        secretValues: Collection<String> = SubagentJournalRedaction.currentSecretValues(),
+    ): String {
+        val scrub: (String) -> String = { SubagentJournalRedaction.redact(it, secretValues) }
+        return buildString {
+            appendLine("# Sub-agent run: ${run.title.ifBlank { run.skillName }}")
             appendLine()
-            for (segment in run.segments) {
-                when (segment) {
-                    is SubagentRunRegistry.Segment.Text -> {
-                        appendLine("**turn ${segment.turn} — text**")
-                        appendLine()
-                        appendLine(segment.content.trim())
-                        appendLine()
-                    }
-                    is SubagentRunRegistry.Segment.Thinking -> {
-                        appendLine("**turn ${segment.turn} — thinking**")
-                        appendLine()
-                        appendLine(segment.content.trim())
-                        appendLine()
-                    }
-                    is SubagentRunRegistry.Segment.ToolCall -> {
-                        appendLine(
-                            "**turn ${segment.turn} — tool: " +
-                                "${segment.toolTitle.ifBlank { segment.toolName }}**",
-                        )
-                        appendLine()
+            appendLine("- run id: ${run.id}")
+            appendLine("- skill: ${run.skillId}")
+            appendLine("- terminal status: $terminal")
+            appendLine("- turns: $turns/${run.maxTurns}")
+            appendLine("- started: ${java.time.Instant.ofEpochMilli(run.startedAtMs)}")
+            error?.let { appendLine("- note: ${scrub(it)}") }
+            if (artifacts.isNotEmpty()) {
+                appendLine("- artifacts: ${artifacts.joinToString(", ")}")
+            }
+            appendLine()
+            appendLine("## Task")
+            appendLine()
+            appendLine(scrub(run.query))
+            appendLine()
+            // [T-subagent-chat-stream] The ORDERED transcript — narration,
+            // reasoning and tool calls in the order they happened. This is what
+            // actually occurred; `## Steps` below is the flat tool-only index
+            // kept for readers (and tests) that expect it. Reasoning is included
+            // here because the journal is the durable record of the run and the
+            // page only holds a bounded tail of it.
+            if (run.segments.isNotEmpty()) {
+                appendLine("## Transcript")
+                appendLine()
+                for (segment in run.segments) {
+                    when (segment) {
+                        is SubagentRunRegistry.Segment.Text -> {
+                            appendLine("**turn ${segment.turn} — text**")
+                            appendLine()
+                            appendLine(scrub(segment.content.trim()))
+                            appendLine()
+                        }
+                        is SubagentRunRegistry.Segment.Thinking -> {
+                            appendLine("**turn ${segment.turn} — thinking**")
+                            appendLine()
+                            appendLine(scrub(segment.content.trim()))
+                            appendLine()
+                        }
+                        is SubagentRunRegistry.Segment.ToolCall -> {
+                            appendLine(
+                                "**turn ${segment.turn} — tool: " +
+                                    "${segment.toolTitle.ifBlank { segment.toolName }}**",
+                            )
+                            appendLine()
+                        }
                     }
                 }
             }
-        }
-        appendLine("## Report")
-        appendLine()
-        if (resultText.isBlank()) appendLine("(no text output produced)") else appendLine(resultText)
-        appendLine()
-        appendLine("## Steps")
-        appendLine()
-        for (step in run.steps) {
-            appendLine("### [${step.status}] ${step.toolTitle.ifBlank { step.toolName }} (${step.durationMs}ms)")
-            if (step.output.isNotBlank()) {
-                appendLine("```")
-                appendLine(step.output)
-                appendLine("```")
-            }
+            appendLine("## Report")
             appendLine()
+            if (resultText.isBlank()) appendLine("(no text output produced)") else appendLine(scrub(resultText))
+            appendLine()
+            appendLine("## Steps")
+            appendLine()
+            for (step in run.steps) {
+                appendLine("### [${step.status}] ${step.toolTitle.ifBlank { step.toolName }} (${step.durationMs}ms)")
+                if (step.output.isNotBlank()) {
+                    appendLine("```")
+                    appendLine(scrub(step.output))
+                    appendLine("```")
+                }
+                appendLine()
+            }
         }
     }
 }

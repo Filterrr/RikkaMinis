@@ -106,7 +106,36 @@ object SubagentOrchestration {
         val reportSource: SubagentRunAssessment.ReportSource =
             SubagentRunAssessment.ReportSource.MODEL,
         val executedToolCalls: Int = 0,
-    )
+    ) {
+        /**
+         * [fix/subagent-verdict-consistency-v3] True when this outcome
+         * represents work the parent may treat as the answer it asked for.
+         *
+         * Both fields must agree: `success` says the run reached a terminal
+         * write without throwing; the verdict says what became of the WORK.
+         * A run can be "successful" at the loop level and still have
+         * delivered a runtime digest (DEGRADED), a partial report (PARTIAL)
+         * or nothing at all (UNSTARTED) — none of which the parent may use
+         * as findings.
+         *
+         * The verdict is reconciled through
+         * [SubagentRunAssessment.effective] first, so a contradictory pair
+         * (`success = false` with the default `COMPLETED`) resolves to
+         * FAILED rather than claiming a report that does not exist.
+         */
+        val delivered: Boolean
+            get() = success && !cancelled && SubagentRunAssessment.isDeliverable(
+                SubagentRunAssessment.effective(outcome, success),
+            )
+
+        /**
+         * [fix/subagent-verdict-consistency-v3] The reconciled verdict — the
+         * one the parent should be told about. See
+         * [SubagentRunAssessment.effective].
+         */
+        val effectiveOutcome: SubagentRunAssessment.Outcome
+            get() = SubagentRunAssessment.effective(outcome, success)
+    }
 
     /**
      * One spawn's lifecycle handle. [deferred] completes exactly once when
@@ -354,13 +383,47 @@ object SubagentOrchestration {
      * Classify a join target list up front so the tool can return a
      * helpful prompt even before awaiting: nothing to wait for if every
      * job already completed.
+     *
+     * [fix/subagent-verdict-consistency-v3] "succeeded" counts DELIVERED
+     * runs — a run whose verdict is COMPLETED. The old count used the
+     * binary `success` flag, which is true for any run that reached its
+     * terminal write without throwing: a DEGRADED runtime digest, a
+     * model-declared PARTIAL and a STOPPED_EARLY readout all counted as
+     * successes. The parent then read a digest as if it were findings.
+     *
+     * Runs that reached a terminal state but did not deliver are counted
+     * separately and named, so the summary never hides them behind
+     * "failed".
      */
     fun joinSummary(group: SubagentGroup, jobs: List<SubagentJob>, outcomes: List<JobOutcome>): String {
-        val ok = outcomes.count { it.success && !it.cancelled }
-        val failed = outcomes.count { !it.success && !it.cancelled }
+        val ok = outcomes.count { it.delivered }
         val cancelled = outcomes.count { it.cancelled }
-        return "Group ${group.id} — ${ok} succeeded, ${failed} failed, ${cancelled} cancelled " +
-            "(${jobs.size} total)"
+        val notDelivered = outcomes.filter { !it.cancelled && !it.delivered }
+        // A run that did not deliver is either a hard failure (the loop
+        // errored) or a softer verdict (DEGRADED digest, PARTIAL report,
+        // TIMED_OUT, UNKNOWN). The hard failures keep the "failed" word;
+        // the softer ones are named, so the summary never hides "it ran but
+        // delivered a digest" behind a flat "failed".
+        val failed = notDelivered.count {
+            SubagentRunAssessment.effective(it.outcome, it.success) ==
+                SubagentRunAssessment.Outcome.FAILED
+        }
+        val breakdown = notDelivered
+            .filter {
+                SubagentRunAssessment.effective(it.outcome, it.success) !=
+                    SubagentRunAssessment.Outcome.FAILED
+            }
+            .groupingBy { SubagentRunAssessment.statusLabel(it.effectiveOutcome) }
+            .eachCount()
+            .entries
+            .sortedBy { it.key }
+            .joinToString(", ") { "${it.value} ${it.key.lowercase()}" }
+        return buildString {
+            append("Group ${group.id} — ")
+            append("$ok succeeded, $failed failed, $cancelled cancelled")
+            if (breakdown.isNotEmpty()) append(", $breakdown")
+            append(" (${jobs.size} total)")
+        }
     }
 
     // ── Awaiting ─────────────────────────────────────────────────────────
@@ -451,7 +514,15 @@ object SubagentOrchestration {
             // first SUCCESSFUL completion — a failed or cancelled outcome is
             // dropped from the race (even with a partial report; join is the
             // tool for collecting partials).
-            if (successOnly && (completed.cancelled || !completed.success)) {
+            //
+            // [fix/subagent-verdict-consistency-v3] "Successful" here is the
+            // VERDICT, not the binary `success` flag. The flag is true for
+            // any run that reached its terminal write without throwing —
+            // including a DEGRADED runtime digest, a model-declared PARTIAL
+            // and a STOPPED_EARLY readout. A success_only race must not
+            // hand the parent a digest as if it were the answer, so the
+            // race keeps going until a run actually DELIVERED.
+            if (successOnly && (completed.cancelled || !completed.delivered)) {
                 val remainingJobs = jobs.filter { it.runId != completed.runId }
                 if (remainingJobs.isEmpty()) return null
                 return waitAny(remainingJobs, deadline - System.currentTimeMillis(), successOnly)
