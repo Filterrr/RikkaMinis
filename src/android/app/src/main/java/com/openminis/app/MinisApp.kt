@@ -308,6 +308,11 @@ class MinisApp : Application(), ImageLoaderFactory {
         // Runs before ExecutionCoordinator.init / NativeOffloadServer.start.
         com.openminis.app.data.ConcurrencyPrefs.prime(this)
 
+        // [feat/subagent-roster-routing] P2-4 — the user-configurable
+        // chat-global cap on concurrent sub-agent runs. Read by the chat
+        // layer at init, so it must be warm before the first chat starts.
+        com.openminis.app.data.SubagentConcurrencyPrefs.prime(this)
+
         // [P2-9-conditional-etag] FilesDir-backed ETag store for the
         // update checker's conditional GETs (304 → UpToDate without
         // re-downloading the releases JSON). Must run before any check().

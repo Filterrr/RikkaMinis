@@ -194,4 +194,54 @@ class SubagentFrontmatterTest {
     fun `an empty name is rejected`() {
         assertTrue(SubagentFrontmatter.validateName("  ")!!.contains("empty"))
     }
+
+    /**
+     * [feat/subagent-roster-routing] P2-8 — the shipped skills' frontmatter
+     * must match what the code comments claim.
+     *
+     * The comments said `general-agent` ships `max_turns: 48`; it ships 40.
+     * A drift like that is not cosmetic: the comment is how a future
+     * maintainer reasons about the history budget, so a wrong number there
+     * invites a wrong fix.
+     *
+     * The guard reads the real SKILL.md assets and compares them with the
+     * numbers quoted in the production comments.
+     */
+    @Test
+    fun `the shipped skills match the turn budgets the code claims`() {
+        val root = com.openminis.app.ProductionSources.mainRoot() ?: return
+        val assets = java.io.File(root.parentFile.parentFile.parentFile.parentFile, "assets/skills")
+        if (!assets.isDirectory) return // not running from the module tree
+
+        val general = java.io.File(assets, "general-agent/SKILL.md")
+        if (!general.isFile) return
+
+        val fm = SubagentFrontmatter.parse(
+            general.readText()
+                .substringAfter("---")
+                .substringBefore("---"),
+        )
+        val declared = fm.int("max_turns")
+        assertTrue("general-agent must declare max_turns", declared != null)
+
+        // The production comments quote this number. Grep the sources for
+        // the stale value and fail if it survives.
+        val stale = java.io.File(root, "tools/SubagentHistoryBudget.kt")
+            .takeIf { it.isFile }
+            ?.readText()
+            .orEmpty() + java.io.File(root, "tools/SubagentRunner.kt")
+                .takeIf { it.isFile }
+                ?.readText()
+                .orEmpty()
+        assertFalse(
+            "the production comments must not quote a stale max_turns for general-agent",
+            stale.contains("general-agent` ships max_turns: 48") ||
+                stale.contains("general-agent` ships `max_turns: 48`"),
+        )
+        assertTrue(
+            "the production comments must quote the real max_turns (${declared})",
+            stale.contains("general-agent` ships max_turns: $declared") ||
+                stale.contains("general-agent` ships `max_turns: $declared`"),
+        )
+    }
 }

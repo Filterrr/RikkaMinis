@@ -783,10 +783,29 @@ class ChatViewModel(
      * the old static limiter that was hard-wired to
      * [SubagentSkill.DEFAULT_MAX_PARALLEL] and ignored the skill config
      * entirely. Over-limit spawns queue (fair FIFO) instead of failing.
+     *
+     * [feat/subagent-roster-routing] P2-4 — the global cap is now
+     * `globalLimit`, which the app can set from a setting. It stays
+     * clamped to the hard ceiling, so a setting can only LOWER the cap
+     * below the built-in maximum, never raise it past what the runtime
+     * was designed for.
      */
     val subagentScheduler = SubagentScheduler(
-        globalLimit = SubagentSkill.MAX_PARALLEL_CAP,
+        globalLimit = subagentGlobalLimit(),
     )
+
+    /**
+     * [feat/subagent-roster-routing] P2-4 — the chat-global concurrency
+     * cap, overridable by the user.
+     *
+     * The cap used to be a constant, so a user on a slow device (or one
+     * paying per token) had no way to stop four sub-agents from running at
+     * once. It can now be LOWERED — never raised past
+     * [SubagentSkill.MAX_PARALLEL_CAP], the hard ceiling the scheduler was
+     * designed around.
+     */
+    private fun subagentGlobalLimit(): Int =
+        com.openminis.app.data.SubagentConcurrencyPrefs.globalLimit()
 
     /**
      * [T-subagent-orchestration] Group + job registries for sub-agent
@@ -1288,6 +1307,7 @@ class ChatViewModel(
                 task: String,
                 modelLabel: String,
                 detached: Boolean,
+                toolScopeLabel: String,
             ): com.openminis.app.tools.SpawnDecision {
                 val ask = subagentApprovals.submit(
                     skillId = skillId,
@@ -1295,6 +1315,7 @@ class ChatViewModel(
                     task = task,
                     modelLabel = modelLabel,
                     detached = detached,
+                    toolScopeLabel = toolScopeLabel,
                 )
                 // [T-notif-inline-decision] Make the ask answerable from the
                 // shade: publish the queue (the broadcast can only see ids, not

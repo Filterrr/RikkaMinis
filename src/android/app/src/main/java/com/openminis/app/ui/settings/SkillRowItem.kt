@@ -26,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.openminis.app.data.repository.SkillRepository
@@ -53,6 +54,18 @@ fun SkillRowItem(
     onToggle: (Boolean) -> Unit,
     onClick: (() -> Unit)? = null,
     showDivider: Boolean = true,
+    /**
+     * [feat/subagent-roster-routing] True when this skill is a SUB-AGENT
+     * (`subagent: true` in its frontmatter).
+     *
+     * The skills list mixed delegates with ordinary instruction sets and
+     * gave no way to tell them apart. That is not cosmetic: a sub-agent
+     * skill is a DELEGATE the parent can hand work to, and it carries a
+     * permission set (`allowed_tools`) that the user is granting by
+     * enabling it. Seeing the badge makes the difference legible, and it
+     * is the anchor for the trust-management screen below.
+     */
+    isSubagent: Boolean = false,
 ) {
     Column {
         Row(
@@ -80,6 +93,18 @@ fun SkillRowItem(
                         tint = badgeColor,
                         modifier = Modifier.size(14.dp),
                     )
+                    // [feat/subagent-roster-routing] The sub-agent badge.
+                    // It sits NEXT TO the source badge, not instead of it —
+                    // where a skill came from and what it IS are different
+                    // questions.
+                    if (isSubagent) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = stringResource(R.string.skill_subagent_badge),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
                 }
                 if (description.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(2.dp))

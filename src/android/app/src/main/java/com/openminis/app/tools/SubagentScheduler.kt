@@ -47,6 +47,13 @@ class SubagentScheduler(
     private val global = Semaphore(globalLimit)
     private val perSkill = ConcurrentHashMap<String, Semaphore>()
 
+    /**
+     * [feat/subagent-roster-routing] P2-4 — the limit each per-skill
+     * semaphore was built with. kotlinx's Semaphore does not expose its
+     * own capacity, so the scheduler keeps it alongside.
+     */
+    private val perSkillLimit = ConcurrentHashMap<String, Int>()
+
     /** Diagnostics: spawns currently executing inside [run]'s block. */
     private val activeGlobal = AtomicInteger(0)
 
@@ -210,11 +217,48 @@ class SubagentScheduler(
             } ?: false
         }
 
-    /** Get-or-create the per-skill semaphore (atomic — no duplicate permits). */
-    private fun skillSemaphore(skillId: String, skillLimit: Int): Semaphore =
-        perSkill.computeIfAbsent(skillId) {
-            Semaphore(skillLimit.coerceIn(1, SubagentSkill.MAX_PARALLEL_CAP))
+    /**
+     * Get-or-create the per-skill semaphore (atomic — no duplicate permits).
+     *
+     * [feat/subagent-roster-routing] P2-4 — the limit is re-checked on every
+     * acquire, not frozen at the first spawn.
+     *
+     * The bug: the semaphore was created ONCE per skill with whatever limit
+     * the FIRST spawn of that skill carried, and every later spawn reused
+     * it. So editing `max_parallel` in the SKILL.md — or simply having the
+     * first spawn come from a different code path that passed a different
+     * value — silently had no effect for the rest of the session. The
+     * frontmatter was parsed, clamped, and then thrown away.
+     *
+     * The fix: when the requested limit differs from the one the existing
+     * semaphore was built with, replace it. The replacement is safe
+     * because the OLD semaphore's permits are only meaningful to the runs
+     * currently holding them; a run in flight keeps its permit on the old
+     * object, and the new semaphore starts from the new limit. To avoid
+     * handing out MORE permits than the new limit while old holders are
+     * still running, the new semaphore starts with the old permits already
+     * taken — the conservative direction: the cap can tighten immediately
+     * but loosens only as the old holders finish.
+     */
+    private fun skillSemaphore(skillId: String, skillLimit: Int): Semaphore {
+        val limit = skillLimit.coerceIn(1, SubagentSkill.MAX_PARALLEL_CAP)
+        val existing = perSkill[skillId]
+        if (existing != null && perSkillLimit[skillId] == limit) return existing
+        val replacement = Semaphore(limit)
+        if (existing != null) {
+            // Carry the in-flight holders over: take one permit for each
+            // run still holding one on the old semaphore, so the new cap
+            // is not exceeded by the overlap.
+            val inFlight = perSkillLimit[skillId]?.minus(existing.availablePermits) ?: 0
+            // tryAcquire, not acquire: this is not a suspend context, and
+            // the permit is available by construction (the replacement was
+            // created with `limit` permits and we take at most `limit`).
+            repeat(inFlight.coerceIn(0, limit)) { replacement.tryAcquire() }
         }
+        perSkill[skillId] = replacement
+        perSkillLimit[skillId] = limit
+        return replacement
+    }
 
     // ── Diagnostics (tests / debug overlays) ─────────────────────────────
 

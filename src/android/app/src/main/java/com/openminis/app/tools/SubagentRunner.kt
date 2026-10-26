@@ -220,6 +220,12 @@ class SubagentRunner(
             task: String,
             modelLabel: String,
             detached: Boolean,
+            /**
+             * [feat/subagent-roster-routing] The tool permissions being
+             * granted, rendered for the dialog. The default keeps every
+             * existing Deps adapter source-compatible.
+             */
+            toolScopeLabel: String = "",
         ): SpawnDecision = SpawnDecision.ALLOW_ONCE
 
         /**
@@ -559,6 +565,14 @@ class SubagentRunner(
                 modelLabel = deps.providerLabel(provider) +
                     (if (spreadLabel.isNotBlank()) " [$spreadLabel]" else ""),
                 detached = runUntil == SubagentSkill.RUN_UNTIL_DETACH,
+                // [feat/subagent-roster-routing] Show the user WHAT they are
+                // about to grant. "Always allow" grants this exact set,
+                // silently and forever, so the set has to be visible before
+                // the tap.
+                toolScopeLabel = SubagentToolScope.label(
+                    config.allowedTools,
+                    config.disallowedTools,
+                ),
             )) {
                 SpawnDecision.DENY -> return ToolExecutionResult(
                     "Error: the user declined this sub-agent spawn. Do NOT retry " +
@@ -1887,7 +1901,7 @@ class SubagentRunner(
                 }
 
                 // [T-subagent-context-budget] The sub-agent's `history` only
-                // ever grew before this — `general-agent` ships max_turns: 48
+                // ever grew before this — `general-agent` ships max_turns: 40
                 // and a research run's tool outputs are routinely tens of KB,
                 // so long runs died on a provider context error instead of
                 // finishing. Trim at the turn boundary (after this turn's

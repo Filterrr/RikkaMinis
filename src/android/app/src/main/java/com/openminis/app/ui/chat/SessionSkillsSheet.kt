@@ -181,6 +181,11 @@ fun SessionSkillsSheet(
                                     skillRepository.setSessionOverride(sessionId, skill.id, enabled)
                                 },
                                 showDivider = index < filteredSkills.size - 1,
+                                // [feat/subagent-roster-routing] Badge the
+                                // sub-agent skills so a delegate is
+                                // distinguishable from an ordinary
+                                // instruction set.
+                                isSubagent = skillRepository.isSubagentSkill(skill),
                             )
                         }
                     }

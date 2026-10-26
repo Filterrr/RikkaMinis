@@ -718,6 +718,10 @@
     <string name="skill_section_installed">Installed</string>
     <string name="skill_section_footer">Skills extend the AI agent with specialized instructions and workflows. They are loaded into the system prompt when enabled.</string>
     <string name="skill_empty_title">No Skills Installed</string>
+    <string name="skill_subagent_badge">sub-agent</string>
+    <string name="settings_subagent_max_concurrent">Max concurrent sub-agents</string>
+    <string name="settings_subagent_max_concurrent_subtitle">Up to %1$d sub-agents may run at the same time</string>
+    <string name="settings_subagent_max_concurrent_dialog_title">Concurrent sub-agents</string>
     <string name="skill_subagent_trust_header">Trusted Sub-agents</string>
     <string name="skill_subagent_trust_footer">Skills you answered \"Always allow\" for. Each may spawn a sub-agent (its own shell, files and browser loop) without asking again. Revoke a grant to be prompted on the next spawn.</string>
     <string name="skill_subagent_trust_empty">No standing grants — every sub-agent spawn asks first.</string>

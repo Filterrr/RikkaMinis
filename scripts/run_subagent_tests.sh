@@ -90,6 +90,8 @@ for f in \
   tools/SubagentRosterHint.kt \
   tools/SubagentFrontmatter.kt \
   tools/SubagentCostLedger.kt \
+  tools/SubagentToolScope.kt \
+  tools/SubagentTaskFingerprint.kt \
   tools/SubagentDelegation.kt \
   tools/SubagentPartialRecovery.kt \
   notification/NotificationDecisionRouter.kt \

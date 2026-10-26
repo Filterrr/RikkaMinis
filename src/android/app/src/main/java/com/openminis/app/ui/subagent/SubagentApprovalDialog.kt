@@ -99,6 +99,14 @@ fun SubagentApprovalDialog(
                         maxLines = 10,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    // [feat/subagent-roster-routing] The tool permissions
+                    // being granted. "Always allow" grants THIS EXACT SET,
+                    // silently and forever — so it has to be visible before
+                    // the tap, not discoverable later. Empty = the skill
+                    // declared no scope info (older request shape).
+                    if (request.toolScopeLabel.isNotBlank()) {
+                        ApprovalLine(label = "tools", value = request.toolScopeLabel)
+                    }
                     Text(
                         text = "The sub-agent runs its own tool loop (shell, files, browser) " +
                             "without further confirmation until it reports back.",

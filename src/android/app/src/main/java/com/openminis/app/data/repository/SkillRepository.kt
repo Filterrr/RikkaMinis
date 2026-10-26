@@ -425,15 +425,23 @@ class SkillRepository(private val context: Context) {
      * Reads the PRESERVED raw frontmatter rather than re-parsing the body:
      * the repository stores the frontmatter verbatim for exactly this kind
      * of question, and the parse is cheap enough for a prompt build.
+     *
+     * Public so the UI can badge the row: the skills list mixed delegates
+     * with ordinary instruction sets and gave the user no way to tell them
+     * apart — even though enabling a sub-agent skill is what grants it a
+     * tool permission set.
      */
-    private fun isSubagentSkill(skill: Skill): Boolean {
-        val fm = skill.frontmatter ?: return false
-        return fm.lineSequence().any { line ->
-            val t = line.trim()
-            t.startsWith("subagent:") &&
-                (t.removePrefix("subagent:").trim().trim('"', '\'').lowercase() in
-                    setOf("true", "yes"))
-        }
+    fun isSubagentSkill(skill: Skill): Boolean =
+        SubagentFrontmatter.parse(skill.frontmatter.orEmpty()).boolean("subagent") ?: false
+
+    /**
+     * [feat/subagent-roster-routing] The tool scope of a skill, rendered
+     * for the UI — the same wording the approval dialog shows, so the
+     * user sees one consistent description of what they are granting.
+     */
+    fun toolScopeLabel(skill: Skill): String {
+        val cfg = com.openminis.app.tools.SubagentSkill.parseSubagentConfig(skill)
+        return com.openminis.app.tools.SubagentToolScope.label(cfg.allowedTools, cfg.disallowedTools)
     }
 
     /**
