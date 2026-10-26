@@ -95,6 +95,7 @@ import com.openminis.app.tools.SpawnDecision
 import com.openminis.app.tools.SubagentOrchestrationTools
 import com.openminis.app.tools.ToolExecutionResult
 import com.openminis.app.tools.ToolFailureHook
+import com.openminis.app.tools.ToolOutputRedaction
 import com.openminis.app.offload.OffloadPermissionManager
 import com.openminis.app.service.SessionActivityTracker
 import com.openminis.app.service.SessionConcurrencyManager
@@ -10012,12 +10013,31 @@ class ChatViewModel(
                     errorMessage = errMsgForDetector,
                     toolCallId = id,
                 )
+                // [fix/tool-output-env-redaction] Mask env-var values in the
+                // text the MODEL reads — for EVERY tool, not just
+                // shell_execute.
+                //
+                // The shell executor masks its own output, but every other
+                // tool (file_read, file_write, browser_use, web_search, ...)
+                // returned its bytes verbatim. A file that holds a secret
+                // therefore reached the model in plaintext, got copied into
+                // the tool_result message (which is persisted in the chat
+                // DB), and ended up in the sub-agent's journal and report.
+                //
+                // The mask is applied HERE — at the result→model boundary —
+                // rather than inside each tool, so one rule covers every
+                // tool and a future tool cannot silently skip it. The
+                // user's own tool block keeps the raw text, matching the
+                // shell path's contract ("the user still sees the unmasked
+                // output in chat; only the bytes flowing into the agent's
+                // context are rewritten").
+                val maskedOutput = ToolOutputRedaction.maskForModel(result.output)
                 val outputForLLM = if (postRecord.level == Level.WARNING && postRecord.message != null) {
                     AppLogger.debug("ChatViewModel",
                         "appending loop-warning to tool result name=$name key=${postRecord.warningKey}")
-                    "${result.output}\n\n${postRecord.message}"
+                    "$maskedOutput\n\n${postRecord.message}"
                 } else {
-                    result.output
+                    maskedOutput
                 }
 
                 val blockIdx = allToolBlocks.indexOfFirst { it.id == id }
@@ -10459,12 +10479,20 @@ class ChatViewModel(
         }
 
         // T9: record tool result event
+        //
+        // [fix/tool-output-env-redaction] Mask env-var values before the
+        // output reaches the TRACE file. The trace is a durable, readable
+        // artifact (`.traces/agent-*.jsonl`) and its own regex-based
+        // secret scrubber only knows a few credential SHAPES (sk-, ghp_,
+        // Bearer, key=) — it does not know the user's env vars. A file_read
+        // of a config that holds an env var's value would otherwise land in
+        // the trace verbatim.
         agentTraceRecorder.toolResult(
             turn = activeTraceTurn,
             toolId = toolId,
             name = name,
             success = result.success,
-            output = result.output,
+            output = ToolOutputRedaction.maskQuiet(result.output),
             durationMs = System.currentTimeMillis() - etStartMs,
         )
         // T7-A: 观察 —— 工具结束（ToolFinished 语义）
@@ -10479,7 +10507,16 @@ class ChatViewModel(
         // without relying on the agent remembering to check the skill.
         if (!result.success) {
             runCatching {
-                toolFailureHook.recordFailure(name, result.output, argsJson, activeSessionId)
+                // [fix/tool-output-env-redaction] The learning hook writes to
+                // a durable, agent-readable file (`.learnings/ERRORS.md`).
+                // A failed file_read whose error text quotes the file's
+                // content would otherwise park a secret there forever.
+                toolFailureHook.recordFailure(
+                    name,
+                    ToolOutputRedaction.maskQuiet(result.output),
+                    argsJson,
+                    activeSessionId,
+                )
             }
             // Deliberately swallowed: a logging failure must never break the
             // tool-result path back to the model.

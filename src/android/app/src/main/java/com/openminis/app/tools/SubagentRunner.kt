@@ -1597,13 +1597,28 @@ class SubagentRunner(
                         errorMessage = if (result.success) null else result.output,
                         toolCallId = call.id,
                     )
+                    // [fix/tool-output-env-redaction] Mask env-var values in
+                    // the text the SUB-AGENT MODEL reads — for every tool,
+                    // not just shell_execute.
+                    //
+                    // Before this, the sub-agent's shell executor masked its
+                    // own stdout but file_read / file_write / browser_use
+                    // returned their bytes verbatim. A sub-agent asked to
+                    // "check the config" therefore received every configured
+                    // secret in plaintext, wrote it into its report, and
+                    // that report became the parent agent's findings.
+                    //
+                    // The mask sits at the result→model boundary — the same
+                    // place the main loop applies it — so one rule covers
+                    // every tool and a future tool cannot skip it.
+                    val maskedResultContent = ToolOutputRedaction.maskForModel(resultContent)
                     val contentForModel = if (
                         postRecord.level == com.openminis.app.agent.Level.WARNING &&
                         postRecord.message != null
                     ) {
-                        "$resultContent\n\n${postRecord.message}"
+                        "$maskedResultContent\n\n${postRecord.message}"
                     } else {
-                        resultContent
+                        maskedResultContent
                     }
                     // [T-subagent-vision] Forward the tool's IMAGE payload.
                     //
