@@ -38,7 +38,7 @@ class SubagentCheckpointRecoveryTest {
 
     @Test
     fun `a well-formed checkpoint renders skill, task and progress`() {
-        val note = SubagentRunCheckpoint.resumeNote(ckpt())
+        val note = SubagentCheckpointFormat.resumeNote(ckpt())
 
         assertNotNull(note)
         assertTrue(note!!.contains("general-agent"))
@@ -49,16 +49,16 @@ class SubagentCheckpointRecoveryTest {
 
     @Test
     fun `a missing or malformed checkpoint yields no note`() {
-        assertNull(SubagentRunCheckpoint.resumeNote(null))
-        assertNull(SubagentRunCheckpoint.resumeNote(""))
-        assertNull("a non-checkpoint file must not be misread", SubagentRunCheckpoint.resumeNote("hello\nworld"))
+        assertNull(SubagentCheckpointFormat.resumeNote(null))
+        assertNull(SubagentCheckpointFormat.resumeNote(""))
+        assertNull("a non-checkpoint file must not be misread", SubagentCheckpointFormat.resumeNote("hello\nworld"))
     }
 
     // ── prompt assembly ──────────────────────────────────────────────────
 
     @Test
     fun `no interrupted runs produces no prompt`() {
-        assertNull(SubagentRunCheckpoint.buildRecoveryPrompt(emptyList()))
+        assertNull(SubagentCheckpointFormat.buildRecoveryPrompt(emptyList()))
     }
 
     /**
@@ -68,10 +68,10 @@ class SubagentCheckpointRecoveryTest {
     @Test
     fun `the recovery prompt frames runs as interrupted fragments`() {
         val runs = listOf(
-            SubagentRunCheckpoint.InterruptedRun("subagent-1.ckpt", SubagentRunCheckpoint.resumeNote(ckpt())!!),
+            SubagentCheckpointFormat.InterruptedRun("subagent-1.ckpt", SubagentCheckpointFormat.resumeNote(ckpt())!!),
         )
 
-        val prompt = SubagentRunCheckpoint.buildRecoveryPrompt(runs)!!
+        val prompt = SubagentCheckpointFormat.buildRecoveryPrompt(runs)!!
 
         assertTrue(prompt.contains("1 sub-agent run(s)"))
         assertTrue("must state the runs never reported", prompt.contains("never reported"))
@@ -83,11 +83,11 @@ class SubagentCheckpointRecoveryTest {
     @Test
     fun `multiple recovered runs are all listed`() {
         val runs = listOf(
-            SubagentRunCheckpoint.InterruptedRun("subagent-1.ckpt", SubagentRunCheckpoint.resumeNote(ckpt(query = "task one"))!!),
-            SubagentRunCheckpoint.InterruptedRun("subagent-2.ckpt", SubagentRunCheckpoint.resumeNote(ckpt(query = "task two"))!!),
+            SubagentCheckpointFormat.InterruptedRun("subagent-1.ckpt", SubagentCheckpointFormat.resumeNote(ckpt(query = "task one"))!!),
+            SubagentCheckpointFormat.InterruptedRun("subagent-2.ckpt", SubagentCheckpointFormat.resumeNote(ckpt(query = "task two"))!!),
         )
 
-        val prompt = SubagentRunCheckpoint.buildRecoveryPrompt(runs)!!
+        val prompt = SubagentCheckpointFormat.buildRecoveryPrompt(runs)!!
 
         assertTrue(prompt.contains("2 sub-agent run(s)"))
         assertTrue(prompt.contains("task one"))
@@ -114,7 +114,7 @@ class SubagentCheckpointRecoveryTest {
             // A journal WITHOUT a checkpoint is the normal completed case.
             java.io.File(dir, "subagent-3.md").writeText("# terminal record")
 
-            val found = SubagentRunCheckpoint.scanDirectory(dir)
+            val found = SubagentCheckpointFormat.scanDirectory(dir)
 
             assertEquals(1, found.size)
             assertTrue("only the orphan may be reported", found.single().note.contains("orphan task"))
@@ -128,8 +128,8 @@ class SubagentCheckpointRecoveryTest {
     fun `a directory with no checkpoints reports nothing`() {
         val dir = java.nio.file.Files.createTempDirectory("ckpt-empty").toFile()
         try {
-            assertTrue(SubagentRunCheckpoint.scanDirectory(dir).isEmpty())
-            assertTrue("a missing directory is not an error", SubagentRunCheckpoint.scanDirectory(java.io.File(dir, "nope")).isEmpty())
+            assertTrue(SubagentCheckpointFormat.scanDirectory(dir).isEmpty())
+            assertTrue("a missing directory is not an error", SubagentCheckpointFormat.scanDirectory(java.io.File(dir, "nope")).isEmpty())
         } finally {
             dir.deleteRecursively()
         }
@@ -141,7 +141,7 @@ class SubagentCheckpointRecoveryTest {
         val dir = java.nio.file.Files.createTempDirectory("ckpt-bad").toFile()
         try {
             java.io.File(dir, "subagent-9.ckpt").writeText("not a checkpoint at all")
-            assertTrue(SubagentRunCheckpoint.scanDirectory(dir).isEmpty())
+            assertTrue(SubagentCheckpointFormat.scanDirectory(dir).isEmpty())
         } finally {
             dir.deleteRecursively()
         }
@@ -155,7 +155,7 @@ class SubagentCheckpointRecoveryTest {
             repeat(10) { i ->
                 java.io.File(dir, "subagent-$i.ckpt").writeText(ckpt(query = "task $i"))
             }
-            assertEquals(3, SubagentRunCheckpoint.scanDirectory(dir, maxReported = 3).size)
+            assertEquals(3, SubagentCheckpointFormat.scanDirectory(dir, maxReported = 3).size)
         } finally {
             dir.deleteRecursively()
         }
@@ -175,7 +175,7 @@ class SubagentCheckpointRecoveryTest {
         val dir = java.nio.file.Files.createTempDirectory("ckpt-once").toFile()
         try {
             java.io.File(dir, "subagent-1.ckpt").writeText(ckpt(query = "orphan task"))
-            assertEquals(1, SubagentRunCheckpoint.scanDirectory(dir).size)
+            assertEquals(1, SubagentCheckpointFormat.scanDirectory(dir).size)
 
             // Simulate what the session-open path does after enqueueing.
             val seen = java.io.File(dir, "subagent-1.ckpt.seen")
@@ -184,23 +184,40 @@ class SubagentCheckpointRecoveryTest {
                 java.io.File(dir, "subagent-1.ckpt").renameTo(seen),
             )
 
-            assertTrue("a marked checkpoint must leave the scan", SubagentRunCheckpoint.scanDirectory(dir).isEmpty())
+            assertTrue("a marked checkpoint must leave the scan", SubagentCheckpointFormat.scanDirectory(dir).isEmpty())
             assertTrue("the file survives as .seen for debugging", seen.exists())
         } finally {
             dir.deleteRecursively()
         }
     }
 
-    /** markReported tolerates non-checkpoint names and missing files. */
+    /**
+     * markReported tolerates non-checkpoint names and missing files.
+     *
+     * The PURE half is exercised here: the production entry point resolves
+     * the sandbox path through PRootKernel (Android), then delegates the
+     * rename to [SubagentCheckpointFormat.markReportedIn]. Testing the pure
+     * half directly keeps the rule "only a .ckpt is renamed, and the rename
+     * is atomic-or-delete" pinned on the plain JVM.
+     */
     @Test
     fun `markReported is safe on odd input`() {
         val dir = java.nio.file.Files.createTempDirectory("ckpt-mark").toFile()
         try {
+            val journal = java.io.File(dir, "subagent-1.md")
+            journal.writeText("journal")
+            val seen = java.io.File(dir, "subagent-1.ckpt.seen")
+            seen.writeText("already seen")
+            val missing = java.io.File(dir, "subagent-404.ckpt")
+
             // No throw for a journal name, a .seen name, or a nonexistent id.
-            SubagentRunCheckpoint.markReported("subagent-1.md", null, null)
-            SubagentRunCheckpoint.markReported("subagent-1.ckpt.seen", null, null)
-            SubagentRunCheckpoint.markReported("subagent-404.ckpt", null, null)
-            assertTrue(dir.listFiles()!!.isEmpty())
+            SubagentCheckpointFormat.markReportedIn(journal)
+            SubagentCheckpointFormat.markReportedIn(seen)
+            SubagentCheckpointFormat.markReportedIn(missing)
+
+            assertTrue("a journal is never renamed", journal.exists())
+            assertTrue("a .seen file is never renamed", seen.exists())
+            assertFalse("a missing checkpoint is not an error", missing.exists())
         } finally {
             dir.deleteRecursively()
         }

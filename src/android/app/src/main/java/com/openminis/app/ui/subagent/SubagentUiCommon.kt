@@ -92,39 +92,21 @@ internal fun turnProgressFraction(run: SubagentRunRegistry.Run): Float? {
     return fraction.coerceIn(0.04f, 0.96f)
 }
 
-/**
- * [T-subagent-token-accounting] "in→out" cost label for a run, or null when
- * the provider never reported usage (both -1) — unknown is RENDERED AS ABSENT,
- * never as 0 or -1: a silent provider must not masquerade as a free run. One
- * side unknown keeps a "?" placeholder so a mid-stream snapshot still shows
- * what IS known.
- */
-internal fun formatSubagentTokenCost(run: SubagentRunRegistry.Run): String? {
-    if (run.tokensIn < 0 && run.tokensOut < 0) return null
-    fun k(n: Int): String = if (n < 1000) n.toString() else String.format("%.1fk", n / 1000.0)
-    val inPart = if (run.tokensIn >= 0) k(run.tokensIn) else "?"
-    val outPart = if (run.tokensOut >= 0) k(run.tokensOut) else "?"
-    return "$inPart→$outPart"
-}
+// [feat/subagent-roster-routing] The formatting/logic helpers now live in
+// `tools/SubagentRunFormat.kt` — a pure file with no Compose imports, so
+// they are unit-testable on the plain JVM. This file keeps only the parts
+// that genuinely need Compose (colors, the live ticker) and delegates the
+// rest.
+internal fun formatSubagentTokenCost(run: SubagentRunRegistry.Run): String? =
+    SubagentRunFormat.tokenCost(run)
 
 /** Compact duration formatting shared by pill + detail page. */
-internal fun formatSubagentDuration(ms: Long): String = when {
-    ms < 0L -> "0s"
-    ms < 1000L -> "${ms}ms"
-    ms < 60_000L -> String.format("%.1fs", ms / 1000.0)
-    else -> String.format("%dm%02ds", ms / 60_000, (ms % 60_000) / 1000)
-}
+internal fun formatSubagentDuration(ms: Long): String = SubagentRunFormat.duration(ms)
 
 /**
  * [T-subagent-queue-visibility] "waited 2m10s" label for a run that spent
  * time queued before executing, or null when it started immediately (the
  * common case — no chip, no noise) or the wait was imperceptible.
  */
-internal fun formatSubagentQueueWait(run: SubagentRunRegistry.Run): String? {
-    val waited = run.queueWaitMs ?: return null
-    if (waited < QUEUE_WAIT_NOTABLE_MS) return null
-    return "waited ${formatSubagentDuration(waited)}"
-}
-
-/** Below this, a queue hop is scheduler jitter rather than a visible wait. */
-private const val QUEUE_WAIT_NOTABLE_MS = 1000L
+internal fun formatSubagentQueueWait(run: SubagentRunRegistry.Run): String? =
+    SubagentRunFormat.queueWait(run)
