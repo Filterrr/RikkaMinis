@@ -339,7 +339,14 @@ class SubagentRunner(
 
         // Fail-closed capability filter + explicit allowlist (validated
         // BEFORE registration so a misconfigured skill never creates a run).
-        val subagentTools = SubagentSkill.buildFilteredTools(deps.agentTools(), config.allowedTools)
+        val subagentTools = SubagentSkill.buildFilteredTools(
+            deps.agentTools(),
+            config.allowedTools,
+            // [feat/subagent-roster-routing] The blacklist applies to the
+            // schema too — the model should not even SEE a tool the skill
+            // denies. (The runtime gate enforces it regardless.)
+            config.disallowedTools,
+        )
         if (subagentTools.isEmpty()) {
             return ToolExecutionResult(
                 "Error: Skill '$skillName' has no usable tools (all filtered out by forbidden/allowlist)",
@@ -1654,6 +1661,10 @@ class SubagentRunner(
                                 // runtime gate sees the same list the schema
                                 // filter used.
                                 allowedTools = config.allowedTools,
+                                // [feat/subagent-roster-routing] The blacklist
+                                // travels too, so the runtime gate can deny a
+                                // tool the schema filter already hid.
+                                disallowedTools = config.disallowedTools,
                             )
                         }
                     }
@@ -2323,6 +2334,11 @@ class SubagentRunner(
         runId: String,
         artifacts: MutableList<String>? = null,
         allowedTools: Set<String>? = null,
+        // [feat/subagent-roster-routing] The skill's `disallowed_tools`
+        // blacklist. Applied AFTER the allowlist and it WINS — see
+        // SubagentAllowedTools.isAllowed for why the restrictive reading is
+        // the safe one.
+        disallowedTools: Set<String> = emptySet(),
     ): ToolExecutionResult {
         if (name in SubagentSkill.FORBIDDEN_TOOLS) {
             return forbiddenToolResult(name)
@@ -2336,13 +2352,14 @@ class SubagentRunner(
         // before. A non-null allowlist means EXACTLY those tools, and
         // everything else is refused even if the capability catalog grants
         // it and the schema filter should already have hidden it.
-        if (!SubagentAllowedTools.isAllowed(name, allowedTools)) {
+        if (!SubagentAllowedTools.isAllowed(name, allowedTools, disallowedTools)) {
             AppLogger.warning(
                 TAG,
-                "[Subagent] '$name' REFUSED — not in this skill's allowed_tools list",
+                "[Subagent] '$name' REFUSED — not permitted by this skill's " +
+                    if (name in disallowedTools) "disallowed_tools" else "allowed_tools",
             )
             return ToolExecutionResult(
-                SubagentAllowedTools.refusalText(name, allowedTools),
+                SubagentAllowedTools.refusalText(name, allowedTools, disallowedTools),
                 false,
                 toolTitle = name,
             )

@@ -51,15 +51,28 @@ object SubagentAllowedTools {
 
     /**
      * True when [toolName] may be executed by a run whose skill declared
-     * [allowedTools].
+     * [allowedTools] and [disallowedTools].
      *
      * @param allowedTools the skill's `allowed_tools` allowlist, or null when
      *   the skill declared none (null = unrestricted, subject to the hard
      *   forbidden set and the capability catalog, which are checked
      *   separately).
+     * @param disallowedTools the skill's `disallowed_tools` blacklist. It is
+     *   applied AFTER the allowlist and WINS: an allowlist cannot express
+     *   "everything except the destructive one" without enumerating every
+     *   tool, and a blacklist cannot express "only these". Both together
+     *   cover both shapes — and when they conflict, the deny wins, because
+     *   the whole point of a permission model is that the restrictive
+     *   reading is the safe one.
      */
-    fun isAllowed(toolName: String, allowedTools: Set<String>?): Boolean =
-        allowedTools == null || toolName in allowedTools
+    fun isAllowed(
+        toolName: String,
+        allowedTools: Set<String>?,
+        disallowedTools: Set<String> = emptySet(),
+    ): Boolean {
+        if (toolName in disallowedTools) return false
+        return allowedTools == null || toolName in allowedTools
+    }
 
     /**
      * The model-facing refusal for a tool outside the skill's allowlist.
@@ -69,8 +82,23 @@ object SubagentAllowedTools {
      * — use a permitted tool or report the gap. A generic "forbidden" message
      * is what the model saw before, and it could not tell a policy refusal
      * from a missing tool.
+     *
+     * A BLACKLIST refusal is worded differently: the tool was otherwise
+     * available and the skill explicitly removed it, so saying "not in
+     * allowed_tools" would be misleading — the model would try to "fix" it
+     * by adding the tool to a list it cannot edit.
      */
-    fun refusalText(toolName: String, allowedTools: Set<String>?): String {
+    fun refusalText(
+        toolName: String,
+        allowedTools: Set<String>?,
+        disallowedTools: Set<String> = emptySet(),
+    ): String {
+        if (toolName in disallowedTools) {
+            return "Error: Tool '$toolName' is explicitly denied by this skill's " +
+                "disallowed_tools list. Do NOT retry it and do NOT try to reach the " +
+                "same capability through another tool. Use a permitted tool, or " +
+                "finish and state the capability gap as a caveat in your report."
+        }
         val permitted = allowedTools?.sorted()?.joinToString(", ") ?: "(unrestricted)"
         return "Error: Tool '$toolName' is not in this skill's allowed_tools list. " +
             "This skill may only use: $permitted. " +

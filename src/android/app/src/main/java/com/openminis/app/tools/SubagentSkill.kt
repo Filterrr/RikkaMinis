@@ -316,6 +316,40 @@ object SubagentSkill {
          * instead of reverse-engineering it from the tool pills.
          */
         val planFirst: Boolean = true,
+        /**
+         * [feat/subagent-roster-routing] The model this skill's sub-agent
+         * should run on, from `model:` in the frontmatter. Null = inherit
+         * whatever the spawn resolved to.
+         *
+         * TRAE has this field and it earns its place: a deep-research
+         * sub-agent wants a strong model and a mechanical one wants a cheap
+         * one, and without a per-skill default the parent has to decide on
+         * every spawn (and get it wrong in the parent's context, where the
+         * model catalogue may not even be visible).
+         */
+        val model: String? = null,
+        /**
+         * [feat/subagent-roster-routing] `disallowed_tools:` — a BLACKLIST
+         * applied AFTER the allowlist. Null = no blacklist.
+         *
+         * The allowlist alone cannot express "everything except X": an
+         * allowlist is an enumeration, so "all tools but the destructive
+         * one" would have to list every tool. The blacklist is the other
+         * half of the same permission model, and it wins over the
+         * allowlist when both mention a tool.
+         */
+        val disallowedTools: Set<String> = emptySet(),
+        /**
+         * [feat/subagent-roster-routing] `mcp_servers:` — the MCP servers
+         * this sub-agent may call, by name.
+         *
+         * This closes a hole the allowlist cannot: MCP tools are reached
+         * through the SHELL in this app (the MCP CLI), so a sub-agent with
+         * `shell_execute` could call ANY configured MCP server — including
+         * ones the parent had gated. Naming the servers here makes the
+         * grant explicit and per-skill.
+         */
+        val mcpServers: Set<String> = emptySet(),
     )
 
     // ── Tool definition ──────────────────────────────────────────────────
@@ -465,83 +499,32 @@ object SubagentSkill {
             }
         if (frontmatter.isNullOrBlank()) return SubagentConfig()
 
-        val lines = frontmatter.lines()
-        var isSubagent = false
-        var maxTurns = DEFAULT_MAX_TURNS
-        var allowedTools: Set<String>? = null
-        var maxParallel = 1
-        // [T-subagent-thinking] `thinking:` in the frontmatter. Accepts the
-        // same names the chat's level picker shows (case-insensitive) plus a
-        // couple of obvious synonyms; an unrecognised value stays OFF rather
-        // than guessing a level the user did not ask for.
-        var thinkingLevel = ThinkingLevel.OFF
-        // [fix/subagent-plan-first] Default ON — see SubagentConfig.planFirst.
-        var planFirst = true
-
-        var i = 0
-        while (i < lines.size) {
-            val trimmed = lines[i].trim()
-            when {
-                trimmed.startsWith("subagent:") -> {
-                    val value = trimmed.substringAfter(":").trim()
-                    isSubagent = value == "true" || value == "yes"
-                }
-                trimmed.startsWith("max_turns:") -> {
-                    maxTurns = trimmed.substringAfter(":").trim().toIntOrNull() ?: DEFAULT_MAX_TURNS
-                }
-                // [T-subagent-output-from-model] `max_output_tokens:` in the
-                // frontmatter is intentionally not honoured any more — the
-                // per-turn output ceiling comes from the model config (管理提供商
-                // → Max Output Tokens) resolved at spawn time. The key is not
-                // matched here, so a legacy skill carrying it is parsed
-                // normally with the line ignored.
-                trimmed.startsWith("max_parallel:") -> {
-                    // [T-subagent-parallel] Optional concurrency knob for this
-                    // skill; clamped to [1, 4] — the worker serializes model
-                    // calls anyway, so more than 4 interleaved agents just
-                    // queues without benefit.
-                    maxParallel = (trimmed.substringAfter(":").trim().toIntOrNull() ?: 1)
-                        .coerceIn(1, MAX_PARALLEL_CAP)
-                }
-                trimmed.startsWith("thinking:") -> {
-                    thinkingLevel = parseThinkingLevelName(trimmed.substringAfter(":").trim())
-                }
-                // [fix/subagent-plan-first] `plan_first:` — opt OUT is the
-                // only non-default value an author needs to know about.
-                trimmed.startsWith("plan_first:") -> {
-                    val value = trimmed.substringAfter(":").trim().lowercase()
-                    planFirst = value != "false" && value != "no" && value != "off"
-                }
-                trimmed.startsWith("allowed_tools:") -> {
-                    val listStr = trimmed.substringAfter(":").trim()
-                    val tools = mutableSetOf<String>()
-                    if (listStr.isNotEmpty()) {
-                        parseListValue(listStr)?.let { tools.addAll(it) }
-                    }
-                    // Multi-line form: subsequent lines starting with "- "
-                    var j = i + 1
-                    while (j < lines.size) {
-                        val item = lines[j].trim()
-                        if (item.startsWith("- ")) {
-                            tools.add(item.removePrefix("- ").trim().trim('"', '\''))
-                            j++
-                        } else {
-                            break
-                        }
-                    }
-                    allowedTools = tools.ifEmpty { emptySet() }
-                }
-            }
-            i++
-        }
+        // [feat/subagent-roster-routing] A real frontmatter parser, not a
+        // hand-rolled key matcher.
+        //
+        // The old loop matched keys with `startsWith("key:")` and parsed
+        // list values in two separate branches, which broke on:
+        //  - a value containing a colon (`description: use this: for that`
+        //    lost everything after the second colon);
+        //  - a quoted value containing a comma (`allowed_tools: ["a, b"]`
+        //    split inside the quotes);
+        //  - a `#` inside a value (treated as a comment start).
+        //
+        // SubagentFrontmatter handles those, and is unit-tested on the
+        // plain JVM.
+        val fm = SubagentFrontmatter.parse(frontmatter)
 
         return SubagentConfig(
-            isSubagent = isSubagent,
-            maxTurns = maxTurns.coerceIn(1, 100),
-            allowedTools = allowedTools,
-            maxParallel = maxParallel,
-            thinkingLevel = thinkingLevel,
-            planFirst = planFirst,
+            isSubagent = fm.boolean("subagent") ?: false,
+            maxTurns = (fm.int("max_turns") ?: DEFAULT_MAX_TURNS).coerceIn(1, 100),
+            allowedTools = fm.list("allowed_tools")?.toSet(),
+            maxParallel = (fm.int("max_parallel") ?: 1).coerceIn(1, MAX_PARALLEL_CAP),
+            thinkingLevel = parseThinkingLevelName(fm.string("thinking").orEmpty()),
+            planFirst = fm.boolean("plan_first") ?: true,
+            // [feat/subagent-roster-routing] The TRAE-shaped fields.
+            model = fm.string("model")?.trim()?.takeIf { it.isNotEmpty() },
+            disallowedTools = fm.list("disallowed_tools")?.toSet().orEmpty(),
+            mcpServers = fm.list("mcp_servers")?.toSet().orEmpty(),
         )
     }
 
@@ -577,10 +560,11 @@ object SubagentSkill {
     fun buildFilteredTools(
         allTools: List<AgentToolDefinition>,
         allowedTools: Set<String>?,
+        disallowedTools: Set<String> = emptySet(),
     ): List<AgentToolDefinition> {
         return allTools.filter { tool ->
             AgentCapabilities.isToolGrantableToSubagent(tool.name) &&
-                (allowedTools == null || tool.name in allowedTools)
+                SubagentAllowedTools.isAllowed(tool.name, allowedTools, disallowedTools)
         }
     }
 

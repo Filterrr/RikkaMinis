@@ -88,6 +88,8 @@ for f in \
   tools/SubagentContextTokens.kt \
   tools/SubagentCheckpointFormat.kt \
   tools/SubagentRosterHint.kt \
+  tools/SubagentFrontmatter.kt \
+  tools/SubagentCostLedger.kt \
   tools/SubagentDelegation.kt \
   tools/SubagentPartialRecovery.kt \
   notification/NotificationDecisionRouter.kt \
