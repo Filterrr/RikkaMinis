@@ -1191,7 +1191,14 @@ class ChatViewModel(
             override fun findSkill(skillName: String) =
                 this@ChatViewModel.skillRepository?.skills?.value?.find {
                     it.name == skillName || it.id == skillName ||
-                        it.name.equals(skillName, ignoreCase = true)
+                        // [feat/subagent-roster-routing] The same folding
+                        // the roster uses. `ignoreCase` alone does NOT
+                        // fold diacritics, so a skill named
+                        // "Résumé-agent" was listed under the folded key
+                        // and could not be matched — the one route the
+                        // unified rule had not reached.
+                        com.openminis.app.tools.SubagentNameKey.normalize(it.name) ==
+                            com.openminis.app.tools.SubagentNameKey.normalize(skillName)
                 }
             override fun isSkillEnabledForSession(skillId: String) =
                 this@ChatViewModel.skillRepository?.isEnabledForSession(

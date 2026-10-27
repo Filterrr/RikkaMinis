@@ -83,6 +83,28 @@ class SubagentNameFoldingTest {
         assertTrue("it must resolve to the CONFIGURED entry", d!!.fromRoster)
     }
 
+    /**
+     * The skill LOOKUP has to fold the same way. It used to match on the
+     * exact name, the id, or `ignoreCase` — and `ignoreCase` does NOT fold
+     * diacritics. So a skill named "Résumé-agent" was listed under the
+     * folded key and could not be found by the name the roster showed.
+     */
+    @Test
+    fun `the skill lookup folds the same way as the roster`() {
+        val root = com.openminis.app.ProductionSources.mainRoot() ?: return
+        val cvm = File(root, "ui/chat/ChatViewModel.kt")
+        if (!cvm.isFile) return
+        val text = SubagentSourceText.stripComments(cvm.readText())
+        val lookup = Regex("""override fun findSkill[\s\S]{0,600}?\n {16}\}""")
+            .find(text)?.value
+        assertTrue("the skill lookup was not found", lookup != null)
+        assertTrue(
+            "the skill lookup must use the shared folding rule, not just " +
+                "ignoreCase (which does not fold diacritics)",
+            lookup!!.contains("SubagentNameKey.normalize"),
+        )
+    }
+
     @Test
     fun `the roster hint resolves with the same folding`() {
         val entries = listOf(SubagentRosterHint.Entry("Résumé-agent", "use for CVs"))
