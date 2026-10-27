@@ -94,6 +94,8 @@ for f in \
   tools/SubagentFrontmatter.kt \
   tools/SubagentCostLedger.kt \
   tools/SubagentToolScope.kt \
+  tools/SubagentMcpScope.kt \
+  tools/SubagentNameKey.kt \
   tools/SubagentTaskFingerprint.kt \
   tools/SubagentDelegation.kt \
   tools/SubagentPartialRecovery.kt \

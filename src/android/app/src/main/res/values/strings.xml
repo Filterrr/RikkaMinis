@@ -733,6 +733,10 @@
     <string name="sub_agent_roster_instructions">Instructions</string>
     <string name="sub_agent_roster_no_description">No description — the main agent has no reason to pick this</string>
     <string name="sub_agent_roster_limit">Up to %1$d sub-agents</string>
+    <string name="sub_agent_roster_model_group">Model group</string>
+    <string name="sub_agent_roster_any_model">Any model</string>
+    <string name="sub_agent_roster_thinking">Reasoning level</string>
+    <string name="sub_agent_roster_inherit_thinking">Inherit</string>
     <string name="settings_subagent_max_concurrent">Max concurrent sub-agents</string>
     <string name="settings_subagent_max_concurrent_subtitle">Up to %1$d sub-agents may run at the same time</string>
     <string name="settings_subagent_max_concurrent_dialog_title">Concurrent sub-agents</string>

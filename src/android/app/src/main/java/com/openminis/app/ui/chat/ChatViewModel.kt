@@ -1688,6 +1688,16 @@ class ChatViewModel(
                 name = def.name,
                 description = def.description,
                 instructions = def.instructions,
+                // [feat/subagent-roster-routing] The model group and the
+                // reasoning-level override are the roster entry's own
+                // configuration — they used to be stored and never read.
+                modelGroupId = def.modelGroupId,
+                thinkingLevelOverride = def.thinkingLevelOverride?.name,
+                // [feat/subagent-roster-routing] The built-in entry's
+                // display name is NOT the wire name, so the runtime needs
+                // the flag to recognise it.
+                id = def.id,
+                isBuiltIn = def.isBuiltIn,
             )
         }
 

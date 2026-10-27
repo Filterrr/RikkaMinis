@@ -125,9 +125,15 @@ object SubagentRosterHint {
         configured: List<Entry>,
     ): List<Entry> {
         val byKey = LinkedHashMap<String, Entry>()
-        val configuredByKey = configured.associateBy { it.name.trim().lowercase() }
+        // The same folding the resolver uses, so the merged roster and the
+        // resolver agree on what "the same name" means. Three layers used
+        // to disagree (trim+lowercase here, diacritics+trim+lowercase in
+        // the data layer, and a third variant in the tools resolver), so
+        // a name with an accent could be listed by one and matched by
+        // another.
+        val configuredByKey = configured.associateBy { SubagentDelegation.normalize(it.name) }
         for (s in skills) {
-            val key = s.name.trim().lowercase()
+            val key = SubagentDelegation.normalize(s.name)
             val cfg = configuredByKey[key]
             byKey[key] = if (cfg != null && cfg.description.isNotBlank()) {
                 s.copy(description = cfg.description)
@@ -136,7 +142,7 @@ object SubagentRosterHint {
             }
         }
         for (c in configured) {
-            val key = c.name.trim().lowercase()
+            val key = SubagentDelegation.normalize(c.name)
             if (key.isEmpty() || byKey.containsKey(key)) continue
             byKey[key] = c
         }
@@ -146,19 +152,20 @@ object SubagentRosterHint {
     /**
      * Resolve a parent-emitted name to a roster entry.
      *
-     * Matching is case-insensitive and whitespace-trimmed, because the name
-     * comes back from a MODEL that may not reproduce it exactly — the same
-     * rule [SubAgentRoster.resolve] uses for its own list, so a name that
-     * works in one route works in the other.
+     * Matching folds case, whitespace AND diacritics, because the name comes
+     * back from a MODEL that may not reproduce it exactly — and because the
+     * stored side is user-typed. This is now the SAME rule the data layer's
+     * [SubAgentRoster.nameKey] and the tools layer's resolver use, so a name
+     * that works in one route works in all of them.
      *
      * Returns null when nothing matches: the caller then reports
      * "unknown sub-agent" and lists the roster, which is far more useful
      * than a generic "not found".
      */
     fun resolve(name: String?, entries: List<Entry>): Entry? {
-        val key = name?.trim()?.lowercase().orEmpty()
+        val key = SubagentDelegation.normalize(name)
         if (key.isEmpty()) return null
-        return entries.firstOrNull { it.name.trim().lowercase() == key }
+        return entries.firstOrNull { SubagentDelegation.normalize(it.name) == key }
     }
 
     /**

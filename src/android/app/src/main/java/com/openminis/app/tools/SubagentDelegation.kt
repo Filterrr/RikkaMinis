@@ -14,8 +14,8 @@ package com.openminis.app.tools
  *
  *  - The CONFIGURED roster shape (`SubAgentDefinition`) is the TRAE shape:
  *    a name plus a DESCRIPTION that says WHEN to delegate there, plus
- *    optional INSTRUCTIONS. It has no runtime, and `SubAgentRoster.resolve`
- *    had zero call sites — it was dead weight in the data model.
+ *    optional INSTRUCTIONS. It had NO runtime — it was dead weight in the
+ *    data model.
  *
  * The resolution rule this object encodes: **a delegation is a skill
  * (the runtime) plus optional extra instructions (the speciality).**
@@ -48,6 +48,25 @@ object SubagentDelegation {
         val extraInstructions: String,
         val description: String,
         val fromRoster: Boolean,
+        /**
+         * [feat/subagent-roster-routing] The configured roster entry's
+         * model group — the models this agent may run on.
+         *
+         * Null = no group pinned, so the run inherits whatever the parent
+         * resolved. It is a CONSTRAINT, not a demand: when the parent
+         * names a model outside the group, the group wins, because the
+         * user pinned the group precisely to keep this agent on it.
+         */
+        val modelGroupId: String? = null,
+        /**
+         * [feat/subagent-roster-routing] The configured roster entry's
+         * reasoning-level override.
+         *
+         * Null = inherit the skill's own `thinking:` (or the parent's).
+         * The value is a NAME, not the enum, so the tools layer stays free
+         * of the data layer's Android-bound types.
+         */
+        val thinkingLevelOverride: String? = null,
     )
 
     /**
@@ -80,6 +99,49 @@ object SubagentDelegation {
     ): Target? {
         val key = normalize(requested)
 
+        // 0. NO NAME → the built-in entry.
+        //
+        // The data layer's `SubAgentRoster.resolve` had this rule (an empty
+        // name resolves to the built-in, else the first entry) and the
+        // tools layer did not, so the two routes disagreed on what an
+        // unnamed spawn means. An empty name is the parent saying "use
+        // the default agent", and the built-in IS the default.
+        if (key.isEmpty()) {
+            // The built-in is identified by its FLAG. Its display name is
+            // "General Sub Agent", which is NOT the wire name the parent
+            // emits — matching on the name would never find it.
+            val builtIn = configured.firstOrNull { it.isBuiltIn }
+                ?: configured.firstOrNull { it.name == GENERAL_SKILL_NAME }
+                ?: configured.firstOrNull()
+            if (builtIn != null) {
+                // The built-in's display name is not a skill name; it runs
+                // on the general runtime.
+                val runtime = if (builtIn.isBuiltIn) {
+                    GENERAL_SKILL_NAME
+                } else if (skillExists(builtIn.name)) {
+                    builtIn.name
+                } else {
+                    GENERAL_SKILL_NAME
+                }
+                return Target(
+                    skillName = runtime,
+                    extraInstructions = builtIn.instructions.trim(),
+                    description = builtIn.description.ifBlank { builtIn.name },
+                    fromRoster = true,
+                    modelGroupId = builtIn.modelGroupId?.takeIf { it.isNotBlank() },
+                    thinkingLevelOverride = builtIn.thinkingLevelOverride?.takeIf { it.isNotBlank() },
+                )
+            }
+            // No configured roster at all: fall back to the general
+            // runtime, which is always available.
+            return Target(
+                skillName = GENERAL_SKILL_NAME,
+                extraInstructions = "",
+                description = GENERAL_SKILL_NAME,
+                fromRoster = false,
+            )
+        }
+
         // 1. A configured entry that matches wins on the ROUTING question:
         //    the user wrote this description to say WHEN to delegate here.
         val cfg = configured.firstOrNull { normalize(it.name) == key }
@@ -88,12 +150,22 @@ object SubagentDelegation {
             // A configured entry whose name matches an installed skill runs
             // THAT skill (the user may have refined an existing agent);
             // otherwise it runs on the general runtime.
-            val runtime = if (skillExists(cfg.name)) cfg.name else GENERAL_SKILL_NAME
+            // The built-in's display name is not a skill name; it runs on
+            // the general runtime.
+            val runtime = if (cfg.isBuiltIn) {
+                GENERAL_SKILL_NAME
+            } else if (skillExists(cfg.name)) {
+                cfg.name
+            } else {
+                GENERAL_SKILL_NAME
+            }
             return Target(
                 skillName = runtime,
                 extraInstructions = instructions,
                 description = cfg.description.ifBlank { cfg.name },
                 fromRoster = true,
+                modelGroupId = cfg.modelGroupId?.takeIf { it.isNotBlank() },
+                thinkingLevelOverride = cfg.thinkingLevelOverride?.takeIf { it.isNotBlank() },
             )
         }
 
@@ -119,6 +191,26 @@ object SubagentDelegation {
         val name: String,
         val description: String,
         val instructions: String = "",
+        /** The model group this agent is pinned to. */
+        val modelGroupId: String? = null,
+        /** The reasoning-level override, by name. */
+        val thinkingLevelOverride: String? = null,
+        /**
+         * [feat/subagent-roster-routing] The roster entry's stable id.
+         *
+         * The built-in entry's NAME is a display name ("General Sub
+         * Agent"), not the wire name the parent emits ("general-agent").
+         * The id is what identifies it — and the data layer's own
+         * `SubAgentRoster.resolve` matched on the id for exactly this
+         * reason. Without the id here, the built-in entry could not be
+         * recognised as the built-in, and an unnamed spawn would fall
+         * through to "the first entry" instead.
+         */
+        val id: String? = null,
+        /**
+         * True for the built-in entry — the one an unnamed spawn uses.
+         */
+        val isBuiltIn: Boolean = false,
     )
 
     /**
@@ -129,5 +221,21 @@ object SubagentDelegation {
      * whitespace. Folding both is what stops "General Agent" from failing
      * to resolve a roster entry named "general-agent".
      */
-    fun normalize(s: String?): String = s?.trim()?.lowercase().orEmpty()
+    /**
+     * The comparison form of a name.
+     *
+     * [feat/subagent-roster-routing] This now matches
+     * `SubAgentRoster.nameKey` EXACTLY — diacritics folded, trimmed,
+     * case-folded.
+     *
+     * The two used to disagree: the data layer folded diacritics and the
+     * tools layer did not. A roster entry named "Résumé-agent" resolved
+     * on one path and not on the other, so the same name could work or
+     * fail depending on which layer answered. A name that comes back from
+     * a MODEL may not reproduce accents exactly, and the stored side is
+     * user-typed and may carry stray whitespace — folding both is what
+     * stops that from becoming a lost delegation.
+     */
+    fun normalize(s: String?): String = SubagentNameKey.normalize(s)
+
 }

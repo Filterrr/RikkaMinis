@@ -1334,6 +1334,9 @@ fun AppNavigation(
                 onUpsert = { def -> providerRepository.upsertSubAgent(def) },
                 onDelete = { id -> providerRepository.deleteSubAgent(id) },
                 onBack = { navController.popBackStack() },
+                // [feat/subagent-roster-routing] The model groups the user
+                // can pin an agent to.
+                modelGroups = config.modelGroups,
             )
         }
 

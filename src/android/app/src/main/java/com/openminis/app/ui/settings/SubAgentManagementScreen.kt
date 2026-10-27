@@ -21,6 +21,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.ExposedDropdownMenu
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -32,8 +36,10 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.openminis.app.R
+import com.openminis.app.data.model.ModelGroup
 import com.openminis.app.data.model.SubAgentDefinition
 import com.openminis.app.data.model.SubAgentLimits
+import com.openminis.app.data.model.ThinkingLevel
 
 /**
  * [feat/subagent-roster-routing] P0-A — the editor for the CONFIGURED
@@ -61,6 +67,20 @@ fun SubAgentManagementScreen(
     onUpsert: (SubAgentDefinition) -> Unit,
     onDelete: (String) -> Unit,
     onBack: () -> Unit,
+    /**
+     * [feat/subagent-roster-routing] The model groups the user can pin
+     * this agent to.
+     *
+     * The roster entry's `modelGroupId` existed in the data model from the
+     * start and was never reachable — and, until this branch, never read
+     * by the runtime either. It is now both settable AND enforced.
+     */
+    modelGroups: List<ModelGroup> = emptyList(),
+    /**
+     * The reasoning levels the user can pin. Same story as the group: a
+     * stored-but-unreachable field, now settable and honoured.
+     */
+    thinkingLevels: List<ThinkingLevel> = ThinkingLevel.entries,
 ) {
     var editing by remember { mutableStateOf<SubAgentDefinition?>(null) }
     var creating by remember { mutableStateOf(false) }
@@ -150,6 +170,8 @@ fun SubAgentManagementScreen(
     if (creating || editing != null) {
         SubAgentEditorDialog(
             initial = editing,
+            modelGroups = modelGroups,
+            thinkingLevels = thinkingLevels,
             onDismiss = { creating = false; editing = null },
             onSave = { def ->
                 onUpsert(def)
@@ -170,10 +192,16 @@ private fun SubAgentEditorDialog(
     initial: SubAgentDefinition?,
     onDismiss: () -> Unit,
     onSave: (SubAgentDefinition) -> Unit,
+    modelGroups: List<ModelGroup>,
+    thinkingLevels: List<ThinkingLevel>,
 ) {
     var name by remember { mutableStateOf(initial?.name.orEmpty()) }
     var description by remember { mutableStateOf(initial?.description.orEmpty()) }
     var instructions by remember { mutableStateOf(initial?.instructions.orEmpty()) }
+    var modelGroupId by remember { mutableStateOf(initial?.modelGroupId) }
+    var thinkingLevel by remember { mutableStateOf(initial?.thinkingLevelOverride) }
+    var groupExpanded by remember { mutableStateOf(false) }
+    var thinkingExpanded by remember { mutableStateOf(false) }
 
     val nameError = when {
         name.isBlank() -> stringResource(R.string.sub_agent_roster_name_required)
@@ -220,6 +248,91 @@ private fun SubAgentEditorDialog(
                     label = { Text(stringResource(R.string.sub_agent_roster_instructions)) },
                     minLines = 3,
                 )
+                // [feat/subagent-roster-routing] The model group and the
+                // reasoning level. Both were stored in the data model and
+                // unreachable from the UI — and unread by the runtime.
+                if (modelGroups.isNotEmpty()) {
+                    ExposedDropdownMenuBox(
+                        expanded = groupExpanded,
+                        onExpandedChange = { groupExpanded = it },
+                    ) {
+                        OutlinedTextField(
+                            value = modelGroups.firstOrNull { it.id == modelGroupId }?.name
+                                ?: stringResource(R.string.sub_agent_roster_any_model),
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text(stringResource(R.string.sub_agent_roster_model_group)) },
+                            trailingIcon = {
+                                ExposedDropdownMenuDefaults.TrailingIcon(expanded = groupExpanded)
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .menuAnchor(),
+                        )
+                        ExposedDropdownMenu(
+                            expanded = groupExpanded,
+                            onDismissRequest = { groupExpanded = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.sub_agent_roster_any_model)) },
+                                onClick = {
+                                    modelGroupId = null
+                                    groupExpanded = false
+                                },
+                            )
+                            modelGroups.forEach { group ->
+                                DropdownMenuItem(
+                                    text = { Text(group.name) },
+                                    onClick = {
+                                        modelGroupId = group.id
+                                        groupExpanded = false
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+                if (thinkingLevels.isNotEmpty()) {
+                    ExposedDropdownMenuBox(
+                        expanded = thinkingExpanded,
+                        onExpandedChange = { thinkingExpanded = it },
+                    ) {
+                        OutlinedTextField(
+                            value = thinkingLevel?.displayName
+                                ?: stringResource(R.string.sub_agent_roster_inherit_thinking),
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text(stringResource(R.string.sub_agent_roster_thinking)) },
+                            trailingIcon = {
+                                ExposedDropdownMenuDefaults.TrailingIcon(expanded = thinkingExpanded)
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .menuAnchor(),
+                        )
+                        ExposedDropdownMenu(
+                            expanded = thinkingExpanded,
+                            onDismissRequest = { thinkingExpanded = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.sub_agent_roster_inherit_thinking)) },
+                                onClick = {
+                                    thinkingLevel = null
+                                    thinkingExpanded = false
+                                },
+                            )
+                            thinkingLevels.forEach { level ->
+                                DropdownMenuItem(
+                                    text = { Text(level.displayName) },
+                                    onClick = {
+                                        thinkingLevel = level
+                                        thinkingExpanded = false
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
             }
         },
         confirmButton = {
@@ -234,6 +347,8 @@ private fun SubAgentEditorDialog(
                             name = name.trim(),
                             description = description.trim(),
                             instructions = instructions,
+                            modelGroupId = modelGroupId,
+                            thinkingLevelOverride = thinkingLevel,
                         ),
                     )
                 },

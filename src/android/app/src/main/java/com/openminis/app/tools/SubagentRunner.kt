@@ -327,7 +327,19 @@ class SubagentRunner(
                 SubagentRosterHint.unknownAgentMessage(skillName, deps.subagentRoster()),
                 false, toolTitle = title,
             )
-        val config = SubagentSkill.parseSubagentConfig(skill)
+        val parsedConfig = SubagentSkill.parseSubagentConfig(skill)
+        // [feat/subagent-roster-routing] The configured roster entry's
+        // reasoning-level override WINS over the skill's own `thinking:`.
+        //
+        // The roster entry is the USER's configuration for this particular
+        // agent ("this reviewer thinks hard"); the skill's `thinking:` is
+        // the author's general default for the skill. When the user has
+        // said otherwise for this agent, the user's word is the more
+        // specific instruction.
+        val config = delegation?.thinkingLevelOverride
+            ?.takeIf { it.isNotBlank() }
+            ?.let { parsedConfig.copy(thinkingLevel = SubagentSkill.parseThinkingLevelName(it)) }
+            ?: parsedConfig
         if (!config.isSubagent) {
             return ToolExecutionResult(
                 "Error: Skill '$skillName' is not a sub-agent skill. " +
@@ -388,7 +400,53 @@ class SubagentRunner(
         // [Deps.groupSpreadAssignments]. This keeps children deterministic
         // under async fan-out. A lone call with no precomputed assignment
         // (manual dispatch, tests) uses the group's first usable member.
-        val modelArg = args.optString("model", "").trim()
+        // [feat/subagent-roster-routing] The skill's `model:` is the
+        // DEFAULT for this skill: it applies when the parent did not
+        // name a model. An explicit argument from the parent still wins —
+        // the parent's choice is the more specific one.
+        //
+        // The value is resolved through the SAME path as an explicit
+        // argument (`resolveSpawnModelPlan`), so `model:` may name a
+        // model OR a group (`group:<name>`), and a bad name fails the
+        // spawn loudly rather than silently inheriting the parent's
+        // (possibly expensive) model.
+        val requestedModelArg = args.optString("model", "").trim()
+        // [feat/subagent-roster-routing] The configured roster entry may
+        // PIN this agent to a model group. When it does, the group is the
+        // constraint: a model named by the parent that is not in the group
+        // is refused rather than silently honoured, because the user
+        // pinned the group precisely to keep this agent on it.
+        val rosterGroupId = delegation?.modelGroupId
+        // The precedence, narrowest-first:
+        //   1. the parent's explicit `model` argument;
+        //   2. the roster entry's pinned model GROUP;
+        //   3. the skill's own `model:` default;
+        //   4. whatever the group spread resolves.
+        //
+        // The roster's group outranks the skill's default because the
+        // roster entry is the USER's configuration for this particular
+        // agent, while `model:` is the skill author's general default.
+        val modelArg = requestedModelArg.ifEmpty {
+            rosterGroupId?.let { "group:$it" }
+                ?: config.model?.trim().orEmpty()
+        }
+        if (rosterGroupId != null && requestedModelArg.isNotEmpty()) {
+            val members = deps.modelGroupMembers(rosterGroupId)
+            val inGroup = members.any {
+                it.modelId == requestedModelArg ||
+                    it.displayName.equals(requestedModelArg, ignoreCase = true) ||
+                    it.entryId == requestedModelArg
+            }
+            if (!inGroup) {
+                return ToolExecutionResult(
+                    "Error: this sub-agent is pinned to model group '$rosterGroupId', and " +
+                        "'$requestedModelArg' is not in that group. Use one of: " +
+                        members.joinToString(", ") { it.describe() } +
+                        ", or omit the model to let the group choose.",
+                    false, toolTitle = title,
+                )
+            }
+        }
         val precomputed = deps.groupSpreadAssignments()[blockId]
         // [T-subagent-model-spread] Non-empty only when this spawn actually
         // landed on a group member via the batch plan — drives the approval
@@ -1713,6 +1771,11 @@ class SubagentRunner(
                                 // travels too, so the runtime gate can deny a
                                 // tool the schema filter already hid.
                                 disallowedTools = config.disallowedTools,
+                                // [feat/subagent-roster-routing] The MCP
+                                // scope travels too. MCP is reached through
+                                // the shell, so this is enforced on the
+                                // COMMAND rather than on a tool list.
+                                mcpServers = config.mcpServers,
                             )
                         }
                     }
@@ -2387,6 +2450,12 @@ class SubagentRunner(
         // SubagentAllowedTools.isAllowed for why the restrictive reading is
         // the safe one.
         disallowedTools: Set<String> = emptySet(),
+        // [feat/subagent-roster-routing] The MCP servers this skill may
+        // reach. MCP is reached through the SHELL (the minis-mcp-cli
+        // binary), so a tool allowlist cannot express it — the shell
+        // command itself has to be checked. An EMPTY set means the skill
+        // declared no scope, which means NO MCP access.
+        mcpServers: Set<String> = emptySet(),
     ): ToolExecutionResult {
         if (name in SubagentSkill.FORBIDDEN_TOOLS) {
             return forbiddenToolResult(name)
@@ -2413,7 +2482,7 @@ class SubagentRunner(
             )
         }
         return when (name) {
-            "shell_execute" -> executeSubagentShell(argsJson, callId, runId)
+            "shell_execute" -> executeSubagentShell(argsJson, callId, runId, mcpServers)
             "browser_use" -> deps.executeBrowserUse(argsJson)
             // [T-subagent-websearch] Same executor the main loop uses
             // (configured engine + render wait + readable extraction), so a
@@ -2496,13 +2565,36 @@ class SubagentRunner(
      * exit-code suffix, timeout flag, env-var redaction) minus the
      * parent-loop UI plumbing.
      */
-    private suspend fun executeSubagentShell(argsJson: String, stepId: String, runId: String): ToolExecutionResult {
+    private suspend fun executeSubagentShell(
+        argsJson: String,
+        stepId: String,
+        runId: String,
+        // [feat/subagent-roster-routing] The MCP servers this skill may
+        // reach. See the note at the call site: MCP is a SHELL capability,
+        // so this is enforced on the command, not on a tool list.
+        mcpServers: Set<String> = emptySet(),
+    ): ToolExecutionResult {
         val args = try { JSONObject(argsJson) } catch (_: Exception) { JSONObject() }
         val command = args.optString("command", "")
         val timeoutSec = args.optInt("timeout", 900).coerceIn(1, 900)
         val toolTitle = args.optString("tool_title", "shell_execute")
         if (command.isBlank()) {
             return ToolExecutionResult("Error: 'command' is required", false, toolTitle = toolTitle)
+        }
+        // [feat/subagent-roster-routing] The MCP scope gate. Refused BEFORE
+        // the command runs, so an out-of-scope server is never contacted.
+        val mcpServer = SubagentMcpScope.serverInCommand(command)
+        if (mcpServer != null && mcpServer !in mcpServers) {
+            AppLogger.warning(
+                TAG,
+                "[Subagent] MCP server '$mcpServer' REFUSED — outside the skill's " +
+                    "mcp_servers scope (allowed: ${mcpServers.joinToString(", ").ifEmpty { "none" }})",
+            )
+            return ToolExecutionResult(
+                SubagentMcpScope.refusalText(mcpServer, mcpServers),
+                false,
+                toolTitle = toolTitle,
+            )
         }
         val result = ExecutionCoordinator.execute(
             sessionId = deps.activeSessionId(),
