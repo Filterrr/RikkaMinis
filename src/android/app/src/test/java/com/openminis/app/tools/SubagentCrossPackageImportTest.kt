@@ -78,25 +78,97 @@ class SubagentCrossPackageImportTest {
         // declaration on one line and an `internal` type name in its
         // signature. It is deliberately narrow — only the types this
         // subsystem actually owns — so it cannot fire on unrelated code.
-        val internalTypes = listOf(
-            "InterruptedRun",
-            "SubagentCheckpointFormat.InterruptedRun",
-            "SubagentPartialRecovery.Step",
-            "SubagentRosterHint.Entry",
-            "SubagentDelegation.ConfiguredAgent",
-        )
+        // The internal types are DISCOVERED from the sources, not listed.
+        //
+        // A hand-kept list was the blind spot: the CI build caught a
+        // public function exposing `SubagentCostLedger` — a type added
+        // AFTER the guard was written, so the guard did not know it. A
+        // guard that must be updated when the code changes is a guard that
+        // fails exactly when it is needed.
+        // The internal types are DISCOVERED from the sources, not listed.
+        //
+        // A hand-kept list was the blind spot: the CI build caught a
+        // public function exposing `SubagentCostLedger` — a type added
+        // AFTER the guard was written, so the guard did not know it. A
+        // guard that must be updated when the code changes is a guard that
+        // fails exactly when it is needed.
+        //
+        // The discovery is scoped to the SUBSYSTEM's own files. Scanning
+        // the whole codebase surfaced unrelated pre-existing patterns
+        // (`OffloadArgs`, `FlatChatItem`) whose visibility rules differ
+        // (they are exposed through different modules), so the guard would
+        // fire on code this change does not own.
+        val internalTypes = mutableListOf<String>()
+        for (file in productionFiles()) {
+            if (file.parentFile?.name != "tools") continue
+            val text = file.readText()
+            // `internal class X` / `internal object X` / `internal data class X`
+            for (m in Regex("""\binternal\s+(?:data\s+|sealed\s+|abstract\s+|value\s+)*(?:class|object|interface|typealias)\s+([A-Za-z_][A-Za-z0-9_]*)""").findAll(text)) {
+                internalTypes += m.groupValues[1]
+            }
+        }
         val offenders = mutableListOf<String>()
         for (file in productionFiles()) {
             val lines = file.readText().lines()
+            // The ENCLOSING declaration's visibility matters: a member of
+            // an `internal object` IS internal, whatever the member itself
+            // says. Kotlin computes the effective visibility, and the
+            // compiler error follows THAT. So the guard tracks the nearest
+            // enclosing `internal`/`private` declaration.
+            var enclosingIsRestricted = false
+            var enclosingIndent = -1
             for ((i, line) in lines.withIndex()) {
+                val indent = line.takeWhile { it == ' ' }.length
+                if (line.trim().isEmpty() || line.trimStart().startsWith("//") ||
+                    line.trimStart().startsWith("*") || line.trimStart().startsWith("/*")
+                ) {
+                    continue
+                }
+                if (enclosingIndent >= 0 && indent <= enclosingIndent) {
+                    enclosingIsRestricted = false
+                    enclosingIndent = -1
+                }
+                if (Regex("""\b(internal|private)\s+(?:data\s+|sealed\s+|abstract\s+|value\s+)*(?:class|object|interface)\s+[A-Za-z_]""").containsMatchIn(line)) {
+                    enclosingIsRestricted = true
+                    enclosingIndent = indent
+                }
                 if (!line.contains("fun ")) continue
-                if (!Regex("""\bpublic\b""").containsMatchIn(line)) continue
+                // [feat/subagent-roster-routing] The visibility rule is
+                // about the DECLARED visibility, not the `public` keyword:
+                // a member of an interface without a modifier IS public,
+                // and the source never says "public". So the check must
+                // fire on any `fun` whose signature mentions an internal
+                // type UNLESS the declaration is explicitly `internal` or
+                // `private`.
+                //
+                // The first version of this guard looked for the literal
+                // word "public" and therefore caught NOTHING in an
+                // interface — the exact case that the CI build then
+                // failed on. The negative verification caught it.
+                val isExplicitlyRestricted = Regex("""\b(internal|private)\s+fun\b""")
+                    .containsMatchIn(line)
+                if (isExplicitlyRestricted) continue
+                // Inside an `internal`/`private` declaration, the member's
+                // effective visibility is already restricted — no error.
+                if (enclosingIsRestricted) continue
                 for (t in internalTypes) {
                     // The signature of THIS declaration: from `fun` to the
                     // opening brace or the end of the line.
+                    // The SIGNATURE is what matters — not the body. A
+                    // one-line `fun f(x: T) = Other.internalThing(x)`
+                    // exposes nothing: the internal type appears in the
+                    // body, and Kotlin only forbids it in the signature.
                     val sig = line.substringAfter("fun ")
-                    if (Regex("""\b""" + Regex.escape(t) + """\b""").containsMatchIn(sig)) {
-                        offenders += "${file.name}:${i + 1} public fun exposes internal type $t"
+                        .substringBefore(" = ")
+                        .substringBefore(" {")
+                    // A QUALIFIED mention (`Foo.Bar`) is not the same as
+                    // exposing `Bar` — `SubagentCheckpointFormat.InterruptedRun`
+                    // names the internal object's member, and Kotlin allows
+                    // that where the object itself is internal. Only a
+                    // BARE mention counts.
+                    val bare = Regex("""(?<![.\w])""" + Regex.escape(t) + """\b""").containsMatchIn(sig)
+                    if (bare) {
+                        offenders += "${file.name}:${i + 1} fun exposes internal type $t"
                     }
                 }
             }

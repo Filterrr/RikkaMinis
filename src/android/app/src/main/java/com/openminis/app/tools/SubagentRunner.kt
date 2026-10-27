@@ -101,7 +101,7 @@ class SubagentRunner(
          * [feat/subagent-roster-routing] P1-3 — the chat-level ledger of
          * what delegation costs. Null when the chat has no ledger (tests).
          */
-        fun subagentCostLedger(): SubagentCostLedger? = null
+        internal fun subagentCostLedger(): SubagentCostLedger? = null
 
         fun agentTools(): List<AgentToolDefinition>
         fun currentProvider(): com.openminis.app.provider.LLMProvider?
@@ -642,7 +642,7 @@ class SubagentRunner(
                 try {
                     scheduler.run(skill.id, config.maxParallel, deadlineNanos) {
                         registry.markExecuting(run.id)
-                        executeLoopGuarded(run, worstCaseChildTokens) {
+                        executeLoopGuarded(run, worstCaseChildTokens, skill.name) {
                             executeLoop(
                                 run = run, skill = skill, config = config, skillName = skillName,
                                 query = query, title = title, runUntil = SubagentSkill.RUN_UNTIL_DONE,
@@ -752,7 +752,7 @@ class SubagentRunner(
             ) {
                 registry.markExecuting(run.id)
                 try {
-                    val result = executeLoopGuarded(run, worstCaseChildTokens) {
+                    val result = executeLoopGuarded(run, worstCaseChildTokens, skill.name) {
                         executeLoop(
                             run = run, skill = skill, config = config, skillName = skillName,
                             query = query, title = title, runUntil = runUntil,
@@ -1054,6 +1054,13 @@ class SubagentRunner(
     private suspend fun executeLoopGuarded(
         run: SubagentRunRegistry.Run,
         worstCaseChildTokens: Long,
+        /**
+         * [feat/subagent-roster-routing] P1-3 — the skill name for the
+         * ledger entry. It is a PARAMETER because `executeLoopGuarded` is
+         * a sibling of the spawn site, not a nested scope: the skill is
+         * resolved by the caller.
+         */
+        skillName: String,
         block: suspend () -> ToolExecutionResult,
     ): ToolExecutionResult {
         val guard = deps.subagentBudgetGuard()
@@ -1068,7 +1075,7 @@ class SubagentRunner(
         // runtime's own configuration implies — never as a fabricated
         // measurement.
         val ledger = deps.subagentCostLedger()
-        ledger?.reserve(run.id, skill.name, worstCaseChildTokens)
+        ledger?.reserve(run.id, skillName, worstCaseChildTokens)
         try {
             return block()
         } finally {
