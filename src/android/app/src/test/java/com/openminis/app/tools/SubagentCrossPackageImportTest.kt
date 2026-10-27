@@ -95,40 +95,6 @@ class SubagentCrossPackageImportTest {
      * Strip line and block comments, preserving line structure so that
      * line numbers stay meaningful.
      */
-    private fun stripComments(text: String): String {
-        val out = StringBuilder(text.length)
-        var i = 0
-        var inBlock = false
-        while (i < text.length) {
-            if (inBlock) {
-                when {
-                    text.startsWith("*/", i) -> { inBlock = false; i += 2 }
-                    text[i] == '\n' -> { out.append('\n'); i++ }
-                    else -> i++
-                }
-                continue
-            }
-            if (text.startsWith("/*", i)) { inBlock = true; i += 2; continue }
-            if (text.startsWith("//", i)) {
-                while (i < text.length && text[i] != '\n') i++
-                continue
-            }
-            // A string literal can contain "//" — do not treat it as a
-            // comment start. The scan is textual, so a simple heuristic
-            // is enough: skip to the end of the current line's quotes.
-            if (text[i] == '"') {
-                out.append(text[i]); i++
-                while (i < text.length && text[i] != '"' && text[i] != '\n') {
-                    if (text[i] == '\\' && i + 1 < text.length) { out.append(text[i]); i++ }
-                    out.append(text[i]); i++
-                }
-                if (i < text.length) { out.append(text[i]); i++ }
-                continue
-            }
-            out.append(text[i]); i++
-        }
-        return out.toString()
-    }
 
     private fun productionFiles(): List<java.io.File> {
         val root = ProductionSources.mainRoot()
@@ -354,7 +320,7 @@ class SubagentCrossPackageImportTest {
             // type is not a USE of it, and requiring an import for a
             // comment would be wrong. (The auto-discovery made this
             // visible — every "offender" turned out to be prose.)
-            val text = stripComments(file.readText())
+            val text = SubagentSourceText.stripComments(file.readText())
             // A file in the `tools` package needs no import for a `tools`
             // helper — that is the same package, not a cross-package use.
             val inToolsPackage = file.parentFile?.name == "tools"

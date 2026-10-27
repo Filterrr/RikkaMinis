@@ -96,6 +96,7 @@ for f in \
   tools/SubagentToolScope.kt \
   tools/SubagentMcpScope.kt \
   tools/SubagentNameKey.kt \
+  tools/SubagentSourceText.kt \
   tools/SubagentTaskFingerprint.kt \
   tools/SubagentDelegation.kt \
   tools/SubagentPartialRecovery.kt \

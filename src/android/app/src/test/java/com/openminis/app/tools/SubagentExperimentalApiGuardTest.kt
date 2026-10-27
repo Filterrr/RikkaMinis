@@ -34,37 +34,6 @@ class SubagentExperimentalApiGuardTest {
     /**
      * Strip line and block comments, preserving line structure.
      */
-    private fun stripComments(text: String): String {
-        val out = StringBuilder(text.length)
-        var i = 0
-        var inBlock = false
-        while (i < text.length) {
-            if (inBlock) {
-                when {
-                    text.startsWith("*/", i) -> { inBlock = false; i += 2 }
-                    text[i] == '\n' -> { out.append('\n'); i++ }
-                    else -> i++
-                }
-                continue
-            }
-            if (text.startsWith("/*", i)) { inBlock = true; i += 2; continue }
-            if (text.startsWith("//", i)) {
-                while (i < text.length && text[i] != '\n') i++
-                continue
-            }
-            if (text[i] == '"') {
-                out.append(text[i]); i++
-                while (i < text.length && text[i] != '"' && text[i] != '\n') {
-                    if (text[i] == '\\' && i + 1 < text.length) { out.append(text[i]); i++ }
-                    out.append(text[i]); i++
-                }
-                if (i < text.length) { out.append(text[i]); i++ }
-                continue
-            }
-            out.append(text[i]); i++
-        }
-        return out.toString()
-    }
 
     /**
      * Is the use at [useIndex] inside the scope of the opt-in at
@@ -90,7 +59,7 @@ class SubagentExperimentalApiGuardTest {
             // COMMENTS are stripped: a mention of an API in a comment is
             // not a USE of it. (The first version of this guard flagged a
             // dozen files whose only "TopAppBar" was in a prose comment.)
-            val text = stripComments(file.readText())
+            val text = SubagentSourceText.stripComments(file.readText())
             // An IMPORT alone does not trigger the error — only a USE
             // does. The import lines are removed before the search, or a
             // file that imports an API it never calls (there are several)

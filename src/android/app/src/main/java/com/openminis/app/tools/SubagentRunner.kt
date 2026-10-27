@@ -519,8 +519,25 @@ class SubagentRunner(
             }
             plan is SubagentGroupSpread.ModelPlan.Failed -> {
                 deps.recordSpreadAssignment(blockId, "failed")
+                // [feat/subagent-roster-routing] The failure message must
+                // name the ALTERNATIVES.
+                //
+                // The resolver had already collected the candidates
+                // (`plan.options`) and the message dropped them on the
+                // floor. So the model was told "no such model" and left
+                // to guess a replacement — and a parent that guesses
+                // wrong loses the whole delegation for the turn. This is
+                // the same reason the roster's unknown-name error lists
+                // the roster.
+                val alternatives = if (plan.options.isEmpty()) {
+                    ""
+                } else {
+                    " Available: " + plan.options.joinToString(", ") +
+                        ". Use one of these, or omit the model argument."
+                }
                 return ToolExecutionResult(
-                    "Error: ${plan.message} Spawn aborted; no sub-agent run was created.",
+                    "Error: ${plan.message}$alternatives " +
+                        "Spawn aborted; no sub-agent run was created.",
                     false, toolTitle = title,
                 )
             }
