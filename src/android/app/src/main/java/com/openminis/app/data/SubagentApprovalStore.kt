@@ -116,6 +116,23 @@ object SubagentApprovalStore {
             .map { it.removePrefix(KEY_PREFIX) }
             .sorted()
 
+    /**
+     * The tool scope a grant was made under, or null if there is no
+     * grant (or the grant predates scope binding).
+     *
+     * [feat/subagent-roster-routing] The Trusted Sub-agents screen uses
+     * this to tell the truth: a grant whose scope no longer matches the
+     * skill's current permissions is NOT the grant the user made, and
+     * the runtime will ask again. Showing it as plainly "trusted" would
+     * be a lie the settings screen tells on the runtime's behalf.
+     */
+    fun recordedScope(context: Context, skillId: String): String? =
+        if (prefs(context).getBoolean(KEY_PREFIX + skillId, false)) {
+            prefs(context).getString(SCOPE_PREFIX + skillId, null)
+        } else {
+            null
+        }
+
     /** Revoke every grant — the "reset sub-agent trust" escape hatch. */
     fun revokeAll(context: Context) {
         val keys = alwaysAllowedSkillIds(context).map { KEY_PREFIX + it }

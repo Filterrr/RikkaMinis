@@ -1086,6 +1086,28 @@ private fun SubagentTrustSection(
     }
     val byId = remember(skills) { skills.associateBy { it.id } }
 
+    // Which grants no longer match the skill's current permissions.
+    // Computed once per (skills, tick) rather than inside the row loop:
+    // a `remember` inside the loop would capture the previous `skills`
+    // map and keep answering with a stale verdict.
+    val staleScopeIds = remember(skills, tick) {
+        grantedIds.filter { skillId ->
+            val recorded = com.openminis.app.data.SubagentApprovalStore
+                .recordedScope(context, skillId)
+            val skill = byId[skillId]
+            if (recorded == null || skill == null) {
+                false
+            } else {
+                val cfg = com.openminis.app.tools.SubagentSkill
+                    .parseSubagentConfig(skill)
+                recorded != com.openminis.app.tools.SubagentToolScope.fingerprint(
+                    cfg.allowedTools,
+                    cfg.disallowedTools,
+                )
+            }
+        }.toSet()
+    }
+
     SettingsSection(
         header = stringResource(R.string.skill_subagent_trust_header),
         footer = stringResource(R.string.skill_subagent_trust_footer),
@@ -1101,9 +1123,21 @@ private fun SubagentTrustSection(
             )
         } else {
             grantedIds.forEachIndexed { index, skillId ->
+                // [feat/subagent-roster-routing] A grant is bound to the
+                // tool scope it was made under. If the skill's
+                // permissions changed since, the runtime will ask again
+                // — so the row must say so. Showing it as plainly
+                // trusted would be the settings screen telling a lie on
+                // the runtime's behalf, and the footer's promise ("may
+                // spawn ... without asking again") would be false.
+                val scopeChanged = skillId in staleScopeIds
                 SettingsRow(
                     title = byId[skillId]?.name ?: skillId,
-                    subtitle = byId[skillId]?.let { stripMarkdown(it.description) } ?: skillId,
+                    subtitle = if (scopeChanged) {
+                        stringResource(R.string.skill_subagent_trust_scope_changed)
+                    } else {
+                        byId[skillId]?.let { stripMarkdown(it.description) } ?: skillId
+                    },
                     showChevron = false,
                     showDivider = index < grantedIds.size - 1,
                     trailing = {

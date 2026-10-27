@@ -88,6 +88,39 @@ class SubagentAlwaysAllowScopeWiringTest {
     }
 
     /**
+     * The settings screen must not tell the user a grant is in force when
+     * the runtime will ask again.
+     *
+     * This is the same defect as the one the approval dialog had: the
+     * screen showed "Trusted — may spawn without asking again" for every
+     * grant, while the runtime had stopped honouring the ones whose
+     * scope had changed. The store and the runtime would disagree, and
+     * the screen would be the one telling the lie.
+     */
+    @Test
+    fun `the trusted-skills screen marks a grant whose scope changed`() {
+        val screen = ProductionSources.read("ui/settings/SkillsManagementScreen.kt")
+        assertTrue(
+            "the trusted-skills screen must compare the recorded scope with the " +
+                "skill's current scope",
+            screen.contains("SubagentToolScope.fingerprint("),
+        )
+        // The LIVE branch, not the mere presence of the string: the first
+        // version of this guard only checked that the source mentioned
+        // the string resource, and the negative verification short-
+        // circuited the branch to `if (false)` while the resource name
+        // stayed in the file — so the guard stayed green while the
+        // screen stopped saying anything.
+        val liveBranch = Regex(
+            """if\s*\(\s*scopeChanged\s*\)\s*\{[^}]*skill_subagent_trust_scope_changed""",
+        )
+        assertTrue(
+            "the trusted-skills screen must say when the permissions changed",
+            liveBranch.containsMatchIn(screen),
+        )
+    }
+
+    /**
      * The ViewModel is the adapter between the runner and the store; it
      * must pass the fingerprint through rather than dropping it.
      */
