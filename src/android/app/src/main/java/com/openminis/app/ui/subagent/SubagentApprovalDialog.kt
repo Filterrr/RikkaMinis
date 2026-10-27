@@ -107,9 +107,18 @@ fun SubagentApprovalDialog(
                     if (request.toolScopeLabel.isNotBlank()) {
                         ApprovalLine(label = "tools", value = request.toolScopeLabel)
                     }
+                    // [feat/subagent-roster-routing] The FIXED sentence is
+                    // gone. It claimed every sub-agent runs "its own tool
+                    // loop (shell, files, browser)" — but a read-only
+                    // auditor has no shell and no browser, so the dialog
+                    // was stating a capability the agent did not have.
+                    //
+                    // The line above now carries the ACTUAL scope, and
+                    // this one says the one thing that is true of every
+                    // sub-agent: it runs unattended once allowed.
                     Text(
-                        text = "The sub-agent runs its own tool loop (shell, files, browser) " +
-                            "without further confirmation until it reports back.",
+                        text = "It runs on its own until it reports back; no further " +
+                            "confirmation is asked while it works.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

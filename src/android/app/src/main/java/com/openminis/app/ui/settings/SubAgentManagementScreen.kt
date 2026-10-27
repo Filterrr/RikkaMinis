@@ -22,9 +22,9 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
-import androidx.compose.material3.ExposedDropdownMenu
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -61,6 +61,7 @@ import com.openminis.app.data.model.ThinkingLevel
  *  - INSTRUCTIONS: WHAT this agent must do (child-session only, so it can
  *    be longer).
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SubAgentManagementScreen(
     definitions: List<SubAgentDefinition>,
@@ -187,6 +188,7 @@ fun SubAgentManagementScreen(
  * [SubAgentLimits] the storage and the prompt injection use, so the editor
  * cannot create a definition the runtime would later clamp.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SubAgentEditorDialog(
     initial: SubAgentDefinition?,
