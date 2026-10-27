@@ -74,6 +74,7 @@ import com.openminis.app.ui.settings.MountedFoldersScreen
 import com.openminis.app.ui.settings.SharedFolderDetailScreen
 import com.openminis.app.ui.settings.SharedFoldersScreen
 import com.openminis.app.ui.settings.SkillsManagementScreen
+import com.openminis.app.ui.settings.SubAgentManagementScreen
 import com.openminis.app.data.repository.EnvVarRepository
 import com.openminis.app.data.repository.MemoryRepository
 import com.openminis.app.data.repository.SkillRepository
@@ -160,6 +161,9 @@ object Routes {
     const val FILE_PREVIEW = "file_preview"
     const val ENV_VARS = "env_vars"
     const val SKILLS = "skills"
+    // [feat/subagent-roster-routing] P0-A — the configured sub-agent
+    // roster editor.
+    const val SUB_AGENTS = "sub_agents"
     const val SKILL_DETAIL = "skill/{skillId}"
     const val SKILL_FILE = "skill_file/{skillId}/{relativePath}"
     const val MINIS_SKILLS_BROWSER = "minis_skills_browser"
@@ -688,6 +692,9 @@ fun AppNavigation(
                 onRootfsClick = { navController.safeNavigate(Routes.STORAGE) },
                 onEnvVarsClick = { navController.safeNavigate(Routes.ENV_VARS) },
                 onSkillsClick = { navController.safeNavigate(Routes.SKILLS) },
+                // [feat/subagent-roster-routing] P0-A — reach the roster
+                // editor.
+                onSubAgentsClick = { navController.safeNavigate(Routes.SUB_AGENTS) },
                 onTerminalClick = { navController.safeNavigate(Routes.terminal()) },
                 onMemoryClick = { navController.safeNavigate(Routes.MEMORY) },
                 onMcpClick = { navController.safeNavigate(Routes.MCP) },
@@ -1314,6 +1321,20 @@ fun AppNavigation(
                     onBack = { navController.safePopBackStack() },
                 )
             }
+        }
+
+        // [feat/subagent-roster-routing] P0-A — the configured sub-agent
+        // roster editor. The roster had storage and CRUD from the start;
+        // this is the missing UI, and with it the roster becomes reachable
+        // AND meaningful (the runtime consumes it).
+        composable(Routes.SUB_AGENTS) {
+            val config by providerRepository.config.collectAsState()
+            SubAgentManagementScreen(
+                definitions = config.subAgents,
+                onUpsert = { def -> providerRepository.upsertSubAgent(def) },
+                onDelete = { id -> providerRepository.deleteSubAgent(id) },
+                onBack = { navController.popBackStack() },
+            )
         }
 
         composable(Routes.SKILLS) {

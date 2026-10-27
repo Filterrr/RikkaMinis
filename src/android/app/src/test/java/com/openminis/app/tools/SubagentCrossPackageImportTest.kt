@@ -32,6 +32,20 @@ class SubagentCrossPackageImportTest {
         "SubagentPartialRecovery",
         "SubagentContextTokens",
         "SubagentCheckpointFormat",
+        // [feat/subagent-roster-routing] The CI build caught a missing
+        // import for EACH of these three in a different file — the same
+        // defect class three times. The guard's helper list was too
+        // narrow: a `data.repository` or `ui.settings` file that used a
+        // `tools` helper was never checked.
+        //
+        // The rule is now general: ANY file in ANY package that BARELY
+        // uses one of these types must import it (unless the file is in
+        // the same package as the type).
+        "SubagentFrontmatter",
+        "SubagentSkill",
+        "SubagentToolScope",
+        "SubagentTaskFingerprint",
+        "SubagentCostLedger",
     )
 
     /** Files that may legitimately use the helpers without an import. */

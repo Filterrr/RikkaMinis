@@ -73,6 +73,10 @@ fun SettingsScreen(
     onRootfsClick: () -> Unit = {},
     onEnvVarsClick: () -> Unit = {},
     onSkillsClick: () -> Unit = {},
+    // [feat/subagent-roster-routing] P0-A — the editor for the configured
+    // sub-agent roster. The roster had storage and CRUD from the start and
+    // no way to reach it.
+    onSubAgentsClick: () -> Unit = {},
     onTerminalClick: () -> Unit = {},
     onMemoryClick: () -> Unit = {},
     // [T-mcp-integration-android] MCP Integrations page, listed directly below
@@ -177,6 +181,17 @@ fun SettingsScreen(
                     title = stringResource(R.string.settings_skills),
                     subtitle = stringResource(R.string.settings_skills_subtitle),
                     onClick = onSkillsClick,
+                )
+                // [feat/subagent-roster-routing] P0-A — the sub-agent
+                // roster editor, right next to Skills (they are the two
+                // halves of delegation: the skills are the runtimes, the
+                // roster says when to use them).
+                SettingsItem(
+                    icon = Icons.Outlined.Psychology,
+                    iconColor = Color(0xFFAF52DE),
+                    title = stringResource(R.string.settings_sub_agents),
+                    subtitle = stringResource(R.string.settings_sub_agents_subtitle),
+                    onClick = onSubAgentsClick,
                 )
                 // [T-soul-md] insertion between Skills and Memory per spec.
                 SettingsItem(

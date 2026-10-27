@@ -114,8 +114,15 @@ internal object SubagentCheckpointFormat {
             }
             appendLine()
             append("These are RECOVERED fragments, not live results — their work stopped mid-flight. ")
-            append("Decide per run: resume it (re-spawn with the task above and any partial artifacts), ")
-            append("or discard it if the task is no longer relevant.")
+            // [feat/subagent-roster-routing] P2-9 — say EXACTLY how to
+            // resume. The old wording said "resume it (re-spawn with the
+            // task above)", which left the parent to guess the tool call —
+            // and a parent that guesses the skill name wrong loses the
+            // resume. Naming the tool and the field makes it one call.
+            append("To resume one, call spawn_agent with skill_name = the skill id given above ")
+            append("and query = the task line above; the run starts from scratch, so say ")
+            append("in the query which parts are already done. ")
+            append("Otherwise discard it if the task is no longer relevant.")
         }.trim()
     }
 

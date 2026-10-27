@@ -2,6 +2,9 @@ package com.openminis.app.data.repository
 
 import android.content.Context
 import com.openminis.app.tools.SkillInfo
+import com.openminis.app.tools.SubagentFrontmatter
+import com.openminis.app.tools.SubagentSkill
+import com.openminis.app.tools.SubagentToolScope
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import android.net.Uri
