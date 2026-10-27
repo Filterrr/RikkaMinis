@@ -79,7 +79,7 @@ fun SubAgentManagementScreen(
         }
         item {
             Text(
-                text = stringResource(R.string.sub_agent_rooster_explainer),
+                text = stringResource(R.string.sub_agent_roster_explainer),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -100,7 +100,7 @@ fun SubAgentManagementScreen(
                             )
                             Text(
                                 text = def.description.ifBlank {
-                                    stringResource(R.string.sub_agent_rooster_no_description)
+                                    stringResource(R.string.sub_agent_roster_no_description)
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
