@@ -20,6 +20,45 @@ package com.openminis.app.tools
  */
 internal object SubagentToolScope {
 
+    /**
+     * A stable fingerprint of one skill's tool permissions.
+     *
+     * [feat/subagent-roster-routing] "Always allow" used to be recorded
+     * per skill ID alone. But the scope it grants is not a property of
+     * the skill — it is a property of the skill's CURRENT `allowed_tools`
+     * and `disallowed_tools`, which the user can change at any time by
+     * editing or re-importing the SKILL.md.
+     *
+     * So a grant outlived the thing the user actually approved. Approve a
+     * read-only auditor, then give it `shell_execute`, and the next spawn
+     * ran with `shell_execute` — silently, forever, under a grant the user
+     * had never been shown. That is a privilege escalation wearing the
+     * costume of a convenience.
+     *
+     * The fingerprint makes the grant mean what the dialog said: the
+     * grant is valid only while the permissions hash to the same value.
+     * Change the scope and the grant no longer matches, so the user is
+     * asked again — with the NEW scope in the dialog.
+     *
+     * The hash is over the sets themselves, not the rendered label, so a
+     * change in wording or in how many names are displayed does not
+     * silently invalidate a grant. An unrestricted skill (no allowlist)
+     * is distinguishable from an allowlist that happens to list every
+     * tool, because they are different capabilities.
+     */
+    fun fingerprint(
+        allowedTools: Set<String>?,
+        disallowedTools: Set<String> = emptySet(),
+    ): String {
+        val allowPart = if (allowedTools == null) {
+            "*"
+        } else {
+            allowedTools.sorted().joinToString(",")
+        }
+        val denyPart = disallowedTools.sorted().joinToString(",")
+        return "$allowPart|deny:$denyPart"
+    }
+
     /** Render the tool scope of one skill for the approval dialog. */
     fun label(
         allowedTools: Set<String>?,

@@ -1309,11 +1309,15 @@ class ChatViewModel(
             // in-flight turn and it drags `_attachments` along with it.
             // [T-subagent-approval] Per-skill always-allow, persisted in
             // SubagentApprovalStore (global, survives chats & restarts).
-            override fun isSkillAlwaysAllowed(skillId: String) =
-                com.openminis.app.data.SubagentApprovalStore.isAlwaysAllowed(context, skillId)
+            override fun isSkillAlwaysAllowed(skillId: String, scopeFingerprint: String?) =
+                com.openminis.app.data.SubagentApprovalStore.isAlwaysAllowed(
+                    context, skillId, scopeFingerprint,
+                )
 
-            override fun setSkillAlwaysAllowed(skillId: String) {
-                com.openminis.app.data.SubagentApprovalStore.setAlwaysAllowed(context, skillId, true)
+            override fun setSkillAlwaysAllowed(skillId: String, scopeFingerprint: String?) {
+                com.openminis.app.data.SubagentApprovalStore.setAlwaysAllowed(
+                    context, skillId, true, scopeFingerprint,
+                )
                 // [T-subagent-approval] Collapse the asks this grant already
                 // covers. A fan-out of N spawns submits N asks up front, so
                 // answering the FIRST with "Always allow" used to leave the

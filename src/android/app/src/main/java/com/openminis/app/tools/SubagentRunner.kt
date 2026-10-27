@@ -206,13 +206,18 @@ class SubagentRunner(
          * skill — the fast path that skips the dialog entirely. Default false:
          * an implementation without persistence still ASKS (safe direction).
          */
-        fun isSkillAlwaysAllowed(skillId: String): Boolean = false
+        fun isSkillAlwaysAllowed(skillId: String, scopeFingerprint: String? = null): Boolean = false
 
         /**
          * [T-subagent-approval] Record an "always allow" grant for [skillId].
          * Only called after the user explicitly chose that option.
+         *
+         * [feat/subagent-roster-routing] [scopeFingerprint] is the tool
+         * scope that was on screen when the user tapped. The grant is
+         * bound to it: if the skill's permissions change later, the grant
+         * no longer matches and the user is asked again.
          */
-        fun setSkillAlwaysAllowed(skillId: String) {}
+        fun setSkillAlwaysAllowed(skillId: String, scopeFingerprint: String? = null) {}
 
         /**
          * [T-subagent-approval] Park the spawn until the user answers. Returns
@@ -673,7 +678,15 @@ class SubagentRunner(
             SubagentOrchestration.attachReusedRun(orchestration, earlyDuplicate.id, groupId)
             return deduplicatedSpawnResult(earlyDuplicate.id, skillName, batchGroupId = groupId)
         }
-        if (!deps.isSkillAlwaysAllowed(skill.id)) {
+        // [feat/subagent-roster-routing] The grant is bound to the scope
+        // the user actually saw. If the skill's `allowed_tools` changed
+        // since the grant was made, the grant no longer applies and the
+        // dialog comes back — showing the NEW scope.
+        val scopeFingerprint = SubagentToolScope.fingerprint(
+            config.allowedTools,
+            config.disallowedTools,
+        )
+        if (!deps.isSkillAlwaysAllowed(skill.id, scopeFingerprint)) {
             when (deps.awaitSpawnApproval(
                 skillId = skill.id,
                 skillName = skill.name,
@@ -696,7 +709,8 @@ class SubagentRunner(
                         "Do the work inline, or ask the user what they would prefer.",
                     false, toolTitle = "Sub-agent: $skillName",
                 )
-                SpawnDecision.ALWAYS_ALLOW -> deps.setSkillAlwaysAllowed(skill.id)
+                SpawnDecision.ALWAYS_ALLOW ->
+                    deps.setSkillAlwaysAllowed(skill.id, scopeFingerprint)
                 SpawnDecision.ALLOW_ONCE -> Unit
             }
         }

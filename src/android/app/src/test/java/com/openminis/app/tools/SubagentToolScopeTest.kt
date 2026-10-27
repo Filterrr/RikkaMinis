@@ -39,6 +39,81 @@ class SubagentToolScopeTest {
         assertTrue("it must NOT claim all tools", !label.contains("all tools"))
     }
 
+    /**
+     * [feat/subagent-roster-routing] The fingerprint that binds an
+     * "always allow" grant to the scope the user actually saw.
+     *
+     * "Always allow" used to be recorded per skill ID alone, while the
+     * scope it grants comes from the skill's CURRENT `allowed_tools` —
+     * which the user can change by editing or re-importing the SKILL.md.
+     * So a grant outlived the thing that was approved: approve a
+     * read-only auditor, add `shell_execute`, and the next spawn ran
+     * with `shell_execute`, silently, forever, under a grant the user
+     * had never seen.
+     *
+     * The fingerprint is what makes "always allow" mean what the dialog
+     * said.
+     */
+    @Test
+    fun `the fingerprint changes when the allowlist changes`() {
+        val before = SubagentToolScope.fingerprint(setOf("file_read"))
+        val after = SubagentToolScope.fingerprint(setOf("file_read", "shell_execute"))
+        assertTrue(
+            "adding a tool must invalidate a grant made under the old scope",
+            before != after,
+        )
+    }
+
+    @Test
+    fun `the fingerprint changes when the blacklist changes`() {
+        val before = SubagentToolScope.fingerprint(setOf("file_read"))
+        val after = SubagentToolScope.fingerprint(setOf("file_read"), setOf("shell_execute"))
+        assertTrue(
+            "denying a tool must invalidate a grant made under the old scope",
+            before != after,
+        )
+    }
+
+    /**
+     * A grant made under one scope must not carry over to a different
+     * one — that is the whole point.
+     */
+    @Test
+    fun `the same scope has the same fingerprint`() {
+        assertEquals(
+            SubagentToolScope.fingerprint(setOf("file_read", "shell_execute")),
+            SubagentToolScope.fingerprint(setOf("shell_execute", "file_read")),
+        )
+    }
+
+    /**
+     * An unrestricted skill is a DIFFERENT capability from one that
+     * happens to list every tool by name, so the two must not share a
+     * fingerprint.
+     */
+    @Test
+    fun `unrestricted is not the same as an explicit all-tools list`() {
+        assertTrue(
+            SubagentToolScope.fingerprint(null) !=
+                SubagentToolScope.fingerprint(setOf("file_read", "shell_execute")),
+        )
+    }
+
+    /**
+     * The fingerprint is over the SETS, not the rendered label. A change
+     * in wording, or in how many names the dialog shows, must not
+     * silently invalidate a grant — that would train the user to ignore
+     * the prompt.
+     */
+    @Test
+    fun `the fingerprint does not depend on the rendered label`() {
+        val many = (1..20).map { "tool_$it" }.toSet()
+        assertEquals(
+            SubagentToolScope.fingerprint(many),
+            SubagentToolScope.fingerprint(many),
+        )
+    }
+
     @Test
     fun `a blacklist is named separately from the allowlist`() {
         val label = SubagentToolScope.label(
