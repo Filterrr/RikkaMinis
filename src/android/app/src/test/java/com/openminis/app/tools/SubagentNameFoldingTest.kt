@@ -89,6 +89,45 @@ class SubagentNameFoldingTest {
      * diacritics. So a skill named "Résumé-agent" was listed under the
      * folded key and could not be found by the name the roster showed.
      */
+    /**
+     * ENUMERATE the routes instead of checking them one at a time.
+     *
+     * The rule was unified across the data layer, the tools resolver and
+     * the roster-hint merge — and then the SKILL LOOKUP was left behind.
+     * It was found only because someone went looking for it specifically.
+     *
+     * A test that checks one route at a time finds exactly the routes
+     * someone thought of. This one lists the places that MATCH a
+     * sub-agent name and asserts that each of them uses the shared
+     * folding rule.
+     *
+     * The list is deliberately explicit: a new matching route has to be
+     * added here, and adding it means deciding whether it should fold.
+     */
+    @Test
+    fun `every route that matches a sub-agent name uses the shared rule`() {
+        val root = com.openminis.app.ProductionSources.mainRoot() ?: return
+        // (file, the expression that matches a name)
+        val routes = listOf(
+            "ui/chat/ChatViewModel.kt" to "it.name == skillName",
+            "tools/SubagentDelegation.kt" to "normalize(it.name) == normalize(GENERAL_SKILL_NAME)",
+            "tools/SubagentRosterHint.kt" to "SubagentDelegation.normalize(it.name) == key",
+            "data/model/SubAgentDefinition.kt" to "SubagentNameKey.normalize(s)",
+        )
+        val missing = mutableListOf<String>()
+        for ((rel, marker) in routes) {
+            val f = File(root, rel)
+            if (!f.isFile) { missing += "$rel (file not found)"; continue }
+            val text = SubagentSourceText.stripComments(f.readText())
+            if (!text.contains(marker)) missing += "$rel (no '$marker')"
+        }
+        assertTrue(
+            "these name-matching routes do not use the shared folding rule:\n" +
+                missing.joinToString("\n"),
+            missing.isEmpty(),
+        )
+    }
+
     @Test
     fun `the skill lookup folds the same way as the roster`() {
         val root = com.openminis.app.ProductionSources.mainRoot() ?: return

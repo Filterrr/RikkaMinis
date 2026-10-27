@@ -111,7 +111,7 @@ object SubagentDelegation {
             // "General Sub Agent", which is NOT the wire name the parent
             // emits — matching on the name would never find it.
             val builtIn = configured.firstOrNull { it.isBuiltIn }
-                ?: configured.firstOrNull { it.name == GENERAL_SKILL_NAME }
+                ?: configured.firstOrNull { normalize(it.name) == normalize(GENERAL_SKILL_NAME) }
                 ?: configured.firstOrNull()
             if (builtIn != null) {
                 // The built-in's display name is not a skill name; it runs
