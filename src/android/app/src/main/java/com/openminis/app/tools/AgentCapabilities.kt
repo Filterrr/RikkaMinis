@@ -49,6 +49,25 @@ enum class AgentCapability {
 
     /** Spawn further sub-agents (`spawn_agent`). */
     SPAWN_AGENT,
+
+    /**
+     * [feat/subagent-roster-routing] The session task list (`todo_write`).
+     *
+     * It was MISSING from this catalog, so the fail-closed filter dropped
+     * it — the same omission that silently took `web_search` away from
+     * every research sub-agent.
+     *
+     * But unlike `web_search`, the fix is NOT to grant it. `todo_write`
+     * REPLACES the whole session task list — the one the user sees in the
+     * chat's top bar. A sub-agent writing to it would overwrite the
+     * parent's plan with its own, and the user would watch the parent's
+     * progress list change underneath them.
+     *
+     * So it gets an explicit capability and an explicit exclusion. The
+     * exclusion is now a DECISION, recorded in the catalog, rather than
+     * an accident of a missing line.
+     */
+    TASK_LIST,
 }
 
 object AgentCapabilities {
@@ -77,6 +96,7 @@ object AgentCapabilities {
         // [T-subagent-orchestration] Parent-only orchestration tools share
         // the SPAWN_AGENT capability — never grantable to sub-agents, so a
         // sub-agent can neither join others' results nor cancel siblings.
+        "todo_write" -> AgentCapability.TASK_LIST
         "join_subagents" -> AgentCapability.SPAWN_AGENT
         "wait_any" -> AgentCapability.SPAWN_AGENT
         "cancel_subagents" -> AgentCapability.SPAWN_AGENT
@@ -101,19 +121,80 @@ object AgentCapabilities {
     /**
      * Capabilities that can NEVER be granted to a sub-agent — not by the
      * default, not by a skill's `allowed_tools`, not by any future
-     * config knob. Enforced twice: schema filter (tools never offered)
-     * and runtime executor (calls never executed).
+     * config knob.
+     *
+     * [feat/subagent-roster-routing] This set was DEAD: nothing in the
+     * production code consulted it. Every capability listed here already
+     * had its tool in [SubagentSkill.FORBIDDEN_TOOLS], and that check
+     * comes FIRST — so the capability-level check could never be
+     * reached. Two lists describing the same rule, one of them
+     * unreachable, and a future edit that touched only one of them would
+     * have widened the grant silently.
+     *
+     * The two lists are now DERIVED from one source: the tool names in
+     * [SubagentSkill.FORBIDDEN_TOOLS] are mapped to their capability,
+     * and that mapping is the hard-forbidden set. A tool that is not in
+     * the capability map contributes nothing — it is already refused by
+     * the fail-closed lookup.
      */
-    val SUBAGENT_HARD_FORBIDDEN: Set<AgentCapability> = setOf(
-        AgentCapability.MEMORY_READ,
-        AgentCapability.MEMORY_WRITE,
-        AgentCapability.SPAWN_AGENT,
-    )
+    val SUBAGENT_HARD_FORBIDDEN: Set<AgentCapability> =
+        SubagentSkill.FORBIDDEN_TOOLS
+            .mapNotNull { capabilityOf(it) }
+            .toSet()
 
-    /** True when a sub-agent may hold [toolName]. */
-    fun isToolGrantableToSubagent(toolName: String): Boolean {
+    /**
+     * True when a sub-agent may hold [toolName].
+     *
+     * [feat/subagent-roster-routing] The HARD-FORBIDDEN check was
+     * MISSING here.
+     *
+     * The set's own documentation says the exclusions are enforced twice
+     * — the schema filter and the runtime executor — and the filter was
+     * the schema filter. But this function only consulted
+     * [SUBAGENT_BASE], so the hard-forbidden capabilities were blocked
+     * only because nobody had happened to add them to the base set.
+     *
+     * That is a single point of failure for the three capabilities that
+     * are supposed to be unreachable by ANY configuration. Adding one of
+     * them to the base set — a plausible-looking edit — would have
+     * silently granted it, and the documentation would have kept
+     * promising the opposite.
+     *
+     * The check is now explicit, so the promise and the code agree.
+     */
+    fun isToolGrantableToSubagent(toolName: String): Boolean =
+        isGrantable(
+            toolName = toolName,
+            base = SUBAGENT_BASE,
+            hardForbidden = SUBAGENT_HARD_FORBIDDEN,
+        )
+
+    /**
+     * The grant rule, with the two sets passed in.
+     *
+     * [feat/subagent-roster-routing] The sets are parameters so the rule
+     * can be TESTED where it matters.
+     *
+     * The real sets are `val`s, so a test could only observe that
+     * `memory_read` is refused — which stays true even if the
+     * hard-forbidden check is deleted, because the capability is absent
+     * from the base set anyway. Such a test cannot tell the two
+     * defences apart, and therefore cannot tell whether the hard
+     * forbidden one is still there.
+     *
+     * With the sets as parameters, the question "is a hard-forbidden
+     * capability refused even when the base set contains it?" is
+     * answerable — and that is exactly the question a future edit to
+     * the base set would turn on.
+     */
+    internal fun isGrantable(
+        toolName: String,
+        base: Set<AgentCapability>,
+        hardForbidden: Set<AgentCapability>,
+    ): Boolean {
         if (toolName in SubagentSkill.FORBIDDEN_TOOLS) return false
         val capability = capabilityOf(toolName) ?: return false
-        return capability in SUBAGENT_BASE
+        if (capability in hardForbidden) return false
+        return capability in base
     }
 }
