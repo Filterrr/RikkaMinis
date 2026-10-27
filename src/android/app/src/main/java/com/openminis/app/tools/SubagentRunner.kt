@@ -2600,18 +2600,35 @@ class SubagentRunner(
         }
         // [feat/subagent-roster-routing] The MCP scope gate. Refused BEFORE
         // the command runs, so an out-of-scope server is never contacted.
-        val mcpServer = SubagentMcpScope.serverInCommand(command)
-        if (mcpServer != null && mcpServer !in mcpServers) {
-            AppLogger.warning(
-                TAG,
-                "[Subagent] MCP server '$mcpServer' REFUSED — outside the skill's " +
-                    "mcp_servers scope (allowed: ${mcpServers.joinToString(", ").ifEmpty { "none" }})",
-            )
-            return ToolExecutionResult(
-                SubagentMcpScope.refusalText(mcpServer, mcpServers),
-                false,
-                toolTitle = toolTitle,
-            )
+        when (val attempt = SubagentMcpScope.attemptInCommand(command)) {
+            null -> Unit
+            is SubagentMcpScope.Attempt.Forbidden -> {
+                AppLogger.warning(
+                    TAG,
+                    "[Subagent] MCP command '${attempt.command}' REFUSED — not permitted " +
+                        "from a sub-agent",
+                )
+                return ToolExecutionResult(
+                    SubagentMcpScope.forbiddenText(attempt.command),
+                    false,
+                    toolTitle = toolTitle,
+                )
+            }
+            is SubagentMcpScope.Attempt.Server -> {
+                if (attempt.server !in mcpServers) {
+                    AppLogger.warning(
+                        TAG,
+                        "[Subagent] MCP server '${attempt.server}' REFUSED — outside the " +
+                            "skill's mcp_servers scope (allowed: " +
+                            "${mcpServers.joinToString(", ").ifEmpty { "none" }})",
+                    )
+                    return ToolExecutionResult(
+                        SubagentMcpScope.refusalText(attempt.server, mcpServers),
+                        false,
+                        toolTitle = toolTitle,
+                    )
+                }
+            }
         }
         val result = ExecutionCoordinator.execute(
             sessionId = deps.activeSessionId(),
