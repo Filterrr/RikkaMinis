@@ -97,6 +97,12 @@ class SubagentRunner(
          */
         fun configuredSubagents(): List<SubagentDelegation.ConfiguredAgent> = emptyList()
 
+        /**
+         * [feat/subagent-roster-routing] P1-3 — the chat-level ledger of
+         * what delegation costs. Null when the chat has no ledger (tests).
+         */
+        fun subagentCostLedger(): SubagentCostLedger? = null
+
         fun agentTools(): List<AgentToolDefinition>
         fun currentProvider(): com.openminis.app.provider.LLMProvider?
         fun activeSessionId(): String
@@ -1055,6 +1061,14 @@ class SubagentRunner(
         if (reserved) {
             guard!!.reserve(worstCaseChildTokens)
         }
+        // [feat/subagent-roster-routing] P1-3 — book the run's CEILING in
+        // the chat-level ledger. This is independent of the parent's token
+        // budget (whose token dimension is disabled today): the ledger is
+        // what makes the chat's delegation spend VISIBLE, as a ceiling the
+        // runtime's own configuration implies — never as a fabricated
+        // measurement.
+        val ledger = deps.subagentCostLedger()
+        ledger?.reserve(run.id, skill.name, worstCaseChildTokens)
         try {
             return block()
         } finally {
@@ -1065,6 +1079,19 @@ class SubagentRunner(
                 } ?: 0L
                 runCatching { guard!!.settle(actual) }
             }
+            // Settle what the provider actually reported — and record
+            // WHETHER it reported anything, so "unknown" never renders as
+            // "free".
+            val snapshot = registry.runs.value.firstOrNull { it.id == run.id }
+            val hasUsage = snapshot != null &&
+                (snapshot.tokensIn >= 0 || snapshot.tokensOut >= 0)
+            ledger?.settle(
+                run.id,
+                snapshot?.let {
+                    it.tokensIn.coerceAtLeast(0).toLong() + it.tokensOut.coerceAtLeast(0).toLong()
+                } ?: 0L,
+                hasUsage,
+            )
         }
     }
 

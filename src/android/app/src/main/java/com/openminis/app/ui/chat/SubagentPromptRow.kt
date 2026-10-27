@@ -44,6 +44,7 @@ import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.Radar
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -83,6 +84,21 @@ fun SubagentPromptRow(
     activeCount: Int,
     onOpenRun: (String) -> Unit,
     modifier: Modifier = Modifier,
+    /**
+     * [feat/subagent-roster-routing] P2-11 — the chat-level delegation
+     * spend.
+     *
+     * Per-run token counts were shown, but the user had no idea what the
+     * DELEGATION as a whole cost — and a chat that quietly spawned five
+     * sub-agents looked identical to one that did not. The label states
+     * what is actually known:
+     *  - the reported total, when the provider reported usage;
+     *  - otherwise the CEILING, marked with "≤" so it is never read as a
+     *    measurement;
+     *  - and never "0" when the provider reported nothing — unknown is
+     *    rendered as unknown.
+     */
+    costLabel: String? = null,
 ) {
     if (runs.isEmpty()) return
     Row(
@@ -112,6 +128,21 @@ fun SubagentPromptRow(
             SubagentCapsule(
                 run = run,
                 onOpenRun = onOpenRun,
+            )
+        }
+        // [feat/subagent-roster-routing] P2-11 — the chat-level spend.
+        if (!costLabel.isNullOrBlank()) {
+            Text(
+                text = costLabel,
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .background(
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        RoundedCornerShape(8.dp),
+                    )
+                    .padding(horizontal = 7.dp, vertical = 4.dp),
             )
         }
     }

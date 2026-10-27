@@ -795,6 +795,33 @@ class ChatViewModel(
     )
 
     /**
+     * [feat/subagent-roster-routing] P1-3 — the chat-level ledger of what
+     * delegation costs the user.
+     *
+     * The parent's own token budget does not cover this: its token
+     * dimension is disabled today (`maxEstimatedTokens = null`), and that
+     * budget forbids fabricating a token count. So the ledger reports
+     * delegation spend as a CEILING — a real fact about the runtime's
+     * configuration — and separately tracks what the provider actually
+     * reported, with "nothing reported" kept visibly distinct from zero.
+     */
+    val subagentCostLedger = SubagentCostLedger()
+
+    /**
+     * [feat/subagent-roster-routing] P2-11 — the chat-level delegation
+     * spend, as one label for the UI.
+     *
+     * Two states, both honest:
+     *  - the provider reported usage → the measured total;
+     *  - it reported nothing → the CEILING, marked "≤".
+     *
+     * Null when nothing was delegated. Never "0" for an unknown total —
+     * a silent provider must not masquerade as a free run.
+     */
+    val subagentCostLabel: String?
+        get() = subagentCostLedger.summary() ?: subagentCostLedger.worstCaseSummary()
+
+    /**
      * [feat/subagent-roster-routing] P2-4 — the chat-global concurrency
      * cap, overridable by the user.
      *
@@ -1189,6 +1216,10 @@ class ChatViewModel(
             // instructions — the runtime resolves a configured speciality to
             // a skill + a mission.
             override fun configuredSubagents() = this@ChatViewModel.configuredSubagentDefinitions()
+
+            // [feat/subagent-roster-routing] P1-3 — the chat-level ledger
+            // of delegation spend.
+            override fun subagentCostLedger() = this@ChatViewModel.subagentCostLedger
             override fun agentTools() = this@ChatViewModel.agentTools
             override fun currentProvider() = this@ChatViewModel.currentProvider
             override fun activeSessionId() = this@ChatViewModel.activeSessionId
