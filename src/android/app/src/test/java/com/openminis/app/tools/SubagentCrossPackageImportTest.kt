@@ -25,7 +25,40 @@ import java.io.File
 class SubagentCrossPackageImportTest {
 
     /** The helpers this change moved into the pure `tools` package. */
-    private val helpers = listOf(
+    /**
+     * The types this BRANCH introduced, discovered from the sources.
+     *
+     * A hand-kept list is a guard that fails exactly when it is needed:
+     * every type added after the list was written is invisible to it.
+     * The CI build caught this three times — once per new type that a
+     * file outside the `tools` package used without importing.
+     *
+     * The discovery covers the files this branch touched: the `tools`
+     * package plus the two new non-tools types.
+     */
+    private val helpers: List<String> = discoverHelpers()
+
+    private fun discoverHelpers(): List<String> {
+        val root = ProductionSources.mainRoot() ?: return emptyList()
+        val found = linkedSetOf<String>()
+        for (file in root.walkTopDown().filter { it.isFile && it.extension == "kt" }) {
+            val rel = file.relativeTo(root).path
+            val inTools = file.parentFile?.name == "tools"
+            val isConcurrencyPrefs = rel.endsWith("data/SubagentConcurrencyPrefs.kt")
+            if (!inTools && !isConcurrencyPrefs) continue
+            val text = file.readText()
+            for (m in Regex(
+                """^(?:public\s+|internal\s+|private\s+)?(?:data\s+|sealed\s+|abstract\s+|value\s+|enum\s+)*(?:class|object|interface)\s+([A-Za-z_][A-Za-z0-9_]*)""",
+                RegexOption.MULTILINE,
+            ).findAll(text)) {
+                found += m.groupValues[1]
+            }
+        }
+        return found.toList()
+    }
+
+    @Suppress("unused")
+    private val legacyHelpers = listOf(
         "SubagentRosterHint",
         "SubagentRunFormat",
         "SubagentDelegation",
@@ -57,6 +90,45 @@ class SubagentCrossPackageImportTest {
         "SubagentContextTokens.kt",
         "SubagentCheckpointFormat.kt",
     )
+
+    /**
+     * Strip line and block comments, preserving line structure so that
+     * line numbers stay meaningful.
+     */
+    private fun stripComments(text: String): String {
+        val out = StringBuilder(text.length)
+        var i = 0
+        var inBlock = false
+        while (i < text.length) {
+            if (inBlock) {
+                when {
+                    text.startsWith("*/", i) -> { inBlock = false; i += 2 }
+                    text[i] == '\n' -> { out.append('\n'); i++ }
+                    else -> i++
+                }
+                continue
+            }
+            if (text.startsWith("/*", i)) { inBlock = true; i += 2; continue }
+            if (text.startsWith("//", i)) {
+                while (i < text.length && text[i] != '\n') i++
+                continue
+            }
+            // A string literal can contain "//" — do not treat it as a
+            // comment start. The scan is textual, so a simple heuristic
+            // is enough: skip to the end of the current line's quotes.
+            if (text[i] == '"') {
+                out.append(text[i]); i++
+                while (i < text.length && text[i] != '"' && text[i] != '\n') {
+                    if (text[i] == '\\' && i + 1 < text.length) { out.append(text[i]); i++ }
+                    out.append(text[i]); i++
+                }
+                if (i < text.length) { out.append(text[i]); i++ }
+                continue
+            }
+            out.append(text[i]); i++
+        }
+        return out.toString()
+    }
 
     private fun productionFiles(): List<java.io.File> {
         val root = ProductionSources.mainRoot()
@@ -278,7 +350,11 @@ class SubagentCrossPackageImportTest {
         val offenders = mutableListOf<String>()
         for (file in productionFiles()) {
             if (file.name in samePackage) continue
-            val text = file.readText()
+            // COMMENTS are stripped before the check: a KDoc mention of a
+            // type is not a USE of it, and requiring an import for a
+            // comment would be wrong. (The auto-discovery made this
+            // visible — every "offender" turned out to be prose.)
+            val text = stripComments(file.readText())
             // A file in the `tools` package needs no import for a `tools`
             // helper — that is the same package, not a cross-package use.
             val inToolsPackage = file.parentFile?.name == "tools"
