@@ -59,12 +59,19 @@ object SubagentRunCheckpoint {
             java.io.File(sandboxPath)
         }
         file.parentFile?.mkdirs()
+        // [fix/tool-output-env-redaction] Mask env-var values before the
+        // checkpoint lands on disk. The .ckpt holds the run's QUERY and the
+        // last turn's text preview — both of which can quote a secret the
+        // sub-agent just read from a file. The checkpoint is a durable,
+        // file_read-able recovery anchor, so it needs the same scrubbing
+        // the journal got in PR #79.
+        val secrets = SubagentJournalRedaction.currentSecretValues()
         val header = HEADER_PREFIX +
             listOf(run.skillId, run.skillName, run.query)
-                .joinToString("|") { oneLine(it).take(200) }
+                .joinToString("|") { oneLine(SubagentJournalRedaction.redact(it, secrets)).take(200) }
         val progress = "t$turns|" +
             java.time.Instant.now().toString() + "|" +
-            oneLine(lastTextPreview).take(300)
+            oneLine(SubagentJournalRedaction.redact(lastTextPreview, secrets)).take(300)
         file.writeText(header + "\n" + progress + "\n")
         sandboxPath
     }.getOrNull()
