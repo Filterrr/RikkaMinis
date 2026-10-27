@@ -377,6 +377,38 @@ class SubagentRunner(
                 false, toolTitle = title,
             )
         }
+        // [feat/subagent-roster-routing] A MISSPELLED tool name in
+        // `allowed_tools` used to fail silently: the unknown name matched
+        // nothing, so the tool was simply absent — and the agent looked
+        // healthy while quietly missing a capability the author had
+        // granted it. The full set of names is only visible here, where
+        // the catalogue is in hand, so this is where the check belongs.
+        // The names the RUNTIME knows — every tool the app defines, not
+        // only the ones available in this session. `read_image` is
+        // registered only when the model supports image input, so a
+        // skill that lists it is not broken; it is simply unavailable
+        // here. Checking against the session's catalogue would report
+        // that as a typo, and would refuse a perfectly valid skill.
+        val knownToolNames = SubagentAllowedTools.knownToolNames() +
+            deps.agentTools().map { it.name }
+        val unknownAllowed = SubagentAllowedTools.unknownAllowedTools(
+            config.allowedTools,
+            knownToolNames,
+        )
+        if (unknownAllowed.isNotEmpty()) {
+            AppLogger.warning(
+                TAG,
+                "[Subagent] Skill '$skillName' lists unknown tool(s) in allowed_tools: " +
+                    unknownAllowed.joinToString(", "),
+            )
+            return ToolExecutionResult(
+                "Error: Skill '$skillName' names tool(s) that do not exist: " +
+                    unknownAllowed.joinToString(", ") + ". " +
+                    "Known tools: " + knownToolNames.sorted().joinToString(", ") + ". " +
+                    "The spawn was NOT started; fix the skill's allowed_tools and try again.",
+                false, toolTitle = title,
+            )
+        }
         val parentProvider = deps.currentProvider() ?: return ToolExecutionResult(
             "Error: No active provider available", false, toolTitle = title,
         )
