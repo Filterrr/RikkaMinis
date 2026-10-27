@@ -36,8 +36,11 @@ object MCPOAuthStore {
                 .also { prefsRef = it }
         }
 
-    private fun secretKey(server: String) = "secret::$server"
-    private fun tokensKey(server: String) = "tokens::$server"
+    private fun secretKey(server: String) = SECRET_PREFIX + server
+    private fun tokensKey(server: String) = TOKENS_PREFIX + server
+
+    private const val SECRET_PREFIX = "secret::"
+    private const val TOKENS_PREFIX = "tokens::"
 
     // -- client secret --
 
@@ -98,6 +101,75 @@ object MCPOAuthStore {
 
     fun isAuthorized(context: Context, server: String): Boolean =
         tokens(context, server)?.accessToken?.isNotEmpty() == true
+
+    /**
+     * Restore one server's OAuth material from a backup.
+     *
+     * [feat/subagent-roster-routing] The backup importer had no way to
+     * write MCP authorizations back — the wire format had the field and
+     * the store had the data, but nothing joined them, so a restored
+     * backup left every MCP server unauthenticated.
+     *
+     * A backup written before this field existed carries the access token
+     * only. It is still restored, and it still works until it expires;
+     * the missing refresh token simply means the user will have to redo
+     * the round-trip at that point. Returning whether a refresh token
+     * came along lets the importer say so rather than pretending the
+     * restore was complete.
+     */
+    fun restore(
+        context: Context,
+        server: String,
+        accessToken: String,
+        refreshToken: String?,
+        expiresAtMs: Long,
+        clientSecret: String?,
+    ) {
+        val editor = prefs(context).edit()
+        if (clientSecret != null) editor.putString(secretKey(server), clientSecret)
+        editor.putString(
+            tokensKey(server),
+            org.json.JSONObject().apply {
+                put("accessToken", accessToken)
+                put("refreshToken", refreshToken ?: JSONObject.NULL)
+                put("expiresAtMs", expiresAtMs)
+            }.toString(),
+        )
+        editor.apply()
+    }
+
+    /**
+     * Every server this store holds something for.
+     *
+     * [feat/subagent-roster-routing] The backup export needs to know
+     * WHICH servers have OAuth material — the store only ever answered
+     * "what do you have for THIS server", so there was no way to ask
+     * "what do you have at all". That is why the MCP OAuth secrets never
+     * reached the backup: the wire format had the field, the store had
+     * the data, and nothing could join them.
+     *
+     * Both key prefixes are scanned, because a server can hold a client
+     * secret without having completed the token exchange yet — and that
+     * secret is exactly what the user would have to re-enter by hand
+     * after a restore.
+     */
+    fun allServers(context: Context): List<String> {
+        val all = prefs(context).all.keys
+        return all.mapNotNull { key ->
+            when {
+                key.startsWith(SECRET_PREFIX) -> key.removePrefix(SECRET_PREFIX)
+                key.startsWith(TOKENS_PREFIX) -> key.removePrefix(TOKENS_PREFIX)
+                else -> null
+            }
+        }.distinct().sorted()
+    }
+
+    /**
+     * The client secret for a server, or null. Exposed for the backup
+     * export, which needs it in the wire shape.
+     */
+    fun clientSecretOrNull(context: Context, server: String): String? =
+        clientSecret(context, server)
 
     /** Forget issued tokens but keep the client secret (sign out, re-auth later). */
     fun signOut(context: Context, server: String) {

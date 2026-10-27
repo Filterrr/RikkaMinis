@@ -450,11 +450,34 @@ data class BackupSecrets(
     @Serializable
     data class EnvVarSecret(val name: String, val value: String)
 
+    /**
+     * One MCP server's OAuth material.
+     *
+     * [feat/subagent-roster-routing] `refreshToken` and `expiresAtMs`
+     * are ADDITIVE optional fields.
+     *
+     * The original shape carried only the access token. Without the
+     * refresh token, a restored MCP authorization would work until the
+     * access token expired and then stop — with no way to recover,
+     * because the refresh token was never in the backup to begin with.
+     * The user would have to redo the OAuth round-trip and would have
+     * had no warning that this was coming.
+     *
+     * Adding optional fields with defaults keeps the wire compatible:
+     * an older iOS build ignores what it does not know
+     * (`ignoreUnknownKeys = true`), and an older backup simply has
+     * nulls here, which the importer handles by restoring the access
+     * token alone.
+     */
     @Serializable
     data class MCPOAuthSecret(
         val serverId: String,
         val token: String,
         val clientSecret: String? = null,
+        /** base64 of the refresh token's UTF-8 bytes. */
+        val refreshToken: String? = null,
+        /** When the access token expires, in epoch millis. */
+        val expiresAtMs: Long? = null,
     )
 }
 
