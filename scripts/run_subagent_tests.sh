@@ -20,6 +20,9 @@ set -e
 REPO=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 SRC=$REPO/src/android/app/src/main/java/com/openminis/app
 TEST=$REPO/src/android/app/src/test/java/com/openminis/app
+# The resolver walks from the PACKAGE root so it can read the package
+# declaration out of each file.
+TEST_ROOT=$REPO/src/android/app/src/test/java
 OUT=/tmp/subagent-tests-out
 
 KOTLINC=/tmp/kotlinc/bin/kotlinc
@@ -100,15 +103,25 @@ for f in \
 done
 
 # ── Test sources ─────────────────────────────────────────────────────────
-TESTS=""
+# The SOURCE selection and the CLASS selection must agree. A file may
+# declare more than one test class (SubagentRunRegistryTest.kt also
+# declares SubagentSchedulerTest), so resolving a class by filename
+# silently dropped the extra class from the run — a test the CI failed on
+# was GREEN locally. Both sides now go through the same resolver: the
+# class name maps to the file that DECLARES it, and the default run
+# takes every file that declares a Subagent test class.
+RESOLVER="$(dirname "$0")/resolve_test_classes.py"
+
 if [ $# -gt 0 ]; then
+  TESTS=""
   for c in "$@"; do
-    f=$(find "$TEST" -name "$c.kt" | head -1)
-    if [ -z "$f" ]; then echo "test class not found: $c" >&2; exit 1; fi
+    f=$(python3 "$RESOLVER" --file "$TEST_ROOT" "$c") || {
+      echo "test class not found: $c" >&2; exit 1;
+    }
     TESTS="$TESTS $f"
   done
 else
-  TESTS=$(find "$TEST" -name '*Subagent*Test.kt' | sort)
+  TESTS=$(python3 "$RESOLVER" --files "$TEST_ROOT" | sort)
 fi
 
 # The source-grep drift guards need the production tree on disk, and
@@ -125,22 +138,31 @@ for f in \
   if [ -f "$SRC/$f" ]; then ANDROIDISH="$ANDROIDISH $SRC/$f"; fi
 done
 
-"$KOTLINC" -nowarn -classpath "$CP" -d "$OUT" $PROD $ANDROIDISH \
+# The JVM heap for kotlinc matters: adding the scheduler test class
+# pushed the compile over the default heap and it died with
+# "OutOfMemoryError: Java heap space" mid-analysis. 3g is comfortable on
+# a 15g host and leaves room for the test JVM.
+"$KOTLINC" -J-Xmx3g -nowarn -classpath "$CP" -d "$OUT" $PROD $ANDROIDISH \
   "$REPO/scripts/test-stubs/EnvVarRepositoryStub.kt" $TESTS "$TEST/ProductionSources.kt"
 
 # ── Run ──────────────────────────────────────────────────────────────────
+# The class list is derived from the DECLARED class names, not the file
+# names. A file may declare more than one test class (SubagentRunRegistryTest.kt
+# also declares SubagentSchedulerTest), and resolving by filename silently
+# dropped the extra class from the run — so a test the CI failed on was
+# GREEN locally. That is the worst kind of gap: it hides a failure exactly
+# when the failure is real.
 if [ $# -gt 0 ]; then
   CLASSES=""
   for c in "$@"; do
-    f=$(find "$TEST" -name "$c.kt" | head -1)
-    rel=${f#"$TEST"/}
-    CLASSES="$CLASSES com.openminis.app.$(echo "$rel" | sed 's|/|.|g; s|\.kt$||')"
+    resolved=$(python3 "$RESOLVER" "$TEST_ROOT" "$c") || {
+      echo "test class not found: $c" >&2
+      exit 1
+    }
+    CLASSES="$CLASSES $resolved"
   done
 else
-  CLASSES=$(find "$TEST" -name '*Subagent*Test.kt' | sort | while read -r f; do
-    rel=${f#"$TEST"/}
-    echo "com.openminis.app.$(echo "$rel" | sed 's|/|.|g; s|\.kt$||')"
-  done)
+  CLASSES=$(python3 "$RESOLVER" --all "$TEST_ROOT")
 fi
 
 java -cp "$OUT:$CP" org.junit.runner.JUnitCore $CLASSES

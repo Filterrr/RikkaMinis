@@ -48,6 +48,12 @@ class SubagentScheduler(
     private val perSkill = ConcurrentHashMap<String, Semaphore>()
 
     /**
+     * Guards the get-or-replace of a per-skill semaphore. See
+     * [skillSemaphore] for why the replacement must be atomic.
+     */
+    private val perSkillLock = Any()
+
+    /**
      * [feat/subagent-roster-routing] P2-4 — the limit each per-skill
      * semaphore was built with. kotlinx's Semaphore does not expose its
      * own capacity, so the scheduler keeps it alongside.
@@ -78,7 +84,8 @@ class SubagentScheduler(
     ): T {
         if (deadlineNanos <= 0L && maxQueueWaitMs <= 0L) {
             // Ungated (legacy) path: wait FIFO forever, as before.
-            return skillSemaphore(skillId, skillLimit).withPermit {
+            val sem = skillSemaphore(skillId, skillLimit)
+            return sem.withPermit {
                 global.withPermit { counted(block) }
             }
         }
@@ -104,7 +111,8 @@ class SubagentScheduler(
             )
         }
         val waitMs = if (maxQueueWaitMs > 0L) minOf(remainingMs, maxQueueWaitMs) else remainingMs
-        if (!tryAcquire(skillId, skillLimit, waitMs)) {
+        val acquired = tryAcquirePair(skillId, skillLimit, waitMs)
+        if (acquired == null) {
             throw QueueTimeoutException(
                 if (maxQueueWaitMs > 0L) {
                     "no scheduler slot became free within ${maxQueueWaitMs}ms of queue wait"
@@ -117,7 +125,8 @@ class SubagentScheduler(
         try {
             return counted(block)
         } finally {
-            release(skillId, skillLimit)
+            // Release on the SAME semaphore the permit came from.
+            releasePair(acquired.first)
         }
     }
 
@@ -169,31 +178,48 @@ class SubagentScheduler(
      * twice the deadline the caller was promised. The budget is now
      * measured against a single deadline that both levels share.
      */
-    suspend fun tryAcquire(skillId: String, skillLimit: Int, waitBudgetMs: Long): Boolean {
+    /**
+     * Acquire a pair (skill permit + global permit).
+     *
+     * [feat/subagent-roster-routing] P2-4 — returns the EXACT semaphore
+     * whose permit was taken, or null on failure.
+     *
+     * Returning it matters because the per-skill semaphore can now be
+     * REPLACED when the configured limit changes (see [skillSemaphore]).
+     * A release that looked the semaphore up again by id could release a
+     * DIFFERENT object than the one it acquired from — which strands the
+     * original permit and leaks a slot. The pair must be released on the
+     * objects it was taken from.
+     */
+    private suspend fun tryAcquirePair(
+        skillId: String,
+        skillLimit: Int,
+        waitBudgetMs: Long,
+    ): Pair<Semaphore, Boolean>? {
         val skillSemaphore = skillSemaphore(skillId, skillLimit)
         if (waitBudgetMs <= 0) {
             // Immediate-try semantics: no waiting at either level.
-            if (!skillSemaphore.tryAcquire()) return false
+            if (!skillSemaphore.tryAcquire()) return null
             if (!global.tryAcquire()) {
                 skillSemaphore.release()
-                return false
+                return null
             }
-            return true
+            return skillSemaphore to true
         }
         val deadlineNanos = System.nanoTime() + waitBudgetMs * 1_000_000L
-        if (!acquireWithin(skillSemaphore, deadlineNanos)) return false
+        if (!acquireWithin(skillSemaphore, deadlineNanos)) return null
         val remainingMs = ((deadlineNanos - System.nanoTime()) / 1_000_000L).coerceAtLeast(0L)
         if (!acquireWithin(global, deadlineNanos, remainingMs)) {
             skillSemaphore.release()
-            return false
+            return null
         }
-        return true
+        return skillSemaphore to true
     }
 
-    /** Release a pair acquired by [tryAcquire]. Mirrors its acquisition order. */
-    fun release(skillId: String, skillLimit: Int) {
+    /** Release a pair acquired by [tryAcquirePair]. Mirrors its acquisition order. */
+    private fun releasePair(skillSemaphore: Semaphore) {
         global.release()
-        skillSemaphore(skillId, skillLimit).release()
+        skillSemaphore.release()
     }
 
     /**
@@ -242,22 +268,34 @@ class SubagentScheduler(
      */
     private fun skillSemaphore(skillId: String, skillLimit: Int): Semaphore {
         val limit = skillLimit.coerceIn(1, SubagentSkill.MAX_PARALLEL_CAP)
-        val existing = perSkill[skillId]
-        if (existing != null && perSkillLimit[skillId] == limit) return existing
-        val replacement = Semaphore(limit)
-        if (existing != null) {
+        // The get-or-replace must be ATOMIC. Two concurrent spawns that
+        // both see "the limit changed" would each build a replacement and
+        // each install it — and the loser's permit would be stranded on a
+        // semaphore nobody holds any more, leaking a slot and letting the
+        // cap be exceeded.
+        //
+        // One lock for the whole map: the critical section is a handful of
+        // field accesses, and contention is limited to the moment a limit
+        // actually changes.
+        synchronized(perSkillLock) {
+            val existing = perSkill[skillId]
+            if (existing != null && perSkillLimit[skillId] == limit) return existing
+            val replacement = Semaphore(limit)
+            if (existing != null) {
             // Carry the in-flight holders over: take one permit for each
             // run still holding one on the old semaphore, so the new cap
             // is not exceeded by the overlap.
-            val inFlight = perSkillLimit[skillId]?.minus(existing.availablePermits) ?: 0
-            // tryAcquire, not acquire: this is not a suspend context, and
-            // the permit is available by construction (the replacement was
-            // created with `limit` permits and we take at most `limit`).
-            repeat(inFlight.coerceIn(0, limit)) { replacement.tryAcquire() }
+                val inFlight = perSkillLimit[skillId]?.minus(existing.availablePermits) ?: 0
+                // tryAcquire, not acquire: this is not a suspend context,
+                // and the permit is available by construction (the
+                // replacement was created with `limit` permits and we take
+                // at most `limit`).
+                repeat(inFlight.coerceIn(0, limit)) { replacement.tryAcquire() }
+            }
+            perSkill[skillId] = replacement
+            perSkillLimit[skillId] = limit
+            return replacement
         }
-        perSkill[skillId] = replacement
-        perSkillLimit[skillId] = limit
-        return replacement
     }
 
     // ── Diagnostics (tests / debug overlays) ─────────────────────────────
