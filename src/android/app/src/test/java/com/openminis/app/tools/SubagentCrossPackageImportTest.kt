@@ -132,7 +132,20 @@ class SubagentCrossPackageImportTest {
                     enclosingIsRestricted = true
                     enclosingIndent = indent
                 }
-                if (!line.contains("fun ")) continue
+                // A PROPERTY can expose an internal type just as a
+                // function can: `val ledger = SubagentCostLedger()` is a
+                // public property whose type is internal, and Kotlin
+                // rejects it the same way. The CI build caught the
+                // function form; the property form is the same defect.
+                //
+                // Only CLASS-LEVEL properties count. A `val` inside a
+                // function body is local — its type is not part of any
+                // signature, so it exposes nothing. Class members sit at
+                // indentation 4 (or less); a local declaration is deeper.
+                val isClassLevel = indent <= 4
+                if (!line.contains("fun ") &&
+                    !(isClassLevel && (line.contains("val ") || line.contains("var ")))
+                ) continue
                 // [feat/subagent-roster-routing] The visibility rule is
                 // about the DECLARED visibility, not the `public` keyword:
                 // a member of an interface without a modifier IS public,
@@ -148,6 +161,15 @@ class SubagentCrossPackageImportTest {
                 val isExplicitlyRestricted = Regex("""\b(internal|private)\s+fun\b""")
                     .containsMatchIn(line)
                 if (isExplicitlyRestricted) continue
+                // A `private`/`internal` PROPERTY is restricted the same
+                // way. The declaration may put the modifier on the line
+                // or on a preceding line (a KDoc-annotated multi-line
+                // declaration), so check both.
+                if (Regex("""\b(internal|private)\s+(?:const\s+|lateinit\s+|val\s+|var\s+)""")
+                        .containsMatchIn(line)
+                ) {
+                    continue
+                }
                 // Inside an `internal`/`private` declaration, the member's
                 // effective visibility is already restricted — no error.
                 if (enclosingIsRestricted) continue
@@ -158,9 +180,28 @@ class SubagentCrossPackageImportTest {
                     // one-line `fun f(x: T) = Other.internalThing(x)`
                     // exposes nothing: the internal type appears in the
                     // body, and Kotlin only forbids it in the signature.
-                    val sig = line.substringAfter("fun ")
-                        .substringBefore(" = ")
-                        .substringBefore(" {")
+                    val sig = if (line.contains("fun ")) {
+                        line.substringAfter("fun ")
+                            .substringBefore(" = ")
+                            .substringBefore(" {")
+                    } else {
+                        // For a property, the type may be DECLARED on the
+                        // left of the `=` (`val x: Foo`) or INFERRED from
+                        // the initializer (`val x = Foo()`). Both expose
+                        // the type, so both are checked — the inferred
+                        // form is exactly how the CI failure looked.
+                        val declared = line.substringBefore(" = ")
+                            .substringAfter("val ", "")
+                            .substringAfter("var ", "")
+                            .trim()
+                            .substringBefore(":").trim()
+                        val inferred = line.substringAfter("=")
+                            .trim()
+                            .substringBefore("(")
+                            .substringBefore(" ")
+                            .trim()
+                        if (declared.isNotEmpty()) declared else inferred
+                    }
                     // A QUALIFIED mention (`Foo.Bar`) is not the same as
                     // exposing `Bar` — `SubagentCheckpointFormat.InterruptedRun`
                     // names the internal object's member, and Kotlin allows

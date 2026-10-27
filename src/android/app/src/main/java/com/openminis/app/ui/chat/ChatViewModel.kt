@@ -806,7 +806,7 @@ class ChatViewModel(
      * configuration — and separately tracks what the provider actually
      * reported, with "nothing reported" kept visibly distinct from zero.
      */
-    val subagentCostLedger = SubagentCostLedger()
+    internal val subagentCostLedger = SubagentCostLedger()
 
     /**
      * [feat/subagent-roster-routing] P2-11 — the chat-level delegation
