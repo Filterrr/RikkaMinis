@@ -43,6 +43,20 @@ class SubagentRunner(
     private val deps: Deps,
 ) {
     /**
+     * [feat/subagent-roster-routing] The roster as a trailing note, for the
+     * errors where the skill EXISTS but cannot be spawned (not a sub-agent
+     * skill, disabled for this session). The parent's instruction says not
+     * to retry the SAME spawn — so the note has to offer a DIFFERENT one.
+     *
+     * Empty when no roster is known (tests, or a chat with no sub-agent
+     * installed): the message then says nothing extra, exactly as before.
+     */
+    private fun rosterSuffix(): String {
+        val roster = SubagentRosterHint.build(deps.subagentRoster())
+        return if (roster.isEmpty()) "" else "\n\n$roster"
+    }
+
+    /**
      * Conversation-layer dependencies. Deliberately narrow: no ChatViewModel
      * or SkillRepository reference leaks into the sub-agent runtime — skill
      * access goes through [findSkill]/[isSkillEnabledForSession] so this
@@ -51,6 +65,44 @@ class SubagentRunner(
     interface Deps {
         fun findSkill(skillName: String): SkillInfo?
         fun isSkillEnabledForSession(skillId: String): Boolean
+
+        /**
+         * [feat/subagent-roster-routing] The sub-agents that are spawnable
+         * RIGHT NOW — installed, enabled for this session, and marked
+         * `subagent: true`.
+         *
+         * Used for two things:
+         *  - the roster the parent sees (discoverability — the parent must
+         *    not have to guess a `skill_name`);
+         *  - the error message when the parent names one that does not exist:
+         *    it lists the valid names so the model can CORRECT THE NAME IN
+         *    THE SAME RESPONSE. Without it the model's own rule ("do not
+         *    retry the same spawn") turned one bad name into a lost
+         *    delegation.
+         *
+         * Default empty = no roster known (tests / a VM without the
+         * repository) → the old behaviour, no listing.
+         */
+        fun subagentRoster(): List<SubagentRosterHint.Entry> = emptyList()
+
+        /**
+         * [feat/subagent-roster-routing] The CONFIGURED roster — the
+         * user's own sub-agent definitions (name, description, the
+         * instructions that make that agent what it is).
+         *
+         * These entries name a SPECIALITY, not a runtime: they say WHEN to
+         * delegate somewhere and WHAT that agent must do. The runtime
+         * comes from a skill. Default empty = no configured roster (the
+         * common case for a fresh install).
+         */
+        fun configuredSubagents(): List<SubagentDelegation.ConfiguredAgent> = emptyList()
+
+        /**
+         * [feat/subagent-roster-routing] P1-3 — the chat-level ledger of
+         * what delegation costs. Null when the chat has no ledger (tests).
+         */
+        fun subagentCostLedger(): SubagentCostLedger? = null
+
         fun agentTools(): List<AgentToolDefinition>
         fun currentProvider(): com.openminis.app.provider.LLMProvider?
         fun activeSessionId(): String
@@ -154,13 +206,18 @@ class SubagentRunner(
          * skill — the fast path that skips the dialog entirely. Default false:
          * an implementation without persistence still ASKS (safe direction).
          */
-        fun isSkillAlwaysAllowed(skillId: String): Boolean = false
+        fun isSkillAlwaysAllowed(skillId: String, scopeFingerprint: String? = null): Boolean = false
 
         /**
          * [T-subagent-approval] Record an "always allow" grant for [skillId].
          * Only called after the user explicitly chose that option.
+         *
+         * [feat/subagent-roster-routing] [scopeFingerprint] is the tool
+         * scope that was on screen when the user tapped. The grant is
+         * bound to it: if the skill's permissions change later, the grant
+         * no longer matches and the user is asked again.
          */
-        fun setSkillAlwaysAllowed(skillId: String) {}
+        fun setSkillAlwaysAllowed(skillId: String, scopeFingerprint: String? = null) {}
 
         /**
          * [T-subagent-approval] Park the spawn until the user answers. Returns
@@ -174,6 +231,12 @@ class SubagentRunner(
             task: String,
             modelLabel: String,
             detached: Boolean,
+            /**
+             * [feat/subagent-roster-routing] The tool permissions being
+             * granted, rendered for the dialog. The default keeps every
+             * existing Deps adapter source-compatible.
+             */
+            toolScopeLabel: String = "",
         ): SpawnDecision = SpawnDecision.ALLOW_ONCE
 
         /**
@@ -236,32 +299,118 @@ class SubagentRunner(
             )
         }
 
-        val skill = deps.findSkill(skillName) ?: return ToolExecutionResult(
-            "Error: Skill '$skillName' not found. Make sure it is installed and the name is correct.",
-            false, toolTitle = title,
+        // [feat/subagent-roster-routing] Resolve the requested name against
+        // BOTH routes:
+        //  1. a SKILL — the runtime (tool set, budget, instructions);
+        //  2. a CONFIGURED roster entry — the speciality the user defined.
+        //
+        // A configured entry is a NAME + DESCRIPTION, not a runtime, so it
+        // needs a skill to run on. The pairing rule is deliberate:
+        //  - same name as a sub-agent skill → that skill, with the
+        //    configured DESCRIPTION as the routing text (the user wrote it
+        //    to say WHEN to delegate there);
+        //  - otherwise → the DEFAULT sub-agent skill (general-agent), with
+        //    the configured INSTRUCTIONS appended as the mission.
+        //
+        // Before this, `SubAgentRoster.resolve` had ZERO call sites and
+        // the `subagent_task` tool was never registered: the configured
+        // roster was a complete data model with no runtime behind it.
+        val delegation = SubagentDelegation.resolve(
+            requested = skillName,
+            skillRoster = deps.subagentRoster(),
+            configured = deps.configuredSubagents(),
+            skillExists = { n -> deps.findSkill(n) != null },
         )
-        val config = SubagentSkill.parseSubagentConfig(skill)
+        val skill = delegation?.let { deps.findSkill(it.skillName) }
+            ?: deps.findSkill(skillName)
+            ?: return ToolExecutionResult(
+                // Name the valid alternatives. The parent's standing
+                // instruction is "do not retry the same spawn", so a bare
+                // "not found" makes it give up on the delegation entirely;
+                // listing the roster lets it pick a real one in the SAME
+                // turn.
+                SubagentRosterHint.unknownAgentMessage(skillName, deps.subagentRoster()),
+                false, toolTitle = title,
+            )
+        val parsedConfig = SubagentSkill.parseSubagentConfig(skill)
+        // [feat/subagent-roster-routing] The configured roster entry's
+        // reasoning-level override WINS over the skill's own `thinking:`.
+        //
+        // The roster entry is the USER's configuration for this particular
+        // agent ("this reviewer thinks hard"); the skill's `thinking:` is
+        // the author's general default for the skill. When the user has
+        // said otherwise for this agent, the user's word is the more
+        // specific instruction.
+        val config = delegation?.thinkingLevelOverride
+            ?.takeIf { it.isNotBlank() }
+            ?.let { parsedConfig.copy(thinkingLevel = SubagentSkill.parseThinkingLevelName(it)) }
+            ?: parsedConfig
         if (!config.isSubagent) {
             return ToolExecutionResult(
                 "Error: Skill '$skillName' is not a sub-agent skill. " +
-                    "Add `subagent: true` to its SKILL.md frontmatter to enable sub-agent mode.",
+                    "Add `subagent: true` to its SKILL.md frontmatter to enable sub-agent mode." +
+                    rosterSuffix(),
                 false, toolTitle = title,
             )
         }
 
         if (!deps.isSkillEnabledForSession(skill.id)) {
             return ToolExecutionResult(
-                "Error: Skill '$skillName' is disabled for this session",
+                "Error: Skill '$skillName' is disabled for this session" + rosterSuffix(),
                 false, toolTitle = title,
             )
         }
 
+        // [feat/subagent-roster-routing] The mission for this run: the
+        // configured roster entry's instructions when the parent named a
+        // configured speciality, empty for an ordinary skill spawn.
+        val extraInstructions = delegation?.extraInstructions.orEmpty()
+
         // Fail-closed capability filter + explicit allowlist (validated
         // BEFORE registration so a misconfigured skill never creates a run).
-        val subagentTools = SubagentSkill.buildFilteredTools(deps.agentTools(), config.allowedTools)
+        val subagentTools = SubagentSkill.buildFilteredTools(
+            deps.agentTools(),
+            config.allowedTools,
+            // [feat/subagent-roster-routing] The blacklist applies to the
+            // schema too — the model should not even SEE a tool the skill
+            // denies. (The runtime gate enforces it regardless.)
+            config.disallowedTools,
+        )
         if (subagentTools.isEmpty()) {
             return ToolExecutionResult(
                 "Error: Skill '$skillName' has no usable tools (all filtered out by forbidden/allowlist)",
+                false, toolTitle = title,
+            )
+        }
+        // [feat/subagent-roster-routing] A MISSPELLED tool name in
+        // `allowed_tools` used to fail silently: the unknown name matched
+        // nothing, so the tool was simply absent — and the agent looked
+        // healthy while quietly missing a capability the author had
+        // granted it. The full set of names is only visible here, where
+        // the catalogue is in hand, so this is where the check belongs.
+        // The names the RUNTIME knows — every tool the app defines, not
+        // only the ones available in this session. `read_image` is
+        // registered only when the model supports image input, so a
+        // skill that lists it is not broken; it is simply unavailable
+        // here. Checking against the session's catalogue would report
+        // that as a typo, and would refuse a perfectly valid skill.
+        val knownToolNames = SubagentAllowedTools.knownToolNames() +
+            deps.agentTools().map { it.name }
+        val unknownAllowed = SubagentAllowedTools.unknownAllowedTools(
+            config.allowedTools,
+            knownToolNames,
+        )
+        if (unknownAllowed.isNotEmpty()) {
+            AppLogger.warning(
+                TAG,
+                "[Subagent] Skill '$skillName' lists unknown tool(s) in allowed_tools: " +
+                    unknownAllowed.joinToString(", "),
+            )
+            return ToolExecutionResult(
+                "Error: Skill '$skillName' names tool(s) that do not exist: " +
+                    unknownAllowed.joinToString(", ") + ". " +
+                    "Known tools: " + knownToolNames.sorted().joinToString(", ") + ". " +
+                    "The spawn was NOT started; fix the skill's allowed_tools and try again.",
                 false, toolTitle = title,
             )
         }
@@ -288,7 +437,56 @@ class SubagentRunner(
         // [Deps.groupSpreadAssignments]. This keeps children deterministic
         // under async fan-out. A lone call with no precomputed assignment
         // (manual dispatch, tests) uses the group's first usable member.
-        val modelArg = args.optString("model", "").trim()
+        // [feat/subagent-roster-routing] The skill's `model:` is the
+        // DEFAULT for this skill: it applies when the parent did not
+        // name a model. An explicit argument from the parent still wins —
+        // the parent's choice is the more specific one.
+        //
+        // The value is resolved through the SAME path as an explicit
+        // argument (`resolveSpawnModelPlan`), so `model:` may name a
+        // model OR a group (`group:<name>`), and a bad name fails the
+        // spawn loudly rather than silently inheriting the parent's
+        // (possibly expensive) model.
+        val requestedModelArg = args.optString("model", "").trim()
+        // [feat/subagent-roster-routing] The configured roster entry may
+        // PIN this agent to a model group. When it does, the group is the
+        // constraint: a model named by the parent that is not in the group
+        // is refused rather than silently honoured, because the user
+        // pinned the group precisely to keep this agent on it.
+        val rosterGroupId = delegation?.modelGroupId
+        // The precedence, narrowest-first:
+        //   1. the parent's explicit `model` argument;
+        //   2. the roster entry's pinned model GROUP;
+        //   3. the skill's own `model:` default;
+        //   4. whatever the group spread resolves.
+        //
+        // The roster's group outranks the skill's default because the
+        // roster entry is the USER's configuration for this particular
+        // agent, while `model:` is the skill author's general default.
+        val modelArg = SubagentModelChoice.resolve(
+            requestedModelArg = requestedModelArg,
+            rosterGroupId = rosterGroupId,
+            skillDefaultModel = config.model,
+        )
+        if (rosterGroupId != null && requestedModelArg.isNotEmpty()) {
+            val members = deps.modelGroupMembers(rosterGroupId)
+            val outsideGroup = SubagentModelChoice.isOutsidePinnedGroup(
+                requestedModelArg = requestedModelArg,
+                pinnedGroupId = rosterGroupId,
+                groupMemberIds = members.map { it.modelId },
+                groupMemberDisplayNames = members.map { it.displayName },
+                groupMemberEntryIds = members.map { it.entryId },
+            )
+            if (outsideGroup) {
+                return ToolExecutionResult(
+                    "Error: this sub-agent is pinned to model group '$rosterGroupId', and " +
+                        "'$requestedModelArg' is not in that group. Use one of: " +
+                        members.joinToString(", ") { it.describe() } +
+                        ", or omit the model to let the group choose.",
+                    false, toolTitle = title,
+                )
+            }
+        }
         val precomputed = deps.groupSpreadAssignments()[blockId]
         // [T-subagent-model-spread] Non-empty only when this spawn actually
         // landed on a group member via the batch plan — drives the approval
@@ -361,8 +559,25 @@ class SubagentRunner(
             }
             plan is SubagentGroupSpread.ModelPlan.Failed -> {
                 deps.recordSpreadAssignment(blockId, "failed")
+                // [feat/subagent-roster-routing] The failure message must
+                // name the ALTERNATIVES.
+                //
+                // The resolver had already collected the candidates
+                // (`plan.options`) and the message dropped them on the
+                // floor. So the model was told "no such model" and left
+                // to guess a replacement — and a parent that guesses
+                // wrong loses the whole delegation for the turn. This is
+                // the same reason the roster's unknown-name error lists
+                // the roster.
+                val alternatives = if (plan.options.isEmpty()) {
+                    ""
+                } else {
+                    " Available: " + plan.options.joinToString(", ") +
+                        ". Use one of these, or omit the model argument."
+                }
                 return ToolExecutionResult(
-                    "Error: ${plan.message} Spawn aborted; no sub-agent run was created.",
+                    "Error: ${plan.message}$alternatives " +
+                        "Spawn aborted; no sub-agent run was created.",
                     false, toolTitle = title,
                 )
             }
@@ -463,7 +678,15 @@ class SubagentRunner(
             SubagentOrchestration.attachReusedRun(orchestration, earlyDuplicate.id, groupId)
             return deduplicatedSpawnResult(earlyDuplicate.id, skillName, batchGroupId = groupId)
         }
-        if (!deps.isSkillAlwaysAllowed(skill.id)) {
+        // [feat/subagent-roster-routing] The grant is bound to the scope
+        // the user actually saw. If the skill's `allowed_tools` changed
+        // since the grant was made, the grant no longer applies and the
+        // dialog comes back — showing the NEW scope.
+        val scopeFingerprint = SubagentToolScope.fingerprint(
+            config.allowedTools,
+            config.disallowedTools,
+        )
+        if (!deps.isSkillAlwaysAllowed(skill.id, scopeFingerprint)) {
             when (deps.awaitSpawnApproval(
                 skillId = skill.id,
                 skillName = skill.name,
@@ -471,6 +694,14 @@ class SubagentRunner(
                 modelLabel = deps.providerLabel(provider) +
                     (if (spreadLabel.isNotBlank()) " [$spreadLabel]" else ""),
                 detached = runUntil == SubagentSkill.RUN_UNTIL_DETACH,
+                // [feat/subagent-roster-routing] Show the user WHAT they are
+                // about to grant. "Always allow" grants this exact set,
+                // silently and forever, so the set has to be visible before
+                // the tap.
+                toolScopeLabel = SubagentToolScope.label(
+                    config.allowedTools,
+                    config.disallowedTools,
+                ),
             )) {
                 SpawnDecision.DENY -> return ToolExecutionResult(
                     "Error: the user declined this sub-agent spawn. Do NOT retry " +
@@ -478,7 +709,8 @@ class SubagentRunner(
                         "Do the work inline, or ask the user what they would prefer.",
                     false, toolTitle = "Sub-agent: $skillName",
                 )
-                SpawnDecision.ALWAYS_ALLOW -> deps.setSkillAlwaysAllowed(skill.id)
+                SpawnDecision.ALWAYS_ALLOW ->
+                    deps.setSkillAlwaysAllowed(skill.id, scopeFingerprint)
                 SpawnDecision.ALLOW_ONCE -> Unit
             }
         }
@@ -534,7 +766,7 @@ class SubagentRunner(
                 try {
                     scheduler.run(skill.id, config.maxParallel, deadlineNanos) {
                         registry.markExecuting(run.id)
-                        executeLoopGuarded(run, worstCaseChildTokens) {
+                        executeLoopGuarded(run, worstCaseChildTokens, skill.name) {
                             executeLoop(
                                 run = run, skill = skill, config = config, skillName = skillName,
                                 query = query, title = title, runUntil = SubagentSkill.RUN_UNTIL_DONE,
@@ -548,6 +780,7 @@ class SubagentRunner(
                                 deadlineNanos = SubagentBudgetClock.startRun(timeoutSeconds).runDeadlineNanos,
                                 modelMaxOutputTokens = modelMaxOutputTokens,
                                 spreadLabel = spreadLabel,
+                                extraInstructions = extraInstructions,
                             )
                         }
                     }
@@ -643,7 +876,7 @@ class SubagentRunner(
             ) {
                 registry.markExecuting(run.id)
                 try {
-                    val result = executeLoopGuarded(run, worstCaseChildTokens) {
+                    val result = executeLoopGuarded(run, worstCaseChildTokens, skill.name) {
                         executeLoop(
                             run = run, skill = skill, config = config, skillName = skillName,
                             query = query, title = title, runUntil = runUntil,
@@ -657,6 +890,7 @@ class SubagentRunner(
                             deadlineNanos = SubagentBudgetClock.startRun(timeoutSeconds).runDeadlineNanos,
                             modelMaxOutputTokens = modelMaxOutputTokens,
                             spreadLabel = spreadLabel,
+                            extraInstructions = extraInstructions,
                         )
                     }
                     job.deferred.complete(
@@ -944,6 +1178,13 @@ class SubagentRunner(
     private suspend fun executeLoopGuarded(
         run: SubagentRunRegistry.Run,
         worstCaseChildTokens: Long,
+        /**
+         * [feat/subagent-roster-routing] P1-3 — the skill name for the
+         * ledger entry. It is a PARAMETER because `executeLoopGuarded` is
+         * a sibling of the spawn site, not a nested scope: the skill is
+         * resolved by the caller.
+         */
+        skillName: String,
         block: suspend () -> ToolExecutionResult,
     ): ToolExecutionResult {
         val guard = deps.subagentBudgetGuard()
@@ -951,6 +1192,14 @@ class SubagentRunner(
         if (reserved) {
             guard!!.reserve(worstCaseChildTokens)
         }
+        // [feat/subagent-roster-routing] P1-3 — book the run's CEILING in
+        // the chat-level ledger. This is independent of the parent's token
+        // budget (whose token dimension is disabled today): the ledger is
+        // what makes the chat's delegation spend VISIBLE, as a ceiling the
+        // runtime's own configuration implies — never as a fabricated
+        // measurement.
+        val ledger = deps.subagentCostLedger()
+        ledger?.reserve(run.id, skillName, worstCaseChildTokens)
         try {
             return block()
         } finally {
@@ -961,6 +1210,19 @@ class SubagentRunner(
                 } ?: 0L
                 runCatching { guard!!.settle(actual) }
             }
+            // Settle what the provider actually reported — and record
+            // WHETHER it reported anything, so "unknown" never renders as
+            // "free".
+            val snapshot = registry.runs.value.firstOrNull { it.id == run.id }
+            val hasUsage = snapshot != null &&
+                (snapshot.tokensIn >= 0 || snapshot.tokensOut >= 0)
+            ledger?.settle(
+                run.id,
+                snapshot?.let {
+                    it.tokensIn.coerceAtLeast(0).toLong() + it.tokensOut.coerceAtLeast(0).toLong()
+                } ?: 0L,
+                hasUsage,
+            )
         }
     }
 
@@ -990,6 +1252,13 @@ class SubagentRunner(
          * into the remaining context window, see [resolveSubagentTurnMaxTokens].
          */
         modelMaxOutputTokens: Int,
+        /**
+         * [feat/subagent-roster-routing] The CONFIGURED roster entry's
+         * instructions for this delegation. Empty for an ordinary skill
+         * spawn. Appended to the skill body in the system prompt, so the
+         * mission the user configured reaches the model that does the work.
+         */
+        extraInstructions: String = "",
         /**
          * [T-subagent-model-spread] "group:<name> member k/n" when this run
          * landed on a group member via the batch plan; empty for ordinary
@@ -1026,6 +1295,11 @@ class SubagentRunner(
                 maxTurns = config.maxTurns,
                 timeoutSeconds = timeoutSeconds,
             ),
+            // [feat/subagent-roster-routing] The CONFIGURED roster entry's
+            // instructions — the speciality the user wrote for this agent.
+            // Appended to the skill body, so the runtime contract (how to
+            // work) and the mission (what to do) both survive.
+            extraInstructions = extraInstructions,
         )
         // [fix/subagent-plan-first] When the skill keeps plan_first on (the
         // default), the FIRST turn is a planning turn: the model must lay out
@@ -1116,7 +1390,25 @@ class SubagentRunner(
                 // means the partial report is always coherent: whatever the
                 // run learned so far survives into the TIMED_OUT result below.
                 if (System.nanoTime() >= deadlineNanos) {
-                    val partial = resultSb.toString().trim()
+                    // [feat/subagent-roster-routing] P1-4 — a TIMED OUT run
+                    // must deliver its evidence too. Same defect class as
+                    // the crash path: the accumulated text is often empty for
+                    // a tool-driven run, so the parent received "timed out,
+                    // no report" and the journal held the only copy.
+                    val timeoutSteps = registry.runs.value.firstOrNull { it.id == run.id }?.steps.orEmpty()
+                    val recovered = SubagentPartialRecovery.recover(
+                        accumulatedText = resultSb.toString(),
+                        steps = timeoutSteps.map { step ->
+                            SubagentPartialRecovery.Step(
+                                toolName = step.toolName,
+                                toolTitle = step.toolTitle,
+                                success = step.status == SubagentRunRegistry.ToolStepStatus.SUCCESS,
+                                output = step.output,
+                            )
+                        },
+                        stopReason = "TIMED OUT after ${timeoutSeconds}s",
+                    )
+                    val partial = recovered.report
                     AppLogger.warning(TAG, "[Subagent] '$skillName' exceeded ${timeoutSeconds}s run budget at turn $turns")
                     registry.finishIfActive(
                         run.id, SubagentRunRegistry.RunStatus.TIMED_OUT,
@@ -1126,9 +1418,7 @@ class SubagentRunner(
                         // verdict so the detached paths report TIMED_OUT
                         // rather than a bare success.
                         outcome = SubagentRunAssessment.Outcome.TIMED_OUT,
-                        reportSource = if (partial.isBlank()) {
-                            SubagentRunAssessment.ReportSource.NONE
-                        } else SubagentRunAssessment.ReportSource.PARTIAL,
+                        reportSource = recovered.source,
                         executedToolCalls = executedToolCalls,
                     )
                     val reconciledPartial = reconcileArtifactPaths(partial, artifacts, run.id)
@@ -1136,9 +1426,7 @@ class SubagentRunner(
                         status = SubagentResult.Status.FAILED,
                         report = reconciledPartial,
                         outcome = SubagentRunAssessment.Outcome.TIMED_OUT,
-                        reportSource = if (partial.isBlank()) {
-                            SubagentRunAssessment.ReportSource.NONE
-                        } else SubagentRunAssessment.ReportSource.PARTIAL,
+                        reportSource = recovered.source,
                         executedToolCalls = executedToolCalls,
                         turns = turns,
                         maxTurns = config.maxTurns,
@@ -1545,6 +1833,15 @@ class SubagentRunner(
                                 // runtime gate sees the same list the schema
                                 // filter used.
                                 allowedTools = config.allowedTools,
+                                // [feat/subagent-roster-routing] The blacklist
+                                // travels too, so the runtime gate can deny a
+                                // tool the schema filter already hid.
+                                disallowedTools = config.disallowedTools,
+                                // [feat/subagent-roster-routing] The MCP
+                                // scope travels too. MCP is reached through
+                                // the shell, so this is enforced on the
+                                // COMMAND rather than on a tool list.
+                                mcpServers = config.mcpServers,
                             )
                         }
                     }
@@ -1782,7 +2079,7 @@ class SubagentRunner(
                 }
 
                 // [T-subagent-context-budget] The sub-agent's `history` only
-                // ever grew before this — `general-agent` ships max_turns: 48
+                // ever grew before this — `general-agent` ships max_turns: 40
                 // and a research run's tool outputs are routinely tens of KB,
                 // so long runs died on a provider context error instead of
                 // finishing. Trim at the turn boundary (after this turn's
@@ -1874,16 +2171,32 @@ class SubagentRunner(
             // the partial report, reconcile the registry to CANCELLED (the
             // pill must not spin forever), then rethrow so the framework's
             // cancel cleanup can attach the recovery pointer.
-            val partial = resultSb.toString()
+            //
+            // [feat/subagent-roster-routing] P1-4 — a CANCELLED run also
+            // keeps its evidence. The user cancelled because the run was
+            // taking too long; the work it DID do is exactly the part worth
+            // keeping.
+            val cancelSteps = registry.runs.value.firstOrNull { it.id == run.id }?.steps.orEmpty()
+            val recovered = SubagentPartialRecovery.recover(
+                accumulatedText = resultSb.toString(),
+                steps = cancelSteps.map { step ->
+                    SubagentPartialRecovery.Step(
+                        toolName = step.toolName,
+                        toolTitle = step.toolTitle,
+                        success = step.status == SubagentRunRegistry.ToolStepStatus.SUCCESS,
+                        output = step.output,
+                    )
+                },
+                stopReason = "was cancelled",
+            )
+            val partial = recovered.report
             registry.finishIfActive(
                 run.id, SubagentRunRegistry.RunStatus.CANCELLED,
                 resultText = partial,
                 error = e.message ?: "cancelled",
                 // [fix/subagent-verdict-and-report-gate]
                 outcome = SubagentRunAssessment.Outcome.FAILED,
-                reportSource = if (partial.isBlank()) {
-                    SubagentRunAssessment.ReportSource.NONE
-                } else SubagentRunAssessment.ReportSource.PARTIAL,
+                reportSource = recovered.source,
                 executedToolCalls = executedToolCalls,
             )
             journal(
@@ -1895,22 +2208,52 @@ class SubagentRunner(
         } catch (e: Exception) {
             val msg = e.message ?: e.javaClass.simpleName
             AppLogger.warning(TAG, "[Subagent] '$skillName' error after $turns turn(s): $msg")
+            // [feat/subagent-roster-routing] P1-4 — a CRASHED run must still
+            // deliver its evidence.
+            //
+            // The bug this closes: the normal path rebuilds a digest from the
+            // tool calls when the model's closing message carries no
+            // findings (SubagentReportDecision), but the EXCEPTION path did
+            // not. A run that executed 16 turns of real tool calls and then
+            // hit a stream error delivered "FAILED" with an EMPTY report to
+            // the parent — 16 turns of work silently reduced to nothing,
+            // while the journal (which the parent had to go and read by
+            // hand) held the only copy.
+            //
+            // Measured on a live run: 3 audit sub-agents, 0 reports
+            // delivered, 100% of the evidence stranded in the journals.
+            val crashSteps = registry.runs.value.firstOrNull { it.id == run.id }?.steps.orEmpty()
+            val recovered = SubagentPartialRecovery.recover(
+                accumulatedText = resultSb.toString(),
+                steps = crashSteps.map { step ->
+                    SubagentPartialRecovery.Step(
+                        toolName = step.toolName,
+                        toolTitle = step.toolTitle,
+                        success = step.status == SubagentRunRegistry.ToolStepStatus.SUCCESS,
+                        output = step.output,
+                    )
+                },
+                stopReason = "CRASHED ($msg)",
+            )
+            // The guard in SubagentArtifactPathWiringTest pins the name
+            // `partial` for the variable that carries a partial report out
+            // of every terminal exit — keep it: the guard is what stops a
+            // new exit from skipping the artifact reconciliation.
+            val partial = recovered.report
+            val reportSource = recovered.source
             registry.finishIfActive(
                 run.id, SubagentRunRegistry.RunStatus.FAILED,
                 outcome = SubagentRunAssessment.Outcome.FAILED,
-                reportSource = SubagentRunAssessment.ReportSource.NONE,
+                reportSource = reportSource,
                 executedToolCalls = executedToolCalls,
-                resultText = resultSb.toString(), error = msg,
+                resultText = partial, error = msg,
             )
-            val partial = resultSb.toString()
             val reconciledPartial = reconcileArtifactPaths(partial, artifacts, run.id)
             val result = SubagentResult(
                 status = SubagentResult.Status.FAILED,
                 report = reconciledPartial,
                 outcome = SubagentRunAssessment.Outcome.FAILED,
-                reportSource = if (partial.isBlank()) {
-                    SubagentRunAssessment.ReportSource.NONE
-                } else SubagentRunAssessment.ReportSource.PARTIAL,
+                reportSource = reportSource,
                 executedToolCalls = executedToolCalls,
                 turns = turns,
                 maxTurns = config.maxTurns,
@@ -2183,6 +2526,17 @@ class SubagentRunner(
         runId: String,
         artifacts: MutableList<String>? = null,
         allowedTools: Set<String>? = null,
+        // [feat/subagent-roster-routing] The skill's `disallowed_tools`
+        // blacklist. Applied AFTER the allowlist and it WINS — see
+        // SubagentAllowedTools.isAllowed for why the restrictive reading is
+        // the safe one.
+        disallowedTools: Set<String> = emptySet(),
+        // [feat/subagent-roster-routing] The MCP servers this skill may
+        // reach. MCP is reached through the SHELL (the minis-mcp-cli
+        // binary), so a tool allowlist cannot express it — the shell
+        // command itself has to be checked. An EMPTY set means the skill
+        // declared no scope, which means NO MCP access.
+        mcpServers: Set<String> = emptySet(),
     ): ToolExecutionResult {
         if (name in SubagentSkill.FORBIDDEN_TOOLS) {
             return forbiddenToolResult(name)
@@ -2196,19 +2550,20 @@ class SubagentRunner(
         // before. A non-null allowlist means EXACTLY those tools, and
         // everything else is refused even if the capability catalog grants
         // it and the schema filter should already have hidden it.
-        if (!SubagentAllowedTools.isAllowed(name, allowedTools)) {
+        if (!SubagentAllowedTools.isAllowed(name, allowedTools, disallowedTools)) {
             AppLogger.warning(
                 TAG,
-                "[Subagent] '$name' REFUSED — not in this skill's allowed_tools list",
+                "[Subagent] '$name' REFUSED — not permitted by this skill's " +
+                    if (name in disallowedTools) "disallowed_tools" else "allowed_tools",
             )
             return ToolExecutionResult(
-                SubagentAllowedTools.refusalText(name, allowedTools),
+                SubagentAllowedTools.refusalText(name, allowedTools, disallowedTools),
                 false,
                 toolTitle = name,
             )
         }
         return when (name) {
-            "shell_execute" -> executeSubagentShell(argsJson, callId, runId)
+            "shell_execute" -> executeSubagentShell(argsJson, callId, runId, mcpServers)
             "browser_use" -> deps.executeBrowserUse(argsJson)
             // [T-subagent-websearch] Same executor the main loop uses
             // (configured engine + render wait + readable extraction), so a
@@ -2291,13 +2646,53 @@ class SubagentRunner(
      * exit-code suffix, timeout flag, env-var redaction) minus the
      * parent-loop UI plumbing.
      */
-    private suspend fun executeSubagentShell(argsJson: String, stepId: String, runId: String): ToolExecutionResult {
+    private suspend fun executeSubagentShell(
+        argsJson: String,
+        stepId: String,
+        runId: String,
+        // [feat/subagent-roster-routing] The MCP servers this skill may
+        // reach. See the note at the call site: MCP is a SHELL capability,
+        // so this is enforced on the command, not on a tool list.
+        mcpServers: Set<String> = emptySet(),
+    ): ToolExecutionResult {
         val args = try { JSONObject(argsJson) } catch (_: Exception) { JSONObject() }
         val command = args.optString("command", "")
         val timeoutSec = args.optInt("timeout", 900).coerceIn(1, 900)
         val toolTitle = args.optString("tool_title", "shell_execute")
         if (command.isBlank()) {
             return ToolExecutionResult("Error: 'command' is required", false, toolTitle = toolTitle)
+        }
+        // [feat/subagent-roster-routing] The MCP scope gate. Refused BEFORE
+        // the command runs, so an out-of-scope server is never contacted.
+        when (val attempt = SubagentMcpScope.attemptInCommand(command)) {
+            null -> Unit
+            is SubagentMcpScope.Attempt.Forbidden -> {
+                AppLogger.warning(
+                    TAG,
+                    "[Subagent] MCP command '${attempt.command}' REFUSED — not permitted " +
+                        "from a sub-agent",
+                )
+                return ToolExecutionResult(
+                    SubagentMcpScope.forbiddenText(attempt.command),
+                    false,
+                    toolTitle = toolTitle,
+                )
+            }
+            is SubagentMcpScope.Attempt.Server -> {
+                if (attempt.server !in mcpServers) {
+                    AppLogger.warning(
+                        TAG,
+                        "[Subagent] MCP server '${attempt.server}' REFUSED — outside the " +
+                            "skill's mcp_servers scope (allowed: " +
+                            "${mcpServers.joinToString(", ").ifEmpty { "none" }})",
+                    )
+                    return ToolExecutionResult(
+                        SubagentMcpScope.refusalText(attempt.server, mcpServers),
+                        false,
+                        toolTitle = toolTitle,
+                    )
+                }
+            }
         }
         val result = ExecutionCoordinator.execute(
             sessionId = deps.activeSessionId(),
@@ -2672,95 +3067,4 @@ class SubagentRunner(
         private val STREAM_RETRY_DELAYS_SEC = intArrayOf(1, 2, 4)
     }
 }
-
-/**
- * [T-subagent-report-budget] Bound one report for parent-turn delivery.
- *
- * A truncation is only acceptable when the full text remains reachable, so
- * every cut names its recovery path: the journal when one exists, else an
- * explicit "re-run with a smaller scope / file_read the artifact" hint. Silent
- * truncation would let the parent treat a partial report as the whole finding
- * — the failure mode this whole subsystem's report hygiene exists to prevent.
- *
- * Top-level + pure so the wording contract is unit-testable.
- */
-/**
- * [T-subagent-thinking] Effective reasoning level for a sub-agent run.
- *
- * The skill's frontmatter states an INTENT (`thinking: low`); whether it can
- * be honoured depends on the model that the spawn actually resolved to. The
- * rule mirrors the main chat's: a model that cannot reason runs with reasoning
- * off rather than sending an unsupported parameter (which some providers
- * reject outright). [modelSupportsReasoning] is tri-state — `null` means the
- * catalog does not know, and this deliberately treats unknown as capable so
- * the user's explicit request is not silently dropped for a model the app has
- * no information about.
- *
- * Pure + top-level so the downgrade rule is unit-testable without a provider.
- */
-internal fun resolveSubagentThinkingLevel(
-    requested: com.openminis.app.data.model.ThinkingLevel,
-    modelSupportsReasoning: Boolean?,
-): com.openminis.app.data.model.ThinkingLevel =
-    if (!requested.isEnabled) com.openminis.app.data.model.ThinkingLevel.OFF
-    else if (modelSupportsReasoning == false) com.openminis.app.data.model.ThinkingLevel.OFF
-    else requested
-
-/**
- * [T-subagent-output-from-model] Upper bound for one sub-agent turn's output
- * request: the run model's configured Max Output Tokens (管理提供商 / Manage
- * Providers → the model's "Max Output Tokens", which may come from the model
- * catalog, a per-entry override, or the provider default), never above the
- * shared 128K cap that [com.openminis.app.provider.clampOutboundMaxTokens]
- * enforces for every provider family. Pure so the clamp boundaries are
- * unit-testable without a provider.
- */
-internal fun subagentOutputCeiling(modelMaxOutputTokens: Int): Int =
-    modelMaxOutputTokens.coerceIn(1, com.openminis.app.provider.GLOBAL_MAX_OUTPUT_CEILING)
-
-/**
- * [T-subagent-output-from-model] Fallback floor when the remaining context
- * window cannot fit another meaningful reply — mirrors the main loop's
- * `MIN_MAX_TOKENS`. A value below this would starve the turn entirely, which
- * is worse than letting the provider report the overrun loudly.
- */
-private const val SUBAGENT_MIN_MAX_TOKENS = 1024
-
-/**
- * [T-subagent-output-from-model] Per-turn `maxTokens` for a sub-agent request:
- * the model's output ceiling ([subagentOutputCeiling]), reduced to what still
- * fits the remaining context window (window − last API-reported input tokens)
- * with a floor of [SUBAGENT_MIN_MAX_TOKENS]. Mirrors the main loop's
- * `dynamicMaxTokens()` sizing so a delegated run and an inline run against the
- * same model behave identically. [lastContextTokens] is 0 until the first
- * Usage chunk reports a figure.
- */
-internal fun resolveSubagentTurnMaxTokens(
-    modelMaxOutputTokens: Int,
-    contextWindowTokens: Int,
-    lastContextTokens: Int = 0,
-): Int {
-    val ceiling = subagentOutputCeiling(modelMaxOutputTokens)
-    if (contextWindowTokens <= 0) return ceiling
-    val remaining = contextWindowTokens - lastContextTokens
-    return minOf(ceiling, maxOf(remaining, SUBAGENT_MIN_MAX_TOKENS))
-}
-
-/**
- * [T-subagent-output-from-model] Context size for the next turn's output
- * sizing, mirroring the main loop's Usage-chunk rule (ChatViewModel):
- * `latestContextTokens` when the provider reports it; otherwise fresh
- * `inputTokens` + cache-read + cache-creation (inputTokens is fresh-only —
- * the cached portion is subtracted by the parser, so a cache-hit turn would
- * otherwise under-report context pressure and every turn would ask for the
- * FULL output ceiling even on a nearly-full window). 0 = nothing reported.
- */
-internal fun subagentContextTokensFromUsage(usage: com.openminis.app.data.model.LLMUsage): Int =
-    when {
-        usage.latestContextTokens > 0 -> usage.latestContextTokens
-        usage.inputTokens > 0 -> usage.inputTokens +
-            (usage.cacheReadInputTokens ?: 0) +
-            (usage.cacheCreationInputTokens ?: 0)
-        else -> 0
-    }
 

@@ -99,9 +99,26 @@ fun SubagentApprovalDialog(
                         maxLines = 10,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    // [feat/subagent-roster-routing] The tool permissions
+                    // being granted. "Always allow" grants THIS EXACT SET,
+                    // silently and forever — so it has to be visible before
+                    // the tap, not discoverable later. Empty = the skill
+                    // declared no scope info (older request shape).
+                    if (request.toolScopeLabel.isNotBlank()) {
+                        ApprovalLine(label = "tools", value = request.toolScopeLabel)
+                    }
+                    // [feat/subagent-roster-routing] The FIXED sentence is
+                    // gone. It claimed every sub-agent runs "its own tool
+                    // loop (shell, files, browser)" — but a read-only
+                    // auditor has no shell and no browser, so the dialog
+                    // was stating a capability the agent did not have.
+                    //
+                    // The line above now carries the ACTUAL scope, and
+                    // this one says the one thing that is true of every
+                    // sub-agent: it runs unattended once allowed.
                     Text(
-                        text = "The sub-agent runs its own tool loop (shell, files, browser) " +
-                            "without further confirmation until it reports back.",
+                        text = "It runs on its own until it reports back; no further " +
+                            "confirmation is asked while it works.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

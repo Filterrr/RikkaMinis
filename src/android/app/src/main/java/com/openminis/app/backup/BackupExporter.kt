@@ -558,6 +558,48 @@ class BackupExporter(
                 }
             } else emptyList()
 
+        // [feat/subagent-roster-routing] The MCP OAuth material.
+        //
+        // The wire format has had `mcpOAuth` for a while, and
+        // `MCPOAuthStore` has held the tokens — but nothing ever joined
+        // them, so a backup carried every provider key and every env var
+        // and NONE of the MCP authorizations. Restoring such a backup
+        // left every MCP server needing a fresh OAuth round-trip the
+        // user had no way to see coming.
+        //
+        // It rides along with PROVIDERS: these are credentials, and they
+        // are encrypted by the same pass that seals the other secrets.
+        val mcpSecrets =
+            if (BackupCategory.PROVIDERS in categories) {
+                val ctx = app?.applicationContext
+                if (ctx == null) emptyList()
+                else com.openminis.app.mcp.oauth.MCPOAuthStore.allServers(ctx).mapNotNull { server ->
+                    val stored = com.openminis.app.mcp.oauth.MCPOAuthStore
+                        .tokens(ctx, server)
+                    val token = stored?.accessToken
+                    val clientSecret = com.openminis.app.mcp.oauth.MCPOAuthStore
+                        .clientSecretOrNull(ctx, server)
+                    if (token.isNullOrEmpty() && clientSecret.isNullOrEmpty()) null
+                    else com.openminis.app.backup.BackupSecrets.MCPOAuthSecret(
+                        serverId = server,
+                        token = android.util.Base64.encodeToString(
+                            (token ?: "").toByteArray(), android.util.Base64.NO_WRAP
+                        ),
+                        clientSecret = clientSecret?.let {
+                            android.util.Base64.encodeToString(
+                                it.toByteArray(), android.util.Base64.NO_WRAP
+                            )
+                        },
+                        refreshToken = stored?.refreshToken?.let {
+                            android.util.Base64.encodeToString(
+                                it.toByteArray(), android.util.Base64.NO_WRAP
+                            )
+                        },
+                        expiresAtMs = stored?.expiresAtMs,
+                    )
+                }
+            } else emptyList()
+
         val envSecrets =
             if (BackupCategory.ENVIRONMENT_VARIABLES in categories) {
                 val repo = app?.let { if (it.subsystemsReady()) it.envVarRepository else null }
@@ -573,16 +615,21 @@ class BackupExporter(
                 }
             } else emptyList()
 
-        if (providerSecrets.isEmpty() && envSecrets.isEmpty()) return
+        if (providerSecrets.isEmpty() && envSecrets.isEmpty() && mcpSecrets.isEmpty()) return
 
-        val secrets = BackupSecrets(providers = providerSecrets, envVars = envSecrets)
+        val secrets = BackupSecrets(
+            providers = providerSecrets,
+            envVars = envSecrets,
+            mcpOAuth = mcpSecrets,
+        )
         File(staging, "secrets.json").writeText(
             BackupFormat.json.encodeToString(BackupSecrets.serializer(), secrets)
         )
         AppLogger.warning(
             TAG,
             "[Backup] package contains UNENCRYPTED credentials (stage 3a): " +
-                "providers=${providerSecrets.size} envVars=${envSecrets.size}"
+                "providers=${providerSecrets.size} envVars=${envSecrets.size} " +
+                "mcpOAuth=${mcpSecrets.size}"
         )
     }
 

@@ -81,6 +81,8 @@ import com.openminis.app.tools.MemoryRollupTool
 import com.openminis.app.tools.MemoryTools
 import com.openminis.app.tools.ReadImageTool
 import com.openminis.app.tools.SubagentOrchestration
+import com.openminis.app.tools.SubagentCostLedger
+import com.openminis.app.tools.SubagentRosterHint
 import com.openminis.app.tools.SubagentRunCheckpoint
 import com.openminis.app.tools.SubagentRunRegistry
 import com.openminis.app.tools.SubagentRunner
@@ -783,10 +785,56 @@ class ChatViewModel(
      * the old static limiter that was hard-wired to
      * [SubagentSkill.DEFAULT_MAX_PARALLEL] and ignored the skill config
      * entirely. Over-limit spawns queue (fair FIFO) instead of failing.
+     *
+     * [feat/subagent-roster-routing] P2-4 — the global cap is now
+     * `globalLimit`, which the app can set from a setting. It stays
+     * clamped to the hard ceiling, so a setting can only LOWER the cap
+     * below the built-in maximum, never raise it past what the runtime
+     * was designed for.
      */
     val subagentScheduler = SubagentScheduler(
-        globalLimit = SubagentSkill.MAX_PARALLEL_CAP,
+        globalLimit = subagentGlobalLimit(),
     )
+
+    /**
+     * [feat/subagent-roster-routing] P1-3 — the chat-level ledger of what
+     * delegation costs the user.
+     *
+     * The parent's own token budget does not cover this: its token
+     * dimension is disabled today (`maxEstimatedTokens = null`), and that
+     * budget forbids fabricating a token count. So the ledger reports
+     * delegation spend as a CEILING — a real fact about the runtime's
+     * configuration — and separately tracks what the provider actually
+     * reported, with "nothing reported" kept visibly distinct from zero.
+     */
+    val subagentCostLedger = SubagentCostLedger()
+
+    /**
+     * [feat/subagent-roster-routing] P2-11 — the chat-level delegation
+     * spend, as one label for the UI.
+     *
+     * Two states, both honest:
+     *  - the provider reported usage → the measured total;
+     *  - it reported nothing → the CEILING, marked "≤".
+     *
+     * Null when nothing was delegated. Never "0" for an unknown total —
+     * a silent provider must not masquerade as a free run.
+     */
+    val subagentCostLabel: String?
+        get() = subagentCostLedger.summary() ?: subagentCostLedger.worstCaseSummary()
+
+    /**
+     * [feat/subagent-roster-routing] P2-4 — the chat-global concurrency
+     * cap, overridable by the user.
+     *
+     * The cap used to be a constant, so a user on a slow device (or one
+     * paying per token) had no way to stop four sub-agents from running at
+     * once. It can now be LOWERED — never raised past
+     * [SubagentSkill.MAX_PARALLEL_CAP], the hard ceiling the scheduler was
+     * designed around.
+     */
+    private fun subagentGlobalLimit(): Int =
+        com.openminis.app.data.SubagentConcurrencyPrefs.globalLimit()
 
     /**
      * [T-subagent-orchestration] Group + job registries for sub-agent
@@ -1144,12 +1192,43 @@ class ChatViewModel(
             override fun findSkill(skillName: String) =
                 this@ChatViewModel.skillRepository?.skills?.value?.find {
                     it.name == skillName || it.id == skillName ||
-                        it.name.equals(skillName, ignoreCase = true)
+                        // [feat/subagent-roster-routing] The same folding
+                        // the roster uses. `ignoreCase` alone does NOT
+                        // fold diacritics, so a skill named
+                        // "Résumé-agent" was listed under the folded key
+                        // and could not be matched — the one route the
+                        // unified rule had not reached.
+                        com.openminis.app.tools.SubagentNameKey.normalize(it.name) ==
+                            com.openminis.app.tools.SubagentNameKey.normalize(skillName)
                 }
             override fun isSkillEnabledForSession(skillId: String) =
                 this@ChatViewModel.skillRepository?.isEnabledForSession(
                     skillId, this@ChatViewModel.activeSessionId,
                 ) ?: false
+
+            // [feat/subagent-roster-routing] The spawnable roster — used to
+            // list the valid sub-agent names in the "not found" error, so the
+            // parent can correct the name in the SAME turn instead of
+            // writing the delegation off (its standing rule is "do not
+            // retry the same spawn").
+            //
+            // The SAME merged list the parent sees in the tool schema —
+            // the error must not offer names the schema did not list.
+            override fun subagentRoster() =
+                SubagentRosterHint.merge(
+                    this@ChatViewModel.skillRepository
+                        ?.subagentRoster(this@ChatViewModel.activeSessionId).orEmpty(),
+                    configuredSubagentRoster(),
+                )
+
+            // [feat/subagent-roster-routing] The configured roster WITH its
+            // instructions — the runtime resolves a configured speciality to
+            // a skill + a mission.
+            override fun configuredSubagents() = this@ChatViewModel.configuredSubagentDefinitions()
+
+            // [feat/subagent-roster-routing] P1-3 — the chat-level ledger
+            // of delegation spend.
+            override fun subagentCostLedger() = this@ChatViewModel.subagentCostLedger
             override fun agentTools() = this@ChatViewModel.agentTools
             override fun currentProvider() = this@ChatViewModel.currentProvider
             override fun activeSessionId() = this@ChatViewModel.activeSessionId
@@ -1231,11 +1310,15 @@ class ChatViewModel(
             // in-flight turn and it drags `_attachments` along with it.
             // [T-subagent-approval] Per-skill always-allow, persisted in
             // SubagentApprovalStore (global, survives chats & restarts).
-            override fun isSkillAlwaysAllowed(skillId: String) =
-                com.openminis.app.data.SubagentApprovalStore.isAlwaysAllowed(context, skillId)
+            override fun isSkillAlwaysAllowed(skillId: String, scopeFingerprint: String?) =
+                com.openminis.app.data.SubagentApprovalStore.isAlwaysAllowed(
+                    context, skillId, scopeFingerprint,
+                )
 
-            override fun setSkillAlwaysAllowed(skillId: String) {
-                com.openminis.app.data.SubagentApprovalStore.setAlwaysAllowed(context, skillId, true)
+            override fun setSkillAlwaysAllowed(skillId: String, scopeFingerprint: String?) {
+                com.openminis.app.data.SubagentApprovalStore.setAlwaysAllowed(
+                    context, skillId, true, scopeFingerprint,
+                )
                 // [T-subagent-approval] Collapse the asks this grant already
                 // covers. A fan-out of N spawns submits N asks up front, so
                 // answering the FIRST with "Always allow" used to leave the
@@ -1268,6 +1351,7 @@ class ChatViewModel(
                 task: String,
                 modelLabel: String,
                 detached: Boolean,
+                toolScopeLabel: String,
             ): com.openminis.app.tools.SpawnDecision {
                 val ask = subagentApprovals.submit(
                     skillId = skillId,
@@ -1275,6 +1359,7 @@ class ChatViewModel(
                     task = task,
                     modelLabel = modelLabel,
                     detached = detached,
+                    toolScopeLabel = toolScopeLabel,
                 )
                 // [T-notif-inline-decision] Make the ask answerable from the
                 // shade: publish the queue (the broadcast can only see ids, not
@@ -1525,6 +1610,32 @@ class ChatViewModel(
             // Budgeted: capped at MAX_CATALOG_HINT_MODELS names because this
             // rides in every request's tool schema.
             modelCatalogHint = SubagentSkill.buildCatalogHint(subagentModelCatalog()),
+            // [feat/subagent-roster-routing] The spawnable sub-agent roster.
+            // Without it the parent had no way to know what it could spawn:
+            // `skill_name` said only "the name of the sub-agent skill", and
+            // the skills fragment mixed sub-agent skills with ordinary ones
+            // behind a 20-entry cap. The parent had to GUESS a name, and a
+            // guess that missed lost the delegation for the whole turn.
+            //
+            // Recomputed per read (a getter), so a skill installed or
+            // enabled mid-chat becomes spawnable on the next request with no
+            // restart. Same budget discipline as the model catalogue — this
+            // rides in every request's tool schema.
+            rosterHint = SubagentRosterHint.build(
+                // [feat/subagent-roster-routing] Two routes, one roster:
+                //  - SKILLS: the installed `subagent: true` skills. These
+                //    are the SPAWNABLE things — each has a runtime, a
+                //    tool set and a budget.
+                //  - the CONFIGURED roster (TRAE-shaped): the user names
+                //    a speciality and says WHEN to delegate there.
+                // The skill wins on a name clash (it is the thing that can
+                // actually run), but the configured description is the
+                // routing text — the user wrote it for that purpose.
+                SubagentRosterHint.merge(
+                    skillRepository?.subagentRoster(activeSessionId).orEmpty(),
+                    configuredSubagentRoster(),
+                ),
+            ),
             // [T-subagent-model-spread] Embed the group names too, so a spawn
             // CAN name a group ('group:<name>' / bare name) instead of having
             // to discover them by failing. Same budget discipline as above.
@@ -1553,6 +1664,54 @@ class ChatViewModel(
             instances = providerRepository.instances,
             entriesPerInstance = { providerRepository.visibleEntries(it) },
         )
+
+    /**
+     * [feat/subagent-roster-routing] The USER-CONFIGURED sub-agent roster,
+     * read from the provider configuration.
+     *
+     * This list had a complete data model — name, description, model group,
+     * thinking override, a built-in entry, normalization and backup merge —
+     * but NO runtime: `SubAgentRoster.resolve` had zero call sites, the
+     * `subagent_task` tool was never registered, and there was no UI. So
+     * the parent only ever saw skills.
+     *
+     * Now it is merged into the parent's roster. The configured entry names
+     * a SPECIALITY and its description says WHEN to delegate there — the
+     * TRAE routing shape. A skill names an IMPLEMENTATION. When both
+     * exist for one name, the skill wins (it can actually run) and the
+     * configured description becomes the routing text.
+     */
+    private fun configuredSubagentRoster(): List<com.openminis.app.tools.SubagentRosterHint.Entry> =
+        configuredSubagentDefinitions().map { def ->
+            com.openminis.app.tools.SubagentRosterHint.Entry(
+                name = def.name,
+                description = def.description,
+            )
+        }
+
+    /**
+     * [feat/subagent-roster-routing] The configured roster in the shape the
+     * runtime consumes — including the INSTRUCTIONS, which are what make a
+     * configured entry an agent rather than a label.
+     */
+    private fun configuredSubagentDefinitions(): List<com.openminis.app.tools.SubagentDelegation.ConfiguredAgent> =
+        providerRepository.subAgents.map { def ->
+            com.openminis.app.tools.SubagentDelegation.ConfiguredAgent(
+                name = def.name,
+                description = def.description,
+                instructions = def.instructions,
+                // [feat/subagent-roster-routing] The model group and the
+                // reasoning-level override are the roster entry's own
+                // configuration — they used to be stored and never read.
+                modelGroupId = def.modelGroupId,
+                thinkingLevelOverride = def.thinkingLevelOverride?.name,
+                // [feat/subagent-roster-routing] The built-in entry's
+                // display name is NOT the wire name, so the runtime needs
+                // the flag to recognise it.
+                id = def.id,
+                isBuiltIn = def.isBuiltIn,
+            )
+        }
 
     /**
      * Per-session loop detector. Reset alongside [agentHistory] whenever the

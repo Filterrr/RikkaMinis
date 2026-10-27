@@ -27,12 +27,44 @@ object SubagentApprovalStore {
     private const val PREFS = "minis_subagent_approval_prefs"
     private const val KEY_PREFIX = "subagent.always_allow__"
 
+    /**
+     * The tool scope a grant was made under.
+     *
+     * A grant without one was written by an older build, which did not
+     * bind the scope. It is kept separate from [KEY_PREFIX] so the
+     * "trusted skills" list — which enumerates [KEY_PREFIX] — does not
+     * start showing scope keys as skills.
+     */
+    private const val SCOPE_PREFIX = "subagent.always_allow_scope__"
+
     private fun prefs(context: Context): SharedPreferences =
         context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    /** True when the user granted "always allow" for this skill. */
-    fun isAlwaysAllowed(context: Context, skillId: String): Boolean =
-        prefs(context).getBoolean(KEY_PREFIX + skillId, false)
+    /**
+     * True when the user granted "always allow" for this skill.
+     *
+     * [feat/subagent-roster-routing] The grant is now bound to the tool
+     * scope that was on screen when it was made. A grant made for a
+     * read-only skill does NOT survive the user adding `shell_execute` to
+     * that skill's SKILL.md — the scope the user approved is not the scope
+     * the agent would run with, and the whole point of showing the scope
+     * in the dialog is that "always allow" means THAT.
+     *
+     * A grant with no recorded scope (written by an older build) is
+     * treated as NOT matching: the user is asked once more, with the
+     * scope on screen. Failing closed here costs one prompt; failing open
+     * costs an unreviewed permission grant.
+     */
+    fun isAlwaysAllowed(
+        context: Context,
+        skillId: String,
+        scopeFingerprint: String? = null,
+    ): Boolean {
+        if (!prefs(context).getBoolean(KEY_PREFIX + skillId, false)) return false
+        if (scopeFingerprint == null) return true
+        val recorded = prefs(context).getString(SCOPE_PREFIX + skillId, null)
+        return recorded != null && recorded == scopeFingerprint
+    }
 
     /**
      * Grant or revoke "always allow" for [skillId].
@@ -45,10 +77,22 @@ object SubagentApprovalStore {
      * silently disagrees with the UI. Key removal makes list, runtime gate,
      * and revokeAll agree on one rule: a grant exists iff its key exists.
      */
-    fun setAlwaysAllowed(context: Context, skillId: String, allowed: Boolean) {
+    fun setAlwaysAllowed(
+        context: Context,
+        skillId: String,
+        allowed: Boolean,
+        scopeFingerprint: String? = null,
+    ) {
         prefs(context).edit().apply {
-            if (allowed) putBoolean(KEY_PREFIX + skillId, true)
-            else remove(KEY_PREFIX + skillId)
+            if (allowed) {
+                putBoolean(KEY_PREFIX + skillId, true)
+                if (scopeFingerprint != null) {
+                    putString(SCOPE_PREFIX + skillId, scopeFingerprint)
+                }
+            } else {
+                remove(KEY_PREFIX + skillId)
+                remove(SCOPE_PREFIX + skillId)
+            }
         }.apply()
     }
 
@@ -72,10 +116,30 @@ object SubagentApprovalStore {
             .map { it.removePrefix(KEY_PREFIX) }
             .sorted()
 
+    /**
+     * The tool scope a grant was made under, or null if there is no
+     * grant (or the grant predates scope binding).
+     *
+     * [feat/subagent-roster-routing] The Trusted Sub-agents screen uses
+     * this to tell the truth: a grant whose scope no longer matches the
+     * skill's current permissions is NOT the grant the user made, and
+     * the runtime will ask again. Showing it as plainly "trusted" would
+     * be a lie the settings screen tells on the runtime's behalf.
+     */
+    fun recordedScope(context: Context, skillId: String): String? =
+        if (prefs(context).getBoolean(KEY_PREFIX + skillId, false)) {
+            prefs(context).getString(SCOPE_PREFIX + skillId, null)
+        } else {
+            null
+        }
+
     /** Revoke every grant — the "reset sub-agent trust" escape hatch. */
     fun revokeAll(context: Context) {
         val keys = alwaysAllowedSkillIds(context).map { KEY_PREFIX + it }
         if (keys.isEmpty()) return
-        prefs(context).edit().apply { keys.forEach { remove(it) } }.apply()
+        prefs(context).edit().apply {
+            keys.forEach { remove(it) }
+            keys.forEach { remove(SCOPE_PREFIX + it.removePrefix(KEY_PREFIX)) }
+        }.apply()
     }
 }

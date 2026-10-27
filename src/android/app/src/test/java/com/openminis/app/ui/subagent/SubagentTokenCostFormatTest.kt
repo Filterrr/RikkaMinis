@@ -1,5 +1,6 @@
 package com.openminis.app.ui.subagent
 
+import com.openminis.app.tools.SubagentRunFormat
 import com.openminis.app.tools.SubagentRunRegistry
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -22,24 +23,24 @@ class SubagentTokenCostFormatTest {
 
     @Test
     fun `both sides unknown renders no chip`() {
-        assertNull(formatSubagentTokenCost(run(inTok = -1, outTok = -1)))
+        assertNull(SubagentRunFormat.tokenCost(run(inTok = -1, outTok = -1)))
     }
 
     @Test
     fun `real usage formats with an arrow and kilo suffix`() {
-        assertEquals("1.2k→350", formatSubagentTokenCost(run(inTok = 1200, outTok = 350)))
-        assertEquals("52.5k→3.3k", formatSubagentTokenCost(run(inTok = 52_473, outTok = 3_316)))
+        assertEquals("1.2k→350", SubagentRunFormat.tokenCost(run(inTok = 1200, outTok = 350)))
+        assertEquals("52.5k→3.3k", SubagentRunFormat.tokenCost(run(inTok = 52_473, outTok = 3_316)))
     }
 
     @Test
     fun `single-sided reports keep the known half and question the other`() {
         // A mid-stream snapshot can legitimately have input but no output yet.
-        assertEquals("900→?", formatSubagentTokenCost(run(inTok = 900, outTok = -1)))
-        assertEquals("?→900", formatSubagentTokenCost(run(inTok = -1, outTok = 900)))
+        assertEquals("900→?", SubagentRunFormat.tokenCost(run(inTok = 900, outTok = -1)))
+        assertEquals("?→900", SubagentRunFormat.tokenCost(run(inTok = -1, outTok = 900)))
     }
 
     @Test
     fun `a genuine zero is rendered as zero, not as unknown`() {
-        assertEquals("0→0", formatSubagentTokenCost(run(inTok = 0, outTok = 0)))
+        assertEquals("0→0", SubagentRunFormat.tokenCost(run(inTok = 0, outTok = 0)))
     }
 }

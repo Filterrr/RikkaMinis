@@ -2,6 +2,9 @@ package com.openminis.app.data.repository
 
 import android.content.Context
 import com.openminis.app.tools.SkillInfo
+import com.openminis.app.tools.SubagentFrontmatter
+import com.openminis.app.tools.SubagentSkill
+import com.openminis.app.tools.SubagentToolScope
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import android.net.Uri
@@ -258,6 +261,38 @@ class SkillRepository(private val context: Context) {
     }
 
     /**
+     * [feat/subagent-roster-routing] The sub-agents that are spawnable in
+     * this session RIGHT NOW: installed, enabled for the session, and marked
+     * `subagent: true` in their SKILL.md frontmatter.
+     *
+     * This is the ROSTER the parent agent sees. Before it existed, the
+     * parent's only clue was the generic skills fragment — which mixed
+     * sub-agent skills with ordinary ones, carried no marker, and was capped
+     * at 20 entries — so a parent that wanted to delegate had to guess a
+     * `skill_name`, and a wrong guess lost the delegation for the turn.
+     *
+     * The description is the ROUTING text, so it is taken from the skill's
+     * own frontmatter `description:` — the same field a skill author writes
+     * to say when the skill should be used. When it is missing, the skill's
+     * body title is not a substitute (it describes WHAT, not WHEN), so the
+     * entry falls back to a neutral line.
+     */
+    fun subagentRoster(sessionId: String): List<com.openminis.app.tools.SubagentRosterHint.Entry> {
+        val enabled = _skills.value.filter { isEnabledForSession(it.id, sessionId) }
+        return enabled.mapNotNull { skill ->
+            val config = com.openminis.app.tools.SubagentSkill.parseSubagentConfig(skill)
+            if (!config.isSubagent) return@mapNotNull null
+            com.openminis.app.tools.SubagentRosterHint.Entry(
+                name = skill.name,
+                description = skill.description.ifBlank {
+                    "A sub-agent skill — read its SKILL.md to see what it is for."
+                },
+            )
+        }
+    }
+
+
+    /**
      * [T-android-session-skill-override-init-timing] Re-point every
      * `session_skill_overrides` row that was written against the draft
      * session id ([fromDraft], e.g. `__new__<uuid>`) onto the persisted
@@ -291,18 +326,32 @@ class SkillRepository(private val context: Context) {
         val selected: List<Skill>
         val hasMore: Boolean
 
+        // [feat/subagent-roster-routing] A SUB-AGENT skill is not just
+        // another skill: it is a delegate the parent can hand work to. If
+        // it loses its slot to the disclosure cap, the parent cannot spawn
+        // it by name and the delegation is simply unavailable — a silently
+        // narrower capability, not a narrower description.
+        //
+        // So sub-agent skills are picked FIRST (priority 0, above bundled),
+        // and the remaining slots go to ordinary skills as before.
+        val subagentSkills = enabled.filter { isSubagentSkill(it) }
+        val ordinarySkills = enabled.filterNot { isSubagentSkill(it) }
+
         if (total <= MAX_SKILLS_IN_PROMPT) {
             selected = enabled.sortedByDescending { it.updatedAt }
             hasMore = false
         } else {
             val picked = linkedMapOf<String, Skill>() // preserves insertion order + id dedupe
+            // Priority 0: sub-agent skills — always, so a delegation
+            // target never disappears behind the cap.
+            subagentSkills.forEach { picked.putIfAbsent(it.id, it) }
             // Priority 1: bundled
-            enabled.filter { it.importSource == ImportSource.BUNDLED }
+            ordinarySkills.filter { it.importSource == ImportSource.BUNDLED }
                 .forEach { picked.putIfAbsent(it.id, it) }
             // Priority 2: recently updated (within 7 days), up to RECENT_SLOTS more
             val cutoff = System.currentTimeMillis() - RECENT_WINDOW_MS
             val recentLimit = minOf(RECENT_SLOTS, MAX_SKILLS_IN_PROMPT - picked.size).coerceAtLeast(0)
-            enabled.asSequence()
+            ordinarySkills.asSequence()
                 .filter { it.updatedAt > cutoff && it.id !in picked }
                 .sortedByDescending { it.updatedAt }
                 .take(recentLimit)
@@ -310,7 +359,7 @@ class SkillRepository(private val context: Context) {
             // Priority 3: fill remaining slots by useCount (desc)
             if (picked.size < MAX_SKILLS_IN_PROMPT) {
                 val remaining = MAX_SKILLS_IN_PROMPT - picked.size
-                enabled.asSequence()
+                ordinarySkills.asSequence()
                     .filter { it.id !in picked }
                     .sortedByDescending { it.useCount }
                     .take(remaining)
@@ -331,6 +380,15 @@ class SkillRepository(private val context: Context) {
                 append("    <name>").append(escapeXml(skill.name)).append("</name>\n")
                 append("    <description>").append(escapeXml(desc)).append("</description>\n")
                 append("    <path>/var/minis/skills/").append(skill.id).append("/SKILL.md</path>\n")
+                // [feat/subagent-roster-routing] Mark the sub-agent skills so
+                // the parent can tell a DELEGATE from an ordinary
+                // instruction set. Without the marker the two were
+                // indistinguishable in this list: the parent could read
+                // "general-agent" next to "github-ops" and had no way to
+                // know which one it could hand work to.
+                if (isSubagentSkill(skill)) {
+                    append("    <subagent>true</subagent>\n")
+                }
                 append("  </skill>\n")
             }
             append("</available_skills>")
@@ -348,8 +406,45 @@ class SkillRepository(private val context: Context) {
                 append("\n\n")
                 append(omitted.size).append(" more skills not shown above: ").append(names)
                 append(". List /var/minis/skills/ or grep to search all.")
+                // [feat/subagent-roster-routing] A sub-agent skill should
+                // never be in that omitted tail — the pick order reserves
+                // its slot first. Say so if it ever happens, because a
+                // missing delegate is a silent capability loss and the
+                // parent cannot diagnose it on its own.
+                val droppedSubagents = omitted.filter { isSubagentSkill(it) }
+                if (droppedSubagents.isNotEmpty()) {
+                    append("\nNote: sub-agent skill(s) ")
+                        .append(droppedSubagents.joinToString(", ") { it.name })
+                        .append(" did not fit the disclosure limit; they are still spawnable by exact name.")
+                }
             }
         }
+    }
+
+    /**
+     * [feat/subagent-roster-routing] Whether this skill is a SUB-AGENT
+     * (i.e. marked `subagent: true` in its SKILL.md frontmatter).
+     *
+     * Reads the PRESERVED raw frontmatter rather than re-parsing the body:
+     * the repository stores the frontmatter verbatim for exactly this kind
+     * of question, and the parse is cheap enough for a prompt build.
+     *
+     * Public so the UI can badge the row: the skills list mixed delegates
+     * with ordinary instruction sets and gave the user no way to tell them
+     * apart — even though enabling a sub-agent skill is what grants it a
+     * tool permission set.
+     */
+    fun isSubagentSkill(skill: Skill): Boolean =
+        SubagentFrontmatter.parse(skill.frontmatter.orEmpty()).boolean("subagent") ?: false
+
+    /**
+     * [feat/subagent-roster-routing] The tool scope of a skill, rendered
+     * for the UI — the same wording the approval dialog shows, so the
+     * user sees one consistent description of what they are granting.
+     */
+    fun toolScopeLabel(skill: Skill): String {
+        val cfg = com.openminis.app.tools.SubagentSkill.parseSubagentConfig(skill)
+        return com.openminis.app.tools.SubagentToolScope.label(cfg.allowedTools, cfg.disallowedTools)
     }
 
     /**

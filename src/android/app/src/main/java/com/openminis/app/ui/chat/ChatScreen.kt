@@ -549,6 +549,11 @@ fun ChatScreen(
     // and pushes live state to the second-level detail page.
     val subagentRuns by viewModel.subagentRunRegistry.runs.collectAsState()
     val subagentActiveCount = subagentRuns.count { it.isActive }
+    // [feat/subagent-roster-routing] P2-11 — the chat-level delegation
+    // spend. The ledger reports the provider's total when it reported
+    // usage, and otherwise the ceiling, marked with "≤" so a bound is
+    // never read as a measurement. Null = nothing delegated yet.
+    val subagentCostLabel = viewModel.subagentCostLabel
     // Publish the live registry flow for the nav-level SubagentDetailScreen
     // (AppNavigation has no VM reference; the holder is the FilePreviewHolder-
     // style bridge). The flow object is stable for the VM's lifetime, so
@@ -4527,6 +4532,9 @@ fun ChatScreen(
                 SubagentPromptRow(
                     runs = subagentRuns,
                     activeCount = subagentActiveCount,
+                    // [feat/subagent-roster-routing] P2-11 — the chat-level
+                    // delegation spend, next to the run pills.
+                    costLabel = subagentCostLabel,
                     onOpenRun = { runId ->
                         // Live registry flow already published to
                         // ChatSubagentRunsHolder by the SideEffect above —

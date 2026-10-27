@@ -29,10 +29,18 @@ class SubagentAllowedToolsWiringTest {
         // nothing. The negative verification for this branch disabled the
         // gate exactly that way and the first version of this guard still
         // passed — so the assertion pins the LIVE condition.
+        //
+        // [feat/subagent-roster-routing] The call now carries the
+        // `disallowed_tools` blacklist as a third argument (the deny wins
+        // over the allow). The guard accepts either shape — what it must
+        // NOT accept is the gate disappearing or being short-circuited.
+        val liveGate = Regex(
+            """if \(!SubagentAllowedTools\.isAllowed\(name,\s*allowedTools(,\s*disallowedTools)?\)\)""",
+        )
         assertTrue(
             "executeSubagentTool must consult SubagentAllowedTools.isAllowed as a " +
                 "live condition — a schema-only allowlist does not stop execution",
-            runnerSource.contains("if (!SubagentAllowedTools.isAllowed(name, allowedTools))"),
+            liveGate.containsMatchIn(runnerSource),
         )
         assertFalse(
             "the allowlist gate must not be short-circuited away",

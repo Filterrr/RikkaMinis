@@ -73,6 +73,10 @@ fun SettingsScreen(
     onRootfsClick: () -> Unit = {},
     onEnvVarsClick: () -> Unit = {},
     onSkillsClick: () -> Unit = {},
+    // [feat/subagent-roster-routing] P0-A — the editor for the configured
+    // sub-agent roster. The roster had storage and CRUD from the start and
+    // no way to reach it.
+    onSubAgentsClick: () -> Unit = {},
     onTerminalClick: () -> Unit = {},
     onMemoryClick: () -> Unit = {},
     // [T-mcp-integration-android] MCP Integrations page, listed directly below
@@ -178,6 +182,17 @@ fun SettingsScreen(
                     subtitle = stringResource(R.string.settings_skills_subtitle),
                     onClick = onSkillsClick,
                 )
+                // [feat/subagent-roster-routing] P0-A — the sub-agent
+                // roster editor, right next to Skills (they are the two
+                // halves of delegation: the skills are the runtimes, the
+                // roster says when to use them).
+                SettingsItem(
+                    icon = Icons.Outlined.Psychology,
+                    iconColor = Color(0xFFAF52DE),
+                    title = stringResource(R.string.settings_sub_agents),
+                    subtitle = stringResource(R.string.settings_sub_agents_subtitle),
+                    onClick = onSubAgentsClick,
+                )
                 // [T-soul-md] insertion between Skills and Memory per spec.
                 SettingsItem(
                     icon = Icons.Outlined.AutoAwesome,
@@ -216,6 +231,14 @@ fun SettingsScreen(
                 // Lets the user run at the Phase-0 floor (2 slots) for a while,
                 // read live occupancy (running/waiting) and evaluate widening to 3.
                 ConcurrencySlotSetting()
+
+                // [feat/subagent-roster-routing] P2-4 — the chat-global cap
+                // on concurrent sub-agent runs. It used to be a constant, so
+                // a user on a slow device (or paying per token) had no way
+                // to stop four delegates from running at once. It can be
+                // lowered; it can never be raised past the scheduler's
+                // designed ceiling.
+                SubagentConcurrencySetting()
             }
 
             // -- Storage --
@@ -435,6 +458,82 @@ private fun SettingsItem(
                     .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
             )
         }
+    }
+}
+
+/**
+ * [feat/subagent-roster-routing] P2-4 — the chat-global cap on concurrent
+ * sub-agent runs.
+ *
+ * The value is read at app start (SubagentConcurrencyPrefs.prime) and sized
+ * into the chat's scheduler at init, so a change takes effect on the next
+ * process start — the dialog says so, exactly like the cross-session cap
+ * next to it.
+ */
+@Composable
+private fun SubagentConcurrencySetting() {
+    val context = LocalContext.current
+    var showDialog by remember { mutableStateOf(false) }
+
+    SettingsItem(
+        icon = Icons.Outlined.Psychology,
+        iconColor = Color(0xFFAF52DE),
+        title = stringResource(R.string.settings_subagent_max_concurrent),
+        subtitle = stringResource(
+            R.string.settings_subagent_max_concurrent_subtitle,
+            com.openminis.app.data.SubagentConcurrencyPrefs.globalLimit(),
+        ),
+        onClick = { showDialog = true },
+        showDivider = false,
+    )
+
+    if (showDialog) {
+        var sliderValue by remember {
+            mutableStateOf(
+                com.openminis.app.data.SubagentConcurrencyPrefs.globalLimit().toFloat(),
+            )
+        }
+        AlertDialog(
+            onDismissRequest = { showDialog = false },
+            title = { Text(stringResource(R.string.settings_subagent_max_concurrent_dialog_title)) },
+            text = {
+                Column {
+                    Text(
+                        text = sliderValue.toInt().toString(),
+                        style = MaterialTheme.typography.headlineMedium,
+                    )
+                    Slider(
+                        value = sliderValue,
+                        onValueChange = { sliderValue = it },
+                        valueRange = com.openminis.app.data.SubagentConcurrencyPrefs.MIN.toFloat()..
+                            com.openminis.app.data.SubagentConcurrencyPrefs.MAX.toFloat(),
+                        steps = com.openminis.app.data.SubagentConcurrencyPrefs.MAX -
+                            com.openminis.app.data.SubagentConcurrencyPrefs.MIN - 1,
+                    )
+                    Text(
+                        text = stringResource(R.string.settings_max_concurrent_restart_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    com.openminis.app.data.SubagentConcurrencyPrefs.setGlobalLimit(
+                        context,
+                        sliderValue.toInt(),
+                    )
+                    showDialog = false
+                }) {
+                    Text(stringResource(R.string.common_save))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDialog = false }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            },
+        )
     }
 }
 

@@ -436,8 +436,20 @@ class SubagentRunRegistry {
      * decision from the human.
      */
     fun findActiveDuplicate(skillId: String, query: String): Run? = synchronized(registerLock) {
+        // [feat/subagent-roster-routing] P2-10 — compare by FINGERPRINT,
+        // not by exact string.
+        //
+        // The parent re-issues a task across turns with different wording
+        // every time ("audit the sub-agent runner" / "please audit the
+        // sub-agent runner again"), so the exact comparison missed them
+        // all and each re-ask created REAL duplicate work — several
+        // sub-agents doing the same investigation at once, for one answer.
+        val target = SubagentTaskFingerprint.of(query)
         _runs.value.firstOrNull {
-            it.isActive && it.skillId == skillId && it.query == query
+            it.isActive &&
+                it.skillId == skillId &&
+                target.isNotEmpty() &&
+                SubagentTaskFingerprint.of(it.query) == target
         }
     }
 
@@ -473,7 +485,9 @@ class SubagentRunRegistry {
         queued: Boolean = false,
     ): RegisterOutcome = synchronized(registerLock) {
         val duplicate = _runs.value.firstOrNull {
-            it.isActive && it.skillId == skillId && it.query == query
+            it.isActive &&
+                it.skillId == skillId &&
+                SubagentTaskFingerprint.of(it.query) == SubagentTaskFingerprint.of(query)
         }
         if (duplicate != null) return RegisterOutcome(duplicate, reused = true)
         RegisterOutcome(

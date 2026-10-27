@@ -48,7 +48,7 @@ data class SubAgentDefinition(
      * The wire identifier, NOT a label.
      *
      * This is the `enum` of `subagent_task.agent`, the value the model has to
-     * emit, and the key [SubAgentRoster.resolve] matches on. It is deliberately
+     * emit, and the key the runtime matches on. It is deliberately
      * never localized: localizing it would put the UI language into the tool
      * schema, make the model emit non-ASCII identifiers, and — worse — break
      * every stored reference the moment the user switched language or synced to
@@ -262,22 +262,6 @@ object SubAgentRoster {
     }
 
     /**
-     * The definition a delegation should run under.
-     *
-     * Matching is case-insensitive and whitespace-trimmed because the name
-     * comes back from a model. A null/blank name = the built-in. A name that
-     * matches nothing returns null, which the caller turns into
-     * `unknown_agent`.
-     */
-    fun resolve(name: String?, roster: List<SubAgentDefinition>): SubAgentDefinition? {
-        val raw = name?.let { nameKey(it) }
-        if (raw.isNullOrEmpty()) {
-            return roster.firstOrNull { it.id == SubAgentDefinition.BUILT_IN_ID } ?: roster.firstOrNull()
-        }
-        return roster.firstOrNull { nameKey(it.name) == raw }
-    }
-
-    /**
      * The comparison form of a name: trimmed, case-folded and diacritic-folded.
      *
      * The name comes back from a MODEL, which may not reproduce accents exactly,
@@ -286,13 +270,17 @@ object SubAgentRoster {
      * one platform and failing with `unknown_agent` on the other. Matches iOS
      * SubAgentDefinition.nameKey.
      */
-    fun nameKey(s: String): String =
-        java.text.Normalizer.normalize(s.trim(), java.text.Normalizer.Form.NFD)
-            .replace(COMBINING_MARKS, "")
-            .lowercase()
-
-    /** Hoisted: the merge path calls [nameKey] O(local × remote) times. */
-    private val COMBINING_MARKS = Regex("\\p{Mn}+")
+    /**
+     * [feat/subagent-roster-routing] Delegates to the tools layer's
+     * normaliser, which is now the single definition.
+     *
+     * The folding rule used to exist TWICE — here (with diacritics folded)
+     * and in the tools layer (without). The two disagreed, so a roster
+     * entry named "Résumé-agent" could be listed by one layer and
+     * matched by the other, and the same delegation could work or fail
+     * depending on which layer answered. One definition, one behaviour.
+     */
+    fun nameKey(s: String): String = com.openminis.app.tools.SubagentNameKey.normalize(s)
 
     /** Outcome of [mergeBackup]: the roster to save plus the report counts. */
     data class BackupMerge(val roster: List<SubAgentDefinition>, val written: Int, val skipped: Int)

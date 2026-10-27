@@ -818,6 +818,56 @@ class BackupImporter(
             for (s in secrets.providers) {
                 if (repo.restoreBackupProviderSecret(s)) restored++ else kept++
             }
+            // [feat/subagent-roster-routing] The MCP OAuth material.
+            //
+            // It rode along in the wire format from the start and was
+            // never restored, so a round-tripped backup silently dropped
+            // every MCP authorization. The tokens are base64 in the
+            // file, like the other secrets.
+            val ctx = app?.applicationContext
+            var mcpRestored = 0
+            var mcpWithoutRefresh = 0
+            if (ctx != null) {
+                for (m in secrets.mcpOAuth) {
+                    val token = runCatching {
+                        String(android.util.Base64.decode(m.token, android.util.Base64.DEFAULT))
+                    }.getOrNull()
+                    if (token.isNullOrEmpty()) continue
+                    val refresh = m.refreshToken?.let {
+                        runCatching {
+                            String(android.util.Base64.decode(it, android.util.Base64.DEFAULT))
+                        }.getOrNull()
+                    }
+                    val clientSecret = m.clientSecret?.let {
+                        runCatching {
+                            String(android.util.Base64.decode(it, android.util.Base64.DEFAULT))
+                        }.getOrNull()
+                    }
+                    com.openminis.app.mcp.oauth.MCPOAuthStore.restore(
+                        context = ctx,
+                        server = m.serverId,
+                        accessToken = token,
+                        refreshToken = refresh,
+                        expiresAtMs = m.expiresAtMs ?: 0L,
+                        clientSecret = clientSecret,
+                    )
+                    mcpRestored++
+                    if (refresh.isNullOrEmpty()) mcpWithoutRefresh++
+                }
+            }
+            if (mcpRestored > 0) {
+                restored += mcpRestored
+                if (mcpWithoutRefresh > 0) {
+                    kept++
+                    android.util.Log.w(
+                        "BackupImporter",
+                        "[Backup] restored $mcpRestored MCP authorization(s), but " +
+                            "$mcpWithoutRefresh had no refresh token (older backup " +
+                            "format) — those will need a fresh sign-in once the " +
+                            "access token expires",
+                    )
+                }
+            }
             report.credentialsRestored = restored
             report.credentialsKept = kept
         }

@@ -31,6 +31,27 @@ data class SpawnApprovalRequest(
     val modelLabel: String,
     /** True when the run will execute in the background (detach). */
     val detached: Boolean,
+    /**
+     * [feat/subagent-roster-routing] The tool permissions the user is
+     * ABOUT TO GRANT, rendered as one line.
+     *
+     * The approval dialog used to say only "The sub-agent runs its own tool
+     * loop (shell, files, browser) without further confirmation until it
+     * reports back." — a fixed sentence that described the same capability
+     * for every skill. But the capability is NOT the same for every skill:
+     * one may be read-only, another may hold `file_write` and `shell_execute`.
+     * "Always allow" then grants that exact set, silently and forever.
+     *
+     * So the dialog now names the ACTUAL set. A user who says "always
+     * allow" must be able to see what they are allowing, and the difference
+     * between a read-only auditor and an unrestricted one must be visible
+     * BEFORE the tap, not discoverable later.
+     *
+     * Empty = unrestricted (the skill declared no allowlist) — rendered as
+     * an explicit "all tools" so the absence of a list is not read as
+     * "nothing".
+     */
+    val toolScopeLabel: String = "",
 )
 
 /**
@@ -79,6 +100,7 @@ class SpawnApprovalQueue {
         task: String,
         modelLabel: String,
         detached: Boolean,
+        toolScopeLabel: String = "",
     ): SubmittedAsk {
         val request = SpawnApprovalRequest(
             id = nextAskId(),
@@ -87,6 +109,7 @@ class SpawnApprovalQueue {
             taskPreview = task.trim().take(TASK_PREVIEW_CHARS),
             modelLabel = modelLabel,
             detached = detached,
+            toolScopeLabel = toolScopeLabel,
         )
         val entry = Entry(request)
         entries[request.id] = entry

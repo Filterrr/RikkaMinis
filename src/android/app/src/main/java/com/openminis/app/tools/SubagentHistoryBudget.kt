@@ -10,7 +10,7 @@ import com.openminis.app.data.model.LLMMessage
  * Why this exists: the main loop guards its history with offload +
  * `trimContextHistoryWindow`, but [SubagentRunner] builds its own
  * `history: MutableList<LLMMessage>` that only ever grows. A long research
- * run (`general-agent` ships `max_turns: 48`) therefore hits the provider's
+ * run (`general-agent` ships `max_turns: 40`) therefore hits the provider's
  * context wall and fails on a stream error instead of degrading gracefully.
  *
  * Shape of a sub-agent history (differs from the main chat!):
