@@ -66,6 +66,59 @@ class SubagentCrossPackageImportTest {
             .toList()
     }
 
+    /**
+     * [feat/subagent-roster-routing] Kotlin does NOT allow `internal` or
+     * `private` members inside an INTERFACE — the compiler rejects it
+     * with "Modifier 'internal' is not applicable inside 'interface'".
+     *
+     * The CI build caught exactly this when the ledger seam was marked
+     * `internal` to satisfy a visibility rule: fixing one compile error
+     * created another, and neither is visible to the local JVM script
+     * (it cannot compile the runner).
+     *
+     * The rule is simple enough to check textually: no `internal`/`private`
+     * modifier on a member of an interface body.
+     */
+    @Test
+    fun `an interface has no internal or private members`() {
+        val offenders = mutableListOf<String>()
+        for (file in productionFiles()) {
+            val lines = file.readText().lines()
+            var inInterface = false
+            var interfaceIndent = -1
+            for ((i, line) in lines.withIndex()) {
+                val trimmed = line.trim()
+                if (trimmed.isEmpty() || trimmed.startsWith("//") ||
+                    trimmed.startsWith("*") || trimmed.startsWith("/*")
+                ) continue
+                val indent = line.takeWhile { it == ' ' }.length
+                if (!inInterface) {
+                    if (Regex("""\binterface\s+[A-Za-z_][A-Za-z0-9_]*""").containsMatchIn(trimmed)) {
+                        inInterface = true
+                        interfaceIndent = indent
+                    }
+                    continue
+                }
+                // The interface body ends at the first declaration at or
+                // above the interface's own indentation.
+                if (indent <= interfaceIndent && !trimmed.startsWith("}")) {
+                    inInterface = false
+                    interfaceIndent = -1
+                    continue
+                }
+                if (Regex("""\b(internal|private)\s+(?:fun|val|var|class|object)\b""")
+                        .containsMatchIn(trimmed)
+                ) {
+                    offenders += "${file.name}:${i + 1} interface member is '${trimmed.take(60)}'"
+                }
+            }
+        }
+        assertTrue(
+            "Kotlin forbids internal/private members in an interface:\n" + offenders.joinToString("\n"),
+            offenders.isEmpty(),
+        )
+    }
+
     @Test
     fun `a public function does not expose an internal type`() {
         // Kotlin: "public type exposes its internal type argument" — a public

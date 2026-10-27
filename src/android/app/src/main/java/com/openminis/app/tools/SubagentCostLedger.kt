@@ -28,7 +28,7 @@ package com.openminis.app.tools
  * Without it, the app would have to present a ceiling as if it were a
  * measurement.
  */
-internal class SubagentCostLedger {
+class SubagentCostLedger {
 
     /** One delegated run's contribution to the chat's delegation cost. */
     data class Entry(

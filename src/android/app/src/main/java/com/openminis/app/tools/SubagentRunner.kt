@@ -101,7 +101,7 @@ class SubagentRunner(
          * [feat/subagent-roster-routing] P1-3 — the chat-level ledger of
          * what delegation costs. Null when the chat has no ledger (tests).
          */
-        internal fun subagentCostLedger(): SubagentCostLedger? = null
+        fun subagentCostLedger(): SubagentCostLedger? = null
 
         fun agentTools(): List<AgentToolDefinition>
         fun currentProvider(): com.openminis.app.provider.LLMProvider?
