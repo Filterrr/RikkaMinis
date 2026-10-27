@@ -458,18 +458,21 @@ class SubagentRunner(
         // The roster's group outranks the skill's default because the
         // roster entry is the USER's configuration for this particular
         // agent, while `model:` is the skill author's general default.
-        val modelArg = requestedModelArg.ifEmpty {
-            rosterGroupId?.let { "group:$it" }
-                ?: config.model?.trim().orEmpty()
-        }
+        val modelArg = SubagentModelChoice.resolve(
+            requestedModelArg = requestedModelArg,
+            rosterGroupId = rosterGroupId,
+            skillDefaultModel = config.model,
+        )
         if (rosterGroupId != null && requestedModelArg.isNotEmpty()) {
             val members = deps.modelGroupMembers(rosterGroupId)
-            val inGroup = members.any {
-                it.modelId == requestedModelArg ||
-                    it.displayName.equals(requestedModelArg, ignoreCase = true) ||
-                    it.entryId == requestedModelArg
-            }
-            if (!inGroup) {
+            val outsideGroup = SubagentModelChoice.isOutsidePinnedGroup(
+                requestedModelArg = requestedModelArg,
+                pinnedGroupId = rosterGroupId,
+                groupMemberIds = members.map { it.modelId },
+                groupMemberDisplayNames = members.map { it.displayName },
+                groupMemberEntryIds = members.map { it.entryId },
+            )
+            if (outsideGroup) {
                 return ToolExecutionResult(
                     "Error: this sub-agent is pinned to model group '$rosterGroupId', and " +
                         "'$requestedModelArg' is not in that group. Use one of: " +
