@@ -178,9 +178,71 @@ object SubagentSkill {
      * transient-retry backoff on an unstable relay. 900s keeps ~60 turns of
      * headroom for a healthy relay; the max exists so a detached run cannot
      * outlive its usefulness overnight.
+     *
+     * [feat/subagent-max-turns-75] The shipped sub-agent skills now declare
+     * `max_turns: 75`, so 900s no longer covers the TURN budget: at the
+     * ~15s/turn this calibration assumed, a 75-turn run needs ~1125s and was
+     * being killed by the CLOCK at ~turn 60 — the turn budget would have been
+     * decoration. The default moves to 1800s (30 min), which covers the full
+     * 75 turns with margin for retry backoff, and keeps the 3600s max as the
+     * ceiling for callers that want to raise `timeout_seconds` explicitly.
+     *
+     * The two budgets are deliberately kept in step: the wall-clock default
+     * must be able to deliver the turn budget the skills advertise, or the
+     * advertised budget is a lie. Raising one without the other is how a
+     * 40-turn run "had time to spare" while a 75-turn run silently died at
+     * turn 60 with a TIMED_OUT verdict that looks like the model's fault.
      */
-    const val DEFAULT_TIMEOUT_SECONDS = 900
+    const val DEFAULT_TIMEOUT_SECONDS = 1800
     const val MAX_TIMEOUT_SECONDS = 3600
+
+    /**
+     * [feat/subagent-max-turns-75] The turn budget the shipped sub-agent
+     * skills declare. This is the NUMBER the default wall-clock budget has
+     * to be able to deliver — see [wallClockSecondsForTurnBudget].
+     */
+    const val SHIPPED_SUBAGENT_MAX_TURNS = 75
+
+    /**
+     * [feat/subagent-max-turns-75] Seconds-per-turn assumed when checking
+     * that a wall-clock budget can deliver a turn budget.
+     *
+     * 15s/turn is the pace the original 900s calibration was measured at
+     * ("900s keeps ~60 turns of headroom for a healthy relay"). It is
+     * deliberately CONSERVATIVE: the real cost of a turn is a model
+     * round-trip plus its tool calls, and the calibration itself was taken
+     * on a relay that was spending a third of the wall clock on
+     * transient-retry backoff.
+     */
+    const val SECONDS_PER_TURN_ESTIMATE = 15
+
+    /**
+     * [feat/subagent-max-turns-75] The wall-clock budget needed to deliver
+     * [turns] turns, with a margin for retry backoff.
+     *
+     * Why this exists: the turn budget and the wall-clock budget are two
+     * different limits, and the run stops at WHICHEVER comes first. A
+     * skill that advertises `max_turns: 75` under a 900s default wall-clock
+     * budget is advertising a budget the run can never reach — the clock
+     * kills it first, and the parent sees a TIMED_OUT verdict that reads
+     * like the model ran out of patience when in fact it was never given
+     * the time it was promised.
+     *
+     * This function is the single place that relationship is expressed, so
+     * the two numbers cannot drift apart silently.
+     *
+     * @param turns the advertised turn budget.
+     * @return the wall-clock seconds required, or null when the ceiling
+     *   ([MAX_TIMEOUT_SECONDS]) cannot deliver it — in which case the turn
+     *   budget itself is unreachable no matter what timeout is chosen.
+     */
+    fun wallClockSecondsForTurnBudget(turns: Int): Int? {
+        if (turns <= 0) return 0
+        // 25% headroom over the raw estimate: retry backoff and a slow
+        // relay are the norm, not the exception.
+        val required = turns * SECONDS_PER_TURN_ESTIMATE * 5 / 4
+        return if (required > MAX_TIMEOUT_SECONDS) null else required
+    }
 
     /**
      * [T-subagent-queue-budget] How long an INLINE spawn will sit in the

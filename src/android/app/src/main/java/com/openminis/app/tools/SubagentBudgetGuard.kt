@@ -14,7 +14,7 @@ package com.openminis.app.tools
  * Deliberately a three-method interface rather than handing an
  * `AgentExecutionBudget` to the runner:
  *  - a child must not be able to consume the PARENT's turn / tool-call
- *    counters (those are the parent loop's own progress; 5 spawns × 48 turns
+ *    counters (those are the parent loop's own progress; 5 spawns × 75 turns
  *    would otherwise cut the parent off mid-plan); a child moves TOKENS and
  *    the shared deadline only;
  *  - reserve / settle are split across the run's life so a spawn that dies

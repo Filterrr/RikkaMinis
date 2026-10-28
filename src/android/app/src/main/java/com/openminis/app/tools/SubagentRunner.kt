@@ -626,9 +626,27 @@ class SubagentRunner(
         // SIT in the scheduler queue (see tryAcquire below): the parent turn
         // is parked on this call returning, so queue time is user-visible
         // freeze, not background progress.
-        val timeoutSeconds = args.optInt("timeout_seconds", SubagentSkill.DEFAULT_TIMEOUT_SECONDS)
-            .coerceIn(1, SubagentSkill.MAX_TIMEOUT_SECONDS)
-        // [fix/subagent-queue-budget] The run's wall-clock budget is NOT
+        // [feat/subagent-max-turns-75] The wall-clock budget must be able to
+        // deliver the skill's TURN budget. The run stops at whichever limit
+        // comes first, so a `max_turns: 75` skill under a 900s clock is
+        // killed at ~turn 60 and the parent sees a TIMED_OUT verdict that
+        // looks like the model gave up — when in fact it was never given the
+        // time it was promised.
+        //
+        // When the caller did NOT pick a timeout explicitly, the budget is
+        // raised to whatever the turn budget needs. When the caller DID pick
+        // one, their explicit choice wins — but the mismatch is reported in
+        // the runtime context so the sub-agent knows its real budget rather
+        // than discovering it by being cut off mid-task.
+        val requestedTimeout = args.optInt("timeout_seconds", 0)
+        val timeoutForTurnBudget = SubagentSkill.wallClockSecondsForTurnBudget(config.maxTurns)
+        val timeoutSeconds = if (requestedTimeout <= 0 && timeoutForTurnBudget != null) {
+            timeoutForTurnBudget.coerceAtLeast(SubagentSkill.DEFAULT_TIMEOUT_SECONDS)
+                .coerceIn(1, SubagentSkill.MAX_TIMEOUT_SECONDS)
+        } else {
+            args.optInt("timeout_seconds", SubagentSkill.DEFAULT_TIMEOUT_SECONDS)
+                .coerceIn(1, SubagentSkill.MAX_TIMEOUT_SECONDS)
+        }        // [fix/subagent-queue-budget] The run's wall-clock budget is NOT
         // consumed by the time it spends waiting for a concurrency slot. The
         // old code computed one absolute deadline at spawn time and handed it
         // to the scheduler, which used it for BOTH the queue wait and the
@@ -2099,7 +2117,7 @@ class SubagentRunner(
                 }
 
                 // [T-subagent-context-budget] The sub-agent's `history` only
-                // ever grew before this — `general-agent` ships max_turns: 40
+                // ever grew before this — `general-agent` ships max_turns: 75
                 // and a research run's tool outputs are routinely tens of KB,
                 // so long runs died on a provider context error instead of
                 // finishing. Trim at the turn boundary (after this turn's
