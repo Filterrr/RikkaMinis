@@ -124,6 +124,20 @@ object SubagentOrchestration {
          * `artifacts:` section instead (reconciled against disk).
          */
         val artifacts: List<String> = emptyList(),
+        /**
+         * [feat/subagent-report-summary] The report's contract fields,
+         * parsed — the same object the inline path carries.
+         *
+         * The detached paths read the report from the registry snapshot,
+         * so the parsed form is parsed there too (the runner stores it
+         * with the terminal write). It is what lets a join produce a
+         * one-line-per-run digest instead of N prose reports the parent
+         * must read in full to choose between.
+         *
+         * Null when the run delivered no parseable report (a runtime
+         * digest, a crash with no text) — absence is a fact.
+         */
+        val parsed: SubagentReportContract.ParsedReport? = null,
     ) {
         /**
          * [fix/subagent-verdict-consistency-v3] True when this outcome

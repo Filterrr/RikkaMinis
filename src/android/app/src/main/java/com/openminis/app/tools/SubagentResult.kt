@@ -45,6 +45,25 @@ data class SubagentResult(
      */
     val declaredStatus: String? = null,
     /**
+     * [feat/subagent-report-summary] The report's contract fields, PARSED.
+     *
+     * Before this, only `declaredStatus` was ever consumed as structure;
+     * `key_findings`, `gaps` and `artifacts` reached the parent as prose
+     * inside [report], and `summary` did not exist at all.
+     *
+     * The parsed form is what makes a one-line parent-facing digest
+     * possible — the parent needs "what did this run conclude / what did
+     * it not establish / what did it produce", and re-deriving that from
+     * prose on every delivery path is exactly the work this object
+     * removes.
+     *
+     * Null when the report was never parsed (a runtime-assembled digest,
+     * a crash with no text). It is a nullable rather than a default
+     * instance: "we did not parse a report" and "we parsed a report with
+     * no findings" are different facts.
+     */
+    val parsed: SubagentReportContract.ParsedReport? = null,
+    /**
      * [fix/subagent-run-assessment] The single verdict about the WORK, as
      * opposed to [status], which only says whether the LOOP finished.
      *
@@ -105,6 +124,11 @@ data class SubagentResult(
             if (SubagentRunAssessment.isModelAuthored(reportSource)) {
                 declaredStatusAnnotation()?.let { append(it) }
             }
+            // [feat/subagent-report-summary] The summary comes FIRST —
+            // before the artifacts and before the body. It is the field
+            // that answers the parent's question, and putting it first
+            // means it survives a truncation of everything below it.
+            parsed?.summary?.let { append("\nSummary: ").append(it) }
             if (artifacts.isNotEmpty()) {
                 append("\nArtifacts written: ")
                 append(artifacts.joinToString(", "))
@@ -121,6 +145,9 @@ data class SubagentResult(
         else -> buildString {
             append("Sub-agent '$skillName' ended after $turns turn(s).")
             append("\n").append(SubagentRunAssessment.headline(outcome, executedToolCalls, reportSource))
+            // [feat/subagent-report-summary] A failed run can still carry
+            // a usable summary — the parent's salvage path needs it.
+            parsed?.summary?.let { append("\nSummary: ").append(it) }
             // [feat/subagent-artifact-delivery] A failed run can still have
             // produced deliverables — that is exactly the work worth
             // salvaging. Before this the FAILED branch named none, so the

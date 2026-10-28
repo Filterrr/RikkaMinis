@@ -50,6 +50,26 @@ internal fun artifactListLine(artifacts: List<String>): String? {
     return "Artifacts written: " + artifacts.joinToString(", ")
 }
 
+/**
+ * [feat/subagent-report-summary] The one-line digest of a parsed report.
+ *
+ * The parent does not need the whole report to decide what to do next — it
+ * needs "what did this run conclude". The parsed contract has exactly
+ * that, and the digest is what lets a JOIN of N runs be read as an index
+ * instead of N prose reports stacked on top of each other.
+ *
+ * Returns null when there is nothing to say: a report with no summary
+ * and no findings produces no line, rather than a decorative
+ * "(no findings)" — the parent learns the absence from the verdict and
+ * the report body.
+ */
+internal fun reportDigestLine(parsed: SubagentReportContract.ParsedReport?): String? {
+    if (parsed == null) return null
+    val text = parsed.summary ?: parsed.findings.firstOrNull()
+    if (text.isNullOrBlank()) return null
+    return "Summary: " + text
+}
+
 internal fun boundReportForParent(
     report: String,
     journalPath: String?,
@@ -138,6 +158,10 @@ internal fun buildWakePrompt(
     // the wake-up carried the report text only, so a detached run's files
     // were reachable only through the model's prose.
     artifactListLine(outcome.artifacts)?.let { appendLine(it) }
+    // [feat/subagent-report-summary] The summary comes BEFORE the report
+    // body — it is the one part that answers the parent's question, and
+    // it must not be the thing a truncation eats.
+    reportDigestLine(outcome.parsed)?.let { appendLine(it) }
     if (outcome.report.isNotBlank()) {
         appendLine()
         appendLine(boundReportForParent(outcome.report, outcome.journalPath, maxReportChars))

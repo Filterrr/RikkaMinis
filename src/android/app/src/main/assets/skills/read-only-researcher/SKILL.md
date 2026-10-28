@@ -1,7 +1,7 @@
 ---
 name: read-only-researcher
 version: 1.0.4
-description: Read-only investigation sub-agent — a general-agent variant with file_write, file_edit, and shell_execute disabled (allowed_tools: [file_read, read_image, browser_use]). Use it for research against untrusted or unknown sources where the sub-agent must not be able to mutate the filesystem or run arbitrary commands — evidence collection with an audit trail, cross-checking another agent's claims, first-contact reconnaissance of unknown sites. Returns the same structured report contract as general-agent (status / key_findings / gaps / artifacts).
+description: Read-only investigation sub-agent — a general-agent variant with file_write, file_edit, and shell_execute disabled (allowed_tools: [file_read, read_image, browser_use]). Use it for research against untrusted or unknown sources where the sub-agent must not be able to mutate the filesystem or run arbitrary commands — evidence collection with an audit trail, cross-checking another agent's claims, first-contact reconnaissance of unknown sites. Returns the same structured report contract as general-agent (summary / status / key_findings / gaps / artifacts).
 subagent: true
 allowed_tools: [file_read, read_image, browser_use]
 max_turns: 40
@@ -47,8 +47,12 @@ End your LAST turn with a plain-text structured report and NO tool calls.
 You cannot write artifacts to disk, so your anchors ARE the deliverable:
 every key finding must carry its evidence inline (URL, file path with
 line number, or verbatim quote). Keep it under ~400 words; use the
-parent's language if the task indicates one. Exactly these four fields:
+parent's language if the task indicates one. Exactly these five fields:
 
+- `summary`: 3-5 lines answering what the parent ACTUALLY asked — the
+  bottom line, before any detail. Write it for someone who reads only
+  this field: what was searched, what was concluded, what it means.
+  This is the field that survives truncation, so it must stand alone.
 - `status`: `done` | `partial` (blocked early — say what remains) | `failed`
 - `key_findings`: one line each, format `conclusion (evidence anchor)`
 - `gaps`: what was NOT found, NOT verifiable, or requires tools you lack.
@@ -56,8 +60,15 @@ parent's language if the task indicates one. Exactly these four fields:
 - `artifacts`: usually `none (read-only skill)`; list file paths only if
   you were pointed at existing files as evidence sources.
 
+Never silently drop a field, even when empty.
+
 **This report is PLAIN TEXT, not XML.** Write `status: done` on its own
 line — never `<status>done</status>`, `<parameter name="status">done</parameter>`,
 or any other tag form. The `<task-plan>` block is the ONLY tagged structure
 you may emit, and it belongs to the plan, not to the report. A report that is
 only a tag carries no findings and will be discarded.
+
+**Put `summary:` FIRST.** The runtime parses these fields and delivers
+them in a fixed order; a report whose `summary` comes after a long
+prose preamble may lose it to truncation. Lead with the bottom line,
+then the evidence.
