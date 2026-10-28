@@ -123,6 +123,25 @@ object SubagentReportContract {
         val findings: List<String>,
         val gaps: String?,
         val artifacts: List<String>,
+        /**
+         * The report text that is NOT part of any contract field — the
+         * prose the sub-agent wrote around its findings.
+         *
+         * Why this exists: the envelope renders the contract fields AS
+         * structure (summary / findings / gaps / artifacts) and then
+         * renders the body. If the body were the whole report, every
+         * finding would appear TWICE — once as a structured line and
+         * once inside the prose — and the parent would pay for the
+         * duplicate in every token budget.
+         *
+         * The prose is what the structured fields cannot carry: the
+         * reasoning, the caveats, the "why this matters". Dropping it
+         * would lose the sub-agent's actual account; keeping it in the
+         * body would duplicate the contract.
+         *
+         * Empty when the report was nothing but contract fields.
+         */
+        val prose: String = "",
     ) {
         /** True when the report carried a usable summary. */
         val summaryAvailable: Boolean get() = summary != null
@@ -183,6 +202,8 @@ object SubagentReportContract {
         val artifactLines = mutableListOf<String>()
         val gapLines = mutableListOf<String>()
 
+        val proseLines = mutableListOf<String>()
+
         var current: String? = null
         var declaredStatus: String? = null
         for (raw in report.lines()) {
@@ -211,8 +232,33 @@ object SubagentReportContract {
             }
             when (current) {
                 FIELD_SUMMARY -> summaryLines += line.trim()
-                FIELD_KEY_FINDINGS -> findingLines += stripBullet(line.trim())
-                FIELD_ARTIFACTS -> artifactLines += stripBullet(line.trim())
+                FIELD_KEY_FINDINGS -> {
+                    val raw = line.trim()
+                    // [feat/subagent-truncation-envelope] The findings
+                    // section is a LIST — the contract writes it as
+                    // bullets. A line that is not a bullet is prose that
+                    // followed the list, and it belongs to the prose
+                    // (the reasoning), not to the findings.
+                    if (isBullet(raw)) {
+                        findingLines += stripBullet(raw)
+                    } else {
+                        proseLines += raw
+                    }
+                }
+                FIELD_ARTIFACTS -> {
+                    val entry = stripBullet(line.trim())
+                    // [feat/subagent-truncation-envelope] Only a PATH is an
+                    // artifact. Without this check, any line that follows
+                    // an `artifacts:` header is taken as a deliverable —
+                    // including a paragraph of prose, which would then be
+                    // rendered as a comma-separated list of "paths" and
+                    // would blow the envelope's budget.
+                    //
+                    // A line that is NOT a path is prose that happened to
+                    // follow the header — it goes to the prose, not to
+                    // the artifacts.
+                    if (looksLikePath(entry)) artifactLines += entry else proseLines += line.trim()
+                }
                 FIELD_GAPS -> gapLines += line.trim()
                 // A `status:` header with the value on the NEXT line —
                 // the contract allows it, and the old tail-scanning
@@ -222,6 +268,11 @@ object SubagentReportContract {
                 }
                 else -> Unit
             }
+            // Text BEFORE the first contract field is prose too — a
+            // sub-agent that writes an intro before `summary:` put its
+            // account there, and dropping it would lose the only
+            // narrative the run produced.
+            if (current == null && line.isNotBlank()) proseLines += line.trim()
         }
 
         val findings = findingLines.filter { it.isNotBlank() }
@@ -243,6 +294,7 @@ object SubagentReportContract {
         // parser's token sets) and the SAME "most recent wins" rule, so
         // they cannot drift apart on what a token MEANS.
         val status = declaredStatus
+        val prose = proseLines.joinToString("\n").trim()
 
         if (summary != null) {
             return ParsedReport(
@@ -252,6 +304,7 @@ object SubagentReportContract {
                 findings = findings,
                 gaps = gaps,
                 artifacts = artifacts,
+                prose = prose,
             )
         }
         // Degradation step 2: salvage the first finding as the summary.
@@ -266,6 +319,7 @@ object SubagentReportContract {
                 findings = findings,
                 gaps = gaps,
                 artifacts = artifacts,
+                prose = prose,
             )
         }
         // Step 3: nothing. Absence is reported, never papered over.
@@ -276,6 +330,7 @@ object SubagentReportContract {
             findings = findings,
             gaps = gaps,
             artifacts = artifacts,
+            prose = prose,
         )
     }
 
@@ -312,6 +367,31 @@ object SubagentReportContract {
     }
 
     /**
+     * Does this line look like a filesystem path?
+     *
+     * [feat/subagent-truncation-envelope] The `artifacts:` section lists
+     * paths. A line that does not look like one is prose that happened to
+     * follow the header — and taking it as a path produced an envelope
+     * that listed a paragraph as a deliverable.
+     *
+     * The test is deliberately loose about WHERE a path starts (the
+     * sandbox uses absolute paths, but a sub-agent may name a relative
+     * one) and strict about it CONTAINING a separator. A bare word like
+     * "none" or "the report is above" is prose; "notes.md" is a
+     * relative path and is accepted.
+     */
+    private fun looksLikePath(line: String): Boolean {
+        if (line.isBlank()) return false
+        // A path with a separator, or a file extension — either one is
+        // enough to tell it from a sentence.
+        if (line.contains('/')) return true
+        val name = line.substringAfterLast(' ').substringBefore(" -").trim()
+        if (name.contains('.')) return true
+        // An absolute path always has a separator; a bare "none" does not.
+        return false
+    }
+
+    /**
      * Strip a leading list bullet from a body line.
      *
      * The contract's list fields are written as bullets ("- conclusion
@@ -319,6 +399,9 @@ object SubagentReportContract {
      * text after it. Keeping the bullet would put "- " in front of every
      * line the parent reads, including the derived summary.
      */
+    private fun isBullet(line: String): Boolean =
+        line.startsWith("- ") || line.startsWith("* ") || line.startsWith("+ ")
+
     private fun stripBullet(line: String): String = when {
         line.startsWith("- ") || line.startsWith("* ") -> line.substring(2).trim()
         line.startsWith("+ ") -> line.substring(2).trim()

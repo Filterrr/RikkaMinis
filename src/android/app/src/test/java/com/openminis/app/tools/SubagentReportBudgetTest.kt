@@ -18,6 +18,18 @@ import org.junit.Test
  */
 class SubagentReportBudgetTest {
 
+    /**
+     * The upper bound on the truncation marker's length.
+     *
+     * The marker names the cap, the original size, the dropped count
+     * and the recovery route — a few hundred characters at most. The
+     * budget tests must allow for the marker WITHOUT becoming a place
+     * where the marker's own size is hard-coded twice.
+     */
+    private companion object {
+        const val TRUNCATION_MARKER_MAX_CHARS = 400
+    }
+
     private fun outcome(
         report: String,
         journalPath: String? = null,
@@ -84,9 +96,12 @@ class SubagentReportBudgetTest {
     fun `wait_any winner reports obey the same cap`() {
         val bounded = boundWaitAnyReport(outcome("w".repeat(50_000)))
 
+        // The bound is the body plus the truncation MARKER — the marker
+        // is a fixed string, so the slack is bounded by it, not by a
+        // magic number that a longer marker would silently break.
         assertTrue(
-            "wait_any must not be the one unbounded sink",
-            bounded.length <= JOIN_REPORT_MAX_CHARS + 200,
+            "wait_any must not be the one unbounded sink: ${bounded.length} chars",
+            bounded.length <= JOIN_REPORT_MAX_CHARS + TRUNCATION_MARKER_MAX_CHARS,
         )
     }
 

@@ -177,6 +177,55 @@ class SubagentReportContractTest {
         assertTrue("absence must be visible", !parsed.summaryAvailable)
     }
 
+    /**
+     * [feat/subagent-truncation-envelope] The `artifacts:` section lists
+     * PATHS. A line that does not look like one is prose that happened
+     * to follow the header.
+     *
+     * Without this, a paragraph after `artifacts:` was rendered as a
+     * comma-separated list of "deliverables" — and the envelope's
+     * budget went to it.
+     */
+    @Test
+    fun `a non-path after the artifacts header is prose, not a deliverable`() {
+        val parsed = SubagentReportContract.parse(
+            """
+            summary: the bottom line
+            status: done
+            artifacts: /var/minis/workspace/subagents/run-1/report.md
+            and then a paragraph of prose that is definitely not a path
+            """.trimIndent(),
+        )
+
+        assertEquals(1, parsed.artifacts.size)
+        assertTrue(
+            "the prose must not become a deliverable: ${parsed.artifacts}",
+            parsed.artifacts.none { it.contains("paragraph of prose") },
+        )
+        assertTrue("the prose must be kept: ${parsed.prose}", parsed.prose.contains("paragraph of prose"))
+    }
+
+    /**
+     * The prose is what the structured fields cannot carry — the
+     * reasoning. It must reach the parent.
+     */
+    @Test
+    fun `the prose around the contract is kept`() {
+        val parsed = SubagentReportContract.parse(
+            """
+            I started by looking at the API docs.
+            summary: the bottom line
+            status: done
+            key_findings:
+            - a finding (anchor: x)
+            and here is why that matters
+            """.trimIndent(),
+        )
+
+        assertTrue("the intro must be kept: ${parsed.prose}", parsed.prose.contains("looking at the API docs"))
+        assertTrue("the trailing prose must be kept: ${parsed.prose}", parsed.prose.contains("why that matters"))
+    }
+
     // ── honesty ──────────────────────────────────────────────────────────
 
     /**

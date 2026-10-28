@@ -141,7 +141,17 @@ class SubagentDeliveryTest {
         // AND the recovery route in one line (see boundReportForParent) — so
         // the assertion checks the announcement, not one exact rendering.
         assertTrue("the cut must be announced", text.contains("truncated"))
-        assertTrue("it must say how much was kept", text.contains("at 4000 chars"))
+        // [feat/subagent-truncation-envelope] The marker says HOW MUCH
+        // was kept and out of how much — not just "truncated at N chars",
+        // which told the parent a number and nothing it could act on.
+        assertTrue(
+            "it must say how much was kept, out of how much: $text",
+            text.contains("4000 of 9000 chars shown"),
+        )
+        assertTrue(
+            "it must say how much was dropped: $text",
+            text.contains("5000 chars dropped"),
+        )
         assertTrue("the full text needs an anchor", text.contains("/var/minis/workspace/.subagent/r1.md"))
     }
 
