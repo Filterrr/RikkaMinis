@@ -29,6 +29,27 @@ private const val WAKE_REPORT_MAX_CHARS = 4000
  */
 internal const val JOIN_REPORT_MAX_CHARS = 6000
 
+/**
+ * [feat/subagent-artifact-delivery] One line naming what the run produced.
+ *
+ * The inline path already had this wording
+ * ("Artifacts written: …", [SubagentResult.toPromptText]); the detached
+ * paths had NOTHING. A detached run that wrote three deliverables reached
+ * the parent with the paths buried in the model's prose — and prose drifts,
+ * which is why the runtime reconciles it
+ * ([SubagentArtifactTruth]). The detached surfaces now name the
+ * deliverables from the runtime's own write log.
+ *
+ * Returns null for an empty list: "no artifacts" is a fact the parent
+ * learns from the absence of the line, not from a line saying so. A
+ * research-only run produces no artifacts and should not carry a
+ * decorative empty line.
+ */
+internal fun artifactListLine(artifacts: List<String>): String? {
+    if (artifacts.isEmpty()) return null
+    return "Artifacts written: " + artifacts.joinToString(", ")
+}
+
 internal fun boundReportForParent(
     report: String,
     journalPath: String?,
@@ -113,6 +134,10 @@ internal fun buildWakePrompt(
         appendLine("turns: ${run.turn}/${run.maxTurns}")
     }
     if (!outcome.error.isNullOrBlank()) appendLine("error: ${outcome.error}")
+    // [feat/subagent-artifact-delivery] Name the deliverables. Before this
+    // the wake-up carried the report text only, so a detached run's files
+    // were reachable only through the model's prose.
+    artifactListLine(outcome.artifacts)?.let { appendLine(it) }
     if (outcome.report.isNotBlank()) {
         appendLine()
         appendLine(boundReportForParent(outcome.report, outcome.journalPath, maxReportChars))
