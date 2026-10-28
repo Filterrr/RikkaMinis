@@ -70,6 +70,7 @@ for f in \
   tools/SubagentPlanGate.kt \
   tools/SubagentReportHygiene.kt \
   tools/SubagentReportDecision.kt \
+  tools/SubagentReportContract.kt \
   tools/SubagentRunAssessment.kt \
   tools/SubagentResult.kt \
   tools/SubagentParentDelivery.kt \

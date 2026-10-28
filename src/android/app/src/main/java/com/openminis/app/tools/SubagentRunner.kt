@@ -1123,6 +1123,11 @@ class SubagentRunner(
             // existed only in the runner's local variable, so a detached
             // run could not tell the parent what it produced.
             artifacts = snapshot?.artifacts.orEmpty(),
+            // [feat/subagent-report-summary] The parsed contract comes
+            // back from the same snapshot — so the detached surfaces show
+            // the parent the same summary, findings and gaps the inline
+            // path shows.
+            parsed = snapshot?.parsedReport,
         )
         return if (job.deferred.complete(outcome)) outcome else null
     }
@@ -1433,6 +1438,12 @@ class SubagentRunner(
                         report = reconciledPartial,
                         outcome = SubagentRunAssessment.Outcome.TIMED_OUT,
                         reportSource = recovered.source,
+                        // [feat/subagent-report-summary] A timed-out run
+                        // often produced a real partial report, and that
+                        // report may already carry the contract — the
+                        // parent's salvage path needs the same parsed
+                        // fields as any other delivery.
+                        parsed = SubagentReportContract.parse(reconciledPartial),
                         executedToolCalls = executedToolCalls,
                         turns = turns,
                         maxTurns = config.maxTurns,
@@ -2441,6 +2452,19 @@ class SubagentRunner(
         // closing message.
         val declared = decision.declaredStatus
         val outcome = decision.outcome
+        // [feat/subagent-report-summary] Parse the contract ONCE, here,
+        // and hand the same object to the registry (for the detached
+        // paths) and to the inline result. Two parses of the same text
+        // could disagree; one parse, two references, cannot.
+        //
+        // Only the model's own report is a contract. A runtime-assembled
+        // digest is raw tool output dressed in a report's shape — parsing
+        // it would manufacture fields the model never wrote.
+        val parsedReport = if (SubagentRunAssessment.isModelAuthored(reportSource)) {
+            SubagentReportContract.parse(deliveredText)
+        } else {
+            null
+        }
         registry.finishIfActive(
             run.id, SubagentRunRegistry.RunStatus.SUCCESS,
             resultText = deliveredText,
@@ -2451,10 +2475,15 @@ class SubagentRunner(
             reportSource = reportSource,
             executedToolCalls = executedToolCalls,
         )
+        registry.setParsedReport(run.id, parsedReport)
         val result = SubagentResult(
             status = SubagentResult.Status.SUCCESS,
             report = deliveredText,
             declaredStatus = declared,
+            // [feat/subagent-report-summary] The SAME parsed object the
+            // registry got — one parse, two references, no chance of the
+            // two surfaces disagreeing about what the fields are.
+            parsed = parsedReport,
             outcome = outcome,
             reportSource = reportSource,
             executedToolCalls = executedToolCalls,
@@ -2950,6 +2979,11 @@ class SubagentRunner(
                             append(winner.runId)
                             append(" (").append(winner.skillName).append(")")
                             append(" ").append(winnerLabel)
+                            // [feat/subagent-report-summary] The winner's
+                            // summary comes BEFORE the body — it is the one
+                            // part that answers the parent's question, and
+                            // a truncation of the body must not eat it.
+                            reportDigestLine(winner.parsed)?.let { append("\n").append(it) }
                             append("\n\n---\n").append(boundWaitAnyReport(winner))
                             // [feat/subagent-artifact-delivery] The winner's
                             // deliverables, named from the runtime's write
@@ -3115,6 +3149,10 @@ class SubagentRunner(
             // carried the report text only — a run that produced three
             // files told the parent about them only through prose.
             artifactListLine(outcome.artifacts)?.let { sb.append("\n").append(it) }
+            // [feat/subagent-report-summary] The summary comes before the
+            // body, so a truncation of the body cannot eat the one part
+            // that answers the parent's question.
+            reportDigestLine(outcome.parsed)?.let { sb.append("\n").append(it) }
             outcome.error?.let { sb.append("\nError: ").append(it) }
             outcome.journalPath?.let { sb.append("\nJournal: ").append(it) }
         }

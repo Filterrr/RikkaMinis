@@ -219,6 +219,17 @@ class SubagentRunRegistry {
          */
         val artifacts: List<String> = emptyList(),
         /**
+         * [feat/subagent-report-summary] The report's contract fields,
+         * parsed — stored with the run so the detached paths can read them
+         * back without re-parsing the text (and without the two paths
+         * disagreeing about what the fields are).
+         *
+         * Null until a terminal write carries one. A run that delivered no
+         * parseable report keeps it null — absence is a fact, not an
+         * empty report.
+         */
+        val parsedReport: SubagentReportContract.ParsedReport? = null,
+        /**
          * [T-subagent-chat-stream] Interleaved transcript — narration,
          * reasoning and tool calls in arrival order. Empty for runs that
          * produced nothing yet (and for runs restored from a journal written
@@ -592,6 +603,19 @@ class SubagentRunRegistry {
         updateRun(runId) { run ->
             if (path in run.artifacts) run else run.copy(artifacts = run.artifacts + path)
         }
+    }
+
+    /**
+     * [feat/subagent-report-summary] Store the parsed report contract.
+     *
+     * Called once, at the terminal write that owns the delivered text.
+     * The detached paths read it back from the snapshot — the same place
+     * they read the verdict, the report source and the artifacts — so
+     * every delivery surface shows the parent the SAME fields, parsed by
+     * ONE parser.
+     */
+    fun setParsedReport(runId: String, parsed: SubagentReportContract.ParsedReport?) {
+        updateRun(runId) { run -> run.copy(parsedReport = parsed) }
     }
 
     /**
