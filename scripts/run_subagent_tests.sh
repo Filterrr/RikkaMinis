@@ -163,6 +163,7 @@ for f in \
   data/EnvVarRedactor.kt \
   data/EnvVarPrivacyStore.kt \
   tools/SubagentJournalRedaction.kt \
+  tools/SubagentJournalIndex.kt \
   tools/ToolOutputRedaction.kt \
   ; do
   if [ -f "$SRC/$f" ]; then ANDROIDISH="$ANDROIDISH $SRC/$f"; fi

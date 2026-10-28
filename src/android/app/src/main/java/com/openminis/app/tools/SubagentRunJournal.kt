@@ -84,6 +84,19 @@ object SubagentRunJournal {
                 appendLine("- artifacts: ${artifacts.joinToString(", ")}")
             }
             appendLine()
+            // [feat/subagent-journal-index] The index goes right after the
+            // run's identity and before the task: the parent reads the top
+            // of a file first, and this is what makes the rest navigable.
+            append(
+                SubagentJournalIndex.render(
+                    run = run,
+                    terminal = terminal,
+                    resultText = resultText,
+                    turns = turns,
+                    artifacts = artifacts,
+                ),
+            )
+            appendLine()
             appendLine("## Task")
             appendLine()
             appendLine(scrub(run.query))
