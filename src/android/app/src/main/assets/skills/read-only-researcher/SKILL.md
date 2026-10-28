@@ -1,10 +1,10 @@
 ---
 name: read-only-researcher
-version: 1.0.4
+version: 1.1.0
 description: Read-only investigation sub-agent — a general-agent variant with file_write, file_edit, and shell_execute disabled (allowed_tools: [file_read, read_image, browser_use]). Use it for research against untrusted or unknown sources where the sub-agent must not be able to mutate the filesystem or run arbitrary commands — evidence collection with an audit trail, cross-checking another agent's claims, first-contact reconnaissance of unknown sites. Returns the same structured report contract as general-agent (summary / status / key_findings / gaps / artifacts).
 subagent: true
 allowed_tools: [file_read, read_image, browser_use]
-max_turns: 40
+max_turns: 75
 max_parallel: 2
 # [T-subagent-thinking] Read-only research usually benefits from reasoning:
 # cross-checking claims and spotting contradictions between sources is

@@ -21,7 +21,7 @@ import com.openminis.app.tools.SubagentBudgetGuard
  *    becomes live the moment the token dimension is enabled.
  *
  * The PARENT's turn / tool-call counters are deliberately unreachable from
- * here: 5 spawns × 48 turns must not be able to cut the parent's own loop
+ * here: 5 spawns × 75 turns must not be able to cut the parent's own loop
  * off mid-plan by consuming its progress budget. A child moves tokens (and
  * shares the deadline) only.
  */

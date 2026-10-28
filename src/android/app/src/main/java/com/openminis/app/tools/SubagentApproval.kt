@@ -12,7 +12,7 @@ import kotlinx.coroutines.flow.update
  * [T-subagent-approval] User gate for sub-agent dispatch.
  *
  * Spawning a sub-agent hands an autonomous tool loop (shell, files, browser,
- * up to 48 unattended turns) to a MODEL-CHOSEN task — the human sees none of
+ * up to 75 unattended turns) to a MODEL-CHOSEN task — the human sees none of
  * those turns. This runtime had no approval concept at all, so "trust" was
  * binary at the tool-toggle level. The gate asks once per spawn (per-skill
  * "always allow" collapses repeat asks); a refusal aborts the spawn BEFORE

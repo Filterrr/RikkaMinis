@@ -10,8 +10,8 @@ import org.junit.Test
  * sub-agent sends, so the number cannot silently drift.
  *
  * Why this matters: a sub-agent's request carries the system prompt AND
- * the tool schemas, and BOTH are re-sent on every turn. With a 40-turn
- * budget the schemas alone are re-sent 40 times.
+ * the tool schemas, and BOTH are re-sent on every turn. With a 75-turn
+ * budget the schemas alone are re-sent 75 times.
  *
  * The measurement here is deliberately coarse — it measures the SOURCE
  * size of each tool definition, not the exact serialized JSON the
