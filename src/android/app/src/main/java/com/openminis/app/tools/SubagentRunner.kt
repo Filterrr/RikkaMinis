@@ -2624,19 +2624,65 @@ class SubagentRunner(
      * Deliberately applied on EVERY exit path (success, timeout, early stop,
      * cancellation, exception): a report that drifted is just as useless to a
      * parent reading a partial result as to one reading a complete one.
+     *
+     * [fix/subagent-artifact-reconcile-shell-scope] The early return on
+     * `artifacts.isEmpty()` is GONE, and it was the whole bug.
+     *
+     * `artifacts` is populated only by `file_write` / `file_edit`, so a run
+     * that produced its deliverables with `shell_execute` — the ordinary way
+     * a sub-agent works — had an EMPTY list, and the reconciliation returned
+     * the report untouched. Measured 2026-10-28 on real runs: a pure-shell
+     * run delivered its report with fabricated paths and real paths
+     * indistinguishable, and NO warning at all, while an identical run
+     * using `file_write` got the reconciliation and the warning. The
+     * guarantee the runtime advertised was conditional on a tool choice the
+     * model — not the runtime — made.
+     *
+     * The reconciliation is now driven by the REPORT's own paths, and the
+     * write log is only used to REPAIR them. An empty write log is a valid
+     * input, not a reason to skip the check.
      */
     private fun reconcileArtifactPaths(
         report: String,
         artifacts: List<String>,
         runId: String,
     ): String {
-        if (report.isBlank() || artifacts.isEmpty()) return report
+        if (report.isBlank()) return report
         val reconciliation = SubagentArtifactTruth.reconcile(
             report = report,
             recordedPaths = artifacts,
             artifactsDir = SubagentSkill.artifactsDirFor(runId),
+            pathExists = ::artifactPathExists,
         )
         return reconciliation.report
+    }
+
+    /**
+     * [fix/subagent-artifact-reconcile-shell-scope] Does this sandbox path
+     * exist on disk RIGHT NOW?
+     *
+     * The runtime's write log only records `file_write` / `file_edit`. A
+     * sub-agent that writes with `shell_execute` produces real files that
+     * the log never saw — so before this probe, the runtime could only say
+     * "not in the write log (may have been produced by shell_execute, or may
+     * not exist)" about a real shell artifact and about a path the model
+     * made up. The parent could not tell them apart, and the warning was
+     * true of neither.
+     *
+     * Resolved through the SAME [PRootKernel.resolveSessionHostPath] the file
+     * tools use, so the answer matches what a parent would get when it
+     * follows the path. A path that cannot be resolved is reported as
+     * absent — the runtime must not vouch for a path it cannot open.
+     */
+    private fun artifactPathExists(path: String): Boolean {
+        if (path.isBlank()) return false
+        return try {
+            val file = PRootKernel.resolveSessionHostPath(deps.activeSessionId(), path, context)
+            file != null && file.exists()
+        } catch (e: Exception) {
+            AppLogger.warning(TAG, "[Subagent] artifact existence probe failed for $path: ${e.message}")
+            false
+        }
     }
 
     /**

@@ -72,15 +72,25 @@ object SubagentArtifactTruth {
      *   model's spelling was repaired.
      * @param unverifiedPaths paths the model cited that the runtime did NOT
      *   record. Kept in the report, explicitly marked as unverified.
+     * @param missingPaths paths the model cited that do not exist on disk.
+     *   These are the genuinely broken ones — the parent must not follow
+     *   them. Empty when no existence check was supplied.
      */
     data class Reconciliation(
         val report: String,
         val authoritativePaths: List<String>,
         val correctedPaths: List<Pair<String, String>>,
         val unverifiedPaths: List<String>,
+        val missingPaths: List<String> = emptyList(),
     ) {
         /** True when the report claimed a path that was not the real one. */
         val hadDrift: Boolean get() = correctedPaths.isNotEmpty() || unverifiedPaths.isNotEmpty()
+
+        /**
+         * A path the runtime never logged AND that does not exist on disk —
+         * the strongest form of "this is not a deliverable".
+         */
+        val hadMissing: Boolean get() = missingPaths.isNotEmpty()
     }
 
     /** Root of the session sandbox — the only path space the runtime can reason about. */
@@ -190,11 +200,32 @@ object SubagentArtifactTruth {
      *   `file_write` / `file_edit` calls (raw, as the tool was called).
      * @param artifactsDir this run's artifacts directory — the base for
      *   resolving relative paths.
+     * @param pathExists an OPTIONAL existence probe, injected so this object
+     *   stays pure (no filesystem, no Android — the wiring guard asserts
+     *   that). When supplied, a cited path that is absent from the write log
+     *   is checked on disk and split into two classes:
+     *
+     *   - it EXISTS → it was almost certainly produced by `shell_execute`,
+     *     which the runtime does not log. It is a real deliverable and must
+     *     be accepted as one.
+     *   - it does NOT exist → the model invented it. It is called out as
+     *     missing, which is a much stronger warning than "unverified".
+     *
+     *   Before this probe existed the runtime said "may have been produced by
+     *   shell_execute, or may not exist" about BOTH cases — so a genuinely
+     *   real shell artifact and a fabricated path were indistinguishable,
+     *   and the warning was true of neither. Measured 2026-10-28 on real
+     *   runs: a pure-shell run produced zero warnings while every cited
+     *   path — real and fake alike — reached the parent unmarked.
+     *
+     *   When null (no probe available) the split cannot be made, and every
+     *   unlogged path stays in the single "unverified" class.
      */
     fun reconcile(
         report: String,
         recordedPaths: List<String>,
         artifactsDir: String,
+        pathExists: ((String) -> Boolean)? = null,
     ): Reconciliation {
         val authoritative = recordedPaths
             .map { canonicalize(it, artifactsDir) }
@@ -234,21 +265,78 @@ object SubagentArtifactTruth {
         // ── 2. rebuild the `artifacts:` section from the authoritative list ──
         val section = rebuildArtifactsSection(text, authoritative, artifactsDir)
         text = section.text
-        val unverified = section.unverified
+
+        // ── 2b. collect sandbox paths cited in PROSE ──
+        //
+        // [fix/subagent-artifact-reconcile-shell-scope] Only the
+        // `artifacts:` section was ever checked. A path the model mentions
+        // in `key_findings` — "read the result from
+        // /var/minis/workspace/out/summary.md" — was never verified at all,
+        // so a fabricated one in prose reached the parent unmarked. The
+        // parent's FIRST instinct is to follow a path it finds in the
+        // findings, not one buried in a trailing section.
+        //
+        // Absolute sandbox paths only: a relative path has no stable meaning
+        // outside the artifacts section, and a host path (/tmp/...) is not
+        // the runtime's business.
+        //
+        // Prose paths are held SEPARATE from the section's. For the section
+        // (the deliverable list) the parent needs provenance — was this
+        // logged by the runtime, or produced by shell_execute? For prose
+        // (a mention in passing) the parent needs only existence — a real
+        // path needs no comment, only a fake one does.
+        val proseCited = ABS_MINIS_PATH.findAll(text)
+            .map { canonicalize(it.groupValues[0], artifactsDir) }
+            .filter { it.isNotEmpty() && it !in authoritative && it !in section.unverified }
+            .distinct()
 
         // ── 3. say out loud which cited paths the runtime did not record ──
-        if (unverified.isNotEmpty()) {
-            val note = "⚠️ artifact path(s) cited in this report were NOT recorded by the runtime's " +
-                "file-write log (they may have been produced by shell_execute, or may not exist): " +
-                unverified.joinToString(", ")
-            text = text.trimEnd() + "\n" + note
+        //
+        // [fix/subagent-artifact-reconcile-shell-scope] The single
+        // "unverified" class was a lie in both directions: it called a real
+        // shell artifact "may not exist", and it called a fabricated path
+        // the same thing. With an existence probe the two are separable —
+        // and only the genuinely absent one deserves to be flagged loudly.
+        //
+        // Without a probe we know NEITHER, so the note must not claim
+        // existence either way. It says exactly what is true: the runtime
+        // did not log this write, and could not check it.
+        val sectionUnverified = section.unverified
+        val missing: List<String>
+        if (pathExists == null) {
+            missing = emptyList()
+            if (sectionUnverified.isNotEmpty()) {
+                val note = "⚠️ artifact path(s) cited in this report were NOT recorded by the " +
+                    "runtime's file-write log, and their existence could not be checked " +
+                    "(they may have been produced by shell_execute): " +
+                    sectionUnverified.joinToString(", ")
+                text = text.trimEnd() + "\n" + note
+            }
+        } else {
+            val (shellProduced, missingFromSection) = sectionUnverified.partition { pathExists(it) }
+            val missingFromProse = proseCited.filter { !pathExists(it) }
+            missing = (missingFromSection + missingFromProse).distinct()
+            if (missing.isNotEmpty()) {
+                val note = "❌ artifact path(s) cited in this report DO NOT EXIST on disk " +
+                    "(the runtime recorded no such write and no file is there): " +
+                    missing.joinToString(", ")
+                text = text.trimEnd() + "\n" + note
+            }
+            if (shellProduced.isNotEmpty()) {
+                val note = "ℹ️ artifact path(s) cited in this report were not in the runtime's " +
+                    "file-write log, but they DO exist on disk (produced by shell_execute) — " +
+                    "treat them as real deliverables: " +
+                    shellProduced.joinToString(", ")
+                text = text.trimEnd() + "\n" + note
+            }
         }
 
         return Reconciliation(
             report = text,
             authoritativePaths = authoritative,
             correctedPaths = corrected.distinct(),
-            unverifiedPaths = unverified.distinct(),
+            unverifiedPaths = (sectionUnverified + proseCited).distinct(),
+            missingPaths = missing,
         )
     }
 
