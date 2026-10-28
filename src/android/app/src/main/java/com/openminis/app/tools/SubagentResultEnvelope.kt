@@ -9,10 +9,10 @@ package com.openminis.app.tools
  * renderers, each with its own wording, its own field order and its own
  * budget:
  *
- *  - inline spawn     — [SubagentResult.toPromptText]   (tool result, NO cap)
- *  - detached wake    — [buildWakePrompt]                 (user message, 4k)
- *  - join_subagents   — the runner's join renderer        (tool result, 6k each)
- *  - wait_any         — the runner's winner renderer      (tool result, 6k)
+ *  - inline spawn     - [SubagentResult.toPromptText]   (tool result, NO cap)
+ *  - detached wake    - [buildWakePrompt]                 (user message, 4k)
+ *  - join_subagents   - the runner's join renderer        (tool result, 6k each)
+ *  - wait_any         - the runner's winner renderer      (tool result, 6k)
  *
  * The inline path was the outlier twice over: it had NO budget at all
  * (a run's stored text can be 24k, and the inline path spliced all of
@@ -27,18 +27,18 @@ package com.openminis.app.tools
  * -------------------
  * Four layers, always in this order:
  *
- *  1. ENVELOPE   — run id, skill, verdict, turns, tools, model, tokens.
+ *  1. ENVELOPE   - run id, skill, verdict, turns, tools, model, tokens.
  *                  Never truncated. The parent must always be able to
  *                  tell WHAT this is and whether to trust it.
- *  2. CONTRACT   — summary / findings / gaps / artifacts, parsed.
+ *  2. CONTRACT   - summary / findings / gaps / artifacts, parsed.
  *                  This is the actionable part and it comes BEFORE the
  *                  body, so a truncation of the body cannot eat it.
- *  3. BODY       — the report text. This is the only layer that may be
+ *  3. BODY       - the report text. This is the only layer that may be
  *                  cut, and a cut is announced with its recovery route.
- *  4. POINTERS   — journal path, artifact paths.
+ *  4. POINTERS   - journal path, artifact paths.
  *
  * A parent that reads only the envelope and the summary knows what
- * happened, what was found, and where the evidence is — without reading
+ * happened, what was found, and where the evidence is - without reading
  * the body at all.
  */
 object SubagentResultEnvelope {
@@ -47,9 +47,9 @@ object SubagentResultEnvelope {
     data class Facts(
         val runId: String,
         val skillName: String,
-        /** The verdict about the WORK — see [SubagentRunAssessment.Outcome]. */
+        /** The verdict about the WORK - see [SubagentRunAssessment.Outcome]. */
         val outcome: SubagentRunAssessment.Outcome,
-        /** Where the report text came from — a model account or a rebuild. */
+        /** Where the report text came from - a model account or a rebuild. */
         val reportSource: SubagentRunAssessment.ReportSource,
         /** Tool calls that actually executed. */
         val executedToolCalls: Int,
@@ -67,7 +67,7 @@ object SubagentResultEnvelope {
         val parsed: SubagentReportContract.ParsedReport? = null,
         /** Deliverables, from the runtime's write log. */
         val artifacts: List<String> = emptyList(),
-        /** The durable journal — the recovery anchor. */
+        /** The durable journal - the recovery anchor. */
         val journalPath: String? = null,
         /** The error, for a failed run. */
         val error: String? = null,
@@ -90,14 +90,14 @@ object SubagentResultEnvelope {
      * The framing differs (a wake-up is an EVENT, an inline result is a
      * RESULT), but the CONTENT does not: the same envelope, the same
      * fields, the same order. A path that wants a different framing
-     * gets a different first line — it does not get a different report.
+     * gets a different first line - it does not get a different report.
      */
     enum class Framing {
         /** A blocking spawn: the parent called spawn and waited. */
         INLINE,
 
         /**
-         * A first-turn readout — `run_until=first_turn`. The run is NOT
+         * A first-turn readout - `run_until=first_turn`. The run is NOT
          * finished; it is a peek. The framing says so, because reading a
          * readout as a finished task is the exact confusion the
          * STOPPED_EARLY verdict exists to prevent.
@@ -110,7 +110,7 @@ object SubagentResultEnvelope {
         /** An explicit "give me the results" call. */
         JOIN,
 
-        /** A race — one member won. */
+        /** A race - one member won. */
         WAIT_ANY,
     }
 
@@ -118,11 +118,11 @@ object SubagentResultEnvelope {
      * The per-path budget for the BODY layer.
      *
      * The inline path used to have NO budget at all. It has one now, and
-     * it is the SAME number as the join path's — a spawn is at least as
+     * it is the SAME number as the join path's - a spawn is at least as
      * explicit a request as a join, and two constants with the same
      * value are two constants that will drift apart.
      *
-     * The wake path keeps its smaller 4k — it is unsolicited, and it
+     * The wake path keeps its smaller 4k - it is unsolicited, and it
      * interrupts whatever the parent was doing.
      *
      * The value itself lives in
@@ -138,7 +138,7 @@ object SubagentResultEnvelope {
      * @param facts the run's facts.
      * @param framing how the path frames it.
      * @param bodyMaxChars the BODY budget. The envelope and the contract
-     *   are NEVER cut — only the body is, and the cut is announced.
+     *   are NEVER cut - only the body is, and the cut is announced.
      */
     fun render(
         facts: Facts,
@@ -150,7 +150,7 @@ object SubagentResultEnvelope {
         append("\n").append(costLine(facts))
         append("\n").append(turnLine(facts))
 
-        // The declared-status annotation — only for a model-authored
+        // The declared-status annotation - only for a model-authored
         // report, and only when it says something (the runtime's own
         // digest writes its own status line; forwarding that as the
         // model's self-assessment would misattribute it).
@@ -160,15 +160,43 @@ object SubagentResultEnvelope {
 
         // ── layer 2: the contract ──
         append("\n").append(summaryLine(facts.parsed))
+        append("\n").append(findingsLine(facts.parsed))
         append("\n").append(gapsLine(facts.parsed))
-        append("\n").append(artifactsLine(facts.artifacts))
+        append("\n").append(artifactsLine(facts.artifacts, facts.parsed?.artifacts.orEmpty()))
 
         // ── layer 3: the body ──
-        if (facts.report.isNotBlank()) {
+        //
+        // [feat/subagent-truncation-envelope] The body is the report's
+        // PROSE - the text that is not part of any contract field. The
+        // contract fields are already rendered above, as structure;
+        // rendering the whole report again as the body would show every
+        // finding TWICE and spend the parent's budget on the duplicate.
+        //
+        // When there is no parsed contract (a runtime-assembled digest, a
+        // crash with no text), the body IS the report - there is nothing
+        // else to show.
+        //
+        // When the contract layer captured NOTHING (a report whose fields
+        // the parser did not recognise), the body IS the report - there
+        // is nothing above it to duplicate. When the contract layer DID
+        // capture something, the body is the PROSE only: falling back to
+        // the whole report there would render every finding twice, once
+        // as structure and once inside the body.
+        val contractCapturedSomething = facts.parsed != null &&
+            (facts.parsed.summary != null ||
+                facts.parsed.findings.isNotEmpty() ||
+                facts.parsed.gaps != null ||
+                facts.parsed.artifacts.isNotEmpty())
+        val body = if (contractCapturedSomething) {
+            facts.parsed?.prose.orEmpty()
+        } else {
+            facts.report
+        }
+        if (body.isNotBlank()) {
             // [feat/subagent-result-envelope] A body that is NOT the
             // model's own complete account must say so. A parent that
             // reads a partial body as a complete one will treat a
-            // half-finished run's conclusions as final — the exact
+            // half-finished run's conclusions as final - the exact
             // mistake the PARTIAL / DEGRADED verdicts exist to prevent.
             val partialBody = !SubagentRunAssessment.isModelAuthored(facts.reportSource) ||
                 facts.outcome == SubagentRunAssessment.Outcome.PARTIAL ||
@@ -182,8 +210,23 @@ object SubagentResultEnvelope {
             if (partialBody) {
                 append("\nPartial output (not a complete account):")
             }
-            append("\n---\n")
-            append(boundBody(facts.report, facts.journalPath, bodyMaxChars))
+            append("\n\n---\n")
+            append(boundBody(body, facts.journalPath, bodyMaxChars))
+        } else if (contractCapturedSomething) {
+            // The whole report WAS the contract - there is no prose left
+            // to show. Say so, and say where the full account lives.
+            //
+            // Silence here would be a lie of omission: the parent sees a
+            // short envelope and cannot tell "the sub-agent wrote three
+            // lines" from "the sub-agent wrote 400 lines and the
+            // contract captured all of it".
+            append("\n\n---\n(the whole report is the contract above - no additional prose)")
+            if (facts.report.length > bodyMaxChars) {
+                append("\n...[body truncated: 0 of ${facts.report.length} chars shown " +
+                    "(${facts.report.length} chars dropped) - the summary, findings, gaps and " +
+                    "artifacts above are NOT cut; full text: file_read " +
+                    (facts.journalPath ?: "the run was not journaled") + "]")
+            }
         } else {
             append("\n(no text output produced)")
         }
@@ -206,7 +249,7 @@ object SubagentResultEnvelope {
             "Sub-agent '${facts.skillName}' first-turn readout (1/${facts.maxTurns} turns):"
         Framing.WAKE ->
             "[Sub-agent '${facts.skillName}' finished in the background" +
-                (facts.runtimeStatus?.let { " — status $it" } ?: "") + "]" +
+                (facts.runtimeStatus?.let { " - status $it" } ?: "") + "]" +
                 // [feat/subagent-result-envelope] The run id is NOT
                 // decoration: the parent's next move is usually
                 // join_subagents(run_ids=...) or cancel_subagents, and
@@ -234,7 +277,7 @@ object SubagentResultEnvelope {
      * The cost line.
      *
      * A provider that never reports usage leaves the totals at -1. That
-     * must render as "unknown", never as 0 — a zero cost claim is a
+     * must render as "unknown", never as 0 - a zero cost claim is a
      * measurement the runtime does not have.
      */
     private fun costLine(facts: Facts): String {
@@ -253,7 +296,7 @@ object SubagentResultEnvelope {
     }
 
     /**
-     * The summary line — the one part that answers the parent's question.
+     * The summary line - the one part that answers the parent's question.
      *
      * A DERIVED summary (the runtime fell back to the first finding) is
      * labelled as such. The parent must be able to tell the model's own
@@ -265,20 +308,62 @@ object SubagentResultEnvelope {
         return if (parsed.summaryIsModelAuthored) {
             "summary: $summary"
         } else {
-            "summary: $summary (derived from the first key finding — the sub-agent wrote no summary)"
+            "summary: $summary (derived from the first key finding - the sub-agent wrote no summary)"
         }
     }
 
-    /** The gaps line — what the run did NOT establish. */
+    /**
+     * The findings line - the conclusions, with their anchors.
+     *
+     * [feat/subagent-truncation-envelope] The envelope's documentation
+     * promised `findings` from the start, and the code never rendered
+     * it - the parsed findings were parsed, stored, and then DROPPED at
+     * the moment they were supposed to reach the parent. The findings
+     * are the sub-agent's conclusions with their evidence anchors; a
+     * parent that gets the summary and the gaps but not the findings
+     * gets the bottom line without the proof.
+     *
+     * The whole list is rendered - it is not part of the BODY budget.
+     * The findings are the actionable part of the contract, and a
+     * truncation must never be able to eat them.
+     */
+    private fun findingsLine(parsed: SubagentReportContract.ParsedReport?): String {
+        val findings = parsed?.findings?.filter { it.isNotBlank() }.orEmpty()
+        if (findings.isEmpty()) return "findings: none reported"
+        return "findings:\n" + findings.joinToString("\n") { "- $it" }
+    }
+
+    /** The gaps line - what the run did NOT establish. */
     private fun gapsLine(parsed: SubagentReportContract.ParsedReport?): String {
         val gaps = parsed?.gaps?.takeIf { it.isNotBlank() } ?: return "gaps: not reported"
         return "gaps: $gaps"
     }
 
-    /** The artifacts line. */
-    private fun artifactsLine(artifacts: List<String>): String {
-        if (artifacts.isEmpty()) return "artifacts: none"
-        return "artifacts: " + artifacts.joinToString(", ")
+    /**
+     * The artifacts line.
+     *
+     * [feat/subagent-truncation-envelope] It carries the UNION of two
+     * sources:
+     *
+     * - the runtime's WRITE LOG (the paths the runtime vouched for), and
+     * - the model's DECLARED paths, which the reconciliation has already
+     *   checked against disk.
+     *
+     * The runtime log alone is not enough: a file written through
+     * `shell_execute` never enters it, and the reconciliation accepted
+     * that path precisely because it exists on disk. The declared paths
+     * alone are not enough: the model's prose drifts, and a path it
+     * invented would be listed as a deliverable.
+     *
+     * The union keeps both, deduplicated, in that order.
+     */
+    private fun artifactsLine(
+        runtimeArtifacts: List<String>,
+        declaredArtifacts: List<String>,
+    ): String {
+        val all = (runtimeArtifacts + declaredArtifacts).distinct()
+        if (all.isEmpty()) return "artifacts: none"
+        return "artifacts: " + all.joinToString(", ")
     }
 
     /**
@@ -287,10 +372,10 @@ object SubagentResultEnvelope {
      */
     private fun declaredStatusAnnotation(declaredStatus: String?): String? = when (declaredStatus) {
         "partial" ->
-            "The sub-agent's report declares status: partial — it did NOT complete the task " +
+            "The sub-agent's report declares status: partial - it did NOT complete the task " +
                 "as specified. Check its gaps and the journaled artifacts before relying on this."
         "failed" ->
-            "The sub-agent's report declares status: failed — treat this result as an error " +
+            "The sub-agent's report declares status: failed - treat this result as an error " +
                 "report, not a deliverable."
         else -> null
     }
@@ -298,22 +383,36 @@ object SubagentResultEnvelope {
     /**
      * The body, bounded.
      *
-     * The cut is announced WITH ITS RECOVERY ROUTE — a parent that
+     * The cut is announced WITH ITS RECOVERY ROUTE - a parent that
      * cannot find the rest would treat a partial body as the whole
      * finding, which is the exact failure the report-hygiene workstream
      * exists to prevent.
      *
      * [feat/subagent-result-envelope] Public within the module so the
      * delivery helpers delegate here instead of carrying their own copy
-     * of "how do we cut" — one implementation, four callers.
+     * of "how do we cut" - one implementation, four callers.
      */
     internal fun boundBody(body: String, journalPath: String?, maxChars: Int): String {
         if (body.length <= maxChars) return body
         val recovery = if (!journalPath.isNullOrBlank()) {
             "full text: file_read $journalPath"
         } else {
-            "the run was not journaled — re-spawn with a narrower scope to get the rest"
+            "the run was not journaled - re-spawn with a narrower scope to get the rest"
         }
-        return body.take(maxChars) + "\n...[body truncated at $maxChars chars — $recovery]"
+        // [feat/subagent-truncation-envelope] The marker says WHAT was
+        // cut and HOW MUCH, not just "truncated at N chars".
+        //
+        // "truncated at 6000 chars" told the parent a NUMBER and nothing
+        // else - it did not say how much was dropped (so the parent could
+        // not judge whether the remainder mattered), and it did not say
+        // WHAT was dropped (the prose? the findings?). The findings are
+        // NOT in this layer - they are in the contract layer above, and
+        // they are never cut. A parent that knew that could read a cut
+        // body as "the reasoning was cut, the conclusions were not".
+        val dropped = body.length - maxChars
+        return body.take(maxChars) +
+            "\n...[body truncated: $maxChars of ${body.length} chars shown " +
+            "($dropped chars dropped) - the summary, findings, gaps and artifacts " +
+            "above are NOT cut; $recovery]"
     }
 }

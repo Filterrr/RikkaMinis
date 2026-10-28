@@ -13,8 +13,8 @@ import org.junit.Test
  * shape on the inline path can read the wake / join / wait_any output
  * without re-learning it.
  *
- * These tests pin the envelope's LAYERS — the envelope, then the
- * contract, then the body, then the pointers — because the layer order
+ * These tests pin the envelope's LAYERS - the envelope, then the
+ * contract, then the body, then the pointers - because the layer order
  * is the whole point: the actionable part must come before the part that
  * may be cut.
  */
@@ -68,7 +68,7 @@ class SubagentResultEnvelopeTest {
 
     /**
      * The order IS the contract. The summary answers the parent's
-     * question, so it must come BEFORE the body — otherwise a
+     * question, so it must come BEFORE the body - otherwise a
      * truncation of the body eats the one part that was worth reading.
      */
     @Test
@@ -79,9 +79,9 @@ class SubagentResultEnvelopeTest {
         )
 
         val summaryIdx = text.indexOf("summary: The API returns 404")
-        val bodyIdx = text.indexOf("the report body")
+        val bodyIdx = text.indexOf("---")
         assertTrue("the summary must be rendered: $text", summaryIdx >= 0)
-        assertTrue("the body must be rendered: $text", bodyIdx >= 0)
+        assertTrue("the body must be rendered: $text\n---\n", bodyIdx >= 0)
         assertTrue("the summary must precede the body", summaryIdx < bodyIdx)
     }
 
@@ -100,7 +100,7 @@ class SubagentResultEnvelopeTest {
         assertTrue("the envelope must precede the contract", costIdx < summaryIdx)
     }
 
-    /** The pointers come last — they are the recovery route. */
+    /** The pointers come last - they are the recovery route. */
     @Test
     fun `the pointers come after the body`() {
         val text = SubagentResultEnvelope.render(
@@ -108,7 +108,7 @@ class SubagentResultEnvelopeTest {
             SubagentResultEnvelope.Framing.INLINE,
         )
 
-        val bodyIdx = text.indexOf("the report body")
+        val bodyIdx = text.indexOf("---")
         val journalIdx = text.indexOf("/var/minis/workspace/.subagent/run-1.md")
         assertTrue("the journal must be named: $text", journalIdx >= 0)
         assertTrue("the journal must come after the body", bodyIdx < journalIdx)
@@ -131,7 +131,7 @@ class SubagentResultEnvelopeTest {
 
     /**
      * A provider that never reports usage must render as "not reported",
-     * NEVER as 0 — a zero cost claim is a measurement the runtime does
+     * NEVER as 0 - a zero cost claim is a measurement the runtime does
      * not have.
      */
     @Test
@@ -149,7 +149,7 @@ class SubagentResultEnvelopeTest {
     // ── the contract layer ──────────────────────────────────────────────
 
     @Test
-    fun `the contract layer carries the summary, the gaps and the artifacts`() {
+    fun `the contract layer carries the summary, the findings, the gaps and the artifacts`() {
         val text = SubagentResultEnvelope.render(
             facts(parsed = parsedReport(), artifacts = listOf("/a.md")),
             SubagentResultEnvelope.Framing.INLINE,
@@ -158,6 +158,33 @@ class SubagentResultEnvelopeTest {
         assertTrue("the summary must be rendered: $text", text.contains("summary: The API returns 404"))
         assertTrue("the gaps must be rendered: $text", text.contains("gaps: pagination was not exercised"))
         assertTrue("the artifacts must be rendered: $text", text.contains("artifacts: /a.md"))
+    }
+
+    /**
+     * [feat/subagent-truncation-envelope] The findings — the
+     * conclusions WITH their evidence anchors — must be rendered.
+     *
+     * The envelope's documentation promised `findings` from the first
+     * PR, and the code never rendered them: they were parsed, stored,
+     * and then dropped at the exact moment they were supposed to reach
+     * the parent. A parent that gets the summary and the gaps but not
+     * the findings gets the bottom line without the proof.
+     *
+     * This assertion is what makes that regression impossible to
+     * reintroduce silently — the negative verification caught the gap.
+     */
+    @Test
+    fun `the findings are rendered with their anchors`() {
+        val text = SubagentResultEnvelope.render(
+            facts(parsed = parsedReport()),
+            SubagentResultEnvelope.Framing.INLINE,
+        )
+
+        assertTrue("the findings must be rendered: $text", text.contains("findings:"))
+        assertTrue(
+            "the finding must be rendered with its anchor: $text",
+            text.contains("404 not 403 (anchor: curl -s https://api/repos/x)"),
+        )
     }
 
     /**
@@ -269,7 +296,7 @@ class SubagentResultEnvelopeTest {
             assertTrue("$framing must carry the summary: $text", text.contains("summary: The API returns 404"))
             assertTrue("$framing must carry the gaps: $text", text.contains("gaps: pagination was not exercised"))
             assertTrue("$framing must carry the artifacts: $text", text.contains("artifacts: /a.md"))
-            assertTrue("$framing must carry the body: $text", text.contains("the report body"))
+            assertTrue("$framing must carry the body section: $text", text.contains("---"))
             assertTrue("$framing must carry the journal: $text", text.contains("/var/minis/workspace/.subagent/run-1.md"))
         }
     }
