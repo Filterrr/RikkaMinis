@@ -78,6 +78,13 @@ data class SubagentResult(
         stoppedEarly && status == Status.SUCCESS -> buildString {
             append("Sub-agent '$skillName' first-turn readout (1/$maxTurns turns):")
             append("\n\n").append(SubagentRunAssessment.headline(outcome, executedToolCalls, reportSource))
+            // [feat/subagent-artifact-delivery] A first-turn readout that
+            // already wrote files must name them — the parent may want
+            // them even though the run stopped early.
+            if (artifacts.isNotEmpty()) {
+                append("\nArtifacts written: ")
+                append(artifacts.joinToString(", "))
+            }
             append("\n\n---\n")
             append(report.ifBlank { "(no text output produced)" })
             append("\n---")
@@ -114,6 +121,15 @@ data class SubagentResult(
         else -> buildString {
             append("Sub-agent '$skillName' ended after $turns turn(s).")
             append("\n").append(SubagentRunAssessment.headline(outcome, executedToolCalls, reportSource))
+            // [feat/subagent-artifact-delivery] A failed run can still have
+            // produced deliverables — that is exactly the work worth
+            // salvaging. Before this the FAILED branch named none, so the
+            // parent saw "failed" and had no idea that three files were
+            // already on disk.
+            if (artifacts.isNotEmpty()) {
+                append("\nArtifacts written: ")
+                append(artifacts.joinToString(", "))
+            }
             if (report.isNotBlank()) {
                 append("\n\nPartial output:\n---\n").append(report).append("\n---")
             }

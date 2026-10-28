@@ -1117,6 +1117,12 @@ class SubagentRunner(
             reportSource = snapshot?.reportSource
                 ?: SubagentRunAssessment.ReportSource.NONE,
             executedToolCalls = snapshot?.executedToolCalls ?: 0,
+            // [feat/subagent-artifact-delivery] The deliverables come back
+            // from the registry snapshot — the same place every other
+            // detached fact is read from. Before this the artifact list
+            // existed only in the runner's local variable, so a detached
+            // run could not tell the parent what it produced.
+            artifacts = snapshot?.artifacts.orEmpty(),
         )
         return if (job.deferred.complete(outcome)) outcome else null
     }
@@ -2583,7 +2589,18 @@ class SubagentRunner(
                             raw,
                             SubagentSkill.artifactsDirFor(runId),
                         )
-                        if (canonical.isNotEmpty()) artifacts?.add(canonical)
+                        if (canonical.isNotEmpty()) {
+                            artifacts?.add(canonical)
+                            // [feat/subagent-artifact-delivery] Record it in
+                            // the REGISTRY too, at the moment the write
+                            // succeeded. The registry is what every detached
+                            // path reads; the local list dies with the
+                            // coroutine, so a run that crashed or was
+                            // cancelled delivered no artifact list at all.
+                            // Recording here means the deliverable survives
+                            // every terminal path.
+                            registry.addArtifact(runId, canonical)
+                        }
                     }
                     deps.maybeReloadSkillsForPath(argsJson)
                 }
@@ -2934,6 +2951,10 @@ class SubagentRunner(
                             append(" (").append(winner.skillName).append(")")
                             append(" ").append(winnerLabel)
                             append("\n\n---\n").append(boundWaitAnyReport(winner))
+                            // [feat/subagent-artifact-delivery] The winner's
+                            // deliverables, named from the runtime's write
+                            // log — same line the join path uses.
+                            artifactListLine(winner.artifacts)?.let { append("\n").append(it) }
                             winner.journalPath?.let { append("\n\nJournal: $it") }
                             append("\n\n---\nStill running (NOT waited on): ")
                             append(losers.joinToString(", ") { it.runId }.ifEmpty { "(none)" })
@@ -3089,6 +3110,11 @@ class SubagentRunner(
             } else {
                 sb.append("\n(no report text)")
             }
+            // [feat/subagent-artifact-delivery] Name the deliverables of
+            // this run, from the runtime's write log. Before this the join
+            // carried the report text only — a run that produced three
+            // files told the parent about them only through prose.
+            artifactListLine(outcome.artifacts)?.let { sb.append("\n").append(it) }
             outcome.error?.let { sb.append("\nError: ").append(it) }
             outcome.journalPath?.let { sb.append("\nJournal: ").append(it) }
         }

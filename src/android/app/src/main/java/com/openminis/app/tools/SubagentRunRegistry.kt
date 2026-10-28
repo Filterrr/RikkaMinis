@@ -185,6 +185,40 @@ class SubagentRunRegistry {
         /** Tool calls that actually executed (see [runOutcome]). */
         val executedToolCalls: Int = 0,
         /**
+         * [feat/subagent-artifact-delivery] The deliverables this run
+         * produced — canonical sandbox paths, in the order they were written.
+         *
+         * Why this field exists: the artifact list lived ONLY in the
+         * runner's local variable and in the journal's header line. The
+         * registry snapshot — which is what EVERY detached path reads
+         * (`completeJobFromRegistry` builds the JobOutcome from it) — had
+         * no artifact field at all. So a detached run that wrote three
+         * files delivered its report to the parent with the paths buried in
+         * the model's prose, and the parent's wake / join / wait_any
+         * surfaces could not name the deliverables at all. The parent had
+         * to trust prose that the runtime knows to drift.
+         *
+         * The runtime's write log is the authority here (same rule as
+         * [SubagentArtifactTruth]): a path is recorded because a
+         * `file_write` / `file_edit` actually succeeded, not because the
+         * model said so.
+         *
+         * SCOPE, stated honestly: this is the WRITE LOG, not "every file
+         * the run produced". A sub-agent that writes with `shell_execute`
+         * produces real files this list does not contain — the runtime
+         * does not log shell writes. Those paths reach the parent through
+         * the report's `artifacts:` section, which the reconciliation
+         * checks against disk separately (a shell-produced path that
+         * exists is accepted and labelled as such). What this list adds
+         * is the paths the runtime can vouch for WITHOUT asking the
+         * model.
+         *
+         * Empty for a run that produced nothing (or a pure research run
+         * that only read). It is a LIST, not a nullable — "no artifacts" is
+         * a fact, and the detached surfaces render it as such.
+         */
+        val artifacts: List<String> = emptyList(),
+        /**
          * [T-subagent-chat-stream] Interleaved transcript — narration,
          * reasoning and tool calls in arrival order. Empty for runs that
          * produced nothing yet (and for runs restored from a journal written
@@ -537,6 +571,27 @@ class SubagentRunRegistry {
     fun setJournalPath(runId: String, path: String?) {
         if (path.isNullOrEmpty()) return
         updateRun(runId) { if (it.journalPath == path) it else it.copy(journalPath = path) }
+    }
+
+    /**
+     * [feat/subagent-artifact-delivery] Record a deliverable the run
+     * produced.
+     *
+     * Called the moment a write SUCCEEDS — not at terminal time. That
+     * ordering matters: a run that crashes, times out or is cancelled still
+     * has the artifacts it wrote before it died, and those are exactly the
+     * ones a parent needs to salvage the work. Recording them at the end
+     * would lose every artifact of every run that did not finish cleanly.
+     *
+     * Paths are canonicalised by the caller (the runner) before they get
+     * here — this registry stores what it is given, and the write log is
+     * the authority, so the same path is never stored twice.
+     */
+    fun addArtifact(runId: String, path: String) {
+        if (path.isBlank()) return
+        updateRun(runId) { run ->
+            if (path in run.artifacts) run else run.copy(artifacts = run.artifacts + path)
+        }
     }
 
     /**

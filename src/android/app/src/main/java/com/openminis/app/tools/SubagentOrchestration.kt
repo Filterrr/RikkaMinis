@@ -106,6 +106,24 @@ object SubagentOrchestration {
         val reportSource: SubagentRunAssessment.ReportSource =
             SubagentRunAssessment.ReportSource.MODEL,
         val executedToolCalls: Int = 0,
+        /**
+         * [feat/subagent-artifact-delivery] The deliverables the run
+         * produced — canonical sandbox paths.
+         *
+         * Why this field exists: the detached paths could not name what the
+         * run produced. The artifact list lived in the runner's local
+         * variable and in the journal header; neither reached the parent.
+         * A detached run that wrote three deliverables delivered its report
+         * with the paths buried in prose — and prose drifts (that is why
+         * [SubagentArtifactTruth] exists).
+         *
+         * The runtime's write log is the authority: a path is here because
+         * a `file_write` / `file_edit` actually succeeded. A path produced
+         * by `shell_execute` is NOT in this list — the runtime does not log
+         * shell writes — and reaches the parent through the report's
+         * `artifacts:` section instead (reconciled against disk).
+         */
+        val artifacts: List<String> = emptyList(),
     ) {
         /**
          * [fix/subagent-verdict-consistency-v3] True when this outcome
