@@ -71,6 +71,7 @@ for f in \
   tools/SubagentReportHygiene.kt \
   tools/SubagentReportDecision.kt \
   tools/SubagentReportContract.kt \
+  tools/SubagentResultEnvelope.kt \
   tools/SubagentRunAssessment.kt \
   tools/SubagentResult.kt \
   tools/SubagentParentDelivery.kt \

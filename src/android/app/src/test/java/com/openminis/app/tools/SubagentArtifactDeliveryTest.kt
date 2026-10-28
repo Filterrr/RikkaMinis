@@ -131,15 +131,44 @@ class SubagentArtifactDeliveryTest {
 
     // ── the rendered line ────────────────────────────────────────────────
 
+    /**
+     * [feat/subagent-result-envelope] The artifact line is now part of
+     * the ONE envelope — there is no separate helper any more, because
+     * four copies of "how do we name the deliverables" is how they drift.
+     */
     @Test
     fun `the artifact line names every deliverable`() {
-        val line = artifactListLine(listOf("/a.md", "/b.md"))
-        assertEquals("Artifacts written: /a.md, /b.md", line)
+        val text = SubagentResultEnvelope.render(
+            facts = SubagentResultEnvelope.Facts(
+                runId = "run-1",
+                skillName = "general-agent",
+                outcome = SubagentRunAssessment.Outcome.COMPLETED,
+                reportSource = SubagentRunAssessment.ReportSource.MODEL,
+                executedToolCalls = 1,
+                turns = 1,
+                maxTurns = 10,
+                artifacts = listOf("/a.md", "/b.md"),
+            ),
+            framing = SubagentResultEnvelope.Framing.INLINE,
+        )
+        assertTrue("the envelope must name the deliverables: $text", text.contains("artifacts: /a.md, /b.md"))
     }
 
     @Test
-    fun `no artifacts means no line`() {
-        assertEquals(null, artifactListLine(emptyList()))
+    fun `no artifacts means the envelope says so`() {
+        val text = SubagentResultEnvelope.render(
+            facts = SubagentResultEnvelope.Facts(
+                runId = "run-1",
+                skillName = "general-agent",
+                outcome = SubagentRunAssessment.Outcome.COMPLETED,
+                reportSource = SubagentRunAssessment.ReportSource.MODEL,
+                executedToolCalls = 1,
+                turns = 1,
+                maxTurns = 10,
+            ),
+            framing = SubagentResultEnvelope.Framing.INLINE,
+        )
+        assertTrue("the envelope must say there are none: $text", text.contains("artifacts: none"))
     }
 
     // ── the delivery surfaces ────────────────────────────────────────────
@@ -153,17 +182,28 @@ class SubagentArtifactDeliveryTest {
 
         assertTrue(
             "the wake prompt must name what the run produced: $prompt",
-            prompt.contains("Artifacts written: /var/minis/workspace/subagents/run-1/report.md"),
+            prompt.contains("artifacts: /var/minis/workspace/subagents/run-1/report.md"),
         )
     }
 
+    /**
+     * [feat/subagent-result-envelope] The envelope renders a FIXED set of
+     * fields — including `artifacts: none`. That is a deliberate change
+     * from the old wake renderer, which omitted the line entirely.
+     *
+     * The reason: the envelope is a contract. A parent that reads the
+     * fields positionally (which it will, because the fields are now
+     * IDENTICAL on every path) cannot tell "no artifacts" from "the
+     * renderer forgot to mention them". An explicit `none` is a fact; a
+     * missing line is an ambiguity.
+     */
     @Test
-    fun `the wake prompt of an artifact-less run carries no artifact line`() {
+    fun `the wake prompt of an artifact-less run says there are none`() {
         val prompt = buildWakePrompt(outcome = outcome(), snapshot = null)
 
-        assertFalse(
-            "a run that produced nothing must not carry a decorative line: $prompt",
-            prompt.contains("Artifacts written"),
+        assertTrue(
+            "a run that produced nothing must say so explicitly: $prompt",
+            prompt.contains("artifacts: none"),
         )
     }
 
@@ -191,7 +231,7 @@ class SubagentArtifactDeliveryTest {
         val text = result.toPromptText()
         assertTrue(
             "a failed run's deliverables must be named: $text",
-            text.contains("Artifacts written: /var/minis/workspace/subagents/run-1/notes.md"),
+            text.contains("artifacts: /var/minis/workspace/subagents/run-1/notes.md"),
         )
     }
 
@@ -212,7 +252,7 @@ class SubagentArtifactDeliveryTest {
         val text = result.toPromptText(stoppedEarly = true)
         assertTrue(
             "an early readout must still name what it wrote: $text",
-            text.contains("Artifacts written: /var/minis/workspace/subagents/run-1/a.md"),
+            text.contains("artifacts: /var/minis/workspace/subagents/run-1/a.md"),
         )
     }
 
@@ -241,22 +281,37 @@ class SubagentArtifactDeliveryTest {
         )
     }
 
+    /**
+     * [feat/subagent-result-envelope] The artifact line moved INTO the
+     * one envelope — there is no per-path helper any more, because four
+     * copies of "how do we name the deliverables" is how they drift.
+     *
+     * So the guard now asks two questions: does the envelope render the
+     * artifacts, and does every detached path go through it?
+     */
     @Test
     fun `every detached surface renders the artifact line`() {
-        // The wake prompt lives in SubagentParentDelivery; the join and
-        // wait_any renderers live in the runner.
         val delivery = ProductionSources.read("tools/SubagentParentDelivery.kt")
+        val envelope = ProductionSources.read("tools/SubagentResultEnvelope.kt")
         assertTrue(
-            "the wake prompt must render the artifact line",
-            delivery.contains("artifactListLine(outcome.artifacts)"),
+            "the envelope must render the artifact line",
+            envelope.contains("artifacts: "),
         )
         assertTrue(
-            "the join prompt must render the artifact line",
-            runner.contains("artifactListLine(outcome.artifacts)"),
+            "the envelope must receive the artifact list",
+            envelope.contains("val artifacts: List<String>"),
         )
         assertTrue(
-            "the wait_any winner must render the artifact line",
-            runner.contains("artifactListLine(winner.artifacts)"),
+            "the wake prompt must render through the envelope",
+            delivery.contains("SubagentResultEnvelope.Framing.WAKE"),
+        )
+        assertTrue(
+            "the join prompt must render through the envelope",
+            runner.contains("SubagentResultEnvelope.Framing.JOIN"),
+        )
+        assertTrue(
+            "the wait_any winner must render through the envelope",
+            runner.contains("SubagentResultEnvelope.Framing.WAIT_ANY"),
         )
     }
 }

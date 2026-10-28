@@ -230,6 +230,14 @@ class SubagentRunRegistry {
          */
         val parsedReport: SubagentReportContract.ParsedReport? = null,
         /**
+         * [feat/subagent-result-envelope] The model's own declared status,
+         * when it declared one ("partial" / "failed").
+         *
+         * Different fact from [runOutcome]: the verdict is what the
+         * runtime concluded, this is what the model said about itself.
+         */
+        val declaredStatus: String? = null,
+        /**
          * [T-subagent-chat-stream] Interleaved transcript — narration,
          * reasoning and tool calls in arrival order. Empty for runs that
          * produced nothing yet (and for runs restored from a journal written
@@ -616,6 +624,18 @@ class SubagentRunRegistry {
      */
     fun setParsedReport(runId: String, parsed: SubagentReportContract.ParsedReport?) {
         updateRun(runId) { run -> run.copy(parsedReport = parsed) }
+    }
+
+    /**
+     * [feat/subagent-result-envelope] Store the model's declared status.
+     *
+     * The verdict (what the runtime concluded) and the declaration (what
+     * the model said about itself) are two different facts, and the
+     * parent needs both: a run that quietly declared itself `partial`
+     * must not read like a clean completion.
+     */
+    fun setDeclaredStatus(runId: String, declaredStatus: String?) {
+        updateRun(runId) { run -> run.copy(declaredStatus = declaredStatus) }
     }
 
     /**

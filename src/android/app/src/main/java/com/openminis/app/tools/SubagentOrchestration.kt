@@ -138,6 +138,17 @@ object SubagentOrchestration {
          * digest, a crash with no text) — absence is a fact.
          */
         val parsed: SubagentReportContract.ParsedReport? = null,
+        /**
+         * [feat/subagent-result-envelope] The model's own declared status,
+         * when it declared one ("partial" / "failed").
+         *
+         * It is a different fact from [outcome]: the verdict is what the
+         * runtime concluded about the work, this is what the model said
+         * about itself. The envelope renders both, because a parent that
+         * sees only the verdict cannot tell a run that quietly declared
+         * itself partial from one that claimed completion.
+         */
+        val declaredStatus: String? = null,
     ) {
         /**
          * [fix/subagent-verdict-consistency-v3] True when this outcome

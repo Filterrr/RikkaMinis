@@ -30,60 +30,56 @@ private const val WAKE_REPORT_MAX_CHARS = 4000
 internal const val JOIN_REPORT_MAX_CHARS = 6000
 
 /**
- * [feat/subagent-artifact-delivery] One line naming what the run produced.
+ * [feat/subagent-result-envelope] Turn a detached outcome into the
+ * envelope's [SubagentResultEnvelope.Facts].
  *
- * The inline path already had this wording
- * ("Artifacts written: …", [SubagentResult.toPromptText]); the detached
- * paths had NOTHING. A detached run that wrote three deliverables reached
- * the parent with the paths buried in the model's prose — and prose drifts,
- * which is why the runtime reconciles it
- * ([SubagentArtifactTruth]). The detached surfaces now name the
- * deliverables from the runtime's own write log.
+ * The detached paths read their facts from the registry snapshot (the
+ * same snapshot the verdict comes from), so the envelope they render is
+ * built from ONE source of truth — not from a re-derivation that could
+ * drift from the inline path.
  *
- * Returns null for an empty list: "no artifacts" is a fact the parent
- * learns from the absence of the line, not from a line saying so. A
- * research-only run produces no artifacts and should not carry a
- * decorative empty line.
+ * The model / token / turn numbers come from the snapshot when there is
+ * one; a snapshot that is missing (the run was pruned) degrades to
+ * "not reported" rather than to a zero.
  */
-internal fun artifactListLine(artifacts: List<String>): String? {
-    if (artifacts.isEmpty()) return null
-    return "Artifacts written: " + artifacts.joinToString(", ")
-}
+internal fun envelopeFacts(
+    outcome: SubagentOrchestration.JobOutcome,
+    snapshot: SubagentRunRegistry.Run?,
+): SubagentResultEnvelope.Facts = SubagentResultEnvelope.Facts(
+    runId = outcome.runId,
+    skillName = outcome.skillName,
+    outcome = if (outcome.cancelled) {
+        SubagentRunAssessment.Outcome.FAILED
+    } else {
+        outcome.effectiveOutcome
+    },
+    reportSource = outcome.reportSource,
+    executedToolCalls = outcome.executedToolCalls,
+    turns = snapshot?.turn ?: 0,
+    maxTurns = snapshot?.maxTurns ?: 0,
+    modelLabel = snapshot?.modelLabel.orEmpty(),
+    tokensIn = snapshot?.tokensIn ?: -1,
+    tokensOut = snapshot?.tokensOut ?: -1,
+    report = outcome.report,
+    parsed = outcome.parsed,
+    artifacts = outcome.artifacts,
+    journalPath = outcome.journalPath,
+    error = outcome.error,
+    declaredStatus = outcome.declaredStatus,
+)
 
 /**
- * [feat/subagent-report-summary] The one-line digest of a parsed report.
+ * [feat/subagent-result-envelope] Cut a report body to fit a budget.
  *
- * The parent does not need the whole report to decide what to do next — it
- * needs "what did this run conclude". The parsed contract has exactly
- * that, and the digest is what lets a JOIN of N runs be read as an index
- * instead of N prose reports stacked on top of each other.
- *
- * Returns null when there is nothing to say: a report with no summary
- * and no findings produces no line, rather than a decorative
- * "(no findings)" — the parent learns the absence from the verdict and
- * the report body.
+ * A thin delegate to the envelope's own cutter: ONE implementation of
+ * "how do we cut", so the inline / wake / join / wait_any paths cannot
+ * drift on the cut marker or the recovery route.
  */
-internal fun reportDigestLine(parsed: SubagentReportContract.ParsedReport?): String? {
-    if (parsed == null) return null
-    val text = parsed.summary ?: parsed.findings.firstOrNull()
-    if (text.isNullOrBlank()) return null
-    return "Summary: " + text
-}
-
 internal fun boundReportForParent(
     report: String,
     journalPath: String?,
     maxChars: Int,
-): String {
-    if (report.length <= maxChars) return report
-    val recovery = if (!journalPath.isNullOrBlank()) {
-        "full text: file_read $journalPath"
-    } else {
-        "the run was not journaled — re-spawn with a narrower scope to get the rest"
-    }
-    return report.take(maxChars) +
-        "\n…[report truncated at $maxChars chars — $recovery]"
-}
+): String = SubagentResultEnvelope.boundBody(report, journalPath, maxChars)
 
 /**
  * [T-subagent-report-budget] Render the wait_any winner's report with the SAME
@@ -100,6 +96,7 @@ internal fun boundWaitAnyReport(
     maxChars = maxChars,
 )
 
+
 /**
  * [T-subagent-delivery] Render the parent-facing turn for a detached run's
  * terminal outcome.
@@ -110,64 +107,28 @@ internal fun boundWaitAnyReport(
  * window on it; the journal holds the full text and is named so the parent can
  * read selectively.
  *
+ * [feat/subagent-result-envelope] It renders through the ONE envelope now —
+ * the same object the inline path renders — so the wake-up and the inline
+ * result can never disagree about what a run produced. Only the framing and
+ * the body budget differ.
+ *
  * Top-level + pure (no runner state) so the wording contract is unit-testable.
  */
 internal fun buildWakePrompt(
     outcome: SubagentOrchestration.JobOutcome,
     snapshot: SubagentRunRegistry.Run?,
     maxReportChars: Int = WAKE_REPORT_MAX_CHARS,
-): String = buildString {
-    // [fix/subagent-verdict-consistency-v3] The wake prompt carries TWO
-    // independent facts, and the old code conflated them:
-    //
-    //   - the RUNTIME status (registry RunStatus): how the run ENDED —
-    //     TIMED_OUT, CANCELLED, FAILED.
-    //   - the WORK verdict (Outcome): what the run DELIVERED — a full
-    //     report, a runtime digest, a partial result, nothing.
-    //
-    // A run can time out AND still have produced partial notes; a run can
-    // finish without throwing AND deliver only a digest. Reading the
-    // binary `success` flag answered neither question ("SUCCESS" for a
-    // digest, "FAILED" for a timeout that left usable notes).
-    //
-    // So the header names the runtime status when it is not the plain
-    // success case, and the verdict is always stated — the parent needs to
-    // know both WHY the run ended and WHETHER the text below is findings.
-    val runtimeStatus = snapshot?.status?.name
-    val verdict = if (outcome.cancelled) {
-        SubagentRunAssessment.Outcome.FAILED
-    } else {
-        outcome.effectiveOutcome
-    }
-    val status = SubagentRunAssessment.summaryStatus(
-        runtimeStatus = runtimeStatus,
-        verdict = verdict,
-        hasReport = outcome.report.isNotBlank(),
+): String {
+    val facts = envelopeFacts(outcome, snapshot).copy(
+        // [feat/subagent-result-envelope] The wake-up's first line names
+        // the RUNTIME status as well as the verdict — a run can time out
+        // AND still have delivered partial notes, and "how the run ended"
+        // is a different fact from "what it delivered".
+        runtimeStatus = snapshot?.status?.name,
     )
-    appendLine("[Sub-agent '${outcome.skillName}' finished in the background — status $status]")
-    appendLine("run_id: ${outcome.runId}")
-    snapshot?.let { run ->
-        if (run.modelLabel.isNotBlank()) appendLine("model: ${run.modelLabel}")
-        if (run.tokensIn >= 0 || run.tokensOut >= 0) {
-            appendLine("tokens: in=${run.tokensIn.coerceAtLeast(0)} out=${run.tokensOut.coerceAtLeast(0)}")
-        }
-        appendLine("turns: ${run.turn}/${run.maxTurns}")
-    }
-    if (!outcome.error.isNullOrBlank()) appendLine("error: ${outcome.error}")
-    // [feat/subagent-artifact-delivery] Name the deliverables. Before this
-    // the wake-up carried the report text only, so a detached run's files
-    // were reachable only through the model's prose.
-    artifactListLine(outcome.artifacts)?.let { appendLine(it) }
-    // [feat/subagent-report-summary] The summary comes BEFORE the report
-    // body — it is the one part that answers the parent's question, and
-    // it must not be the thing a truncation eats.
-    reportDigestLine(outcome.parsed)?.let { appendLine(it) }
-    if (outcome.report.isNotBlank()) {
-        appendLine()
-        appendLine(boundReportForParent(outcome.report, outcome.journalPath, maxReportChars))
-    }
-    outcome.journalPath?.let {
-        appendLine()
-        append("Full report: $it (file_read it for anything truncated above).")
-    }
-}.trim()
+    return SubagentResultEnvelope.render(
+        facts = facts,
+        framing = SubagentResultEnvelope.Framing.WAKE,
+        bodyMaxChars = maxReportChars,
+    ).trim()
+}

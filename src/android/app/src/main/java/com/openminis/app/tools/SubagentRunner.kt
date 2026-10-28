@@ -1128,6 +1128,9 @@ class SubagentRunner(
             // the parent the same summary, findings and gaps the inline
             // path shows.
             parsed = snapshot?.parsedReport,
+            // [feat/subagent-result-envelope] The model's own declaration
+            // travels with the snapshot too.
+            declaredStatus = snapshot?.declaredStatus,
         )
         return if (job.deferred.complete(outcome)) outcome else null
     }
@@ -2476,6 +2479,7 @@ class SubagentRunner(
             executedToolCalls = executedToolCalls,
         )
         registry.setParsedReport(run.id, parsedReport)
+        registry.setDeclaredStatus(run.id, declared)
         val result = SubagentResult(
             status = SubagentResult.Status.SUCCESS,
             report = deliveredText,
@@ -2963,33 +2967,22 @@ class SubagentRunner(
                     // UNSTARTED run from a crashed one, and (worse) a
                     // success_only race would treat a DEGRADED digest as a
                     // usable winner. Use the verdict.
-                    val winnerLabel = if (winner.cancelled) {
-                        "CANCELLED"
-                    } else {
-                        SubagentRunAssessment.summaryStatus(
-                            runtimeStatus = null,
-                            verdict = winner.effectiveOutcome,
-                            hasReport = winner.report.isNotBlank(),
-                        )
-                    }
                     val winnerDelivered = winner.delivered
                     ToolExecutionResult(
                         buildString {
-                            append("wait_any: first completion in group ${group.id} → run ")
-                            append(winner.runId)
-                            append(" (").append(winner.skillName).append(")")
-                            append(" ").append(winnerLabel)
-                            // [feat/subagent-report-summary] The winner's
-                            // summary comes BEFORE the body — it is the one
-                            // part that answers the parent's question, and
-                            // a truncation of the body must not eat it.
-                            reportDigestLine(winner.parsed)?.let { append("\n").append(it) }
-                            append("\n\n---\n").append(boundWaitAnyReport(winner))
-                            // [feat/subagent-artifact-delivery] The winner's
-                            // deliverables, named from the runtime's write
-                            // log — same line the join path uses.
-                            artifactListLine(winner.artifacts)?.let { append("\n").append(it) }
-                            winner.journalPath?.let { append("\n\nJournal: $it") }
+                            // [feat/subagent-result-envelope] The winner
+                            // renders through the ONE envelope — the same
+                            // renderer the join, wake and inline paths use.
+                            // The verdict label rides in the framing line,
+                            // so the parent still sees the outcome in the
+                            // first line.
+                            append(
+                                SubagentResultEnvelope.render(
+                                    facts = envelopeFacts(winner, null),
+                                    framing = SubagentResultEnvelope.Framing.WAIT_ANY,
+                                    bodyMaxChars = JOIN_REPORT_MAX_CHARS,
+                                ),
+                            )
                             append("\n\n---\nStill running (NOT waited on): ")
                             append(losers.joinToString(", ") { it.runId }.ifEmpty { "(none)" })
                             append(". Reap losers with cancel_subagents when you no longer need them.")
@@ -3092,7 +3085,19 @@ class SubagentRunner(
         }
     }
 
-    /** Model-facing rendering of a join's outcomes. */
+    /**
+     * Model-facing rendering of a join's outcomes.
+     *
+     * [feat/subagent-result-envelope] Every run renders through the ONE
+     * envelope now — the same renderer the inline path and the wake path
+     * use. Before this the join had its own copy of the same idea, and
+     * the four copies had drifted apart on field order, on what the
+     * verdict line said, and on whether the artifacts were named at all.
+     *
+     * The summary above the runs is the INDEX: it tells the parent how
+     * many runs are in the batch and what each verdict was, so the
+     * parent can decide which envelope to read closely.
+     */
     private fun buildJoinPrompt(
         group: SubagentOrchestration.SubagentGroup,
         jobs: List<SubagentOrchestration.SubagentJob>,
@@ -3112,49 +3117,14 @@ class SubagentRunner(
         // sibling code path. The journal holds the full text (and is named on
         // truncation), so nothing is lost — only the automatic spend is.
         for ((job, outcome) in jobs.zip(outcomes)) {
-            sb.append("\n\n=== run ").append(job.runId)
-                .append(" (").append(outcome.skillName).append(") — ")
-                .append(
-                    when {
-                        outcome.cancelled -> "CANCELLED"
-                        // [fix/subagent-verdict-consistency-v3] The old
-                        // three-way split (cancelled / success / failed)
-                        // collapsed every verdict the runtime knows about
-                        // into "FAILED" — an UNSTARTED run, a DEGRADED
-                        // runtime digest and a model-declared PARTIAL all
-                        // reached the parent as the same word. The parent
-                        // then had to re-read the body to learn whether the
-                        // run did anything. Use the verdict label.
-                        else -> SubagentRunAssessment.summaryStatus(
-                            runtimeStatus = null,
-                            verdict = outcome.effectiveOutcome,
-                            hasReport = outcome.report.isNotBlank(),
-                        )
-                    },
-                )
-                .append(" ===")
-            if (outcome.report.isNotBlank()) {
-                sb.append("\n").append(
-                    boundReportForParent(
-                        report = outcome.report,
-                        journalPath = outcome.journalPath,
-                        maxChars = JOIN_REPORT_MAX_CHARS,
-                    ),
-                )
-            } else {
-                sb.append("\n(no report text)")
-            }
-            // [feat/subagent-artifact-delivery] Name the deliverables of
-            // this run, from the runtime's write log. Before this the join
-            // carried the report text only — a run that produced three
-            // files told the parent about them only through prose.
-            artifactListLine(outcome.artifacts)?.let { sb.append("\n").append(it) }
-            // [feat/subagent-report-summary] The summary comes before the
-            // body, so a truncation of the body cannot eat the one part
-            // that answers the parent's question.
-            reportDigestLine(outcome.parsed)?.let { sb.append("\n").append(it) }
-            outcome.error?.let { sb.append("\nError: ").append(it) }
-            outcome.journalPath?.let { sb.append("\nJournal: ").append(it) }
+            sb.append("\n\n")
+            sb.append(
+                SubagentResultEnvelope.render(
+                    facts = envelopeFacts(outcome, null),
+                    framing = SubagentResultEnvelope.Framing.JOIN,
+                    bodyMaxChars = JOIN_REPORT_MAX_CHARS,
+                ),
+            )
         }
         if (timedOut) {
             sb.append("\n\nOne or more runs timed out of this join but keep running in the background — ")

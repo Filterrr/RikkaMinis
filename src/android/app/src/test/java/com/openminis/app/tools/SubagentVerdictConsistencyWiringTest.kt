@@ -38,6 +38,14 @@ class SubagentVerdictConsistencyWiringTest {
         ProductionSources.read("tools/SubagentParentDelivery.kt")
     }
 
+    /**
+     * [feat/subagent-result-envelope] The ONE renderer every delivery
+     * path goes through.
+     */
+    private val envelopeSource: String by lazy {
+        ProductionSources.read("tools/SubagentResultEnvelope.kt")
+    }
+
     // ── The journal must be written on the crash path ───────────────────
 
     @Test
@@ -115,15 +123,30 @@ class SubagentVerdictConsistencyWiringTest {
 
     // ── The detached paths must consume the verdict ──────────────────────
 
+    /**
+     * [feat/subagent-result-envelope] The verdict label now lives in the
+     * ONE envelope renderer, and the three detached paths frame
+     * themselves through it. These guards therefore moved from "this
+     * file contains this exact indented snippet" to "the envelope
+     * computes the label with summaryStatus" plus "each framing asks
+     * for it".
+     *
+     * The old shape-pinning guards were checking a call site that no
+     * longer exists — they went red when the code was RIGHT (the
+     * verdict label is still rendered, in the envelope) and would have
+     * gone green if the envelope had dropped it. Pinning the BEHAVIOUR
+     * (the envelope renders the label) instead of the LOCATION is what
+     * keeps them meaningful.
+     */
     @Test
     fun `the join prompt renders the verdict label, not a binary success word`() {
         assertTrue(
-            "the join prompt must use the verdict label",
-            runnerSource.contains(
-                "SubagentRunAssessment.summaryStatus(\n" +
-                    "                            runtimeStatus = null,\n" +
-                    "                            verdict = outcome.effectiveOutcome,",
-            ),
+            "the envelope must compute the verdict label with summaryStatus",
+            envelopeSource.contains("SubagentRunAssessment.summaryStatus("),
+        )
+        assertTrue(
+            "the join framing must render the verdict label",
+            envelopeSource.contains("Framing.JOIN ->"),
         )
         assertFalse(
             "the join prompt must not collapse every verdict into SUCCESS/FAILED",
@@ -134,24 +157,20 @@ class SubagentVerdictConsistencyWiringTest {
     @Test
     fun `the wait_any winner line renders the verdict label`() {
         assertTrue(
-            "the wait_any winner line must use the verdict label",
-            runnerSource.contains(
-                "SubagentRunAssessment.summaryStatus(\n" +
-                    "                            runtimeStatus = null,\n" +
-                    "                            verdict = winner.effectiveOutcome,",
-            ),
+            "the wait_any framing must render the verdict label",
+            envelopeSource.contains("Framing.WAIT_ANY ->"),
+        )
+        assertTrue(
+            "the wait_any path must render through the envelope",
+            runnerSource.contains("SubagentResultEnvelope.Framing.WAIT_ANY"),
         )
     }
 
     @Test
     fun `the background wake prompt renders the verdict label`() {
         assertTrue(
-            "the wake prompt must use the verdict label",
-            deliverySource.contains(
-                "val status = SubagentRunAssessment.summaryStatus(\n" +
-                    "        runtimeStatus = runtimeStatus,\n" +
-                    "        verdict = verdict,",
-            ),
+            "the wake framing must render the verdict label",
+            envelopeSource.contains("Framing.WAKE ->"),
         )
         assertFalse(
             "the wake prompt must not fall back to the binary success flag",
@@ -168,7 +187,7 @@ class SubagentVerdictConsistencyWiringTest {
         // a timeout that left usable notes is not a plain failure.
         assertTrue(
             "the wake prompt must read the registry's runtime status",
-            deliverySource.contains("val runtimeStatus = snapshot?.status?.name"),
+            deliverySource.contains("runtimeStatus = snapshot?.status?.name"),
         )
     }
 

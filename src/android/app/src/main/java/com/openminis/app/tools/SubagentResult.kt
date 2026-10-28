@@ -93,78 +93,32 @@ data class SubagentResult(
      *   early readout — renders the short first-turn framing instead of the
      *   full-completion framing.
      */
-    fun toPromptText(stoppedEarly: Boolean = false): String = when {
-        stoppedEarly && status == Status.SUCCESS -> buildString {
-            append("Sub-agent '$skillName' first-turn readout (1/$maxTurns turns):")
-            append("\n\n").append(SubagentRunAssessment.headline(outcome, executedToolCalls, reportSource))
-            // [feat/subagent-artifact-delivery] A first-turn readout that
-            // already wrote files must name them — the parent may want
-            // them even though the run stopped early.
-            if (artifacts.isNotEmpty()) {
-                append("\nArtifacts written: ")
-                append(artifacts.joinToString(", "))
-            }
-            append("\n\n---\n")
-            append(report.ifBlank { "(no text output produced)" })
-            append("\n---")
-            journalPath?.let { append("\n\nFull journal: $it") }
+    fun toPromptText(stoppedEarly: Boolean = false): String {
+        // [feat/subagent-result-envelope] The inline path used to have its
+        // OWN renderer — a fourth copy of the same idea, with no budget
+        // and no cost line. It now renders through the ONE envelope; the
+        // only per-path difference is the framing and the body budget.
+        val framing = if (stoppedEarly && status == Status.SUCCESS) {
+            SubagentResultEnvelope.Framing.EARLY_READOUT
+        } else {
+            SubagentResultEnvelope.Framing.INLINE
         }
-        status == Status.SUCCESS -> buildString {
-            // [fix/subagent-run-assessment] The verdict comes FIRST — before
-            // the turn count, before artifacts. The parent must be able to
-            // triage without reading the report body; "completed in 5
-            // turn(s)" alone was identical for a real run and an empty one.
-            append("Sub-agent '$skillName' ran $turns turn(s).")
-            append("\n").append(SubagentRunAssessment.headline(outcome, executedToolCalls, reportSource))
-            // [fix/subagent-run-assessment] Only annotate a declaration the
-            // MODEL made. A runtime-assembled digest writes its own
-            // `status: partial` line; forwarding that as "the sub-agent's
-            // report declares status: partial" would attribute the runtime's
-            // wording to the model and read as if the model had judged itself.
-            if (SubagentRunAssessment.isModelAuthored(reportSource)) {
-                declaredStatusAnnotation()?.let { append(it) }
-            }
-            // [feat/subagent-report-summary] The summary comes FIRST —
-            // before the artifacts and before the body. It is the field
-            // that answers the parent's question, and putting it first
-            // means it survives a truncation of everything below it.
-            parsed?.summary?.let { append("\nSummary: ").append(it) }
-            if (artifacts.isNotEmpty()) {
-                append("\nArtifacts written: ")
-                append(artifacts.joinToString(", "))
-            }
-            if (report.isNotBlank()) {
-                append("\n\n---\n").append(report)
-            } else {
-                append("\n\n(no text output produced)")
-            }
-            journalPath?.let {
-                append("\n\n(Journaled at $it — survives interruption.)")
-            }
-        }
-        else -> buildString {
-            append("Sub-agent '$skillName' ended after $turns turn(s).")
-            append("\n").append(SubagentRunAssessment.headline(outcome, executedToolCalls, reportSource))
-            // [feat/subagent-report-summary] A failed run can still carry
-            // a usable summary — the parent's salvage path needs it.
-            parsed?.summary?.let { append("\nSummary: ").append(it) }
-            // [feat/subagent-artifact-delivery] A failed run can still have
-            // produced deliverables — that is exactly the work worth
-            // salvaging. Before this the FAILED branch named none, so the
-            // parent saw "failed" and had no idea that three files were
-            // already on disk.
-            if (artifacts.isNotEmpty()) {
-                append("\nArtifacts written: ")
-                append(artifacts.joinToString(", "))
-            }
-            if (report.isNotBlank()) {
-                append("\n\nPartial output:\n---\n").append(report).append("\n---")
-            }
-            append("\n\nError: ").append(error ?: "unknown error")
-            journalPath?.let {
-                append("\n\nRecoverable: the full partial report is journaled at $it — file_read it to retrieve everything the sub-agent produced before failing.")
-            }
-        }
+        val facts = SubagentResultEnvelope.Facts(
+            runId = skillId,
+            skillName = skillName,
+            outcome = outcome,
+            reportSource = reportSource,
+            executedToolCalls = executedToolCalls,
+            turns = turns,
+            maxTurns = maxTurns,
+            report = report,
+            parsed = parsed,
+            artifacts = artifacts,
+            journalPath = journalPath,
+            error = error,
+            declaredStatus = declaredStatus,
+        )
+        return SubagentResultEnvelope.render(facts, framing)
     }
 
     companion object {
