@@ -126,7 +126,29 @@ if [ $# -gt 0 ]; then
     TESTS="$TESTS $f"
   done
 else
+  # [fix/scheduler-test-api-after-merge] The name filter decides what to
+  # RUN — but it must not decide what to COMPILE.
+  #
+  # The filter was applied to the SOURCE selection as well, so a test
+  # file whose class was not called a Subagent test was never compiled
+  # locally. `ToolOutputRedactionTest` came in with PR #80 and stayed
+  # uncompiled until CI built the whole test source set, where it failed
+  # to compile because the scheduler's API had changed under it.
+  #
+  # Compiling every test file needs the whole production tree, which this
+  # script deliberately does not have — so the source selection now takes
+  # the union of the Subagent tests and any test file that the CI build
+  # would compile, restricted to the ones whose dependencies this script
+  # already provides. `ToolOutputRedactionTest` and its wiring guard are
+  # pure JVM tests over classes this script already builds, so they
+  # belong here.
   TESTS=$(python3 "$RESOLVER" --files "$TEST_ROOT" | sort)
+  for extra in \
+    "$TEST_ROOT/com/openminis/app/tools/ToolOutputRedactionTest.kt" \
+    "$TEST_ROOT/com/openminis/app/tools/ToolOutputRedactionWiringTest.kt" \
+    ; do
+    if [ -f "$extra" ]; then TESTS="$TESTS $extra"; fi
+  done
 fi
 
 # The source-grep drift guards need the production tree on disk, and
@@ -139,6 +161,7 @@ for f in \
   data/EnvVarRedactor.kt \
   data/EnvVarPrivacyStore.kt \
   tools/SubagentJournalRedaction.kt \
+  tools/ToolOutputRedaction.kt \
   ; do
   if [ -f "$SRC/$f" ]; then ANDROIDISH="$ANDROIDISH $SRC/$f"; fi
 done

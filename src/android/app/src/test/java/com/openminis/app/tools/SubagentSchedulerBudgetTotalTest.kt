@@ -5,7 +5,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -21,7 +21,7 @@ import org.junit.Test
  *   t=0      M holds the only GLOBAL permit AND the target's SKILL permit.
  *   t=0.2s   W parks on the GLOBAL permit (its own skill permit is free,
  *            so it goes straight to the global wait).
- *   t=0.7s   M releases. `release()` frees the GLOBAL permit FIRST, so W —
+ *   t=0.7s   M releases. The release frees the GLOBAL permit FIRST, so W —
  *            already queued — takes it, and the global level stays busy.
  *            Then M's SKILL permit is freed, so the target's skill acquire
  *            SUCCEEDS at t=0.7s.
@@ -35,6 +35,29 @@ import org.junit.Test
  *
  * The 600ms gap between the two behaviours is what makes this sensitive;
  * the old test's gap was zero.
+ *
+ * ## Rewritten for the post-merge API
+ *
+ * [fix/scheduler-test-api-after-merge] This test was written against the
+ * scheduler's OLD public surface — `tryAcquire(skillId, limit,
+ * waitBudgetMs)` and `release(skillId, limit)` — which exposed the
+ * two-level acquire directly. PR #81 closed that surface: the acquire is
+ * now private (`tryAcquirePair` / `releasePair`) and the only entry point
+ * is `run(skillId, skillLimit, deadlineNanos, maxQueueWaitMs) { ... }`.
+ *
+ * The two PRs did not conflict in git — neither touched the other's lines
+ * — so both merged, and the test was left calling an API that no longer
+ * existed. main did not compile.
+ *
+ * The behaviour under test is unchanged and still reachable through
+ * `run`: the shared deadline lives in `tryAcquirePair`, which `run` calls
+ * with a single `waitMs` derived from ONE deadline. So this test now
+ * drives the same interleaving through `run`, and still fails if the two
+ * levels ever start budgeting separately again.
+ *
+ * The mechanism is the same too: `run`'s `finally` calls `releasePair`,
+ * which frees the GLOBAL permit first and the skill permit second — the
+ * ordering the interleaving depends on.
  */
 class SubagentSchedulerBudgetTotalTest {
 
@@ -44,31 +67,42 @@ class SubagentSchedulerBudgetTotalTest {
         val budgetMs = 1_000L
         val skillReleaseAtMs = 700L
 
-        // M holds the only global permit and the target skill's permit.
-        assertTrue(
-            "the setup must take both permits",
-            scheduler.tryAcquire("skillM", 1, waitBudgetMs = 0L),
-        )
+        // M holds the only global permit AND the target skill's permit.
+        // Its block is the "work", and its END is the release: `run`
+        // frees the global permit first, then the skill permit.
+        val m = launch(Dispatchers.Default) {
+            scheduler.run("skillM", 1) {
+                delay(skillReleaseAtMs)
+            }
+        }
 
         // W parks on the global permit and will absorb the permit M frees.
+        // Its own skill permit is free, so it goes straight to the global
+        // wait — exactly where the target will end up behind it.
         val w = launch(Dispatchers.Default) {
-            scheduler.tryAcquire("skillW", 1, waitBudgetMs = 60_000L)
+            try {
+                scheduler.run("skillW", 1, maxQueueWaitMs = 60_000L) {
+                    delay(60_000L)
+                }
+            } catch (_: SubagentScheduler.QueueTimeoutException) {
+                // cancelled below
+            }
         }
         delay(250) // let W reach the global wait
 
-        // Free M's permits mid-budget. release() frees the GLOBAL permit
-        // first, so the queued W takes it and the global level stays busy.
-        launch(Dispatchers.Default) {
-            delay(skillReleaseAtMs)
-            scheduler.release("skillM", 1)
-        }
-
         val start = System.nanoTime()
-        val got = scheduler.tryAcquire("skillM", 1, waitBudgetMs = budgetMs)
+        var gaveUp = false
+        try {
+            scheduler.run("skillM", 1, maxQueueWaitMs = budgetMs) {
+                // must not be reached
+            }
+        } catch (_: SubagentScheduler.QueueTimeoutException) {
+            gaveUp = true
+        }
         val elapsedMs = (System.nanoTime() - start) / 1_000_000L
 
         // The global permit is never free, so the target must give up.
-        assertFalse("tryAcquire must give up, not hang", got)
+        assertTrue("the target must give up, not hang", gaveUp)
 
         // The skill permit was released when the global level failed.
         assertEquals(
@@ -86,8 +120,6 @@ class SubagentSchedulerBudgetTotalTest {
         )
 
         w.cancel()
+        m.cancel()
     }
-
-    private fun assertTrue(message: String, value: Boolean) =
-        org.junit.Assert.assertTrue(message, value)
 }
