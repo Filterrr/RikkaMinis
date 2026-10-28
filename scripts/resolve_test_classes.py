@@ -48,6 +48,20 @@ def _read(path):
         return ""
 
 
+# Tests that belong to the sub-agent subsystem but are NOT named
+# "Subagent*Test", so the name filter leaves them out. They are still
+# compiled and run: the filter is a naming convention, not a boundary.
+#
+# [fix/scheduler-test-api-after-merge] `ToolOutputRedactionTest` came in
+# with PR #80 and was never compiled locally — the filter decided what
+# to COMPILE as well as what to RUN — and it failed to compile in CI
+# after the scheduler's API changed underneath it.
+EXTRA_TEST_NAMES = {
+    "ToolOutputRedactionTest",
+    "ToolOutputRedactionWiringTest",
+}
+
+
 def scan(root, want_subagent_only=True):
     """Yield (fqn, path) for every test class found under root."""
     for path in _walk(root):
@@ -59,9 +73,34 @@ def scan(root, want_subagent_only=True):
             name = m.group(1)
             if not name.endswith("Test"):
                 continue
-            if want_subagent_only and "Subagent" not in name:
+            if want_subagent_only and "Subagent" not in name \
+                    and name not in EXTRA_TEST_NAMES:
                 continue
             yield pkg.group(1) + "." + name, path
+
+
+def all_test_files(root):
+    """Yield every test SOURCE file under root, whatever it is named.
+
+    [fix/scheduler-test-api-after-merge] The source selection used to be
+    driven by the same "Subagent" name filter as the class selection, so
+    a test file whose class was NOT called a Subagent test was never
+    compiled locally. `ToolOutputRedactionTest` — which came in with
+    PR #80 — was one of them, and it stayed uncompiled until CI tried to
+    build the whole test source set.
+
+    That is how a compile error survives: the local chain compiles a
+    SUBSET, the CI chain compiles ALL of it, and the gap is invisible
+    until a merge.
+
+    The class filter is a reasonable way to decide what to RUN. It is
+    not a reasonable way to decide what to COMPILE. A broken import or
+    a renamed method has to be caught by the local chain too, whether
+    or not the local chain intends to run that test.
+    """
+    for path in _walk(root):
+        if path.endswith(".kt"):
+            yield path
 
 
 def main(argv):
@@ -75,6 +114,8 @@ def main(argv):
             mode = "all"
         elif a == "--files":
             mode = "files"
+        elif a == "--all-files":
+            mode = "all-files"
         elif a == "--file":
             mode = "file"
             want = args.pop(0) if args else ""
@@ -91,7 +132,10 @@ def main(argv):
         if not os.path.isdir(root) and os.path.isdir(want):
             root, want = want, root
     if not root:
-        sys.stderr.write("usage: resolve_test_classes.py <root> [--all|--files|--file] [Class]\n")
+        sys.stderr.write(
+            "usage: resolve_test_classes.py <root> "
+            "[--all|--files|--all-files|--file] [Class]\n"
+        )
         return 2
 
     entries = list(scan(root))
@@ -99,6 +143,11 @@ def main(argv):
     if mode == "all":
         for fqn, _path in entries:
             print(fqn)
+        return 0
+
+    if mode == "all-files":
+        for path in all_test_files(root):
+            print(path)
         return 0
 
     if mode == "files":
