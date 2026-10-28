@@ -121,4 +121,103 @@ class SubagentArtifactPathWiringTest {
     private fun stripKotlinComments(source: String): String = source
         .replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), " ")
         .replace(Regex("""//[^\n]*"""), " ")
+
+    // ── [fix/subagent-artifact-reconcile-shell-scope] ───────────────────
+    //
+    // The unit tests in SubagentArtifactReconcileShellScopeTest cover the
+    // PURE behaviour. They CANNOT cover whether the runner reaches that
+    // behaviour — and the defect lived exactly there.
+
+    /**
+     * THE regression, at the wiring level.
+     *
+     * `reconcileArtifactPaths` used to start with
+     *
+     *     if (report.isBlank() || artifacts.isEmpty()) return report
+     *
+     * `artifacts` is populated only by `file_write` / `file_edit`, so a run
+     * whose deliverables came from `shell_execute` skipped the
+     * reconciliation entirely. Measured 2026-10-28: two sub-agents given
+     * the same task, differing only in how they wrote the file — the
+     * `file_write` one had its fabricated paths flagged, the
+     * `shell_execute` one had NO warning at all.
+     *
+     * The pure tests stay GREEN when this early return comes back (the
+     * pure function is still correct — nobody calls it). Only a guard on
+     * the runner's own source can see it.
+     */
+    @Test
+    fun `the reconciliation must not be skipped when the write log is empty`() {
+        val body = runner
+        assertTrue(
+            "the runner must reconcile even with an empty write log — a run that " +
+                "produced its files with shell_execute has an empty log, and skipping " +
+                "the reconciliation is what let fabricated paths through unmarked",
+            !body.contains("artifacts.isEmpty()) return report"),
+        )
+        assertTrue(
+            "the blank-report guard must remain",
+            body.contains("if (report.isBlank()) return report"),
+        )
+    }
+
+    /**
+     * The existence probe must be INJECTED, not hard-coded — the pure
+     * object may not touch the filesystem (the purity guard above asserts
+     * it does not).
+     */
+    @Test
+    fun `the existence probe is injected into the reconciliation`() {
+        assertTrue(
+            "the runner must inject an existence probe — without it the runtime " +
+                "cannot tell a real shell artifact from a fabricated path",
+            runner.contains("pathExists = ::artifactPathExists"),
+        )
+        assertTrue(
+            "the probe must be defined",
+            runner.contains("private fun artifactPathExists("),
+        )
+        assertTrue(
+            "the probe must actually check the filesystem",
+            runner.contains("file != null && file.exists()"),
+        )
+    }
+
+    /**
+     * The probe must resolve through the SAME path resolution the file
+     * tools use — otherwise the runtime would answer "this exists" about a
+     * path the parent cannot open.
+     */
+    @Test
+    fun `the existence probe uses the session path resolution`() {
+        assertTrue(
+            "the probe must resolve through PRootKernel.resolveSessionHostPath",
+            runner.contains("PRootKernel.resolveSessionHostPath(deps.activeSessionId(), path, context)"),
+        )
+    }
+
+    /**
+     * The old single warning class said "may have been produced by
+     * shell_execute, or may not exist" — true of neither a real artifact
+     * nor a fabricated one. The two cases must now be distinguishable.
+     */
+    @Test
+    fun `the warning distinguishes a missing path from a shell produced one`() {
+        val obj = ProductionSources.read("tools/SubagentArtifactTruth.kt")
+        assertTrue(
+            "a path that does not exist must be called out as missing",
+            obj.contains("DO NOT EXIST on disk"),
+        )
+        assertTrue(
+            "a path that exists must be called out as real",
+            obj.contains("DO exist on disk"),
+        )
+        // Strip the comments before the wording check: the DEFECT's
+        // wording is quoted in this file's documentation, and a guard that
+        // greps raw source trips on its own explanation of the bug.
+        assertTrue(
+            "the old ambiguous wording must be gone from the CODE",
+            !stripKotlinComments(obj).contains("or may not exist"),
+        )
+    }
 }
