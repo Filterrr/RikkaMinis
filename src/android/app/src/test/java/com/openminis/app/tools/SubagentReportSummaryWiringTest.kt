@@ -106,28 +106,41 @@ class SubagentReportSummaryWiringTest {
      */
     @Test
     fun `every delivery surface renders the summary`() {
-        // Inline path — the success branch AND the failure branch.
+        // [feat/subagent-result-envelope] The inline path used to have
+        // its own renderer with TWO summary lines (one per branch). It
+        // now renders through the ONE envelope, so the summary is
+        // rendered ONCE, in the envelope, and BOTH inline branches get
+        // it — a single render site that every path shares.
+        //
+        // The guard therefore asks: does the envelope render the
+        // summary, and does the inline path go through the envelope?
+        val envelope = ProductionSources.read("tools/SubagentResultEnvelope.kt")
         assertTrue(
-            "the inline result must render the summary in BOTH its success " +
-                "and failure branches, found ${result.countOccurrences("parsed?.summary?.let")}",
-            result.countOccurrences("parsed?.summary?.let") >= 2,
-        )
-        // Detached paths, through the shared digest helper.
-        assertTrue(
-            "the shared digest helper must exist",
-            delivery.contains("fun reportDigestLine("),
-        )
-        assertTrue(
-            "the wake prompt must render the summary",
-            delivery.contains("reportDigestLine(outcome.parsed)"),
+            "the envelope must render the summary",
+            envelope.contains("summary: "),
         )
         assertTrue(
-            "the join prompt must render the summary",
-            runner.contains("reportDigestLine(outcome.parsed)"),
+            "the envelope must render the summary from the parsed report",
+            envelope.contains("parsed.summary"),
         )
         assertTrue(
-            "the wait_any prompt must render the summary",
-            runner.contains("reportDigestLine(winner.parsed)"),
+            "the inline result must render through the envelope",
+            result.contains("SubagentResultEnvelope.render("),
+        )
+        // [feat/subagent-result-envelope] The detached paths render
+        // through the envelope too, so the summary rides on the envelope's
+        // own field — there is no separate digest helper any more.
+        assertTrue(
+            "the wake prompt must render through the envelope",
+            delivery.contains("SubagentResultEnvelope.render("),
+        )
+        assertTrue(
+            "the join prompt must render through the envelope",
+            runner.contains("SubagentResultEnvelope.render("),
+        )
+        assertTrue(
+            "the wait_any prompt must render through the envelope",
+            runner.countOccurrences("SubagentResultEnvelope.render(") >= 2,
         )
     }
 
