@@ -93,7 +93,18 @@ class SubagentDeliveryTest {
     @Test
     fun `wake prompt is framed as an event and names the run`() {
         val text = buildWakePrompt(outcome(), run())
-        assertTrue(text.startsWith("[Sub-agent 'general-agent' finished in the background"))
+        // [feat/subagent-wake-data-boundary] The wake-up opens with the
+        // DATA frame — it enters the parent session as a USER message,
+        // so it must be fenced before anything else. The event line is
+        // inside the frame.
+        assertTrue(
+            "the wake prompt must open with the data frame: $text",
+            text.startsWith("<subagent-data run=\"r1\">"),
+        )
+        assertTrue(
+            "the event line must still be there: $text",
+            text.contains("[Sub-agent 'general-agent' finished in the background"),
+        )
         assertTrue(text.contains("run_id: r1"))
         assertTrue(text.contains("found 3 regressions"))
     }
@@ -161,7 +172,10 @@ class SubagentDeliveryTest {
             runId = "r1", success = true, report = "", skillName = "general-agent",
         )
         val text = buildWakePrompt(o, run())
-        assertTrue(text.startsWith("[Sub-agent"))
+        // [feat/subagent-wake-data-boundary] The frame opens the message;
+        // the event line is inside it.
+        assertTrue(text.startsWith("<subagent-data"))
+        assertTrue(text.contains("[Sub-agent"))
         assertFalse(text.contains("null"))
     }
 
