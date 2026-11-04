@@ -67,8 +67,24 @@ object SubagentResultEnvelope {
         val parsed: SubagentReportContract.ParsedReport? = null,
         /** Deliverables, from the runtime's write log. */
         val artifacts: List<String> = emptyList(),
+        /**
+         * [fix/subagent-artifact-size] Path → bytes for the deliverables the
+         * runtime could stat. A path missing here has NO known size and is
+         * rendered bare — the renderer never invents a zero.
+         */
+        val artifactBytes: Map<String, Int> = emptyMap(),
         /** The durable journal - the recovery anchor. */
         val journalPath: String? = null,
+        /**
+         * [fix/subagent-journal-navigability] Where each section sits in the
+         * journal, so the pointer can name a line range instead of saying
+         * "read the whole file".
+         *
+         * Null when the caller has no layout (the run was not journaled, or the
+         * offsets were not passed along). The renderer then degrades to the old
+         * one-line pointer rather than inventing numbers.
+         */
+        val journalSpans: List<SubagentJournalIndex.SectionSpan>? = null,
         /** The error, for a failed run. */
         val error: String? = null,
         /** The model's own declared status, when it declared one. */
@@ -190,7 +206,9 @@ object SubagentResultEnvelope {
         append("\n").append(summaryLine(facts.parsed))
         append("\n").append(findingsLine(facts.parsed))
         append("\n").append(gapsLine(facts.parsed))
-        append("\n").append(artifactsLine(facts.artifacts, facts.parsed?.artifacts.orEmpty()))
+        append("\n").append(
+            artifactsLine(facts.artifacts, facts.parsed?.artifacts.orEmpty(), facts.artifactBytes),
+        )
 
         // ── layer 3: the body ──
         //
@@ -260,9 +278,36 @@ object SubagentResultEnvelope {
         }
 
         // ── layer 4: the pointers ──
-        facts.journalPath?.let {
-            append("\nFull report: ").append(it)
-            append(" (file_read it for the complete transcript and every tool output)")
+        //
+        // [fix/subagent-journal-navigability] The pointer used to say "file_read
+        // it for the complete transcript and every tool output" — which told the
+        // parent the file was large and did not tell it where the answer was, so
+        // the sensible reaction was to skip it. The journal now carries an index
+        // with real line ranges; the pointer gives the two that matter and says
+        // what each one costs.
+        facts.journalPath?.let { path ->
+            append("\nFull report: ").append(path)
+            val spans = facts.journalSpans
+            val report = spans?.firstOrNull { it.name == "Report" }
+            val evidence = spans?.firstOrNull { it.name == "Transcript" }
+            if (report != null && !report.isEmpty) {
+                append("\n  conclusions: L").append(report.startLine)
+                    .append("-L").append(report.endLine)
+                    .append(" (").append(SubagentJournalIndex.humanSize(report.bytes)).append(")")
+                    .append(" - file_read with offset=").append(report.startLine)
+                    .append(", lines=").append(report.lineCount)
+            }
+            if (evidence != null && !evidence.isEmpty) {
+                append("\n  evidence: L").append(evidence.startLine)
+                    .append("-L").append(evidence.endLine)
+                    .append(" (").append(SubagentJournalIndex.humanSize(evidence.bytes)).append(")")
+                    .append(" - only if you must verify a finding")
+            }
+            if (report == null || report.isEmpty) {
+                // No layout available (a caller that never journaled). Say what
+                // the file is instead of inventing offsets.
+                append(" (file_read it for the report, the transcript and every tool output)")
+            }
         }
         facts.error?.let {
             append("\nError: ").append(it)
@@ -475,10 +520,33 @@ object SubagentResultEnvelope {
     private fun artifactsLine(
         runtimeArtifacts: List<String>,
         declaredArtifacts: List<String>,
+        sizes: Map<String, Int> = emptyMap(),
     ): String {
         val all = (runtimeArtifacts + declaredArtifacts).distinct()
         if (all.isEmpty()) return "artifacts: none"
-        return "artifacts: " + all.joinToString(", ")
+        // [fix/subagent-artifact-size] Name the scale, not just the path.
+        //
+        // The parent has to decide whether to open a file, and the path alone
+        // cannot answer that: a 12 KB markdown report should be read, a 480 KB
+        // CSV should be queried, and the two look identical in a bare list.
+        // A path the runtime could not stat (a shell-written file, a declared
+        // path reconciled against disk) is named WITHOUT a size — an invented
+        // "0 B" would be worse than the omission.
+        return "artifacts: " + all.joinToString(", ") { path ->
+            val bytes = sizes[path]
+            if (bytes != null && bytes >= 0) {
+                "$path (${SubagentJournalIndex.humanSize(bytes)}, ${readAdvice(bytes)})"
+            } else {
+                path
+            }
+        }
+    }
+
+    /** [fix/subagent-artifact-size] What to DO with a file of this size. */
+    private fun readAdvice(bytes: Int): String = when {
+        bytes <= 32 * 1024 -> "read it"
+        bytes <= 256 * 1024 -> "skim the head, it is mid-sized"
+        else -> "query it, do not read it whole"
     }
 
     /**

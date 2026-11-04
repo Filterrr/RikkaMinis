@@ -79,6 +79,9 @@ internal fun envelopeFacts(
     report = outcome.report,
     parsed = outcome.parsed,
     artifacts = outcome.artifacts,
+    // [fix/subagent-artifact-size] Sizes travel with the list, so every
+    // delivery path can say how big a deliverable is.
+    artifactBytes = snapshot?.artifactBytes.orEmpty(),
     journalPath = outcome.journalPath,
     error = outcome.error,
     declaredStatus = outcome.declaredStatus,

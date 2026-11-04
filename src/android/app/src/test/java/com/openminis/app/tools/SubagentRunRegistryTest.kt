@@ -78,9 +78,42 @@ class SubagentRunRegistryTest {
 
         val big = "x".repeat(SubagentRunRegistry.MAX_RESULT_TEXT_CHARS + 5000)
         registry.appendResultText(run.id, big)
-        assertEquals(
-            SubagentRunRegistry.MAX_RESULT_TEXT_CHARS,
-            registry.runs.value.single().resultText.length,
+        val bounded = registry.runs.value.single().resultText
+        assertTrue(
+            "the text must be bounded (marker included): ${bounded.length}",
+            bounded.length <= SubagentRunRegistry.MAX_RESULT_TEXT_CHARS + 400,
+        )
+        assertTrue("the cut must be announced", bounded.contains("elided here"))
+    }
+
+    /**
+     * [fix/subagent-result-head-truncation] The bound must keep the HEAD.
+     *
+     * The report contract puts `summary:` first, deliberately, so that it
+     * survives truncation. The old bound kept the TAIL (`takeLast`), which
+     * deleted exactly the field the contract was designed to protect and kept
+     * the narration that follows it — so a long run's summary disappeared
+     * while its closing chatter stayed.
+     */
+    @Test
+    fun `bounding a long result keeps the summary at the head`() {
+        val registry = makeRegistry()
+        val run = registry.register("b1", "s", "s", "q", "t", 4)
+
+        val head = "summary: the answer is 42\nstatus: done\nkey_findings:\n- it is 42 (a.kt:1)\n"
+        val middle = "narration ".repeat(4000)
+        val tail = "\nstatus: done\n"
+        registry.appendResultText(run.id, head + middle + tail)
+
+        val bounded = registry.runs.value.single().resultText
+        assertTrue(
+            "the summary must survive the bound: ${bounded.take(120)}",
+            bounded.contains("summary: the answer is 42"),
+        )
+        assertTrue("the gap must be visible", bounded.contains("elided here"))
+        assertTrue(
+            "the closing turns must survive too",
+            bounded.contains("status: done"),
         )
     }
 
