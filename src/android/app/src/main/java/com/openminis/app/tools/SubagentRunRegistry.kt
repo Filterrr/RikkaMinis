@@ -1050,18 +1050,68 @@ class SubagentRunRegistry {
                 run
             } else {
                 applied = true
+                val delivered = resultText.ifBlank { run.resultText }
+                val source = reportSource ?: run.reportSource
                 run.copy(
                     status = status,
                     endedAtMs = System.currentTimeMillis(),
-                    resultText = resultText.ifBlank { run.resultText },
+                    resultText = delivered,
                     error = error,
                     runOutcome = outcome ?: run.runOutcome,
-                    reportSource = reportSource ?: run.reportSource,
+                    reportSource = source,
                     executedToolCalls = if (executedToolCalls > 0) executedToolCalls else run.executedToolCalls,
+                    // [fix/subagent-parsed-on-every-path] Parse the delivered
+                    // contract on EVERY terminal write, not only the SUCCESS
+                    // one.
+                    //
+                    // The runner's success path parses explicitly and stores
+                    // the object (one parse, two references). Every other
+                    // terminal write — TIMED_OUT, CANCELLED, FAILED,
+                    // STOPPED_EARLY, queue timeout, empty output — wrote no
+                    // parsed report at all, so the detached surfaces (wake /
+                    // join / wait_any) read `null` and announced
+                    //
+                    //     summary: not reported / findings: none reported
+                    //
+                    // for a partial report that had `summary:` and
+                    // `key_findings:` written in it. That is the WORST case to
+                    // lose: a timed-out run's partial report is the only thing
+                    // the parent has, and the 75-turn budget shipped in
+                    // [#90] makes timing out the expected end of a long run.
+                    //
+                    // A runtime-assembled digest is not a contract (parsing it
+                    // would manufacture fields the model never wrote), and an
+                    // explicitly stored parsed report is never overwritten —
+                    // see `setParsedReport`.
+                    parsedReport = run.parsedReport ?: parsedReportFor(delivered, source),
                 )
             }
         }
         return applied
+    }
+
+    /**
+     * [fix/subagent-parsed-on-every-path] Derive the contract from a terminal
+     * write's delivered text.
+     *
+     * Returns null when there is nothing a contract could describe: no text,
+     * or a report the runtime assembled itself ([SubagentRunAssessment
+     * .isModelAuthored]). Absence stays absent — an empty [ParsedReport] would
+     * claim "the model wrote a report with no fields", which is a different
+     * fact from "we did not parse one".
+     */
+    private fun parsedReportFor(
+        delivered: String,
+        source: SubagentRunAssessment.ReportSource?,
+    ): SubagentReportContract.ParsedReport? {
+        if (delivered.isBlank()) return null
+        if (!SubagentRunAssessment.isModelAuthored(
+                source ?: SubagentRunAssessment.ReportSource.NONE,
+            )
+        ) {
+            return null
+        }
+        return SubagentReportContract.parse(delivered)
     }
 
     fun finish(
@@ -1074,14 +1124,18 @@ class SubagentRunRegistry {
         executedToolCalls: Int = 0,
     ) {
         updateRun(runId) { run ->
+            val delivered = resultText.ifBlank { run.resultText }
+            val source = reportSource ?: run.reportSource
             run.copy(
                 status = status,
                 endedAtMs = System.currentTimeMillis(),
-                resultText = resultText.ifBlank { run.resultText },
+                resultText = delivered,
                 error = error,
                 runOutcome = outcome ?: run.runOutcome,
-                reportSource = reportSource ?: run.reportSource,
+                reportSource = source,
                 executedToolCalls = if (executedToolCalls > 0) executedToolCalls else run.executedToolCalls,
+                // [fix/subagent-parsed-on-every-path] Same rule as [finishOnce].
+                parsedReport = run.parsedReport ?: parsedReportFor(delivered, source),
             )
         }
     }

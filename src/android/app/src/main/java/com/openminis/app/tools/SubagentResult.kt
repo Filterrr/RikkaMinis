@@ -22,6 +22,20 @@ data class SubagentResult(
     /** Skill display name. */
     val skillName: String,
     /**
+     * [fix/subagent-envelope-facts] The RUN's id.
+     *
+     * The envelope prints it (the parent's next move is usually
+     * `join_subagents(run_ids=…)` or `cancel_subagents`), and this field did
+     * not exist — so the inline renderer passed `skillId` in its place and
+     * every inline result named a run that does not exist. Two runs of the
+     * same skill were indistinguishable to the parent.
+     *
+     * Empty only for call sites that never had a run id (tests, legacy
+     * paths); the renderer then falls back to the skill id so the header is
+     * never blank.
+     */
+    val runId: String = "",
+    /**
      * Durable journal path (session-sandbox Linux path) when the report
      * was persisted — the recovery anchor for interrupted runs. Null when
      * journaling failed or was unnecessary.
@@ -104,7 +118,10 @@ data class SubagentResult(
             SubagentResultEnvelope.Framing.INLINE
         }
         val facts = SubagentResultEnvelope.Facts(
-            runId = skillId,
+            // [fix/subagent-envelope-facts] The RUN id, not the skill id. The
+            // parent uses this to join / cancel the run it is reading about;
+            // `skillId` named a run that never existed.
+            runId = runId.ifBlank { skillId },
             skillName = skillName,
             outcome = outcome,
             reportSource = reportSource,

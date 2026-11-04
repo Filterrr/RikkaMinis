@@ -133,6 +133,32 @@ object SubagentResultEnvelope {
     const val INLINE_BODY_MAX_CHARS = JOIN_REPORT_MAX_CHARS
 
     /**
+     * [fix/subagent-contract-budget] Per-field budgets for the CONTRACT layer.
+     *
+     * The contract layer is deliberately outside the BODY budget: a truncation
+     * of the body must never be able to eat the summary, the findings or the
+     * gaps. That rule was implemented as "no bound at all", which meant one
+     * runaway field could spend the parent's whole turn:
+     *
+     *  - a `summary:` that swallowed a 20 KB paragraph rendered a 20 KB
+     *    summary (measured), and a wake-up whose declared budget is 4 KB
+     *    arrived at 20 493 chars;
+     *  - a 30 KB `gaps:` produced a 30 474-char wake-up;
+     *  - 400 findings rendered 38 743 chars under a 6 000-char budget.
+     *
+     * The budget these fields share is the point of the BODY budget: the
+     * parent turn. Each field is bounded on its own and the cut is announced
+     * in place, so a field that WAS cut is visible as cut rather than
+     * silently shortened (silence there would be the same lie the truncation
+     * marker exists to prevent).
+     */
+    const val MAX_SUMMARY_CHARS = 1200
+    const val MAX_GAPS_CHARS = 1200
+    const val MAX_FINDING_CHARS = 400
+    const val MAX_FINDINGS_CHARS = 2400
+    const val MAX_FINDINGS_SHOWN = 40
+
+    /**
      * Render the envelope.
      *
      * @param facts the run's facts.
@@ -146,7 +172,9 @@ object SubagentResultEnvelope {
         bodyMaxChars: Int = INLINE_BODY_MAX_CHARS,
     ): String = buildString {
         append(headerLine(facts, framing))
-        append("\n").append(SubagentRunAssessment.headline(facts.outcome, facts.executedToolCalls, facts.reportSource))
+        append("\n").append(
+            headlineFor(facts),
+        )
         append("\n").append(costLine(facts))
         append("\n").append(turnLine(facts))
 
@@ -241,10 +269,48 @@ object SubagentResultEnvelope {
         }
     }
 
+    /**
+     * [fix/subagent-cancel-headline] The verdict line, reconciled with how the
+     * run actually ENDED.
+     *
+     * `SubagentRunAssessment.headline` renders the WORK verdict, and a
+     * cancelled run's work verdict is FAILED (it did not finish). Left at
+     * that, a run the USER stopped was announced as
+     *
+     *     [failed] 12 tool calls executed before the run errored.
+     *
+     * — which asserts a crash that never happened. The header line above it
+     * said CANCELLED, so the message contradicted itself two lines apart.
+     *
+     * The runtime status is the fact that settles it: a cancelled run is
+     * announced as cancelled, and its text as partial, never as an error.
+     */
+    private fun headlineFor(facts: Facts): String = when (facts.runtimeStatus) {
+        "CANCELLED" ->
+            "[cancelled] the run was stopped before it finished; " +
+                if (facts.executedToolCalls > 0) {
+                    "${facts.executedToolCalls} tool call(s) had executed. " +
+                        "What follows is partial output, not an error report."
+                } else {
+                    "no tool call had executed yet."
+                }
+        else -> SubagentRunAssessment.headline(
+            facts.outcome, facts.executedToolCalls, facts.reportSource,
+        )
+    }
+
     /** The first line: what this is, and which run it is. */
     private fun headerLine(facts: Facts, framing: Framing): String = when (framing) {
         Framing.INLINE ->
-            "Sub-agent '${facts.skillName}' ran ${facts.turns} turn(s)."
+            // [fix/subagent-envelope-facts] The run id rides in the header when
+            // it is known. The parent's next move after reading any result is
+            // often join_subagents(run_ids=…) or cancel_subagents, and the
+            // inline path used to print the SKILL id in that slot — naming a
+            // run that does not exist, and making two runs of one skill
+            // indistinguishable.
+            "Sub-agent '${facts.skillName}'" +
+                (facts.runId.takeIf { it.isNotBlank() }?.let { " (run $it)" } ?: "") +
+                " ran ${facts.turns} turn(s)."
         Framing.EARLY_READOUT ->
             "Sub-agent '${facts.skillName}' first-turn readout (1/${facts.maxTurns} turns):"
         Framing.WAKE ->
@@ -267,7 +333,11 @@ object SubagentResultEnvelope {
         Framing.WAIT_ANY ->
             "wait_any: first completion -> run ${facts.runId} (${facts.skillName}) " +
                 SubagentRunAssessment.summaryStatus(
-                    runtimeStatus = null,
+                    // [fix/subagent-envelope-facts] This was a hardcoded
+                    // `null`, so CANCELLED could never be rendered on the
+                    // race path even though the facts carried it. Both
+                    // detached framings now read the same field.
+                    runtimeStatus = facts.runtimeStatus,
                     verdict = facts.outcome,
                     hasReport = facts.report.isNotBlank(),
                 )
@@ -301,14 +371,23 @@ object SubagentResultEnvelope {
      * A DERIVED summary (the runtime fell back to the first finding) is
      * labelled as such. The parent must be able to tell the model's own
      * bottom line from the runtime's guess at one.
+     *
+     * [fix/subagent-contract-budget] Bounded. The contract layer is NOT part
+     * of the BODY budget (a truncation must never eat the conclusions), but
+     * that made every scalar field UNBOUNDED: a report whose `summary:` ran
+     * into a 20 KB paragraph produced a 20 KB "summary" and a wake-up that
+     * blew its 4 KB budget by 5×. The fields are bounded individually and the
+     * cut is announced — silently shortening a conclusion would be worse than
+     * the size problem it solves.
      */
     private fun summaryLine(parsed: SubagentReportContract.ParsedReport?): String {
         if (parsed == null) return "summary: not reported"
         val summary = parsed.summary ?: return "summary: not reported"
+        val body = boundField("summary", summary, MAX_SUMMARY_CHARS)
         return if (parsed.summaryIsModelAuthored) {
-            "summary: $summary"
+            "summary: $body"
         } else {
-            "summary: $summary (derived from the first key finding - the sub-agent wrote no summary)"
+            "summary: $body (derived from the first key finding - the sub-agent wrote no summary)"
         }
     }
 
@@ -323,20 +402,56 @@ object SubagentResultEnvelope {
      * parent that gets the summary and the gaps but not the findings
      * gets the bottom line without the proof.
      *
-     * The whole list is rendered - it is not part of the BODY budget.
      * The findings are the actionable part of the contract, and a
-     * truncation must never be able to eat them.
+     * truncation of the BODY must never be able to eat them. They are
+     * bounded independently ([MAX_FINDINGS_CHARS] / [MAX_FINDINGS_SHOWN])
+     * with an explicit "… and N more (see the journal)" tail, so a report
+     * with 400 findings cannot spend the whole parent turn.
      */
     private fun findingsLine(parsed: SubagentReportContract.ParsedReport?): String {
         val findings = parsed?.findings?.filter { it.isNotBlank() }.orEmpty()
         if (findings.isEmpty()) return "findings: none reported"
-        return "findings:\n" + findings.joinToString("\n") { "- $it" }
+        val shown = findings.take(MAX_FINDINGS_SHOWN)
+        val sb = StringBuilder("findings:")
+        var used = 0
+        for (f in shown) {
+            if (used >= MAX_FINDINGS_CHARS) break
+            val line = boundField("finding", f, MAX_FINDING_CHARS)
+            sb.append("\n- ").append(line)
+            used += line.length
+        }
+        val rendered = findings.size.coerceAtMost(shown.size)
+        // Count what was actually rendered, not what was attempted: a
+        // finding that hit MAX_FINDING_CHARS still counts as shown.
+        val remaining = findings.size - rendered
+        if (remaining > 0) {
+            sb.append("\n- … and ").append(remaining)
+                .append(" more finding(s) — the whole list is in the journal")
+        }
+        return sb.toString()
     }
 
-    /** The gaps line - what the run did NOT establish. */
+    /** The gaps line - what the run did NOT establish. Bounded, see [MAX_GAPS_CHARS]. */
     private fun gapsLine(parsed: SubagentReportContract.ParsedReport?): String {
         val gaps = parsed?.gaps?.takeIf { it.isNotBlank() } ?: return "gaps: not reported"
-        return "gaps: $gaps"
+        return "gaps: " + boundField("gaps", gaps, MAX_GAPS_CHARS)
+    }
+
+    /**
+     * [fix/subagent-contract-budget] Bound one contract field, announcing the
+     * cut.
+     *
+     * @param label the field name, for the announcement.
+     * @param text the field's text.
+     * @param maxChars the field's budget.
+     */
+    private fun boundField(label: String, text: String, maxChars: Int): String {
+        val flat = text.replace(Regex("\\s*\\n\\s*"), " ").trim()
+        if (flat.length <= maxChars) return flat
+        val dropped = flat.length - maxChars
+        return flat.take(maxChars) +
+            " [… $label truncated: $maxChars of ${flat.length} chars shown, " +
+            "$dropped dropped — see the journal]"
     }
 
     /**

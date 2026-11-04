@@ -15,7 +15,7 @@ package com.openminis.app.tools
  * That works fine while the parent reads the whole report. It stops
  * working the moment the report does not fit:
  *
- * - the delivery paths truncate ([SubagentParentDelivery.boundReportForParent]
+ * - the delivery paths truncate ([SubagentResultEnvelope.boundBody]
  *   keeps the HEAD, so the tail — `gaps` and `artifacts`, the two most
  *   actionable fields — is what gets cut);
  * - a join of N runs stacks N full reports into one parent turn;
@@ -208,24 +208,60 @@ object SubagentReportContract {
         var declaredStatus: String? = null
         for (raw in report.lines()) {
             val line = raw.trimEnd()
+            // [fix/subagent-contract-prose-loss] A BLANK line ends a SCALAR
+            // field's body.
+            //
+            // `summary` and `gaps` are prose fields: the contract writes them
+            // over 3-5 lines and the next field follows directly. Without this
+            // rule the field swallowed every following line until the next
+            // header — so `gaps: none` followed by a blank line and a closing
+            // paragraph became a 500-char "gaps" and the paragraph was lost
+            // from both the gaps and the prose.
+            //
+            // LIST fields are exempt on purpose: a bullet list may be written
+            // with blank lines between items, and ending the section there
+            // would silently drop the second half of the findings.
+            if (line.isBlank() && (current == FIELD_SUMMARY || current == FIELD_GAPS)) {
+                current = null
+                continue
+            }
             val header = FIELD_HEADER.matchEntire(line)
             val label = header?.groupValues?.get(1)?.trim()?.lowercase()?.replace(" ", "_")
             val canonical = label?.let { LABEL_ALIASES[it] ?: it }
             val isHeader = header != null && canonical != null &&
                 canonical in CANONICAL_LABELS
             if (isHeader) {
-                current = canonical
+                // A header's INLINE value takes the same validation as a body
+                // line. These two paths grew apart: the body checked
+                // `looksLikePath` / `normalizeStatus`, the inline value went
+                // straight into the field. So `artifacts: none` became the
+                // deliverable "none" and `status: mostly finished` became a
+                // null status with the words deleted — the exact defects the
+                // body path had already been fixed for.
                 val inline = header!!.groupValues[3].trim()
+                current = canonical
                 when (canonical) {
                     FIELD_SUMMARY -> if (inline.isNotBlank()) summaryLines += inline
                     FIELD_KEY_FINDINGS -> if (inline.isNotBlank()) findingLines += inline
                     FIELD_GAPS -> if (inline.isNotBlank()) gapLines += inline
-                    FIELD_ARTIFACTS -> if (inline.isNotBlank()) artifactLines += inline
+                    FIELD_ARTIFACTS -> if (inline.isNotBlank()) {
+                        val entry = stripBullet(inline)
+                        if (looksLikePath(entry)) artifactLines += entry else proseLines += entry
+                    }
                     // The status is read here, from the TAIL-most status
                     // line — the same "most recent self-assessment wins"
                     // rule the existing parser uses. See below for why
                     // this object keeps its own read.
-                    FIELD_STATUS -> declaredStatus = normalizeStatus(inline)
+                    FIELD_STATUS -> if (inline.isNotBlank()) {
+                        val normalized = normalizeStatus(inline)
+                        if (normalized != null) {
+                            declaredStatus = normalized
+                        } else {
+                            // An unrecognised token is still text the model
+                            // wrote; prose is the only honest place for it.
+                            proseLines += inline
+                        }
+                    }
                     else -> Unit
                 }
                 continue
@@ -263,8 +299,36 @@ object SubagentReportContract {
                 // A `status:` header with the value on the NEXT line —
                 // the contract allows it, and the old tail-scanning
                 // parser found it.
-                FIELD_STATUS -> if (declaredStatus == null && line.isNotBlank()) {
-                    declaredStatus = normalizeStatus(line.trim())
+                //
+                // [fix/subagent-contract-prose-loss] Everything ELSE after a
+                // `status:` is PROSE. This branch used to be
+                // `else -> Unit`, so every line between `status:` and the next
+                // field header was silently dropped — not into the prose, not
+                // into any field, nowhere.
+                //
+                // That is the contract's own documented layout: SKILL.md says
+                // `summary` → `status` → the evidence, and a model that
+                // explains its status ("done, but the second provider is
+                // still unverified") had that explanation deleted from every
+                // delivery surface. Measured on a realistic report: a whole
+                // paragraph vanished and `prose` came back empty, so the
+                // parent saw a verdict with no reasoning.
+                FIELD_STATUS -> {
+                    if (declaredStatus == null && line.isNotBlank()) {
+                        val normalized = normalizeStatus(line.trim())
+                        if (normalized != null) {
+                            declaredStatus = normalized
+                        } else {
+                            // [fix/subagent-contract-prose-loss] An unrecognised
+                            // token is still text the model wrote. Dropping it
+                            // would lose the sentence; the contract has no
+                            // place for "a status I did not understand", and
+                            // prose is exactly that place.
+                            proseLines += line.trim()
+                        }
+                    } else if (line.isNotBlank()) {
+                        proseLines += line.trim()
+                    }
                 }
                 else -> Unit
             }
@@ -374,22 +438,51 @@ object SubagentReportContract {
      * follow the header — and taking it as a path produced an envelope
      * that listed a paragraph as a deliverable.
      *
-     * The test is deliberately loose about WHERE a path starts (the
-     * sandbox uses absolute paths, but a sub-agent may name a relative
-     * one) and strict about it CONTAINING a separator. A bare word like
-     * "none" or "the report is above" is prose; "notes.md" is a
-     * relative path and is accepted.
+     * [fix/subagent-artifact-path-truth] "Contains a dot" is not a path test.
+     * It accepted `No artifacts were produced.` (the last word, `produced.`,
+     * carries the dot) and `see the report above.` — so a model that answered
+     * the field in a sentence handed the parent invented deliverables. The
+     * test is now about SHAPE:
+     *
+     *  - an absolute or relative path has a separator and no whitespace;
+     *  - a bare filename has a 1-8 alphanumeric extension and does not end in
+     *    sentence punctuation.
+     *
+     * A sentence can contain a separator (`/var/minis/... was written`), so
+     * the whitespace check comes FIRST — it is what separates a path from
+     * prose about a path.
      */
     private fun looksLikePath(line: String): Boolean {
-        if (line.isBlank()) return false
-        // A path with a separator, or a file extension — either one is
-        // enough to tell it from a sentence.
-        if (line.contains('/')) return true
-        val name = line.substringAfterLast(' ').substringBefore(" -").trim()
-        if (name.contains('.')) return true
-        // An absolute path always has a separator; a bare "none" does not.
-        return false
+        val text = line.trim().trim('`', '"', '\'').trim()
+        if (text.isBlank()) return false
+        // A path never contains whitespace. A sentence about a path usually
+        // does, so this alone rejects most prose.
+        if (text.any { it.isWhitespace() }) return false
+        if (text.any { it == '。' || it == '，' || it == '、' }) return false
+        if (text.endsWith('.')) return false
+        if (NO_ARTIFACT_TOKENS.contains(text.lowercase())) return false
+        // An absolute / relative path: contains a separator AND at least one
+        // non-separator character. A bare "/" is not a deliverable; a
+        // directory ("…/subagent-1/") is.
+        if (text.contains('/')) return text.any { it != '/' }
+        // A bare filename: needs a plausible extension, and the name part must
+        // exist ("md" alone is not a file, ".env" is).
+        val name = text.substringBefore(' ')
+        val dot = name.lastIndexOf('.')
+        if (dot <= 0 || dot == name.length - 1) return false
+        val ext = name.substring(dot + 1)
+        return ext.length in 1..8 && ext.all { it.isLetterOrDigit() }
     }
+
+    /**
+     * [fix/subagent-artifact-path-truth] Words a model writes INSTEAD of a
+     * path. "none" is already handled by the shape test (no separator, no
+     * extension) — this list catches the ones that look path-shaped.
+     */
+    private val NO_ARTIFACT_TOKENS = setOf(
+        "none", "n/a", "na", "null", "-", "—", "无", "没有",
+        "none.", "n/a.", "no", "nothing",
+    )
 
     /**
      * Strip a leading list bullet from a body line.

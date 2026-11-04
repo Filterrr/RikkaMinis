@@ -136,20 +136,37 @@ class SubagentResultEnvelopeWiringTest {
     }
 
     /**
-     * One implementation of "how do we cut": the delivery helpers must
-     * DELEGATE to the envelope, not carry their own copy. A second copy
-     * is how the cut marker and the recovery route drifted before.
+     * One implementation of "how do we cut": the envelope owns the cutter and
+     * NO caller re-cuts.
+     *
+     * [fix/subagent-envelope-facts] This guard used to require a delegating
+     * helper in the delivery file (`boundReportForParent`) — a helper that,
+     * by the time this was written, had no production caller left: the four
+     * delivery paths all render through the envelope, which cuts the body
+     * itself. A guard that pins a dead delegate keeps the dead code alive and
+     * proves nothing about what runs.
+     *
+     * The invariant that matters is narrower and stronger: exactly one place
+     * performs the cut, and it is the envelope.
      */
     @Test
     fun `the body cutter has one implementation`() {
         assertTrue(
-            "the delivery helper must delegate to the envelope's cutter",
-            delivery.contains("SubagentResultEnvelope.boundBody("),
+            "the envelope must own the cutter",
+            envelope.contains("internal fun boundBody("),
         )
-        assertFalse(
-            "the delivery helper must not cut the body itself",
-            delivery.contains("report.take(maxChars)"),
+        assertTrue(
+            "the envelope must be the one that cuts the body",
+            envelope.contains("body.take(maxChars)"),
         )
+        listOf("SubagentParentDelivery.kt" to delivery, "SubagentResult.kt" to result)
+            .forEach { (name, source) ->
+                assertFalse(
+                    "$name must not carry its own body cutter",
+                    source.contains("report.take(maxChars)") ||
+                        source.contains("body.take(maxChars)"),
+                )
+            }
     }
 
     /**
