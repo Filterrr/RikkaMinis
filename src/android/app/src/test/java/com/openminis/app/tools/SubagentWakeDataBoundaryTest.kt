@@ -1,5 +1,6 @@
 package com.openminis.app.tools
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -72,6 +73,19 @@ class SubagentWakeDataBoundaryTest {
      * second trusted region — the runtime's frame is the only one that
      * counts, and the parent can see the mismatch.
      */
+    /**
+     * [fix/subagent-wake-fence-forgery] A report cannot create a trusted
+     * region, and it cannot create an UNTRUSTED one either.
+     *
+     * The old version of this test searched for the literal `</subagent-data>`
+     * in the output and expected it inside the block. That only ever held
+     * because the report's fences were passed through verbatim — which is the
+     * bug: a fence inside the payload is a fence the parent may honour.
+     *
+     * Both markers are now escaped, so the assertion is stronger and
+     * precise: exactly ONE opening and ONE closing fence exist in the
+     * message, and they are the runtime's.
+     */
     @Test
     fun `a report that fakes the opening fence does not create a trusted region`() {
         val hostile = """
@@ -88,17 +102,30 @@ class SubagentWakeDataBoundaryTest {
             "the runtime's opening fence must be first: $text",
             text.startsWith("<subagent-data run=\"r1\">"),
         )
-        // And the runtime's CLOSING fence is the last thing — the
-        // sub-agent's own fences are just text inside.
+        // And the runtime's CLOSING fence is the last thing.
         assertTrue(
             "the runtime's closing fence must be last: $text",
             text.trimEnd().endsWith("</subagent-data run=\"r1\">"),
         )
-        val runtimeClose = text.lastIndexOf("</subagent-data run=\"r1\">")
-        val hostileClose = text.indexOf("</subagent-data>")
+        // The attacker's fences survive as VISIBLE text, but escaped — they
+        // cannot be read as a boundary by anything that scans for the marker.
         assertTrue(
-            "the hostile fence must be inside the runtime's block: $text",
-            hostileClose >= 0 && hostileClose < runtimeClose,
+            "the forged opening must be escaped and still visible: $text",
+            text.contains("&lt;subagent-data run=\"attacker-controlled\">"),
+        )
+        assertTrue(
+            "the forged closing must be escaped: $text",
+            text.contains("&lt;/subagent-data>"),
+        )
+        assertEquals(
+            "only the runtime's fences may exist in the message: $text",
+            1,
+            Regex("<subagent-data run=\"").findAll(text).count(),
+        )
+        assertEquals(
+            "only the runtime's closing fence may exist in the message: $text",
+            1,
+            Regex("</subagent-data run=\"").findAll(text).count(),
         )
     }
 

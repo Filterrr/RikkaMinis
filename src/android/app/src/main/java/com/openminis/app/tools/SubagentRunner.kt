@@ -911,15 +911,25 @@ class SubagentRunner(
                             extraInstructions = extraInstructions,
                         )
                     }
+                    // [fix/subagent-inline-double-render] The report stored on
+                    // the deferred is the RAW registry text, not the rendered
+                    // tool result.
+                    //
+                    // `result.output` is `toPromptText()` — an ENVELOPE. Storing
+                    // it made the deferred carry a rendered envelope as if it
+                    // were a report, so a later join_subagents over this inline
+                    // run wrapped the envelope AGAIN: `[completed]` and
+                    // `Full report:` appeared twice, and the OUTER contract
+                    // layer (parsed from the prose that is now an envelope)
+                    // said "summary: not reported" for a run that had one.
+                    val liveSnapshot = registry.runs.value.firstOrNull { it.id == run.id }
                     job.deferred.complete(
                         SubagentOrchestration.JobOutcome(
                             runId = run.id,
                             success = result.success,
-                            report = result.output,
+                            report = liveSnapshot?.resultText ?: "",
                             skillName = skill.name,
-                            journalPath = run.id.let { rid ->
-                                registry.runs.value.firstOrNull { it.id == rid }?.journalPath
-                            },
+                            journalPath = liveSnapshot?.journalPath,
                             error = if (result.success) null else result.output.take(300),
                             // [fix/subagent-verdict-and-report-gate] Carry
                             // the verdict on the inline path too — the same
@@ -929,19 +939,37 @@ class SubagentRunner(
                             // verdict is not on ToolExecutionResult; the
                             // runner wrote it into the registry snapshot on
                             // its terminal write, so read it from there.
-                            outcome = registry.runs.value.firstOrNull { it.id == run.id }?.runOutcome
+                            outcome = liveSnapshot?.runOutcome
                                 ?: SubagentRunAssessment.Outcome.COMPLETED,
-                            reportSource = registry.runs.value.firstOrNull { it.id == run.id }?.reportSource
+                            reportSource = liveSnapshot?.reportSource
                                 ?: SubagentRunAssessment.ReportSource.MODEL,
-                            executedToolCalls = registry.runs.value
-                                .firstOrNull { it.id == run.id }?.executedToolCalls ?: 0,
+                            executedToolCalls = liveSnapshot?.executedToolCalls ?: 0,
+                            // [fix/subagent-envelope-facts] The envelope's own
+                            // facts travel with the outcome, so a join over an
+                            // INLINE run is not forced to render `turns: 0`
+                            // and "cost: not reported".
+                            turns = liveSnapshot?.turn ?: 0,
+                            maxTurns = liveSnapshot?.maxTurns ?: 0,
+                            modelLabel = liveSnapshot?.modelLabel.orEmpty(),
+                            tokensIn = liveSnapshot?.tokensIn ?: -1,
+                            tokensOut = liveSnapshot?.tokensOut ?: -1,
+                            runtimeStatus = liveSnapshot?.status?.name,
+                            parsed = liveSnapshot?.parsedReport,
+                            declaredStatus = liveSnapshot?.declaredStatus,
+                            artifacts = liveSnapshot?.artifacts.orEmpty(),
                         ),
                     )
                     result
                 } catch (e: CancellationException) {
+                    val cancelSnapshot = registry.runs.value.firstOrNull { it.id == run.id }
                     job.deferred.complete(
                         SubagentOrchestration.JobOutcome(
-                            runId = run.id, success = false, report = "",
+                            runId = run.id, success = false,
+                            // [fix/subagent-cancel-truth] A cancelled run HAS a
+                            // partial report — the runner journals it. Sending
+                            // "" here threw that away, so a join over an
+                            // interrupted run could not show what it found.
+                            report = cancelSnapshot?.resultText.orEmpty(),
                             skillName = skill.name, cancelled = true,
                             error = e.message ?: "cancelled",
                             // [fix/subagent-verdict-consistency-v3] A cancelled
@@ -949,14 +977,29 @@ class SubagentRunner(
                             // (COMPLETED + MODEL) would tell a later join
                             // that the model wrote a report.
                             outcome = SubagentRunAssessment.Outcome.FAILED,
-                            reportSource = SubagentRunAssessment.ReportSource.NONE,
+                            reportSource = cancelSnapshot?.reportSource
+                                ?: SubagentRunAssessment.ReportSource.NONE,
+                            // [fix/subagent-envelope-facts] The status word the
+                            // parent needs: this run was STOPPED, not crashed.
+                            runtimeStatus = SubagentRunRegistry.RunStatus.CANCELLED.name,
+                            executedToolCalls = cancelSnapshot?.executedToolCalls ?: 0,
+                            turns = cancelSnapshot?.turn ?: 0,
+                            maxTurns = cancelSnapshot?.maxTurns ?: 0,
+                            modelLabel = cancelSnapshot?.modelLabel.orEmpty(),
+                            tokensIn = cancelSnapshot?.tokensIn ?: -1,
+                            tokensOut = cancelSnapshot?.tokensOut ?: -1,
+                            parsed = cancelSnapshot?.parsedReport,
+                            declaredStatus = cancelSnapshot?.declaredStatus,
+                            artifacts = cancelSnapshot?.artifacts.orEmpty(),
                         ),
                     )
                     throw e
                 } catch (e: Exception) {
+                    val failSnapshot = registry.runs.value.firstOrNull { it.id == run.id }
                     job.deferred.complete(
                         SubagentOrchestration.JobOutcome(
-                            runId = run.id, success = false, report = "",
+                            runId = run.id, success = false,
+                            report = failSnapshot?.resultText.orEmpty(),
                             skillName = skill.name,
                             error = e.message ?: e.javaClass.simpleName,
                             // [fix/subagent-verdict-consistency-v3] The
@@ -967,7 +1010,18 @@ class SubagentRunner(
                             // wait_any does not report the crash as a
                             // successful run.
                             outcome = SubagentRunAssessment.Outcome.FAILED,
-                            reportSource = SubagentRunAssessment.ReportSource.NONE,
+                            reportSource = failSnapshot?.reportSource
+                                ?: SubagentRunAssessment.ReportSource.NONE,
+                            runtimeStatus = SubagentRunRegistry.RunStatus.FAILED.name,
+                            executedToolCalls = failSnapshot?.executedToolCalls ?: 0,
+                            turns = failSnapshot?.turn ?: 0,
+                            maxTurns = failSnapshot?.maxTurns ?: 0,
+                            modelLabel = failSnapshot?.modelLabel.orEmpty(),
+                            tokensIn = failSnapshot?.tokensIn ?: -1,
+                            tokensOut = failSnapshot?.tokensOut ?: -1,
+                            parsed = failSnapshot?.parsedReport,
+                            declaredStatus = failSnapshot?.declaredStatus,
+                            artifacts = failSnapshot?.artifacts.orEmpty(),
                         ),
                     )
                     throw e
@@ -1149,6 +1203,16 @@ class SubagentRunner(
             // [feat/subagent-result-envelope] The model's own declaration
             // travels with the snapshot too.
             declaredStatus = snapshot?.declaredStatus,
+            // [fix/subagent-envelope-facts] The envelope's own facts travel
+            // WITH the outcome now, so every path that receives one can
+            // render `turns: N/M` and a real cost line without being handed
+            // the registry snapshot separately.
+            turns = snapshot?.turn ?: 0,
+            maxTurns = snapshot?.maxTurns ?: 0,
+            modelLabel = snapshot?.modelLabel.orEmpty(),
+            tokensIn = snapshot?.tokensIn ?: -1,
+            tokensOut = snapshot?.tokensOut ?: -1,
+            runtimeStatus = snapshot?.status?.name,
         )
         return if (job.deferred.complete(outcome)) outcome else null
     }
@@ -1442,9 +1506,18 @@ class SubagentRunner(
                     )
                     val partial = recovered.report
                     AppLogger.warning(TAG, "[Subagent] '$skillName' exceeded ${timeoutSeconds}s run budget at turn $turns")
+                    // [fix/subagent-timedout-parsed] Reconcile BEFORE the
+                    // terminal write, so the registry and the inline result
+                    // describe the SAME text. The registry used to receive
+                    // the un-reconciled report while the inline result got
+                    // the reconciled one, and the parsed contract was derived
+                    // from the latter — two snapshots of one run differing on
+                    // the artifact paths the model was told to trust.
+                    val reconciledPartial = reconcileArtifactPaths(partial, artifacts, run.id)
+                    val timedOutParsed = SubagentReportContract.parse(reconciledPartial)
                     registry.finishIfActive(
                         run.id, SubagentRunRegistry.RunStatus.TIMED_OUT,
-                        resultText = partial,
+                        resultText = reconciledPartial,
                         error = "exceeded the $timeoutSeconds-second run budget after $turns turn(s)",
                         // [fix/subagent-verdict-and-report-gate] Persist the
                         // verdict so the detached paths report TIMED_OUT
@@ -1453,7 +1526,11 @@ class SubagentRunner(
                         reportSource = recovered.source,
                         executedToolCalls = executedToolCalls,
                     )
-                    val reconciledPartial = reconcileArtifactPaths(partial, artifacts, run.id)
+                    // [fix/subagent-parsed-on-every-path] A timed-out run is
+                    // the case where the parsed contract matters MOST: the
+                    // partial report is all the parent gets, and the 75-turn
+                    // budget makes timing out the expected end of a long run.
+                    registry.setParsedReport(run.id, timedOutParsed)
                     val timedOutResult = SubagentResult(
                         status = SubagentResult.Status.FAILED,
                         report = reconciledPartial,
@@ -1464,12 +1541,16 @@ class SubagentRunner(
                         // report may already carry the contract — the
                         // parent's salvage path needs the same parsed
                         // fields as any other delivery.
-                        parsed = SubagentReportContract.parse(reconciledPartial),
+                        parsed = timedOutParsed,
                         executedToolCalls = executedToolCalls,
                         turns = turns,
                         maxTurns = config.maxTurns,
                         skillId = skill.id,
                         skillName = skill.name,
+                        // [fix/subagent-envelope-facts] The inline result needs
+                        // the run id the envelope prints — it used to print
+                        // the SKILL id there.
+                        runId = run.id,
                         journalPath = journal(
                             run, "TIMED_OUT", reconciledPartial, turns,
                             "timed out after ${timeoutSeconds}s", artifacts, sessionId,
@@ -2192,6 +2273,7 @@ class SubagentRunner(
                         turns = turns,
                         maxTurns = config.maxTurns,
                         skillId = skill.id,
+                        runId = run.id,
                         skillName = skill.name,
                         journalPath = journal(
                             run, SubagentResult.journalTerminal(SubagentResult.Status.SUCCESS, stoppedEarly = true),
@@ -2296,6 +2378,7 @@ class SubagentRunner(
                 turns = turns,
                 maxTurns = config.maxTurns,
                 skillId = skill.id,
+                runId = run.id,
                 skillName = skill.name,
                 journalPath = journal(run, "FAILED", reconciledPartial, turns, msg, artifacts, sessionId),
                 artifacts = artifacts.toList(),
@@ -2496,6 +2579,10 @@ class SubagentRunner(
             reportSource = reportSource,
             executedToolCalls = executedToolCalls,
         )
+        // [fix/subagent-parsed-on-every-path] The terminal write now parses
+        // the contract on EVERY path (see [SubagentRunRegistry.finishOnce]),
+        // so this line only has to make sure THIS call's object wins — the
+        // exact object, not a second parse of the same text.
         registry.setParsedReport(run.id, parsedReport)
         registry.setDeclaredStatus(run.id, declared)
         val result = SubagentResult(
@@ -2512,6 +2599,7 @@ class SubagentRunner(
             turns = turns,
             maxTurns = config.maxTurns,
             skillId = skill.id,
+            runId = run.id,
             skillName = skill.name,
             journalPath = journal(
                 run, SubagentResult.journalTerminal(SubagentResult.Status.SUCCESS, stoppedEarly = false),
@@ -2996,7 +3084,13 @@ class SubagentRunner(
                             // first line.
                             append(
                                 SubagentResultEnvelope.render(
-                                    facts = envelopeFacts(winner, null),
+                                    // [fix/subagent-envelope-facts] Hand the
+                                    // registry snapshot along as well: the
+                                    // outcome already carries the numbers,
+                                    // but the snapshot is the fallback for a
+                                    // run whose outcome was built before the
+                                    // facts were stored.
+                                    facts = envelopeFacts(winner, registry.runs.value.firstOrNull { it.id == winner.runId }),
                                     framing = SubagentResultEnvelope.Framing.WAIT_ANY,
                                     bodyMaxChars = JOIN_REPORT_MAX_CHARS,
                                 ),
@@ -3138,7 +3232,15 @@ class SubagentRunner(
             sb.append("\n\n")
             sb.append(
                 SubagentResultEnvelope.render(
-                    facts = envelopeFacts(outcome, null),
+                    // [fix/subagent-envelope-facts] The snapshot is the
+                    // fallback: `outcome` carries turns / cost / status now,
+                    // but a run whose outcome predates that (or whose
+                    // registry row was pruned) still renders what is known
+                    // rather than `turns: 0` and "not reported".
+                    facts = envelopeFacts(
+                        outcome,
+                        registry.runs.value.firstOrNull { it.id == job.runId },
+                    ),
                     framing = SubagentResultEnvelope.Framing.JOIN,
                     bodyMaxChars = JOIN_REPORT_MAX_CHARS,
                 ),

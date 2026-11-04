@@ -107,6 +107,41 @@ object SubagentOrchestration {
             SubagentRunAssessment.ReportSource.MODEL,
         val executedToolCalls: Int = 0,
         /**
+         * [fix/subagent-envelope-facts] Turns executed / the run's turn budget.
+         *
+         * Why these are on the outcome: the envelope renders `turns: N/M` on
+         * EVERY path, and the join / wait_any paths had no registry snapshot
+         * to read it from — they rendered `turns: 0` for runs that had spent
+         * twenty turns. A field the renderer needs and one path cannot supply
+         * is a field that must travel WITH the outcome.
+         *
+         * 0 means "not reported" for both, and the renderer then prints the
+         * bare count rather than inventing a budget.
+         */
+        val turns: Int = 0,
+        val maxTurns: Int = 0,
+        /**
+         * [fix/subagent-envelope-facts] The model that ran and the tokens the
+         * provider reported. -1 = never reported (rendered as "unknown", never
+         * as 0 — a zero cost claim is a measurement the runtime does not have).
+         *
+         * Same reason as [turns]: the join / wait_any surfaces rendered
+         * "cost: not reported by the provider" for runs whose cost the
+         * registry had known all along.
+         */
+        val modelLabel: String = "",
+        val tokensIn: Int = -1,
+        val tokensOut: Int = -1,
+        /**
+         * [fix/subagent-envelope-facts] How the run ENDED, as opposed to what
+         * the work became ([outcome]): "TIMED_OUT" / "CANCELLED" / …
+         *
+         * The join and wait_any framings passed a hardcoded `null` here, so a
+         * cancelled run was announced as FAILED on both — the one word the
+         * parent uses to decide between "re-spawn" and "the user stopped it".
+         */
+        val runtimeStatus: String? = null,
+        /**
          * [feat/subagent-artifact-delivery] The deliverables the run
          * produced — canonical sandbox paths.
          *

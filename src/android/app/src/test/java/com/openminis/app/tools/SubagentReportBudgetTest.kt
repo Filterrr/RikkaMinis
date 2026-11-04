@@ -28,6 +28,18 @@ class SubagentReportBudgetTest {
      */
     private companion object {
         const val TRUNCATION_MARKER_MAX_CHARS = 400
+
+        /**
+         * [fix/subagent-envelope-facts] Everything the envelope renders AROUND
+         * the body: the framing line, the verdict headline, the cost line, the
+         * turn line, the five contract lines and the journal pointer.
+         *
+         * Bounded by construction (the contract fields have their own budgets
+         * — see [SubagentResultEnvelope.MAX_SUMMARY_CHARS] & co), and stated
+         * here so the bound is a total budget rather than "the body cap,
+         * plus whatever the envelope happens to add today".
+         */
+        const val ENVELOPE_OVERHEAD_MAX_CHARS = 1500
     }
 
     private fun outcome(
@@ -47,13 +59,13 @@ class SubagentReportBudgetTest {
     @Test
     fun `a report under the cap is delivered verbatim`() {
         val report = "short and complete"
-        assertEquals(report, boundReportForParent(report, journalPath = null, maxChars = 100))
+        assertEquals(report, SubagentResultEnvelope.boundBody(report, journalPath = null, maxChars = 100))
     }
 
     @Test
     fun `a report at exactly the cap is untouched`() {
         val report = "x".repeat(50)
-        val bounded = boundReportForParent(report, journalPath = null, maxChars = 50)
+        val bounded = SubagentResultEnvelope.boundBody(report, journalPath = null, maxChars = 50)
         assertEquals(report, bounded)
         assertFalse("an exact fit is not a truncation", bounded.contains("truncated"))
     }
@@ -61,7 +73,7 @@ class SubagentReportBudgetTest {
     @Test
     fun `an oversized report is truncated to the cap`() {
         val report = "y".repeat(500)
-        val bounded = boundReportForParent(report, journalPath = null, maxChars = 100)
+        val bounded = SubagentResultEnvelope.boundBody(report, journalPath = null, maxChars = 100)
 
         assertTrue("must be cut", bounded.length < report.length)
         assertTrue("the report body survives up to the cap", bounded.startsWith("y".repeat(100)))
@@ -75,7 +87,9 @@ class SubagentReportBudgetTest {
      */
     @Test
     fun `a truncation with a journal names the journal as the recovery route`() {
-        val bounded = boundReportForParent("z".repeat(500), "/var/minis/workspace/.subagent/run-1.md", maxChars = 100)
+        val bounded = SubagentResultEnvelope.boundBody(
+            "z".repeat(500), "/var/minis/workspace/.subagent/run-1.md", maxChars = 100,
+        )
 
         assertTrue("recovery must be actionable", bounded.contains("file_read"))
         assertTrue(bounded.contains("/var/minis/workspace/.subagent/run-1.md"))
@@ -84,7 +98,7 @@ class SubagentReportBudgetTest {
     /** Without a journal the note must still be honest about what was lost. */
     @Test
     fun `a truncation without a journal says so and suggests a fix`() {
-        val bounded = boundReportForParent("z".repeat(500), journalPath = null, maxChars = 100)
+        val bounded = SubagentResultEnvelope.boundBody("z".repeat(500), journalPath = null, maxChars = 100)
 
         assertTrue("must not promise a journal that does not exist", !bounded.contains("file_read"))
         assertTrue("must state the gap", bounded.contains("not journaled") || bounded.contains("re-spawn"))
@@ -92,23 +106,36 @@ class SubagentReportBudgetTest {
 
     // ── wait_any uses the same budget ────────────────────────────────────
 
+    /**
+     * [fix/subagent-envelope-facts] wait_any renders through the ONE envelope
+     * now — `boundWaitAnyReport` had no production caller left and is gone.
+     * The property it guarded (the race path must not be the one unbounded
+     * sink) is pinned here against the renderer that actually runs.
+     */
     @Test
     fun `wait_any winner reports obey the same cap`() {
-        val bounded = boundWaitAnyReport(outcome("w".repeat(50_000)))
-
-        // The bound is the body plus the truncation MARKER — the marker
-        // is a fixed string, so the slack is bounded by it, not by a
-        // magic number that a longer marker would silently break.
-        assertTrue(
-            "wait_any must not be the one unbounded sink: ${bounded.length} chars",
-            bounded.length <= JOIN_REPORT_MAX_CHARS + TRUNCATION_MARKER_MAX_CHARS,
+        val facts = envelopeFacts(outcome("w".repeat(50_000)), null)
+        val text = SubagentResultEnvelope.render(
+            facts,
+            SubagentResultEnvelope.Framing.WAIT_ANY,
+            bodyMaxChars = JOIN_REPORT_MAX_CHARS,
         )
+
+        assertTrue(
+            "wait_any must not be the one unbounded sink: ${text.length} chars",
+            text.length <= JOIN_REPORT_MAX_CHARS + TRUNCATION_MARKER_MAX_CHARS + ENVELOPE_OVERHEAD_MAX_CHARS,
+        )
+        assertTrue("the cut must be announced", text.contains("truncated"))
     }
 
     @Test
     fun `wait_any renders a placeholder for an empty report`() {
-        val bounded = boundWaitAnyReport(outcome(""))
-        assertTrue(bounded.contains("no report text"))
+        val text = SubagentResultEnvelope.render(
+            envelopeFacts(outcome(""), null),
+            SubagentResultEnvelope.Framing.WAIT_ANY,
+            bodyMaxChars = JOIN_REPORT_MAX_CHARS,
+        )
+        assertTrue(text.contains("no text output produced"))
     }
 
     @Test
