@@ -269,7 +269,15 @@ class SubagentArtifactDeliveryTest {
     fun `the runner records a successful write into the registry`() {
         assertTrue(
             "a successful file write must be recorded in the registry",
-            runner.contains("registry.addArtifact(runId, canonical)"),
+            runner.contains("registry.addArtifact(runId, canonical"),
+        )
+        // [fix/subagent-artifact-size] ...and with a measured size, so the
+        // parent can tell a 12 KB report from a 480 KB dataset without opening
+        // either. A path recorded without a size renders bare, which is the
+        // intended degradation — but the call site must actually try.
+        assertTrue(
+            "the recorded artifact must carry its measured size",
+            runner.contains("SubagentArtifactSize.of(canonical)"),
         )
     }
 

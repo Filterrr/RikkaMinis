@@ -217,15 +217,29 @@ class SubagentVerdictConsistencyWiringTest {
 
     // ── The journal must scrub secrets ───────────────────────────────────
 
+    /**
+     * [fix/subagent-journal-navigability] These guards pin the RULE, not the
+     * call shape.
+     *
+     * They used to match exact lines (`appendLine(scrub(resultText))`), which
+     * went red the moment the journal started building its sections as data
+     * and handing them to the layout pass — while the scrubbing itself was
+     * still applied to every field. A guard that fails on a refactor that kept
+     * the behaviour teaches people to rewrite the guard instead of reading it.
+     *
+     * What must hold: every free-text field reaches the journal THROUGH the
+     * scrubber, and no raw field is written.
+     */
     @Test
     fun `the journal scrubs the report text before writing it`() {
         assertTrue(
-            "the journal must scrub the report",
-            journalSource.contains("appendLine(scrub(resultText))"),
+            "the report must be scrubbed before it becomes a section",
+            journalSource.contains("\"Report\" to if (resultText.isBlank())") &&
+                journalSource.contains("scrub(resultText)"),
         )
         assertFalse(
             "the journal must not write the raw report",
-            journalSource.contains("appendLine(resultText)"),
+            Regex("""appendLine\(resultText\)""").containsMatchIn(journalSource),
         )
     }
 
@@ -233,7 +247,7 @@ class SubagentVerdictConsistencyWiringTest {
     fun `the journal scrubs the task text and the error note`() {
         assertTrue(
             "the journal must scrub the task query",
-            journalSource.contains("appendLine(scrub(run.query))"),
+            journalSource.contains("\"Task\" to scrub(run.query)"),
         )
         assertTrue(
             "the journal must scrub the error note",
@@ -243,13 +257,39 @@ class SubagentVerdictConsistencyWiringTest {
 
     @Test
     fun `the journal scrubs the transcript and the step outputs`() {
+        // Both go through `boundSegment`, which scrubs before it bounds — so
+        // the rule is checked at the one place that produces them, and a new
+        // segment kind that bypassed it would leave `boundSegment` unused.
         assertTrue(
-            "the journal must scrub the transcript segments",
-            journalSource.contains("appendLine(scrub(segment.content.trim()))"),
+            "the transcript segments must be scrubbed",
+            journalSource.contains("boundSegment(\"text\", segment.content.trim(), scrub)") &&
+                journalSource.contains("boundSegment(\"thinking\", segment.content.trim(), scrub)"),
         )
         assertTrue(
-            "the journal must scrub the step outputs",
-            journalSource.contains("appendLine(scrub(step.output))"),
+            "the step outputs must be scrubbed",
+            journalSource.contains("boundSegment(\"output\", step.output, scrub)"),
         )
+        assertTrue(
+            "the scrubber must actually be applied inside boundSegment",
+            journalSource.contains("val scrubbed = scrub(text)"),
+        )
+    }
+
+    /** No free-text field may bypass the scrubber. */
+    @Test
+    fun `no journal field is written unscrubbed`() {
+        // The unscrubbed spellings that must never appear. Structural fields
+        // (ids, paths, counts) are not text from the model and are exempt by
+        // design — they are not in this list.
+        listOf(
+            "appendLine(segment.content",
+            "appendLine(step.output)",
+            "appendLine(run.query)",
+        ).forEach { raw ->
+            assertFalse(
+                "`$raw` would write model text without scrubbing",
+                journalSource.contains(raw),
+            )
+        }
     }
 }

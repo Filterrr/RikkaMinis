@@ -88,6 +88,7 @@ for f in \
   tools/SubagentScheduler.kt \
   tools/SubagentAnsiText.kt \
   tools/SubagentArtifactTruth.kt \
+  tools/SubagentArtifactSize.kt \
   tools/SubagentRunRegistry.kt \
   tools/SubagentRunFormat.kt \
   tools/SubagentContextTokens.kt \

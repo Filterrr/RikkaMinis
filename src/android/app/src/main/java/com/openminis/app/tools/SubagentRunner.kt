@@ -2738,7 +2738,14 @@ class SubagentRunner(
                             // cancelled delivered no artifact list at all.
                             // Recording here means the deliverable survives
                             // every terminal path.
-                            registry.addArtifact(runId, canonical)
+                            //
+                            // [fix/subagent-artifact-size] With its size, read
+                            // off disk right now — this is the one moment the
+                            // runtime is guaranteed to be looking at a file
+                            // that exists and is complete. The parent needs the
+                            // size to decide whether to open it: a 480 KB CSV
+                            // is "query it", a 12 KB report is "read it".
+                            registry.addArtifact(runId, canonical, SubagentArtifactSize.of(canonical))
                         }
                     }
                     deps.maybeReloadSkillsForPath(argsJson)

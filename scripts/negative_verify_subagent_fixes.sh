@@ -75,12 +75,18 @@ PY
     fi
 }
 
-echo "━━━ negative verification ━━━"
-echo "A. envelope facts"
-patch_and_test "A1 turns come from the outcome" "$SRC/SubagentParentDelivery.kt" SubagentEnvelopeFactsTest \
+GROUP="${1:-all}"
+want() { [ "$GROUP" = "all" ] || [ "$GROUP" = "$1" ]; }
+# Run a case only when its group is selected. A function rather than an
+# inline test because the arguments span several lines.
+run() { g=$1; shift; if want "$g"; then "$@"; fi; }
+
+echo "━━━ negative verification (group: $GROUP) ━━━"
+want A && echo "A. envelope facts"
+run A patch_and_test "A1 turns come from the outcome" "$SRC/SubagentParentDelivery.kt" SubagentEnvelopeFactsTest \
   'turns = if (outcome.turns > 0) outcome.turns else snapshot?.turn ?: 0' \
   'turns = snapshot?.turn ?: 0'
-patch_and_test "A2 wait_any reads runtimeStatus" "$SRC/SubagentResultEnvelope.kt" SubagentEnvelopeFactsTest \
+run A patch_and_test "A2 wait_any reads runtimeStatus" "$SRC/SubagentResultEnvelope.kt" SubagentEnvelopeFactsTest \
   'Framing.WAIT_ANY ->
             "wait_any: first completion -> run ${facts.runId} (${facts.skillName}) " +
                 SubagentRunAssessment.summaryStatus(
@@ -93,7 +99,7 @@ patch_and_test "A2 wait_any reads runtimeStatus" "$SRC/SubagentResultEnvelope.kt
             "wait_any: first completion -> run ${facts.runId} (${facts.skillName}) " +
                 SubagentRunAssessment.summaryStatus(
                     runtimeStatus = null,'
-patch_and_test "A3 parsed report on every terminal write" "$SRC/SubagentRunRegistry.kt" SubagentEnvelopeFactsTest \
+run A patch_and_test "A3 parsed report on every terminal write" "$SRC/SubagentRunRegistry.kt" SubagentEnvelopeFactsTest \
   'parsedReport = run.parsedReport ?: parsedReportFor(delivered, source),
                 )
             }
@@ -105,33 +111,48 @@ patch_and_test "A3 parsed report on every terminal write" "$SRC/SubagentRunRegis
         }
         return applied'
 
-echo "B. delivery shape"
-patch_and_test "B2 inline envelope names the run" "$SRC/SubagentResult.kt" SubagentEnvelopeFactsTest \
+want B && echo "B. delivery shape"
+run B patch_and_test "B2 inline envelope names the run" "$SRC/SubagentResult.kt" SubagentEnvelopeFactsTest \
   'runId = runId.ifBlank { skillId },' 'runId = skillId,'
-patch_and_test "B3 summary is bounded" "$SRC/SubagentResultEnvelope.kt" SubagentContractBudgetTest \
+run B patch_and_test "B3 summary is bounded" "$SRC/SubagentResultEnvelope.kt" SubagentContractBudgetTest \
   'val body = boundField("summary", summary, MAX_SUMMARY_CHARS)' 'val body = summary'
-patch_and_test "B3b gaps is bounded" "$SRC/SubagentResultEnvelope.kt" SubagentContractBudgetTest \
+run B patch_and_test "B3b gaps is bounded" "$SRC/SubagentResultEnvelope.kt" SubagentContractBudgetTest \
   'return "gaps: " + boundField("gaps", gaps, MAX_GAPS_CHARS)' 'return "gaps: $gaps"'
-patch_and_test "B3c findings list is bounded" "$SRC/SubagentResultEnvelope.kt" SubagentContractBudgetTest \
+run B patch_and_test "B3c findings list is bounded" "$SRC/SubagentResultEnvelope.kt" SubagentContractBudgetTest \
   'val shown = findings.take(MAX_FINDINGS_SHOWN)' 'val shown = findings'
 
-echo "C. parser"
-patch_and_test "C1 status body kept as prose" "$SRC/SubagentReportContract.kt" SubagentReportProseLossTest \
+want C && echo "C. parser"
+run C patch_and_test "C1 status body kept as prose" "$SRC/SubagentReportContract.kt" SubagentReportProseLossTest \
   '                    } else if (line.isNotBlank()) {
                         proseLines += line.trim()' \
   '                    } else if (false) {
                         proseLines += line.trim()'
-patch_and_test "C1b scalar field ends at a blank line" "$SRC/SubagentReportContract.kt" SubagentReportProseLossTest \
+run C patch_and_test "C1b scalar field ends at a blank line" "$SRC/SubagentReportContract.kt" SubagentReportProseLossTest \
   'if (line.isBlank() && (current == FIELD_SUMMARY || current == FIELD_GAPS)) {' \
   'if (false) {'
-patch_and_test "C2 a sentence is not a path" "$SRC/SubagentReportContract.kt" SubagentReportProseLossTest \
+run C patch_and_test "C2 a sentence is not a path" "$SRC/SubagentReportContract.kt" SubagentReportProseLossTest \
   'if (text.any { it.isWhitespace() }) return false' 'if (false) return false'
-patch_and_test "C2b none is not an artifact" "$SRC/SubagentReportContract.kt" SubagentReportProseLossTest \
+run C patch_and_test "C2b none is not an artifact" "$SRC/SubagentReportContract.kt" SubagentReportProseLossTest \
   'if (NO_ARTIFACT_TOKENS.contains(text.lowercase())) return false' 'if (false) return false'
 
-echo "D. security"
-patch_and_test "D1 fence markers are escaped" "$SRC/SubagentParentDelivery.kt" SubagentContractBudgetTest \
+want D && echo "D. security"
+run D patch_and_test "D1 fence markers are escaped" "$SRC/SubagentParentDelivery.kt" SubagentContractBudgetTest \
   'append(escapeFenceMarkers(envelope))' 'append(envelope)'
+
+want E && echo "E. recovery route (navigability)"
+run E patch_and_test "E1 index gives real line numbers" "$SRC/SubagentJournalIndex.kt" SubagentJournalIndexTest \
+  'starts += sb.count { it == '"'"'\n'"'"' } + 1' 'starts += sb.count { it == '"'"'\n'"'"' } + 2'
+run E patch_and_test "E2 report precedes transcript in the journal" "$SRC/SubagentRunJournal.kt" SubagentJournalIndexTest \
+  '"Report" to if (resultText.isBlank()) "(no text output produced)" else scrub(resultText),
+            "Transcript" to renderTranscript(run, scrub),' \
+  '"Transcript" to renderTranscript(run, scrub),
+            "Report" to if (resultText.isBlank()) "(no text output produced)" else scrub(resultText),'
+run E patch_and_test "E3 pointer names the conclusion range" "$SRC/SubagentResultEnvelope.kt" SubagentRecoveryRouteTest \
+  'if (report != null && !report.isEmpty) {' 'if (false) {'
+run E patch_and_test "E4 registry bound keeps the head" "$SRC/SubagentRunRegistry.kt" SubagentRecoveryRouteTest \
+  'val head = text.take(SubagentRunRegistry.RESULT_TEXT_HEAD_CHARS)' 'val head = ""'
+run E patch_and_test "E5 artifact names its size" "$SRC/SubagentResultEnvelope.kt" SubagentRecoveryRouteTest \
+  'if (bytes != null && bytes >= 0) {' 'if (false) {'
 
 echo
 echo "passed: $PASS   failed: $FAIL"

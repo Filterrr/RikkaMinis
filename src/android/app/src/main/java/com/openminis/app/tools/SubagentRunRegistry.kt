@@ -219,6 +219,16 @@ class SubagentRunRegistry {
          */
         val artifacts: List<String> = emptyList(),
         /**
+         * [fix/subagent-artifact-size] Path → size in bytes, for the artifacts
+         * the runtime could stat when the write succeeded.
+         *
+         * Why: the artifacts line named the files but not their scale, so the
+         * parent had no way to choose between opening a 12 KB report and
+         * slurping a 480 KB CSV. A path with no entry here was never measured —
+         * the renderer says nothing about its size rather than claiming 0 B.
+         */
+        val artifactBytes: Map<String, Int> = emptyMap(),
+        /**
          * [feat/subagent-report-summary] The report's contract fields,
          * parsed — stored with the run so the detached paths can read them
          * back without re-parsing the text (and without the two paths
@@ -606,10 +616,21 @@ class SubagentRunRegistry {
      * here — this registry stores what it is given, and the write log is
      * the authority, so the same path is never stored twice.
      */
-    fun addArtifact(runId: String, path: String) {
+    fun addArtifact(runId: String, path: String, bytes: Int = -1) {
         if (path.isBlank()) return
         updateRun(runId) { run ->
-            if (path in run.artifacts) run else run.copy(artifacts = run.artifacts + path)
+            if (path in run.artifacts) {
+                run
+            } else {
+                run.copy(
+                    artifacts = run.artifacts + path,
+                    // [fix/subagent-artifact-size] -1 = "size unknown" and is
+                    // rendered as nothing, never as 0 B. A zero-byte claim about
+                    // a file the runtime did not stat would be a fabricated
+                    // measurement.
+                    artifactBytes = if (bytes >= 0) run.artifactBytes + (path to bytes) else run.artifactBytes,
+                )
+            }
         }
     }
 
@@ -847,11 +868,11 @@ class SubagentRunRegistry {
      * [fix/subagent-plan-first] Replace the run's accumulated report text
      * when a `<task-plan>` block was stripped from the narration — keeps
      * [Run.resultText] (the parent-facing report fallback) consistent with
-     * the transcript. Bounded by the same cap as append.
+     * the transcript. Bounded by the same rule as append.
      */
     fun replaceResultText(runId: String, cleaned: String) {
         updateRun(runId) { run ->
-            run.copy(resultText = cleaned.takeLast(MAX_RESULT_TEXT_CHARS))
+            run.copy(resultText = boundResultText(cleaned))
         }
     }
 
@@ -969,7 +990,7 @@ class SubagentRunRegistry {
     fun appendResultText(runId: String, delta: String) {
         if (delta.isEmpty()) return
         updateRun(runId) { run ->
-            run.copy(resultText = (run.resultText + delta).takeLast(MAX_RESULT_TEXT_CHARS))
+            run.copy(resultText = boundResultText(run.resultText + delta))
         }
     }
 
@@ -1189,6 +1210,13 @@ class SubagentRunRegistry {
         const val MAX_LIVE_RUNS = 40
         const val MAX_STEP_OUTPUT_LINES = 60
         const val MAX_RESULT_TEXT_CHARS = 24_000
+
+        /**
+         * [fix/subagent-result-head-truncation] How much of the HEAD survives
+         * the bound. The report contract writes `summary:` first, so the head
+         * is where the answer lives; the tail is where the closing turns are.
+         */
+        const val RESULT_TEXT_HEAD_CHARS = 8_000
         private const val MAX_NOTICE_CHARS = 2_000
         /**
          * [T-subagent-chat-stream] Transcript bounds. Segments are what the
@@ -1216,3 +1244,33 @@ class SubagentRunRegistry {
  * the 31-min stale reset, and its acquireOrFalse() production path turned
  * max_parallel into "over limit → spawn fails" instead of queueing.
  */
+
+/**
+ * [fix/subagent-result-head-truncation] Bound a run's streamed report text
+ * WITHOUT throwing away its beginning.
+ *
+ * `takeLast(24_000)` keeps the tail — and the report contract puts `summary:`
+ * FIRST, deliberately, so that it survives truncation. Cutting from the front
+ * deleted exactly the field the contract was designed to protect, and kept the
+ * narration that follows it.
+ *
+ * The bound now keeps the HEAD (the summary and the first findings, capped)
+ * plus the TAIL (the closing turns), with an explicit marker in between. A
+ * reader can see that text is missing and know roughly what kind.
+ *
+ * Top-level rather than a registry member: it touches no run state, and the
+ * registry's file imports `PRootKernel`-adjacent types that make the class
+ * awkward to reach from a plain test.
+ */
+internal fun boundResultText(text: String): String {
+    if (text.length <= SubagentRunRegistry.MAX_RESULT_TEXT_CHARS) return text
+    val dropped = text.length - SubagentRunRegistry.MAX_RESULT_TEXT_CHARS
+    val head = text.take(SubagentRunRegistry.RESULT_TEXT_HEAD_CHARS)
+    val tail = text.takeLast(SubagentRunRegistry.MAX_RESULT_TEXT_CHARS - SubagentRunRegistry.RESULT_TEXT_HEAD_CHARS)
+    return head +
+        "\n… [${dropped} characters elided here — the beginning (summary) and the " +
+        "closing turns are kept, the middle narration is not. The journal holds " +
+        "the complete text]\n" +
+        tail
+}
+
