@@ -104,9 +104,25 @@ object SubagentArtifactTruth {
      * The character class stops at whitespace and at the punctuation that
      * typically ends a sentence, so a path in prose is captured without
      * dragging the following comma or full stop along.
+     *
+     * [fix/subagent-artifact-path-fwparen] The class excluded the full-width
+     * RIGHT parenthesis `）` but not the full-width LEFT parenthesis `（`.
+     * A model that annotates a path with a full-width Chinese comment —
+     * `/var/minis/.../report.md（测试探针文件，31 字节）` — had the whole
+     * comment swallowed into the path candidate. The candidate then never
+     * matched the recorded path (which has no comment), so a REAL deliverable
+     * was flagged as unverified and, with an existence probe, as missing.
+     * Observed 2026-11-04 on a real run: both artifacts of a successful run
+     * were reported as "DO NOT EXIST on disk" even though both were on disk.
+     *
+     * So every full-width bracket is now excluded — left AND right, and the
+     * CJK comment pairs `【】` / `《》` / `「」` as well. An English trailing
+     * comment `(31 bytes)` is already handled because the half-width `(`
+     * was never in the class either; `)` was already excluded. The class now
+     * treats all bracket-like delimiters as terminators.
      */
     private val ABS_MINIS_PATH = Regex(
-        """/var/minis/[^\s"'`，。、；：)）\],]+""",
+        """/var/minis/[^\s"'`，。、；：)）(\[（【《「\],]+""",
     )
 
     /**
