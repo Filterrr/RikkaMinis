@@ -368,4 +368,87 @@ class SubagentArtifactTruthTest {
             result.report.contains("\n- parallel_file_read_report.md"),
         )
     }
+
+    /**
+     * [fix/subagent-artifact-path-fwparen] A model annotates a path with a
+     * full-width Chinese comment — `report.md（测试探针文件，31 字节）` — and
+     * the whole comment must NOT be swallowed into the path candidate.
+     *
+     * Real defect (2026-11-04, run `subagent-1`): the model wrote
+     * `- /var/minis/workspace/subagent_test/probe_smoke.txt（测试探针文件，31 字节，md5=...）`
+     * in the `artifacts:` section. The full-width LEFT parenthesis `（` was
+     * not excluded by the path character class, so the candidate became
+     * `probe_smoke.txt（测试探针文件，31 字节，md5=...）` — it matched no
+     * recorded path, the existence probe found no such file, and a REAL
+     * deliverable was flagged as "DO NOT EXIST on disk". Both artifacts of
+     * an otherwise-successful run were misreported as missing.
+     */
+    @Test
+    fun `a full-width Chinese comment after a path is not part of the path`() {
+        val report = """
+            status: done
+            artifacts:
+            - $realPath（测试探针文件，31 字节，md5=c184f0087846077f577938dd89fd5809）
+        """.trimIndent()
+
+        val result = SubagentArtifactTruth.reconcile(
+            report = report,
+            recordedPaths = listOf(realPath),
+            artifactsDir = artifactsDir,
+        )
+
+        // The candidate must resolve to the recorded path — no drift, no "missing".
+        // The comment stays attached to the path (that is the model's prose);
+        // what must NOT happen is the WHOLE `path（comment）` being treated as
+        // one path candidate that matches nothing.
+        assertTrue("the real path must be present", result.report.contains(realPath))
+        assertFalse(result.hadDrift)
+        assertFalse(result.hadMissing)
+        assertTrue("the comment is not a path candidate", result.correctedPaths.isEmpty())
+        assertTrue("no fabricated candidate", result.unverifiedPaths.isEmpty())
+    }
+
+    /**
+     * Same scenario WITH an existence probe wired in — the probe must be
+     * asked about the REAL path, not about a path carrying the comment.
+     * Before the fix the probe received the comment-suffixed candidate and
+     * returned false, producing a false "missing" flag.
+     */
+    @Test
+    fun `a full-width comment path is not flagged missing with an existence probe`() {
+        val report = """
+            status: done
+            artifacts:
+            - $realPath（自述记录，834 字节）
+        """.trimIndent()
+
+        val result = SubagentArtifactTruth.reconcile(
+            report = report,
+            recordedPaths = listOf(realPath),
+            artifactsDir = artifactsDir,
+            pathExists = { it == realPath },
+        )
+
+        assertTrue(result.report.contains(realPath))
+        assertFalse("a real deliverable must never be flagged missing", result.hadMissing)
+        assertTrue("the correct path was probed", result.missingPaths.isEmpty())
+    }
+
+    /**
+     * The full-width comment is preserved in the output (information is not
+     * deleted) — only the path candidate is trimmed at the bracket.
+     */
+    @Test
+    fun `the full-width comment survives in the repaired report`() {
+        val report = "artifacts:\n- $realPath（这是注释）"
+
+        val result = SubagentArtifactTruth.reconcile(
+            report = report,
+            recordedPaths = listOf(realPath),
+            artifactsDir = artifactsDir,
+        )
+
+        assertTrue(result.report.contains(realPath))
+        assertTrue("the annotation is part of the model's prose and must survive", result.report.contains("（这是注释）"))
+    }
 }
