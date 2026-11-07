@@ -105,6 +105,13 @@ object SubagentSkill {
         SubagentOrchestrationTools.JOIN_NAME,
         SubagentOrchestrationTools.WAIT_ANY_NAME,
         SubagentOrchestrationTools.CANCEL_NAME,
+        // [port/upstream-subagent-status] Reading siblings' state is the
+        // same leak as joining them: it hands a sub-agent context about
+        // work it cannot see and was not asked about.
+        SubagentOrchestrationTools.STATUS_NAME,
+        // [port/upstream-subagent-steer] A sub-agent must never be able to
+        // inject instructions into another run.
+        SubagentOrchestrationTools.STEER_NAME,
     )
 
     /** Default turn budget for sub-agents when the skill doesn't specify. */
@@ -516,9 +523,31 @@ object SubagentSkill {
                     "subject to it, so a background spawn cannot outlive its " +
                     "usefulness.",
             ),
+            // [port/upstream-subagent-progress] Opt-in PUSH. Off by default
+            // on purpose: a progress note costs the parent a whole turn, and
+            // subagent_status answers the same question on demand for free.
+            // Only a DETACHED run can report: an inline run returns its own
+            // result at the end of the call, so there is nobody to notify
+            // while it works.
+            "progress_report" to AgentToolParam(
+                "string",
+                "Optional, detached runs only. 'none' (default): the parent hears " +
+                    "nothing until the run finishes. 'frequent': a short note every 15 " +
+                    "seconds, ONLY when the run actually changed (new tool, new turn, new " +
+                    "text) — a run sitting in one long command stays quiet. 'moderate': " +
+                    "one note a minute regardless. Every note is a message in this " +
+                    "conversation and costs you a turn, so leave it at 'none' unless you " +
+                    "genuinely need to react mid-run. Capped at " +
+                    "${SubagentProgress.MAX_PROGRESS_MESSAGES} notes per run. Ignored when " +
+                    "run_until is not 'detach'.",
+                enumValues = listOf("none", "frequent", "moderate"),
+            ),
         ),
         required = listOf("tool_title", "skill_name", "query"),
-        propertyOrdering = listOf("tool_title", "skill_name", "query", "run_until", "model", "timeout_seconds"),
+        propertyOrdering = listOf(
+            "tool_title", "skill_name", "query", "run_until", "model", "timeout_seconds",
+            "progress_report",
+        ),
     )
 
     // ── Config parsing ───────────────────────────────────────────────────

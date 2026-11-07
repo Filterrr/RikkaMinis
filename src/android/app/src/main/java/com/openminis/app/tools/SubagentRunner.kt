@@ -253,7 +253,75 @@ class SubagentRunner(
          * Default no-op keeps every existing Deps adapter source-compatible.
          */
         suspend fun wakeParentWithResult(runId: String, prompt: String) {}
+
+        /**
+         * [port/upstream-subagent-child-session] Persistence seam for a run's
+         * HIDDEN CHILD SESSION.
+         *
+         * The runner must not touch ChatRepository (it would drag Room, the
+         * session file store and the app graph into a class the local test
+         * harness compiles). The ViewModel owns the repository, so it supplies
+         * this adapter; the default returns null and appends nothing, which
+         * makes persistence strictly additive — a Deps that does not implement
+         * it behaves exactly as before.
+         */
+        fun childSessions(): ChildSessionStore = ChildSessionStore.NONE
+
+        /** Fire-and-forget progress note for a detached run. */
+        suspend fun reportProgress(runId: String, prompt: String) {
+            wakeParentWithResult(runId, prompt)
+        }
     }
+
+    /**
+     * [port/upstream-subagent-child-session] The minimum a run needs in order
+     * to be readable after the fact.
+     */
+    interface ChildSessionStore {
+        /**
+         * Create a hidden child session for this run. Returns its id, or null
+         * when persistence is unavailable (no repository wired, no active
+         * parent session) — a run must never fail because it could not be
+         * recorded.
+         */
+        suspend fun createChildSession(
+            parentSessionId: String,
+            parentToolUseId: String,
+            title: String,
+            modelId: String,
+        ): String?
+
+        suspend fun appendChildMessage(sessionId: String, role: String, partsJson: String)
+
+        /** Final bookkeeping (touch the timestamp, drop transient state). */
+        suspend fun finishChildSession(sessionId: String)
+
+        companion object {
+            val NONE: ChildSessionStore = object : ChildSessionStore {
+                override suspend fun createChildSession(
+                    parentSessionId: String,
+                    parentToolUseId: String,
+                    title: String,
+                    modelId: String,
+                ): String? = null
+
+                override suspend fun appendChildMessage(sessionId: String, role: String, partsJson: String) = Unit
+
+                override suspend fun finishChildSession(sessionId: String) = Unit
+            }
+        }
+    }
+
+    /**
+     * run id → child session id, for the terminal write.
+     *
+     * A map rather than a parameter because the terminal write happens in
+     * [executeLoopGuarded]'s finally, which is the ONLY place every exit path
+     * of the loop passes through — and threading one more value through a
+     * thousand-line function to reach it is how a new exit path ends up
+     * forgetting it.
+     */
+    private val childSessionsByRun = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     // ── Entry point ──────────────────────────────────────────────────────
 
@@ -274,6 +342,11 @@ class SubagentRunner(
         val skillName = args.optString("skill_name", "").trim()
         val query = args.optString("query", "").trim()
         val title = args.optString("tool_title", "Sub-agent").ifBlank { "Sub-agent" }
+        // [port/upstream-subagent-progress] Opt-in progress notes. Parsed here
+        // so an invalid value degrades to NONE (quiet) rather than to a chatty
+        // default, and stored on the run row so the reporter does not have to
+        // re-read the tool args.
+        val progressLevel = SubagentProgress.parse(args.optString("progress_report", "none"))
         val rawRunUntil = args.optString("run_until", SubagentSkill.RUN_UNTIL_DONE)
             .ifBlank { SubagentSkill.RUN_UNTIL_DONE }
 
@@ -780,6 +853,13 @@ class SubagentRunner(
             // orchestration scope (outlives stream cancel, dies with the VM)
             // and return the handle immediately. The parent collects via
             // join_subagents / wait_any or discards via cancel_subagents.
+            // [port/upstream-subagent-progress] The reporter lives on the
+            // orchestration scope so it outlives a stream cancel like the run
+            // it reports on, and is cancelled in the run's finally — a note
+            // about a finished run is worse than no note.
+            val progressJob = if (progressLevel != SubagentProgress.Level.NONE) {
+                deps.orchestrationScope().launch { reportProgress(run.id, progressLevel) }
+            } else null
             val detachedJob = deps.orchestrationScope().launch {
                 try {
                     scheduler.run(skill.id, config.maxParallel, deadlineNanos) {
@@ -849,6 +929,10 @@ class SubagentRunner(
                     // registry's FAILED state.
                     journal(run, "FAILED", "", 0, crashError, emptyList(), sessionId)
                 } finally {
+                    // [port/upstream-subagent-progress] Stop reporting before
+                    // the completion is delivered, so the parent never receives
+                    // "progress" after "finished".
+                    progressJob?.cancel()
                     // Complete the job from the registry's terminal snapshot if
                     // nobody else did (cancel path completes the deferred BEFORE
                     // cancelling the coroutine, so this is usually a no-op), and
@@ -1236,6 +1320,68 @@ class SubagentRunner(
      * paths could deliver. The window contains no suspension points and the
      * failure mode is one duplicate informational turn, not lost data.
      */
+    /**
+     * [port/upstream-subagent-child-session] Write the run's terminal report
+     * into its child session, then release the mapping.
+     *
+     * Non-blocking failures: if the row cannot be written the run still
+     * completed, and the journal still holds the evidence. Logging and moving
+     * on is correct — turning a storage hiccup into a failed run would be a
+     * worse trade.
+     */
+    private suspend fun persistChildReport(runId: String, snapshot: SubagentRunRegistry.Run?) {
+        val sid = childSessionsByRun.remove(runId) ?: return
+        kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+            runCatching {
+                val report = snapshot?.resultText.orEmpty()
+                val verdict = snapshot?.let { SubagentStatus.stateLabel(it) } ?: "FINISHED"
+                deps.childSessions().appendChildMessage(
+                    sid, "assistant", SubagentChildTranscript.reportPartsJson(report, verdict),
+                )
+                deps.childSessions().finishChildSession(sid)
+            }.onFailure {
+                AppLogger.warning(TAG, "[Subagent] could not persist child session $sid: ${it.message}")
+            }
+        }
+    }
+
+    /**
+     * [port/upstream-subagent-progress] Push a progress note while a detached
+     * run is alive.
+     *
+     * Bounded three ways — interval, change gate (see [SubagentProgress]) and
+     * [SubagentProgress.MAX_PROGRESS_MESSAGES] — because every note is a
+     * message in the PARENT conversation and costs it a turn. The loop re-reads
+     * the run from the registry every tick rather than holding a snapshot, so a
+     * note always describes the run as it is now.
+     */
+    private suspend fun reportProgress(runId: String, level: SubagentProgress.Level) {
+        var lastSignature = ""
+        // Seeded with "now", so the first note lands one interval after the
+        // spawn instead of immediately — the spawn result already said more.
+        var lastAtMs = System.currentTimeMillis()
+        var sent = 0
+        while (sent < SubagentProgress.MAX_PROGRESS_MESSAGES) {
+            kotlinx.coroutines.delay(SubagentProgress.TICK_MS)
+            val snapshot = registry.runs.value.firstOrNull { it.id == runId } ?: return
+            // Terminal or pruned: the completion path takes over from here.
+            if (!snapshot.isActive) return
+            val now = System.currentTimeMillis()
+            val signature = SubagentProgress.signature(snapshot)
+            if (!SubagentProgress.shouldEmit(level, now, lastAtMs, signature, lastSignature, sent)) {
+                continue
+            }
+            lastSignature = signature
+            lastAtMs = now
+            sent += 1
+            deps.reportProgress(runId, SubagentProgress.prompt(snapshot, now, sent - 1))
+        }
+        AppLogger.info(
+            TAG,
+            "[Subagent] progress reporting for '$runId' stopped after ${SubagentProgress.MAX_PROGRESS_MESSAGES} notes",
+        )
+    }
+
     private suspend fun maybeWakeParent(job: SubagentOrchestration.SubagentJob) {
         val outcome = completeJobFromRegistry(job) ?: return
         if (!job.detached) return
@@ -1319,6 +1465,15 @@ class SubagentRunner(
                 } ?: 0L,
                 hasUsage,
             )
+            // [port/upstream-subagent-child-session] The terminal report.
+            //
+            // This finally is the ONLY place every exit path of the loop passes
+            // through (success, timeout, cancel, crash), so it is the only
+            // place a write cannot be forgotten by a future exit path. It runs
+            // inside NonCancellable because a cancelled run reaches it with its
+            // coroutine already cancelled — and a cancelled run is precisely the
+            // one whose partial result is worth keeping.
+            persistChildReport(run.id, snapshot)
         }
     }
 
@@ -1379,6 +1534,31 @@ class SubagentRunner(
         runCatching {
             val dirFile = PRootKernel.resolveSessionHostPath(sessionId, artifactsDir, context)
             if (dirFile != null) dirFile.mkdirs()
+        }
+        // [port/upstream-subagent-child-session] Persist the run as a HIDDEN
+        // CHILD SESSION of the chat that spawned it, so the work is readable
+        // after the fact (the journal is evidence; this is the conversation).
+        //
+        // Best-effort by construction: a run must never fail because it could
+        // not be recorded, so every step here is guarded and a null id simply
+        // means "not persisted".
+        val childSessionId = runCatching {
+            deps.childSessions().createChildSession(
+                parentSessionId = sessionId,
+                parentToolUseId = run.blockId,
+                title = SubagentChildTranscript.title(title, skill.name),
+                modelId = provider.model.id,
+            )
+        }.getOrNull()
+        if (childSessionId != null) {
+            childSessionsByRun[run.id] = childSessionId
+            runCatching {
+                deps.childSessions().appendChildMessage(
+                    childSessionId,
+                    "user",
+                    SubagentChildTranscript.taskPartsJson(query, skill.name),
+                )
+            }
         }
         val systemPrompt = SubagentSkill.buildSystemPrompt(
             skill,
@@ -1566,6 +1746,35 @@ class SubagentRunner(
                 }
                 turns++
                 registry.turnStarted(run.id, turns)
+                // [port/upstream-subagent-steer] Deliver queued course
+                // corrections at the TURN BOUNDARY — never mid-stream and
+                // never mid-tool-call. Two properties matter here:
+                //
+                //  1. the work already done is kept, which is the whole
+                //     difference between steering and cancel-then-re-spawn;
+                //  2. the transcript stays alternating. A tool result is a
+                //     USER-role message, so appending another USER would
+                //     produce USER/USER — the exact shape that made the old
+                //     repair pass fabricate an "interrupted" turn on every
+                //     tool turn. SubagentSteer.deliver MERGES into the tail
+                //     instead, so no repair needs to run.
+                // NOT wrapped in `run { }`: this function's first parameter is
+                // itself named `run` (the Run being executed), so a lambda
+                // call would resolve against that value and fail to compile.
+                val pendingSteers = registry.drainSteers(run.id)
+                if (pendingSteers.isNotEmpty()) {
+                    val delivered = SubagentSteer.deliver(history, pendingSteers)
+                    if (delivered > 0) {
+                        registry.appendNotice(
+                            run.id,
+                            "[steer] $delivered course correction(s) delivered at turn $turns",
+                        )
+                        AppLogger.info(
+                            TAG,
+                            "[Subagent] '$skillName' received $delivered course correction(s) at turn $turns",
+                        )
+                    }
+                }
                 val instance = provider.instanceContext ?: let {
                     registry.finishIfActive(
                         run.id, SubagentRunRegistry.RunStatus.FAILED,
@@ -1756,6 +1965,18 @@ class SubagentRunner(
 
                 val text = textSb.toString()
                 lastText = text
+                // [port/upstream-subagent-child-session] One row per turn, not
+                // per delta: the child session is a readable record, and a
+                // streamed answer would otherwise persist hundreds of rows.
+                if (text.isNotBlank()) {
+                    childSessionsByRun[run.id]?.let { sid ->
+                        runCatching {
+                            deps.childSessions().appendChildMessage(
+                                sid, "assistant", SubagentChildTranscript.textPartsJson(text),
+                            )
+                        }
+                    }
+                }
                 if (text.isNotBlank()) {
                     if (resultSb.isNotEmpty()) resultSb.append('\n')
                     resultSb.append(text)
@@ -3113,6 +3334,104 @@ class SubagentRunner(
                         success = !winner.cancelled && (winnerDelivered || !successOnly),
                         toolTitle = toolTitle,
                     )
+                }
+            }
+            // [port/upstream-subagent-status] Read-only snapshot. Never awaits:
+            // a status call that blocked would be a second join, and the point
+            // of this tool is to decide what to join.
+            SubagentOrchestrationTools.STATUS_NAME -> {
+                val snapshot = registry.runs.value
+                val selected = when {
+                    runIds.isNotEmpty() -> snapshot.filter { run ->
+                        // A prefix is accepted, as everywhere else in this
+                        // layer: the user-visible ids are 8-char prefixes, and
+                        // that is what the model will have copied.
+                        runIds.any { it == run.id || run.id.startsWith(it) }
+                    }
+                    !groupId.isNullOrBlank() -> snapshot.filter { it.groupId == groupId }
+                    else -> snapshot
+                }
+                if (selected.isEmpty()) {
+                    val asked = when {
+                        runIds.isNotEmpty() -> " for run_ids=${runIds.joinToString(",")}"
+                        !groupId.isNullOrBlank() -> " in group $groupId"
+                        else -> ""
+                    }
+                    ToolExecutionResult(
+                        "No sub-agent runs$asked in this conversation." +
+                            " Nothing has been spawned here yet — spawn_agent starts one.",
+                        false, toolTitle = toolTitle,
+                    )
+                } else {
+                    ToolExecutionResult(
+                        SubagentStatus.format(selected, System.currentTimeMillis()),
+                        true, toolTitle = toolTitle,
+                    )
+                }
+            }
+            // [port/upstream-subagent-steer] Queue a course correction for a
+            // RUNNING run. Deliberately honest about the three ways this can
+            // do nothing: unknown id, ambiguous prefix, already finished —
+            // a parent that believes it corrected a run which had already
+            // answered is worse off than one told to re-delegate.
+            SubagentOrchestrationTools.STEER_NAME -> {
+                val target = args.optString("run_id", "").trim()
+                val message = args.optString("message", "").trim()
+                if (target.isEmpty()) {
+                    return ToolExecutionResult(
+                        "steer_subagent needs run_id — the run the correction is for. " +
+                            "subagent_status lists this conversation's runs.",
+                        false, toolTitle = toolTitle,
+                    )
+                }
+                if (message.isEmpty()) {
+                    return ToolExecutionResult(
+                        "steer_subagent needs message — say what to change.",
+                        false, toolTitle = toolTitle,
+                    )
+                }
+                val matches = registry.runs.value.filter {
+                    it.id == target || it.id.startsWith(target)
+                }
+                when {
+                    matches.isEmpty() -> ToolExecutionResult(
+                        "No sub-agent run '$target' in this conversation. " +
+                            "subagent_status lists the ones that exist.",
+                        false, toolTitle = toolTitle,
+                    )
+                    matches.size > 1 -> ToolExecutionResult(
+                        "run_id '$target' matches ${matches.size} runs (" +
+                            matches.joinToString(", ") { it.id.take(8) } +
+                            "). Send a longer prefix.",
+                        false, toolTitle = toolTitle,
+                    )
+                    else -> {
+                        val run = matches.first()
+                        when {
+                            !run.isActive -> ToolExecutionResult(
+                                "'" + run.title.ifBlank { run.id.take(8) } + "' has already finished (" +
+                                    SubagentStatus.stateLabel(run) + "). Its result stands — " +
+                                    "delegate a new task instead of steering this one.",
+                                false, toolTitle = toolTitle,
+                            )
+                            !registry.enqueueSteer(run.id, message) -> ToolExecutionResult(
+                                "Could not queue the correction: '" +
+                                    run.title.ifBlank { run.id.take(8) } + "' already has " +
+                                    registry.MAX_PENDING_STEERS_PER_RUN +
+                                    " unread corrections queued. It reads them at its next turn " +
+                                    "boundary — wait for that rather than stacking more.",
+                                false, toolTitle = toolTitle,
+                            )
+                            else -> ToolExecutionResult(
+                                "Queued for #" + SubagentStatus.shortId(run.id) + "." +
+                                    " The sub-agent reads it at its next turn boundary; a tool call " +
+                                    "already running is not interrupted and the work done so far is " +
+                                    "kept. It may finish before consuming it — " +
+                                    registry.pendingSteerCount(run.id) + " correction(s) now pending.",
+                                true, toolTitle = toolTitle,
+                            )
+                        }
+                    }
                 }
             }
             SubagentOrchestrationTools.CANCEL_NAME -> {

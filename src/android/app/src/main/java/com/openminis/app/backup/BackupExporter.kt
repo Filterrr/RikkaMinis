@@ -267,7 +267,12 @@ class BackupExporter(
             BackupJsonlWriter(dataDir, "messages").use { messages ->
                 BackupJsonlWriter(dataDir, "compact_markers").use { markers ->
                     BackupJsonlWriter(dataDir, "folders").use { folders ->
-                        for (session in dao.listSessions()) {
+                        // [port/upstream-subagent-child-session] Hidden child
+                        // sessions (sub-agent runs) are NOT exported: they are
+                        // a by-product of a conversation, not a conversation,
+                        // and restoring them as standalone entries would
+                        // clutter the user's list with runs they never made.
+                        for (session in dao.listRootSessions()) {
                             // Snapshot cut-off: a session updated after the user
                             // pressed Create Backup is not part of this backup's
                             // view. Excluding the WHOLE session rather than

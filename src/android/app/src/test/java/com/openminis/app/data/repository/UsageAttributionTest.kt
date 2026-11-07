@@ -57,6 +57,9 @@ class UsageAttributionTest {
         override fun observeSessions(): Flow<List<ChatSessionEntity>> = emptyFlow()
         override fun observeSessionsSorted(): Flow<List<ChatSessionEntity>> = emptyFlow()
         override suspend fun listSessions(): List<ChatSessionEntity> = emptyList()
+        override fun observeRootSessions(): Flow<List<ChatSessionEntity>> = emptyFlow()
+        override suspend fun listRootSessions(): List<ChatSessionEntity> = emptyList()
+        override suspend fun childSessions(parentId: String): List<ChatSessionEntity> = emptyList()
         override suspend fun getSession(id: String): ChatSessionEntity? = null
         override suspend fun getMessage(id: String): MessageEntity? = null
         override suspend fun sessionsUpdatedSince(cutoff: Long): List<ChatSessionEntity> = emptyList()

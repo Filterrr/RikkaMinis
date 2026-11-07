@@ -49,8 +49,16 @@ internal fun toolCallDedupeFingerprint(name: String, args: JSONObject): String {
     // a model legitimately re-issues the identical call to poll again ("has it
     // finished yet?"). Deduping the second call would wedge the turn — exempt
     // them from same-turn dedupe entirely.
+    // [port/upstream-subagent-status] subagent_status is a SNAPSHOT: two
+    // identical calls a second apart legitimately return different states,
+    // so deduping the second would hand back a stale one.
     if (name == com.openminis.app.tools.SubagentOrchestrationTools.JOIN_NAME ||
-        name == com.openminis.app.tools.SubagentOrchestrationTools.WAIT_ANY_NAME
+        name == com.openminis.app.tools.SubagentOrchestrationTools.WAIT_ANY_NAME ||
+        name == com.openminis.app.tools.SubagentOrchestrationTools.STATUS_NAME ||
+        // [port/upstream-subagent-steer] The same correction may legitimately
+        // be re-sent (it was read at the wrong boundary, or the run needed it
+        // twice); deduping would drop the second silently.
+        name == com.openminis.app.tools.SubagentOrchestrationTools.STEER_NAME
     ) {
         return "$name|no-dedupe|${System.nanoTime()}"
     }

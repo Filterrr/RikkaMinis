@@ -15,6 +15,21 @@ object SubagentOrchestrationTools {
     const val WAIT_ANY_NAME = "wait_any"
     const val CANCEL_NAME = "cancel_subagents"
 
+    /**
+     * [port/upstream-subagent-status] Read-only snapshot of the conversation's
+     * sub-agent runs. Third sibling of join / wait_any / cancel: the parent
+     * could act on runs but could not SEE them without blocking on one.
+     */
+    const val STATUS_NAME = "subagent_status"
+
+    /**
+     * [port/upstream-subagent-steer] Course correction for a running run.
+     * The one mid-run interaction RikkaMinis was missing: before this, the
+     * only way to influence a run in flight was to cancel it and lose the
+     * work.
+     */
+    const val STEER_NAME = "steer_subagent"
+
     private fun timeoutParam(defaultSec: Int, toolLabel: String): Pair<String, AgentToolParam> = "timeout_sec" to AgentToolParam(
         "integer",
         "Optional. Max seconds to wait before giving up (default $defaultSec for $toolLabel). " +
@@ -121,6 +136,76 @@ object SubagentOrchestrationTools {
         ),
         required = listOf("tool_title"),
         propertyOrdering = listOf("tool_title", "run_ids", "group_id", "reason"),
+    )
+
+    // ── subagent_status ──────────────────────────────────────────────────
+
+    fun statusDefinition(): AgentToolDefinition = AgentToolDefinition(
+        name = STATUS_NAME,
+        description = "Report what this conversation's sub-agents are doing — WITHOUT waiting. " +
+            "Every run's state (running / queued / finished, with the runtime's verdict), turn, " +
+            "elapsed time, the tool call in flight, the model that is paying for it, token usage, " +
+            "and — for finished runs — a short preview of the result. " +
+            "Read-only and non-blocking: it never waits for anything to finish and never changes a " +
+            "run. Use it to decide what to do next: which run to join, which to cancel, whether a " +
+            "run that looks active has actually already failed. " +
+            "Do NOT use it as a poll loop while waiting for a result — a spawn with " +
+            "run_until='done' returns its own result, and join_subagents / wait_any are the " +
+            "correct way to wait; status is for a snapshot, not for spinning. " +
+            "Do NOT assume a run is healthy because it is still listed: check its state line, and " +
+            "remember that a SUCCESS-state run can carry a DEGRADED/PARTIAL verdict.",
+        parameters = mapOf(
+            "tool_title" to AgentToolParam(
+                "string",
+                "A concise 5-10 word summary of what this tool call does. Use the same language as the user.",
+            ),
+            "run_ids" to AgentToolParam(
+                "string",
+                "Optional. Comma- or space-separated run ids to report on. Omit to report every " +
+                    "run of this conversation (still-running first, then the newest finished ones).",
+            ),
+            "group_id" to AgentToolParam(
+                "string",
+                "Optional. Report only the members of one spawn batch group.",
+            ),
+        ),
+        required = listOf("tool_title"),
+        propertyOrdering = listOf("tool_title", "run_ids", "group_id"),
+    )
+
+    // ── steer_subagent ───────────────────────────────────────────────────
+
+    fun steerDefinition(): AgentToolDefinition = AgentToolDefinition(
+        name = STEER_NAME,
+        description = "Send a course correction to a RUNNING sub-agent — without stopping it. " +
+            "The message is queued and read at the sub-agent's next turn boundary: a tool call " +
+            "already in progress is not interrupted, and all the work done so far is kept. " +
+            "This is the alternative to cancel + re-spawn when the task is right but a detail is " +
+            "wrong (a path, a constraint, a format, a scope to drop). " +
+            "It does NOT restart the task and does NOT create a new run. " +
+            "Only a run that is still RUNNING or QUEUED can be steered — a finished run's result " +
+            "stands, and the call says so instead of pretending. Steer applies to DETACHED runs " +
+            "(spawn_agent run_until='detach'): an inline run executes inside the call that " +
+            "spawned it, so you cannot issue another tool call while it runs. " +
+            "Check state with subagent_status first if you are unsure the run is still alive.",
+        parameters = mapOf(
+            "tool_title" to AgentToolParam(
+                "string",
+                "A concise 5-10 word summary of what this tool call does. Use the same language as the user.",
+            ),
+            "run_id" to AgentToolParam(
+                "string",
+                "The run to correct. A unique prefix of the id is accepted (the ids shown by " +
+                    "subagent_status are 8-character prefixes).",
+            ),
+            "message" to AgentToolParam(
+                "string",
+                "The correction, phrased as an instruction to the running sub-agent. Say what to " +
+                    "CHANGE, not the whole task again: the sub-agent keeps everything it has done.",
+            ),
+        ),
+        required = listOf("tool_title", "run_id", "message"),
+        propertyOrdering = listOf("tool_title", "run_id", "message"),
     )
 
     /** Parse a run_ids arg ("a, b" / "a b" / JSON-ish) into a clean list. */
