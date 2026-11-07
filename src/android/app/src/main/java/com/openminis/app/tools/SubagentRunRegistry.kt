@@ -687,6 +687,74 @@ class SubagentRunRegistry {
         updateRun(runId) { it.copy(turn = turn) }
     }
 
+    // ── Steering mailbox ─────────────────────────────────────────────────
+    //
+    // [port/upstream-subagent-steer] Course corrections the PARENT sends to a
+    // running sub-agent, delivered at its next turn boundary.
+    //
+    // Why a mailbox and not a field on [Run]: [runs] is an immutable snapshot
+    // republished through StateFlow on every mutation, so writing a queue into
+    // it would republish the whole run list (and re-render every pill) once
+    // per steer. It would also be LOST on the next `copy()` that did not carry
+    // it — the exact class of "field exists but nothing reads it" bug this
+    // codebase keeps closing. The mailbox is a side channel keyed by run id,
+    // which is also what makes it drainable exactly once.
+    //
+    // Why delivery is deferred to the turn boundary rather than injected
+    // mid-flight: a tool call already in progress must not be interrupted, and
+    // the work done so far must be kept — that is the entire difference
+    // between steering and cancel-then-re-spawn. It costs no extra turn.
+
+    private val steerMailbox = java.util.concurrent.ConcurrentHashMap<
+        String, java.util.concurrent.ConcurrentLinkedQueue<String>>()
+
+    /** Bounded per run — a chatty parent must not grow this without limit. */
+    val MAX_PENDING_STEERS_PER_RUN = 8
+
+    /**
+     * Queue a course correction for [runId].
+     *
+     * Returns FALSE when the run is unknown or already terminal: the caller
+     * must be able to tell the parent "that run has finished, its result
+     * stands" instead of accepting a message nobody will ever read. Silently
+     * swallowing it here is how a parent ends up believing it corrected a run
+     * that had already answered.
+     */
+    fun enqueueSteer(runId: String, message: String): Boolean {
+        val clean = message.trim()
+        if (clean.isEmpty()) return false
+        val run = _runs.value.firstOrNull { it.id == runId } ?: return false
+        if (!run.isActive) return false
+        val queue = steerMailbox.computeIfAbsent(runId) {
+            java.util.concurrent.ConcurrentLinkedQueue<String>()
+        }
+        if (queue.size >= MAX_PENDING_STEERS_PER_RUN) {
+            // Explicit overflow: drop nothing, refuse the new one. A silently
+            // dropped correction is worse than a refused one.
+            return false
+        }
+        queue.add(clean)
+        return true
+    }
+
+    fun pendingSteerCount(runId: String): Int = steerMailbox[runId]?.size ?: 0
+
+    /** Take everything queued for [runId]; the mailbox is emptied. */
+    fun drainSteers(runId: String): List<String> {
+        val queue = steerMailbox[runId] ?: return emptyList()
+        val out = mutableListOf<String>()
+        while (true) {
+            val next = queue.poll() ?: break
+            out.add(next)
+        }
+        if (queue.isEmpty()) steerMailbox.remove(runId, queue)
+        return out
+    }
+
+    fun clearSteers(runId: String) {
+        steerMailbox.remove(runId)
+    }
+
     /**
      * [T-subagent-transient-retry] Pre-attempt transcript snapshot — see
      * [turnSnapshot] / [resetTurn].
@@ -1037,6 +1105,17 @@ class SubagentRunRegistry {
         executedToolCalls: Int = 0,
     ) {
         finishOnce(runId, status, resultText, error, outcome, reportSource, executedToolCalls)
+        // [port/upstream-subagent-steer] A correction queued but never read
+        // must not vanish silently — the parent would go on believing it had
+        // been applied. Record it once, on the terminal write, and clear.
+        val missed = drainSteers(runId)
+        if (missed.isNotEmpty()) {
+            appendNotice(
+                runId,
+                "[steer] ${missed.size} course correction(s) were never read — " +
+                    "the run finished before its next turn boundary",
+            )
+        }
     }
 
     /**

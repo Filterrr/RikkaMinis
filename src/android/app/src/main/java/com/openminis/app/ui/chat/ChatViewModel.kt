@@ -10623,6 +10623,8 @@ class ChatViewModel(
                 SubagentOrchestrationTools.JOIN_NAME,
                 SubagentOrchestrationTools.WAIT_ANY_NAME,
                 SubagentOrchestrationTools.CANCEL_NAME,
+                SubagentOrchestrationTools.STATUS_NAME,
+                SubagentOrchestrationTools.STEER_NAME,
                 -> subagentRunner.executeOrchestrationTool(name, argsJson)
                 else -> ToolExecutionResult("Unknown tool: $name", false)
             }

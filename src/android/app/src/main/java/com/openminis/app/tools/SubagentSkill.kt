@@ -105,6 +105,13 @@ object SubagentSkill {
         SubagentOrchestrationTools.JOIN_NAME,
         SubagentOrchestrationTools.WAIT_ANY_NAME,
         SubagentOrchestrationTools.CANCEL_NAME,
+        // [port/upstream-subagent-status] Reading siblings' state is the
+        // same leak as joining them: it hands a sub-agent context about
+        // work it cannot see and was not asked about.
+        SubagentOrchestrationTools.STATUS_NAME,
+        // [port/upstream-subagent-steer] A sub-agent must never be able to
+        // inject instructions into another run.
+        SubagentOrchestrationTools.STEER_NAME,
     )
 
     /** Default turn budget for sub-agents when the skill doesn't specify. */

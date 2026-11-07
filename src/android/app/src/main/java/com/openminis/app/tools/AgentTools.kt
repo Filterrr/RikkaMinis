@@ -72,6 +72,10 @@ object AgentTools {
         add(SubagentOrchestrationTools.joinDefinition())
         add(SubagentOrchestrationTools.waitAnyDefinition())
         add(SubagentOrchestrationTools.cancelDefinition())
+        // [port/upstream-subagent-status] Read-only snapshot of the runs.
+        add(SubagentOrchestrationTools.statusDefinition())
+        // [port/upstream-subagent-steer] Course correction for a running run.
+        add(SubagentOrchestrationTools.steerDefinition())
         if (memoryEnabled) {
             add(memoryWriteDefinition())
             add(memoryGetDefinition())

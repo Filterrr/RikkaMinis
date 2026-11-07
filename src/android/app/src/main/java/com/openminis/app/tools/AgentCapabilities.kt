@@ -100,6 +100,14 @@ object AgentCapabilities {
         "join_subagents" -> AgentCapability.SPAWN_AGENT
         "wait_any" -> AgentCapability.SPAWN_AGENT
         "cancel_subagents" -> AgentCapability.SPAWN_AGENT
+        // [port/upstream-subagent-status] Parent-only for the same reason:
+        // a sub-agent must not be able to inspect its siblings (or its
+        // parent's other work) — that is context it was never given.
+        "subagent_status" -> AgentCapability.SPAWN_AGENT
+        // [port/upstream-subagent-steer] Parent-only: a sub-agent steering
+        // a sibling would be a second, invisible instruction channel into a
+        // run nobody asked it to manage.
+        "steer_subagent" -> AgentCapability.SPAWN_AGENT
         else -> null
     }
 

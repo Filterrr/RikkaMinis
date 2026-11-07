@@ -100,6 +100,9 @@ for f in \
   tools/SubagentMcpScope.kt \
   tools/SubagentNameKey.kt \
   tools/SubagentSourceText.kt \
+  tools/SubagentStatus.kt \
+  tools/SubagentSteer.kt \
+  tools/SubagentErrorKind.kt \
   tools/SubagentModelChoice.kt \
   backup/BackupFormat.kt \
   tools/SubagentTaskFingerprint.kt \
