@@ -31,7 +31,22 @@ class ChatRepository(
     private val database: AppDatabase? = null,
 ) {
 
-    fun observeSessions(): Flow<List<ChatSessionEntity>> = dao.observeSessions()
+    /**
+     * [port/upstream-subagent-child-session] ROOT sessions only.
+     *
+     * Sub-agent runs persist as hidden children; the home list, the drawer and
+     * the "open the most recent chat" shortcut must see the chats the user
+     * made, not the runs each of them spawned. Callers that genuinely need the
+     * child rows (subtree delete, storage accounting) use the DAO directly.
+     */
+    fun observeSessions(): Flow<List<ChatSessionEntity>> = dao.observeRootSessions()
+
+    /** Root sessions, one shot. */
+    suspend fun listRootSessions(): List<ChatSessionEntity> = dao.listRootSessions()
+
+    /** Direct children of [parentId] (hidden sub-agent sessions). */
+    suspend fun childSessions(parentId: String): List<ChatSessionEntity> =
+        dao.childSessions(parentId)
 
     /** [P0-1-drawer-title-visibility] Live message-count map per session. */
     fun observeMessageCountsPerSession(): Flow<Map<String, Int>> =
@@ -53,6 +68,12 @@ class ChatRepository(
         // in-memory value here; the standalone update (persistThinkingOverride)
         // only runs once the session already exists.
         thinkingLevel: String? = null,
+        // [port/upstream-subagent-child-session] Non-null makes this a HIDDEN
+        // CHILD session of that chat: it is filtered out of the home list and
+        // deleted with its parent's subtree. Only a delegated sub-agent run
+        // sets these.
+        parentSessionId: String? = null,
+        parentToolUseId: String? = null,
     ): ChatSessionEntity {
         val now = System.currentTimeMillis()
         // [fix-audit-p0-1] Thinking override folds INTO the row at insert
@@ -70,6 +91,8 @@ class ChatRepository(
             updatedAt = now,
             memoryEnabled = if (memoryEnabled) 1 else 0,
             thinkingOverride = thinkingLevel,
+            parentSessionId = parentSessionId,
+            parentToolUseId = parentToolUseId,
         )
         dao.insertSession(session)
         return session
@@ -214,28 +237,34 @@ class ChatRepository(
         dao.updatePinnedAt(sessionId, if (pinned) now else null, now)
     }
 
+    /**
+     * [port/upstream-subagent-child-session] Delete the whole SUBTREE, deepest
+     * first.
+     *
+     * A chat can own hidden child sessions (its sub-agent runs). Deleting only
+     * the parent row left those behind: the `messages` foreign key cascades
+     * from `sessions`, so the orphans kept their transcript, kept consuming
+     * disk, and — because their `parent_session_id` now pointed at nothing —
+     * became invisible everywhere except a storage report.
+     *
+     * Deepest-first means a crash halfway through can never leave a child
+     * pointing at a parent that no longer exists.
+     */
     suspend fun deleteSession(id: String) {
-        dao.deleteMessages(id)
-        dao.deleteSession(id)
-        // [A: session file reclamation] Dropping the DB rows previously leaked
-        // the bind-mounted session dir (minis-sessions/<id>: workspace /
-        // attachments / offloads / browser) and any media, which kept burning
-        // disk invisibly — the exact runaway-accumulation that also feeds the
-        // backup-OOM (ConfigBackup.export bundles live session content).
-        // Deleting a session means deleting the whole session, not just its text.
-        val store = sessionFiles
-        if (store == null) {
-            // [Bug 4 / opt-2] Only unit-test construction reaches here; a null
-            // store means on-disk files are NOT reclaimed and would leak
-            // silently. Surface it loudly so a missing injection is caught in
-            // CI/logs rather than masquerading as a successful delete.
+        val subtree = com.openminis.app.data.session.SessionTree.subtreeDeepestFirst(id) { parent ->
+            runCatching { dao.childSessions(parent).map { it.id } }.getOrDefault(emptyList())
+        }
+        for (sessionId in subtree) {
+            dao.deleteMessages(sessionId)
+            dao.deleteSession(sessionId)
+            sessionFiles?.deleteSessionFiles(sessionId)
+        }
+        if (sessionFiles == null) {
             android.util.Log.w(
                 "ChatRepository",
-                "deleteSession: sessionFiles is null, skipping on-disk reclamation for $id",
+                "deleteSession: sessionFiles is null, skipping on-disk reclamation for $subtree",
             )
-            return
         }
-        store.deleteSessionFiles(id)
     }
 
     /**

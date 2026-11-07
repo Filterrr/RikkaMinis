@@ -200,8 +200,21 @@ internal const val DATA_BOUNDARY_CLOSE_PREFIX = "</subagent-data"
 internal fun wrapAsData(
     envelope: String,
     outcome: SubagentOrchestration.JobOutcome,
+): String = wrapAsData(envelope, outcome.runId)
+
+/**
+ * [port/upstream-subagent-progress] The same boundary, keyed by a run id.
+ *
+ * Progress notes travel on the SAME channel as a completion (a USER message in
+ * the parent conversation) and therefore need the same treatment: the sub-agent
+ * may quote a web page, a file or an issue comment, and that text must not
+ * arrive with user authority. Only the envelope differs; the fence and the
+ * escaping do not, so they are shared rather than re-implemented.
+ */
+internal fun wrapAsData(
+    envelope: String,
+    runId: String,
 ): String {
-    val runId = outcome.runId
     return buildString {
         append(DATA_BOUNDARY_OPEN_PREFIX)
         append(" run=\"")

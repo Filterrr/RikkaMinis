@@ -103,6 +103,10 @@ for f in \
   tools/SubagentStatus.kt \
   tools/SubagentSteer.kt \
   tools/SubagentErrorKind.kt \
+  tools/SubagentProgress.kt \
+  tools/SubagentChildTranscript.kt \
+  data/session/SessionTree.kt \
+  ui/chat/StopScope.kt \
   tools/SubagentModelChoice.kt \
   backup/BackupFormat.kt \
   tools/SubagentTaskFingerprint.kt \

@@ -438,7 +438,10 @@ fun AppNavigation(
             // (the stock session list is gone), so the share consumer always
             // mounts.
             hasPendingShare && mode == 3 -> Routes.chat(com.openminis.app.data.ComposerDraftStore.nextDraftId(context))
-            mode == 1 -> chatRepository.dao.listSessions().firstOrNull()?.let { Routes.chat(it.id) }
+            // [port/upstream-subagent-child-session] ROOT sessions only: the
+            // most recent row may now be a hidden sub-agent run, and opening
+            // the app into one would strand the user in a read-only child.
+            mode == 1 -> chatRepository.dao.listRootSessions().firstOrNull()?.let { Routes.chat(it.id) }
             mode == 2 -> Routes.chat(com.openminis.app.data.ComposerDraftStore.nextDraftId(context))
             // [remove-session-list] Mode 3 was "Home" (the deleted session
             // list). It now means "Safe Start": always open a fresh draft
@@ -447,7 +450,7 @@ fun AppNavigation(
             // on a page that no longer exists.
             mode == 3 -> Routes.chat(com.openminis.app.data.ComposerDraftStore.nextDraftId(context))
             else -> {
-                val latest = chatRepository.dao.listSessions().firstOrNull()
+                val latest = chatRepository.dao.listRootSessions().firstOrNull()
                 val fresh = latest != null && System.currentTimeMillis() - latest.updatedAt < autoThresholdMs
                 if (fresh) Routes.chat(latest!!.id) else Routes.chat(com.openminis.app.data.ComposerDraftStore.nextDraftId(context))
             }

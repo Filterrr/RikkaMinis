@@ -83,6 +83,7 @@ import com.openminis.app.tools.ReadImageTool
 import com.openminis.app.tools.SubagentOrchestration
 import com.openminis.app.tools.SubagentCostLedger
 import com.openminis.app.tools.SubagentRosterHint
+import com.openminis.app.tools.SubagentRunAssessment
 import com.openminis.app.tools.SubagentRunCheckpoint
 import com.openminis.app.tools.SubagentRunRegistry
 import com.openminis.app.tools.SubagentRunner
@@ -1156,6 +1157,53 @@ class ChatViewModel(
     }
 
     /**
+     * [port/upstream-stop-scope] What a Stop would reach in THIS chat.
+     *
+     * Read-only: the UI uses it to say what is about to happen. Without it the
+     * user was told nothing and the background runs simply kept going.
+     */
+    fun subagentStopSummary(): StopSummary = StopScopePolicy.summarize(
+        runs = subagentRunRegistry.runs.value,
+        isDetached = { runId -> subagentOrchestration.getJob(runId)?.detached == true },
+    )
+
+    /**
+     * [port/upstream-stop-scope] Cancel every DETACHED run of this chat.
+     *
+     * Called from [cancelStream] so "Stop" means what it says. The order is
+     * deliberate and was expensive to learn upstream: the registry must reach a
+     * terminal state BEFORE the coroutines are cancelled, because the runner's
+     * own unwind treats a still-active run as a natural exit — first writer
+     * wins — and a run the user stopped would otherwise be reported as
+     * completed.
+     *
+     * Inline runs are skipped on purpose: they live inside the turn being
+     * cancelled and end with it. Touching them here would either double-cancel
+     * or, worse, mark a run cancelled that is about to deliver a real result.
+     */
+    fun cancelAllSubagentRuns(reason: String = StopScopePolicy.REASON): Int {
+        val jobs = subagentOrchestration.liveJobs().filter { it.detached }
+        if (jobs.isEmpty()) return 0
+        for (job in jobs) {
+            val snapshot = subagentRunRegistry.runs.value.firstOrNull { it.id == job.runId }
+            subagentRunRegistry.finishIfActive(
+                job.runId,
+                SubagentRunRegistry.RunStatus.CANCELLED,
+                error = reason,
+                // A stopped run delivered nothing; the detached surfaces must
+                // not read the snapshot as a plain success.
+                outcome = SubagentRunAssessment.Outcome.FAILED,
+                reportSource = SubagentRunAssessment.ReportSource.NONE,
+                executedToolCalls = snapshot?.executedToolCalls ?: 0,
+            )
+            job.coroutineJob?.cancel(kotlinx.coroutines.CancellationException(reason))
+        }
+        SubagentOrchestration.cancelCascade(jobs, reason)
+        AppLogger.info(TAG, "[Subagent] stop cancelled ${jobs.size} detached run(s) in $activeSessionId")
+        return jobs.size
+    }
+
+    /**
      * [T-subagent-approval] Skill ids the user has granted "always allow" for
      * sub-agent spawns. Backs the revoke UI.
      */
@@ -1391,6 +1439,51 @@ class ChatViewModel(
                     com.openminis.app.tools.SpawnDecision.DENY
                 }
             }
+
+            // [port/upstream-subagent-child-session] Persist each run as a
+            // HIDDEN CHILD SESSION of this chat.
+            //
+            // Why here and not in the runner: the runner must stay free of
+            // Room/repository dependencies (it is compiled by the local JVM
+            // harness). This adapter is the only place that already owns a
+            // ChatRepository and knows the active chat id.
+            //
+            // memoryEnabled = false: a sub-agent must not mutate the user's
+            // long-term memory — the same isolation rule that keeps memory
+            // tools out of a sub-agent's tool set, applied at the row level.
+            override fun childSessions(): SubagentRunner.ChildSessionStore =
+                object : SubagentRunner.ChildSessionStore {
+                    override suspend fun createChildSession(
+                        parentSessionId: String,
+                        parentToolUseId: String,
+                        title: String,
+                        modelId: String,
+                    ): String? = runCatching {
+                        chatRepository.createSession(
+                            modelId = modelId,
+                            title = title,
+                            memoryEnabled = false,
+                            parentSessionId = parentSessionId,
+                            parentToolUseId = parentToolUseId,
+                        ).id
+                    }.onFailure {
+                        AppLogger.warning(TAG, "[Subagent] child session create failed: ${it.message}")
+                    }.getOrNull()
+
+                    override suspend fun appendChildMessage(
+                        sessionId: String,
+                        role: String,
+                        partsJson: String,
+                    ) {
+                        chatRepository.appendMessage(
+                            sessionId = sessionId, role = role, partsJson = partsJson,
+                        )
+                    }
+
+                    override suspend fun finishChildSession(sessionId: String) {
+                        chatRepository.dao.touchSession(sessionId, System.currentTimeMillis())
+                    }
+                }
 
             override suspend fun wakeParentWithResult(runId: String, prompt: String) {
                 if (!enqueueSyntheticPrompt(prompt)) return
@@ -12994,6 +13087,11 @@ Environment variables:
         // release would corrupt the count and over-admit new spawns. The
         // 31-min stale-lease self-heal bounds any leaked permit anyway.
         //
+        // [port/upstream-stop-scope] Stop the DETACHED runs too. They own
+        // their own coroutine on the orchestration scope, so cancelling the
+        // stream job never reached them — the pills stayed lit and the tokens
+        // kept burning until the run's own budget expired.
+        runCatching { cancelAllSubagentRuns() }
         // [T-subagent-orchestration] Only INLINE runs die with the stream:
         // they execute inside the cancelled streamJob's dispatch. Detached
         // runs (run_until="detach") live on the orchestration scope and keep

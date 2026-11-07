@@ -63,6 +63,28 @@ interface ChatDao {
     @Query("SELECT * FROM sessions ORDER BY updated_at DESC")
     suspend fun listSessions(): List<ChatSessionEntity>
 
+    /**
+     * [port/upstream-subagent-child-session] Top-level sessions only.
+     *
+     * A sub-agent run persists as a HIDDEN CHILD of the chat that spawned it
+     * (`parent_session_id` non-null). Those rows must never appear in the home
+     * list or become "the most recent session" — they are reached through the
+     * run's own card, not navigated to.
+     *
+     * Filtered in SQL rather than in Kotlin because `isChild` is a computed
+     * property, not a column, and because every list caller would otherwise
+     * have to remember the rule separately.
+     */
+    @Query("SELECT * FROM sessions WHERE parent_session_id IS NULL ORDER BY updated_at DESC")
+    fun observeRootSessions(): Flow<List<ChatSessionEntity>>
+
+    @Query("SELECT * FROM sessions WHERE parent_session_id IS NULL ORDER BY updated_at DESC")
+    suspend fun listRootSessions(): List<ChatSessionEntity>
+
+    /** Direct children of [parentId] — used by the subtree delete walk. */
+    @Query("SELECT * FROM sessions WHERE parent_session_id = :parentId ORDER BY created_at ASC")
+    suspend fun childSessions(parentId: String): List<ChatSessionEntity>
+
     @Query("SELECT * FROM sessions WHERE id = :id")
     suspend fun getSession(id: String): ChatSessionEntity?
 
