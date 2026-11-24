@@ -300,6 +300,21 @@ object SubagentSkill {
     const val SHELL_BUDGET_RESERVE_SECONDS = 30
 
     /**
+     * [feat/subagent-budget-hardening] Tools that can occupy the runtime for
+     * MINUTES and have no timeout knob a sub-agent can pass (`browser_use`,
+     * `web_search`). Below this much remaining wall clock they must not be
+     * STARTED — the deadline is checked only at turn boundaries, so a long
+     * tool begun now guarantees the run ends with no time to report.
+     */
+    const val MIN_LONG_TOOL_BUDGET_SECONDS = 60
+
+    /** Tools that may still run on the FINAL turn — landing the report. */
+    val REPORT_WRITE_TOOLS: Set<String> = setOf("file_write", "file_edit")
+
+    /** Tools capped by the long-tool gate (shell has its own, tighter cap). */
+    val LONG_RUNNING_TOOLS: Set<String> = setOf("shell_execute", "browser_use", "web_search")
+
+    /**
      * Maximum parent-declared budget: the wall-clock ceiling expressed in
      * minutes (60 at the shipped 3600s [MAX_TIMEOUT_SECONDS]). A spawn that
      * asks for more is clamped and the clamp is reported in the tool result.
@@ -764,8 +779,9 @@ object SubagentSkill {
                     "The continuation is handed the previous partial report, the artifacts " +
                     "it already wrote and their directory, so it should verify those files " +
                     "rather than redo the work — and it gets a FRESH max_minutes budget. " +
-                    "Only the last ${SubagentRunRegistry.MAX_RETAINED_RUNS} runs of the chat " +
-                    "are retained; an unknown id is an error, not a fresh spawn.",
+                    "The last ${SubagentRunRegistry.MAX_RETAINED_RUNS} runs stay in memory " +
+                    "and terminal runs are ALSO archived on disk, so a resume survives an app " +
+                    "restart; an unknown id is an error, not a fresh spawn.",
             ),
             "run_until" to AgentToolParam(
                 "string",

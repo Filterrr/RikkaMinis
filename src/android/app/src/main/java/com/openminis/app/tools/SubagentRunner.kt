@@ -440,53 +440,23 @@ class SubagentRunner(
         val resumeRunId = args.optString("resume_run_id", "").trim()
         val resumeSource = if (resumeRunId.isBlank()) {
             null
-        } else {
-            val known = registry.runs.value
-            val source = known.firstOrNull { it.id == resumeRunId }
-                ?: return ToolExecutionResult(
-                    "Error: resume_run_id '$resumeRunId' is not a run of this chat. " +
-                        "Only the last ${SubagentRunRegistry.MAX_RETAINED_RUNS} runs are retained — " +
-                        "recent run ids: " +
-                        known.takeLast(5).joinToString(", ") { it.id }.ifEmpty { "(none)" } +
-                        ". Start a fresh spawn if the evidence is not here.",
-                    false,
-                    toolTitle = title,
-                )
-            if (source.status == SubagentRunRegistry.RunStatus.RUNNING ||
-                source.status == SubagentRunRegistry.RunStatus.QUEUED
-            ) {
-                return ToolExecutionResult(
-                    "Error: run '$resumeRunId' is still ${source.status}. " +
-                        "Continue a run only after it stops — join_subagents / wait_any on " +
-                        "it instead of resuming it.",
-                    false,
-                    toolTitle = title,
-                )
-            }
-            if (source.skillId != skill.id) {
-                return ToolExecutionResult(
-                    "Error: run '$resumeRunId' belongs to sub-agent skill " +
-                        "'${source.skillName}' (id ${source.skillId}), not '${skill.name}'. " +
-                        "Resume it with skill_name = '${source.skillName}', or start a fresh " +
-                        "spawn if this is genuinely different work.",
-                    false,
-                    toolTitle = title,
-                )
-            }
-            source
+        } else when (val resolved = resolveResumeSource(resumeRunId, skillId = skill.id)) {
+            is ResumeResolution.Refused ->
+                return ToolExecutionResult(resolved.message, false, toolTitle = title)
+            is ResumeResolution.Found -> resolved.source
         }
-        val resumeArtifactsDir = resumeSource?.let { SubagentSkill.artifactsDirFor(it.id) }.orEmpty()
+        val resumeArtifactsDir = resumeSource?.workspaceDir.orEmpty()
         val resumeContext = resumeSource?.let { src ->
             SubagentResume.context(
                 previousRunId = src.id,
                 skillName = src.skillName,
-                statusLabel = src.status.name,
-                stopReason = src.error.orEmpty(),
-                turns = src.turn,
+                statusLabel = src.statusLabel,
+                stopReason = src.error,
+                turns = src.turns,
                 maxTurns = src.maxTurns,
-                resultText = src.resultText,
+                resultText = src.report,
                 artifacts = src.artifacts,
-                workspaceDir = SubagentSkill.artifactsDirFor(src.id),
+                workspaceDir = src.workspaceDir,
             )
         }.orEmpty()
 
@@ -1451,6 +1421,174 @@ class SubagentRunner(
         }
     }
 
+    // ── Continuation sources ─────────────────────────────────────────────
+
+    /**
+     * [feat/subagent-resume-durability] A continuation's source, whether it
+     * came from the in-memory registry or from the on-disk archive.
+     */
+    private data class ResumeSource(
+        val id: String,
+        val skillId: String,
+        val skillName: String,
+        val statusLabel: String,
+        val error: String,
+        val turns: Int,
+        val maxTurns: Int,
+        val report: String,
+        val artifacts: List<String>,
+        val workspaceDir: String,
+    )
+
+    private sealed class ResumeResolution {
+        data class Found(val source: ResumeSource) : ResumeResolution()
+        data class Refused(val message: String) : ResumeResolution()
+    }
+
+    /**
+     * Resolve `resume_run_id` to a usable continuation source.
+     *
+     * [feat/subagent-resume-durability] Two storage layers, checked in that
+     * order:
+     *
+     *  1. the REGISTRY — the live view, and the only place a run can still be
+     *     RUNNING (which is refused: join it instead of racing it);
+     *  2. the ARCHIVE next to the run's artifacts — written on every terminal
+     *     path from [executeLoopGuarded]'s finally, so a continuation still
+     *     works after the process restarts and the registry is gone.
+     *
+     * A run that exists in neither is an ERROR that names the recent ids: the
+     * parent's standing instruction is "do not retry the same spawn", and a
+     * silent fall-through to a fresh spawn would re-buy the whole task.
+     */
+    private fun resolveResumeSource(runId: String, skillId: String): ResumeResolution {
+        val live = registry.runs.value.firstOrNull { it.id == runId }
+        val source: ResumeSource
+        if (live != null) {
+            if (live.isActive) {
+                return ResumeResolution.Refused(
+                    "Error: run '$runId' is still ${live.status}. Continue a run only after " +
+                        "it stops — join_subagents / wait_any on it instead of resuming it.",
+                )
+            }
+            source = ResumeSource(
+                id = live.id,
+                skillId = live.skillId,
+                skillName = live.skillName,
+                statusLabel = live.status.name,
+                error = live.error.orEmpty(),
+                turns = live.turn,
+                maxTurns = live.maxTurns,
+                report = live.resultText,
+                artifacts = live.artifacts,
+                workspaceDir = SubagentSkill.artifactsDirFor(live.id),
+            )
+        } else {
+            val archived = loadResumeArchive(runId)
+                ?: return ResumeResolution.Refused(
+                    "Error: resume_run_id '$runId' is not a run of this chat. Only the last " +
+                        "${SubagentRunRegistry.MAX_RETAINED_RUNS} runs stay in memory, and " +
+                        "terminal runs are archived on disk — recent archived run ids: " +
+                        recentResumeRunIds(5).joinToString(", ").ifEmpty { "(none)" } +
+                        ". Start a fresh spawn if the evidence is not here.",
+                )
+            source = ResumeSource(
+                id = archived.runId,
+                skillId = archived.skillId,
+                skillName = archived.skillName,
+                statusLabel = archived.status,
+                error = archived.error,
+                turns = archived.turns,
+                maxTurns = archived.maxTurns,
+                report = archived.report,
+                artifacts = archived.artifacts,
+                workspaceDir = SubagentSkill.artifactsDirFor(archived.runId),
+            )
+        }
+        if (source.skillId != skillId) {
+            return ResumeResolution.Refused(
+                "Error: run '$runId' belongs to sub-agent skill '${source.skillName}' " +
+                    "(id ${source.skillId}), not this one. Resume it with " +
+                    "skill_name = '${source.skillName}', or start a fresh spawn if this is " +
+                    "genuinely different work.",
+            )
+        }
+        return ResumeResolution.Found(source)
+    }
+
+    /** [feat/subagent-resume-durability] The archive file inside a run's dir. */
+    private fun resumeArchiveFile(runId: String): java.io.File? =
+        PRootKernel.resolveSessionHostPath(
+            deps.activeSessionId(),
+            SubagentSkill.artifactsDirFor(runId),
+            context,
+        )?.let { java.io.File(it, SubagentResumeArchive.FILE_NAME) }
+
+    /**
+     * Read a continuation archive, or null when there is none / it is
+     * unreadable. A corrupt archive must look ABSENT, not like a run with no
+     * evidence — see [SubagentResumeArchive.parse].
+     */
+    private fun loadResumeArchive(runId: String): SubagentResumeArchive.Snapshot? = runCatching {
+        val file = resumeArchiveFile(runId) ?: return@runCatching null
+        if (!file.isFile) return@runCatching null
+        SubagentResumeArchive.parse(file.readText(Charsets.UTF_8))
+    }.getOrNull()
+
+    /** Newest archived run ids, for the "not a run" error message. */
+    private fun recentResumeRunIds(limit: Int): List<String> = runCatching {
+        val root = PRootKernel.resolveSessionHostPath(
+            deps.activeSessionId(),
+            SubagentSkill.ARTIFACTS_DIR,
+            context,
+        ) ?: return@runCatching emptyList()
+        root.listFiles()
+            ?.mapNotNull { dir ->
+                val f = java.io.File(dir, SubagentResumeArchive.FILE_NAME)
+                if (f.isFile) dir.name to f.lastModified() else null
+            }
+            ?.sortedByDescending { it.second }
+            ?.take(limit)
+            ?.map { it.first }
+            ?: emptyList()
+    }.getOrDefault(emptyList())
+
+    /**
+     * [feat/subagent-resume-durability] Write the continuation archive on
+     * EVERY terminal path.
+     *
+     * Called from [executeLoopGuarded]'s finally — the one place success,
+     * max-turns, TIMED_OUT, cancel and crash all pass through — so a future
+     * exit path cannot forget it, and a CANCELLED run (whose partial result
+     * is the most valuable to continue from) still archives. Failures are
+     * logged and swallowed: losing the archive must never fail the run.
+     */
+    private fun persistResumeArchive(runId: String, snapshot: SubagentRunRegistry.Run?) {
+        val s = snapshot ?: return
+        runCatching {
+            val file = resumeArchiveFile(runId) ?: return@runCatching
+            file.parentFile?.mkdirs()
+            file.writeText(
+                SubagentResumeArchive.toJson(
+                    SubagentResumeArchive.Snapshot(
+                        runId = s.id,
+                        skillId = s.skillId,
+                        skillName = s.skillName,
+                        status = SubagentStatus.stateLabel(s),
+                        error = s.error.orEmpty(),
+                        turns = s.turn,
+                        maxTurns = s.maxTurns,
+                        report = s.resultText,
+                        artifacts = s.artifacts,
+                    ),
+                ),
+                Charsets.UTF_8,
+            )
+        }.onFailure {
+            AppLogger.warning(TAG, "[Subagent] could not archive resume state for $runId: ${it.message}")
+        }
+    }
+
     // ── Model loop ───────────────────────────────────────────────────────
 
     /**
@@ -1528,6 +1666,11 @@ class SubagentRunner(
             // coroutine already cancelled — and a cancelled run is precisely the
             // one whose partial result is worth keeping.
             persistChildReport(run.id, snapshot)
+            // [feat/subagent-resume-durability] Same finally, same reason:
+            // this is the only place every exit path reaches, so a
+            // continuation stays possible after the process (and with it the
+            // memory-only registry) is gone.
+            persistResumeArchive(run.id, snapshot)
         }
     }
 
@@ -2269,6 +2412,9 @@ class SubagentRunner(
                                 // branch caps its own timeout with this, so a
                                 // single command cannot eat the whole run.
                                 budgetLeftSeconds = runSecondsLeft(deadlineNanos),
+                                // [feat/subagent-budget-hardening] The last
+                                // turn is report-only.
+                                finalTurn = turns >= config.maxTurns,
                                 // [fix/subagent-allowed-tools-enforcement] The
                                 // skill's allowlist travels with the run, so the
                                 // runtime gate sees the same list the schema
@@ -3014,6 +3160,12 @@ class SubagentRunner(
          * shorten it.
          */
         budgetLeftSeconds: Int = Int.MAX_VALUE,
+        /**
+         * [feat/subagent-budget-hardening] True on the run's LAST turn. A
+         * tool call there would spend the only turn left and end the run with
+         * no deliverable, so only report-landing tools stay allowed.
+         */
+        finalTurn: Boolean = false,
     ): ToolExecutionResult {
         if (name in SubagentSkill.FORBIDDEN_TOOLS) {
             return forbiddenToolResult(name)
@@ -3035,6 +3187,40 @@ class SubagentRunner(
             )
             return ToolExecutionResult(
                 SubagentAllowedTools.refusalText(name, allowedTools, disallowedTools),
+                false,
+                toolTitle = name,
+            )
+        }
+        // [feat/subagent-budget-hardening] The LAST turn belongs to the
+        // report. Allowing one more command there spends the only remaining
+        // turn and the run ends without a deliverable — the exact ending the
+        // budget notes were added to prevent. file_write/file_edit stay
+        // allowed so the report can land on disk.
+        if (finalTurn && name !in SubagentSkill.REPORT_WRITE_TOOLS) {
+            return ToolExecutionResult(
+                "Error: this is the run's FINAL turn — no more tool calls except " +
+                    "file_write / file_edit. Write the final report NOW with what you " +
+                    "already have, and put unfinished work in `gaps:`.",
+                false,
+                toolTitle = name,
+            )
+        }
+        // [feat/subagent-budget-hardening] A long tool cannot be STARTED with
+        // no time left to finish it. shell also has a tighter per-command cap;
+        // browser_use / web_search have no timeout the sub-agent can pass, so
+        // this gate is the only protection they get.
+        if (budgetLeftSeconds != Int.MAX_VALUE &&
+            budgetLeftSeconds <= SubagentSkill.MIN_LONG_TOOL_BUDGET_SECONDS &&
+            name in SubagentSkill.LONG_RUNNING_TOOLS
+        ) {
+            AppLogger.warning(
+                TAG,
+                "[Subagent] '$name' REFUSED — only ${budgetLeftSeconds}s of budget left",
+            )
+            return ToolExecutionResult(
+                "Error: only ${budgetLeftSeconds}s of this run's wall-clock budget remain — " +
+                    "no time to start a $name call. Stop calling tools and write the final " +
+                    "report NOW.",
                 false,
                 toolTitle = name,
             )

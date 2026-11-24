@@ -135,7 +135,7 @@ class SubagentResumeTest {
         )
         assertTrue(
             "a live run must be refused, not resumed",
-            runner.contains("SubagentRunRegistry.RunStatus.RUNNING"),
+            runner.contains("if (live.isActive)"),
         )
         assertTrue(
             "the continuation must keep writing into the previous run's directory",
@@ -144,6 +144,15 @@ class SubagentResumeTest {
         assertTrue(
             "the hand-off must reach the child's first message",
             runner.contains("\$resumeContext"),
+        )
+        assertTrue(
+            "a continuation must work after the registry is gone (archive fallback)",
+            runner.contains("loadResumeArchive(resumeRunId)") ||
+                runner.contains("loadResumeArchive(runId)"),
+        )
+        assertTrue(
+            "every terminal path must archive the continuation state",
+            runner.contains("persistResumeArchive(run.id, snapshot)"),
         )
     }
 
