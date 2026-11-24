@@ -2383,7 +2383,14 @@ class SubagentRunner(
                             textSb.setLength(0)
                             toolCalls.clear()
                             kotlinx.coroutines.delay(RUN_LEVEL_RETRY_DELAY_MS)
-                            break
+                            // [feat/subagent-budget-hardening] CONTINUE the
+                            // stream loop, not the turn loop: breaking out
+                            // would fall into the "tool-less turn" logic with
+                            // an empty toolCalls list, and the plan gate would
+                            // FINISH the run — recording a transient provider
+                            // failure as a completed task. One more attempt at
+                            // THIS turn is the retry; the next failure throws.
+                            continue
                         }
                         throw e  // fatal for this run — outer handler journals + reports
                     }
