@@ -427,6 +427,69 @@ class SubagentRunner(
             )
         }
 
+        // [feat/subagent-budget-hardening] CONTINUATION. A run stopped by
+        // its budget used to be finishable only by spawning the same task
+        // again — paying twice for every read and every dead end. The
+        // registry snapshot already holds the evidence, so a continuation
+        // just has to be told what exists.
+        //
+        // Accepted source: a TERMINAL run of THIS chat with the SAME skill.
+        // A live run is refused (join/wait instead — continuing it would run
+        // two agents over one workspace), and a different skill is refused
+        // (its tool allowlist and instructions do not describe this work).
+        val resumeRunId = args.optString("resume_run_id", "").trim()
+        val resumeSource = if (resumeRunId.isBlank()) {
+            null
+        } else {
+            val known = registry.runs.value
+            val source = known.firstOrNull { it.id == resumeRunId }
+                ?: return ToolExecutionResult(
+                    "Error: resume_run_id '$resumeRunId' is not a run of this chat. " +
+                        "Only the last ${SubagentRunRegistry.MAX_RETAINED_RUNS} runs are retained — " +
+                        "recent run ids: " +
+                        known.takeLast(5).joinToString(", ") { it.id }.ifEmpty { "(none)" } +
+                        ". Start a fresh spawn if the evidence is not here.",
+                    false,
+                    toolTitle = title,
+                )
+            if (source.status == SubagentRunRegistry.RunStatus.RUNNING ||
+                source.status == SubagentRunRegistry.RunStatus.QUEUED
+            ) {
+                return ToolExecutionResult(
+                    "Error: run '$resumeRunId' is still ${source.status}. " +
+                        "Continue a run only after it stops — join_subagents / wait_any on " +
+                        "it instead of resuming it.",
+                    false,
+                    toolTitle = title,
+                )
+            }
+            if (source.skillId != skill.id) {
+                return ToolExecutionResult(
+                    "Error: run '$resumeRunId' belongs to sub-agent skill " +
+                        "'${source.skillName}' (id ${source.skillId}), not '${skill.name}'. " +
+                        "Resume it with skill_name = '${source.skillName}', or start a fresh " +
+                        "spawn if this is genuinely different work.",
+                    false,
+                    toolTitle = title,
+                )
+            }
+            source
+        }
+        val resumeArtifactsDir = resumeSource?.let { SubagentSkill.artifactsDirFor(it.id) }.orEmpty()
+        val resumeContext = resumeSource?.let { src ->
+            SubagentResume.context(
+                previousRunId = src.id,
+                skillName = src.skillName,
+                statusLabel = src.status.name,
+                stopReason = src.error.orEmpty(),
+                turns = src.turn,
+                maxTurns = src.maxTurns,
+                resultText = src.resultText,
+                artifacts = src.artifacts,
+                workspaceDir = SubagentSkill.artifactsDirFor(src.id),
+            )
+        }.orEmpty()
+
         if (!deps.isSkillEnabledForSession(skill.id)) {
             return ToolExecutionResult(
                 "Error: Skill '$skillName' is disabled for this session" + rosterSuffix(),
@@ -818,6 +881,9 @@ class SubagentRunner(
             return deduplicatedSpawnResult(outcome.run.id, skillName, batchGroupId = groupId)
         }
         val run = outcome.run
+        if (resumeSource != null) {
+            registry.appendNotice(run.id, "[resumed from ${resumeSource.id}]")
+        }
         val job = SubagentOrchestration.SubagentJob(
             runId = run.id,
             skillId = skill.id,
@@ -863,6 +929,8 @@ class SubagentRunner(
                                 modelMaxOutputTokens = modelMaxOutputTokens,
                                 spreadLabel = spreadLabel,
                                 extraInstructions = extraInstructions,
+                                resumeContext = resumeContext,
+                                resumeArtifactsDir = resumeArtifactsDir,
                             )
                         }
                     }
@@ -977,6 +1045,8 @@ class SubagentRunner(
                             modelMaxOutputTokens = modelMaxOutputTokens,
                             spreadLabel = spreadLabel,
                             extraInstructions = extraInstructions,
+                            resumeContext = resumeContext,
+                            resumeArtifactsDir = resumeArtifactsDir,
                         )
                     }
                     // [fix/subagent-inline-double-render] The report stored on
@@ -1501,6 +1571,18 @@ class SubagentRunner(
          * every downstream surface show the same story.
          */
         spreadLabel: String = "",
+        /**
+         * [feat/subagent-budget-hardening] The continuation hand-off for a
+         * resumed run (empty for a fresh spawn). Prepended to the task so
+         * the model knows what already exists instead of re-deriving it.
+         */
+        resumeContext: String = "",
+        /**
+         * The resumed run's artifacts directory. The continuation writes
+         * THERE, not into a new per-run directory, so one deliverable does
+         * not end up split across two numbered folders.
+         */
+        resumeArtifactsDir: String = "",
     ): ToolExecutionResult {
         // [T-subagent-runtime-preamble] Inject a short runtime preamble
         // (current date/time + durable artifacts root) ahead of the skill
@@ -1514,7 +1596,14 @@ class SubagentRunner(
         // same-named deliverables (`report.md`, `data.csv`) were the exact
         // collision this closes: with N parallel research agents, last
         // writer won and the parent could not attribute a file to a run.
-        val artifactsDir = SubagentSkill.artifactsDirFor(run.id)
+        // [feat/subagent-budget-hardening] A continuation keeps writing into
+        // the PREVIOUS run's directory: the deliverable must stay in one
+        // place, and the paths quoted in its hand-off are that directory's.
+        val artifactsDir = if (resumeArtifactsDir.isNotBlank()) {
+            resumeArtifactsDir
+        } else {
+            SubagentSkill.artifactsDirFor(run.id)
+        }
         runCatching {
             val dirFile = PRootKernel.resolveSessionHostPath(sessionId, artifactsDir, context)
             if (dirFile != null) dirFile.mkdirs()
@@ -1580,7 +1669,18 @@ class SubagentRunner(
             deps.providerLabel(provider) +
                 (if (spreadLabel.isNotBlank()) " [$spreadLabel]" else ""),
         )
-        val history = mutableListOf(LLMMessage(role = LLMMessage.Role.USER, content = query))
+        val history = mutableListOf(
+            LLMMessage(
+                role = LLMMessage.Role.USER,
+                content = if (resumeContext.isBlank()) {
+                    query
+                } else {
+                    // One USER message: hand-off + the remaining task. Keeping
+                    // it single preserves alternation from the first request.
+                    "$resumeContext\n\n---\n\nWhat is left to do:\n$query"
+                },
+            ),
+        )
 
         // [T-subagent-run-timeout] The absolute [deadlineNanos] arrives from
         // the spawn site — but since [fix/subagent-queue-budget] it is
@@ -1730,6 +1830,19 @@ class SubagentRunner(
                 }
                 turns++
                 registry.turnStarted(run.id, turns)
+                // [feat/subagent-budget-hardening] The budget belongs in the
+                // SYSTEM prompt, not history: appending a user turn here
+                // would collide with the tool-result USER tail and break the
+                // wire alternation (see SubagentSteer for the full story).
+                // It is re-stated at 70 % / 90 % so the model wraps up with a
+                // report instead of dying mid-task.
+                val effectiveSystemPrompt = systemPromptWithPlan +
+                    SubagentSkill.budgetNote(
+                        remainingSeconds = runSecondsLeft(deadlineNanos),
+                        totalSeconds = timeoutSeconds,
+                        turnsLeft = (config.maxTurns - turns).coerceAtLeast(0),
+                        maxTurns = config.maxTurns,
+                    )
                 // [port/upstream-subagent-steer] Deliver queued course
                 // corrections at the TURN BOUNDARY — never mid-stream and
                 // never mid-tool-call. Two properties matter here:
@@ -1800,7 +1913,7 @@ class SubagentRunner(
                             instance = instance,
                             model = provider.model,
                             messages = history.toList(),
-                            systemPrompt = systemPromptWithPlan,
+                            systemPrompt = effectiveSystemPrompt,
                             // [T-subagent-output-from-model] Per-turn output
                             // ceiling = the run model's configured Max Output
                             // Tokens, clamped into the remaining context window
@@ -2152,6 +2265,10 @@ class SubagentRunner(
                                 callId = call.id,
                                 runId = run.id,
                                 artifacts = artifacts,
+                                // [feat/subagent-budget-hardening] The shell
+                                // branch caps its own timeout with this, so a
+                                // single command cannot eat the whole run.
+                                budgetLeftSeconds = runSecondsLeft(deadlineNanos),
                                 // [fix/subagent-allowed-tools-enforcement] The
                                 // skill's allowlist travels with the run, so the
                                 // runtime gate sees the same list the schema
@@ -2887,6 +3004,16 @@ class SubagentRunner(
         // command itself has to be checked. An EMPTY set means the skill
         // declared no scope, which means NO MCP access.
         mcpServers: Set<String> = emptySet(),
+        /**
+         * [feat/subagent-budget-hardening] Seconds left in the run's
+         * wall-clock budget, or [Int.MAX_VALUE] when unknown (direct callers,
+         * tests). The loop only checks the deadline at TURN boundaries, so a
+         * shell command that outlives the budget still runs to completion —
+         * a 900 s cap inside a 2-minute run burns 15 minutes and only then
+         * reports TIMED_OUT. Passed here so the shell branch can refuse or
+         * shorten it.
+         */
+        budgetLeftSeconds: Int = Int.MAX_VALUE,
     ): ToolExecutionResult {
         if (name in SubagentSkill.FORBIDDEN_TOOLS) {
             return forbiddenToolResult(name)
@@ -2913,7 +3040,13 @@ class SubagentRunner(
             )
         }
         return when (name) {
-            "shell_execute" -> executeSubagentShell(argsJson, callId, runId, mcpServers)
+            "shell_execute" -> executeSubagentShell(
+                argsJson = argsJson,
+                stepId = callId,
+                runId = runId,
+                mcpServers = mcpServers,
+                budgetLeftSeconds = budgetLeftSeconds,
+            )
             "browser_use" -> deps.executeBrowserUse(argsJson)
             // [T-subagent-websearch] Same executor the main loop uses
             // (configured engine + render wait + readable extraction), so a
@@ -3054,6 +3187,17 @@ class SubagentRunner(
     }
 
     /**
+     * [feat/subagent-budget-hardening] Whole seconds left before
+     * [deadlineNanos], floored at 0. The shell branch caps its own timeout
+     * with this: the loop's deadline is only checked at TURN boundaries, so
+     * without the cap a command could outlive the entire run.
+     */
+    private fun runSecondsLeft(deadlineNanos: Long): Int =
+        ((deadlineNanos - System.nanoTime()) / 1_000_000_000L)
+            .coerceIn(0L, Int.MAX_VALUE.toLong())
+            .toInt()
+
+    /**
      * [T-subagent-parity] shell_execute inside a sub-agent: built on
      * [ExecutionCoordinator] with per-line streaming into the registry's
      * current step. Mirrors the main agent's shell path (timeout clamping,
@@ -3068,13 +3212,47 @@ class SubagentRunner(
         // reach. See the note at the call site: MCP is a SHELL capability,
         // so this is enforced on the command, not on a tool list.
         mcpServers: Set<String> = emptySet(),
+        /**
+         * [feat/subagent-budget-hardening] Remaining wall-clock seconds for
+         * the run, or [Int.MAX_VALUE] when unknown. See the parameter of the
+         * same name on [executeSubagentTool].
+         */
+        budgetLeftSeconds: Int = Int.MAX_VALUE,
     ): ToolExecutionResult {
         val args = try { JSONObject(argsJson) } catch (_: Exception) { JSONObject() }
         val command = args.optString("command", "")
-        val timeoutSec = args.optInt("timeout", 900).coerceIn(1, 900)
         val toolTitle = args.optString("tool_title", "shell_execute")
         if (command.isBlank()) {
             return ToolExecutionResult("Error: 'command' is required", false, toolTitle = toolTitle)
+        }
+        // [feat/subagent-budget-hardening] A command must never outlive the
+        // run. Two rules:
+        //  1. not enough time left to START one at all -> refuse, and tell
+        //     the model what to do instead (write the report);
+        //  2. otherwise cap the request at (remaining - reserve), so the last
+        //     turn still has time to report before the deadline fires.
+        if (budgetLeftSeconds != Int.MAX_VALUE &&
+            budgetLeftSeconds <= SubagentSkill.MIN_SHELL_BUDGET_SECONDS
+        ) {
+            AppLogger.warning(
+                TAG,
+                "[Subagent] shell REFUSED — only ${budgetLeftSeconds}s of budget left",
+            )
+            return ToolExecutionResult(
+                "Error: only ${budgetLeftSeconds}s of this run's wall-clock budget remain — " +
+                    "there is no time to start a shell command. Stop calling tools and " +
+                    "write your final report NOW.",
+                false,
+                toolTitle = toolTitle,
+            )
+        }
+        val requestedTimeoutSec = args.optInt("timeout", 900).coerceIn(1, 900)
+        val timeoutSec = if (budgetLeftSeconds == Int.MAX_VALUE) {
+            requestedTimeoutSec
+        } else {
+            requestedTimeoutSec.coerceAtMost(
+                (budgetLeftSeconds - SubagentSkill.SHELL_BUDGET_RESERVE_SECONDS).coerceAtLeast(1),
+            )
         }
         // [feat/subagent-roster-routing] The MCP scope gate. Refused BEFORE
         // the command runs, so an out-of-scope server is never contacted.

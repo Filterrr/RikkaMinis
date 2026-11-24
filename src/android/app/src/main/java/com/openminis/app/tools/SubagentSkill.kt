@@ -286,6 +286,20 @@ object SubagentSkill {
     const val MIN_MINUTES = 1
 
     /**
+     * [feat/subagent-budget-hardening] No shell command may START with less
+     * than this much wall clock left in the run: there would be no time left
+     * to report, and the run would end TIMED_OUT having learned nothing new.
+     */
+    const val MIN_SHELL_BUDGET_SECONDS = 60
+
+    /**
+     * [feat/subagent-budget-hardening] Headroom kept back from a shell
+     * timeout so the final turn can still write its report instead of being
+     * cut off by the deadline mid-tool.
+     */
+    const val SHELL_BUDGET_RESERVE_SECONDS = 30
+
+    /**
      * Maximum parent-declared budget: the wall-clock ceiling expressed in
      * minutes (60 at the shipped 3600s [MAX_TIMEOUT_SECONDS]). A spawn that
      * asks for more is clamped and the clamp is reported in the tool result.
@@ -293,13 +307,20 @@ object SubagentSkill {
     const val MAX_MINUTES = MAX_TIMEOUT_SECONDS / 60
 
     /**
-     * Turn ceiling for a derived budget. Matches the parser's own clamp for
-     * `max_turns` ([parseSubagentConfig] → coerceIn(1, 100)): the token
-     * reservation for a run is `turns × per-turn output ceiling`, so an
-     * unbounded turns number would reserve the parent's whole pool and be
-     * refused by the budget guard.
+     * [feat/subagent-parent-minutes-budget] Turn ceiling for a derived
+     * budget: one hour at the calibrated 15 s/turn pace.
+     *
+     * The old 100 was explained as a token-reservation bound, but the
+     * reservation is currently inert on purpose — `ChatViewModel` builds the
+     * parent budget with `maxEstimatedTokens = null`, and
+     * [com.openminis.app.agent.runtime.TokenBudgetChildGuard] is a permissive
+     * no-op until that dimension is switched on. A 100-turn ceiling therefore
+     * protected nothing while making a parent's honest "40 minutes" estimate
+     * undeliverable (100 × 15 s = 25 min). 240 covers the full 3600 s wall
+     * clock; if the token dimension is ever enabled, cap by TOKENS there —
+     * not by silently shortening the turns the parent asked for.
      */
-    const val MAX_TURNS_CEILING = 100
+    const val MAX_TURNS_CEILING = 240
 
     /** Where a run's budget came from — surfaced so the parent can see it. */
     enum class BudgetSource {
@@ -395,6 +416,66 @@ object SubagentSkill {
             parentMinutes = null,
             source = BudgetSource.SKILL_TURNS,
         )
+    }
+
+    /** Budget fraction at which the child is told to start wrapping up. */
+    const val BUDGET_WARN_FRACTION = 0.7
+
+    /** Budget fraction at which the child is told to write the report NOW. */
+    const val BUDGET_URGENT_FRACTION = 0.9
+
+    /**
+     * [feat/subagent-budget-hardening] The in-run budget note, re-stated as
+     * the run approaches its limits.
+     *
+     * Why this exists: the runtime preamble tells the child its budget ONCE,
+     * at birth. Measured behaviour is that the model then works as if it were
+     * unbounded — it discovers the limit by dying at it, and the parent gets
+     * TIMED_OUT with whatever was on screen. A short note appended to the
+     * SYSTEM prompt (not history, so alternation is untouched) at 70 % and
+     * 90 % is enough to change the shape of the ending: findings on disk,
+     * a report instead of a corpse.
+     *
+     * @param remainingSeconds wall clock left in the run.
+     * @param totalSeconds the run's wall clock budget (<= 0 = unknown).
+     * @param turnsLeft model turns left.
+     * @param maxTurns the turn budget (<= 0 = unknown).
+     * @return "" while there is plenty of both; one line otherwise.
+     */
+    fun budgetNote(
+        remainingSeconds: Int,
+        totalSeconds: Int,
+        turnsLeft: Int,
+        maxTurns: Int,
+    ): String {
+        if (remainingSeconds <= 0) return ""
+        val timeKnown = totalSeconds > 0
+        val elapsedFraction = if (timeKnown) {
+            1.0 - (remainingSeconds.toDouble() / totalSeconds.toDouble())
+        } else {
+            0.0
+        }
+        val turnLeftFraction = if (maxTurns > 0) {
+            turnsLeft.toDouble() / maxTurns.toDouble()
+        } else {
+            1.0
+        }
+        val urgent = elapsedFraction >= BUDGET_URGENT_FRACTION ||
+            (maxTurns > 0 && turnsLeft <= 2)
+        val warn = elapsedFraction >= BUDGET_WARN_FRACTION ||
+            (maxTurns > 0 && turnLeftFraction <= 0.25)
+        if (!urgent && !warn) return ""
+
+        val minutes = if (remainingSeconds >= 60) "${remainingSeconds / 60} min" else "${remainingSeconds}s"
+        val turnsText = if (maxTurns > 0) " / $turnsLeft turn(s)" else ""
+        return if (urgent) {
+            "\n\n[Budget] ~$minutes$turnsText left — STOP starting new work. " +
+                "Write the final report NOW with what you already have; " +
+                "anything unfinished belongs in `gaps:`, not in another tool call."
+        } else {
+            "\n\n[Budget] ~$minutes$turnsText left. Write intermediate findings to disk now " +
+                "and reserve time to write the final report — do not leave the report to the last turn."
+        }
     }
 
     /**
@@ -669,6 +750,23 @@ object SubagentSkill {
                     "over-estimate only wastes headroom, so when genuinely " +
                     "unsure round UP.",
             ),
+            // [feat/subagent-budget-hardening] Continuation instead of a
+            // re-run: a budget-stopped task keeps its evidence (artifacts on
+            // disk + partial report), so paying for the same reads twice is
+            // pure waste.
+            "resume_run_id" to AgentToolParam(
+                "string",
+                "Optional. Resume a PREVIOUS run of this chat instead of " +
+                    "starting from zero: pass its run_id (returned by spawn_agent, or " +
+                    "listed by subagent_status) and put only WHAT IS LEFT in `query`. " +
+                    "The run must be finished (TIMED_OUT / FAILED / CANCELLED — a live run " +
+                    "is refused: join it instead) and must belong to the same skill_name. " +
+                    "The continuation is handed the previous partial report, the artifacts " +
+                    "it already wrote and their directory, so it should verify those files " +
+                    "rather than redo the work — and it gets a FRESH max_minutes budget. " +
+                    "Only the last ${SubagentRunRegistry.MAX_RETAINED_RUNS} runs of the chat " +
+                    "are retained; an unknown id is an error, not a fresh spawn.",
+            ),
             "run_until" to AgentToolParam(
                 "string",
                 "Optional. 'done' (default): return only when the sub-agent " +
@@ -750,8 +848,8 @@ object SubagentSkill {
         ),
         required = listOf("tool_title", "skill_name", "query", "max_minutes"),
         propertyOrdering = listOf(
-            "tool_title", "skill_name", "query", "max_minutes", "run_until", "model",
-            "timeout_seconds", "progress_report",
+            "tool_title", "skill_name", "query", "max_minutes", "resume_run_id",
+            "run_until", "model", "timeout_seconds", "progress_report",
         ),
     )
 
@@ -817,7 +915,7 @@ object SubagentSkill {
 
         return SubagentConfig(
             isSubagent = fm.boolean("subagent") ?: false,
-            maxTurns = (fm.int("max_turns") ?: DEFAULT_MAX_TURNS).coerceIn(1, 100),
+            maxTurns = (fm.int("max_turns") ?: DEFAULT_MAX_TURNS).coerceIn(1, MAX_TURNS_CEILING),
             allowedTools = fm.list("allowed_tools")?.toSet(),
             maxParallel = (fm.int("max_parallel") ?: 1).coerceIn(1, MAX_PARALLEL_CAP),
             thinkingLevel = parseThinkingLevelName(fm.string("thinking").orEmpty()),

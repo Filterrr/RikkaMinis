@@ -61,7 +61,7 @@ class SubagentMinutesBudgetTest {
             SubagentSkill.MAX_TURNS_CEILING,
             SubagentSkill.turnBudgetForTimeoutSeconds(SubagentSkill.MAX_TIMEOUT_SECONDS),
         )
-        assertEquals(100, SubagentSkill.turnBudgetForTimeoutSeconds(1_000_000))
+        assertEquals(240, SubagentSkill.turnBudgetForTimeoutSeconds(1_000_000))
     }
 
     @Test
@@ -180,5 +180,34 @@ class SubagentMinutesBudgetTest {
                 "\"tool_title\", \"skill_name\", \"query\", \"max_minutes\", \"run_until\", \"model\",",
             ),
         )
+    }
+
+    // ── in-run budget note ──────────────────────────────────────────────
+
+    @Test
+    fun `no note while the run has plenty of time and turns`() {
+        assertEquals("", SubagentSkill.budgetNote(500, 600, 30, 40))
+    }
+
+    @Test
+    fun `the note starts at seventy percent and gets urgent at ninety`() {
+        val warn = SubagentSkill.budgetNote(150, 600, 20, 40)
+        assertTrue(warn.contains("70") || warn.contains("min"))
+        assertTrue(warn.contains("intermediate findings"))
+        val urgent = SubagentSkill.budgetNote(40, 600, 8, 40)
+        assertTrue(urgent.contains("FINAL REPORT") || urgent.contains("final report NOW") || urgent.contains("NOW"))
+    }
+
+    @Test
+    fun `the last two turns are always urgent regardless of the clock`() {
+        val note = SubagentSkill.budgetNote(500, 600, 2, 40)
+        assertTrue(note.contains("NOW"))
+    }
+
+    @Test
+    fun `unknown clock or turn budget degrades to silence, never to a wrong number`() {
+        assertEquals("", SubagentSkill.budgetNote(0, 0, 0, 0))
+        // Unknown time (total 0) with known turns: still warns near the end.
+        assertTrue(SubagentSkill.budgetNote(300, 0, 2, 40).contains("NOW"))
     }
 }
