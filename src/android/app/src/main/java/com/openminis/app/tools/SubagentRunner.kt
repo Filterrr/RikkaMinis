@@ -678,48 +678,32 @@ class SubagentRunner(
         // request additionally clamps into the remaining context window, see
         // [resolveSubagentTurnMaxTokens].
         val modelMaxOutputTokens = provider.effectiveMaxOutputTokens(provider.model)
+        // [feat/subagent-parent-minutes-budget] ONE budget question, answered
+        // by the parent: how many minutes does this task need? The wall clock
+        // IS that answer and the turn ceiling is DERIVED from it (≈15 s per
+        // turn), so the two cannot drift the way the old fixed `max_turns: 75`
+        // and the hand-tuned 1800 s default could.
+        //
+        // Priority: `max_minutes` wins; `timeout_seconds` may only TIGHTEN
+        // it. With no `max_minutes` the legacy path runs unchanged (skill
+        // `max_turns`, and a wall clock that can deliver it).
+        val runBudget = SubagentSkill.resolveRunBudget(
+            parentMinutes = args.optInt("max_minutes", 0),
+            explicitTimeoutSeconds = args.optInt("timeout_seconds", 0),
+            skillMaxTurns = config.maxTurns,
+        )
+        // Everything below this line must use `budgetConfig`, not `config`:
+        // config.maxTurns is the skill's fallback number, not this run's
+        // ceiling.
+        val budgetConfig = config.copy(maxTurns = runBudget.maxTurns)
+        val timeoutSeconds = runBudget.timeoutSeconds
         // Worst case a child can spend: every turn asking up to the (globally
         // capped) ceiling. Reserved against the parent's pool for the run's
         // lifetime, settled with the real usage at the end.
         val worstCaseChildTokens =
-            config.maxTurns.toLong() * subagentOutputCeiling(modelMaxOutputTokens).toLong()
+            budgetConfig.maxTurns.toLong() * subagentOutputCeiling(modelMaxOutputTokens).toLong()
 
-        // [T-subagent-run-timeout] Clamp per the tool contract. The default is
-        // deliberate: a detached run has no human watching it, so an
-        // unbounded loop is a cost and permit leak, not a feature.
-        //
-        // [T-subagent-queue-budget] The budget is an ABSOLUTE deadline from
-        // SPAWN time, not a stopwatch started when the permit lands. Two
-        // reasons, both observed in the wild (dogfood run subagent-1/2,
-        // 2026-09-14): a research run spent its whole 600s budget while the
-        // model loop was only half done, and with a per-execution stopwatch a
-        // queued spawn would silently extend that — "timeout_seconds: 600"
-        // meaning "600s plus unbounded waiting" is a lie the tool description
-        // must not tell. Inline spawns additionally cap how long they will
-        // SIT in the scheduler queue (see tryAcquire below): the parent turn
-        // is parked on this call returning, so queue time is user-visible
-        // freeze, not background progress.
-        // [feat/subagent-max-turns-75] The wall-clock budget must be able to
-        // deliver the skill's TURN budget. The run stops at whichever limit
-        // comes first, so a `max_turns: 75` skill under a 900s clock is
-        // killed at ~turn 60 and the parent sees a TIMED_OUT verdict that
-        // looks like the model gave up — when in fact it was never given the
-        // time it was promised.
-        //
-        // When the caller did NOT pick a timeout explicitly, the budget is
-        // raised to whatever the turn budget needs. When the caller DID pick
-        // one, their explicit choice wins — but the mismatch is reported in
-        // the runtime context so the sub-agent knows its real budget rather
-        // than discovering it by being cut off mid-task.
-        val requestedTimeout = args.optInt("timeout_seconds", 0)
-        val timeoutForTurnBudget = SubagentSkill.wallClockSecondsForTurnBudget(config.maxTurns)
-        val timeoutSeconds = if (requestedTimeout <= 0 && timeoutForTurnBudget != null) {
-            timeoutForTurnBudget.coerceAtLeast(SubagentSkill.DEFAULT_TIMEOUT_SECONDS)
-                .coerceIn(1, SubagentSkill.MAX_TIMEOUT_SECONDS)
-        } else {
-            args.optInt("timeout_seconds", SubagentSkill.DEFAULT_TIMEOUT_SECONDS)
-                .coerceIn(1, SubagentSkill.MAX_TIMEOUT_SECONDS)
-        }        // [fix/subagent-queue-budget] The run's wall-clock budget is NOT
+        // [fix/subagent-queue-budget] The run's wall-clock budget is NOT
         // consumed by the time it spends waiting for a concurrency slot. The
         // old code computed one absolute deadline at spawn time and handed it
         // to the scheduler, which used it for BOTH the queue wait and the
@@ -819,7 +803,7 @@ class SubagentRunner(
             skillName = skill.name,
             query = query,
             title = title,
-            maxTurns = config.maxTurns,
+            maxTurns = budgetConfig.maxTurns,
             sessionId = sessionId,
             groupId = groupId,
             queued = true,
@@ -866,7 +850,7 @@ class SubagentRunner(
                         registry.markExecuting(run.id)
                         executeLoopGuarded(run, worstCaseChildTokens, skill.name) {
                             executeLoop(
-                                run = run, skill = skill, config = config, skillName = skillName,
+                                run = run, skill = skill, config = budgetConfig, skillName = skillName,
                                 query = query, title = title, runUntil = SubagentSkill.RUN_UNTIL_DONE,
                                 sessionId = sessionId, provider = provider, subagentTools = subagentTools,
                                 timeoutSeconds = timeoutSeconds,
@@ -980,7 +964,7 @@ class SubagentRunner(
                 try {
                     val result = executeLoopGuarded(run, worstCaseChildTokens, skill.name) {
                         executeLoop(
-                            run = run, skill = skill, config = config, skillName = skillName,
+                            run = run, skill = skill, config = budgetConfig, skillName = skillName,
                             query = query, title = title, runUntil = runUntil,
                             sessionId = sessionId, provider = provider, subagentTools = subagentTools,
                             timeoutSeconds = timeoutSeconds,

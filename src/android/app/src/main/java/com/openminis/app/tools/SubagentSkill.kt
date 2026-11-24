@@ -200,13 +200,26 @@ object SubagentSkill {
      * 40-turn run "had time to spare" while a 75-turn run silently died at
      * turn 60 with a TIMED_OUT verdict that looks like the model's fault.
      */
+    /**
+     * [feat/subagent-parent-minutes-budget] This is now the LEGACY default:
+     * it applies only when the caller supplies neither `max_minutes` nor
+     * `timeout_seconds`. The normal path derives the wall clock from the
+     * parent's minute estimate, so no hand-tuned default can fall out of
+     * step with a turn number again.
+     */
     const val DEFAULT_TIMEOUT_SECONDS = 1800
     const val MAX_TIMEOUT_SECONDS = 3600
 
     /**
-     * [feat/subagent-max-turns-75] The turn budget the shipped sub-agent
-     * skills declare. This is the NUMBER the default wall-clock budget has
-     * to be able to deliver — see [wallClockSecondsForTurnBudget].
+     * [feat/subagent-max-turns-75] The fallback turn budget the shipped
+     * sub-agent skills declare. This is the NUMBER the legacy wall-clock
+     * path has to be able to deliver — see [wallClockSecondsForTurnBudget].
+     *
+     * [feat/subagent-parent-minutes-budget] It is no longer the run's
+     * budget: the spawning parent's `max_minutes` answer decides (see
+     * [resolveRunBudget]). This constant survives as the shipped fallback
+     * the wiring guards pin, so a caller that supplies no estimate cannot
+     * end up unbounded.
      */
     const val SHIPPED_SUBAGENT_MAX_TURNS = 75
 
@@ -249,6 +262,153 @@ object SubagentSkill {
         // relay are the norm, not the exception.
         val required = turns * SECONDS_PER_TURN_ESTIMATE * 5 / 4
         return if (required > MAX_TIMEOUT_SECONDS) null else required
+    }
+
+    // ── [feat/subagent-parent-minutes-budget] TIME IS THE BUDGET ─────────
+    //
+    // The parent agent now answers ONE question per spawn: how many minutes
+    // does this task need? The turn budget is DERIVED from that answer
+    // instead of being a fixed number baked into a skill's frontmatter.
+    //
+    // Why: `max_turns: 75` was a promise about a NUMBER OF ROUND-TRIPS, and
+    // the only thing the parent can actually judge before delegating is how
+    // long the work will take ("this is a ten-minute repo sweep"). Reading
+    // a 75-turn budget told the parent nothing it could reason about, which
+    // is why the wall clock and the turn budget had to be hand-kept in step
+    // (DEFAULT_TIMEOUT_SECONDS 900 → 1800). One parent-supplied number
+    // derives both, so they cannot drift.
+    //
+    // The skill's `max_turns` is NOT removed: it stays as the fallback when
+    // a caller does not supply `max_minutes` (older callers, tests, direct
+    // API use). Nothing in the shipped path relies on it any more.
+
+    /** Minimum parent-declared budget: one minute. */
+    const val MIN_MINUTES = 1
+
+    /**
+     * Maximum parent-declared budget: the wall-clock ceiling expressed in
+     * minutes (60 at the shipped 3600s [MAX_TIMEOUT_SECONDS]). A spawn that
+     * asks for more is clamped and the clamp is reported in the tool result.
+     */
+    const val MAX_MINUTES = MAX_TIMEOUT_SECONDS / 60
+
+    /**
+     * Turn ceiling for a derived budget. Matches the parser's own clamp for
+     * `max_turns` ([parseSubagentConfig] → coerceIn(1, 100)): the token
+     * reservation for a run is `turns × per-turn output ceiling`, so an
+     * unbounded turns number would reserve the parent's whole pool and be
+     * refused by the budget guard.
+     */
+    const val MAX_TURNS_CEILING = 100
+
+    /** Where a run's budget came from — surfaced so the parent can see it. */
+    enum class BudgetSource {
+        /** Derived from the parent's `max_minutes` answer. */
+        PARENT_MINUTES,
+
+        /** Legacy fallback: the skill's `max_turns` frontmatter. */
+        SKILL_TURNS,
+    }
+
+    /**
+     * A run's resolved budget: the model-turn ceiling the runner loop
+     * enforces and the wall-clock seconds the scheduler/deadline enforces.
+     *
+     * The two travel TOGETHER from now on. A run stops at whichever comes
+     * first, so deriving one without the other is how a "30-minute" task
+     * dies at turn 60 with a TIMED_OUT verdict that looks like the model
+     * gave up.
+     */
+    data class RunBudget(
+        val maxTurns: Int,
+        val timeoutSeconds: Int,
+        /** The parent's minute answer, or null when the legacy path ran. */
+        val parentMinutes: Int?,
+        val source: BudgetSource,
+    )
+
+    /**
+     * Turns that fit in [seconds] at the calibrated [SECONDS_PER_TURN_ESTIMATE]
+     * pace, clamped to [1, MAX_TURNS_CEILING].
+     *
+     * Rounds UP: a 61-second budget must allow one turn, not zero.
+     */
+    fun turnBudgetForTimeoutSeconds(seconds: Int): Int {
+        val bounded = seconds.coerceIn(1, MAX_TIMEOUT_SECONDS)
+        val raw = (bounded + SECONDS_PER_TURN_ESTIMATE - 1) / SECONDS_PER_TURN_ESTIMATE
+        return raw.coerceIn(1, MAX_TURNS_CEILING)
+    }
+
+    /** Turns that fit in [minutes] — the parent-facing form. */
+    fun turnBudgetForMinutes(minutes: Int): Int =
+        turnBudgetForTimeoutSeconds(minutes.coerceIn(MIN_MINUTES, MAX_MINUTES) * 60)
+
+    /**
+     * Resolve the budget for one spawn.
+     *
+     * Priority:
+     *  1. `max_minutes` > 0 — the parent judged the task; the wall-clock
+     *     budget is that many minutes, the turn budget is derived from it.
+     *     An explicit `timeout_seconds` still acts as a CAP (never as an
+     *     extension): a parent that says "10 minutes" and also passes
+     *     `timeout_seconds: 300` gets 5 minutes, because both were stated
+     *     ceilings and the tighter one is the honest one.
+     *  2. `max_minutes` absent — legacy behaviour, unchanged: the skill's
+     *     `max_turns` sets the turns, and the wall clock is whatever can
+     *     deliver them (or the caller's explicit `timeout_seconds`).
+     *
+     * @param parentMinutes `max_minutes` from the spawn args; <= 0 = absent.
+     * @param explicitTimeoutSeconds `timeout_seconds`; <= 0 = absent.
+     * @param skillMaxTurns the skill's parsed `max_turns` (legacy fallback).
+     */
+    fun resolveRunBudget(
+        parentMinutes: Int,
+        explicitTimeoutSeconds: Int,
+        skillMaxTurns: Int,
+    ): RunBudget {
+        if (parentMinutes > 0) {
+            val minutes = parentMinutes.coerceIn(MIN_MINUTES, MAX_MINUTES)
+            val asked = minutes * 60
+            val timeoutSeconds = if (explicitTimeoutSeconds > 0) {
+                minOf(asked, explicitTimeoutSeconds.coerceIn(1, MAX_TIMEOUT_SECONDS))
+            } else {
+                asked
+            }
+            return RunBudget(
+                maxTurns = turnBudgetForTimeoutSeconds(timeoutSeconds),
+                timeoutSeconds = timeoutSeconds,
+                parentMinutes = minutes,
+                source = BudgetSource.PARENT_MINUTES,
+            )
+        }
+        val turns = skillMaxTurns.coerceIn(1, MAX_TURNS_CEILING)
+        val timeoutSeconds = if (explicitTimeoutSeconds > 0) {
+            explicitTimeoutSeconds.coerceIn(1, MAX_TIMEOUT_SECONDS)
+        } else {
+            (wallClockSecondsForTurnBudget(turns) ?: 0)
+                .coerceAtLeast(DEFAULT_TIMEOUT_SECONDS)
+                .coerceIn(1, MAX_TIMEOUT_SECONDS)
+        }
+        return RunBudget(
+            maxTurns = turns,
+            timeoutSeconds = timeoutSeconds,
+            parentMinutes = null,
+            source = BudgetSource.SKILL_TURNS,
+        )
+    }
+
+    /**
+     * One-line description of a resolved budget, for the spawn tool result /
+     * runtime context. Kept here so the wording cannot drift between the two
+     * places that render it.
+     */
+    fun describeBudget(budget: RunBudget): String = when (budget.source) {
+        BudgetSource.PARENT_MINUTES ->
+            "${budget.parentMinutes} min budget (parent estimate) → " +
+                "${budget.timeoutSeconds}s wall clock / ${budget.maxTurns} turns"
+        BudgetSource.SKILL_TURNS ->
+            "skill max_turns fallback → ${budget.maxTurns} turns / " +
+                "${budget.timeoutSeconds}s wall clock"
     }
 
     /**
@@ -356,6 +516,16 @@ object SubagentSkill {
      */
     data class SubagentConfig(
         val isSubagent: Boolean = false,
+        /**
+         * [feat/subagent-parent-minutes-budget] LEGACY FALLBACK ONLY.
+         *
+         * This used to BE the run's budget. It is now what the run falls back
+         * to when the spawning parent supplies no `max_minutes` estimate —
+         * the normal path derives the turn ceiling (and the wall clock) from
+         * that answer via [resolveRunBudget]. Kept parsed so older skills,
+         * older callers and direct API use keep working unchanged, and so a
+         * task with no duration estimate still has SOME bound.
+         */
         val maxTurns: Int = DEFAULT_MAX_TURNS,
         /** Null = allow all non-FORBIDDEN tools. Non-null = explicit allowlist. */
         val allowedTools: Set<String>? = null,
@@ -432,6 +602,11 @@ object SubagentSkill {
         description = "Spawn a sub-agent with its own system prompt, tool set, " +
             "and budget. The sub-agent runs independently and returns its final " +
             "result. Use this to delegate complex sub-tasks to a focused agent. " +
+            "You MUST judge the run's budget yourself: pass `max_minutes` — how " +
+            "long this task will take — and the wall clock AND the turn ceiling " +
+            "are derived from your answer (~15 s per turn). Estimate the work, " +
+            "and round UP when unsure: an under-estimate kills a healthy run " +
+            "mid-task as TIMED_OUT. " +
             "The skill must be defined with `subagent: true` in its SKILL.md " +
             "frontmatter and must already be installed and enabled. " +
             "Recursive spawn_agent is forbidden. " +
@@ -470,6 +645,29 @@ object SubagentSkill {
                 "The task, question, or instruction to give to the sub-agent. " +
                     "Make it self-contained: the sub-agent cannot see this " +
                     "conversation and only knows what you write here.",
+            ),
+            // [feat/subagent-parent-minutes-budget] THE budget question.
+            // The skill's fixed `max_turns` is no longer the run's budget —
+            // YOU decide, per task, how many minutes this delegation needs,
+            // and both the wall clock and the turn ceiling are derived from
+            // your answer. Judge the WORK, not the number of round-trips:
+            // a couple of commands is 1-2 minutes, a multi-step repo sweep
+            // 5-10, deep research or a rebuild-and-verify loop 15-30.
+            "max_minutes" to AgentToolParam(
+                "integer",
+                "REQUIRED. How many minutes this sub-agent task needs, in " +
+                    "your judgement ($MIN_MINUTES-$MAX_MINUTES; larger values " +
+                    "are clamped). This is the run's ONE budget: the " +
+                    "wall-clock cap is this many minutes and the turn " +
+                    "ceiling is derived from it (~$SECONDS_PER_TURN_ESTIMATE s " +
+                    "per turn). Estimate the WORK, not the round-trips — " +
+                    "1-2 min for a couple of commands or a single file read, " +
+                    "5-10 min for a multi-step file/code sweep, 15-30 min for " +
+                    "deep research or a rebuild-and-verify loop, 45-60 min " +
+                    "only for genuinely long batches. An under-estimate kills " +
+                    "a healthy run mid-task with a TIMED_OUT verdict; an " +
+                    "over-estimate only wastes headroom, so when genuinely " +
+                    "unsure round UP.",
             ),
             "run_until" to AgentToolParam(
                 "string",
@@ -513,12 +711,19 @@ object SubagentSkill {
             // unattended detached run could keep calling tools forever (each
             // turn is fine, the LOOP is not), and a hung sub-agent held a
             // scheduler permit nobody else could take.
+            //
+            // [feat/subagent-parent-minutes-budget] Normally OMIT this: the
+            // budget comes from `max_minutes`. When passed alongside it, it
+            // can only TIGHTEN the budget, never extend it — the topic of
+            // "how long does this take" belongs to the parent's estimate.
             "timeout_seconds" to AgentToolParam(
                 "integer",
-                "Optional. Wall-clock cap for the whole run (default " +
-                    "$DEFAULT_TIMEOUT_SECONDS; max $MAX_TIMEOUT_SECONDS). On " +
-                    "expiry the run is stopped and reported as TIMED_OUT with " +
-                    "its partial output — this is per RUN, not per tool call " +
+                "Optional, rarely needed. A tighter wall-clock cap for the " +
+                    "whole run, in seconds (max $MAX_TIMEOUT_SECONDS). Budget " +
+                    "comes from `max_minutes`; this can only SHORTEN it, and " +
+                    "never extends a claimed budget. On expiry the run is " +
+                    "stopped and reported as TIMED_OUT with its partial " +
+                    "output — this is per RUN, not per tool call " +
                     "(shell_execute has its own). Detached runs are also " +
                     "subject to it, so a background spawn cannot outlive its " +
                     "usefulness.",
@@ -543,10 +748,10 @@ object SubagentSkill {
                 enumValues = listOf("none", "frequent", "moderate"),
             ),
         ),
-        required = listOf("tool_title", "skill_name", "query"),
+        required = listOf("tool_title", "skill_name", "query", "max_minutes"),
         propertyOrdering = listOf(
-            "tool_title", "skill_name", "query", "run_until", "model", "timeout_seconds",
-            "progress_report",
+            "tool_title", "skill_name", "query", "max_minutes", "run_until", "model",
+            "timeout_seconds", "progress_report",
         ),
     )
 
@@ -559,6 +764,11 @@ object SubagentSkill {
      *   max_turns: 12
      *   allowed_tools: [file_read, file_write, shell_execute]
      *   max_parallel: 2
+     *
+     * [feat/subagent-parent-minutes-budget] `max_turns` is a FALLBACK budget:
+     * the run's real budget comes from the spawning parent's `max_minutes`
+     * answer (see [resolveRunBudget]). The key is still parsed so a skill
+     * spawned by a caller that supplies no estimate keeps a sane bound.
      *
      * (FORBIDDEN tools — spawn_agent and the memory tools — can never be
      * re-enabled via allowed_tools; see [AgentCapabilities].)
