@@ -1,6 +1,6 @@
 package com.openminis.app.tools
 
-import org.junit.Assert.assertEquals
+import com.openminis.app.ProductionSources
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
