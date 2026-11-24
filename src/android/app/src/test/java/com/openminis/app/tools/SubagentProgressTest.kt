@@ -131,10 +131,14 @@ class SubagentProgressTest {
         // interval (12 parent turns for 12 rewordings). The preview still
         // reaches the reader through body(); it just must not look like
         // progress.
+        val narrated = run(
+            steps = listOf(step("shell_execute", ToolStepStatus.RUNNING, "Run tests")),
+            resultText = "halfway there",
+        )
         assertEquals(
             "narration alone must not change the signature",
             SubagentProgress.signature(base),
-            SubagentProgress.signature(run(resultText = "halfway there")),
+            SubagentProgress.signature(narrated),
         )
     }
 
