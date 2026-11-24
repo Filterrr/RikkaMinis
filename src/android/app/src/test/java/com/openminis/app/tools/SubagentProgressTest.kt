@@ -70,10 +70,12 @@ class SubagentProgressTest {
     @Test
     fun `frequent waits for the interval`() {
         val lvl = SubagentProgress.Level.FREQUENT
-        // 14s after the last note: not yet, even though the run changed.
-        assertFalse(SubagentProgress.shouldEmit(lvl, 29_000L, 15_000L, "b", "a", 0))
-        // 15s and changed: yes.
-        assertTrue(SubagentProgress.shouldEmit(lvl, 30_000L, 15_000L, "b", "a", 0))
+        val last = 15_000L
+        val interval = SubagentProgress.FREQUENT_INTERVAL_MS
+        // One millisecond short: not yet, even though the run changed.
+        assertFalse(SubagentProgress.shouldEmit(lvl, last + interval - 1, last, "b", "a", 0))
+        // Exactly the interval and changed: yes.
+        assertTrue(SubagentProgress.shouldEmit(lvl, last + interval, last, "b", "a", 0))
     }
 
     @Test
