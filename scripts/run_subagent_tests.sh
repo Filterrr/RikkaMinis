@@ -81,6 +81,7 @@ for f in \
   tools/SubagentBudgetGuard.kt \
   tools/SubagentResume.kt \
   tools/SubagentResumeArchive.kt \
+  tools/SubagentBudgetCalibration.kt \
   tools/SubagentHistoryBudget.kt \
   tools/SubagentHistoryRepair.kt \
   tools/SubagentExecutedCallCount.kt \

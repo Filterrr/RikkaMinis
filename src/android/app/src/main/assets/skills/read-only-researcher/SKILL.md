@@ -1,9 +1,14 @@
 ---
 name: read-only-researcher
-version: 1.2.0
+version: 1.3.0
 description: Read-only investigation sub-agent — a general-agent variant with file_write, file_edit, and shell_execute disabled (allowed_tools: [file_read, read_image, browser_use]). Use it for research against untrusted or unknown sources where the sub-agent must not be able to mutate the filesystem or run arbitrary commands — evidence collection with an audit trail, cross-checking another agent's claims, first-contact reconnaissance of unknown sites. Returns the same structured report contract as general-agent (summary / status / key_findings / gaps / artifacts).
 subagent: true
 allowed_tools: [file_read, read_image, browser_use]
+# [feat/subagent-budget-hardening] Declares the run read-only. The
+# allowlist already hides write tools; this flag also makes the runtime
+# PROBE for files created through browser downloads/screenshots (which
+# the allowlist cannot see) and report them.
+read_only: true
 # Fallback only: the run budget now comes from the parent's
 # spawn_agent `max_minutes` answer; this number is used only when
 # the caller supplies no estimate.

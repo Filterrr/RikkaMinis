@@ -440,7 +440,7 @@ class SubagentRunner(
         val resumeRunId = args.optString("resume_run_id", "").trim()
         val resumeSource = if (resumeRunId.isBlank()) {
             null
-        } else when (val resolved = resolveResumeSource(resumeRunId, skillId = skill.id)) {
+        } else when (val resolved = resolveResumeSource(resumeRunId)) {
             is ResumeResolution.Refused ->
                 return ToolExecutionResult(resolved.message, false, toolTitle = title)
             is ResumeResolution.Found -> resolved.source
@@ -457,6 +457,10 @@ class SubagentRunner(
                 resultText = src.report,
                 artifacts = src.artifacts,
                 workspaceDir = src.workspaceDir,
+                // [feat/subagent-budget-hardening] Switching skills on resume
+                // is allowed; the hand-off says so and warns that the tool
+                // set may have changed.
+                resumedWithSkill = skill.name,
             )
         }.orEmpty()
 
@@ -720,10 +724,21 @@ class SubagentRunner(
         // Priority: `max_minutes` wins; `timeout_seconds` may only TIGHTEN
         // it. With no `max_minutes` the legacy path runs unchanged (skill
         // `max_turns`, and a wall clock that can deliver it).
+        // [feat/subagent-budget-hardening] Convert minutes at THIS chat's
+        // observed pace, not the global 15 s guess — see
+        // SubagentBudgetCalibration. Falls back to the default when there is
+        // not enough finished history.
+        val calibration = SubagentBudgetCalibration.estimate(
+            runs = registry.runs.value,
+            skillId = skill.id,
+            modelLabel = deps.providerLabel(provider),
+        )
         val runBudget = SubagentSkill.resolveRunBudget(
             parentMinutes = args.optInt("max_minutes", 0),
             explicitTimeoutSeconds = args.optInt("timeout_seconds", 0),
             skillMaxTurns = config.maxTurns,
+            secondsPerTurn = calibration?.secondsPerTurn
+                ?: SubagentSkill.SECONDS_PER_TURN_ESTIMATE,
         )
         // Everything below this line must use `budgetConfig`, not `config`:
         // config.maxTurns is the skill's fallback number, not this run's
@@ -733,8 +748,10 @@ class SubagentRunner(
         // Worst case a child can spend: every turn asking up to the (globally
         // capped) ceiling. Reserved against the parent's pool for the run's
         // lifetime, settled with the real usage at the end.
-        val worstCaseChildTokens =
-            budgetConfig.maxTurns.toLong() * subagentOutputCeiling(modelMaxOutputTokens).toLong()
+        val worstCaseChildTokens = SubagentSkill.worstCaseTokensForBudget(
+            maxTurns = budgetConfig.maxTurns,
+            perTurnOutputCeiling = subagentOutputCeiling(modelMaxOutputTokens),
+        )
 
         // [fix/subagent-queue-budget] The run's wall-clock budget is NOT
         // consumed by the time it spends waiting for a concurrency slot. The
@@ -837,6 +854,9 @@ class SubagentRunner(
             query = query,
             title = title,
             maxTurns = budgetConfig.maxTurns,
+            // [feat/subagent-budget-hardening] The UI shows remaining minutes
+            // from this, not only the turn counter.
+            timeoutSeconds = timeoutSeconds,
             sessionId = sessionId,
             groupId = groupId,
             queued = true,
@@ -853,6 +873,13 @@ class SubagentRunner(
         val run = outcome.run
         if (resumeSource != null) {
             registry.appendNotice(run.id, "[resumed from ${resumeSource.id}]")
+        }
+        calibration?.let {
+            registry.appendNotice(
+                run.id,
+                "[budget] ${it.secondsPerTurn}s/turn from ${it.samples} finished run(s), " +
+                    "median ${it.medianMinutes} min" + if (it.skillOnly) " (skill-only)" else "",
+            )
         }
         val job = SubagentOrchestration.SubagentJob(
             runId = run.id,
@@ -884,7 +911,10 @@ class SubagentRunner(
                 try {
                     scheduler.run(skill.id, config.maxParallel, deadlineNanos) {
                         registry.markExecuting(run.id)
-                        executeLoopGuarded(run, worstCaseChildTokens, skill.name) {
+                        executeLoopGuarded(
+                            run, worstCaseChildTokens, skill.name,
+                            readOnly = config.readOnly,
+                        ) {
                             executeLoop(
                                 run = run, skill = skill, config = budgetConfig, skillName = skillName,
                                 query = query, title = title, runUntil = SubagentSkill.RUN_UNTIL_DONE,
@@ -900,6 +930,7 @@ class SubagentRunner(
                                 spreadLabel = spreadLabel,
                                 extraInstructions = extraInstructions,
                                 resumeContext = resumeContext,
+                                resumeArtifacts = resumeSource?.artifacts.orEmpty(),
                                 resumeArtifactsDir = resumeArtifactsDir,
                             )
                         }
@@ -996,11 +1027,16 @@ class SubagentRunner(
             scheduler.run(
                 skill.id, config.maxParallel,
                 deadlineNanos = deadlineNanos,
-                maxQueueWaitMs = SubagentSkill.INLINE_QUEUE_WAIT_MS,
+                // [feat/subagent-budget-hardening] Wait proportional to the
+                // task: 10 % of its budget, floored at 30 s, capped at 5 min.
+                maxQueueWaitMs = SubagentSkill.inlineQueueWaitMs(timeoutSeconds),
             ) {
                 registry.markExecuting(run.id)
                 try {
-                    val result = executeLoopGuarded(run, worstCaseChildTokens, skill.name) {
+                    val result = executeLoopGuarded(
+                        run, worstCaseChildTokens, skill.name,
+                        readOnly = config.readOnly,
+                    ) {
                         executeLoop(
                             run = run, skill = skill, config = budgetConfig, skillName = skillName,
                             query = query, title = title, runUntil = runUntil,
@@ -1016,6 +1052,7 @@ class SubagentRunner(
                             spreadLabel = spreadLabel,
                             extraInstructions = extraInstructions,
                             resumeContext = resumeContext,
+                            resumeArtifacts = resumeSource?.artifacts.orEmpty(),
                             resumeArtifactsDir = resumeArtifactsDir,
                         )
                     }
@@ -1461,7 +1498,7 @@ class SubagentRunner(
      * parent's standing instruction is "do not retry the same spawn", and a
      * silent fall-through to a fresh spawn would re-buy the whole task.
      */
-    private fun resolveResumeSource(runId: String, skillId: String): ResumeResolution {
+    private fun resolveResumeSource(runId: String): ResumeResolution {
         val live = registry.runs.value.firstOrNull { it.id == runId }
         val source: ResumeSource
         if (live != null) {
@@ -1505,14 +1542,11 @@ class SubagentRunner(
                 workspaceDir = SubagentSkill.artifactsDirFor(archived.runId),
             )
         }
-        if (source.skillId != skillId) {
-            return ResumeResolution.Refused(
-                "Error: run '$runId' belongs to sub-agent skill '${source.skillName}' " +
-                    "(id ${source.skillId}), not this one. Resume it with " +
-                    "skill_name = '${source.skillName}', or start a fresh spawn if this is " +
-                    "genuinely different work.",
-            )
-        }
+        // [feat/subagent-budget-hardening] A DIFFERENT skill is allowed:
+        // read-only research that needs to land its result switches to a
+        // writing skill, and forcing a fresh spawn there throws away exactly
+        // the evidence a continuation exists to keep. The hand-off names the
+        // old skill and warns that the tool set changed.
         return ResumeResolution.Found(source)
     }
 
@@ -1563,29 +1597,108 @@ class SubagentRunner(
      * is the most valuable to continue from) still archives. Failures are
      * logged and swallowed: losing the archive must never fail the run.
      */
-    private fun persistResumeArchive(runId: String, snapshot: SubagentRunRegistry.Run?) {
+    private suspend fun persistResumeArchive(runId: String, snapshot: SubagentRunRegistry.Run?) {
         val s = snapshot ?: return
-        runCatching {
-            val file = resumeArchiveFile(runId) ?: return@runCatching
-            file.parentFile?.mkdirs()
-            file.writeText(
-                SubagentResumeArchive.toJson(
-                    SubagentResumeArchive.Snapshot(
-                        runId = s.id,
-                        skillId = s.skillId,
-                        skillName = s.skillName,
-                        status = SubagentStatus.stateLabel(s),
-                        error = s.error.orEmpty(),
-                        turns = s.turn,
-                        maxTurns = s.maxTurns,
-                        report = s.resultText,
-                        artifacts = s.artifacts,
+        // [feat/subagent-budget-hardening] File I/O off the caller's thread,
+        // and NonCancellable because this runs from a finally that cancelled
+        // runs also reach — their partial result is the one most worth
+        // continuing from.
+        kotlinx.coroutines.withContext(
+            kotlinx.coroutines.NonCancellable + kotlinx.coroutines.Dispatchers.IO,
+        ) {
+            runCatching {
+                val file = resumeArchiveFile(runId) ?: return@runCatching
+                file.parentFile?.mkdirs()
+                file.writeText(
+                    SubagentResumeArchive.toJson(
+                        SubagentResumeArchive.Snapshot(
+                            runId = s.id,
+                            skillId = s.skillId,
+                            skillName = s.skillName,
+                            status = SubagentStatus.stateLabel(s),
+                            error = s.error.orEmpty(),
+                            turns = s.turn,
+                            maxTurns = s.maxTurns,
+                            report = s.resultText,
+                            artifacts = s.artifacts,
+                        ),
                     ),
-                ),
-                Charsets.UTF_8,
+                    Charsets.UTF_8,
+                )
+            }.onFailure {
+                AppLogger.warning(TAG, "[Subagent] could not archive resume state for $runId: ${it.message}")
+            }
+            // [feat/subagent-budget-hardening] Bound the archive directory:
+            // every run wrote one and nothing ever removed them.
+            runCatching { pruneResumeArchives(SubagentResumeArchive.MAX_ARCHIVES) }
+        }
+    }
+
+    /**
+     * [feat/subagent-budget-hardening] Keep the newest [keep] resume archives
+     * and delete the rest. Only the archive FILE is deleted — the run's
+     * artifacts and directory stay untouched, because they may be the only
+     * copy of a deliverable.
+     */
+    private fun pruneResumeArchives(keep: Int) {
+        if (keep <= 0) return
+        val root = PRootKernel.resolveSessionHostPath(
+            deps.activeSessionId(),
+            SubagentSkill.ARTIFACTS_DIR,
+            context,
+        ) ?: return
+        val archives = root.listFiles()
+            ?.mapNotNull { dir ->
+                val f = java.io.File(dir, SubagentResumeArchive.FILE_NAME)
+                if (f.isFile) f to f.lastModified() else null
+            }
+            ?: return
+        if (archives.size <= keep) return
+        archives.sortedByDescending { it.second }
+            .drop(keep)
+            .forEach { (file, _) ->
+                runCatching { file.delete() }
+                    .onFailure {
+                        AppLogger.warning(
+                            TAG,
+                            "[Subagent] could not prune resume archive ${file.name}: ${it.message}",
+                        )
+                    }
+            }
+    }
+
+    /**
+     * [feat/subagent-budget-hardening] A `read_only: true` skill cannot write
+     * through its tools, but `browser_use` still downloads files and saves
+     * screenshots under `/var/minis/browser`. The runtime does not log those
+     * as artifacts (it did not write them), so after a read-only run we PROBE
+     * the browser root and report what appeared during the run. Stated as a
+     * notice, not as an artifact: the distinction between "the runtime wrote
+     * it" and "it appeared while the run was alive" must stay honest.
+     */
+    private fun probeReadOnlyWrites(sinceMs: Long, runId: String) {
+        runCatching {
+            val root = PRootKernel.resolveSessionHostPath(
+                deps.activeSessionId(),
+                "/var/minis/browser",
+                context,
+            ) ?: return@runCatching
+            val hits = root.walkTopDown()
+                .maxDepth(3)
+                .filter { it.isFile && it.lastModified() >= sinceMs }
+                .take(20)
+                .map { it.absolutePath }
+                .toList()
+            if (hits.isEmpty()) return@runCatching
+            registry.appendNotice(
+                runId,
+                "[read-only probe] ${hits.size} file(s) appeared outside the run workspace " +
+                    "while it ran (browser downloads/screenshots): " + hits.joinToString(", "),
             )
-        }.onFailure {
-            AppLogger.warning(TAG, "[Subagent] could not archive resume state for $runId: ${it.message}")
+            AppLogger.warning(
+                TAG,
+                "[Subagent] read-only run $runId produced ${hits.size} file(s) outside its workspace",
+            )
         }
     }
 
@@ -1619,6 +1732,12 @@ class SubagentRunner(
          * resolved by the caller.
          */
         skillName: String,
+        /**
+         * [feat/subagent-budget-hardening] `read_only: true` skill — after
+         * the run, probe for files created through channels the allowlist
+         * cannot see (browser downloads/screenshots).
+         */
+        readOnly: Boolean = false,
         block: suspend () -> ToolExecutionResult,
     ): ToolExecutionResult {
         val guard = deps.subagentBudgetGuard()
@@ -1666,6 +1785,9 @@ class SubagentRunner(
             // coroutine already cancelled — and a cancelled run is precisely the
             // one whose partial result is worth keeping.
             persistChildReport(run.id, snapshot)
+            if (readOnly) {
+                snapshot?.let { probeReadOnlyWrites(it.startedAtMs, run.id) }
+            }
             // [feat/subagent-resume-durability] Same finally, same reason:
             // this is the only place every exit path reaches, so a
             // continuation stays possible after the process (and with it the
@@ -1720,6 +1842,12 @@ class SubagentRunner(
          * the model knows what already exists instead of re-deriving it.
          */
         resumeContext: String = "",
+        /**
+         * [feat/subagent-budget-hardening] The previous run's artifact paths,
+         * carried into this run's list so the deliverable set is the union,
+         * not just what this attempt re-wrote.
+         */
+        resumeArtifacts: List<String> = emptyList(),
         /**
          * The resumed run's artifacts directory. The continuation writes
          * THERE, not into a new per-run directory, so one deliverable does
@@ -1836,9 +1964,19 @@ class SubagentRunner(
         // number of turns, which nothing capped before.
 
         val resultSb = StringBuilder()
-        val artifacts = mutableListOf<String>()
+        // [feat/subagent-budget-hardening] A continuation's artifact list
+        // starts with the PREVIOUS run's files: the parent reads this list to
+        // decide what exists, and starting from empty made every pre-existing
+        // deliverable invisible after a resume.
+        val artifacts = mutableListOf<String>().apply { addAll(resumeArtifacts) }
         var turns = 0
         var lastText = ""
+        // [feat/subagent-budget-hardening] A transient failure that outlives
+        // the per-turn stream retries used to kill the whole run — even when
+        // it lost a single model call from a 20-turn budget. One run-level
+        // retry gives the next turn a fresh start; the failure is NOT worth
+        // replaying the whole task for (that is what resume_run_id is for).
+        var runLevelRetries = 0
         // [fix/subagent-plan-execute] True once a tool-less PLAN turn was
         // answered with an execution nudge. Bounds the nudge to one per run.
         var planNudgeIssued = false
@@ -2199,6 +2337,31 @@ class SubagentRunner(
                             kotlinx.coroutines.delay(delaySec * 1000L)
                             continue
                         }
+                        // [feat/subagent-budget-hardening] RUN-LEVEL retry:
+                        // the per-turn stream retries are exhausted, but a
+                        // transient failure should not throw away a healthy
+                        // multi-turn run. Spend one more turn (bounded by
+                        // MAX_RUN_LEVEL_RETRIES and the remaining budget)
+                        // before giving up; the outer handler still journals
+                        // and reports if this one fails too.
+                        if (runLevelRetries < MAX_RUN_LEVEL_RETRIES &&
+                            turns < config.maxTurns &&
+                            System.nanoTime() < deadlineNanos
+                        ) {
+                            runLevelRetries += 1
+                            registry.appendNotice(
+                                run.id,
+                                "[transient failure — run-level retry " +
+                                    "$runLevelRetries/$MAX_RUN_LEVEL_RETRIES at turn $turns]",
+                            )
+                            AppLogger.warning(
+                                TAG,
+                                "[Subagent] '$skillName' run-level retry " +
+                                    "$runLevelRetries/$MAX_RUN_LEVEL_RETRIES at turn $turns",
+                            )
+                            kotlinx.coroutines.delay(RUN_LEVEL_RETRY_DELAY_MS)
+                            break
+                        }
                         throw e  // fatal for this run — outer handler journals + reports
                     }
                 }
@@ -2414,7 +2577,7 @@ class SubagentRunner(
                                 budgetLeftSeconds = runSecondsLeft(deadlineNanos),
                                 // [feat/subagent-budget-hardening] The last
                                 // turn is report-only.
-                                finalTurn = turns >= config.maxTurns,
+                                finalTurn = config.reportLastTurn && turns >= config.maxTurns,
                                 // [fix/subagent-allowed-tools-enforcement] The
                                 // skill's allowlist travels with the run, so the
                                 // runtime gate sees the same list the schema
@@ -3939,6 +4102,17 @@ class SubagentRunner(
          * (seconds) — mirrors the main loop's AUTO_RETRY_DELAYS_SEC.
          */
         private val STREAM_RETRY_DELAYS_SEC = intArrayOf(1, 2, 4)
+
+        /**
+         * [feat/subagent-budget-hardening] How many times a run may restart
+         * itself after a transient failure exhausts the per-turn stream
+         * retries. One: a second failure is a stuck provider, and the task
+         * is better continued (resume_run_id) than re-burned from turn 1.
+         */
+        private const val MAX_RUN_LEVEL_RETRIES = 1
+
+        /** Backoff before that run-level retry. */
+        private const val RUN_LEVEL_RETRY_DELAY_MS = 2_000L
     }
 }
 

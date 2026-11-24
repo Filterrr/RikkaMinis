@@ -49,7 +49,12 @@ object SubagentProgress {
      */
     const val MAX_PROGRESS_MESSAGES = 12
 
-    const val FREQUENT_INTERVAL_MS = 15_000L
+    /**
+     * [feat/subagent-budget-hardening] 15 s → 30 s. Change-gated notes at
+     * 15 s still cost up to 12 parent turns inside three minutes; 30 s halves
+     * that without losing the "is it alive" signal.
+     */
+    const val FREQUENT_INTERVAL_MS = 30_000L
     const val MODERATE_INTERVAL_MS = 60_000L
 
     /**
@@ -86,12 +91,16 @@ object SubagentProgress {
     fun signature(run: Run): String {
         val active = run.steps.lastOrNull { it.status == ToolStepStatus.RUNNING }
             ?: run.steps.lastOrNull()
-        val tail = run.resultText.takeLast(PREVIEW_CHARS).replace(Regex("\\s+"), " ").trim()
+        // [feat/subagent-budget-hardening] STAGE, not text. The old signature
+        // included the last 200 characters of result text, so a run that was
+        // narrating its way through ONE long step emitted a "new" note every
+        // interval — twelve parent turns for twelve rewordings of the same
+        // activity. The preview still reaches the reader through [body]; it
+        // just no longer counts as a change worth a parent turn.
         return listOf(
             active?.toolName ?: "",
             active?.toolTitle ?: "",
             run.turn.toString(),
-            tail,
         ).joinToString("|")
     }
 

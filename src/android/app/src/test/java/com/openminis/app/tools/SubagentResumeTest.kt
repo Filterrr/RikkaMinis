@@ -185,4 +185,33 @@ class SubagentResumeTest {
             runner.contains("systemPrompt = effectiveSystemPrompt"),
         )
     }
+
+    @Test
+    fun `the remaining hardening knobs are wired`() {
+        val runner = ProductionSources.read("tools/SubagentRunner.kt")
+        assertTrue(
+            "a resumed run must carry the previous run's artifacts",
+            runner.contains("addAll(resumeArtifacts)"),
+        )
+        assertTrue(
+            "resuming under a different skill must be told to the child",
+            runner.contains("resumedWithSkill = skill.name"),
+        )
+        assertTrue(
+            "the final-turn gate must honour the skill's opt-out",
+            runner.contains("config.reportLastTurn && turns >= config.maxTurns"),
+        )
+        assertTrue(
+            "inline queue wait must scale with the task budget",
+            runner.contains("SubagentSkill.inlineQueueWaitMs(timeoutSeconds)"),
+        )
+        assertTrue(
+            "the spawn must calibrate from finished runs",
+            runner.contains("SubagentBudgetCalibration.estimate("),
+        )
+        assertTrue(
+            "archives must be pruned so the workspace does not grow forever",
+            runner.contains("pruneResumeArchives(SubagentResumeArchive.MAX_ARCHIVES)"),
+        )
+    }
 }

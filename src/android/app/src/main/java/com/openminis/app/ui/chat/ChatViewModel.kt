@@ -88,6 +88,7 @@ import com.openminis.app.tools.SubagentRunCheckpoint
 import com.openminis.app.tools.SubagentRunRegistry
 import com.openminis.app.tools.SubagentRunner
 import com.openminis.app.tools.SubagentScheduler
+import com.openminis.app.tools.SubagentBudgetCalibration
 import com.openminis.app.tools.SubagentSkill
 import com.openminis.app.tools.SubagentStepOutputTrim
 import com.openminis.app.tools.ToolBatchExecutor
@@ -1734,6 +1735,12 @@ class ChatViewModel(
             // to discover them by failing. Same budget discipline as above.
             groupHint = SubagentSkill.buildGroupHint(
                 providerRepository.config.value.modelGroups.map { it.name },
+            ),
+            // [feat/subagent-budget-hardening] Evidence for the budget
+            // question: this chat's own finished runs, by skill. Recomputed
+            // per read, so the hint improves as runs accumulate.
+            durationHint = SubagentBudgetCalibration.schemaHint(
+                subagentRunRegistry.runs.value,
             ),
             // [OPT-browser-websearch-tool] Embed the CURRENT engine/template
             // in the schema so the model's web_search calls (and its mental

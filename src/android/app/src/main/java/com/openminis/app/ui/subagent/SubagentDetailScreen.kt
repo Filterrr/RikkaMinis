@@ -163,6 +163,10 @@ fun SubagentDetailScreen(
                                         if (run.isExecuting && run.maxTurns > 0) {
                                             append(" · turn ${run.turn}/${run.maxTurns}")
                                         }
+                                        com.openminis.app.tools.SubagentRunFormat
+                                            .remainingBudgetLabel(run)?.let {
+                                                append(" · ").append(it)
+                                            }
                                         append(" · ")
                                         append(formatSubagentDuration(elapsedMs))
                                     }

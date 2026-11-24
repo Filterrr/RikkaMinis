@@ -52,6 +52,13 @@ internal object SubagentResume {
         resultText: String,
         artifacts: List<String>,
         workspaceDir: String,
+        /**
+         * [feat/subagent-budget-hardening] The skill this continuation is
+         * running under when it DIFFERS from [skillName]. Switching is
+         * allowed (read-only research → general-agent to land the result),
+         * but the model must not assume the old tool set still applies.
+         */
+        resumedWithSkill: String = "",
     ): String {
         val turnText = if (maxTurns > 0) "$turns/$maxTurns turn(s)" else "$turns turn(s)"
         val reasonText = stopReason.trim().takeIf { it.isNotEmpty() }?.let { " — $it" }.orEmpty()
@@ -85,6 +92,12 @@ internal object SubagentResume {
             append("evidenced above. Keep writing into the same directory so the deliverable ")
             append("stays in one place. You have a FRESH budget for this continuation: spend ")
             append("it on what is LEFT, then write the final report.")
+            if (resumedWithSkill.isNotBlank() && resumedWithSkill != skillName) {
+                append("\n\nNOTE: this continuation runs under '").append(resumedWithSkill)
+                append("', not the '").append(skillName).append("' that produced the evidence ")
+                append("above. Its tool set may differ — do not assume the previous run's ")
+                append("capabilities (or its restrictions) still apply.")
+            }
         }
     }
 }

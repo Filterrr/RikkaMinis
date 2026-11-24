@@ -38,6 +38,13 @@ internal object SubagentResumeArchive {
     const val MAX_REPORT_CHARS = SubagentResume.MAX_REPORT_CHARS
     const val MAX_ARTIFACTS = 50
 
+    /**
+     * [feat/subagent-budget-hardening] How many archives to keep on disk.
+     * Every run writes one; without a bound the workspace grows forever.
+     * Only the archive file is pruned — artifacts and directories stay.
+     */
+    const val MAX_ARCHIVES = 50
+
     /** Everything a continuation needs from the previous attempt. */
     data class Snapshot(
         val runId: String,

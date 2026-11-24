@@ -110,7 +110,7 @@ class SubagentProgressTest {
     }
 
     @Test
-    fun `the signature tracks the in-flight tool, the turn and the latest text`() {
+    fun `the signature tracks the in-flight tool and the turn, not narration`() {
         val base = run(steps = listOf(step("shell_execute", ToolStepStatus.RUNNING, "Run tests")))
         val same = run(steps = listOf(step("shell_execute", ToolStepStatus.RUNNING, "Run tests")))
         assertEquals(SubagentProgress.signature(base), SubagentProgress.signature(same))
@@ -124,10 +124,15 @@ class SubagentProgressTest {
             "a new turn must change the signature",
             SubagentProgress.signature(base) != SubagentProgress.signature(run(turn = 4)),
         )
-        assertTrue(
-            "new text must change the signature",
-            SubagentProgress.signature(base) !=
-                SubagentProgress.signature(run(resultText = "halfway there")),
+        // [feat/subagent-budget-hardening] Text is NOT a stage change: a run
+        // narrating its way through one long step used to emit a note every
+        // interval (12 parent turns for 12 rewordings). The preview still
+        // reaches the reader through body(); it just must not look like
+        // progress.
+        assertEquals(
+            "narration alone must not change the signature",
+            SubagentProgress.signature(base),
+            SubagentProgress.signature(run(resultText = "halfway there")),
         )
     }
 

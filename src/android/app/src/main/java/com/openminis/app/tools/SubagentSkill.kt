@@ -169,8 +169,16 @@ object SubagentSkill {
 
     private const val REPORT_SCAN_WINDOW = 10
 
-    /** [T-subagent-parallel] Hard cap on concurrent sub-agents per chat. */
-    const val MAX_PARALLEL_CAP = 4
+    /**
+     * [T-subagent-parallel] Hard cap on concurrent sub-agents per chat.
+     *
+     * [feat/subagent-budget-hardening] 4 → 6. The old number was sized
+     * against "four agents talking to one relay"; today a chat routinely
+     * fans out two research runs and two file/verification runs, and the
+     * 4th slot is taken by whatever the previous batch left finishing. 6
+     * still bounds the pill row and the chat's write concurrency.
+     */
+    const val MAX_PARALLEL_CAP = 6
 
     /** Default concurrent-run ceiling when the skill doesn't opt in higher. */
     const val DEFAULT_MAX_PARALLEL = 2
@@ -235,6 +243,10 @@ object SubagentSkill {
      * transient-retry backoff.
      */
     const val SECONDS_PER_TURN_ESTIMATE = 15
+
+    /** [feat/subagent-budget-hardening] Bounds for a calibrated pace. */
+    const val MIN_SECONDS_PER_TURN = 5
+    const val MAX_SECONDS_PER_TURN = 120
 
     /**
      * [feat/subagent-max-turns-75] The wall-clock budget needed to deliver
@@ -369,15 +381,43 @@ object SubagentSkill {
      *
      * Rounds UP: a 61-second budget must allow one turn, not zero.
      */
-    fun turnBudgetForTimeoutSeconds(seconds: Int): Int {
+    /**
+     * [feat/subagent-budget-hardening] Turn cap used for the COST ceiling
+     * shown to the user. The ledger's "≤ N tok" is a theoretical maximum;
+     * multiplying it by a 240-turn ceiling made a normal delegation read as
+     * a million-token commitment. 60 turns is the realistic upper bound for
+     * a single delegated task (15 min at the calibrated pace) and keeps the
+     * number honest without pretending it is a reservation.
+     */
+    const val WORST_CASE_TURN_CAP = 60
+
+    /**
+     * [feat/subagent-budget-hardening] The run's cost CEILING for display.
+     * NOT a reservation: the token guard is inert today (see
+     * [MAX_TURNS_CEILING]); this only feeds the "≤ N tok" readout.
+     */
+    fun worstCaseTokensForBudget(maxTurns: Int, perTurnOutputCeiling: Int): Long =
+        maxTurns.coerceIn(0, WORST_CASE_TURN_CAP).toLong() *
+            perTurnOutputCeiling.coerceAtLeast(0).toLong()
+
+    fun turnBudgetForTimeoutSeconds(
+        seconds: Int,
+        secondsPerTurn: Int = SECONDS_PER_TURN_ESTIMATE,
+    ): Int {
         val bounded = seconds.coerceIn(1, MAX_TIMEOUT_SECONDS)
-        val raw = (bounded + SECONDS_PER_TURN_ESTIMATE - 1) / SECONDS_PER_TURN_ESTIMATE
+        val pace = secondsPerTurn.coerceIn(MIN_SECONDS_PER_TURN, MAX_SECONDS_PER_TURN)
+        val raw = (bounded + pace - 1) / pace
         return raw.coerceIn(1, MAX_TURNS_CEILING)
     }
 
     /** Turns that fit in [minutes] — the parent-facing form. */
-    fun turnBudgetForMinutes(minutes: Int): Int =
-        turnBudgetForTimeoutSeconds(minutes.coerceIn(MIN_MINUTES, MAX_MINUTES) * 60)
+    fun turnBudgetForMinutes(
+        minutes: Int,
+        secondsPerTurn: Int = SECONDS_PER_TURN_ESTIMATE,
+    ): Int = turnBudgetForTimeoutSeconds(
+        minutes.coerceIn(MIN_MINUTES, MAX_MINUTES) * 60,
+        secondsPerTurn,
+    )
 
     /**
      * Resolve the budget for one spawn.
@@ -401,6 +441,12 @@ object SubagentSkill {
         parentMinutes: Int,
         explicitTimeoutSeconds: Int,
         skillMaxTurns: Int,
+        /**
+         * [feat/subagent-budget-hardening] Calibrated seconds per turn from
+         * THIS chat's finished runs (see SubagentBudgetCalibration), or the
+         * 15 s default when there is not enough history.
+         */
+        secondsPerTurn: Int = SECONDS_PER_TURN_ESTIMATE,
     ): RunBudget {
         if (parentMinutes > 0) {
             val minutes = parentMinutes.coerceIn(MIN_MINUTES, MAX_MINUTES)
@@ -411,7 +457,7 @@ object SubagentSkill {
                 asked
             }
             return RunBudget(
-                maxTurns = turnBudgetForTimeoutSeconds(timeoutSeconds),
+                maxTurns = turnBudgetForTimeoutSeconds(timeoutSeconds, secondsPerTurn),
                 timeoutSeconds = timeoutSeconds,
                 parentMinutes = minutes,
                 source = BudgetSource.PARENT_MINUTES,
@@ -516,6 +562,28 @@ object SubagentSkill {
      * timeout_seconds. 30s mirrors the foreground slot wait ExTV shipped.
      */
     const val INLINE_QUEUE_WAIT_MS = 30_000L
+
+    /** [feat/subagent-budget-hardening] Floor for an inline queue wait. */
+    const val MIN_INLINE_QUEUE_WAIT_MS = 30_000L
+
+    /** Ceiling for an inline queue wait — no inline spawn parks for 10 min. */
+    const val MAX_INLINE_QUEUE_WAIT_MS = 300_000L
+
+    /**
+     * [feat/subagent-budget-hardening] How long an INLINE spawn may wait for
+     * a slot, scaled to the run's own budget.
+     *
+     * The flat 30 s was calibrated for short mechanical spawns; a research
+     * run that legitimately needs 20 minutes failed to even START whenever
+     * two other runs were in flight. A tenth of the task's budget (30 s …
+     * 5 min) keeps the wait proportional: a 2-minute task still gives up in
+     * 30 s, a 20-minute task waits up to 2 minutes.
+     */
+    fun inlineQueueWaitMs(budgetSeconds: Int): Long {
+        if (budgetSeconds <= 0) return MIN_INLINE_QUEUE_WAIT_MS
+        return (budgetSeconds * 1000L / 10)
+            .coerceIn(MIN_INLINE_QUEUE_WAIT_MS, MAX_INLINE_QUEUE_WAIT_MS)
+    }
 
     /**
      * [T-subagent-model-routing] Optional tail appended to the `model`
@@ -623,6 +691,22 @@ object SubagentSkill {
          * task with no duration estimate still has SOME bound.
          */
         val maxTurns: Int = DEFAULT_MAX_TURNS,
+        /**
+         * [feat/subagent-budget-hardening] `report_last_turn: true|false`
+         * (default TRUE). When on, the FINAL turn may only call
+         * file_write/file_edit so the run ends with a deliverable instead of
+         * one last command. A skill whose last step genuinely must be a
+         * command can opt out.
+         */
+        val reportLastTurn: Boolean = true,
+        /**
+         * [feat/subagent-budget-hardening] `read_only: true` in the
+         * frontmatter. The allowlist already hides write tools; this flag
+         * additionally makes the runtime PROBE for files the run created
+         * through channels the allowlist cannot express (browser downloads
+         * and screenshots) and report them.
+         */
+        val readOnly: Boolean = false,
         /** Null = allow all non-FORBIDDEN tools. Non-null = explicit allowlist. */
         val allowedTools: Set<String>? = null,
         /**
@@ -693,6 +777,13 @@ object SubagentSkill {
         modelCatalogHint: String = "",
         groupHint: String = "",
         rosterHint: String = "",
+        /**
+         * [feat/subagent-budget-hardening] One line of EVIDENCE for the
+         * budget question ("recent general-agent runs: median 6 min, n=7"),
+         * built from this chat's finished runs by
+         * SubagentBudgetCalibration. Empty when there is not enough history.
+         */
+        durationHint: String = "",
     ): AgentToolDefinition = AgentToolDefinition(
         name = NAME,
         description = "Spawn a sub-agent with its own system prompt, tool set, " +
@@ -763,7 +854,8 @@ object SubagentSkill {
                     "only for genuinely long batches. An under-estimate kills " +
                     "a healthy run mid-task with a TIMED_OUT verdict; an " +
                     "over-estimate only wastes headroom, so when genuinely " +
-                    "unsure round UP.",
+                    "unsure round UP." +
+                    (if (durationHint.isNotBlank()) " $durationHint" else ""),
             ),
             // [feat/subagent-budget-hardening] Continuation instead of a
             // re-run: a budget-stopped task keeps its evidence (artifacts on
@@ -775,7 +867,10 @@ object SubagentSkill {
                     "starting from zero: pass its run_id (returned by spawn_agent, or " +
                     "listed by subagent_status) and put only WHAT IS LEFT in `query`. " +
                     "The run must be finished (TIMED_OUT / FAILED / CANCELLED — a live run " +
-                    "is refused: join it instead) and must belong to the same skill_name. " +
+                    "is refused: join it instead). It may use a DIFFERENT skill_name — " +
+                    "the hand-off names the skill that ran before and its tool set, so " +
+                    "switching (e.g. read-only research → general-agent to write the " +
+                    "result) is allowed; " +
                     "The continuation is handed the previous partial report, the artifacts " +
                     "it already wrote and their directory, so it should verify those files " +
                     "rather than redo the work — and it gets a FRESH max_minutes budget. " +
@@ -932,6 +1027,8 @@ object SubagentSkill {
         return SubagentConfig(
             isSubagent = fm.boolean("subagent") ?: false,
             maxTurns = (fm.int("max_turns") ?: DEFAULT_MAX_TURNS).coerceIn(1, MAX_TURNS_CEILING),
+            reportLastTurn = fm.boolean("report_last_turn") ?: true,
+            readOnly = fm.boolean("read_only") ?: false,
             allowedTools = fm.list("allowed_tools")?.toSet(),
             maxParallel = (fm.int("max_parallel") ?: 1).coerceIn(1, MAX_PARALLEL_CAP),
             thinkingLevel = parseThinkingLevelName(fm.string("thinking").orEmpty()),
