@@ -174,11 +174,19 @@ class SubagentMinutesBudgetTest {
                 "required = listOf(\"tool_title\", \"skill_name\", \"query\", \"max_minutes\")",
             ),
         )
+        // Order-insensitive on purpose: the list grows as fields are added,
+        // and a substring of the whole row breaks every time another
+        // parameter lands in the middle of it.
+        val orderingStart = src.indexOf("propertyOrdering = listOf(")
+        assertTrue(
+            "spawn_agent must publish propertyOrdering (Gemini uses it for field order)",
+            orderingStart > 0,
+        )
+        val orderingEnd = src.indexOf(')', orderingStart).let { if (it < 0) src.length else it }
+        val ordering = src.substring(orderingStart, orderingEnd)
         assertTrue(
             "Gemini propertyOrdering must list max_minutes (it drives the field order shown to the model)",
-            src.contains(
-                "\"tool_title\", \"skill_name\", \"query\", \"max_minutes\", \"run_until\", \"model\",",
-            ),
+            ordering.contains("\"max_minutes\""),
         )
     }
 
