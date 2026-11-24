@@ -748,7 +748,16 @@ class SubagentRunner(
         // Worst case a child can spend: every turn asking up to the (globally
         // capped) ceiling. Reserved against the parent's pool for the run's
         // lifetime, settled with the real usage at the end.
-        val worstCaseChildTokens = SubagentSkill.worstCaseTokensForBudget(
+        // [feat/subagent-budget-hardening] TWO numbers, deliberately:
+        //  - the RESERVATION uses the real turn budget (it is a resource
+        //    claim; shrinking it would under-reserve the moment the token
+        //    guard is switched on);
+        //  - the LEDGER's "≤ N tok" readout uses the capped estimate, because
+        //    a 240-turn theoretical maximum reads as a million-token
+        //    commitment and makes every delegation look reckless.
+        val worstCaseChildTokens =
+            budgetConfig.maxTurns.toLong() * subagentOutputCeiling(modelMaxOutputTokens).toLong()
+        val displayCeilingTokens = SubagentSkill.worstCaseTokensForBudget(
             maxTurns = budgetConfig.maxTurns,
             perTurnOutputCeiling = subagentOutputCeiling(modelMaxOutputTokens),
         )
@@ -912,7 +921,7 @@ class SubagentRunner(
                     scheduler.run(skill.id, config.maxParallel, deadlineNanos) {
                         registry.markExecuting(run.id)
                         executeLoopGuarded(
-                            run, worstCaseChildTokens, skill.name,
+                            run, worstCaseChildTokens, displayCeilingTokens, skill.name,
                             readOnly = config.readOnly,
                         ) {
                             executeLoop(
@@ -1034,7 +1043,7 @@ class SubagentRunner(
                 registry.markExecuting(run.id)
                 try {
                     val result = executeLoopGuarded(
-                        run, worstCaseChildTokens, skill.name,
+                        run, worstCaseChildTokens, displayCeilingTokens, skill.name,
                         readOnly = config.readOnly,
                     ) {
                         executeLoop(
@@ -1726,6 +1735,12 @@ class SubagentRunner(
         run: SubagentRunRegistry.Run,
         worstCaseChildTokens: Long,
         /**
+         * [feat/subagent-budget-hardening] The CAPPED ceiling shown in the
+         * ledger ("≤ N tok"). Separate from [worstCaseChildTokens], which is
+         * the guard's reservation and must stay the real theoretical maximum.
+         */
+        displayCeilingTokens: Long = worstCaseChildTokens,
+        /**
          * [feat/subagent-roster-routing] P1-3 — the skill name for the
          * ledger entry. It is a PARAMETER because `executeLoopGuarded` is
          * a sibling of the spawn site, not a nested scope: the skill is
@@ -1752,7 +1767,7 @@ class SubagentRunner(
         // runtime's own configuration implies — never as a fabricated
         // measurement.
         val ledger = deps.subagentCostLedger()
-        ledger?.reserve(run.id, skillName, worstCaseChildTokens)
+        ledger?.reserve(run.id, skillName, displayCeilingTokens)
         try {
             return block()
         } finally {
@@ -2359,6 +2374,14 @@ class SubagentRunner(
                                 "[Subagent] '$skillName' run-level retry " +
                                     "$runLevelRetries/$MAX_RUN_LEVEL_RETRIES at turn $turns",
                             )
+                            // [feat/subagent-budget-hardening] Roll the failed
+                            // attempt back before the next turn: its partial
+                            // narration and half-built tool rows must not
+                            // become the run's report or history. (Same
+                            // rollback the per-turn stream retry does.)
+                            registry.resetTurn(run.id, attemptSnap, attemptToolIds)
+                            textSb.setLength(0)
+                            toolCalls.clear()
                             kotlinx.coroutines.delay(RUN_LEVEL_RETRY_DELAY_MS)
                             break
                         }
