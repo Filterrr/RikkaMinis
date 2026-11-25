@@ -33,8 +33,8 @@ class SubagentTurnBudgetWiringTest {
 
     /** The sub-agent skills that ship in the APK and carry a turn budget. */
     private val shippedSubagentSkills = listOf(
-        "general-agent" to "1.4.6",
-        "read-only-researcher" to "1.0.4",
+        "general-agent" to "1.5.0",
+        "read-only-researcher" to "1.1.0",
     )
 
     private fun assetsDir(): File {
@@ -177,12 +177,20 @@ class SubagentTurnBudgetWiringTest {
         // the timeout is chosen.
         val runner = ProductionSources.read("tools/SubagentRunner.kt")
         assertTrue(
-            "the spawn site must derive the timeout from the turn budget",
-            runner.contains("SubagentSkill.wallClockSecondsForTurnBudget(config.maxTurns)"),
+            "the spawn site must resolve ONE budget (parent minutes → turns + clock)",
+            runner.contains("SubagentSkill.resolveRunBudget("),
         )
         assertTrue(
-            "the derived budget must actually feed the run's timeout",
-            runner.contains("timeoutForTurnBudget.coerceAtLeast(SubagentSkill.DEFAULT_TIMEOUT_SECONDS)"),
+            "the parent's max_minutes answer must be what feeds that resolution",
+            runner.contains("parentMinutes = args.optInt(\"max_minutes\", 0)"),
+        )
+        assertTrue(
+            "the resolved turn budget must replace the skill's fallback max_turns",
+            runner.contains("val budgetConfig = config.copy(maxTurns = runBudget.maxTurns)"),
+        )
+        assertTrue(
+            "the resolved wall clock must actually feed the run's timeout",
+            runner.contains("val timeoutSeconds = runBudget.timeoutSeconds"),
         )
     }
 

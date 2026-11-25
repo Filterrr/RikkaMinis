@@ -427,6 +427,43 @@ class SubagentRunner(
             )
         }
 
+        // [feat/subagent-budget-hardening] CONTINUATION. A run stopped by
+        // its budget used to be finishable only by spawning the same task
+        // again — paying twice for every read and every dead end. The
+        // registry snapshot already holds the evidence, so a continuation
+        // just has to be told what exists.
+        //
+        // Accepted source: a TERMINAL run of THIS chat with the SAME skill.
+        // A live run is refused (join/wait instead — continuing it would run
+        // two agents over one workspace), and a different skill is refused
+        // (its tool allowlist and instructions do not describe this work).
+        val resumeRunId = args.optString("resume_run_id", "").trim()
+        val resumeSource = if (resumeRunId.isBlank()) {
+            null
+        } else when (val resolved = resolveResumeSource(resumeRunId)) {
+            is ResumeResolution.Refused ->
+                return ToolExecutionResult(resolved.message, false, toolTitle = title)
+            is ResumeResolution.Found -> resolved.source
+        }
+        val resumeArtifactsDir = resumeSource?.workspaceDir.orEmpty()
+        val resumeContext = resumeSource?.let { src ->
+            SubagentResume.context(
+                previousRunId = src.id,
+                skillName = src.skillName,
+                statusLabel = src.statusLabel,
+                stopReason = src.error,
+                turns = src.turns,
+                maxTurns = src.maxTurns,
+                resultText = src.report,
+                artifacts = src.artifacts,
+                workspaceDir = src.workspaceDir,
+                // [feat/subagent-budget-hardening] Switching skills on resume
+                // is allowed; the hand-off says so and warns that the tool
+                // set may have changed.
+                resumedWithSkill = skill.name,
+            )
+        }.orEmpty()
+
         if (!deps.isSkillEnabledForSession(skill.id)) {
             return ToolExecutionResult(
                 "Error: Skill '$skillName' is disabled for this session" + rosterSuffix(),
@@ -678,48 +715,54 @@ class SubagentRunner(
         // request additionally clamps into the remaining context window, see
         // [resolveSubagentTurnMaxTokens].
         val modelMaxOutputTokens = provider.effectiveMaxOutputTokens(provider.model)
+        // [feat/subagent-parent-minutes-budget] ONE budget question, answered
+        // by the parent: how many minutes does this task need? The wall clock
+        // IS that answer and the turn ceiling is DERIVED from it (≈15 s per
+        // turn), so the two cannot drift the way the old fixed `max_turns: 75`
+        // and the hand-tuned 1800 s default could.
+        //
+        // Priority: `max_minutes` wins; `timeout_seconds` may only TIGHTEN
+        // it. With no `max_minutes` the legacy path runs unchanged (skill
+        // `max_turns`, and a wall clock that can deliver it).
+        // [feat/subagent-budget-hardening] Convert minutes at THIS chat's
+        // observed pace, not the global 15 s guess — see
+        // SubagentBudgetCalibration. Falls back to the default when there is
+        // not enough finished history.
+        val calibration = SubagentBudgetCalibration.estimate(
+            runs = registry.runs.value,
+            skillId = skill.id,
+            modelLabel = deps.providerLabel(provider),
+        )
+        val runBudget = SubagentSkill.resolveRunBudget(
+            parentMinutes = args.optInt("max_minutes", 0),
+            explicitTimeoutSeconds = args.optInt("timeout_seconds", 0),
+            skillMaxTurns = config.maxTurns,
+            secondsPerTurn = calibration?.secondsPerTurn
+                ?: SubagentSkill.SECONDS_PER_TURN_ESTIMATE,
+        )
+        // Everything below this line must use `budgetConfig`, not `config`:
+        // config.maxTurns is the skill's fallback number, not this run's
+        // ceiling.
+        val budgetConfig = config.copy(maxTurns = runBudget.maxTurns)
+        val timeoutSeconds = runBudget.timeoutSeconds
         // Worst case a child can spend: every turn asking up to the (globally
         // capped) ceiling. Reserved against the parent's pool for the run's
         // lifetime, settled with the real usage at the end.
+        // [feat/subagent-budget-hardening] TWO numbers, deliberately:
+        //  - the RESERVATION uses the real turn budget (it is a resource
+        //    claim; shrinking it would under-reserve the moment the token
+        //    guard is switched on);
+        //  - the LEDGER's "≤ N tok" readout uses the capped estimate, because
+        //    a 240-turn theoretical maximum reads as a million-token
+        //    commitment and makes every delegation look reckless.
         val worstCaseChildTokens =
-            config.maxTurns.toLong() * subagentOutputCeiling(modelMaxOutputTokens).toLong()
+            budgetConfig.maxTurns.toLong() * subagentOutputCeiling(modelMaxOutputTokens).toLong()
+        val displayCeilingTokens = SubagentSkill.worstCaseTokensForBudget(
+            maxTurns = budgetConfig.maxTurns,
+            perTurnOutputCeiling = subagentOutputCeiling(modelMaxOutputTokens),
+        )
 
-        // [T-subagent-run-timeout] Clamp per the tool contract. The default is
-        // deliberate: a detached run has no human watching it, so an
-        // unbounded loop is a cost and permit leak, not a feature.
-        //
-        // [T-subagent-queue-budget] The budget is an ABSOLUTE deadline from
-        // SPAWN time, not a stopwatch started when the permit lands. Two
-        // reasons, both observed in the wild (dogfood run subagent-1/2,
-        // 2026-09-14): a research run spent its whole 600s budget while the
-        // model loop was only half done, and with a per-execution stopwatch a
-        // queued spawn would silently extend that — "timeout_seconds: 600"
-        // meaning "600s plus unbounded waiting" is a lie the tool description
-        // must not tell. Inline spawns additionally cap how long they will
-        // SIT in the scheduler queue (see tryAcquire below): the parent turn
-        // is parked on this call returning, so queue time is user-visible
-        // freeze, not background progress.
-        // [feat/subagent-max-turns-75] The wall-clock budget must be able to
-        // deliver the skill's TURN budget. The run stops at whichever limit
-        // comes first, so a `max_turns: 75` skill under a 900s clock is
-        // killed at ~turn 60 and the parent sees a TIMED_OUT verdict that
-        // looks like the model gave up — when in fact it was never given the
-        // time it was promised.
-        //
-        // When the caller did NOT pick a timeout explicitly, the budget is
-        // raised to whatever the turn budget needs. When the caller DID pick
-        // one, their explicit choice wins — but the mismatch is reported in
-        // the runtime context so the sub-agent knows its real budget rather
-        // than discovering it by being cut off mid-task.
-        val requestedTimeout = args.optInt("timeout_seconds", 0)
-        val timeoutForTurnBudget = SubagentSkill.wallClockSecondsForTurnBudget(config.maxTurns)
-        val timeoutSeconds = if (requestedTimeout <= 0 && timeoutForTurnBudget != null) {
-            timeoutForTurnBudget.coerceAtLeast(SubagentSkill.DEFAULT_TIMEOUT_SECONDS)
-                .coerceIn(1, SubagentSkill.MAX_TIMEOUT_SECONDS)
-        } else {
-            args.optInt("timeout_seconds", SubagentSkill.DEFAULT_TIMEOUT_SECONDS)
-                .coerceIn(1, SubagentSkill.MAX_TIMEOUT_SECONDS)
-        }        // [fix/subagent-queue-budget] The run's wall-clock budget is NOT
+        // [fix/subagent-queue-budget] The run's wall-clock budget is NOT
         // consumed by the time it spends waiting for a concurrency slot. The
         // old code computed one absolute deadline at spawn time and handed it
         // to the scheduler, which used it for BOTH the queue wait and the
@@ -819,7 +862,10 @@ class SubagentRunner(
             skillName = skill.name,
             query = query,
             title = title,
-            maxTurns = config.maxTurns,
+            maxTurns = budgetConfig.maxTurns,
+            // [feat/subagent-budget-hardening] The UI shows remaining minutes
+            // from this, not only the turn counter.
+            timeoutSeconds = timeoutSeconds,
             sessionId = sessionId,
             groupId = groupId,
             queued = true,
@@ -834,6 +880,16 @@ class SubagentRunner(
             return deduplicatedSpawnResult(outcome.run.id, skillName, batchGroupId = groupId)
         }
         val run = outcome.run
+        if (resumeSource != null) {
+            registry.appendNotice(run.id, "[resumed from ${resumeSource.id}]")
+        }
+        calibration?.let {
+            registry.appendNotice(
+                run.id,
+                "[budget] ${it.secondsPerTurn}s/turn from ${it.samples} finished run(s), " +
+                    "median ${it.medianMinutes} min" + if (it.skillOnly) " (skill-only)" else "",
+            )
+        }
         val job = SubagentOrchestration.SubagentJob(
             runId = run.id,
             skillId = skill.id,
@@ -864,9 +920,12 @@ class SubagentRunner(
                 try {
                     scheduler.run(skill.id, config.maxParallel, deadlineNanos) {
                         registry.markExecuting(run.id)
-                        executeLoopGuarded(run, worstCaseChildTokens, skill.name) {
+                        executeLoopGuarded(
+                            run, worstCaseChildTokens, displayCeilingTokens, skill.name,
+                            readOnly = config.readOnly,
+                        ) {
                             executeLoop(
-                                run = run, skill = skill, config = config, skillName = skillName,
+                                run = run, skill = skill, config = budgetConfig, skillName = skillName,
                                 query = query, title = title, runUntil = SubagentSkill.RUN_UNTIL_DONE,
                                 sessionId = sessionId, provider = provider, subagentTools = subagentTools,
                                 timeoutSeconds = timeoutSeconds,
@@ -879,6 +938,9 @@ class SubagentRunner(
                                 modelMaxOutputTokens = modelMaxOutputTokens,
                                 spreadLabel = spreadLabel,
                                 extraInstructions = extraInstructions,
+                                resumeContext = resumeContext,
+                                resumeArtifacts = resumeSource?.artifacts.orEmpty(),
+                                resumeArtifactsDir = resumeArtifactsDir,
                             )
                         }
                     }
@@ -974,13 +1036,18 @@ class SubagentRunner(
             scheduler.run(
                 skill.id, config.maxParallel,
                 deadlineNanos = deadlineNanos,
-                maxQueueWaitMs = SubagentSkill.INLINE_QUEUE_WAIT_MS,
+                // [feat/subagent-budget-hardening] Wait proportional to the
+                // task: 10 % of its budget, floored at 30 s, capped at 5 min.
+                maxQueueWaitMs = SubagentSkill.inlineQueueWaitMs(timeoutSeconds),
             ) {
                 registry.markExecuting(run.id)
                 try {
-                    val result = executeLoopGuarded(run, worstCaseChildTokens, skill.name) {
+                    val result = executeLoopGuarded(
+                        run, worstCaseChildTokens, displayCeilingTokens, skill.name,
+                        readOnly = config.readOnly,
+                    ) {
                         executeLoop(
-                            run = run, skill = skill, config = config, skillName = skillName,
+                            run = run, skill = skill, config = budgetConfig, skillName = skillName,
                             query = query, title = title, runUntil = runUntil,
                             sessionId = sessionId, provider = provider, subagentTools = subagentTools,
                             timeoutSeconds = timeoutSeconds,
@@ -993,6 +1060,9 @@ class SubagentRunner(
                             modelMaxOutputTokens = modelMaxOutputTokens,
                             spreadLabel = spreadLabel,
                             extraInstructions = extraInstructions,
+                            resumeContext = resumeContext,
+                            resumeArtifacts = resumeSource?.artifacts.orEmpty(),
+                            resumeArtifactsDir = resumeArtifactsDir,
                         )
                     }
                     // [fix/subagent-inline-double-render] The report stored on
@@ -1397,6 +1467,250 @@ class SubagentRunner(
         }
     }
 
+    // ── Continuation sources ─────────────────────────────────────────────
+
+    /**
+     * [feat/subagent-resume-durability] A continuation's source, whether it
+     * came from the in-memory registry or from the on-disk archive.
+     */
+    private data class ResumeSource(
+        val id: String,
+        val skillId: String,
+        val skillName: String,
+        val statusLabel: String,
+        val error: String,
+        val turns: Int,
+        val maxTurns: Int,
+        val report: String,
+        val artifacts: List<String>,
+        val workspaceDir: String,
+    )
+
+    private sealed class ResumeResolution {
+        data class Found(val source: ResumeSource) : ResumeResolution()
+        data class Refused(val message: String) : ResumeResolution()
+    }
+
+    /**
+     * Resolve `resume_run_id` to a usable continuation source.
+     *
+     * [feat/subagent-resume-durability] Two storage layers, checked in that
+     * order:
+     *
+     *  1. the REGISTRY — the live view, and the only place a run can still be
+     *     RUNNING (which is refused: join it instead of racing it);
+     *  2. the ARCHIVE next to the run's artifacts — written on every terminal
+     *     path from [executeLoopGuarded]'s finally, so a continuation still
+     *     works after the process restarts and the registry is gone.
+     *
+     * A run that exists in neither is an ERROR that names the recent ids: the
+     * parent's standing instruction is "do not retry the same spawn", and a
+     * silent fall-through to a fresh spawn would re-buy the whole task.
+     */
+    private fun resolveResumeSource(runId: String): ResumeResolution {
+        val live = registry.runs.value.firstOrNull { it.id == runId }
+        val source: ResumeSource
+        if (live != null) {
+            if (live.isActive) {
+                return ResumeResolution.Refused(
+                    "Error: run '$runId' is still ${live.status}. Continue a run only after " +
+                        "it stops — join_subagents / wait_any on it instead of resuming it.",
+                )
+            }
+            source = ResumeSource(
+                id = live.id,
+                skillId = live.skillId,
+                skillName = live.skillName,
+                statusLabel = live.status.name,
+                error = live.error.orEmpty(),
+                turns = live.turn,
+                maxTurns = live.maxTurns,
+                report = live.resultText,
+                artifacts = live.artifacts,
+                workspaceDir = SubagentSkill.artifactsDirFor(live.id),
+            )
+        } else {
+            val archived = loadResumeArchive(runId)
+                ?: return ResumeResolution.Refused(
+                    "Error: resume_run_id '$runId' is not a run of this chat. Only the last " +
+                        "${SubagentRunRegistry.MAX_RETAINED_RUNS} runs stay in memory, and " +
+                        "terminal runs are archived on disk — recent archived run ids: " +
+                        recentResumeRunIds(5).joinToString(", ").ifEmpty { "(none)" } +
+                        ". Start a fresh spawn if the evidence is not here.",
+                )
+            source = ResumeSource(
+                id = archived.runId,
+                skillId = archived.skillId,
+                skillName = archived.skillName,
+                statusLabel = archived.status,
+                error = archived.error,
+                turns = archived.turns,
+                maxTurns = archived.maxTurns,
+                report = archived.report,
+                artifacts = archived.artifacts,
+                workspaceDir = SubagentSkill.artifactsDirFor(archived.runId),
+            )
+        }
+        // [feat/subagent-budget-hardening] A DIFFERENT skill is allowed:
+        // read-only research that needs to land its result switches to a
+        // writing skill, and forcing a fresh spawn there throws away exactly
+        // the evidence a continuation exists to keep. The hand-off names the
+        // old skill and warns that the tool set changed.
+        return ResumeResolution.Found(source)
+    }
+
+    /** [feat/subagent-resume-durability] The archive file inside a run's dir. */
+    private fun resumeArchiveFile(runId: String): java.io.File? =
+        PRootKernel.resolveSessionHostPath(
+            deps.activeSessionId(),
+            SubagentSkill.artifactsDirFor(runId),
+            context,
+        )?.let { java.io.File(it, SubagentResumeArchive.FILE_NAME) }
+
+    /**
+     * Read a continuation archive, or null when there is none / it is
+     * unreadable. A corrupt archive must look ABSENT, not like a run with no
+     * evidence — see [SubagentResumeArchive.parse].
+     */
+    private fun loadResumeArchive(runId: String): SubagentResumeArchive.Snapshot? = runCatching {
+        val file = resumeArchiveFile(runId) ?: return@runCatching null
+        if (!file.isFile) return@runCatching null
+        SubagentResumeArchive.parse(file.readText(Charsets.UTF_8))
+    }.getOrNull()
+
+    /** Newest archived run ids, for the "not a run" error message. */
+    private fun recentResumeRunIds(limit: Int): List<String> = runCatching {
+        val root = PRootKernel.resolveSessionHostPath(
+            deps.activeSessionId(),
+            SubagentSkill.ARTIFACTS_DIR,
+            context,
+        ) ?: return@runCatching emptyList()
+        root.listFiles()
+            ?.mapNotNull { dir ->
+                val f = java.io.File(dir, SubagentResumeArchive.FILE_NAME)
+                if (f.isFile) dir.name to f.lastModified() else null
+            }
+            ?.sortedByDescending { it.second }
+            ?.take(limit)
+            ?.map { it.first }
+            ?: emptyList()
+    }.getOrDefault(emptyList())
+
+    /**
+     * [feat/subagent-resume-durability] Write the continuation archive on
+     * EVERY terminal path.
+     *
+     * Called from [executeLoopGuarded]'s finally — the one place success,
+     * max-turns, TIMED_OUT, cancel and crash all pass through — so a future
+     * exit path cannot forget it, and a CANCELLED run (whose partial result
+     * is the most valuable to continue from) still archives. Failures are
+     * logged and swallowed: losing the archive must never fail the run.
+     */
+    private suspend fun persistResumeArchive(runId: String, snapshot: SubagentRunRegistry.Run?) {
+        val s = snapshot ?: return
+        // [feat/subagent-budget-hardening] File I/O off the caller's thread,
+        // and NonCancellable because this runs from a finally that cancelled
+        // runs also reach — their partial result is the one most worth
+        // continuing from.
+        kotlinx.coroutines.withContext(
+            kotlinx.coroutines.NonCancellable + kotlinx.coroutines.Dispatchers.IO,
+        ) {
+            runCatching {
+                val file = resumeArchiveFile(runId) ?: return@runCatching
+                file.parentFile?.mkdirs()
+                file.writeText(
+                    SubagentResumeArchive.toJson(
+                        SubagentResumeArchive.Snapshot(
+                            runId = s.id,
+                            skillId = s.skillId,
+                            skillName = s.skillName,
+                            status = SubagentStatus.stateLabel(s),
+                            error = s.error.orEmpty(),
+                            turns = s.turn,
+                            maxTurns = s.maxTurns,
+                            report = s.resultText,
+                            artifacts = s.artifacts,
+                        ),
+                    ),
+                    Charsets.UTF_8,
+                )
+            }.onFailure {
+                AppLogger.warning(TAG, "[Subagent] could not archive resume state for $runId: ${it.message}")
+            }
+            // [feat/subagent-budget-hardening] Bound the archive directory:
+            // every run wrote one and nothing ever removed them.
+            runCatching { pruneResumeArchives(SubagentResumeArchive.MAX_ARCHIVES) }
+        }
+    }
+
+    /**
+     * [feat/subagent-budget-hardening] Keep the newest [keep] resume archives
+     * and delete the rest. Only the archive FILE is deleted — the run's
+     * artifacts and directory stay untouched, because they may be the only
+     * copy of a deliverable.
+     */
+    private fun pruneResumeArchives(keep: Int) {
+        if (keep <= 0) return
+        val root = PRootKernel.resolveSessionHostPath(
+            deps.activeSessionId(),
+            SubagentSkill.ARTIFACTS_DIR,
+            context,
+        ) ?: return
+        val archives = root.listFiles()
+            ?.mapNotNull { dir ->
+                val f = java.io.File(dir, SubagentResumeArchive.FILE_NAME)
+                if (f.isFile) f to f.lastModified() else null
+            }
+            ?: return
+        if (archives.size <= keep) return
+        archives.sortedByDescending { it.second }
+            .drop(keep)
+            .forEach { (file, _) ->
+                runCatching { file.delete() }
+                    .onFailure {
+                        AppLogger.warning(
+                            TAG,
+                            "[Subagent] could not prune resume archive ${file.name}: ${it.message}",
+                        )
+                    }
+            }
+    }
+
+    /**
+     * [feat/subagent-budget-hardening] A `read_only: true` skill cannot write
+     * through its tools, but `browser_use` still downloads files and saves
+     * screenshots under `/var/minis/browser`. The runtime does not log those
+     * as artifacts (it did not write them), so after a read-only run we PROBE
+     * the browser root and report what appeared during the run. Stated as a
+     * notice, not as an artifact: the distinction between "the runtime wrote
+     * it" and "it appeared while the run was alive" must stay honest.
+     */
+    private fun probeReadOnlyWrites(sinceMs: Long, runId: String) {
+        runCatching {
+            val root = PRootKernel.resolveSessionHostPath(
+                deps.activeSessionId(),
+                "/var/minis/browser",
+                context,
+            ) ?: return@runCatching
+            val hits = root.walkTopDown()
+                .maxDepth(3)
+                .filter { it.isFile && it.lastModified() >= sinceMs }
+                .take(20)
+                .map { it.absolutePath }
+                .toList()
+            if (hits.isEmpty()) return@runCatching
+            registry.appendNotice(
+                runId,
+                "[read-only probe] ${hits.size} file(s) appeared outside the run workspace " +
+                    "while it ran (browser downloads/screenshots): " + hits.joinToString(", "),
+            )
+            AppLogger.warning(
+                TAG,
+                "[Subagent] read-only run $runId produced ${hits.size} file(s) outside its workspace",
+            )
+        }
+    }
+
     // ── Model loop ───────────────────────────────────────────────────────
 
     /**
@@ -1421,12 +1735,24 @@ class SubagentRunner(
         run: SubagentRunRegistry.Run,
         worstCaseChildTokens: Long,
         /**
+         * [feat/subagent-budget-hardening] The CAPPED ceiling shown in the
+         * ledger ("≤ N tok"). Separate from [worstCaseChildTokens], which is
+         * the guard's reservation and must stay the real theoretical maximum.
+         */
+        displayCeilingTokens: Long = worstCaseChildTokens,
+        /**
          * [feat/subagent-roster-routing] P1-3 — the skill name for the
          * ledger entry. It is a PARAMETER because `executeLoopGuarded` is
          * a sibling of the spawn site, not a nested scope: the skill is
          * resolved by the caller.
          */
         skillName: String,
+        /**
+         * [feat/subagent-budget-hardening] `read_only: true` skill — after
+         * the run, probe for files created through channels the allowlist
+         * cannot see (browser downloads/screenshots).
+         */
+        readOnly: Boolean = false,
         block: suspend () -> ToolExecutionResult,
     ): ToolExecutionResult {
         val guard = deps.subagentBudgetGuard()
@@ -1441,7 +1767,7 @@ class SubagentRunner(
         // runtime's own configuration implies — never as a fabricated
         // measurement.
         val ledger = deps.subagentCostLedger()
-        ledger?.reserve(run.id, skillName, worstCaseChildTokens)
+        ledger?.reserve(run.id, skillName, displayCeilingTokens)
         try {
             return block()
         } finally {
@@ -1474,6 +1800,14 @@ class SubagentRunner(
             // coroutine already cancelled — and a cancelled run is precisely the
             // one whose partial result is worth keeping.
             persistChildReport(run.id, snapshot)
+            if (readOnly) {
+                snapshot?.let { probeReadOnlyWrites(it.startedAtMs, run.id) }
+            }
+            // [feat/subagent-resume-durability] Same finally, same reason:
+            // this is the only place every exit path reaches, so a
+            // continuation stays possible after the process (and with it the
+            // memory-only registry) is gone.
+            persistResumeArchive(run.id, snapshot)
         }
     }
 
@@ -1517,6 +1851,24 @@ class SubagentRunner(
          * every downstream surface show the same story.
          */
         spreadLabel: String = "",
+        /**
+         * [feat/subagent-budget-hardening] The continuation hand-off for a
+         * resumed run (empty for a fresh spawn). Prepended to the task so
+         * the model knows what already exists instead of re-deriving it.
+         */
+        resumeContext: String = "",
+        /**
+         * [feat/subagent-budget-hardening] The previous run's artifact paths,
+         * carried into this run's list so the deliverable set is the union,
+         * not just what this attempt re-wrote.
+         */
+        resumeArtifacts: List<String> = emptyList(),
+        /**
+         * The resumed run's artifacts directory. The continuation writes
+         * THERE, not into a new per-run directory, so one deliverable does
+         * not end up split across two numbered folders.
+         */
+        resumeArtifactsDir: String = "",
     ): ToolExecutionResult {
         // [T-subagent-runtime-preamble] Inject a short runtime preamble
         // (current date/time + durable artifacts root) ahead of the skill
@@ -1530,7 +1882,14 @@ class SubagentRunner(
         // same-named deliverables (`report.md`, `data.csv`) were the exact
         // collision this closes: with N parallel research agents, last
         // writer won and the parent could not attribute a file to a run.
-        val artifactsDir = SubagentSkill.artifactsDirFor(run.id)
+        // [feat/subagent-budget-hardening] A continuation keeps writing into
+        // the PREVIOUS run's directory: the deliverable must stay in one
+        // place, and the paths quoted in its hand-off are that directory's.
+        val artifactsDir = if (resumeArtifactsDir.isNotBlank()) {
+            resumeArtifactsDir
+        } else {
+            SubagentSkill.artifactsDirFor(run.id)
+        }
         runCatching {
             val dirFile = PRootKernel.resolveSessionHostPath(sessionId, artifactsDir, context)
             if (dirFile != null) dirFile.mkdirs()
@@ -1596,7 +1955,18 @@ class SubagentRunner(
             deps.providerLabel(provider) +
                 (if (spreadLabel.isNotBlank()) " [$spreadLabel]" else ""),
         )
-        val history = mutableListOf(LLMMessage(role = LLMMessage.Role.USER, content = query))
+        val history = mutableListOf(
+            LLMMessage(
+                role = LLMMessage.Role.USER,
+                content = if (resumeContext.isBlank()) {
+                    query
+                } else {
+                    // One USER message: hand-off + the remaining task. Keeping
+                    // it single preserves alternation from the first request.
+                    "$resumeContext\n\n---\n\nWhat is left to do:\n$query"
+                },
+            ),
+        )
 
         // [T-subagent-run-timeout] The absolute [deadlineNanos] arrives from
         // the spawn site — but since [fix/subagent-queue-budget] it is
@@ -1609,9 +1979,19 @@ class SubagentRunner(
         // number of turns, which nothing capped before.
 
         val resultSb = StringBuilder()
-        val artifacts = mutableListOf<String>()
+        // [feat/subagent-budget-hardening] A continuation's artifact list
+        // starts with the PREVIOUS run's files: the parent reads this list to
+        // decide what exists, and starting from empty made every pre-existing
+        // deliverable invisible after a resume.
+        val artifacts = mutableListOf<String>().apply { addAll(resumeArtifacts) }
         var turns = 0
         var lastText = ""
+        // [feat/subagent-budget-hardening] A transient failure that outlives
+        // the per-turn stream retries used to kill the whole run — even when
+        // it lost a single model call from a 20-turn budget. One run-level
+        // retry gives the next turn a fresh start; the failure is NOT worth
+        // replaying the whole task for (that is what resume_run_id is for).
+        var runLevelRetries = 0
         // [fix/subagent-plan-execute] True once a tool-less PLAN turn was
         // answered with an execution nudge. Bounds the nudge to one per run.
         var planNudgeIssued = false
@@ -1746,6 +2126,19 @@ class SubagentRunner(
                 }
                 turns++
                 registry.turnStarted(run.id, turns)
+                // [feat/subagent-budget-hardening] The budget belongs in the
+                // SYSTEM prompt, not history: appending a user turn here
+                // would collide with the tool-result USER tail and break the
+                // wire alternation (see SubagentSteer for the full story).
+                // It is re-stated at 70 % / 90 % so the model wraps up with a
+                // report instead of dying mid-task.
+                val effectiveSystemPrompt = systemPromptWithPlan +
+                    SubagentSkill.budgetNote(
+                        remainingSeconds = runSecondsLeft(deadlineNanos),
+                        totalSeconds = timeoutSeconds,
+                        turnsLeft = (config.maxTurns - turns).coerceAtLeast(0),
+                        maxTurns = config.maxTurns,
+                    )
                 // [port/upstream-subagent-steer] Deliver queued course
                 // corrections at the TURN BOUNDARY — never mid-stream and
                 // never mid-tool-call. Two properties matter here:
@@ -1816,7 +2209,7 @@ class SubagentRunner(
                             instance = instance,
                             model = provider.model,
                             messages = history.toList(),
-                            systemPrompt = systemPromptWithPlan,
+                            systemPrompt = effectiveSystemPrompt,
                             // [T-subagent-output-from-model] Per-turn output
                             // ceiling = the run model's configured Max Output
                             // Tokens, clamped into the remaining context window
@@ -1957,6 +2350,46 @@ class SubagentRunner(
                             // segments/steps.
                             registry.resetTurn(run.id, attemptSnap, attemptToolIds)
                             kotlinx.coroutines.delay(delaySec * 1000L)
+                            continue
+                        }
+                        // [feat/subagent-budget-hardening] RUN-LEVEL retry:
+                        // the per-turn stream retries are exhausted, but a
+                        // transient failure should not throw away a healthy
+                        // multi-turn run. Spend one more turn (bounded by
+                        // MAX_RUN_LEVEL_RETRIES and the remaining budget)
+                        // before giving up; the outer handler still journals
+                        // and reports if this one fails too.
+                        if (runLevelRetries < MAX_RUN_LEVEL_RETRIES &&
+                            turns < config.maxTurns &&
+                            System.nanoTime() < deadlineNanos
+                        ) {
+                            runLevelRetries += 1
+                            registry.appendNotice(
+                                run.id,
+                                "[transient failure — run-level retry " +
+                                    "$runLevelRetries/$MAX_RUN_LEVEL_RETRIES at turn $turns]",
+                            )
+                            AppLogger.warning(
+                                TAG,
+                                "[Subagent] '$skillName' run-level retry " +
+                                    "$runLevelRetries/$MAX_RUN_LEVEL_RETRIES at turn $turns",
+                            )
+                            // [feat/subagent-budget-hardening] Roll the failed
+                            // attempt back before the next turn: its partial
+                            // narration and half-built tool rows must not
+                            // become the run's report or history. (Same
+                            // rollback the per-turn stream retry does.)
+                            registry.resetTurn(run.id, attemptSnap, attemptToolIds)
+                            textSb.setLength(0)
+                            toolCalls.clear()
+                            kotlinx.coroutines.delay(RUN_LEVEL_RETRY_DELAY_MS)
+                            // [feat/subagent-budget-hardening] CONTINUE the
+                            // stream loop, not the turn loop: breaking out
+                            // would fall into the "tool-less turn" logic with
+                            // an empty toolCalls list, and the plan gate would
+                            // FINISH the run — recording a transient provider
+                            // failure as a completed task. One more attempt at
+                            // THIS turn is the retry; the next failure throws.
                             continue
                         }
                         throw e  // fatal for this run — outer handler journals + reports
@@ -2168,6 +2601,13 @@ class SubagentRunner(
                                 callId = call.id,
                                 runId = run.id,
                                 artifacts = artifacts,
+                                // [feat/subagent-budget-hardening] The shell
+                                // branch caps its own timeout with this, so a
+                                // single command cannot eat the whole run.
+                                budgetLeftSeconds = runSecondsLeft(deadlineNanos),
+                                // [feat/subagent-budget-hardening] The last
+                                // turn is report-only.
+                                finalTurn = config.reportLastTurn && turns >= config.maxTurns,
                                 // [fix/subagent-allowed-tools-enforcement] The
                                 // skill's allowlist travels with the run, so the
                                 // runtime gate sees the same list the schema
@@ -2903,6 +3343,22 @@ class SubagentRunner(
         // command itself has to be checked. An EMPTY set means the skill
         // declared no scope, which means NO MCP access.
         mcpServers: Set<String> = emptySet(),
+        /**
+         * [feat/subagent-budget-hardening] Seconds left in the run's
+         * wall-clock budget, or [Int.MAX_VALUE] when unknown (direct callers,
+         * tests). The loop only checks the deadline at TURN boundaries, so a
+         * shell command that outlives the budget still runs to completion —
+         * a 900 s cap inside a 2-minute run burns 15 minutes and only then
+         * reports TIMED_OUT. Passed here so the shell branch can refuse or
+         * shorten it.
+         */
+        budgetLeftSeconds: Int = Int.MAX_VALUE,
+        /**
+         * [feat/subagent-budget-hardening] True on the run's LAST turn. A
+         * tool call there would spend the only turn left and end the run with
+         * no deliverable, so only report-landing tools stay allowed.
+         */
+        finalTurn: Boolean = false,
     ): ToolExecutionResult {
         if (name in SubagentSkill.FORBIDDEN_TOOLS) {
             return forbiddenToolResult(name)
@@ -2928,8 +3384,48 @@ class SubagentRunner(
                 toolTitle = name,
             )
         }
+        // [feat/subagent-budget-hardening] The LAST turn belongs to the
+        // report. Allowing one more command there spends the only remaining
+        // turn and the run ends without a deliverable — the exact ending the
+        // budget notes were added to prevent. file_write/file_edit stay
+        // allowed so the report can land on disk.
+        if (finalTurn && name !in SubagentSkill.REPORT_WRITE_TOOLS) {
+            return ToolExecutionResult(
+                "Error: this is the run's FINAL turn — no more tool calls except " +
+                    "file_write / file_edit. Write the final report NOW with what you " +
+                    "already have, and put unfinished work in `gaps:`.",
+                false,
+                toolTitle = name,
+            )
+        }
+        // [feat/subagent-budget-hardening] A long tool cannot be STARTED with
+        // no time left to finish it. shell also has a tighter per-command cap;
+        // browser_use / web_search have no timeout the sub-agent can pass, so
+        // this gate is the only protection they get.
+        if (budgetLeftSeconds != Int.MAX_VALUE &&
+            budgetLeftSeconds <= SubagentSkill.MIN_LONG_TOOL_BUDGET_SECONDS &&
+            name in SubagentSkill.LONG_RUNNING_TOOLS
+        ) {
+            AppLogger.warning(
+                TAG,
+                "[Subagent] '$name' REFUSED — only ${budgetLeftSeconds}s of budget left",
+            )
+            return ToolExecutionResult(
+                "Error: only ${budgetLeftSeconds}s of this run's wall-clock budget remain — " +
+                    "no time to start a $name call. Stop calling tools and write the final " +
+                    "report NOW.",
+                false,
+                toolTitle = name,
+            )
+        }
         return when (name) {
-            "shell_execute" -> executeSubagentShell(argsJson, callId, runId, mcpServers)
+            "shell_execute" -> executeSubagentShell(
+                argsJson = argsJson,
+                stepId = callId,
+                runId = runId,
+                mcpServers = mcpServers,
+                budgetLeftSeconds = budgetLeftSeconds,
+            )
             "browser_use" -> deps.executeBrowserUse(argsJson)
             // [T-subagent-websearch] Same executor the main loop uses
             // (configured engine + render wait + readable extraction), so a
@@ -3070,6 +3566,17 @@ class SubagentRunner(
     }
 
     /**
+     * [feat/subagent-budget-hardening] Whole seconds left before
+     * [deadlineNanos], floored at 0. The shell branch caps its own timeout
+     * with this: the loop's deadline is only checked at TURN boundaries, so
+     * without the cap a command could outlive the entire run.
+     */
+    private fun runSecondsLeft(deadlineNanos: Long): Int =
+        ((deadlineNanos - System.nanoTime()) / 1_000_000_000L)
+            .coerceIn(0L, Int.MAX_VALUE.toLong())
+            .toInt()
+
+    /**
      * [T-subagent-parity] shell_execute inside a sub-agent: built on
      * [ExecutionCoordinator] with per-line streaming into the registry's
      * current step. Mirrors the main agent's shell path (timeout clamping,
@@ -3084,13 +3591,47 @@ class SubagentRunner(
         // reach. See the note at the call site: MCP is a SHELL capability,
         // so this is enforced on the command, not on a tool list.
         mcpServers: Set<String> = emptySet(),
+        /**
+         * [feat/subagent-budget-hardening] Remaining wall-clock seconds for
+         * the run, or [Int.MAX_VALUE] when unknown. See the parameter of the
+         * same name on [executeSubagentTool].
+         */
+        budgetLeftSeconds: Int = Int.MAX_VALUE,
     ): ToolExecutionResult {
         val args = try { JSONObject(argsJson) } catch (_: Exception) { JSONObject() }
         val command = args.optString("command", "")
-        val timeoutSec = args.optInt("timeout", 900).coerceIn(1, 900)
         val toolTitle = args.optString("tool_title", "shell_execute")
         if (command.isBlank()) {
             return ToolExecutionResult("Error: 'command' is required", false, toolTitle = toolTitle)
+        }
+        // [feat/subagent-budget-hardening] A command must never outlive the
+        // run. Two rules:
+        //  1. not enough time left to START one at all -> refuse, and tell
+        //     the model what to do instead (write the report);
+        //  2. otherwise cap the request at (remaining - reserve), so the last
+        //     turn still has time to report before the deadline fires.
+        if (budgetLeftSeconds != Int.MAX_VALUE &&
+            budgetLeftSeconds <= SubagentSkill.MIN_SHELL_BUDGET_SECONDS
+        ) {
+            AppLogger.warning(
+                TAG,
+                "[Subagent] shell REFUSED — only ${budgetLeftSeconds}s of budget left",
+            )
+            return ToolExecutionResult(
+                "Error: only ${budgetLeftSeconds}s of this run's wall-clock budget remain — " +
+                    "there is no time to start a shell command. Stop calling tools and " +
+                    "write your final report NOW.",
+                false,
+                toolTitle = toolTitle,
+            )
+        }
+        val requestedTimeoutSec = args.optInt("timeout", 900).coerceIn(1, 900)
+        val timeoutSec = if (budgetLeftSeconds == Int.MAX_VALUE) {
+            requestedTimeoutSec
+        } else {
+            requestedTimeoutSec.coerceAtMost(
+                (budgetLeftSeconds - SubagentSkill.SHELL_BUDGET_RESERVE_SECONDS).coerceAtLeast(1),
+            )
         }
         // [feat/subagent-roster-routing] The MCP scope gate. Refused BEFORE
         // the command runs, so an out-of-scope server is never contacted.
@@ -3591,6 +4132,17 @@ class SubagentRunner(
          * (seconds) — mirrors the main loop's AUTO_RETRY_DELAYS_SEC.
          */
         private val STREAM_RETRY_DELAYS_SEC = intArrayOf(1, 2, 4)
+
+        /**
+         * [feat/subagent-budget-hardening] How many times a run may restart
+         * itself after a transient failure exhausts the per-turn stream
+         * retries. One: a second failure is a stuck provider, and the task
+         * is better continued (resume_run_id) than re-burned from turn 1.
+         */
+        private const val MAX_RUN_LEVEL_RETRIES = 1
+
+        /** Backoff before that run-level retry. */
+        private const val RUN_LEVEL_RETRY_DELAY_MS = 2_000L
     }
 }
 

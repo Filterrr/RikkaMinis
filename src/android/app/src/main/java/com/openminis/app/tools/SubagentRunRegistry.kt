@@ -168,6 +168,12 @@ class SubagentRunRegistry {
         /** Current turn (1-based) / configured max turns. */
         val turn: Int = 0,
         val maxTurns: Int = 0,
+        /**
+         * [feat/subagent-budget-hardening] The run's wall-clock budget, for
+         * the UI ("~3 min left"). 0 for runs restored from older state or
+         * constructed by tests — the UI then shows turns only.
+         */
+        val timeoutSeconds: Int = 0,
         /** Final or streaming text produced by the sub-agent. */
         val resultText: String = "",
         /**
@@ -394,6 +400,11 @@ class SubagentRunRegistry {
         sessionId: String = "",
         groupId: String = "",
         queued: Boolean = false,
+        /**
+         * [feat/subagent-budget-hardening] Wall-clock budget, surfaced so the
+         * UI can show remaining minutes instead of only turn counts.
+         */
+        timeoutSeconds: Int = 0,
     ): Run {
         val run = Run(
             id = nextId("subagent"),
@@ -413,6 +424,7 @@ class SubagentRunRegistry {
             // the wait for a permit stays measurable after execution starts.
             queuedAtMs = if (queued) System.currentTimeMillis() else 0L,
             maxTurns = maxTurns,
+            timeoutSeconds = timeoutSeconds,
         )
         // Newest first — the pill shows the freshest run; detail page lists
         // history the same way.
@@ -546,6 +558,7 @@ class SubagentRunRegistry {
         sessionId: String = "",
         groupId: String = "",
         queued: Boolean = false,
+        timeoutSeconds: Int = 0,
     ): RegisterOutcome = synchronized(registerLock) {
         val duplicate = _runs.value.firstOrNull {
             it.isActive &&
@@ -554,7 +567,10 @@ class SubagentRunRegistry {
         }
         if (duplicate != null) return RegisterOutcome(duplicate, reused = true)
         RegisterOutcome(
-            register(blockId, skillId, skillName, query, title, maxTurns, sessionId, groupId, queued),
+            register(
+                blockId, skillId, skillName, query, title, maxTurns, sessionId, groupId,
+                queued, timeoutSeconds,
+            ),
             reused = false,
         )
     }

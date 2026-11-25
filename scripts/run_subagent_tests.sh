@@ -79,6 +79,9 @@ for f in \
   tools/SubagentToolResultBatch.kt \
   tools/SubagentBudgetClock.kt \
   tools/SubagentBudgetGuard.kt \
+  tools/SubagentResume.kt \
+  tools/SubagentResumeArchive.kt \
+  tools/SubagentBudgetCalibration.kt \
   tools/SubagentHistoryBudget.kt \
   tools/SubagentHistoryRepair.kt \
   tools/SubagentExecutedCallCount.kt \

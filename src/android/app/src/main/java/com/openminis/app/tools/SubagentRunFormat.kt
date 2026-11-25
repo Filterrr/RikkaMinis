@@ -87,6 +87,26 @@ object SubagentRunFormat {
         return fraction.coerceIn(0.04f, 0.96f)
     }
 
+    /**
+     * [feat/subagent-budget-hardening] "~4 min left" for a LIVE run whose
+     * wall-clock budget is known, or null.
+     *
+     * The pill/detail progress bar has always been turn-based; the budget the
+     * parent actually set is TIME. A user watching a run cannot convert
+     * "turn 12/40" into minutes, and that is the number that decides whether
+     * it will finish.
+     */
+    fun remainingBudgetLabel(
+        run: SubagentRunRegistry.Run?,
+        nowMs: Long = System.currentTimeMillis(),
+    ): String? {
+        if (run == null || !run.isExecuting || run.timeoutSeconds <= 0) return null
+        val endMs = run.startedAtMs + run.timeoutSeconds * 1000L
+        val leftMs = (endMs - nowMs).coerceAtLeast(0L)
+        val minutes = (leftMs + 59_999L) / 60_000L
+        return if (minutes >= 1) "~$minutes min left" else "<1 min left"
+    }
+
     /** Below this, a queue hop is scheduler jitter rather than a visible wait. */
     private const val QUEUE_WAIT_NOTABLE_MS = 1000L
 }

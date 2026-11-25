@@ -70,10 +70,12 @@ class SubagentProgressTest {
     @Test
     fun `frequent waits for the interval`() {
         val lvl = SubagentProgress.Level.FREQUENT
-        // 14s after the last note: not yet, even though the run changed.
-        assertFalse(SubagentProgress.shouldEmit(lvl, 29_000L, 15_000L, "b", "a", 0))
-        // 15s and changed: yes.
-        assertTrue(SubagentProgress.shouldEmit(lvl, 30_000L, 15_000L, "b", "a", 0))
+        val last = 15_000L
+        val interval = SubagentProgress.FREQUENT_INTERVAL_MS
+        // One millisecond short: not yet, even though the run changed.
+        assertFalse(SubagentProgress.shouldEmit(lvl, last + interval - 1, last, "b", "a", 0))
+        // Exactly the interval and changed: yes.
+        assertTrue(SubagentProgress.shouldEmit(lvl, last + interval, last, "b", "a", 0))
     }
 
     @Test
@@ -110,7 +112,7 @@ class SubagentProgressTest {
     }
 
     @Test
-    fun `the signature tracks the in-flight tool, the turn and the latest text`() {
+    fun `the signature tracks the in-flight tool and the turn, not narration`() {
         val base = run(steps = listOf(step("shell_execute", ToolStepStatus.RUNNING, "Run tests")))
         val same = run(steps = listOf(step("shell_execute", ToolStepStatus.RUNNING, "Run tests")))
         assertEquals(SubagentProgress.signature(base), SubagentProgress.signature(same))
@@ -124,10 +126,19 @@ class SubagentProgressTest {
             "a new turn must change the signature",
             SubagentProgress.signature(base) != SubagentProgress.signature(run(turn = 4)),
         )
-        assertTrue(
-            "new text must change the signature",
-            SubagentProgress.signature(base) !=
-                SubagentProgress.signature(run(resultText = "halfway there")),
+        // [feat/subagent-budget-hardening] Text is NOT a stage change: a run
+        // narrating its way through one long step used to emit a note every
+        // interval (12 parent turns for 12 rewordings). The preview still
+        // reaches the reader through body(); it just must not look like
+        // progress.
+        val narrated = run(
+            steps = listOf(step("shell_execute", ToolStepStatus.RUNNING, "Run tests")),
+            resultText = "halfway there",
+        )
+        assertEquals(
+            "narration alone must not change the signature",
+            SubagentProgress.signature(base),
+            SubagentProgress.signature(narrated),
         )
     }
 

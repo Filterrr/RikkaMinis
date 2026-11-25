@@ -44,12 +44,15 @@ elif mode == "timeout900":
     s = s.replace("const val DEFAULT_TIMEOUT_SECONDS = 1800",
                   "const val DEFAULT_TIMEOUT_SECONDS = 900")
 elif mode == "version":
-    s = s.replace("version: 1.5.0", "version: 1.4.6")
+    s = s.replace("version: 1.6.0", "version: 1.5.0")
 elif mode == "version_ro":
-    s = s.replace("version: 1.1.0", "version: 1.0.4")
+    s = s.replace("version: 1.2.0", "version: 1.1.0")
 elif mode == "unwire":
-    s = s.replace("SubagentSkill.wallClockSecondsForTurnBudget(config.maxTurns)",
-                  "null")
+    # [feat/subagent-parent-minutes-budget] The spawn site must READ the
+    # parent's answer. Feeding a constant instead leaves every other guard
+    # green while the minutes budget quietly stops working.
+    s = s.replace('parentMinutes = args.optInt("max_minutes", 0),',
+                  "parentMinutes = 0,")
 elif mode == "constant":
     s = s.replace("const val SHIPPED_SUBAGENT_MAX_TURNS = 75",
                   "const val SHIPPED_SUBAGENT_MAX_TURNS = 40")
@@ -74,9 +77,9 @@ echo "── negative verification: each defect must turn the guard RED ──"
 neg "max_turns reverted to 40 in general-agent"   "$GEN"   turns40
 neg "max_turns reverted to 40 in read-only-researcher" "$RO" turns40
 neg "wall-clock default reverted to 900s"          "$SKILL" timeout900
+neg "parent max_minutes ignored at the spawn site" "$RUNNER" unwire
 neg "general-agent version not bumped"             "$GEN"   version
 neg "read-only version not bumped"                 "$RO"    version_ro
-neg "spawn-site wiring removed"                    "$RUNNER" unwire
 neg "shipped constant reverted to 40"              "$SKILL" constant
 
 echo

@@ -122,6 +122,7 @@ object SubagentStatus {
             append(", turn ").append(run.turn)
             if (run.maxTurns > 0) append("/").append(run.maxTurns)
         }
+        SubagentRunFormat.remainingBudgetLabel(run, nowMs)?.let { append(", ").append(it) }
         run.queueWaitMs?.takeIf { it > 0 }?.let { append(", queued ").append(elapsedLabel(it)) }
 
         // What it is doing RIGHT NOW — the answer to "is it stuck?".
