@@ -40,12 +40,21 @@ class SessionSearchMenuEntryTest {
     @Test
     fun legacyOrderGainsSearchSessionAtTheEnd() {
         // An order persisted before this entry existed must not lose the new
-        // row: normalizeOrder appends every missing known key.
+        // row: normalizeOrder appends every missing known key, in ALL_ENTRIES
+        // order — so the tail is SEARCH_SESSION followed by the two
+        // footer-only actions that were already last in the pool.
         val legacy = ChatMenuPrefs.TERMINAL + "," + ChatMenuPrefs.EXPORT
         val resolved = ChatMenuPrefs.normalizeOrder(legacy, ChatMenuPrefs.ALL_ENTRIES)
         assertEquals(ChatMenuPrefs.ALL_ENTRIES.size, resolved.size)
         assertTrue(ChatMenuPrefs.SEARCH_SESSION in resolved)
-        assertEquals(ChatMenuPrefs.SEARCH_SESSION, resolved.last())
+        assertEquals(
+            listOf(
+                ChatMenuPrefs.SEARCH_SESSION,
+                ChatMenuPrefs.TOKEN_USAGE,
+                ChatMenuPrefs.SETTINGS,
+            ),
+            resolved.takeLast(3),
+        )
     }
 
     @Test
