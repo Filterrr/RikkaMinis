@@ -743,6 +743,8 @@ fun ChatScreen(
     // the export sheet above.
     var pendingForkAnchorId by remember { mutableStateOf<String?>(null) }
     var showClearChatDialog by remember { mutableStateOf(false) }
+    // [T-android-enhanced-cache] First-enable confirmation dialog visibility.
+    var showEnhancedCacheDialog by remember { mutableStateOf(false) }
 
 
 
@@ -5296,8 +5298,6 @@ private fun ChatInputArea(
         if (granted && pendingVoiceStart) beginVoiceInput()
         pendingVoiceStart = false
     }
-    // [T-android-enhanced-cache] First-enable confirmation dialog visibility.
-    var showEnhancedCacheDialog by remember { mutableStateOf(false) }
 
     // Mirrors `inputText` for the BasicTextField but tracks selection so we
     // can position the cursor (e.g. AFTER the leading "/" when the slash
