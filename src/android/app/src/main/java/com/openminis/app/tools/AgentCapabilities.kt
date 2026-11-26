@@ -79,6 +79,18 @@ enum class AgentCapability {
      * about the parent or its siblings, so there is no isolation cost.
      */
     SELF_INSPECT,
+
+    /**
+     * [T-ask-user] Park the current turn on a question to the user
+     * (`ask_user`).
+     *
+     * Exists as its own capability so the decision "can a sub-agent block on
+     * a human?" is explicit. It cannot: a child parked on a dialog holds a
+     * scheduler slot (the parent's inline wait burns its own budget), and a
+     * batch of children all asking at once turns one question into a queue.
+     * Only the main agent asks.
+     */
+    ASK_USER,
 }
 
 object AgentCapabilities {
@@ -120,6 +132,7 @@ object AgentCapabilities {
         // run nobody asked it to manage.
         "steer_subagent" -> AgentCapability.SPAWN_AGENT
         "agent_status" -> AgentCapability.SELF_INSPECT
+        "ask_user" -> AgentCapability.ASK_USER
         // [T-shell-job] Background jobs are still shell execution: same
         // sandbox, same command surface, so they ride the SHELL capability
         // rather than inventing a second grant path.

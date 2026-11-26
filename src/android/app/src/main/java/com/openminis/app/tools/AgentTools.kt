@@ -78,6 +78,11 @@ object AgentTools {
         // owns a persistent PRoot shell (ExecutionCoordinator), so a nohup'd
         // child survives the tool call returning — this exposes that.
         add(shellJobDefinition())
+        // [T-ask-user] Blocking clarify-question. Without it the only way to
+        // ask "which of these two APIs?" was to end the turn — losing the
+        // tool state, the plan and the accumulated context, and forcing the
+        // model to re-read everything after the answer.
+        add(askUserDefinition())
         // [T7-subagent] spawn_agent: skill = independent sub-agent instance.
         // Always exposed — the sub-agent's own tool set is filtered inside
         // SubagentSkill.buildFilteredTools (spawn_agent itself is FORBIDDEN
@@ -141,6 +146,52 @@ object AgentTools {
      * model ("start it, then poll it") and the model doesn't have to remember
      * four names under budget pressure.
      */
+    /**
+     * [T-ask-user] 挂起式提问。
+     *
+     * 说明里刻意写清"这一轮会停住等你"——模型如果用它来做本该自己判断的
+     * 小决定，用户会连续收到一串弹窗，比一次问完还烦。所以也给了
+     * `timeout_seconds`（无人值守时降级返回，而不是永远卡住）。
+     */
+    private fun askUserDefinition(): AgentToolDefinition = AgentToolDefinition(
+        name = "ask_user",
+        description = "Ask the user a question and WAIT for the answer inside the current turn. " +
+            "Use it only when a decision is genuinely ambiguous and getting it wrong would be " +
+            "expensive — not for choices you can make from the request, not for permission " +
+            "(tools have their own approval), not to confirm that you understood. " +
+            "Provide 2-6 short options when they are mutually exclusive; set allow_free_text " +
+            "when the answer is open-ended. The turn pauses until the user answers or " +
+            "timeout_seconds elapses (default 300); on timeout you get a 'no answer' result and " +
+            "must proceed with your best judgment or stop.",
+        parameters = mapOf(
+            "tool_title" to AgentToolParam(
+                "string",
+                "A concise 5-10 word summary (e.g. 'Ask which API to target').",
+            ),
+            "question" to AgentToolParam(
+                "string",
+                "The question, in the user's language. One sentence, concrete.",
+            ),
+            "options" to AgentToolParam(
+                "array",
+                "Optional 2-6 mutually exclusive short answers (each <= 80 chars). " +
+                    "Omit for an open-ended question.",
+            ),
+            "allow_free_text" to AgentToolParam(
+                "boolean",
+                "Whether the user may type an answer instead of tapping an option (default: " +
+                    "true when no options were given).",
+            ),
+            "timeout_seconds" to AgentToolParam(
+                "integer",
+                "How long to wait for an answer, 30-1800 (default 300). After this the call " +
+                    "returns 'no answer'.",
+            ),
+        ),
+        required = listOf("tool_title", "question"),
+        propertyOrdering = listOf("tool_title", "question", "options", "allow_free_text", "timeout_seconds"),
+    )
+
     private fun shellJobDefinition(): AgentToolDefinition = AgentToolDefinition(
         name = "shell_job",
         description = "Run a shell command in the BACKGROUND and return immediately. Use this " +

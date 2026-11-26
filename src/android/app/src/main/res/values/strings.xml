@@ -1188,6 +1188,10 @@
 
     <!-- [T-android-trace-viewer] Agent trace viewer — the read side of the
          schema-2.0 traces the runtime writes to workspace/.traces/. -->
+    <string name="ask_user_title">The agent needs your input</string>
+    <string name="ask_user_free_text_label">Or type an answer</string>
+    <string name="ask_user_send">Answer</string>
+    <string name="ask_user_skip">Skip</string>
     <string name="composer_voice_input">Dictate</string>
     <string name="composer_voice_error">Speech recognition failed (%1$s)</string>
     <string name="message_actions_open">Message actions</string>

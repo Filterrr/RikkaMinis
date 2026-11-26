@@ -4716,6 +4716,18 @@ fun ChatScreen(
                     },
                 )
             }
+            // [T-ask-user] Blocking clarify question from the current run.
+            // Rendered from the VM's queue (per-VM, so it can't outlive the
+            // session that asked); answering resumes the exact turn that
+            // parked, with no new turn boundary.
+            val askUserRequests by viewModel.askUserQueue.requests.collectAsState()
+            askUserRequests.firstOrNull()?.let { ask ->
+                AskUserDialog(
+                    request = ask,
+                    onAnswer = { index, text -> viewModel.answerAskUser(ask.id, index, text) },
+                    onDismiss = { viewModel.dismissAskUser(ask.id) },
+                )
+            }
             // [T-android-enhanced-cache] One-time extra-billing confirmation
             // before the first enable. Accepting records the durable ack and
             // turns the toggle on; subsequent enables skip the dialog.

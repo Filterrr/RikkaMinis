@@ -781,6 +781,13 @@ class ChatViewModel(
     val subagentRunRegistry = SubagentRunRegistry()
 
     /**
+     * [T-ask-user] 挂起式提问队列（per-VM，跟会话同生共死）。UI 渲染
+     * [AskUserQueue.requests]，用户点了之后 resolve 唤醒卡在
+     * [executeAskUserTool] 里的那一轮。
+     */
+    val askUserQueue = com.openminis.app.tools.AskUserQueue()
+
+    /**
      * [T-subagent-scheduler] Two-level concurrency scheduler for sub-agent
      * runs. The chat-global cap is [SubagentSkill.MAX_PARALLEL_CAP] (4);
      * each skill's own cap comes from its SKILL.md frontmatter
@@ -10740,6 +10747,10 @@ class ChatViewModel(
                 // shell: nohup'd children outlive the tool call, so builds and
                 // installs stop being bounded by shell_execute's 900s cap.
                 "shell_job" -> executeShellJobTool(argsJson)
+                // [T-ask-user] Blocking clarify question: the turn parks on the
+                // queue's deferred, the dialog resolves it, the answer becomes
+                // the tool result — no turn boundary, no context rebuild.
+                "ask_user" -> executeAskUserTool(argsJson)
                 // [T7-subagent] spawn_agent: delegate to an independent sub-agent
                 // instance running the named skill. [T-subagent-ui] pass the
                 // tool_use block id so the registry run can be linked to this
@@ -13585,6 +13596,10 @@ Environment variables:
         // point, and clears the list the dialog renders.) The queue is per-VM,
         // so the clear-style semantics match the registry above.
         subagentApprovals.denyAllOutstanding()
+        // [T-ask-user] Same rule for a parked question: a dialog nobody can
+        // see must not hold a turn. The waiter resolves null and takes the
+        // documented "no answer" path.
+        askUserQueue.cancelAllOutstanding()
         // [T-subagent-parallel] The per-chat limiter is per-VM like the
         // registry — it dies with this VM, so no release is needed. (The
         // old process-global gate required an onCleared release to avoid
@@ -14270,6 +14285,70 @@ Environment variables:
         } catch (e: Exception) {
             ToolExecutionResult("Error running shell_job: ${e.message}", false)
         }
+    }
+
+    /**
+     * [T-ask-user] 把一轮"停在问题上"：注册到队列 → 等 deferred →
+     * 超时/取消一律降级成 "no answer"，绝不无限期挂死。
+     */
+    private suspend fun executeAskUserTool(argsJson: String): ToolExecutionResult {
+        val args = try { JSONObject(argsJson) } catch (_: Exception) { JSONObject() }
+        val question = args.optString("question", "").trim()
+        if (question.isEmpty()) {
+            return ToolExecutionResult("Error: 'question' is required", false)
+        }
+        val options = buildList {
+            val arr = args.optJSONArray("options")
+            if (arr != null) {
+                for (i in 0 until arr.length()) {
+                    val v = arr.optString(i, "").trim()
+                    if (v.isNotEmpty()) add(v)
+                }
+            }
+        }
+        val allowFreeText = args.optBoolean("allow_free_text", options.isEmpty())
+        val timeoutSeconds = args.optInt("timeout_seconds", 300).coerceIn(30, 1800)
+
+        val (request, deferred) = askUserQueue.submit(question, options, allowFreeText)
+        val answer = try {
+            kotlinx.coroutines.withTimeoutOrNull(timeoutSeconds * 1000L) { deferred.await() }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // Turn cancelled while parked: drop the ask so a stale dialog can't
+            // outlive the run that asked it.
+            askUserQueue.remove(request.id)
+            throw e
+        }
+        askUserQueue.remove(request.id)
+
+        if (answer == null) {
+            return ToolExecutionResult(
+                "No answer: the user did not respond within ${timeoutSeconds}s. " +
+                    "Do not ask again for the same thing — proceed with your best judgment " +
+                    "(state the assumption in your answer) or finish and ask in the reply.",
+                false,
+            )
+        }
+        val picked = request.options.getOrNull(answer.selectedIndex)
+        val text = answer.text?.trim()?.takeIf { it.isNotEmpty() }
+        val body = buildString {
+            append("User answered")
+            if (picked != null) append(": \"$picked\"")
+            if (text != null) {
+                if (picked != null) append("\nFree-text note: $text") else append(": $text")
+            }
+            if (picked == null && text == null) append(": (dismissed without an answer)")
+        }
+        return ToolExecutionResult(body, true)
+    }
+
+    /** [T-ask-user] UI 回答入口。index = -1 表示没有点选项。 */
+    fun answerAskUser(id: String, selectedIndex: Int, text: String?) {
+        askUserQueue.resolve(id, com.openminis.app.tools.AskUserAnswer(selectedIndex, text))
+    }
+
+    /** [T-ask-user] 用户直接关掉对话框：当作"没回答"，agent 走超时降级路径。 */
+    fun dismissAskUser(id: String) {
+        askUserQueue.resolve(id, com.openminis.app.tools.AskUserAnswer(-1, null))
     }
 
     private fun parseToolParams(argsJson: String): Map<String, Any?> {
