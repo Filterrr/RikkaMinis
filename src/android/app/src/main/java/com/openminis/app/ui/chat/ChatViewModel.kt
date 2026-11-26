@@ -68,7 +68,6 @@ import com.openminis.app.agent.shell.BashismDetector
 import com.openminis.app.agent.shell.BashismReminder
 import com.openminis.app.agent.shell.OnDemandBash
 import com.openminis.app.sandbox.ExecutionCoordinator
-import com.openminis.app.sandbox.CommandResult
 import com.openminis.app.sandbox.WorkspaceSnapshot
 import com.openminis.app.sandbox.PRootKernel
 import com.openminis.app.terminal.MinisOpenUrlBroker
@@ -14169,7 +14168,9 @@ Environment variables:
             )
         }
 
-        suspend fun run(command: String, timeoutMs: Long = 30_000L): CommandResult =
+        // Return type inferred: CommandResult is nested in ExecutionCoordinator
+        // (ExecutionCoordinator.CommandResult), not a top-level sandbox type.
+        suspend fun run(command: String, timeoutMs: Long = 30_000L) =
             ExecutionCoordinator.execute(sessionId = sid, command = command, timeout = timeoutMs)
 
         return try {
