@@ -1188,6 +1188,11 @@
 
     <!-- [T-android-trace-viewer] Agent trace viewer — the read side of the
          schema-2.0 traces the runtime writes to workspace/.traces/. -->
+    <string name="sessionlist_export_markdown">Markdown</string>
+    <string name="sessionlist_export_html">HTML page</string>
+    <string name="clipboard_suggest_label">Copied:</string>
+    <string name="clipboard_suggest_insert">Insert</string>
+    <string name="clipboard_suggest_dismiss">Not now</string>
     <string name="tool_approval_title">This command cannot be undone</string>
     <string name="tool_approval_body">The agent is about to run something irreversible. Read the command before allowing it.</string>
     <string name="tool_approval_allow_once">Allow once</string>

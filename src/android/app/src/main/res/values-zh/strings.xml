@@ -1001,6 +1001,11 @@
     <string name="notif_spawn_approval_mode_background">后台运行</string>
     <string name="notif_spawn_approval_mode_foreground">前台运行</string>
     <!-- [T-android-trace-viewer] 智能体追踪查看器 -->
+    <string name="sessionlist_export_markdown">Markdown</string>
+    <string name="sessionlist_export_html">HTML 页面</string>
+    <string name="clipboard_suggest_label">剪贴板：</string>
+    <string name="clipboard_suggest_insert">插入</string>
+    <string name="clipboard_suggest_dismiss">不需要</string>
     <string name="tool_approval_title">这条命令不可撤销</string>
     <string name="tool_approval_body">智能体即将执行一个不可逆操作，请先看清命令再决定。</string>
     <string name="tool_approval_allow_once">允许一次</string>

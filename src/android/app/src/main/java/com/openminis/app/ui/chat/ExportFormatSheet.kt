@@ -58,6 +58,18 @@ fun ExportFormatSheet(
                 subtitle = stringResource(R.string.sessionlist_export_plain),
                 onClick = { onExport("text") },
             )
+            // [T-export-formats] Markdown for notes/PRs, HTML for "open it and
+            // read it like a document" — both streamed, neither needs network.
+            ExportFormatRow(
+                title = stringResource(R.string.sessionlist_export_markdown),
+                subtitle = "Markdown (.md)",
+                onClick = { onExport("markdown") },
+            )
+            ExportFormatRow(
+                title = stringResource(R.string.sessionlist_export_html),
+                subtitle = "HTML (.html)",
+                onClick = { onExport("html") },
+            )
             Spacer(modifier = Modifier.height(8.dp))
         }
     }

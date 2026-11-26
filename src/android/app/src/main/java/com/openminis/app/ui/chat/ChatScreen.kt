@@ -5466,6 +5466,20 @@ private fun ChatInputArea(
                 .padding(horizontal = 12.dp)
                 .padding(top = 2.dp, bottom = 8.dp),
         ) {
+            // [T-clipboard-suggest] One-tap "insert what you just copied".
+            // Only visible when the clipboard actually holds something the
+            // user might want here (>= 4 chars, not already in the composer);
+            // never auto-sends.
+            ClipboardSuggestionChip(
+                context = context,
+                currentInput = inputText,
+                onInsert = { text ->
+                    val base = inputText
+                    viewModel.setInputText(
+                        if (base.isBlank()) text else base.trimEnd() + "\n" + text,
+                    )
+                },
+            )
             // T13 banner moved INSIDE the LazyColumn so it renders at the
             // visual end of the message list (mirrors iOS — see the
             // banner item before items() in the LazyColumn block above).

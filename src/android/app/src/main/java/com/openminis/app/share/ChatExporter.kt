@@ -91,7 +91,16 @@ object ChatExporter {
         format: String,
     ): Pair<Uri, Summary> = withContext(Dispatchers.IO) {
         val isJson = format == "json"
-        val ext = if (isJson) "json" else "txt"
+        // [T-export-formats] Markdown / HTML alongside JSON and plain text.
+        // Markdown is what people paste into notes and PRs; HTML is what they
+        // open on a phone when they want the conversation to look like a
+        // document (and what the agent's own reports already look like).
+        val ext = when {
+            isJson -> "json"
+            format == "markdown" -> "md"
+            format == "html" -> "html"
+            else -> "txt"
+        }
         val stagingRoot = File(context.cacheDir, "export-staging")
         val workDir = File(stagingRoot, UUID.randomUUID().toString())
         if (!workDir.mkdirs() && !workDir.isDirectory) {
@@ -100,7 +109,7 @@ object ChatExporter {
 
         try {
             val transcriptFile = File(workDir, "messages.$ext")
-            val summary = streamTranscript(repository, session, isJson, transcriptFile)
+            val summary = streamTranscript(repository, session, format, transcriptFile)
 
             val metaFile = File(workDir, "session.json")
             writeSessionMeta(metaFile, session, summary)
@@ -137,9 +146,12 @@ object ChatExporter {
     private suspend fun streamTranscript(
         repository: ChatRepository,
         session: ChatSessionEntity,
-        isJson: Boolean,
+        format: String,
         out: File,
     ): Summary {
+        val isJson = format == "json"
+        val isMarkdown = format == "markdown"
+        val isHtml = format == "html"
         val total = repository.messageCount(session.id)
         var done = 0
         var first: Long? = null
@@ -180,6 +192,57 @@ object ChatExporter {
                     _progress.value = Progress.Running(done, total)
                 }
                 writer.write("]")
+            } else if (isMarkdown) {
+                writer.write("# " + (session.title ?: "Conversation") + "\n\n")
+                forEachBatch(repository, session.id, total) { batch ->
+                    for (msg in batch) {
+                        val role = if (msg.role == "user") "You" else "Assistant"
+                        val text = extractPlainText(msg.partsJson)
+                        writer.write("### " + role + "\n\n")
+                        writer.write(text)
+                        writer.write("\n\n---\n\n")
+                        bytes += text.length.toLong() + role.length + 12
+                        if (first == null) first = msg.createdAt
+                        last = msg.createdAt
+                        val (img, vid) = countAttachments(msg.partsJson)
+                        images += img
+                        videos += vid
+                        done += 1
+                    }
+                    writer.flush()
+                    _progress.value = Progress.Running(done, total)
+                }
+            } else if (isHtml) {
+                // Self-contained document: inline CSS, no external assets, so
+                // it opens from a zip on a phone with no network.
+                val title = escapeHtml(session.title ?: "Conversation")
+                writer.write("<!doctype html>\n<html lang=\"zh\">\n<head>\n")
+                writer.write("<meta charset=\"utf-8\">\n")
+                writer.write("<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n")
+                writer.write("<title>" + title + "</title>\n")
+                writer.write("<style>" + HTML_STYLE + "</style>\n</head>\n<body>\n")
+                writer.write("<h1>" + title + "</h1>\n")
+                forEachBatch(repository, session.id, total) { batch ->
+                    for (msg in batch) {
+                        val isUser = msg.role == "user"
+                        val role = if (isUser) "You" else "Assistant"
+                        val text = extractPlainText(msg.partsJson)
+                        writer.write("<article class=\"msg " + (if (isUser) "user" else "assistant") + "\">\n")
+                        writer.write("<header>" + role + "</header>\n")
+                        writer.write("<pre>" + escapeHtml(text) + "</pre>\n")
+                        writer.write("</article>\n")
+                        bytes += text.length.toLong() * 2
+                        if (first == null) first = msg.createdAt
+                        last = msg.createdAt
+                        val (img, vid) = countAttachments(msg.partsJson)
+                        images += img
+                        videos += vid
+                        done += 1
+                    }
+                    writer.flush()
+                    _progress.value = Progress.Running(done, total)
+                }
+                writer.write("</body>\n</html>\n")
             } else {
                 writer.write(session.title ?: "Conversation")
                 writer.write("\n\n")
@@ -206,7 +269,12 @@ object ChatExporter {
         }
 
         return Summary(
-            format = if (isJson) "json" else "text",
+            format = when {
+                isJson -> "json"
+                isMarkdown -> "markdown"
+                isHtml -> "html"
+                else -> "text"
+            },
             messageCount = done,
             firstCreatedAt = first,
             lastCreatedAt = last,
@@ -215,6 +283,12 @@ object ChatExporter {
             estimatedBytes = bytes,
         )
     }
+
+    private fun escapeHtml(value: String): String =
+        value.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\"", "&quot;")
 
     private suspend inline fun forEachBatch(
         repository: ChatRepository,
@@ -303,4 +377,15 @@ object ChatExporter {
     } catch (_: Throwable) {
         0 to 0
     }
+
+    /** Inline CSS for the HTML export — self-contained, no network. */
+    private const val HTML_STYLE =
+        "body{max-width:760px;margin:0 auto;padding:24px 16px;font:16px/1.6 -apple-system,'Segoe UI',Roboto,sans-serif;color:#1f2328;background:#fff}" +
+        "h1{font-size:22px;margin:0 0 24px}" +
+        ".msg{margin:0 0 20px;padding:12px 14px;border-radius:12px;border:1px solid #e5e7eb}" +
+        ".msg.user{background:#f6f8fa;border-color:#d8dee4}" +
+        ".msg.assistant{background:#fff}" +
+        ".msg header{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:#6e7781;margin-bottom:6px}" +
+        "pre{white-space:pre-wrap;word-wrap:break-word;margin:0;font:14px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace}" +
+        "@media (prefers-color-scheme:dark){body{background:#0d1117;color:#e6edf3}.msg{border-color:#30363d}.msg.user{background:#161b22;border-color:#30363d}.msg.assistant{background:#0d1117}}"
 }
