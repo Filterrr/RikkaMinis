@@ -106,6 +106,7 @@ object AgentCapabilities {
         "read_image" -> AgentCapability.FILE_READ
         "file_write" -> AgentCapability.FILE_WRITE
         "file_edit" -> AgentCapability.FILE_WRITE
+        "apply_patch" -> AgentCapability.FILE_WRITE
         "shell_execute" -> AgentCapability.SHELL
         "browser_use" -> AgentCapability.BROWSER
         // [T-subagent-websearch] Registered so the fail-closed filter GRANTS it

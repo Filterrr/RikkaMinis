@@ -51,6 +51,10 @@ object AgentTools {
         add(FileReadTool.definition())
         add(FileWriteTool.definition())
         add(FileEditTool.definition())
+        // [T-apply-patch] Multi-file unified diff, all-or-nothing. Ten
+        // file_edit calls for a refactor means ten chances to drift and no
+        // atomicity; a patch is one validation pass over the whole change.
+        add(ApplyPatchTool.definition())
         if (supportsImageInput) {
             add(ReadImageTool.definition())
         }

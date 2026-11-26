@@ -74,6 +74,7 @@ import com.openminis.app.terminal.MinisOpenUrlBroker
 import com.openminis.app.terminal.MinisUrlMarker
 import com.openminis.app.tools.AgentTraceRecorder
 import com.openminis.app.tools.AgentTools
+import com.openminis.app.tools.ApplyPatchTool
 import com.openminis.app.tools.FileEditTool
 import com.openminis.app.tools.FileReadTool
 import com.openminis.app.tools.FileWriteTool
@@ -10723,6 +10724,11 @@ class ChatViewModel(
                     if (it.success) maybeReloadSkillsForPath(argsJson)
                 }
                 FileEditTool.NAME -> FileEditTool.execute(argsJson, activeSessionId, context).also {
+                    if (it.success) maybeReloadSkillsForPath(argsJson)
+                }
+                // [T-apply-patch] Same skill-reload hook: a patch can touch
+                // SKILL.md just like file_edit can.
+                ApplyPatchTool.NAME -> ApplyPatchTool.execute(argsJson, activeSessionId, context).also {
                     if (it.success) maybeReloadSkillsForPath(argsJson)
                 }
                 // T178: pass sessionId + context so read_image routes through
