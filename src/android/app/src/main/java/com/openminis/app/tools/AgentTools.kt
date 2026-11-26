@@ -66,6 +66,18 @@ object AgentTools {
         // the SAME engine the user configured (was: model-hardcoded google,
         // unreachable without a proxy in CN).
         add(webSearchDefinition(searchHintProvider))
+        // [T-agent-status] Self-inspection. The run keeps a full advisory
+        // budget (turns / tool calls / shell commands / tokens / wall clock)
+        // and the agent had no way to read it — it would burn the last of its
+        // budget on a long download and die mid-flight with no warning. This
+        // is the read side.
+        add(agentStatusDefinition())
+        // [T-shell-job] Background jobs. shell_execute hard-caps at 900s
+        // (ChatViewModel coerces the timeout), which is a ceiling on every
+        // build / install / batch job the agent can run. The session already
+        // owns a persistent PRoot shell (ExecutionCoordinator), so a nohup'd
+        // child survives the tool call returning — this exposes that.
+        add(shellJobDefinition())
         // [T7-subagent] spawn_agent: skill = independent sub-agent instance.
         // Always exposed — the sub-agent's own tool set is filtered inside
         // SubagentSkill.buildFilteredTools (spawn_agent itself is FORBIDDEN
@@ -115,6 +127,70 @@ object AgentTools {
      * every call REPLACES the whole list. The top-bar badge renders
      * pending/total; the sheet renders the full list with status icons.
      */
+    /**
+     * [T-agent-status] Cheap, read-only self check.
+     *
+     * Deliberately printed as human-readable lines rather than JSON: the model
+     * reads it, not a parser, and "12 turns left, ~4 min wall clock" is
+     * actionable in a way that `{"turnsRemaining":12}` is not.
+     */
+    /**
+     * [T-shell-job] Background-job surface.
+     *
+     * Four actions rather than four tools: the schema teaches one mental
+     * model ("start it, then poll it") and the model doesn't have to remember
+     * four names under budget pressure.
+     */
+    private fun shellJobDefinition(): AgentToolDefinition = AgentToolDefinition(
+        name = "shell_job",
+        description = "Run a shell command in the BACKGROUND and return immediately. Use this " +
+            "instead of shell_execute for anything that may take longer than a few minutes " +
+            "(builds, package installs, model training, bulk downloads, test suites) — " +
+            "shell_execute blocks the whole turn and hard-caps at 15 minutes. " +
+            "action=start (needs command) returns a job id; then poll action=status / action=logs, " +
+            "and action=kill to stop it. action=list shows every job of this session. " +
+            "Jobs run in the session's persistent sandbox shell and keep running after the tool " +
+            "call returns; stdout+stderr go to /var/minis/offloads/jobs/<id>.log.",
+        parameters = mapOf(
+            "tool_title" to AgentToolParam(
+                "string",
+                "A concise 5-10 word summary (e.g. 'Start gradle build in background').",
+            ),
+            "action" to AgentToolParam("string", "start | status | logs | kill | list"),
+            "command" to AgentToolParam(
+                "string",
+                "Shell command to run in the background. Required for action=start.",
+            ),
+            "job_id" to AgentToolParam(
+                "string",
+                "Job id returned by action=start. Required for status / logs / kill.",
+            ),
+            "lines" to AgentToolParam(
+                "integer",
+                "For action=logs: how many trailing log lines to return (default 80, max 500).",
+            ),
+        ),
+        required = listOf("tool_title", "action"),
+        propertyOrdering = listOf("tool_title", "action", "command", "job_id", "lines"),
+    )
+
+    private fun agentStatusDefinition(): AgentToolDefinition = AgentToolDefinition(
+        name = "agent_status",
+        description = "Report this run's own remaining execution budget: turns, tool calls, " +
+            "shell commands, estimated tokens and wall-clock time left, whether the run is " +
+            "already expired, plus how many sub-agents are still running. Read-only and cheap. " +
+            "Call it before a long multi-step task, or when you are unsure whether another " +
+            "round of work still fits.",
+        parameters = mapOf(
+            "tool_title" to AgentToolParam(
+                "string",
+                "A concise 5-10 word summary (e.g. 'Check remaining budget').",
+            ),
+        ),
+        required = listOf("tool_title"),
+        propertyOrdering = listOf("tool_title"),
+    )
+
     private fun todoWriteDefinition(): AgentToolDefinition = AgentToolDefinition(
         name = "todo_write",
         description = "Maintain a task list (todo list) for the current session. Each call REPLACES the entire list — always send the complete updated list, not a delta. Use it to: (1) show the user the plan for multi-step work, (2) track progress through complex tasks (mark items in_progress before starting, completed when done). Keep 3-7 items, each a short imperative phrase. Skip it for single-step questions. " +

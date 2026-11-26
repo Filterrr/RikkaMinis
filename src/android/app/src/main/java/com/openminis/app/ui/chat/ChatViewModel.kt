@@ -68,6 +68,7 @@ import com.openminis.app.agent.shell.BashismDetector
 import com.openminis.app.agent.shell.BashismReminder
 import com.openminis.app.agent.shell.OnDemandBash
 import com.openminis.app.sandbox.ExecutionCoordinator
+import com.openminis.app.sandbox.CommandResult
 import com.openminis.app.sandbox.WorkspaceSnapshot
 import com.openminis.app.sandbox.PRootKernel
 import com.openminis.app.terminal.MinisOpenUrlBroker
@@ -10731,6 +10732,15 @@ class ChatViewModel(
                 "memory_write" -> executeMemoryWriteTool(argsJson)
                 "memory_get" -> executeMemoryGetTool(argsJson)
                 "memory_rollup" -> executeMemoryRollupTool()
+                // [T-agent-status] Read-only self-inspection of this run's
+                // budget + live sub-agents. No budget consumption: it runs
+                // through the normal dispatch (so it does count as one tool
+                // call, which is honest — the call itself costs a slot).
+                "agent_status" -> executeAgentStatusTool()
+                // [T-shell-job] Background jobs in the session's persistent
+                // shell: nohup'd children outlive the tool call, so builds and
+                // installs stop being bounded by shell_execute's 900s cap.
+                "shell_job" -> executeShellJobTool(argsJson)
                 // [T7-subagent] spawn_agent: delegate to an independent sub-agent
                 // instance running the named skill. [T-subagent-ui] pass the
                 // tool_use block id so the registry run can be linked to this
@@ -14071,6 +14081,193 @@ Environment variables:
         }.getOrElse { e ->
             AppLogger.warning(TAG, "session search failed: ${e.message}")
             emptyList()
+        }
+    }
+
+    private fun executeAgentStatusTool(): ToolExecutionResult {
+        val out = StringBuilder()
+        val budget = activeRunBudget
+        if (budget == null) {
+            out.append("Budget: not attached to this run (advisory counters unavailable).\n")
+        } else {
+            val s = budget.snapshot()
+            val r = budget.remaining()
+            val minutesLeft = (r.millisRemaining / 60_000L).coerceAtLeast(0L)
+            out.append("Budget (advisory):\n")
+            out.append("  turns: ${s.turnsUsed} used, ${r.turnsRemaining} left\n")
+            out.append("  tool calls: ${s.toolCallsUsed} used, ${r.toolCallsRemaining} left\n")
+            out.append("  shell commands: ${s.shellCommandsUsed} used, ${r.shellCommandsRemaining} left\n")
+            out.append("  compactions: ${s.compactionCallsUsed} used, ${r.compactionCallsRemaining} left\n")
+            out.append("  wall clock: ~$minutesLeft min left\n")
+            val tokensUsed = s.estimatedTokensUsed
+            val tokensLeft = r.estimatedTokensRemaining
+            if (tokensUsed != null || tokensLeft != null) {
+                out.append("  est. tokens: ${tokensUsed ?: "?"} used, ${tokensLeft ?: "?"} left\n")
+            } else {
+                out.append("  est. tokens: not tracked for this run\n")
+            }
+            out.append("  expired: ${if (r.isExpired) "YES — stop starting new work" else "no"}\n")
+        }
+
+        val runs = runCatching { subagentRunRegistry.runs.value }.getOrElse { emptyList() }
+        val live = runs.filter {
+            it.status == SubagentRunRegistry.RunStatus.RUNNING ||
+                it.status == SubagentRunRegistry.RunStatus.QUEUED
+        }
+        out.append("Sub-agents: ${live.size} running/queued")
+        if (live.isEmpty()) {
+            out.append("\n")
+        } else {
+            out.append("\n")
+            for (run in live) {
+                out.append("  - ${run.title.ifBlank { run.skillName }} [${run.status}] id=${run.id}\n")
+            }
+        }
+        // Read the window's size rather than calling check(): check() records
+        // this call against the detector, which would let a status probe
+        // nudge the loop thresholds it is reporting on.
+        out.append("Loop window: ${toolLoopDetector.historySnapshot().size} recent tool calls tracked\n")
+        return ToolExecutionResult(out.toString(), true)
+    }
+
+    /**
+     * [T-shell-job] POSIX 单引号转义：把任意命令安全地塞进 `sh -c '...'`。
+     * 内部单引号用 `'\''` 断开再续，这是唯一在 POSIX sh 里可靠的办法。
+     */
+    private fun shQuote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
+
+    /**
+     * [T-shell-job] 后台作业：把命令扔进会话常驻的 PRoot shell 里 nohup 出去。
+     *
+     * 为什么能活过工具调用：ExecutionCoordinator 每个 session 维护一个常驻
+     * PersistentShell（不是每次 shell_execute 新建 proot），所以 nohup 的子进程
+     * 不会随这次调用结束被回收——这正是 shell_execute 900 秒硬顶之外的解法。
+     *
+     * 元数据只有两个文件：`<id>.meta` 存 pid，`<id>.log` 存合并后的 stdout+stderr。
+     * 不建数据库、不登记进程表：pid 可能被复用的极端情形下，`status` 会退化成
+     * "finished"，不会误杀别人——kill 只打 meta 里记的那个 pid。
+     */
+    private suspend fun executeShellJobTool(argsJson: String): ToolExecutionResult {
+        val args = try { JSONObject(argsJson) } catch (_: Exception) { JSONObject() }
+        val action = args.optString("action", "").trim().lowercase()
+        val jobsDir = "/var/minis/offloads/jobs"
+        val sid = activeSessionId
+        val jobIdPattern = Regex("[A-Za-z0-9._-]{1,64}")
+
+        if (action !in setOf("start", "status", "logs", "kill", "list")) {
+            return ToolExecutionResult(
+                "Error: unknown action '$action'. Use one of: start | status | logs | kill | list",
+                false,
+            )
+        }
+
+        val jobId = args.optString("job_id", "").trim()
+        if (action in setOf("status", "logs", "kill") && !jobIdPattern.matches(jobId)) {
+            return ToolExecutionResult(
+                "Error: 'job_id' is required for action=$action (and must be a plain job id)",
+                false,
+            )
+        }
+
+        suspend fun run(command: String, timeoutMs: Long = 30_000L): CommandResult =
+            ExecutionCoordinator.execute(sessionId = sid, command = command, timeout = timeoutMs)
+
+        return try {
+            when (action) {
+                "start" -> {
+                    val cmd = args.optString("command", "")
+                    if (cmd.isBlank()) {
+                        return ToolExecutionResult("Error: 'command' is required for action=start", false)
+                    }
+                    val id = "job-" + System.currentTimeMillis().toString(36) + "-" +
+                        (System.nanoTime() % 1000).toString().padStart(3, '0')
+                    val log = "$jobsDir/$id.log"
+                    val meta = "$jobsDir/$id.meta"
+                    val script = buildString {
+                        append("mkdir -p $jobsDir\n")
+                        append("nohup sh -c ${shQuote(cmd)} > $log 2>&1 &\n")
+                        append("echo \$! > $meta\n")
+                        append("sleep 0.3\n")
+                        append("echo \"job_id=$id pid=\$(cat $meta 2>/dev/null) log=$log\"\n")
+                    }
+                    val result = run(script)
+                    if (result.exitCode != 0) {
+                        ToolExecutionResult(
+                            "Error starting background job (exit ${result.exitCode}):\n${result.output}",
+                            false,
+                        )
+                    } else {
+                        ToolExecutionResult(
+                            result.output.trim() + "\n" +
+                                "The job keeps running after this call. Poll with shell_job action=status, " +
+                                "read output with action=logs, stop it with action=kill.",
+                            true,
+                        )
+                    }
+                }
+
+                "status" -> {
+                    val log = "$jobsDir/$jobId.log"
+                    val meta = "$jobsDir/$jobId.meta"
+                    val script = buildString {
+                        append("if [ -f $meta ]; then\n")
+                        append("  PID=\$(cat $meta 2>/dev/null)\n")
+                        append("  if [ -n \"\$PID\" ] && kill -0 \"\$PID\" 2>/dev/null; then\n")
+                        append("    echo \"state=running pid=\$PID\"\n")
+                        append("  else\n")
+                        append("    echo \"state=finished pid=\$PID\"\n")
+                        append("  fi\n")
+                        append("else\n")
+                        append("  echo \"state=unknown (no such job)\"\n")
+                        append("fi\n")
+                        append("echo \"log=$log\"\n")
+                        append("echo '--- last 5 lines ---'\n")
+                        append("tail -n 5 $log 2>/dev/null\n")
+                    }
+                    val result = run(script, 20_000L)
+                    ToolExecutionResult(result.output, result.exitCode == 0)
+                }
+
+                "logs" -> {
+                    val log = "$jobsDir/$jobId.log"
+                    val lines = args.optInt("lines", 80).coerceIn(1, 500)
+                    val result = run("tail -n $lines $log 2>/dev/null || echo '(no log yet)'", 20_000L)
+                    ToolExecutionResult(result.output, result.exitCode == 0)
+                }
+
+                "kill" -> {
+                    val meta = "$jobsDir/$jobId.meta"
+                    val script = buildString {
+                        append("PID=\$(cat $meta 2>/dev/null)\n")
+                        append("if [ -n \"\$PID\" ] && kill \"\$PID\" 2>/dev/null; then\n")
+                        append("  echo \"killed job=$jobId pid=\$PID\"\n")
+                        append("else\n")
+                        append("  echo \"job=$jobId not running (already finished or unknown)\"\n")
+                        append("fi\n")
+                    }
+                    val result = run(script, 20_000L)
+                    ToolExecutionResult(result.output, result.exitCode == 0)
+                }
+
+                else -> { // list
+                    val script = buildString {
+                        append("if [ -d $jobsDir ]; then\n")
+                        append("  for m in $jobsDir/*.meta; do\n")
+                        append("    [ -f \"\$m\" ] || continue\n")
+                        append("    ID=\$(basename \"\$m\" .meta)\n")
+                        append("    PID=\$(cat \"\$m\" 2>/dev/null)\n")
+                        append("    if [ -n \"\$PID\" ] && kill -0 \"\$PID\" 2>/dev/null; then ST=running; else ST=finished; fi\n")
+                        append("    echo \"\$ID \$ST pid=\$PID\"\n")
+                        append("  done\n")
+                        append("fi\n")
+                    }
+                    val result = run(script, 20_000L)
+                    val out = result.output.trim()
+                    ToolExecutionResult(out.ifBlank { "(no background jobs in this session)" }, result.exitCode == 0)
+                }
+            }
+        } catch (e: Exception) {
+            ToolExecutionResult("Error running shell_job: ${e.message}", false)
         }
     }
 

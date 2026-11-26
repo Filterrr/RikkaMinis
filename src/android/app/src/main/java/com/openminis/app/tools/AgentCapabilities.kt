@@ -68,6 +68,17 @@ enum class AgentCapability {
      * an accident of a missing line.
      */
     TASK_LIST,
+
+    /**
+     * [T-agent-status] Read this run's own remaining budget
+     * (`agent_status`).
+     *
+     * Grantable to sub-agents on purpose: a sub-agent runs against its OWN
+     * budget and hit the same blindness — it would spend its last turns on a
+     * task it could not finish. The tool is read-only and exposes nothing
+     * about the parent or its siblings, so there is no isolation cost.
+     */
+    SELF_INSPECT,
 }
 
 object AgentCapabilities {
@@ -108,6 +119,11 @@ object AgentCapabilities {
         // a sibling would be a second, invisible instruction channel into a
         // run nobody asked it to manage.
         "steer_subagent" -> AgentCapability.SPAWN_AGENT
+        "agent_status" -> AgentCapability.SELF_INSPECT
+        // [T-shell-job] Background jobs are still shell execution: same
+        // sandbox, same command surface, so they ride the SHELL capability
+        // rather than inventing a second grant path.
+        "shell_job" -> AgentCapability.SHELL
         else -> null
     }
 
@@ -124,6 +140,7 @@ object AgentCapabilities {
         // [T-subagent-websearch] Research sub-agents are the main consumer of
         // search; without this they fall back to hand-rolled navigation.
         AgentCapability.WEB_SEARCH,
+        AgentCapability.SELF_INSPECT,
     )
 
     /**
