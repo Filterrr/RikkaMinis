@@ -1188,6 +1188,11 @@
 
     <!-- [T-android-trace-viewer] Agent trace viewer — the read side of the
          schema-2.0 traces the runtime writes to workspace/.traces/. -->
+    <string name="tool_approval_title">This command cannot be undone</string>
+    <string name="tool_approval_body">The agent is about to run something irreversible. Read the command before allowing it.</string>
+    <string name="tool_approval_allow_once">Allow once</string>
+    <string name="tool_approval_allow_session">Allow this rule for this chat</string>
+    <string name="tool_approval_deny">Deny</string>
     <string name="ask_user_title">The agent needs your input</string>
     <string name="ask_user_free_text_label">Or type an answer</string>
     <string name="ask_user_send">Answer</string>

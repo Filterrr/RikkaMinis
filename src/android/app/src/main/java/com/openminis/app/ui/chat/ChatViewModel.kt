@@ -176,6 +176,9 @@ class ChatViewModel(
         // default to allow — if the user walked away, that was the answer.
         const val SPAWN_APPROVAL_TIMEOUT_MS = 5L * 60L * 1000L
 
+        /** [T-tool-approval] 危险命令审批等多久。超时 = DENY。 */
+        private const val TOOL_APPROVAL_TIMEOUT_MS = 5L * 60L * 1000L
+
 
         // ── T7-A: 观察预算默认上限（advisory 观察用，不阻断任何行为）──
         // 这些数字只用于 trace 记录当前消耗进度（budget_consume/refuse 事件），
@@ -787,6 +790,15 @@ class ChatViewModel(
      * [executeAskUserTool] 里的那一轮。
      */
     val askUserQueue = com.openminis.app.tools.AskUserQueue()
+
+    /**
+     * [T-tool-approval] 危险命令审批队列 + 本会话已放行的规则。
+     *
+     * 作用域是**规则**不是工具：用户点了一次"本会话允许 curl|sh"，下一次
+     * 换个命令照样会问。按工具整体放行太粗，按单条命令放行又等于没记住。
+     */
+    val toolApprovalQueue = com.openminis.app.tools.ToolApprovalQueue()
+    private val sessionApprovedRules = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     /**
      * [T-subagent-scheduler] Two-level concurrency scheduler for sub-agent
@@ -10678,6 +10690,16 @@ class ChatViewModel(
         // bridge, which is now where checkPermission runs.
         val toolTitle = try { JSONObject(argsJson).optString("tool_title", name) } catch (_: Exception) { name }
 
+        // [T-tool-approval] 主 agent 的危险命令闸门。放在预算扣减和 trace
+        // 之前：被拒绝的调用不该消耗一次 tool_call 预算，也不该在 trace 里
+        // 留下"执行过"的假象（它只会在 UI 上挂一条待审批）。
+        //
+        // 只拦不可逆的那几种（见 DangerousCommandPolicy）：rm -rf /、dd 写
+        // 块设备、mkfs、curl|sh、git push --force、chmod -R 777 /、关机。
+        // 无人值守时超时 = DENY，不是放行。
+        val approvalDenied = gateDangerousToolCall(name, argsJson)
+        if (approvalDenied != null) return approvalDenied
+
         // T9: record tool call event
         val etStartMs = System.currentTimeMillis()
         agentTraceRecorder.toolCall(activeTraceTurn, toolId, name, argsJson)
@@ -13606,6 +13628,9 @@ Environment variables:
         // see must not hold a turn. The waiter resolves null and takes the
         // documented "no answer" path.
         askUserQueue.cancelAllOutstanding()
+        // [T-tool-approval] A pending approval nobody can see must deny, not
+        // allow — same rule as the spawn gate.
+        toolApprovalQueue.denyAllOutstanding()
         // [T-subagent-parallel] The per-chat limiter is per-VM like the
         // registry — it dies with this VM, so no release is needed. (The
         // old process-global gate required an onCleared release to avoid
@@ -14355,6 +14380,46 @@ Environment variables:
     /** [T-ask-user] 用户直接关掉对话框：当作"没回答"，agent 走超时降级路径。 */
     fun dismissAskUser(id: String) {
         askUserQueue.resolve(id, com.openminis.app.tools.AskUserAnswer(-1, null))
+    }
+
+    /**
+     * [T-tool-approval] 命中高危规则时挂起等用户决定；返回 null = 放行继续。
+     * 超时（无人值守）走 DENY——安全的一侧永远是不执行。
+     */
+    private suspend fun gateDangerousToolCall(name: String, argsJson: String): ToolExecutionResult? {
+        val hit = com.openminis.app.tools.DangerousCommandPolicy.check(name, argsJson) ?: return null
+        if (hit.ruleId in sessionApprovedRules) return null
+
+        val command = runCatching {
+            JSONObject(argsJson).optString("command", "")
+        }.getOrDefault("")
+        val (request, deferred) = toolApprovalQueue.submit(name, hit.ruleId, hit.label, command)
+        val decision = try {
+            kotlinx.coroutines.withTimeoutOrNull(TOOL_APPROVAL_TIMEOUT_MS) { deferred.await() }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            toolApprovalQueue.remove(request.id)
+            throw e
+        }
+        toolApprovalQueue.remove(request.id)
+
+        return when (decision) {
+            com.openminis.app.tools.ToolApprovalDecision.ALLOW_ONCE -> null
+            com.openminis.app.tools.ToolApprovalDecision.ALLOW_SESSION -> {
+                sessionApprovedRules += hit.ruleId
+                null
+            }
+            else -> ToolExecutionResult(
+                "DENIED: the user refused this command (rule: ${hit.label}). " +
+                    "Do not retry it and do not try to work around it with a different spelling. " +
+                    "Explain what you were trying to do instead.",
+                false,
+            )
+        }
+    }
+
+    /** [T-tool-approval] UI 决定入口。 */
+    fun answerToolApproval(id: String, decision: com.openminis.app.tools.ToolApprovalDecision) {
+        toolApprovalQueue.resolve(id, decision)
     }
 
     private fun parseToolParams(argsJson: String): Map<String, Any?> {

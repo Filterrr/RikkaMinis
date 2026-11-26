@@ -4728,6 +4728,16 @@ fun ChatScreen(
                     onDismiss = { viewModel.dismissAskUser(ask.id) },
                 )
             }
+            // [T-tool-approval] Dangerous-command gate. Sits above the ask-user
+            // dialog in priority: an unapproved irreversible command is a
+            // "stop", a question is a "wait".
+            val toolApprovalRequests by viewModel.toolApprovalQueue.requests.collectAsState()
+            toolApprovalRequests.firstOrNull()?.let { approval ->
+                ToolApprovalDialog(
+                    request = approval,
+                    onDecision = { decision -> viewModel.answerToolApproval(approval.id, decision) },
+                )
+            }
             // [T-android-enhanced-cache] One-time extra-billing confirmation
             // before the first enable. Accepting records the durable ack and
             // turns the toggle on; subsequent enables skip the dialog.
