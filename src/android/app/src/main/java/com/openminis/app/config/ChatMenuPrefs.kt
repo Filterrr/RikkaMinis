@@ -44,6 +44,14 @@ object ChatMenuPrefs {
      * keys) gain it at the end rather than shifting every user's arrangement.
      */
     const val AGENT_TRACES = "menu_agent_traces"
+    /**
+     * [T-session-search] Full-text search inside the CURRENT session. Unlike
+     * the "Input History" top-bar sheet (which只 filters the messages already
+     * held in memory) this walks the persisted message table through
+     * ChatRepository.searchMessages, so older, unloaded turns are searchable,
+     * and a hit jumps straight to that message via focusMessageId.
+     */
+    const val SEARCH_SESSION = "menu_search_session"
     const val EXPORT = "menu_export"
     const val SLASH_COMMANDS = "menu_slash_commands"
     const val SESSION_SKILLS = "menu_session_skills"
@@ -72,6 +80,10 @@ object ChatMenuPrefs {
         // keeps every user's existing arrangement intact and only ever adds
         // this row at the end.
         AGENT_TRACES,
+        // [T-session-search] Appended for the same reason AGENT_TRACES was:
+        // a persisted order written before this key existed hydrates by
+        // appending what it is missing, so nobody's arrangement shifts.
+        SEARCH_SESSION,
     )
 
     /** The full action pool: menu entries first (default order), then the two

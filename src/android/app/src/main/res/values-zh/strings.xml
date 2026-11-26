@@ -1001,6 +1001,14 @@
     <string name="notif_spawn_approval_mode_background">后台运行</string>
     <string name="notif_spawn_approval_mode_foreground">前台运行</string>
     <!-- [T-android-trace-viewer] 智能体追踪查看器 -->
+    <string name="chat_menu_search_session">搜索本会话</string>
+    <string name="session_search_title">搜索本会话</string>
+    <string name="session_search_hint">在所有消息里找内容…</string>
+    <string name="session_search_empty">输入关键词，搜索整个会话——包括那些已经不在内存里的早期消息。</string>
+    <string name="session_search_no_result">没有匹配“%1$s”的消息</string>
+    <string name="session_search_role_user">你</string>
+    <string name="session_search_role_assistant">助手</string>
+    <string name="session_search_result_count">%1$d 条命中</string>
     <string name="chat_menu_agent_traces">智能体追踪</string>
     <string name="trace_title">智能体追踪</string>
     <string name="trace_detail_title">追踪详情</string>

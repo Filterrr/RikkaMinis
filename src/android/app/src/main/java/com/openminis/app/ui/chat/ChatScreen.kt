@@ -732,6 +732,10 @@ fun ChatScreen(
     // [bottom-toolbar-customizable] Export format picker shared by the "..." menu
     // and the history-drawer footer (replaces the old inline submenu).
     var showExportFormatSheet by remember { mutableStateOf(false) }
+    // [T-session-search] Session-scoped full-text search sheet. Unlike the
+    // top-bar input-history sheet (memory-only filter), this queries the
+    // persisted message table, so pre-compaction turns stay searchable.
+    var showSessionSearch by remember { mutableStateOf(false) }
     // [T-message-fork-polish] Pending fork anchor: set by either fork entry
     // (user bubble / tool-run group), consumed by ForkScopeSheet. Holding the
     // anchor id here (instead of launching the fork inline) lets the scope
@@ -795,6 +799,7 @@ fun ChatScreen(
                 runCatching { inputFocusRequester.requestFocus() }
                 keyboardController?.show()
             }
+            ChatMenuPrefs.SEARCH_SESSION -> showSessionSearch = true
             ChatMenuPrefs.EXPORT -> showExportFormatSheet = true
             ChatMenuPrefs.TOKEN_USAGE -> showTokenUsageSheet = true
             ChatMenuPrefs.SETTINGS -> onOpenSettings()
@@ -2717,6 +2722,22 @@ fun ChatScreen(
                                                     },
                                                 )
                                             }
+                                        }
+                                        ChatMenuPrefs.SEARCH_SESSION -> {
+                                            // [T-session-search] Full-text search over the
+                                            // PERSISTED transcript (not just the loaded
+                                            // window Input History filters), with a jump
+                                            // to the matching message.
+                                            DropdownMenuItem(
+                                                text = { Text(stringResource(R.string.chat_menu_search_session)) },
+                                                onClick = {
+                                                    showChatMenu = false
+                                                    dispatchChatAction(ChatMenuPrefs.SEARCH_SESSION)
+                                                },
+                                                leadingIcon = {
+                                                    Icon(Icons.Default.Search, contentDescription = null)
+                                                },
+                                            )
                                         }
                                     }
                                 }
@@ -4802,6 +4823,20 @@ fun ChatScreen(
     // menu EXPORT entry and the history-drawer footer EXPORT action. The old
     // inline JSON/Plain submenu lived only in the menu; the sheet keeps the
     // format choice reachable from both entry points with one implementation.
+    if (showSessionSearch) {
+        ChatSessionSearchSheet(
+            onDismiss = { showSessionSearch = false },
+            onJump = { messageId ->
+                // Reuse the existing "jump to a message and highlight it"
+                // primitive (same path the fork lineage chip uses): the
+                // LaunchedEffect below scrolls in reversed-list space and
+                // clears the request so recomposition can't yank the user.
+                pendingFocusId = messageId
+            },
+            search = { query -> viewModel.searchSessionMessages(query) },
+        )
+    }
+
     if (showExportFormatSheet) {
         ExportFormatSheet(
             onDismiss = { showExportFormatSheet = false },

@@ -1188,6 +1188,14 @@
 
     <!-- [T-android-trace-viewer] Agent trace viewer — the read side of the
          schema-2.0 traces the runtime writes to workspace/.traces/. -->
+    <string name="chat_menu_search_session">Search this chat</string>
+    <string name="session_search_title">Search this chat</string>
+    <string name="session_search_hint">Find text in every message…</string>
+    <string name="session_search_empty">Type to search the whole conversation, including earlier messages that are no longer loaded.</string>
+    <string name="session_search_no_result">No matches for “%1$s”</string>
+    <string name="session_search_role_user">You</string>
+    <string name="session_search_role_assistant">Assistant</string>
+    <string name="session_search_result_count">%1$d matches</string>
     <string name="chat_menu_agent_traces">Agent traces</string>
     <string name="trace_title">Agent Traces</string>
     <string name="trace_detail_title">Trace Detail</string>

@@ -56,6 +56,7 @@ import com.openminis.app.sandbox.offload.ModelStreamErrorException
 import com.openminis.app.sandbox.offload.ProviderExecutionGateway
 import com.openminis.app.R
 import com.openminis.app.data.repository.ChatRepository
+import com.openminis.app.data.repository.MessageSearchMatch
 import com.openminis.app.data.repository.MemoryRepository
 import com.openminis.app.data.repository.ProviderRepository
 import com.openminis.app.provider.ImageBudget
@@ -14028,6 +14029,32 @@ Environment variables:
      * detector still hashes the tool name, so identical bad calls are still
      * detected as a loop.
      */
+    /**
+     * [T-session-search] 会话内全文搜索。走持久化消息表（ChatRepository
+     * .searchMessages —— 同一份 SQL 也供 `minis-sessions-cli search` 使用），
+     * 而不是内存里那份"已加载窗口"：被 compaction / 分页甩掉的早期轮次只有
+     * 这里能翻出来。默认 50 条上限，超出部分不渲染。
+     */
+    suspend fun searchSessionMessages(
+        query: String,
+        limit: Int = 50,
+    ): List<MessageSearchMatch> {
+        val q = query.trim()
+        if (q.isEmpty() || limit <= 0) return emptyList()
+        return runCatching {
+            chatRepository.searchMessages(
+                sessionIds = listOf(sessionId),
+                keywords = listOf(q),
+                limit = limit,
+                startMs = null,
+                endMs = null,
+            )
+        }.getOrElse { e ->
+            AppLogger.warning(TAG, "session search failed: ${e.message}")
+            emptyList()
+        }
+    }
+
     private fun parseToolParams(argsJson: String): Map<String, Any?> {
         if (argsJson.isBlank()) return emptyMap()
         return try {
