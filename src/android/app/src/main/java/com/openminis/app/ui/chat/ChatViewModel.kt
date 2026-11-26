@@ -10771,6 +10771,9 @@ class ChatViewModel(
                 // through the normal dispatch (so it does count as one tool
                 // call, which is honest — the call itself costs a slot).
                 "agent_status" -> executeAgentStatusTool()
+                // [T-agent-profiles] Live roster, so the model stops guessing
+                // names from a system-prompt snapshot.
+                "list_agents" -> executeListAgentsTool()
                 // [T-shell-job] Background jobs in the session's persistent
                 // shell: nohup'd children outlive the tool call, so builds and
                 // installs stop being bounded by shell_execute's 900s cap.
@@ -14420,6 +14423,39 @@ Environment variables:
     /** [T-tool-approval] UI 决定入口。 */
     fun answerToolApproval(id: String, decision: com.openminis.app.tools.ToolApprovalDecision) {
         toolApprovalQueue.resolve(id, decision)
+    }
+
+    /**
+     * [T-agent-profiles] 当前可派遣的 agent：内置 profile + 已安装的
+     * subagent skill。每次现算，不缓存——装了新 skill 立刻可见。
+     */
+    private fun executeListAgentsTool(): ToolExecutionResult {
+        val out = StringBuilder()
+        out.append("Built-in agents (no SKILL.md required):\n")
+        for (p in com.openminis.app.tools.AgentProfiles.ALL) {
+            out.append("  - ").append(p.id).append(" — ").append(p.description).append('\n')
+            out.append("    capabilities: ")
+                .append(p.capabilities.joinToString(", ") { it.name.lowercase() })
+                .append('\n')
+        }
+        val skills = runCatching {
+            skillRepository?.skills?.value.orEmpty().filter {
+                com.openminis.app.tools.SubagentSkill.parseSubagentConfig(it).isSubagent
+            }
+        }.getOrElse { emptyList() }
+        if (skills.isEmpty()) {
+            out.append("\nInstalled sub-agent skills: none.\n")
+        } else {
+            out.append("\nInstalled sub-agent skills (these override the profile they name):\n")
+            for (skill in skills) {
+                val cfg = com.openminis.app.tools.SubagentSkill.parseSubagentConfig(skill)
+                val tools = cfg.allowedTools?.sorted()?.joinToString(", ") ?: "all non-forbidden tools"
+                out.append("  - ").append(skill.name)
+                if (cfg.readOnly) out.append(" [read-only]")
+                out.append('\n').append("    tools: ").append(tools).append('\n')
+            }
+        }
+        return ToolExecutionResult(out.toString(), true)
     }
 
     private fun parseToolParams(argsJson: String): Map<String, Any?> {

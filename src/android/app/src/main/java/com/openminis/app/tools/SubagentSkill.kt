@@ -794,8 +794,9 @@ object SubagentSkill {
             "are derived from your answer (~15 s per turn). Estimate the work, " +
             "and round UP when unsure: an under-estimate kills a healthy run " +
             "mid-task as TIMED_OUT. " +
-            "The skill must be defined with `subagent: true` in its SKILL.md " +
-            "frontmatter and must already be installed and enabled. " +
+            "You can also omit `agent` entirely: the built-in `general` profile runs " +
+            "with the same tool set as you, so a one-off delegated task needs no " +
+            "SKILL.md. Installed sub-agent skills still work and override the profile. " +
             "Recursive spawn_agent is forbidden. " +
             "While the sub-agent runs, the user sees a prompt pill in the chat " +
             "and can open a second-level page that streams the sub-agent's " +
@@ -819,13 +820,35 @@ object SubagentSkill {
                 "A concise 5-10 word summary of what this sub-agent should do. " +
                     "Shown to the user as the live status label.",
             ),
-            "skill_name" to AgentToolParam(
+            "agent" to AgentToolParam(
                 "string",
-                "The name (or id) of the sub-agent skill to invoke. " +
-                    "The sub-agents you can spawn are listed in this tool's " +
-                    "description — pick one of those exact names. " +
+                "Which agent to run. Either a BUILT-IN profile id — general | " +
+                    "researcher | coder | reviewer | ops — or the name/id of an " +
+                    "installed sub-agent skill. Omit for `general`. " +
                     "Do NOT invent a name: an unknown name is rejected and the " +
                     "delegation is lost for this turn.",
+            ),
+            "skill_name" to AgentToolParam(
+                "string",
+                "Legacy alias of `agent`, kept so older prompts keep working. " +
+                    "Ignored when `agent` is present.",
+            ),
+            // [T-agent-profiles] 调用方现场收窄能力，不需要先造 skill。
+            // 逗号分隔而不是 array：Gemini 对 ARRAY 节点强制要求 items，
+            // 一个纯字符串参数能少一整类 schema 事故。
+            "capabilities" to AgentToolParam(
+                "string",
+                "Optional. Comma-separated capability names to NARROW the agent's " +
+                    "tool set, e.g. \"file_read,web_search\". Allowed values: " +
+                    "file_read, file_write, shell, browser, web_search, memory_read, " +
+                    "memory_write, self_inspect. This can only REMOVE tools — asking " +
+                    "for something the chosen agent does not have is ignored, never granted.",
+            ),
+            "role" to AgentToolParam(
+                "string",
+                "Optional one-off instruction appended to the agent's system prompt " +
+                    "(<= 2000 chars), e.g. \"You are auditing a Rust parser.\". " +
+                    "It does NOT change permissions or budget.",
             ),
             "query" to AgentToolParam(
                 "string",
@@ -957,9 +980,10 @@ object SubagentSkill {
                 enumValues = listOf("none", "frequent", "moderate"),
             ),
         ),
-        required = listOf("tool_title", "skill_name", "query", "max_minutes"),
+        required = listOf("tool_title", "query", "max_minutes"),
         propertyOrdering = listOf(
-            "tool_title", "skill_name", "query", "max_minutes", "resume_run_id",
+            "tool_title", "agent", "skill_name", "query", "max_minutes",
+            "capabilities", "role", "resume_run_id",
             "run_until", "model", "timeout_seconds", "progress_report",
         ),
     )

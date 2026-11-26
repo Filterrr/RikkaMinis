@@ -75,6 +75,15 @@ object FileWriteTool {
                 parent.mkdirs()
             }
 
+            // [T-skill-write-guard] SKILL.md 里的权限字段（allowed_tools /
+            // subagent / mcp_servers …）只能由用户改：agent 拿着 file_write
+            // 把它们改成 null，就能给下一次 spawn 开出 shell 权限。
+            val oldContent = if (file.exists()) runCatching { file.readText() }.getOrNull() else null
+            val nextContent = if (append && oldContent != null) oldContent + content else content
+            SkillWriteGuard.check(path, oldContent, nextContent)?.let {
+                return ToolExecutionResult(it, false, toolTitle = toolTitle)
+            }
+
             if (append) {
                 file.appendText(content)
             } else {

@@ -99,7 +99,12 @@ object ApplyPatchTool {
                     )
                 }
                 try {
-                    planned += Planned(fp.path, file, PatchEngine.applyTo(original, fp))
+                    val applied = PatchEngine.applyTo(original, fp)
+                    // [T-skill-write-guard] 补丁也不能改 SKILL.md 的权限字段。
+                    SkillWriteGuard.check(fp.path, original, applied.content)?.let {
+                        return ToolExecutionResult("$it\nNothing was written.", false, toolTitle = toolTitle)
+                    }
+                    planned += Planned(fp.path, file, applied)
                 } catch (e: PatchEngine.PatchException) {
                     return ToolExecutionResult(
                         "Error: ${e.message}\nNothing was written (the patch is all-or-nothing).",

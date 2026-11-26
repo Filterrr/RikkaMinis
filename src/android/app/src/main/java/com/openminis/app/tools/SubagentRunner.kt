@@ -19,6 +19,12 @@ import kotlinx.coroutines.launch
 import org.json.JSONObject
 
 /**
+ * [T-agent-profiles] `role` 参数的长度上限。它进系统提示词、不进权限判定，
+ * 所以限制只为挡住"把一整份 SKILL.md 塞进参数"这种用法。
+ */
+private const val ROLE_MAX_CHARS = 2000
+
+/**
  * [T-subagent-runner] Sub-agent runtime extracted from ChatViewModel —
  * owns the whole spawn_agent lifecycle: arg validation, skill lookup,
  * config parsing, scheduler queueing, registry streaming, the model loop
@@ -339,7 +345,30 @@ class SubagentRunner(
         groupId: String = "",
     ): ToolExecutionResult {
         val args = try { JSONObject(argsJson) } catch (_: Exception) { JSONObject() }
-        val skillName = args.optString("skill_name", "").trim()
+        // [T-agent-profiles] `agent` 是新名字（内置 profile 或 skill），
+        // `skill_name` 是旧名字。agent 优先；两个都没有 → general profile，
+        // 不再要求先写 SKILL.md。
+        val agentArg = args.optString("agent", "").trim()
+        val legacySkillArg = args.optString("skill_name", "").trim()
+        val requestedAgent = agentArg.ifBlank { legacySkillArg }
+        // 只有显式点名时才尝试解析 profile：空字符串必须落到 general，
+        // 而不是被 find("") 静默当成某个 profile。
+        val profile = if (requestedAgent.isBlank()) AgentProfiles.default() else AgentProfiles.find(requestedAgent)
+        val skillName = when {
+            profile != null -> profile.id
+            requestedAgent.isNotBlank() -> requestedAgent
+            else -> AgentProfiles.default().id
+        }
+        // 调用方现场收窄：逗号分隔的能力名。未知名字直接忽略（宁少不多）。
+        val requestedCapabilities: Set<AgentCapability>? = args.optString("capabilities", "")
+            .split(',')
+            .mapNotNull { raw ->
+                val key = raw.trim().lowercase()
+                if (key.isEmpty()) null else AgentCapability.entries.firstOrNull { it.name.lowercase() == key }
+            }
+            .toSet()
+            .takeIf { it.isNotEmpty() }
+        val roleExtra = args.optString("role", "").trim().take(ROLE_MAX_CHARS)
         val query = args.optString("query", "").trim()
         val title = args.optString("tool_title", "Sub-agent").ifBlank { "Sub-agent" }
         // [port/upstream-subagent-progress] Opt-in progress notes. Parsed here
@@ -392,10 +421,16 @@ class SubagentRunner(
             requested = skillName,
             skillRoster = deps.subagentRoster(),
             configured = deps.configuredSubagents(),
-            skillExists = { n -> deps.findSkill(n) != null },
+            skillExists = { n -> AgentProfiles.find(n) != null || deps.findSkill(n) != null },
         )
-        val skill = delegation?.let { deps.findSkill(it.skillName) }
-            ?: deps.findSkill(skillName)
+        val resolvedSkill: SkillInfo? = if (profile != null) {
+            // 合成 SkillInfo：id = "profile:<id>"，于是并发键、registry、
+            // 审批、resume 匹配全部沿用现有逻辑，不需要给它们各开一条分支。
+            AgentProfiles.toSkillInfo(profile)
+        } else {
+            delegation?.let { deps.findSkill(it.skillName) } ?: deps.findSkill(skillName)
+        }
+        val skill = resolvedSkill
             ?: return ToolExecutionResult(
                 // Name the valid alternatives. The parent's standing
                 // instruction is "do not retry the same spawn", so a bare
@@ -405,7 +440,11 @@ class SubagentRunner(
                 SubagentRosterHint.unknownAgentMessage(skillName, deps.subagentRoster()),
                 false, toolTitle = title,
             )
-        val parsedConfig = SubagentSkill.parseSubagentConfig(skill)
+        val parsedConfig = if (profile != null) {
+            AgentProfiles.toConfig(profile)
+        } else {
+            SubagentSkill.parseSubagentConfig(skill)
+        }
         // [feat/subagent-roster-routing] The configured roster entry's
         // reasoning-level override WINS over the skill's own `thinking:`.
         //
@@ -414,11 +453,21 @@ class SubagentRunner(
         // the author's general default for the skill. When the user has
         // said otherwise for this agent, the user's word is the more
         // specific instruction.
-        val config = delegation?.thinkingLevelOverride
+        val configWithThinking = delegation?.thinkingLevelOverride
             ?.takeIf { it.isNotBlank() }
             ?.let { parsedConfig.copy(thinkingLevel = SubagentSkill.parseThinkingLevelName(it)) }
             ?: parsedConfig
-        if (!config.isSubagent) {
+        // [T-agent-profiles] 能力求交，永远只收窄：profile 的 allowlist 是
+        // 基准，调用参数只能从中减。allowedTools == null（不限）时，请求集
+        // 本身就是一次收窄，安全。
+        val config = if (requestedCapabilities == null) {
+            configWithThinking
+        } else {
+            val requestedTools = AgentCapabilities.toolsFor(requestedCapabilities)
+            val narrowed = configWithThinking.allowedTools?.intersect(requestedTools) ?: requestedTools
+            configWithThinking.copy(allowedTools = narrowed)
+        }
+        if (!config.isSubagent && profile == null) {
             return ToolExecutionResult(
                 "Error: Skill '$skillName' is not a sub-agent skill. " +
                     "Add `subagent: true` to its SKILL.md frontmatter to enable sub-agent mode." +
@@ -464,7 +513,7 @@ class SubagentRunner(
             )
         }.orEmpty()
 
-        if (!deps.isSkillEnabledForSession(skill.id)) {
+        if (profile == null && !deps.isSkillEnabledForSession(skill.id)) {
             return ToolExecutionResult(
                 "Error: Skill '$skillName' is disabled for this session" + rosterSuffix(),
                 false, toolTitle = title,
@@ -474,7 +523,12 @@ class SubagentRunner(
         // [feat/subagent-roster-routing] The mission for this run: the
         // configured roster entry's instructions when the parent named a
         // configured speciality, empty for an ordinary skill spawn.
-        val extraInstructions = delegation?.extraInstructions.orEmpty()
+        // [T-agent-profiles] One-off role text sits AFTER the roster mission:
+        // the mission says what to do, the role says who to be while doing it.
+        val extraInstructions = listOfNotNull(
+            delegation?.extraInstructions?.takeIf { it.isNotBlank() },
+            roleExtra.takeIf { it.isNotBlank() },
+        ).joinToString("\n\n")
 
         // Fail-closed capability filter + explicit allowlist (validated
         // BEFORE registration so a misconfigured skill never creates a run).

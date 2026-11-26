@@ -102,6 +102,9 @@ object AgentTools {
         add(SubagentOrchestrationTools.statusDefinition())
         // [port/upstream-subagent-steer] Course correction for a running run.
         add(SubagentOrchestrationTools.steerDefinition())
+        // [T-agent-profiles] Live roster: built-in profiles + installed
+        // sub-agent skills. Replaces the rosterHint snapshot that drifts.
+        add(AgentProfiles.definition())
         if (memoryEnabled) {
             add(memoryWriteDefinition())
             add(memoryGetDefinition())

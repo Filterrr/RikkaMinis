@@ -133,6 +133,9 @@ object AgentCapabilities {
         // run nobody asked it to manage.
         "steer_subagent" -> AgentCapability.SPAWN_AGENT
         "agent_status" -> AgentCapability.SELF_INSPECT
+        // [T-agent-profiles] Listing agents is part of deciding to delegate,
+        // so it shares SPAWN_AGENT (never grantable to a sub-agent).
+        "list_agents" -> AgentCapability.SPAWN_AGENT
         "ask_user" -> AgentCapability.ASK_USER
         // [T-shell-job] Background jobs are still shell execution: same
         // sandbox, same command surface, so they ride the SHELL capability
@@ -146,6 +149,31 @@ object AgentCapabilities {
      * agent EXCEPT memory (context/memory isolation — a research sub-agent
      * must not mutate the parent's long-term memory) and recursion.
      */
+    /**
+     * [T-agent-profiles] capability → 它涵盖的工具名（反向映射）。
+     *
+     * 存在的唯一理由：内置 profile 用 capability 表达权限，而运行时的过滤
+     * 是按工具名的。这张表必须和 [capabilityOf] 一一对应——`toolsFor` 漏掉
+     * 一个工具，那个工具就对所有 profile 静默消失；多列一个，就等于绕过了
+     * capability 的语义。`AgentCapabilityRoundTripTest` 守着这两条。
+     */
+    fun toolsFor(capabilities: Set<AgentCapability>): Set<String> =
+        capabilities.flatMapTo(mutableSetOf()) { toolsOf(it) }
+
+    fun toolsOf(capability: AgentCapability): Set<String> = when (capability) {
+        AgentCapability.FILE_READ -> setOf("file_read", "read_image")
+        AgentCapability.FILE_WRITE -> setOf("file_write", "file_edit", "apply_patch")
+        AgentCapability.SHELL -> setOf("shell_execute", "shell_job")
+        AgentCapability.BROWSER -> setOf("browser_use")
+        AgentCapability.WEB_SEARCH -> setOf("web_search")
+        AgentCapability.MEMORY_READ -> setOf("memory_get")
+        AgentCapability.MEMORY_WRITE -> setOf("memory_write", "memory_rollup")
+        AgentCapability.SPAWN_AGENT -> setOf("spawn_agent")
+        AgentCapability.TASK_LIST -> setOf("todo_write")
+        AgentCapability.SELF_INSPECT -> setOf("agent_status")
+        AgentCapability.ASK_USER -> setOf("ask_user")
+    }
+
     val SUBAGENT_BASE: Set<AgentCapability> = setOf(
         AgentCapability.FILE_READ,
         AgentCapability.FILE_WRITE,
