@@ -176,6 +176,9 @@ object AgentTools {
                 "array",
                 "Optional 2-6 mutually exclusive short answers (each <= 80 chars). " +
                     "Omit for an open-ended question.",
+                // Gemini's Schema validator rejects an ARRAY node without
+                // `items` (v1internal 400). Plain strings inside.
+                items = com.openminis.app.data.model.AgentToolSchema(type = "string"),
             ),
             "allow_free_text" to AgentToolParam(
                 "boolean",
