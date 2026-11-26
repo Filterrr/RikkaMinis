@@ -744,49 +744,7 @@ fun ChatScreen(
     var pendingForkAnchorId by remember { mutableStateOf<String?>(null) }
     var showClearChatDialog by remember { mutableStateOf(false) }
 
-    // [T-voice-input-restore] Mic came back. The engine stack
-    // (SpeechRecognitionManager + the system/provider adapters) was never
-    // removed — only the button was, when the voice-chat panel went away. This
-    // restores the plain "dictate into the composer" affordance and nothing
-    // more: no auto-send, no inline panel.
-    //
-    // Composition rule: a recognition session REPLACES the delta it produced
-    // on each partial, anchored to the composer text captured when the mic was
-    // tapped. Appending deltas instead would duplicate the growing
-    // transcription on every partial (the engine re-sends the whole hypothesis,
-    // not just the new tail).
-    val speechState by com.openminis.app.speech.SpeechRecognitionManager.state.collectAsState()
-    val speechAvailable by com.openminis.app.speech.SpeechRecognitionManager.isAvailable.collectAsState()
-    var speechBaseText by remember { mutableStateOf<String?>(null) }
-    var pendingVoiceStart by remember { mutableStateOf(false) }
-    fun beginVoiceInput() {
-        speechBaseText = viewModel.inputText.value
-        com.openminis.app.speech.SpeechRecognitionManager.startRecording(
-            onPartialOrFinal = { text, isFinal ->
-                if (text.isNotEmpty()) {
-                    viewModel.setInputText((speechBaseText ?: "") + text)
-                }
-                if (isFinal) speechBaseText = null
-            },
-            onError = { error, message ->
-                speechBaseText = null
-                android.widget.Toast.makeText(
-                    context,
-                    context.getString(R.string.composer_voice_error, error.name) +
-                        (message?.let { " ($it)" } ?: ""),
-                    android.widget.Toast.LENGTH_SHORT,
-                ).show()
-            },
-        )
-    }
-    val recordAudioPermission = rememberLauncherForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        if (granted && pendingVoiceStart) beginVoiceInput()
-        pendingVoiceStart = false
-    }
-    // [T-android-enhanced-cache] First-enable confirmation dialog visibility.
-    var showEnhancedCacheDialog by remember { mutableStateOf(false) }
+
 
     // [T-context-exhausted-dialog] 'Context Full' prompt — surfaced directly
     // from the ViewModel (send-at-capacity stash), so the dialog renders
@@ -5297,6 +5255,50 @@ private fun ChatInputArea(
     val attachments by viewModel.attachments.collectAsState()
     var showMoveSheet by remember { mutableStateOf(false) }
     var showAttachMenu by remember { mutableStateOf(false) }
+    // [T-voice-input-restore] Mic came back. The engine stack
+    // (SpeechRecognitionManager + the system/provider adapters) was never
+    // removed — only the button was, when the voice-chat panel went away. This
+    // restores the plain "dictate into the composer" affordance and nothing
+    // more: no auto-send, no inline panel.
+    //
+    // Composition rule: a recognition session REPLACES the delta it produced
+    // on each partial, anchored to the composer text captured when the mic was
+    // tapped. Appending deltas instead would duplicate the growing
+    // transcription on every partial (the engine re-sends the whole hypothesis,
+    // not just the new tail).
+    val speechState by com.openminis.app.speech.SpeechRecognitionManager.state.collectAsState()
+    val speechAvailable by com.openminis.app.speech.SpeechRecognitionManager.isAvailable.collectAsState()
+    var speechBaseText by remember { mutableStateOf<String?>(null) }
+    var pendingVoiceStart by remember { mutableStateOf(false) }
+    fun beginVoiceInput() {
+        speechBaseText = viewModel.inputText.value
+        com.openminis.app.speech.SpeechRecognitionManager.startRecording(
+            onPartialOrFinal = { text, isFinal ->
+                if (text.isNotEmpty()) {
+                    viewModel.setInputText((speechBaseText ?: "") + text)
+                }
+                if (isFinal) speechBaseText = null
+            },
+            onError = { error, message ->
+                speechBaseText = null
+                android.widget.Toast.makeText(
+                    context,
+                    context.getString(R.string.composer_voice_error, error.name) +
+                        (message?.let { " ($it)" } ?: ""),
+                    android.widget.Toast.LENGTH_SHORT,
+                ).show()
+            },
+        )
+    }
+    val recordAudioPermission = rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted && pendingVoiceStart) beginVoiceInput()
+        pendingVoiceStart = false
+    }
+    // [T-android-enhanced-cache] First-enable confirmation dialog visibility.
+    var showEnhancedCacheDialog by remember { mutableStateOf(false) }
+
     // Mirrors `inputText` for the BasicTextField but tracks selection so we
     // can position the cursor (e.g. AFTER the leading "/" when the slash
     // button inserts it) — a plain String overload would reset cursor to 0
