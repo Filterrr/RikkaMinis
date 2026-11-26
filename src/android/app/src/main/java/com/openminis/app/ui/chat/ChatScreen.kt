@@ -743,6 +743,48 @@ fun ChatScreen(
     // the export sheet above.
     var pendingForkAnchorId by remember { mutableStateOf<String?>(null) }
     var showClearChatDialog by remember { mutableStateOf(false) }
+
+    // [T-voice-input-restore] Mic came back. The engine stack
+    // (SpeechRecognitionManager + the system/provider adapters) was never
+    // removed — only the button was, when the voice-chat panel went away. This
+    // restores the plain "dictate into the composer" affordance and nothing
+    // more: no auto-send, no inline panel.
+    //
+    // Composition rule: a recognition session REPLACES the delta it produced
+    // on each partial, anchored to the composer text captured when the mic was
+    // tapped. Appending deltas instead would duplicate the growing
+    // transcription on every partial (the engine re-sends the whole hypothesis,
+    // not just the new tail).
+    val speechState by com.openminis.app.speech.SpeechRecognitionManager.state.collectAsState()
+    val speechAvailable by com.openminis.app.speech.SpeechRecognitionManager.isAvailable.collectAsState()
+    var speechBaseText by remember { mutableStateOf<String?>(null) }
+    var pendingVoiceStart by remember { mutableStateOf(false) }
+    fun beginVoiceInput() {
+        speechBaseText = viewModel.inputText.value
+        com.openminis.app.speech.SpeechRecognitionManager.startRecording(
+            onPartialOrFinal = { text, isFinal ->
+                if (text.isNotEmpty()) {
+                    viewModel.setInputText((speechBaseText ?: "") + text)
+                }
+                if (isFinal) speechBaseText = null
+            },
+            onError = { error, message ->
+                speechBaseText = null
+                android.widget.Toast.makeText(
+                    context,
+                    context.getString(R.string.composer_voice_error, error.name) +
+                        (message?.let { " ($it)" } ?: ""),
+                    android.widget.Toast.LENGTH_SHORT,
+                ).show()
+            },
+        )
+    }
+    val recordAudioPermission = rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted && pendingVoiceStart) beginVoiceInput()
+        pendingVoiceStart = false
+    }
     // [T-android-enhanced-cache] First-enable confirmation dialog visibility.
     var showEnhancedCacheDialog by remember { mutableStateOf(false) }
 
@@ -4190,6 +4232,37 @@ fun ChatScreen(
                                         onRevert = if (item.message.toolBlocks.any { it.kind == "info" && it.toolName == "compact" }) {
                                             { viewModel.revertCompact() }
                                         } else null,
+                                        // [T-message-actions] Header "…" menu for the
+                                        // whole answer. Copy reads messageMarkdown (the
+                                        // joined raw markdown, same string the selection
+                                        // toolbar copies) so code fences survive.
+                                        // Mutating actions keep the T119 gating used by
+                                        // the user bubble: hidden while the turn is live.
+                                        messageActions = AssistantMessageActions(
+                                            onCopyAll = {
+                                                val clipboard = context.getSystemService(
+                                                    android.content.Context.CLIPBOARD_SERVICE,
+                                                ) as android.content.ClipboardManager
+                                                clipboard.setPrimaryClip(
+                                                    android.content.ClipData.newPlainText(
+                                                        "message",
+                                                        item.messageMarkdown,
+                                                    ),
+                                                )
+                                            },
+                                            onRegenerate = if (isStreaming) null else ({
+                                                safeMutate { viewModel.regenerateAssistant(item.messageId) }
+                                            }),
+                                            onForkFromHere = if (isStreaming) null else ({
+                                                pendingForkAnchorId = item.messageId
+                                            }),
+                                            onReadAloud = {
+                                                com.openminis.app.speech.ReadAloudController.speak(
+                                                    context,
+                                                    item.messageMarkdown,
+                                                )
+                                            },
+                                        ),
                                         toolPillActions = { block ->
                                             if (block.kind != "tool_use") {
                                                 null
@@ -6708,8 +6781,42 @@ private fun ChatInputArea(
 
                     Spacer(modifier = Modifier.width(8.dp))
 
-                    // Voice input (mic button, language pill, inline
-                    // voice panel, read-replies TTS) removed here.
+                    // [T-voice-input-restore] Mic button. Rendered only when
+                    // the active recognizer reports itself available, so an OEM
+                    // with no speech service never sees a dead control. Tapping
+                    // while recording stops the session (the composer keeps
+                    // whatever was transcribed so far).
+                    if (speechAvailable) {
+                        val recording = speechState == com.openminis.app.speech.RecognitionState.RECORDING ||
+                            speechState == com.openminis.app.speech.RecognitionState.STARTING
+                        InputCircleButton(
+                            onClick = {
+                                if (recording) {
+                                    com.openminis.app.speech.SpeechRecognitionManager.stopRecording()
+                                    speechBaseText = null
+                                } else {
+                                    val granted = ContextCompat.checkSelfPermission(
+                                        context,
+                                        android.Manifest.permission.RECORD_AUDIO,
+                                    ) == PackageManager.PERMISSION_GRANTED
+                                    if (granted) {
+                                        beginVoiceInput()
+                                    } else {
+                                        pendingVoiceStart = true
+                                        recordAudioPermission.launch(android.Manifest.permission.RECORD_AUDIO)
+                                    }
+                                }
+                            },
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Mic,
+                                contentDescription = stringResource(R.string.composer_voice_input),
+                                tint = if (recording) ChatColors.error else ChatColors.primaryText,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                    }
 
                     // Right: 3-state Send / Enqueue / Stop button (mirrors iOS sendButton).
                     //   • streaming + hasText  → SEND (routes through viewModel.sendMessage,

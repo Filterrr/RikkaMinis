@@ -5970,6 +5970,25 @@ class ChatViewModel(
      * (including the assistant response), rebuild agent history, and resend.
      * Mirrors iOS's edit/retry behavior — no duplicate user messages.
      */
+    /**
+     * [T-message-actions] "Regenerate this answer".
+     *
+     * The assistant bubble knows its own id, not the user turn that produced
+     * it. Walk backwards to the nearest user message and hand off to
+     * [retryFromMessage], which already owns rollback, the DB trim and the
+     * agent-history re-sync. Doing the lookup here (instead of in the
+     * composable) keeps the ordering rule in one place: a regenerate is
+     * always "replay the user turn", never "append another answer".
+     */
+    fun regenerateAssistant(messageId: String) {
+        if (_isStreaming.value) return
+        val list = _messages.value
+        val idx = list.indexOfFirst { it.id == messageId }
+        if (idx <= 0) return
+        val userIndex = (idx - 1 downTo 0).firstOrNull { list[it].role == "user" } ?: return
+        retryFromMessage(list[userIndex].id)
+    }
+
     fun retryFromMessage(messageId: String) {
         if (_isStreaming.value) return
         _canResume.value = false

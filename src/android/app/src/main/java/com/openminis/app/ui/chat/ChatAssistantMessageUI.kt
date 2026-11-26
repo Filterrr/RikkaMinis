@@ -280,8 +280,29 @@ import com.openminis.app.ui.browser.BrowserSheet
 import com.openminis.app.ui.theme.ChatColors
 import com.openminis.app.ui.components.MinisTextButton
 
+/**
+ * [T-message-actions] Per-message actions surfaced from the assistant header.
+ *
+ * Why the header and not a long-press on the body: the answer text lives inside
+ * a SelectionContainer, and a parent-level `combinedClickable` swallows the
+ * long-press-drag that starts a text selection — trading one gesture for
+ * another. A tiny "…" button on the header row costs no gesture at all.
+ *
+ * Every callback is optional so the legacy call sites (and the flat renderer)
+ * can keep rendering a bare header by passing null.
+ */
+internal data class AssistantMessageActions(
+    val onCopyAll: () -> Unit = {},
+    /** Regenerate this answer (rerun the user turn that produced it). */
+    val onRegenerate: (() -> Unit)? = null,
+    /** Branch the conversation from this message. */
+    val onForkFromHere: (() -> Unit)? = null,
+    /** Read this answer aloud through TTS. */
+    val onReadAloud: (() -> Unit)? = null,
+)
+
 @Composable
-internal fun AssistantHeader() {
+internal fun AssistantHeader(actions: AssistantMessageActions? = null) {
     // [T-soul-md] Identity header = locked ✨ sparkle gradient icon +
     // SOUL.md-driven `name`. The emoji-customization field was removed,
     // so we no longer branch on `SoulMetadata.emoji`; the icon stays the
@@ -291,6 +312,8 @@ internal fun AssistantHeader() {
     // SOUL.md is missing the field or set to the default value.
     val soulMeta by com.openminis.app.agent.SoulStore.cachedMetadata.collectAsState()
     val displayName = soulMeta.name.ifBlank { com.openminis.app.agent.SoulMetadata.DEFAULT.name }
+    var menuOpen by remember { mutableStateOf(false) }
+    Box {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
@@ -322,6 +345,64 @@ internal fun AssistantHeader() {
             fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onSurface,
         )
+        if (actions != null) {
+            IconButton(
+                onClick = { menuOpen = true },
+                modifier = Modifier
+                    .size(22.dp)
+                    .padding(start = 2.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.MoreVert,
+                    contentDescription = stringResource(R.string.message_actions_open),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+        }
+    }
+    if (actions != null) {
+        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.message_action_copy_all)) },
+                onClick = {
+                    menuOpen = false
+                    actions.onCopyAll()
+                },
+                leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+            )
+            if (actions.onRegenerate != null) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.message_action_regenerate)) },
+                    onClick = {
+                        menuOpen = false
+                        actions.onRegenerate.invoke()
+                    },
+                    leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
+                )
+            }
+            if (actions.onForkFromHere != null) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.message_action_fork_from_here)) },
+                    onClick = {
+                        menuOpen = false
+                        actions.onForkFromHere.invoke()
+                    },
+                    leadingIcon = { Icon(Icons.Default.AccountTree, contentDescription = null) },
+                )
+            }
+            if (actions.onReadAloud != null) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.message_action_read_aloud)) },
+                    onClick = {
+                        menuOpen = false
+                        actions.onReadAloud.invoke()
+                    },
+                    leadingIcon = { Icon(Icons.Default.PlayArrow, contentDescription = null) },
+                )
+            }
+        }
+    }
     }
 }
 
@@ -359,13 +440,17 @@ internal fun AssistantMessageView(
     // Stage D: "Revert Compact" action for an info block whose toolName is
     // "compact" — mirrors the flat AssistantInfo branch in ChatScreen.kt.
     onRevert: (() -> Unit)? = null,
+    // [T-message-actions] Header "…" menu (copy all / regenerate / fork /
+    // read aloud). Null keeps the header bare — the legacy flat path relies
+    // on that default.
+    messageActions: AssistantMessageActions? = null,
 ) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 2.dp),
     ) {
-        AssistantHeader()
+        AssistantHeader(messageActions)
 
         // Render blocks in original order — text, thinking, and tool calls interleaved
         // exactly as they arrived in the stream (each assistant turn may contain multiple

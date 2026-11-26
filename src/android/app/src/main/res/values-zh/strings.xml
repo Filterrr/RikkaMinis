@@ -1001,6 +1001,13 @@
     <string name="notif_spawn_approval_mode_background">后台运行</string>
     <string name="notif_spawn_approval_mode_foreground">前台运行</string>
     <!-- [T-android-trace-viewer] 智能体追踪查看器 -->
+    <string name="composer_voice_input">语音输入</string>
+    <string name="composer_voice_error">语音识别失败（%1$s）</string>
+    <string name="message_actions_open">消息操作</string>
+    <string name="message_action_copy_all">复制整条回答</string>
+    <string name="message_action_regenerate">重新生成这条</string>
+    <string name="message_action_fork_from_here">从此处分支</string>
+    <string name="message_action_read_aloud">朗读</string>
     <string name="chat_menu_search_session">搜索本会话</string>
     <string name="session_search_title">搜索本会话</string>
     <string name="session_search_hint">在所有消息里找内容…</string>
