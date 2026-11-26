@@ -289,6 +289,30 @@ class MCPPool:
                     continue
                 raise
 
+    def snapshot(self):
+        """[T-mcp-status] Live-session view for `minis-mcp-cli status`.
+
+        Read-only and non-blocking: no ping, no re-handshake. It reports what
+        the pool already knows (alive / idle / TTL left), so a status check
+        costs nothing and can't wake a sleeping server."""
+        now = time.time()
+        with self._lock:
+            items = list(self._pool.items())
+        rows = []
+        for name, session in items:
+            try:
+                alive = bool(session.is_alive())
+            except Exception:  # noqa: BLE001 - HTTP sessions may not implement it
+                alive = True
+            idle = int(now - getattr(session, "last_activity", now))
+            rows.append({
+                "name": name,
+                "alive": alive,
+                "idle_seconds": idle,
+                "ttl_remaining_seconds": max(0, TTL_SECONDS - idle),
+            })
+        return rows
+
     def evict(self, name):
         with self._lock:
             session = self._pool.pop(name, None)
@@ -386,6 +410,14 @@ class DaemonServer:
                 self.pool.call_with_retry(server, lambda s: s.ping())
                 elapsed = int((time.time() - start) * 1000)
                 return {"ok": True, "result": {"server": server, "ok": True, "elapsed_ms": elapsed}}
+
+            if cmd == "status":
+                rows = self.pool.snapshot()
+                return {"ok": True, "result": {
+                    "ttl_seconds": TTL_SECONDS,
+                    "sessions": rows,
+                    "count": len(rows),
+                }}
 
             if cmd == "shutdown":
                 self._running = False

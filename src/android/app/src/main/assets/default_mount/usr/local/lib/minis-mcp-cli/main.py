@@ -7,6 +7,7 @@ Subcommands:
   refresh <server> [--pretty]                   force-reconnect + re-list tools
   info <server> [--pretty]                      show a server's config
   ping <server> [--pretty]                      reachability check
+  status [--pretty]                            live pool: alive / idle / TTL left
   call <server> <tool> [--input '{}'] [k=v ...] invoke a tool
   add --name N (--url U [--header "K: V"] | --command C [--args "..."] [--env "K=V"]) [--note ...]
       [--oauth-client-id ID --oauth-auth-endpoint URL --oauth-token-endpoint URL
@@ -338,6 +339,13 @@ def cmd_ping(args, pretty):
     _emit(result, pretty)
 
 
+def cmd_status(args, pretty):
+    """[T-mcp-status] Pool health: which servers are live, how long they've
+    been idle, how much of the 10-minute TTL is left. Read-only."""
+    result = call_daemon({"cmd": "status"}, pretty)
+    _emit(result, pretty)
+
+
 def cmd_call(args, pretty):
     if len(args) < 2:
         _fail("usage: call <server> <tool> [--input '{}'] [key=value ...]", "PARSE_ERROR", None, pretty)
@@ -522,6 +530,7 @@ Commands:
   refresh <server>                      Alias for `tools <server> --refresh`.
   info <server>                         Show a server's stored config.
   ping <server>                         Reachability check (initialize handshake).
+  status                                Live pool: alive / idle / TTL remaining per server.
   call <server> <tool> [--input '{}'] [key=value ...]
                                         Invoke a tool. --input is a JSON object;
                                         trailing key=value pairs extend/override it.
@@ -614,6 +623,8 @@ def main():
             cmd_info(rest, pretty)
         elif cmd == "ping":
             cmd_ping(rest, pretty)
+        elif cmd == "status":
+            cmd_status(rest, pretty)
         elif cmd == "call":
             cmd_call(rest, pretty)
         elif cmd == "add":
