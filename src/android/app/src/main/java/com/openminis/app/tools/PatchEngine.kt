@@ -133,7 +133,14 @@ object PatchEngine {
                             l.startsWith("@@") || l.startsWith("diff --git ") ||
                                 l.startsWith("--- ") || l.startsWith("+++ ") -> break
                             l.isEmpty() -> {
-                                // 有些编辑器把空上下文行写成真正的空行。
+                                // split() 的产物：文件以换行结尾时最后会多出一个
+                                // 空串。它不是上下文行——把它算进去会让 hunk 多匹配
+                                // 一行，整个补丁必然对不上（CRLF 用例就是这么炸的）。
+                                if (i == raw.size - 1) {
+                                    i++
+                                    break
+                                }
+                                // 但编辑器确实会用真正的空行表示空上下文行。
                                 lines += HunkLine(' ', "")
                                 i++
                             }
