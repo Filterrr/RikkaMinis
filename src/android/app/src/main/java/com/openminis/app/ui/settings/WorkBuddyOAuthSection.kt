@@ -471,7 +471,7 @@ fun WorkBuddyOAuthSection(
             },
             dismissButton = {
                 TextButton(onClick = { showImport = false }) {
-                    Text("Cancel")
+                    Text(stringResource(R.string.cancel))
                 }
             },
         )

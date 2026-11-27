@@ -705,7 +705,7 @@ fun SkillDetailScreen(
                     Text(skill.name, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.width(4.dp))
                     Icon(
-                        Icons.Default.Edit, contentDescription = "Edit name",
+                        Icons.Default.Edit, contentDescription = stringResource(R.string.a11y_edit_skill_name),
                         modifier = Modifier.size(14.dp).clickable {
                             editName = skill.name
                             showEditNameDialog = true
