@@ -10574,7 +10574,8 @@ class ChatViewModel(
             // 半截、没有任何说明，用户看到的就是"自己停了"，而且**连 Resume 都
             // 没有**。现在给出可见原因并把这一轮标成可继续——停下来可以，但
             // 必须让人知道为什么、以及怎么接着跑。
-            val reason = t7BudgetStopReason
+            // mutable property: no smart cast survives the null check.
+            val reason = t7BudgetStopReason ?: "unknown"
             AppLogger.warning(TAG_STREAM, "runAgentLoop EXIT — budget stop: $reason")
             withContext(Dispatchers.Main) {
                 finalizeAtRunLimit(
