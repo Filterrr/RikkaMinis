@@ -188,6 +188,38 @@ object DangerousCommandPolicy {
         ),
     )
 
+    // ── 组合规则：单独看每一条都不危险，合起来就是绕过 ──────────────────
+    //
+    // 纯正则只能看"字面写了什么"，而下面三种写法把真正的动作藏在了解析之后：
+    //
+    //   rm -rf $(cat target.txt)        目标在运行时才展开
+    //   echo cm0g | base64 -d | sh      代码在运行时才解码
+    //   find / -delete                  不是 rm，删得一样干净
+    //
+    // 不引入 shell parser（成本不成比例），只把这三种"隐藏执行 + 破坏性"
+    // 的组合单独抓出来。注意是**组合**判断：`echo $(date) && rm -rf /tmp`
+    // 不该被拦——命令替换里没有破坏性动作。
+
+    /** `$(rm …)` / `` `rm …` ``：替换内部就是破坏性命令。 */
+    private val SUBSHELL_DESTRUCTIVE = Regex(
+        """(?:${'$'}\(|`)[^)`]*\b(?:rm|dd|mkfs(?:\.\w+)?|shred|truncate|chmod|chown|git\s+push)\b""",
+    )
+
+    /** 解码后直接管道给 shell：base64 -d / xxd -r。 */
+    private val DECODED_TO_SHELL = Regex(
+        """\b(?:base64\s+(?:-d|--decode)|xxd\s+-r)\b[^|;&\n]*\|\s*(?:sudo\s+)?(?:ba|z|k)?sh\b""",
+    )
+
+    /** find 的删除形态（-delete / -exec rm）。 */
+    private val FIND_DELETE = Regex(
+        """\bfind\b[^;&|\n]*(?:-delete\b|-exec\s+rm\b)""",
+    )
+
+    /** find 作用在根 / Minis 数据根 / 用户挂载目录上。 */
+    private val FIND_ROOT_TARGET = Regex(
+        """\bfind\s+(?:/\*?|/var/minis/?|/var/minis/mounts/?)(?=\s|$)""",
+    )
+
     /**
      * 检查一次工具调用。返回 null = 放行。
      *
@@ -207,6 +239,21 @@ object DangerousCommandPolicy {
             if (rule.pattern.containsMatchIn(command)) {
                 return Hit(rule.id, rule.label)
             }
+        }
+        if (SUBSHELL_DESTRUCTIVE.containsMatchIn(command)) {
+            return Hit(
+                "subshell_destructive",
+                "Destructive command hidden inside a $( ) substitution or backticks",
+            )
+        }
+        if (DECODED_TO_SHELL.containsMatchIn(command)) {
+            return Hit("decoded_pipe_shell", "Decoded data piped straight into a shell")
+        }
+        if (FIND_DELETE.containsMatchIn(command) && FIND_ROOT_TARGET.containsMatchIn(command)) {
+            return Hit(
+                "find_delete_root",
+                "Recursive delete through find on / , the Minis data root or a mounted folder",
+            )
         }
         return null
     }

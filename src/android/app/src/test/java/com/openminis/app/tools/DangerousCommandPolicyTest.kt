@@ -63,6 +63,56 @@ class DangerousCommandPolicyTest {
         assertNotNull(hit("reboot"))
     }
 
+    // ── 组合绕过：单看都无害，合起来才是问题 ───────────────────────────────
+
+    @Test
+    fun `destructive command hidden inside a substitution is gated`() {
+        assertNotNull(hit("$(rm -rf /tmp/x)"))
+        assertNotNull(hit("X=$(chmod 777 /)"))
+        assertNotNull(hit("$(dd if=/dev/zero of=/tmp/img)"))
+        assertNotNull(hit("`shred -u /var/minis/workspace/a`"))
+        assertNotNull(hit("cd $(git push --force origin main)"))
+    }
+
+    @Test
+    fun `ordinary command substitution is not gated`() {
+        // 误报代价很高：agent 每天都在 `$(date)` / `$(ls)` 这种地方做事。
+        assertNull(hit("echo $(date)"))
+        assertNull(hit("echo $(ls -la)"))
+        assertNull(hit("X=$(pwd) && echo $X"))
+        assertNull(hit("echo $(git rev-parse HEAD)"))
+        assertNull(hit("echo $(date) && rm -rf /tmp/build"))
+    }
+
+    @Test
+    fun `decoded payload piped into a shell is gated`() {
+        assertNotNull(hit("echo cm0gLXJmIC8= | base64 -d | sh"))
+        assertNotNull(hit("xxd -r dump.hex | bash"))
+        assertNotNull(hit("cat blob | base64 --decode | sudo sh"))
+    }
+
+    @Test
+    fun `decoding without a shell pipe is not gated`() {
+        assertNull(hit("base64 -d file.txt > out.bin"))
+        assertNull(hit("echo hi | base64 -d"))
+        assertNull(hit("xxd -r dump.hex > dump.bin"))
+    }
+
+    @Test
+    fun `find -delete on the root or the data root is gated`() {
+        assertNotNull(hit("find / -name '*.log' -delete"))
+        assertNotNull(hit("find /var/minis -delete"))
+        assertNotNull(hit("find /var/minis/mounts -delete"))
+        assertNotNull(hit("find / -type f -exec rm {} \\;"))
+    }
+
+    @Test
+    fun `find -delete inside the workspace is not gated`() {
+        assertNull(hit("find /tmp -name '*.tmp' -delete"))
+        assertNull(hit("find /var/minis/workspace -name '*.bak' -delete"))
+        assertNull(hit("find . -name node_modules -prune"))
+    }
+
     // ── 不许误伤 ──────────────────────────────────────────────────────────
 
     @Test
