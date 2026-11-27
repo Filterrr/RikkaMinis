@@ -8423,6 +8423,11 @@ class ChatViewModel(
         // AIChatViewModel.didInjectEmptyToolReminderThisRun.
         var didInjectEmptyToolReminder = false
         var didRetryTruncatedTurn = false
+        // [T-token-budget-warning] 本轮 run 的累计 token（每轮请求都会重发整个
+        // 上下文，所以逐轮累加就是真实消耗，不是重复计算）。
+        var runTokensSpent = 0L
+        var tokenWarningShown = false
+        val tokenWarnAt = com.openminis.app.data.TokenBudgetPrefs.warnAt(context)
         // [T-length-wall-continue] Consecutive finish_reason="length" turns that
         // produced NO visible content and NO tool calls (output wall hit before
         // anything usable came back). First hit: continue the loop — the model
@@ -8942,6 +8947,26 @@ class ChatViewModel(
                     }
                     is LLMStreamChunk.Usage -> {
                         lastUsage = chunk.usage
+                        // [T-token-budget-warning] 一次可见的提醒，每个 run 只弹
+                        // 一次：这不是错误，长任务是合法的，只是花到这个量级
+                        // 该让用户知道。
+                        runTokensSpent += chunk.usage.inputTokens +
+                            (chunk.usage.cacheCreationInputTokens ?: 0) +
+                            chunk.usage.outputTokens
+                        if (!tokenWarningShown && tokenWarnAt > 0 && runTokensSpent >= tokenWarnAt) {
+                            tokenWarningShown = true
+                            val spent = runTokensSpent
+                            withContext(Dispatchers.Main) {
+                                appendSystemInfo(
+                                    context.getString(
+                                        R.string.token_budget_warning,
+                                        spent / 1000,
+                                        tokenWarnAt / 1000,
+                                    ),
+                                    "token_budget",
+                                )
+                            }
+                        }
                         // Update context token count for next turn's dynamicMaxTokens()
                         // and publish to _lastTurnContextTokens so the ContextPolicy
                         // gate in [checkContextBeforeSend] can see the latest pressure

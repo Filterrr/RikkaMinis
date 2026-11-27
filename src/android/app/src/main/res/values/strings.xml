@@ -1213,6 +1213,7 @@
     <string name="settings_media_section">Media</string>
     <string name="a11y_edit_skill_name">Edit name</string>
     <string name="a11y_selected">Selected</string>
+    <string name="token_budget_warning">About %1$dk tokens used in this run (warning at %2$dk). This is a heads-up, not an error — the run keeps going.</string>
     <string name="scheduled_tasks_channel">Scheduled tasks</string>
     <string name="scheduled_tasks_channel_desc">Reminders from tasks you scheduled</string>
     <string name="subagent_builtin_badge">built-in</string>
