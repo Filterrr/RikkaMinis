@@ -182,13 +182,21 @@ object SubagentRosterHint {
     ): String {
         val roster = build(entries, maxChars = maxChars)
         return buildString {
-            append("Error: no sub-agent named '").append(requested.trim()).append("' is installed.")
+            append("Error: no agent named '").append(requested.trim()).append("' is available.")
+            // [T-list-agents-on-demand] The failure path is where names are
+            // worth their tokens: the model is stuck, and the answer to
+            // "which names exist" decides whether it retries or gives up.
+            append("\n\nBuilt-in agents: ")
+            append(AgentProfiles.ALL.joinToString(" | ") { it.id })
+            append(" (omit agent= to run general).")
             if (roster.isNotEmpty()) {
                 append("\n\n").append(roster)
                 append("\n\nPick one of the names above and spawn THAT instead — Do not retry the same name.")
             } else {
-                append(" No sub-agent is installed in this chat, so do the work inline.")
+                append("\n\nNo sub-agent skills are installed in this chat; " +
+                    "either use a built-in agent above or do the work inline.")
             }
+            append("\n\nFor the full live list (built-ins + installed skills) call list_agents.")
         }
     }
 }

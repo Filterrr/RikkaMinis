@@ -151,10 +151,9 @@ internal object AgentProfiles {
     fun definition(): com.openminis.app.data.model.AgentToolDefinition =
         com.openminis.app.data.model.AgentToolDefinition(
             name = "list_agents",
-            description = "List the agents you can delegate to: the built-in profiles " +
-                "(general / researcher / coder / reviewer / ops — no SKILL.md needed) plus " +
-                "every installed sub-agent skill, with the capabilities each one holds. " +
-                "Call this when you are unsure which agent fits, instead of guessing a name.",
+            description = "List every agent you can delegate to (built-in profiles plus " +
+                "installed sub-agent skills) and the capabilities each holds. Call it instead " +
+                "of guessing a name.",
             parameters = mapOf(
                 "tool_title" to com.openminis.app.data.model.AgentToolParam(
                     "string",

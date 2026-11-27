@@ -812,8 +812,15 @@ object SubagentSkill {
             "returns that existing run_id instead of creating a duplicate — " +
             "join or wait on it rather than spawning the same task again. " +
             "With run_until='detach' the call returns immediately and the " +
-            "result is collected later via join_subagents / wait_any." +
-            rosterHint,
+            "result is collected later via join_subagents / wait_any. " +
+            // [T-list-agents-on-demand] Roster moved OUT of the always-on
+            // schema: every installed skill name used to sit in this
+            // description on every turn (~150 tokens) even though a spawn
+            // rarely fails. The name list now lives in the failure path (see
+            // SubagentRosterHint.unknownAgentMessage) and behind the
+            // list_agents tool, where it is paid for only when needed.
+            "Built-ins: general | researcher | coder | reviewer | ops. " +
+            "For installed sub-agent skills call list_agents.",
         parameters = mapOf(
             "tool_title" to AgentToolParam(
                 "string",
