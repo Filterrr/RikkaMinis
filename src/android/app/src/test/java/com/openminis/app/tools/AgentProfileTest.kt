@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import com.openminis.app.data.model.ThinkingLevel
 import org.junit.Test
 
 /**
@@ -75,6 +76,23 @@ class AgentProfileTest {
             assertEquals("profile:${profile.id}", info.id)
             assertTrue(info.body.isNotBlank())
         }
+    }
+
+    @Test
+    fun `general allows a parallel batch`() {
+        // Concurrency keys are skill ids, and every default spawn is
+        // "profile:general" — maxParallel=1 would queue a batch that used to
+        // run in parallel under distinct skill ids.
+        assertTrue(AgentProfiles.GENERAL.maxParallel >= 2)
+    }
+
+    @Test
+    fun `reasoning is spent only where it pays`() {
+        assertEquals(ThinkingLevel.MEDIUM, AgentProfiles.REVIEWER.thinking)
+        assertEquals(ThinkingLevel.MEDIUM, AgentProfiles.CODER.thinking)
+        // Search/read work does not need multi-step reasoning, and reasoning
+        // tokens are billed per turn.
+        assertEquals(ThinkingLevel.OFF, AgentProfiles.RESEARCHER.thinking)
     }
 
     @Test

@@ -58,6 +58,11 @@ internal object AgentProfiles {
             AgentCapability.WEB_SEARCH,
             AgentCapability.SELF_INSPECT,
         ),
+        // [T-agent-profiles] 显式写死，不靠默认值。改造前并发键是 skill id，
+        // 一个 turn 里 spawn 三个不同 skill 能并行；现在三者的键都是
+        // `profile:general`，若还按 maxParallel=1 就全排队了——那是改造顺带
+        // 引入的并发退化。上限仍受 SubagentScheduler.MAX_PARALLEL_CAP 约束。
+        maxParallel = 3,
     )
 
     val RESEARCHER = AgentProfile(
@@ -76,6 +81,9 @@ internal object AgentProfiles {
             AgentCapability.WEB_SEARCH,
             AgentCapability.SELF_INSPECT,
         ),
+        // 检索类留在 OFF：reasoning token 按输出计费且随轮次翻倍，而"找资料"
+        // 不需要多步推理。真正需要想的是复核和改代码（见下）。
+        thinking = ThinkingLevel.OFF,
     )
 
     val CODER = AgentProfile(
@@ -95,6 +103,7 @@ internal object AgentProfiles {
             AgentCapability.SHELL,
             AgentCapability.SELF_INSPECT,
         ),
+        thinking = ThinkingLevel.MEDIUM,
     )
 
     val REVIEWER = AgentProfile(
@@ -111,6 +120,9 @@ internal object AgentProfiles {
             AgentCapability.FILE_READ,
             AgentCapability.SELF_INSPECT,
         ),
+        // 复核的本质是找反例，属于多步推理；这是唯一值得为它付 reasoning
+        // 费用的内置 agent。
+        thinking = ThinkingLevel.MEDIUM,
     )
 
     val OPS = AgentProfile(

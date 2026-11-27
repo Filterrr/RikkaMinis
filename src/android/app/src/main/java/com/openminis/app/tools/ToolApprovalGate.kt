@@ -253,6 +253,26 @@ object DangerousCommandPolicy {
     )
 
     /**
+     * [T-skill-write-guard] skills 目录的写入也走审批。
+     *
+     * `SkillWriteGuard` 只挂在 file_write / file_edit / apply_patch 上；而
+     * agent 有 shell，`cat > SKILL.md <<EOF` 一条命令就能把 `allowed_tools`
+     * 改成 null。shell 里写文件的方式无穷（printf / tee / sed -i / python -c），
+     * 逐个堵没有尽头——所以把**这一类动作**升级为需要用户确认：批准一次就是
+     * 明确授权这次修改，无人值守超时则默认拒绝。
+     */
+    /** 重定向的目标就是 skills 路径（`2>&1` 不会被误判：`>` 后是 `&`）。 */
+    private val REDIRECT_INTO_SKILLS = Regex(
+        """(?:>>?)\s*/var/minis/skills/""",
+    )
+
+    /** 会改写/删除文件的动词，且命令里出现了 skills 路径。 */
+    private val VERB_ON_SKILLS = Regex(
+        """\b(?:tee|cp|mv|rm|truncate|shred|dd)\b[^;&|\n]*/var/minis/skills/|""" +
+            """\bsed\b[^;&|\n]*-i[^;&|\n]*/var/minis/skills/""",
+    )
+
+    /**
      * 检查一次工具调用。返回 null = 放行。
      *
      * 只对真正会执行命令的工具检查：`shell_execute` 读 `command`；
@@ -271,6 +291,14 @@ object DangerousCommandPolicy {
             if (rule.pattern.containsMatchIn(command)) {
                 return Hit(rule.id, rule.label)
             }
+        }
+        if (REDIRECT_INTO_SKILLS.containsMatchIn(command) ||
+            VERB_ON_SKILLS.containsMatchIn(command)
+        ) {
+            return Hit(
+                "skill_definition_write",
+                "Writes inside a skill directory - SKILL.md carries the sub-agent's permissions",
+            )
         }
         if (hiddenDestructive(command)) {
             return Hit(

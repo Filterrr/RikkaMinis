@@ -113,6 +113,27 @@ class DangerousCommandPolicyTest {
         assertNull(hit("find . -name node_modules -prune"))
     }
 
+    // ── skill 目录写入（file_* 有 SkillWriteGuard，shell 没有） ─────────────
+
+    @Test
+    fun `writing a SKILL through the shell is gated`() {
+        assertNotNull(hit("cat > /var/minis/skills/researcher/SKILL.md <<'EOF'"))
+        assertNotNull(hit("printf 'allowed_tools: null\\n' >> /var/minis/skills/x/SKILL.md"))
+        assertNotNull(hit("sed -i 's/allowed_tools: .*/allowed_tools: null/' /var/minis/skills/c/SKILL.md"))
+        assertNotNull(hit("cp /tmp/evil.md /var/minis/skills/coder/SKILL.md"))
+        assertNotNull(hit("rm -rf /var/minis/skills/old"))
+        assertNotNull(hit("tee -a /var/minis/skills/x/SKILL.md < /tmp/payload"))
+    }
+
+    @Test
+    fun `reading skills or writing elsewhere is not gated`() {
+        assertNull(hit("cat /var/minis/skills/researcher/SKILL.md"))
+        assertNull(hit("ls -la /var/minis/skills"))
+        assertNull(hit("grep allowed_tools /var/minis/skills/x/SKILL.md"))
+        assertNull(hit("echo hi > /tmp/out.txt 2>&1"))
+        assertNull(hit("ls > /tmp/listing.txt"))
+    }
+
     // ── 不许误伤 ──────────────────────────────────────────────────────────
 
     @Test

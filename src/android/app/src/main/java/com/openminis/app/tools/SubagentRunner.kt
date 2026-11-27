@@ -359,13 +359,31 @@ class SubagentRunner(
             requestedAgent.isNotBlank() -> requestedAgent
             else -> AgentProfiles.default().id
         }
-        // 调用方现场收窄：逗号分隔的能力名。未知名字直接忽略（宁少不多）。
-        val requestedCapabilities: Set<AgentCapability>? = args.optString("capabilities", "")
+        // [T-agent-profiles] 能力名拼错必须报错，不能静默丢弃。
+        //
+        // 静默丢弃的后果是反的：调用方想"NARROW to file_read"，打错一个字母
+        // → 请求集变成空 → `takeIf { it.isNotEmpty() }` 让它等于 null →
+        // 回落到 profile 的全量工具集。**想收窄，反而放大**，而且没有任何
+        // 提示。安全相关的失败必须响。
+        val capabilityTokens = args.optString("capabilities", "")
             .split(',')
-            .mapNotNull { raw ->
-                val key = raw.trim().lowercase()
-                if (key.isEmpty()) null else AgentCapability.entries.firstOrNull { it.name.lowercase() == key }
-            }
+            .map { it.trim().lowercase() }
+            .filter { it.isNotEmpty() }
+        val unknownCapabilities = capabilityTokens.filter { key ->
+            AgentCapability.entries.none { it.name.lowercase() == key }
+        }
+        if (unknownCapabilities.isNotEmpty()) {
+            return ToolExecutionResult(
+                "Error: unknown capability " +
+                    unknownCapabilities.joinToString(", ") { "'$it'" } +
+                    ". Valid values: " +
+                    AgentCapability.entries.joinToString(", ") { it.name.lowercase() } +
+                    ". Fix the name — nothing was spawned.",
+                false, toolTitle = title,
+            )
+        }
+        val requestedCapabilities: Set<AgentCapability>? = capabilityTokens
+            .mapNotNull { key -> AgentCapability.entries.firstOrNull { it.name.lowercase() == key } }
             .toSet()
             .takeIf { it.isNotEmpty() }
         val roleExtra = args.optString("role", "").trim().take(ROLE_MAX_CHARS)
