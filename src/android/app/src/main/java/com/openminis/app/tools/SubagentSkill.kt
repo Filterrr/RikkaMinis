@@ -843,6 +843,14 @@ object SubagentSkill {
             // [T-agent-profiles] 调用方现场收窄能力，不需要先造 skill。
             // 逗号分隔而不是 array：Gemini 对 ARRAY 节点强制要求 items，
             // 一个纯字符串参数能少一整类 schema 事故。
+            "knowledge" to AgentToolParam(
+                "string",
+                "Optional. Comma-separated names of installed skills whose BODY should be " +
+                    "attached as reference material (they do not need subagent: true). " +
+                    "Use it to hand a built-in agent domain knowledge without giving it that " +
+                    "skill's runtime: e.g. agent=\"general\", knowledge=\"my-ssh-cheatsheet\". " +
+                    "This changes no permissions.",
+            ),
             "capabilities" to AgentToolParam(
                 "string",
                 "Optional. Comma-separated capability names to NARROW the agent's " +
@@ -990,7 +998,7 @@ object SubagentSkill {
         required = listOf("tool_title", "query", "max_minutes"),
         propertyOrdering = listOf(
             "tool_title", "agent", "skill_name", "query", "max_minutes",
-            "capabilities", "role", "resume_run_id",
+            "knowledge", "capabilities", "role", "resume_run_id",
             "run_until", "model", "timeout_seconds", "progress_report",
         ),
     )

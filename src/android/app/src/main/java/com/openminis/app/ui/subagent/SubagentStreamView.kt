@@ -432,6 +432,11 @@ private fun SubagentTaskHeader(run: SubagentRunRegistry.Run) {
             chips = buildList {
                 add("skill" to run.skillId.ifBlank { run.skillName })
                 if (run.modelLabel.isNotBlank()) add("model" to run.modelLabel)
+                // [T-subagent-audit] 用户也要能看到这个 run 实际拿到的工具集，
+                // 而不是只有审批弹窗里那一瞬间。
+                com.openminis.app.tools.SubagentStatus.toolScopeLabel(run)?.let {
+                    add("tools" to it)
+                }
                 formatSubagentTokenCost(run)?.let { add("tokens" to it) }
                 formatSubagentQueueWait(run)?.let { add("queue" to it) }
                 // [T-subagent-thinking] Make the EFFECTIVE reasoning choice

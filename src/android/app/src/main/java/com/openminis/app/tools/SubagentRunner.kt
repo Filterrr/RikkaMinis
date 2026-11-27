@@ -391,11 +391,34 @@ class SubagentRunner(
                 toolTitle = args.optString("tool_title", "Sub-agent").ifBlank { "Sub-agent" },
             )
         }
+        val unknownKnowledge = knowledgeNames.filter { name ->
+            deps.findSkill(name)?.body.isNullOrBlank()
+        }
+        if (unknownKnowledge.isNotEmpty()) {
+            return ToolExecutionResult(
+                "Error: no skill named " +
+                    unknownKnowledge.joinToString(", ") { "'$it'" } +
+                    " is installed (knowledge=). Call list_agents or use " +
+                    "agent= for a runtime; knowledge= only attaches reference text.",
+                false,
+                toolTitle = args.optString("tool_title", "Sub-agent").ifBlank { "Sub-agent" },
+            )
+        }
         val requestedCapabilities: Set<AgentCapability>? = capabilityTokens
             .mapNotNull { key -> AgentCapability.entries.firstOrNull { it.name.lowercase() == key } }
             .toSet()
             .takeIf { it.isNotEmpty() }
         val roleExtra = args.optString("role", "").trim().take(ROLE_MAX_CHARS)
+        // [T-agent-knowledge] 知识包：把已装 skill 的**正文**当参考资料附上，
+        // 不要求它声明 subagent: true，也不借用它的权限。名字写错要报错——
+        // 静默忽略会让调用方以为知识已加载。
+        val knowledgeNames = args.optString("knowledge", "")
+            .split(',')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+        val knowledgeBodies = knowledgeNames.mapNotNull { name ->
+            deps.findSkill(name)?.body?.takeIf { it.isNotBlank() }
+        }
         val query = args.optString("query", "").trim()
         val title = args.optString("tool_title", "Sub-agent").ifBlank { "Sub-agent" }
         // [port/upstream-subagent-progress] Opt-in progress notes. Parsed here
@@ -576,9 +599,14 @@ class SubagentRunner(
         // configured speciality, empty for an ordinary skill spawn.
         // [T-agent-profiles] One-off role text sits AFTER the roster mission:
         // the mission says what to do, the role says who to be while doing it.
+        val knowledgeText = knowledgeBodies
+            .joinToString("\n\n")
+            .takeIf { it.isNotBlank() }
+            ?.let { "## Reference material\n\n$it" }
         val extraInstructions = listOfNotNull(
             delegation?.extraInstructions?.takeIf { it.isNotBlank() },
             roleExtra.takeIf { it.isNotBlank() },
+            knowledgeText,
         ).joinToString("\n\n")
 
         // Fail-closed capability filter + explicit allowlist (validated

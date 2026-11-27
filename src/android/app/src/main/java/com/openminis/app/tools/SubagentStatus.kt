@@ -110,6 +110,20 @@ object SubagentStatus {
     }
 
     /** One run, as a short block. Public for the UI/tests to reuse. */
+    /**
+     * [T-subagent-audit] toolsHash 的人类可读面：`allow|deny:x,y` 的第一段。
+     * `*` 是契约里的"全部非禁止工具"，照实说，不要写成空列表。
+     */
+    fun toolScopeLabel(run: Run): String? {
+        if (run.toolsHash.isBlank()) return null
+        val allow = run.toolsHash.substringBefore("|deny:")
+        return when {
+            allow == "*" -> "all non-forbidden tools"
+            allow.isBlank() -> "(none)"
+            else -> allow
+        }
+    }
+
     fun line(run: Run, nowMs: Long): String = buildString {
         append("#").append(shortId(run.id))
         run.title.takeIf { it.isNotBlank() }?.let { append(" · ").append(it.trim()) }
@@ -129,6 +143,9 @@ object SubagentStatus {
         currentActivity(run)?.let { append("\n  now:     ").append(it) }
 
         run.modelLabel.takeIf { it.isNotBlank() }?.let { append("\n  model:   ").append(it) }
+        // [T-subagent-audit] 它能碰什么。权限快照会换、SKILL.md 会被改，这里
+        // 报的是**那次 run 实际拿到的工具集**（指纹第一段就是 allowlist）。
+        toolScopeLabel(run)?.let { append("\n  tools:   ").append(it) }
         costLabel(run)?.let { append("\n  tokens:  ").append(it) }
 
         // A terminal run's own words. Preview only: the whole report already
