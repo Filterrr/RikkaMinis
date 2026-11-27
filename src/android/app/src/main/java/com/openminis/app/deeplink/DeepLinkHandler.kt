@@ -10,6 +10,7 @@ import com.openminis.app.ui.navigation.Routes
  *   minis://share                              → open share flow
  *   minis://views/alarm                        → open alarm list
  *   minis://open_terminal?init_command=...      → open terminal with command
+ *   minis://run?prompt=…&session=<id>          → open a chat with the prompt PRE-FILLED (never auto-sent)
  *   minis://session/<id>                        → open specific session
  *   minis://settings                            → Settings home
  *   minis://settings/providers                  → Provider list
@@ -51,6 +52,16 @@ sealed class DeepLinkAction {
     data class CreateEnvironmentVariable(val key: String, val value: String, val note: String) : DeepLinkAction()
     data object OpenPermissionSettings : DeepLinkAction()
     data class OpenSession(val sessionId: String) : DeepLinkAction()
+
+    /**
+     * [T-deeplink-run] `minis://run?prompt=…&session=<id>` —— 带一段提示词
+     * 直达聊天。
+     *
+     * 只**预填**输入框，绝不自动发送：`minis://` 没有任何来源认证，任何
+     * 已安装的应用都能构造这条链接。自动执行等于让任意第三方应用驱动你的
+     * agent（以及你的 shell）。发送永远是用户按下去的那个动作。
+     */
+    data class RunPrompt(val prompt: String, val sessionId: String?) : DeepLinkAction()
 
     /**
      * App-icon long-press quick actions (mirrors iOS QuickActionRouter).
@@ -98,6 +109,9 @@ sealed class DeepLinkAction {
 }
 
 object DeepLinkHandler {
+
+    /** [T-deeplink-run] 一条深链最多带多少提示词。URL 有长度上限，也不该用来搬运长文。 */
+    private const val MAX_RUN_PROMPT_CHARS = 4000
     fun parse(uri: Uri?): DeepLinkAction {
         if (uri == null || uri.scheme != "minis") return DeepLinkAction.Unknown
         val host = uri.host ?: return DeepLinkAction.Unknown
@@ -124,6 +138,15 @@ object DeepLinkHandler {
                 else -> DeepLinkAction.Unknown
             }
             "settings" -> parseSettingsPath(uri)
+            "run" -> {
+                val prompt = uri.getQueryParameter("prompt").orEmpty().trim()
+                val sid = uri.getQueryParameter("session")?.trim()?.takeIf { it.isNotEmpty() }
+                if (prompt.isEmpty()) {
+                    DeepLinkAction.Unknown
+                } else {
+                    DeepLinkAction.RunPrompt(prompt.take(MAX_RUN_PROMPT_CHARS), sid)
+                }
+            }
             "session" -> {
                 // minis://session/<sessionId>                → OpenSession
                 // minis://session/<sessionId>/<resource-path> → OpenHtmlPreview

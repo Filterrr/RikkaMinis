@@ -343,6 +343,35 @@ fun AppNavigation(
                     restoreState = true
                 }
             }
+            is DeepLinkAction.RunPrompt -> {
+                // [T-deeplink-run] Stage the prompt through the SAME pending
+                // share channel the share-sheet uses, then land in the target
+                // chat. ChatScreen consumes it into the composer; sending
+                // stays a user action (see DeepLinkHandler.RunPrompt).
+                runCatching {
+                    com.openminis.app.share.SharedShareStore.savePendingShare(
+                        context,
+                        com.openminis.app.share.PendingShare(
+                            items = listOf(
+                                com.openminis.app.share.PendingShare.Item(
+                                    com.openminis.app.share.PendingShare.Item.Kind.INLINE_TEXT,
+                                    initialDeepLink.prompt,
+                                ),
+                            ),
+                            timestampMs = System.currentTimeMillis(),
+                        ),
+                    )
+                }
+                val target = initialDeepLink.sessionId?.takeIf { it.isNotBlank() } ?: "__new__"
+                navController.safeNavigate(Routes.chat(target)) {
+                    popUpTo(navController.graph.startDestinationId) {
+                        inclusive = true
+                        saveState = true
+                    }
+                    launchSingleTop = true
+                    restoreState = true
+                }
+            }
             is DeepLinkAction.CreateEnvironmentVariable -> {
                 DeepLinkCoordinator.setPendingEnvVarCreate(
                     initialDeepLink.key,
