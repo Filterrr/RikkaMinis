@@ -188,12 +188,22 @@ class ChatViewModel(
         // 不改变生产行为；T7-C 接入 enforced 模式前由 T4-B/T10 依据真实基线校准。
         private const val T7_OBSERVE_MAX_TURNS = 200
         private const val T7_OBSERVE_MAX_PROVIDER_ATTEMPTS = 64
-        private const val T7_OBSERVE_MAX_TOOL_CALLS = 128
-        private const val T7_OBSERVE_MAX_SHELL_COMMANDS = 128
+        // [fix/run-stops-by-itself] 128 次工具调用是**长任务的天花板**，不是
+        // 失控保护：一次批量处理 / 重构很容易 200+ 次工具调用，用户看到的是
+        // "跑着跑着就不动了"。真正的失控保护是 turns 与 wall clock，这两项
+        // 放宽到一个正常工作日也够用的量级。
+        private const val T7_OBSERVE_MAX_TOOL_CALLS = 512
+        private const val T7_OBSERVE_MAX_SHELL_COMMANDS = 512
         private const val T7_OBSERVE_MAX_COMPACTION_CALLS = 8
         private const val T7_OBSERVE_MAX_CONCURRENT_TOOLS = 4
-        /** 观察 deadline：60 分钟单调时间（advisory，不阻断）。 */
-        private const val T7_OBSERVE_DEADLINE_MS = 60L * 60L * 1000L
+        /**
+         * 失控保护：8 小时单调时间。
+         *
+         * 之前是 60 分钟，注释还写着"advisory，不阻断"——但 T7-C 早就把它
+         * 变成了硬 break，于是任何跑过一个小时的任务都会**静默**停住。
+         * 这个数字现在是"防止无限烧 token 的保险丝"，不是任务预算。
+         */
+        private const val T7_OBSERVE_DEADLINE_MS = 8L * 60L * 60L * 1000L
 
         /**
          * T7-A: 把 [AgentRunPhase] 映射为 trace schema v2 的 state_transition
@@ -10560,9 +10570,20 @@ class ChatViewModel(
                 finalizeAtTurnLimit(assistantId, accumulatedText, allToolBlocks)
             }
         } else if (t7BudgetStopReason != null) {
-            // T7-C: 预算耗尽（deadline / 计数上限）—— 显式终态，不是静默失败。
-            // 不经过 finalizeAtTurnLimit（那是 200 轮的 Resume 语义）。
-            AppLogger.warning(TAG_STREAM, "runAgentLoop EXIT — budget stop: $t7BudgetStopReason")
+            // [fix/run-stops-by-itself] 之前这里只打一行日志：循环停了、气泡停在
+            // 半截、没有任何说明，用户看到的就是"自己停了"，而且**连 Resume 都
+            // 没有**。现在给出可见原因并把这一轮标成可继续——停下来可以，但
+            // 必须让人知道为什么、以及怎么接着跑。
+            val reason = t7BudgetStopReason
+            AppLogger.warning(TAG_STREAM, "runAgentLoop EXIT — budget stop: $reason")
+            withContext(Dispatchers.Main) {
+                finalizeAtRunLimit(
+                    assistantId = assistantId,
+                    text = accumulatedText,
+                    blocks = allToolBlocks,
+                    message = budgetStopMessage(reason),
+                )
+            }
         } else {
             AppLogger.info(TAG_STREAM, "runAgentLoop EXIT (loop body ended naturally)")
         }
@@ -10636,10 +10657,54 @@ class ChatViewModel(
      * we stopped, and arms canResume so the user can continue from here.
      * Mirrors iOS AIChatViewModel.swift:4922-4929 pattern (canResume + error).
      */
+    /**
+     * [fix/run-stops-by-itself] 统一的"跑到上限"收尾：落定气泡、清掉流式状态、
+     * 给一句可见的原因、并把这一轮标成可继续。轮数上限与预算上限共用它，
+     * 只有文案不同——不然两条路径迟早漂移成两套行为。
+     */
+    private fun finalizeAtRunLimit(
+        assistantId: String,
+        text: String,
+        blocks: List<AssistantBlock>,
+        message: String,
+    ) {
+        // 轮数上限的旧入口保留原名，避免动所有调用点。
+        finalizeAtRunLimitBody(assistantId, text, blocks, message)
+    }
+
+    /** [fix/run-stops-by-itself] 预算中断的可见文案：说清原因，并给出下一步。 */
+    private fun budgetStopMessage(reason: String): String = when (reason) {
+        "deadline_reached" ->
+            "Stopped: this run reached the 8-hour safety limit. Nothing was lost — " +
+                "the messages and tool output so far are kept. Tap Resume to keep going, " +
+                "or send a new message to narrow the task."
+        "provider_attempt_limit" ->
+            "Stopped: too many failed model requests in a row. Check the provider " +
+                "(key, quota, network), then tap Resume."
+        "turn_limit" ->
+            "Stopped after $MAX_AGENT_TURNS agent turns. Tap Resume to continue."
+        else ->
+            "Stopped: the run hit its safety limit ($reason). Tap Resume to continue."
+    }
+
     private fun finalizeAtTurnLimit(
         assistantId: String,
         text: String,
         blocks: List<AssistantBlock>,
+    ) = finalizeAtRunLimitBody(
+        assistantId,
+        text,
+        blocks,
+        "Stopped after $MAX_AGENT_TURNS agent turns to prevent runaway " +
+            "tool use. The model kept calling tools without finishing — tap " +
+            "Resume to continue from here, or send a new message to start over.",
+    )
+
+    private fun finalizeAtRunLimitBody(
+        assistantId: String,
+        text: String,
+        blocks: List<AssistantBlock>,
+        message: String,
     ) {
         updateAssistantMessage(
             assistantId, text, false, blocks,
@@ -10660,11 +10725,7 @@ class ChatViewModel(
         if (_streamingById.value.containsKey(assistantId)) {
             _streamingById.value = _streamingById.value - assistantId
         }
-        setInlineError(
-            "Stopped after $MAX_AGENT_TURNS agent turns to prevent runaway " +
-            "tool use. The model kept calling tools without finishing — tap " +
-            "Resume to continue from here, or send a new message to start over.",
-        )
+        setInlineError(message)
         _canResume.value = true
     }
 

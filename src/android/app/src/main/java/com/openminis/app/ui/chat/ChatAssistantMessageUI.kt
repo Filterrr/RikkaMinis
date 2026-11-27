@@ -1119,11 +1119,12 @@ internal fun ToolCallPill(
 
 // ─── Tool Run Group (iOS-style collapsible "agent turn" card) ──────────────
 // [T-android-tool-run-collapse] One assistant message with >= 2 tool_use
-// blocks renders as a single foldable row. While any tool is live the group
-// stays expanded (live progress visible); once every tool reached a terminal
-// state the card auto-collapses to a one-line summary ("N tools · total"),
-// exactly like the ThinkingBlock does for long deep-think content. Tapping
-// the header expands it again and takes over the state.
+// blocks renders as a single foldable row. [fix/tool-group-auto-collapse] It
+// opens while running and STAYS open afterwards - the old "collapses to a
+// one-line summary when it finishes" behaviour yanked the card shut while the
+// user was reading it. History entries still start collapsed (otherwise long
+// chats turn into walls of tool cards); a manual toggle is respected from then
+// on.
 
 /**
  * Header-only summary for a collapsed/expanded tool run group.
@@ -1152,13 +1153,20 @@ internal fun ToolCallRunGroup(
     if (group.tools.isEmpty()) return
     // [T-message-fork] Long-press menu state for the header branch action.
     var showGroupMenu by remember { mutableStateOf(false) }
-    // [T-android-run-group-manual] The card is collapsed by default and
-    // never auto-expands, not even while running — the header itself IS the
-    // live status (spinner + "Running N tools" / "Thinking…"), so an
-    // auto-open would only fight the user's scroll position. The user taps
-    // the header to expand, taps again to collapse; `expanded` is the single
-    // source of truth.
-    var expanded by remember(group.messageId) { mutableStateOf(false) }
+    // [fix/tool-group-auto-collapse] 之前初始值写死 false：一个 turn 里出现
+    // 第二个工具时，这一组立刻变成一行摘要——用户明明在看工具输出，它自己
+    // 收起来了。
+    //
+    // 现在的规则：
+    //  - 正在跑的组**展开**（进度就该看得见）；
+    //  - 跑完了**保持原状**，不会自动收；
+    //  - 用户手动点过之后（userTouched）不再自动展开，交给用户；
+    //  - 翻历史消息（组早已结束）默认还是折叠的，否则长对话会被工具卡片刷屏。
+    var expanded by remember(group.messageId) { mutableStateOf(isRunning) }
+    var userTouched by remember(group.messageId) { mutableStateOf(false) }
+    LaunchedEffect(group.isRunning) {
+        if (group.isRunning && !userTouched) expanded = true
+    }
     val effectiveExpanded = expanded
 
     val groupAccent = toolAccentColor("shell_execute")
@@ -1198,6 +1206,7 @@ internal fun ToolCallRunGroup(
                     )
                 }
                 .clickable {
+                    userTouched = true
                     expanded = !expanded
                 }
                 .padding(horizontal = 12.dp, vertical = 8.dp),
@@ -1403,7 +1412,10 @@ internal fun ThinkingBlock(block: AssistantBlock, isStreaming: Boolean, isLast: 
                     // opens the native full-content viewer instead of toggling
                     // the (never-shown) inline expansion.
                     if (overHardCap) showFullContent = true
-                    else expanded = !expanded
+                    else {
+                        userTouched = true
+                        expanded = !expanded
+                    }
                 },
         ) {
             if (isStreaming && block.toolStatus != ToolBlockStatus.SUCCESS) {
