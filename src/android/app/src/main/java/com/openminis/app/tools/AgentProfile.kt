@@ -9,7 +9,7 @@ import com.openminis.app.data.model.ThinkingLevel
  * frontmatter 里。三个问题：
  *
  *  1. **它是一份数据，而数据是 agent 自己能写的** —— `file_write` 到
- *     `/var/minis/skills/**` 没有任何守卫，把 `allowed_tools` 改成 null
+ *     `/var/minis/skills/` 下的任意 SKILL.md 没有任何守卫，把 `allowed_tools` 改成 null
  *     就等于给自己/给子 agent 开 shell；
  *  2. **想跑一次临时任务就得先造一个文件** —— "读三个文件总结一下"也要
  *     先写 SKILL.md、声明 `subagent: true`、再 spawn；

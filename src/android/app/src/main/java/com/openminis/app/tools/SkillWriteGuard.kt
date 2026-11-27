@@ -5,7 +5,7 @@ package com.openminis.app.tools
  *
  * 子 agent 的权限写在 SKILL.md 的 frontmatter 里（`allowed_tools` /
  * `disallowed_tools` / `subagent` / `mcp_servers` / `read_only` …），而 agent
- * 持有 `file_write` / `file_edit`，且 `/var/minis/skills/**` 没有任何守卫。
+ * 持有 `file_write` / `file_edit`，且 `/var/minis/skills/` 下的任意 SKILL.md 没有任何守卫。
  * 于是一条 `file_write` 把某个只读 skill 的 `allowed_tools` 改成 null，下次
  * spawn 就拿到了 shell —— 一条完整的权限提升链，不需要任何漏洞。
  *
