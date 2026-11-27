@@ -1018,6 +1018,52 @@ internal fun buildFlatChatItems(
             out.add(dedupe(FlatChatItem.AssistantError(message.id, it, message.errorDetail)))
         }
     }
+    return foldConsecutiveToolRuns(out)
+}
+
+/**
+ * [T-consecutive-tool-fold] 把**相邻**的工具组折叠成一张卡片。
+ *
+ * 一个 agent 跑 5 轮工具（每轮一条 assistant 消息、没有正文）会渲染成 5 张
+ * 卡片，聊天框被这些壳子撑满。这里在扁平化之后扫一遍：连续的
+ * [FlatChatItem.AssistantToolRunGroup] 合并成一个，工具按原顺序拼接。
+ *
+ * 只在**没有别的东西隔开**时合并——中间夹着正文或思考行就是两段不同的工作，
+ * 合起来会让人以为是一次连续动作。thinking 有意算作"隔断"：它是独立的可
+ * 展开行（T-thinking-split-row），把它吞进工具组会毁掉那个交互。
+ *
+ * 保留第一个组的 messageId 作为代表：fork / rerun 需要锚点，指向这一段的
+ * 开头才是对的。
+ */
+private fun foldConsecutiveToolRuns(items: List<FlatChatItem>): List<FlatChatItem> {
+    if (items.size < 2) return items
+    val out = ArrayList<FlatChatItem>(items.size)
+    var i = 0
+    while (i < items.size) {
+        val item = items[i]
+        if (item !is FlatChatItem.AssistantToolRunGroup) {
+            out.add(item)
+            i++
+            continue
+        }
+        var merged = item
+        var j = i + 1
+        while (j < items.size) {
+            val next = items[j]
+            if (next is FlatChatItem.AssistantToolRunGroup) {
+                merged = merged.copy(
+                    tools = merged.tools + next.tools,
+                    isRunning = merged.isRunning || next.isRunning,
+                    isLastCancelled = next.isLastCancelled,
+                )
+                j++
+            } else {
+                break
+            }
+        }
+        out.add(merged)
+        i = j
+    }
     return out
 }
 
