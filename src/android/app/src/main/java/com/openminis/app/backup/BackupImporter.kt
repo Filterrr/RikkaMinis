@@ -220,7 +220,12 @@ class BackupImporter(
                     when (category) {
                         BackupCategory.CHATS -> importChats(work, fileIndex, report0)
                         BackupCategory.SHARED_FILES -> importSharedFiles(work, fileIndex)
-                        BackupCategory.SKILLS -> importSkills(work, fileIndex)
+                        BackupCategory.SKILLS -> importSkills(work, fileIndex).also {
+                            // [T-skill-permissions-snapshot] 权限快照必须跟着
+                            // 一起恢复：否则 loadAll 会把包里那份 SKILL.md 当
+                            // 基线重新信任一次，篡改就白洗了。
+                            restoreSkillPermissions(manifest.skillPermissions)
+                        }
                         BackupCategory.MEMORY -> importMemory(work)
                         BackupCategory.MCP_SERVERS -> importMcpServers(work)
                         BackupCategory.PROVIDERS -> importProviders(work)
@@ -660,6 +665,32 @@ class BackupImporter(
         // Per §3.2 no meta.db equivalent is needed here: PRoot bind-mounts this
         // directory, so the guest sees the files on the next boot.
         return report
+    }
+
+    /**
+     * [T-skill-permissions-snapshot] 把备份里的权限行写回 skill 库。
+     *
+     * 直接 open 同一个 sqlite 文件（不构造 SkillRepository —— 它的 init 会
+     * 装内置技能，恢复过程中不该有这种副作用）。表已存在则覆盖；
+     * 老包没有这个区块时 manifest.skillPermissions 为空，什么也不做。
+     */
+    private fun restoreSkillPermissions(permissions: Map<String, String>) {
+        if (permissions.isEmpty()) return
+        runCatching {
+            val file = context.getDatabasePath(
+                com.openminis.app.data.repository.SkillRepository.DB_NAME,
+            )
+            val db = android.database.sqlite.SQLiteDatabase.openOrCreateDatabase(file, null)
+            db.use { conn ->
+                conn.execSQL(com.openminis.app.data.repository.SkillRepository.PERMISSIONS_TABLE_SQL)
+                for ((skillId, snapshot) in permissions) {
+                    conn.execSQL(
+                        "INSERT OR REPLACE INTO skill_permissions (skill_id, snapshot, confirmed_at, source) VALUES (?,?,?,?)",
+                        arrayOf<Any>(skillId, snapshot, System.currentTimeMillis(), "backup-restore"),
+                    )
+                }
+            }
+        }
     }
 
     private fun importSkills(root: File, fileIndex: List<BackupFileIndexEntry>): CategoryReport {

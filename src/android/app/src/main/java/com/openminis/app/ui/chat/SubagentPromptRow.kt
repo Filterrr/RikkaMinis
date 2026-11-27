@@ -52,6 +52,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
@@ -59,6 +60,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.openminis.app.R
 import com.openminis.app.tools.SubagentRunRegistry
 import com.openminis.app.ui.subagent.SubagentAccent
 import com.openminis.app.ui.subagent.formatSubagentDuration
@@ -193,6 +195,21 @@ private fun SubagentCapsule(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
                 )
+                // [T-subagent-audit] 内置 profile 不是"装的技能"，别让它看起来
+                // 像用户从市场里下了一个叫 General 的东西。
+                if (run.agentKind == "profile") {
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = stringResource(R.string.subagent_builtin_badge),
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = ChatColors.tertiaryText,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(ChatColors.toolBorder.copy(alpha = 0.35f))
+                            .padding(horizontal = 4.dp, vertical = 1.dp),
+                    )
+                }
             }
             Spacer(modifier = Modifier.height(3.dp))
             // Line 2: live elapsed timer + status word.

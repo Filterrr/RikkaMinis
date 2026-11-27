@@ -46,7 +46,8 @@ class SkillRepository(private val context: Context) {
 
     companion object {
         private const val TAG = "SkillRepository"
-        private const val DB_NAME = "skills.db"
+        /** [T-skill-permissions-snapshot] 备份/恢复也要读写这张表。 */
+        internal const val DB_NAME = "skills.db"
         private const val DB_VERSION = 4
 
         /**
@@ -57,7 +58,7 @@ class SkillRepository(private val context: Context) {
          * 闸门都只能拦"某些写法"，拦不住所有写法。所以真正生效的权限从此
          * 只认这张表：安装/用户编辑时快照一次，之后文件怎么改都不影响运行。
          */
-        private const val PERMISSIONS_TABLE_SQL = """
+        internal const val PERMISSIONS_TABLE_SQL = """
             CREATE TABLE IF NOT EXISTS skill_permissions (
                 skill_id TEXT PRIMARY KEY,
                 snapshot TEXT NOT NULL,

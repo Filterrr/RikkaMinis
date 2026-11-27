@@ -1210,6 +1210,7 @@
     <string name="message_action_fork_from_here">Branch from here</string>
     <string name="message_action_read_aloud">Read aloud</string>
     <string name="chat_menu_search_session">Search this chat</string>
+    <string name="subagent_builtin_badge">built-in</string>
     <string name="session_search_title">Search this chat</string>
     <string name="session_search_hint">Find text in every message…</string>
     <string name="session_search_empty">Type to search the whole conversation, including earlier messages that are no longer loaded.</string>
