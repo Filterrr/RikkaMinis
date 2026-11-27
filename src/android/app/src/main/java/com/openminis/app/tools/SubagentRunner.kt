@@ -1742,6 +1742,12 @@ class SubagentRunner(
                             maxTurns = s.maxTurns,
                             report = s.resultText,
                             artifacts = s.artifacts,
+                            // [T-subagent-audit] 一起落盘：进程重启后，
+                            // 这四个字段是唯一还能说明"那次跑的是什么"的证据。
+                            agentKind = s.agentKind,
+                            toolsHash = s.toolsHash,
+                            profileVersion = s.profileVersion,
+                            roleSummary = s.roleSummary,
                         ),
                     ),
                     Charsets.UTF_8,

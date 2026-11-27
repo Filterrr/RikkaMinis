@@ -45,6 +45,36 @@ class SubagentResumeArchiveTest {
     }
 
     @Test
+    fun `audit fields survive the archive`() {
+        // [T-subagent-audit] After a restart this file is the ONLY place that
+        // still says which configuration ran: the registry is memory-only and
+        // both the skill file and the permission snapshot can change later.
+        val original = snapshot().copy(
+            agentKind = "profile",
+            toolsHash = "file_read,shell_execute|deny:",
+            profileVersion = 2,
+            roleSummary = "auditing a Rust parser",
+        )
+        val parsed = SubagentResumeArchive.parse(SubagentResumeArchive.toJson(original))!!
+        assertEquals("profile", parsed.agentKind)
+        assertEquals("file_read,shell_execute|deny:", parsed.toolsHash)
+        assertEquals(2, parsed.profileVersion)
+        assertEquals("auditing a Rust parser", parsed.roleSummary)
+    }
+
+    @Test
+    fun `an archive written before the audit fields keeps reading`() {
+        // Incremental fields: an old file must still resume, with defaults -
+        // NOT be refused as a version mismatch.
+        val legacy = """{"v":1,"runId":"run-old","skillId":"s","skillName":"s",""" +
+            """"status":"SUCCESS","error":"","turns":3,"maxTurns":5,"report":"ok","artifacts":[]}"""
+        val parsed = SubagentResumeArchive.parse(legacy)!!
+        assertEquals("skill", parsed.agentKind)
+        assertEquals("", parsed.toolsHash)
+        assertEquals(0, parsed.profileVersion)
+    }
+
+    @Test
     fun `the report is bounded at serialisation time, not just at hand-off`() {
         // The file is read back into a USER message later; letting the file
         // grow with the report moves the cost to disk and to whoever reads

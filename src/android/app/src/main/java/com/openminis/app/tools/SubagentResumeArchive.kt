@@ -57,6 +57,12 @@ internal object SubagentResumeArchive {
         val maxTurns: Int,
         val report: String,
         val artifacts: List<String>,
+        // [T-subagent-audit] 这四项让"重启之后还能回答那次跑的是什么"成为
+        // 可能。旧档案没有这些键，解析时落到默认值——增量字段，不升版本。
+        val agentKind: String = "skill",
+        val toolsHash: String = "",
+        val profileVersion: Int = 0,
+        val roleSummary: String = "",
     )
 
     fun toJson(snapshot: Snapshot): String {
@@ -76,6 +82,10 @@ internal object SubagentResumeArchive {
             .put("maxTurns", snapshot.maxTurns)
             .put("report", report)
             .put("artifacts", JSONArray(artifacts))
+            .put("agentKind", snapshot.agentKind)
+            .put("toolsHash", snapshot.toolsHash)
+            .put("profileVersion", snapshot.profileVersion)
+            .put("roleSummary", snapshot.roleSummary)
             .toString()
     }
 
@@ -108,6 +118,10 @@ internal object SubagentResumeArchive {
             maxTurns = obj.optInt("maxTurns", 0).coerceAtLeast(0),
             report = obj.optString("report", "").take(MAX_REPORT_CHARS),
             artifacts = artifacts,
+            agentKind = obj.optString("agentKind", "skill").ifBlank { "skill" },
+            toolsHash = obj.optString("toolsHash", ""),
+            profileVersion = obj.optInt("profileVersion", 0),
+            roleSummary = obj.optString("roleSummary", ""),
         )
     }
 }
