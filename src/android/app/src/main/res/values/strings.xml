@@ -1214,6 +1214,11 @@
     <string name="a11y_edit_skill_name">Edit name</string>
     <string name="a11y_selected">Selected</string>
     <string name="token_budget_warning">About %1$dk tokens used in this run (warning at %2$dk). This is a heads-up, not an error — the run keeps going.</string>
+    <string name="settings_token_budget_title">Token usage warning</string>
+    <string name="settings_token_budget_subtitle">Heads-up after about %1$dk tokens in one run</string>
+    <string name="settings_token_budget_off">Off — never warn</string>
+    <string name="settings_token_budget_option">%1$dk tokens</string>
+    <string name="settings_token_budget_footer">A notice is shown once per run when the total crosses this. It never stops the run — a long task is allowed to be long; this just makes the cost visible.</string>
     <string name="scheduled_tasks_channel">Scheduled tasks</string>
     <string name="scheduled_tasks_channel_desc">Reminders from tasks you scheduled</string>
     <string name="subagent_builtin_badge">built-in</string>

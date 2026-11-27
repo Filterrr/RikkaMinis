@@ -1054,6 +1054,11 @@
     <string name="sub_agent_builtin_description">需要独立工具循环的开放任务：多轮翻代码库或网页、把大量输出消化成一个结论，或者并行跑几条独立分支。</string>
     <string name="sub_agent_builtin_name">通用子智能体</string>
     <string name="token_budget_warning">本轮已使用约 %1$dk tokens（提醒阈值 %2$dk）。这只是提醒，任务会继续跑。</string>
+    <string name="settings_token_budget_title">Token 用量提醒</string>
+    <string name="settings_token_budget_subtitle">一次运行超过约 %1$dk tokens 时提醒</string>
+    <string name="settings_token_budget_off">关闭——不再提醒</string>
+    <string name="settings_token_budget_option">%1$dk tokens</string>
+    <string name="settings_token_budget_footer">一轮运行累计跨过这个阈值时提示一次，不会中断任务。长任务本来就该能跑完，这只是让花费可见。</string>
     <string name="scheduled_tasks_channel">定时任务</string>
     <string name="scheduled_tasks_channel_desc">你安排的定时任务到点提醒</string>
     <string name="subagent_builtin_badge">内置</string>
