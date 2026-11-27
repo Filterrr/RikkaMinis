@@ -1046,7 +1046,9 @@ private fun foldConsecutiveToolRuns(items: List<FlatChatItem>): List<FlatChatIte
             i++
             continue
         }
-        var merged = item
+        // Explicit type: a smart cast does not survive into the `var`, so
+        // copy() would resolve against the sealed base class.
+        var merged: FlatChatItem.AssistantToolRunGroup = item
         var j = i + 1
         while (j < items.size) {
             val next = items[j]
