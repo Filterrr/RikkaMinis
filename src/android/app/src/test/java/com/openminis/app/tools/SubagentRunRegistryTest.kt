@@ -162,7 +162,14 @@ class SubagentRunRegistryTest {
         val def = SubagentSkill.definition()
         assertEquals("spawn_agent", def.name)
         assertTrue(def.parameters.containsKey("run_until"))
-        assertTrue(def.required.containsAll(listOf("tool_title", "skill_name", "query")))
+        // [T-agent-profiles] `agent` is optional (omitted -> the built-in
+        // `general` profile): a delegated one-off task must not require a
+        // SKILL.md first. `skill_name` remains as a legacy alias.
+        assertTrue(def.parameters.containsKey("agent"))
+        assertTrue(def.parameters.containsKey("skill_name"))
+        assertTrue(def.required.containsAll(listOf("tool_title", "query")))
+        assertTrue("agent must stay OPTIONAL", "agent" !in def.required)
+        assertTrue("skill_name must stay OPTIONAL", "skill_name" !in def.required)
         assertEquals("subagentRunRegistry", SubagentSkill.RUN_REGISTRY_KEY)
     }
 
