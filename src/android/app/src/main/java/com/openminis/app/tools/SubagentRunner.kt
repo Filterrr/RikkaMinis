@@ -974,6 +974,13 @@ class SubagentRunner(
             sessionId = sessionId,
             groupId = groupId,
             queued = true,
+            // [T-subagent-audit] 记录"这次跑的是哪套配置"：内置还是 skill、
+            // 最终工具集指纹、profile 版本、role 摘要。文件与快照都会变，
+            // 这三个不会。
+            agentKind = if (profile != null) "profile" else "skill",
+            toolsHash = scopeFingerprint,
+            profileVersion = profile?.version ?: 0,
+            roleSummary = roleExtra.take(120),
         )
         if (outcome.reused) {
             // [T-subagent-orchestration-fix] The deduped run still belongs to

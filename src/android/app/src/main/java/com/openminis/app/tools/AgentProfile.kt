@@ -33,6 +33,11 @@ internal data class AgentProfile(
     val maxParallel: Int = 1,
     val planFirst: Boolean = true,
     val defaultTurns: Int = 12,
+    /**
+     * [T-subagent-audit] 定义版本。改提示词或默认预算时 +1，这样旧 run 的
+     * 记录仍能指出它当时用的是哪一版，而不是"大概差不多"。
+     */
+    val version: Int = 1,
 ) {
     /** 稳定标识：和 skill id 落在同一个命名空间里，注册表/并发键无需特判。 */
     val skillId: String get() = "profile:$id"

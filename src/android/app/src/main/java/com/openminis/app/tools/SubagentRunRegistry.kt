@@ -155,6 +155,28 @@ class SubagentRunRegistry {
          * a recovery anchor.
          */
         val journalPath: String? = null,
+        /**
+         * [T-subagent-audit] 这个 run 用的是内置 profile 还是已装 skill。
+         * "profile" / "skill"。审计时第一眼要能分清。
+         */
+        val agentKind: String = "skill",
+        /**
+         * [T-subagent-audit] 最终工具集的指纹（SubagentToolScope.fingerprint）。
+         * 事后问"那次它到底能碰什么"，答案在这里，而不是在当时的文件里
+         * ——文件早被改过、快照也可能换过。
+         */
+        val toolsHash: String = "",
+        /**
+         * [T-subagent-audit] 内置 profile 的版本号（skill 为 0）。profile 的
+         * 提示词与默认预算改了之后，旧 run 仍能对上它当时用的那一版。
+         */
+        val profileVersion: Int = 0,
+        /**
+         * [T-subagent-audit] 本次 spawn 附带的 role 参数摘要（前 120 字）。
+         * role 不进审批指纹、不改权限，但它改变了模型的思考方式，出问题时
+         * 这是唯一能看出"当时让它扮演什么"的证据。
+         */
+        val roleSummary: String = "",
         val status: RunStatus = RunStatus.RUNNING,
         val startedAtMs: Long = System.currentTimeMillis(),
         /**
@@ -405,6 +427,11 @@ class SubagentRunRegistry {
          * UI can show remaining minutes instead of only turn counts.
          */
         timeoutSeconds: Int = 0,
+        /** [T-subagent-audit] See Run.agentKind / toolsHash / profileVersion / roleSummary. */
+        agentKind: String = "skill",
+        toolsHash: String = "",
+        profileVersion: Int = 0,
+        roleSummary: String = "",
     ): Run {
         val run = Run(
             id = nextId("subagent"),
@@ -425,6 +452,10 @@ class SubagentRunRegistry {
             queuedAtMs = if (queued) System.currentTimeMillis() else 0L,
             maxTurns = maxTurns,
             timeoutSeconds = timeoutSeconds,
+            agentKind = agentKind,
+            toolsHash = toolsHash,
+            profileVersion = profileVersion,
+            roleSummary = roleSummary,
         )
         // Newest first — the pill shows the freshest run; detail page lists
         // history the same way.
@@ -559,6 +590,10 @@ class SubagentRunRegistry {
         groupId: String = "",
         queued: Boolean = false,
         timeoutSeconds: Int = 0,
+        agentKind: String = "skill",
+        toolsHash: String = "",
+        profileVersion: Int = 0,
+        roleSummary: String = "",
     ): RegisterOutcome = synchronized(registerLock) {
         val duplicate = _runs.value.firstOrNull {
             it.isActive &&
@@ -569,7 +604,7 @@ class SubagentRunRegistry {
         RegisterOutcome(
             register(
                 blockId, skillId, skillName, query, title, maxTurns, sessionId, groupId,
-                queued, timeoutSeconds,
+                queued, timeoutSeconds, agentKind, toolsHash, profileVersion, roleSummary,
             ),
             reused = false,
         )
