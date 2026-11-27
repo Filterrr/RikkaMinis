@@ -179,6 +179,9 @@ class ChatViewModel(
         /** [T-tool-approval] 危险命令审批等多久。超时 = DENY。 */
         private const val TOOL_APPROVAL_TIMEOUT_MS = 5L * 60L * 1000L
 
+        /** [T-shell-job-log-cap] 单个后台作业日志的软上限（截断不杀进程）。 */
+        private const val SHELL_JOB_LOG_MAX_BYTES = 8 * 1024 * 1024
+
 
         // ── T7-A: 观察预算默认上限（advisory 观察用，不阻断任何行为）──
         // 这些数字只用于 trace 记录当前消耗进度（budget_consume/refuse 事件），
@@ -14178,11 +14181,6 @@ Environment variables:
         return ToolExecutionResult(out.toString(), true)
     }
 
-    /**
-     * [T-shell-job] POSIX 单引号转义：把任意命令安全地塞进 `sh -c '...'`。
-     * 内部单引号用 `'\''` 断开再续，这是唯一在 POSIX sh 里可靠的办法。
-     */
-    private fun shQuote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
 
     /**
      * [T-shell-job] 后台作业：把命令扔进会话常驻的 PRoot shell 里 nohup 出去。
@@ -14233,10 +14231,21 @@ Environment variables:
                         (System.nanoTime() % 1000).toString().padStart(3, '0')
                     val log = "$jobsDir/$id.log"
                     val meta = "$jobsDir/$id.meta"
+                    // [T-shell-job-log-cap] 长任务的日志会无限长。做法是
+                    // 每 30 秒看一次大小，超过上限就 `> log` 原地截断：
+                    // 进程持的是 O_APPEND fd，截断后它继续往新末尾写——只丢
+                    // 历史，不丢后续输出，也不会像 `head -c` 那样把 job 写死
+                    // 在 SIGPIPE 上。
                     val script = buildString {
                         append("mkdir -p $jobsDir\n")
-                        append("nohup sh -c ${shQuote(cmd)} > $log 2>&1 &\n")
-                        append("echo \$! > $meta\n")
+                        append("nohup sh -c ${com.openminis.app.tools.ShellQuote.single(cmd)} > $log 2>&1 &\n")
+                        append("JOB_PID=\$!\n")
+                        append("echo \$JOB_PID > $meta\n")
+                        append("( while kill -0 \$JOB_PID 2>/dev/null; do sleep 30; ")
+                        append("SZ=\$(wc -c < $log 2>/dev/null || echo 0); ")
+                        append("if [ \"\${SZ:-0}\" -gt $SHELL_JOB_LOG_MAX_BYTES ]; then ")
+                        append("printf '[log truncated: exceeded %s bytes]\\n' $SHELL_JOB_LOG_MAX_BYTES > $log; ")
+                        append("fi; done ) >/dev/null 2>&1 &\n")
                         append("sleep 0.3\n")
                         append("echo \"job_id=$id pid=\$(cat $meta 2>/dev/null) log=$log\"\n")
                     }

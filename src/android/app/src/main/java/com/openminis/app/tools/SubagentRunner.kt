@@ -460,12 +460,31 @@ class SubagentRunner(
         // [T-agent-profiles] 能力求交，永远只收窄：profile 的 allowlist 是
         // 基准，调用参数只能从中减。allowedTools == null（不限）时，请求集
         // 本身就是一次收窄，安全。
-        val config = if (requestedCapabilities == null) {
+        val configAfterCapabilities = if (requestedCapabilities == null) {
             configWithThinking
         } else {
             val requestedTools = AgentCapabilities.toolsFor(requestedCapabilities)
             val narrowed = configWithThinking.allowedTools?.intersect(requestedTools) ?: requestedTools
             configWithThinking.copy(allowedTools = narrowed)
+        }
+        // [T-agent-profiles] 最小权限：完全没点名 agent、也没点名能力时，把
+        // general 收窄到父这一轮**实际持有的**工具集。不然一个被关掉 shell
+        // 的会话随手 spawn 出来的子 agent 反而能跑命令——那是权限放大，不是
+        // 便利。显式点名 agent / capabilities 时不收窄：那是调用方的选择。
+        val config = if (requestedAgent.isBlank() && requestedCapabilities == null) {
+            val parentTools = runCatching {
+                deps.agentTools().map { it.name }.toSet()
+            }.getOrDefault(emptySet())
+            if (parentTools.isEmpty()) {
+                configAfterCapabilities
+            } else {
+                configAfterCapabilities.copy(
+                    allowedTools = configAfterCapabilities.allowedTools?.intersect(parentTools)
+                        ?: parentTools,
+                )
+            }
+        } else {
+            configAfterCapabilities
         }
         if (!config.isSubagent && profile == null) {
             return ToolExecutionResult(
