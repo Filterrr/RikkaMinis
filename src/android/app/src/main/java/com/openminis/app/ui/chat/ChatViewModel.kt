@@ -1303,6 +1303,10 @@ class ChatViewModel(
             // of delegation spend.
             override fun subagentCostLedger() = this@ChatViewModel.subagentCostLedger
             override fun agentTools() = this@ChatViewModel.agentTools
+
+            // [T-skill-permissions-snapshot] 已确认的权限行，来自数据库。
+            override fun permissionsSnapshot(skillId: String) =
+                this@ChatViewModel.skillRepository?.permissionsSnapshot(skillId)
             override fun currentProvider() = this@ChatViewModel.currentProvider
             override fun activeSessionId() = this@ChatViewModel.activeSessionId
             override suspend fun executeBrowserUse(argsJson: String) =

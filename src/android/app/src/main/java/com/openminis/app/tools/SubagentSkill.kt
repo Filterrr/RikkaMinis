@@ -1022,7 +1022,19 @@ object SubagentSkill {
      * Returns [SubagentConfig] with isSubagent=false for skills without
      * `subagent: true` in the frontmatter — existing skills are unaffected.
      */
-    fun parseSubagentConfig(skill: SkillInfo): SubagentConfig {
+    fun parseSubagentConfig(
+        skill: SkillInfo,
+        /**
+         * [T-skill-permissions-snapshot] 数据库里已确认过的权限行。
+         *
+         * 非 null 时，文件里的权限行被**丢弃**，只用这份 + 文件里的非权限行
+         * 重新拼出 frontmatter 再解析。于是 agent 用 shell 改 SKILL.md 里的
+         * `allowed_tools` 不再有任何效果——运行时不看文件的那一段。
+         *
+         * null 表示调用方没有快照能力（测试、profile 合成），保持旧行为。
+         */
+        permissionsSnapshot: String? = null,
+    ): SubagentConfig {
         // [T-subagent-fm] Prefer the preserved raw frontmatter — the
         // registry strips frontmatter from [SkillInfo.body] when skills
         // were imported before preservation existed, and pre-1.0.5 skill
@@ -1040,6 +1052,20 @@ object SubagentSkill {
             }
         if (frontmatter.isNullOrBlank()) return SubagentConfig()
 
+        // [T-skill-permissions-snapshot] 用「文件里的非权限行 + 库里的权限行」
+        // 重建一份 frontmatter。空快照 = 已确认"没有权限声明"，此时文件里
+        // 新塞进来的 `subagent: true` 也不会生效。
+        val effectiveFrontmatter = if (permissionsSnapshot == null) {
+            frontmatter
+        } else {
+            val kept = SkillWriteGuard.splitGuarded(frontmatter).first
+            when {
+                kept.isBlank() -> permissionsSnapshot
+                permissionsSnapshot.isBlank() -> kept
+                else -> kept + "\n" + permissionsSnapshot
+            }
+        }
+
         // [feat/subagent-roster-routing] A real frontmatter parser, not a
         // hand-rolled key matcher.
         //
@@ -1053,7 +1079,7 @@ object SubagentSkill {
         //
         // SubagentFrontmatter handles those, and is unit-tested on the
         // plain JVM.
-        val fm = SubagentFrontmatter.parse(frontmatter)
+        val fm = SubagentFrontmatter.parse(effectiveFrontmatter)
 
         return SubagentConfig(
             isSubagent = fm.boolean("subagent") ?: false,

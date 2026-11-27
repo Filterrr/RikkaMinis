@@ -110,6 +110,12 @@ class SubagentRunner(
         fun subagentCostLedger(): SubagentCostLedger? = null
 
         fun agentTools(): List<AgentToolDefinition>
+
+        /**
+         * [T-skill-permissions-snapshot] 已确认的权限行。默认 null = 没有
+         * 快照能力（测试）。生产实现读 SkillRepository。
+         */
+        fun permissionsSnapshot(skillId: String): String? = null
         fun currentProvider(): com.openminis.app.provider.LLMProvider?
         fun activeSessionId(): String
         suspend fun executeBrowserUse(argsJson: String): ToolExecutionResult
@@ -464,7 +470,12 @@ class SubagentRunner(
         val parsedConfig = if (profile != null) {
             AgentProfiles.toConfig(profile)
         } else {
-            SubagentSkill.parseSubagentConfig(skill)
+            // [T-skill-permissions-snapshot] 权限只认库里的快照：SKILL.md 在
+            // agent 可写的目录下，文件里的 allowed_tools 不再参与运行。
+            SubagentSkill.parseSubagentConfig(
+                skill,
+                permissionsSnapshot = deps.permissionsSnapshot(skill.id),
+            )
         }
         // [feat/subagent-roster-routing] The configured roster entry's
         // reasoning-level override WINS over the skill's own `thinking:`.

@@ -47,7 +47,24 @@ class SkillRepository(private val context: Context) {
     companion object {
         private const val TAG = "SkillRepository"
         private const val DB_NAME = "skills.db"
-        private const val DB_VERSION = 3
+        private const val DB_VERSION = 4
+
+        /**
+         * [T-skill-permissions-snapshot] 用户确认过的权限声明。
+         *
+         * SKILL.md 在 `/var/minis/skills/**` 下，而 agent 有 shell —— 它可以
+         * 把 `allowed_tools` 改成 null。工具层守卫（SkillWriteGuard）和审批
+         * 闸门都只能拦"某些写法"，拦不住所有写法。所以真正生效的权限从此
+         * 只认这张表：安装/用户编辑时快照一次，之后文件怎么改都不影响运行。
+         */
+        private const val PERMISSIONS_TABLE_SQL = """
+            CREATE TABLE IF NOT EXISTS skill_permissions (
+                skill_id TEXT PRIMARY KEY,
+                snapshot TEXT NOT NULL,
+                confirmed_at INTEGER NOT NULL,
+                source TEXT NOT NULL DEFAULT 'import'
+            )
+        """
         private const val MAX_SKILLS_IN_PROMPT = 20
         private const val MAX_SKILL_DESC_LENGTH = 200
         private const val RECENT_WINDOW_MS = 7L * 24 * 3600 * 1000
@@ -187,6 +204,9 @@ class SkillRepository(private val context: Context) {
 
             insertDb(skill)
             writeSkillMd(skill)
+            // [T-skill-permissions-snapshot] 安装即快照：此后文件被谁改都
+            // 不影响运行时的权限。
+            capturePermissions(skill, "install")
             _skills.value = _skills.value + skill
             Log.i(TAG, "Added skill: ${skill.id}")
             skill
@@ -216,8 +236,49 @@ class SkillRepository(private val context: Context) {
             arrayOf<Any>(updated.name, updated.description, updated.version, updated.updatedAt, id)
         )
         writeSkillMd(updated)
+        // [T-skill-permissions-snapshot] 设置页里的编辑 = 用户确认，刷新快照。
+        // agent 走的是文件写入，不会经过这里。
+        capturePermissions(updated, "user-edit")
         _skills.value = _skills.value.map { if (it.id == id) updated else it }
         return true
+    }
+
+    /**
+     * [T-skill-permissions-snapshot] 运行时读取的权限快照。
+     *
+     * `null` = 这个 skill 没有任何已确认的权限声明（按无权限处理）。
+     * 空字符串 = 确认过"它没有权限键"，与 null 区分：前者可信，后者要从
+     * 文件补一次。
+     */
+    fun permissionsSnapshot(skillId: String): String? {
+        val cursor = db.rawQuery(
+            "SELECT snapshot FROM skill_permissions WHERE skill_id=?",
+            arrayOf(skillId),
+        )
+        return cursor.use { if (it.moveToFirst()) it.getString(0) else null }
+    }
+
+    /** 安装 / 用户编辑时固化权限行（这两个入口都有人在场）。 */
+    private fun capturePermissions(skill: Skill, source: String) {
+        val snapshot = com.openminis.app.tools.SkillWriteGuard.splitGuarded(skill.frontmatter).second
+        db.execSQL(
+            "INSERT OR REPLACE INTO skill_permissions (skill_id, snapshot, confirmed_at, source) VALUES (?,?,?,?)",
+            arrayOf<Any>(skill.id, snapshot, System.currentTimeMillis(), source),
+        )
+    }
+
+    /**
+     * 老 skill 没有快照：首次加载时按当时的文件固化一次。
+     *
+     * 这是"一次性信任"——之后 agent 再改文件，快照不变，权限也不变。
+     * （无法追溯更早的篡改；升级那一刻的文件是唯一的基线。）
+     */
+    private fun ensurePermissionsSnapshot(skill: Skill) {
+        val exists = db.rawQuery(
+            "SELECT 1 FROM skill_permissions WHERE skill_id=?",
+            arrayOf(skill.id),
+        ).use { it.moveToFirst() }
+        if (!exists) capturePermissions(skill, "legacy-import")
     }
 
     fun delete(id: String) {
@@ -1573,6 +1634,10 @@ class SkillRepository(private val context: Context) {
             }
         }
 
+        // [T-skill-permissions-snapshot] 老 skill 首次加载时建一次基线。
+        for (skill in dbSkills) {
+            runCatching { ensurePermissionsSnapshot(skill) }
+        }
         _skills.value = dbSkills
     }
 
@@ -1816,6 +1881,7 @@ class SkillRepository(private val context: Context) {
                     PRIMARY KEY (session_id, skill_id)
                 )
             """)
+            db.execSQL(PERMISSIONS_TABLE_SQL)
         }
 
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -1828,6 +1894,11 @@ class SkillRepository(private val context: Context) {
                 try {
                     db.execSQL("ALTER TABLE skills ADD COLUMN use_count REAL NOT NULL DEFAULT 0")
                 } catch (_: Exception) { /* column may already exist */ }
+            }
+            if (oldVersion < 4) {
+                try {
+                    db.execSQL(PERMISSIONS_TABLE_SQL)
+                } catch (_: Exception) { /* table may already exist */ }
             }
         }
     }

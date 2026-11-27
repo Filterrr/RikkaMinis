@@ -83,5 +83,36 @@ object SkillWriteGuard {
         return out
     }
 
+    /**
+     * [T-skill-permissions-snapshot] 把 frontmatter 拆成「非权限行」和
+     * 「权限行」两段。
+     *
+     * 这是入库方案的基础：安装/用户编辑时把权限行快照进数据库，运行时用
+     * `非权限行 + 库里的权限行` 拼回来解析。文件之后被谁改都无所谓——权限
+     * 只认库里那份。
+     */
+    fun splitGuarded(frontmatter: String?): Pair<String, String> {
+        if (frontmatter.isNullOrBlank()) return "" to ""
+        val kept = StringBuilder()
+        val guarded = StringBuilder()
+        // 续行（缩进行 / "- " 列表项）跟随上一个键的归属。
+        var currentIsGuarded = false
+        for (line in frontmatter.split("\n")) {
+            val trimmed = line.trimStart()
+            val key = trimmed.substringBefore(':', "").trim()
+            val isKeyLine = trimmed.contains(':') && key.isNotEmpty() && !trimmed.startsWith("- ")
+            if (isKeyLine) {
+                currentIsGuarded = key in GUARDED_KEYS
+            } else if (trimmed.isNotEmpty() && !trimmed.startsWith("- ") &&
+                !line.startsWith(" ") && !line.startsWith("\t")
+            ) {
+                // 不是续行、也不是键：归属重置（避免把无关段落算进权限）。
+                currentIsGuarded = false
+            }
+            if (currentIsGuarded) guarded.append(line).append('\n') else kept.append(line).append('\n')
+        }
+        return kept.toString().trim() to guarded.toString().trim()
+    }
+
     private val FRONTMATTER = Regex("\\A---\\r?\\n([\\s\\S]*?)\\r?\\n---")
 }
