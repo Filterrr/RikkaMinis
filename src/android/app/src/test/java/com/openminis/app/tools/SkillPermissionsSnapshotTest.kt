@@ -70,7 +70,7 @@ class SkillPermissionsSnapshotTest {
         assertTrue(kept.contains("note: hi"))
         assertFalse(kept.contains("allowed_tools"))
         assertTrue(guarded.contains("subagent: true"))
-        assertTrue(guarded.contains("file_read"), "list continuation lines belong to the key")
+        assertTrue("list continuation lines belong to the key", guarded.contains("file_read"))
         assertTrue(guarded.contains("web_search"))
         assertFalse(guarded.contains("description"))
     }
