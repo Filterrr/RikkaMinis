@@ -186,14 +186,21 @@ class ChatViewModel(
         // ── T7-A: 观察预算默认上限（advisory 观察用，不阻断任何行为）──
         // 这些数字只用于 trace 记录当前消耗进度（budget_consume/refuse 事件），
         // 不改变生产行为；T7-C 接入 enforced 模式前由 T4-B/T10 依据真实基线校准。
-        private const val T7_OBSERVE_MAX_TURNS = 200
+        // [no-tool-call-cap] 工具调用**不设上限**：跑多少轮、调多少次工具，
+        // 由模型按任务实际情况自己决定。固定的次数上限是拍脑袋定的（128 →
+        // 512 只是把同一个问题推远），真实任务该用 5 次还是 500 次，只有当时
+        // 的模型知道。
+        //
+        // 失控保护不靠计数，靠三件事：
+        //  1. ToolLoopDetector —— 同一调用反复无进展时硬阻断（这才是"卡死"）；
+        //  2. 8 小时 wall-clock 保险丝 —— 防的是无限烧钱，不是任务规模；
+        //  3. 用户随时可以停。
+        // 轮次上限保留一个"实际上不可达"的值：它只防代码层面的死循环，
+        // 同时让最终的收尾文案仍然是人话（不是 2147483647）。
+        private const val T7_OBSERVE_MAX_TURNS = 10_000
         private const val T7_OBSERVE_MAX_PROVIDER_ATTEMPTS = 64
-        // [fix/run-stops-by-itself] 128 次工具调用是**长任务的天花板**，不是
-        // 失控保护：一次批量处理 / 重构很容易 200+ 次工具调用，用户看到的是
-        // "跑着跑着就不动了"。真正的失控保护是 turns 与 wall clock，这两项
-        // 放宽到一个正常工作日也够用的量级。
-        private const val T7_OBSERVE_MAX_TOOL_CALLS = 512
-        private const val T7_OBSERVE_MAX_SHELL_COMMANDS = 512
+        private const val T7_OBSERVE_MAX_TOOL_CALLS = Int.MAX_VALUE
+        private const val T7_OBSERVE_MAX_SHELL_COMMANDS = Int.MAX_VALUE
         private const val T7_OBSERVE_MAX_COMPACTION_CALLS = 8
         private const val T7_OBSERVE_MAX_CONCURRENT_TOOLS = 4
         /**
@@ -320,7 +327,14 @@ class ChatViewModel(
          * Resume button rather than a silently stuck "thinking" indicator.
          * Mirrors iOS AIChatViewModel.maxAgentTurns.
          */
-        private const val MAX_AGENT_TURNS = 200
+        /**
+         * [no-tool-call-cap] 循环的代码级边界，不是任务预算。
+         *
+         * 真正的收尾信号是"模型不再请求工具"或别的停止条件；这个数字只防
+         * 代码层面的死循环，取值远大于任何真实任务（10000 轮 ≈ 数天）。
+         * 同时它出现在 Resume 文案里，所以不能是 Int.MAX_VALUE。
+         */
+        private const val MAX_AGENT_TURNS = 10_000
         private const val MIN_MAX_TOKENS = 1024
         // [fix/voice-crash-observability] Generous cap on the persisted draft
         // string (see syncComposerDraft). Covers the vast majority of voice
