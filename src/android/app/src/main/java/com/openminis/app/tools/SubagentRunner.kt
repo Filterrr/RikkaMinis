@@ -379,7 +379,10 @@ class SubagentRunner(
                     ". Valid values: " +
                     AgentCapability.entries.joinToString(", ") { it.name.lowercase() } +
                     ". Fix the name — nothing was spawned.",
-                false, toolTitle = title,
+                false,
+                // `title` is parsed a few lines below; this error can fire
+                // before it exists.
+                toolTitle = args.optString("tool_title", "Sub-agent").ifBlank { "Sub-agent" },
             )
         }
         val requestedCapabilities: Set<AgentCapability>? = capabilityTokens
