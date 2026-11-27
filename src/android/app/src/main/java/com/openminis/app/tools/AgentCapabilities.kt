@@ -91,6 +91,15 @@ enum class AgentCapability {
      * Only the main agent asks.
      */
     ASK_USER,
+
+    /**
+     * [T-scheduled-tasks] Schedule a reminder on the device (`schedule_task`).
+     *
+     * Parent-only, like spawning: a sub-agent arranging future wake-ups would
+     * be a second schedule nobody is watching, and the device's alarm budget
+     * is a shared resource.
+     */
+    SCHEDULE,
 }
 
 object AgentCapabilities {
@@ -137,6 +146,7 @@ object AgentCapabilities {
         // so it shares SPAWN_AGENT (never grantable to a sub-agent).
         "list_agents" -> AgentCapability.SPAWN_AGENT
         "ask_user" -> AgentCapability.ASK_USER
+        "schedule_task" -> AgentCapability.SCHEDULE
         // [T-shell-job] Background jobs are still shell execution: same
         // sandbox, same command surface, so they ride the SHELL capability
         // rather than inventing a second grant path.
@@ -172,6 +182,7 @@ object AgentCapabilities {
         AgentCapability.TASK_LIST -> setOf("todo_write")
         AgentCapability.SELF_INSPECT -> setOf("agent_status")
         AgentCapability.ASK_USER -> setOf("ask_user")
+        AgentCapability.SCHEDULE -> setOf("schedule_task")
     }
 
     val SUBAGENT_BASE: Set<AgentCapability> = setOf(

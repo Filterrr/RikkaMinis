@@ -10789,6 +10789,8 @@ class ChatViewModel(
                 // queue's deferred, the dialog resolves it, the answer becomes
                 // the tool result — no turn boundary, no context rebuild.
                 "ask_user" -> executeAskUserTool(argsJson)
+                // [T-scheduled-tasks] 设备级提醒：走系统闹钟，App 关掉也能响。
+                "schedule_task" -> executeScheduleTaskTool(argsJson)
                 // [T7-subagent] spawn_agent: delegate to an independent sub-agent
                 // instance running the named skill. [T-subagent-ui] pass the
                 // tool_use block id so the registry run can be linked to this
@@ -14470,6 +14472,131 @@ Environment variables:
         }
         return ToolExecutionResult(out.toString(), true)
     }
+
+    /**
+     * [T-scheduled-tasks] 定时提醒的增删查。
+     *
+     * 只写数据 + 排闹钟；到点的行为在 [com.openminis.app.data.ScheduleAlarmReceiver]
+     * 里（发通知 + 深链预填）。**这里不启动任何 agent**——无人值守执行需要
+     * 一套独立的 turn 运行器，还没做，也绝不能假装做了。
+     */
+    private fun executeScheduleTaskTool(argsJson: String): ToolExecutionResult {
+        val args = try { JSONObject(argsJson) } catch (_: Exception) { JSONObject() }
+        val action = args.optString("action", "").trim().lowercase()
+        val store = com.openminis.app.data.ScheduledTaskStore
+        val scheduler = com.openminis.app.data.ScheduledTaskScheduler
+
+        return when (action) {
+            "add" -> {
+                val prompt = args.optString("prompt", "").trim()
+                if (prompt.isEmpty()) {
+                    return ToolExecutionResult("Error: 'prompt' is required for action=add", false)
+                }
+                val daily = args.optBoolean("daily", false)
+                val delayMinutes = args.optInt("delay_minutes", 0)
+                val atRaw = args.optString("at", "").trim()
+                val triggerAt = when {
+                    delayMinutes > 0 -> System.currentTimeMillis() + delayMinutes * 60_000L
+                    atRaw.isNotEmpty() -> parseScheduleAt(atRaw)
+                    else -> null
+                } ?: return ToolExecutionResult(
+                    "Error: give either 'at' (\"HH:mm\" or \"YYYY-MM-DD HH:mm\") or a positive " +
+                        "'delay_minutes'. '$atRaw' could not be parsed.",
+                    false,
+                )
+                if (triggerAt <= System.currentTimeMillis()) {
+                    return ToolExecutionResult(
+                        "Error: that time is already in the past (${formatScheduleTime(triggerAt)}). " +
+                            "For a daily reminder give the next occurrence.",
+                        false,
+                    )
+                }
+                val task = com.openminis.app.data.ScheduledTask(
+                    id = store.newId(),
+                    label = args.optString("label", "").trim().ifBlank { prompt.take(40) },
+                    prompt = prompt.take(com.openminis.app.data.ScheduledTask.MAX_PROMPT_CHARS),
+                    sessionId = args.optString("session_id", "").trim().takeIf { it.isNotEmpty() },
+                    triggerAtMillis = triggerAt,
+                    daily = daily,
+                )
+                store.upsert(context, task)
+                scheduler.schedule(context, task)
+                val exact = if (scheduler.canScheduleExact(context)) "exact" else
+                    "inexact (no exact-alarm permission — the system may delay it)"
+                ToolExecutionResult(
+                    "Scheduled '${task.label}' for ${formatScheduleTime(triggerAt)}" +
+                        (if (daily) " (repeats daily)" else "") + ". Alarm: $exact. " +
+                        "At that time a notification appears; tapping it opens a chat with the " +
+                        "prompt pre-filled. The agent does not run by itself.",
+                    true,
+                )
+            }
+
+            "list" -> {
+                val tasks = store.load(context).filter { it.enabled }.sortedBy { it.triggerAtMillis }
+                if (tasks.isEmpty()) {
+                    ToolExecutionResult("No scheduled tasks on this device.", true)
+                } else {
+                    ToolExecutionResult(
+                        tasks.joinToString("\n") { t ->
+                            "- ${t.id} · ${formatScheduleTime(t.triggerAtMillis)}" +
+                                (if (t.daily) " (daily)" else "") + " · ${t.label}"
+                        },
+                        true,
+                    )
+                }
+            }
+
+            "remove" -> {
+                val id = args.optString("task_id", "").trim()
+                if (id.isEmpty()) {
+                    return ToolExecutionResult("Error: 'task_id' is required for action=remove", false)
+                }
+                val before = store.load(context).size
+                store.remove(context, id)
+                scheduler.cancel(context, id)
+                val after = store.load(context).size
+                if (after == before) {
+                    ToolExecutionResult("No scheduled task with id '$id'.", false)
+                } else {
+                    ToolExecutionResult("Removed scheduled task '$id'.", true)
+                }
+            }
+
+            else -> ToolExecutionResult(
+                "Error: unknown action '$action'. Use add | list | remove.",
+                false,
+            )
+        }
+    }
+
+    /** [T-scheduled-tasks] "HH:mm"（今天/明天）或 "yyyy-MM-dd HH:mm"。返回 null = 解析失败。 */
+    private fun parseScheduleAt(raw: String): Long? {
+        val fmtTime = java.text.SimpleDateFormat("HH:mm", java.util.Locale.US)
+        val fmtFull = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US)
+        fmtFull.isLenient = false
+        fmtTime.isLenient = false
+        return runCatching {
+            if (raw.length <= 5) {
+                val parsed = fmtTime.parse(raw) ?: return null
+                val cal = java.util.Calendar.getInstance()
+                val src = java.util.Calendar.getInstance().apply { time = parsed }
+                cal.set(java.util.Calendar.HOUR_OF_DAY, src.get(java.util.Calendar.HOUR_OF_DAY))
+                cal.set(java.util.Calendar.MINUTE, src.get(java.util.Calendar.MINUTE))
+                cal.set(java.util.Calendar.SECOND, 0)
+                cal.set(java.util.Calendar.MILLISECOND, 0)
+                if (cal.timeInMillis <= System.currentTimeMillis()) {
+                    cal.add(java.util.Calendar.DAY_OF_YEAR, 1)
+                }
+                cal.timeInMillis
+            } else {
+                fmtFull.parse(raw)?.time
+            }
+        }.getOrNull()
+    }
+
+    private fun formatScheduleTime(epochMs: Long): String =
+        java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US).format(java.util.Date(epochMs))
 
     private fun parseToolParams(argsJson: String): Map<String, Any?> {
         if (argsJson.isBlank()) return emptyMap()

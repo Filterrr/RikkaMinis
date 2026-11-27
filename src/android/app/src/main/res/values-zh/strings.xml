@@ -1023,6 +1023,8 @@
     <string name="message_action_fork_from_here">从此处分支</string>
     <string name="message_action_read_aloud">朗读</string>
     <string name="chat_menu_search_session">搜索本会话</string>
+    <string name="scheduled_tasks_channel">定时任务</string>
+    <string name="scheduled_tasks_channel_desc">你安排的定时任务到点提醒</string>
     <string name="subagent_builtin_badge">内置</string>
     <string name="session_search_title">搜索本会话</string>
     <string name="session_search_hint">在所有消息里找内容…</string>

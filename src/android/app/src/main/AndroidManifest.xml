@@ -465,6 +465,13 @@
                 android:resource="@xml/file_provider_paths" />
         </provider>
 
+        <!-- [T-scheduled-tasks] AlarmManager 的落点。exported=false：只有
+             自己的 PendingIntent 能触发，外部应用不能伪造一次"到点"。 -->
+        <receiver
+            android:name=".data.ScheduleAlarmReceiver"
+            android:exported="false"
+            android:enabled="true" />
+
         <!-- [T-docs-provider] Sandbox files in the system Files app.
              MinisDocumentsProvider was fully implemented (memory / skills /
              shared under filesDir/minis-global) but never registered, so it

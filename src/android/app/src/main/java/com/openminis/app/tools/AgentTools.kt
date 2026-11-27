@@ -87,6 +87,9 @@ object AgentTools {
         // tool state, the plan and the accumulated context, and forcing the
         // model to re-read everything after the answer.
         add(askUserDefinition())
+        // [T-scheduled-tasks] Reminders that fire through the system alarm,
+        // so they survive the app being closed.
+        add(scheduleTaskDefinition())
         // [T7-subagent] spawn_agent: skill = independent sub-agent instance.
         // Always exposed — the sub-agent's own tool set is filtered inside
         // SubagentSkill.buildFilteredTools (spawn_agent itself is FORBIDDEN
@@ -160,6 +163,38 @@ object AgentTools {
      * 小决定，用户会连续收到一串弹窗，比一次问完还烦。所以也给了
      * `timeout_seconds`（无人值守时降级返回，而不是永远卡住）。
      */
+    /**
+     * [T-scheduled-tasks] 定时提醒。
+     *
+     * 描述里明说"只发通知、不会无人值守跑 agent"——让模型别拿它当"后台
+     * 自动执行"用，否则用户会以为是任务跑了，实际只是响了一下。
+     */
+    private fun scheduleTaskDefinition(): AgentToolDefinition = AgentToolDefinition(
+        name = "schedule_task",
+        description = "Schedule a reminder on this device. action=add needs 'prompt' plus " +
+            "either 'at' (\"HH:mm\" or \"YYYY-MM-DD HH:mm\", device local time) or 'delay_minutes'. " +
+            "When it is due the phone shows a notification containing the prompt, and tapping it " +
+            "opens a chat with that prompt PRE-FILLED. It does NOT run the agent by itself — do not " +
+            "describe it to the user as automatic background work. action=list shows pending tasks; " +
+            "action=remove needs task_id.",
+        parameters = mapOf(
+            "tool_title" to AgentToolParam("string", "A concise summary (e.g. 'Remind me at 09:30')."),
+            "action" to AgentToolParam("string", "add | list | remove"),
+            "prompt" to AgentToolParam("string", "What to remind about / the text to pre-fill (<= 2000 chars)."),
+            "label" to AgentToolParam("string", "Short notification title. Defaults to the prompt."),
+            "at" to AgentToolParam("string", "\"HH:mm\" (today, or tomorrow if already past) or \"YYYY-MM-DD HH:mm\"."),
+            "delay_minutes" to AgentToolParam("integer", "Alternative to 'at': fire this many minutes from now."),
+            "daily" to AgentToolParam("boolean", "Repeat every day at that time (default: false)."),
+            "session_id" to AgentToolParam("string", "Optional chat to open; omit for a fresh draft."),
+            "task_id" to AgentToolParam("string", "Required for action=remove."),
+        ),
+        required = listOf("tool_title", "action"),
+        propertyOrdering = listOf(
+            "tool_title", "action", "prompt", "label", "at", "delay_minutes", "daily",
+            "session_id", "task_id",
+        ),
+    )
+
     private fun askUserDefinition(): AgentToolDefinition = AgentToolDefinition(
         name = "ask_user",
         description = "Ask the user a question and WAIT for the answer inside the current turn. " +

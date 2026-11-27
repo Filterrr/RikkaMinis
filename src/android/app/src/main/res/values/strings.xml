@@ -1210,6 +1210,8 @@
     <string name="message_action_fork_from_here">Branch from here</string>
     <string name="message_action_read_aloud">Read aloud</string>
     <string name="chat_menu_search_session">Search this chat</string>
+    <string name="scheduled_tasks_channel">Scheduled tasks</string>
+    <string name="scheduled_tasks_channel_desc">Reminders from tasks you scheduled</string>
     <string name="subagent_builtin_badge">built-in</string>
     <string name="session_search_title">Search this chat</string>
     <string name="session_search_hint">Find text in every message…</string>
