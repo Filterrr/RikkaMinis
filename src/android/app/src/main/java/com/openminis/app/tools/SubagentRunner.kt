@@ -391,19 +391,6 @@ class SubagentRunner(
                 toolTitle = args.optString("tool_title", "Sub-agent").ifBlank { "Sub-agent" },
             )
         }
-        val unknownKnowledge = knowledgeNames.filter { name ->
-            deps.findSkill(name)?.body.isNullOrBlank()
-        }
-        if (unknownKnowledge.isNotEmpty()) {
-            return ToolExecutionResult(
-                "Error: no skill named " +
-                    unknownKnowledge.joinToString(", ") { "'$it'" } +
-                    " is installed (knowledge=). Call list_agents or use " +
-                    "agent= for a runtime; knowledge= only attaches reference text.",
-                false,
-                toolTitle = args.optString("tool_title", "Sub-agent").ifBlank { "Sub-agent" },
-            )
-        }
         val requestedCapabilities: Set<AgentCapability>? = capabilityTokens
             .mapNotNull { key -> AgentCapability.entries.firstOrNull { it.name.lowercase() == key } }
             .toSet()
@@ -419,6 +406,20 @@ class SubagentRunner(
         val knowledgeBodies = knowledgeNames.mapNotNull { name ->
             deps.findSkill(name)?.body?.takeIf { it.isNotBlank() }
         }
+        val unknownKnowledge = knowledgeNames.filter { name ->
+            deps.findSkill(name)?.body.isNullOrBlank()
+        }
+        if (unknownKnowledge.isNotEmpty()) {
+            return ToolExecutionResult(
+                "Error: no skill named " +
+                    unknownKnowledge.joinToString(", ") { "'$it'" } +
+                    " is installed (knowledge=). Call list_agents or use " +
+                    "agent= for a runtime; knowledge= only attaches reference text.",
+                false,
+                toolTitle = args.optString("tool_title", "Sub-agent").ifBlank { "Sub-agent" },
+            )
+        }
+
         val query = args.optString("query", "").trim()
         val title = args.optString("tool_title", "Sub-agent").ifBlank { "Sub-agent" }
         // [port/upstream-subagent-progress] Opt-in progress notes. Parsed here
