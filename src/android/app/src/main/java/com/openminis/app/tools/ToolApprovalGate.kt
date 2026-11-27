@@ -200,10 +200,42 @@ object DangerousCommandPolicy {
     // 的组合单独抓出来。注意是**组合**判断：`echo $(date) && rm -rf /tmp`
     // 不该被拦——命令替换里没有破坏性动作。
 
-    /** `$(rm …)` / `` `rm …` ``：替换内部就是破坏性命令。 */
-    private val SUBSHELL_DESTRUCTIVE = Regex(
-        """(?:${'$'}\(|`)[^)`]*\b(?:rm|dd|mkfs(?:\.\w+)?|shred|truncate|chmod|chown|git\s+push)\b""",
+    /**
+     * 破坏性动词本身。被 [hiddenDestructive] 用来检查**替换内部**。
+     *
+     * 这里不用一条大正则去匹配 `$( … rm … )`：跨括号的惰性匹配在 Java 的
+     * 回溯引擎上容易受贪婪/边界组合影响，行为不直观；显式扫描括号区间既
+     * 好读又好测。
+     */
+    private val DESTRUCTIVE_VERB = Regex(
+        """\b(?:rm|dd|mkfs(?:\.\w+)?|shred|truncate|chmod|chown|git\s+push)\b""",
     )
+
+    /**
+     * 命令替换/反引号**内部**是否有破坏性动词。
+     *
+     * `echo $(date) && rm -rf /tmp/build` 必须放行（rm 在替换外），
+     * `X=$(chmod 777 /)` 必须拦下（替换内就是放权）。
+     */
+    private fun hiddenDestructive(command: String): Boolean {
+        var i = command.indexOf("\$(")
+        while (i >= 0) {
+            val close = command.indexOf(')', i + 2)
+            val end = if (close < 0) command.length else close
+            if (DESTRUCTIVE_VERB.containsMatchIn(command.substring(i + 2, end))) return true
+            if (close < 0) break
+            i = command.indexOf("\$(", close)
+        }
+        i = command.indexOf('`')
+        while (i >= 0) {
+            val close = command.indexOf('`', i + 1)
+            val end = if (close < 0) command.length else close
+            if (DESTRUCTIVE_VERB.containsMatchIn(command.substring(i + 1, end))) return true
+            if (close < 0) break
+            i = command.indexOf('`', close + 1)
+        }
+        return false
+    }
 
     /** 解码后直接管道给 shell：base64 -d / xxd -r。 */
     private val DECODED_TO_SHELL = Regex(
@@ -240,7 +272,7 @@ object DangerousCommandPolicy {
                 return Hit(rule.id, rule.label)
             }
         }
-        if (SUBSHELL_DESTRUCTIVE.containsMatchIn(command)) {
+        if (hiddenDestructive(command)) {
             return Hit(
                 "subshell_destructive",
                 "Destructive command hidden inside a $( ) substitution or backticks",
