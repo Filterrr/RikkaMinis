@@ -79,7 +79,7 @@ class DangerousCommandPolicyTest {
         // 误报代价很高：agent 每天都在 `$(date)` / `$(ls)` 这种地方做事。
         assertNull(hit("echo $(date)"))
         assertNull(hit("echo $(ls -la)"))
-        assertNull(hit("X=$(pwd) && echo $X"))
+        assertNull(hit("X=\$(pwd) && echo \$X"))
         assertNull(hit("echo $(git rev-parse HEAD)"))
         assertNull(hit("echo $(date) && rm -rf /tmp/build"))
     }
