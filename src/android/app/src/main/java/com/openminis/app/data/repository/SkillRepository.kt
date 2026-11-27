@@ -52,7 +52,7 @@ class SkillRepository(private val context: Context) {
         /**
          * [T-skill-permissions-snapshot] 用户确认过的权限声明。
          *
-         * SKILL.md 在 `/var/minis/skills/**` 下，而 agent 有 shell —— 它可以
+         * SKILL.md 在 `/var/minis/skills/` 下，而 agent 有 shell —— 它可以
          * 把 `allowed_tools` 改成 null。工具层守卫（SkillWriteGuard）和审批
          * 闸门都只能拦"某些写法"，拦不住所有写法。所以真正生效的权限从此
          * 只认这张表：安装/用户编辑时快照一次，之后文件怎么改都不影响运行。
