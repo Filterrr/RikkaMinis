@@ -465,6 +465,32 @@
                 android:resource="@xml/file_provider_paths" />
         </provider>
 
+        <!-- [T-scheduled-tasks] AlarmManager 的落点。exported=false：只有
+             自己的 PendingIntent 能触发，外部应用不能伪造一次"到点"。 -->
+        <receiver
+            android:name=".data.ScheduleAlarmReceiver"
+            android:exported="false"
+            android:enabled="true" />
+
+        <!-- [T-docs-provider] Sandbox files in the system Files app.
+             MinisDocumentsProvider was fully implemented (memory / skills /
+             shared under filesDir/minis-global) but never registered, so it
+             was unreachable dead code. MANAGE_DOCUMENTS keeps it to the
+             system document picker — ordinary apps cannot query it, and
+             nothing becomes world-readable. memory + skills are read-only;
+             shared is writable, which is the point (drop a file in from the
+             Files app and the agent can read it). -->
+        <provider
+            android:name=".providers.MinisDocumentsProvider"
+            android:authorities="${applicationId}.minis.documents"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS">
+            <intent-filter>
+                <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
+            </intent-filter>
+        </provider>
+
         <!-- T323: AccessibilityService backing `android-a11y-cli`. The user
              must enable this manually under Settings → Accessibility; we
              never start it programmatically (Android forbids that). -->

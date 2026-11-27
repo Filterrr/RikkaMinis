@@ -280,8 +280,29 @@ import com.openminis.app.ui.browser.BrowserSheet
 import com.openminis.app.ui.theme.ChatColors
 import com.openminis.app.ui.components.MinisTextButton
 
+/**
+ * [T-message-actions] Per-message actions surfaced from the assistant header.
+ *
+ * Why the header and not a long-press on the body: the answer text lives inside
+ * a SelectionContainer, and a parent-level `combinedClickable` swallows the
+ * long-press-drag that starts a text selection — trading one gesture for
+ * another. A tiny "…" button on the header row costs no gesture at all.
+ *
+ * Every callback is optional so the legacy call sites (and the flat renderer)
+ * can keep rendering a bare header by passing null.
+ */
+internal data class AssistantMessageActions(
+    val onCopyAll: () -> Unit = {},
+    /** Regenerate this answer (rerun the user turn that produced it). */
+    val onRegenerate: (() -> Unit)? = null,
+    /** Branch the conversation from this message. */
+    val onForkFromHere: (() -> Unit)? = null,
+    /** Read this answer aloud through TTS. */
+    val onReadAloud: (() -> Unit)? = null,
+)
+
 @Composable
-internal fun AssistantHeader() {
+internal fun AssistantHeader(actions: AssistantMessageActions? = null) {
     // [T-soul-md] Identity header = locked ✨ sparkle gradient icon +
     // SOUL.md-driven `name`. The emoji-customization field was removed,
     // so we no longer branch on `SoulMetadata.emoji`; the icon stays the
@@ -291,6 +312,8 @@ internal fun AssistantHeader() {
     // SOUL.md is missing the field or set to the default value.
     val soulMeta by com.openminis.app.agent.SoulStore.cachedMetadata.collectAsState()
     val displayName = soulMeta.name.ifBlank { com.openminis.app.agent.SoulMetadata.DEFAULT.name }
+    var menuOpen by remember { mutableStateOf(false) }
+    Box {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
@@ -322,6 +345,64 @@ internal fun AssistantHeader() {
             fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onSurface,
         )
+        if (actions != null) {
+            IconButton(
+                onClick = { menuOpen = true },
+                modifier = Modifier
+                    .size(22.dp)
+                    .padding(start = 2.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.MoreVert,
+                    contentDescription = stringResource(R.string.message_actions_open),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+        }
+    }
+    if (actions != null) {
+        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.message_action_copy_all)) },
+                onClick = {
+                    menuOpen = false
+                    actions.onCopyAll()
+                },
+                leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+            )
+            if (actions.onRegenerate != null) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.message_action_regenerate)) },
+                    onClick = {
+                        menuOpen = false
+                        actions.onRegenerate.invoke()
+                    },
+                    leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
+                )
+            }
+            if (actions.onForkFromHere != null) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.message_action_fork_from_here)) },
+                    onClick = {
+                        menuOpen = false
+                        actions.onForkFromHere.invoke()
+                    },
+                    leadingIcon = { Icon(Icons.Default.AccountTree, contentDescription = null) },
+                )
+            }
+            if (actions.onReadAloud != null) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.message_action_read_aloud)) },
+                    onClick = {
+                        menuOpen = false
+                        actions.onReadAloud.invoke()
+                    },
+                    leadingIcon = { Icon(Icons.Default.PlayArrow, contentDescription = null) },
+                )
+            }
+        }
+    }
     }
 }
 
@@ -359,13 +440,17 @@ internal fun AssistantMessageView(
     // Stage D: "Revert Compact" action for an info block whose toolName is
     // "compact" — mirrors the flat AssistantInfo branch in ChatScreen.kt.
     onRevert: (() -> Unit)? = null,
+    // [T-message-actions] Header "…" menu (copy all / regenerate / fork /
+    // read aloud). Null keeps the header bare — the legacy flat path relies
+    // on that default.
+    messageActions: AssistantMessageActions? = null,
 ) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 2.dp),
     ) {
-        AssistantHeader()
+        AssistantHeader(messageActions)
 
         // Render blocks in original order — text, thinking, and tool calls interleaved
         // exactly as they arrived in the stream (each assistant turn may contain multiple
@@ -1034,11 +1119,12 @@ internal fun ToolCallPill(
 
 // ─── Tool Run Group (iOS-style collapsible "agent turn" card) ──────────────
 // [T-android-tool-run-collapse] One assistant message with >= 2 tool_use
-// blocks renders as a single foldable row. While any tool is live the group
-// stays expanded (live progress visible); once every tool reached a terminal
-// state the card auto-collapses to a one-line summary ("N tools · total"),
-// exactly like the ThinkingBlock does for long deep-think content. Tapping
-// the header expands it again and takes over the state.
+// blocks renders as a single foldable row. [fix/tool-group-auto-collapse] It
+// opens while running and STAYS open afterwards - the old "collapses to a
+// one-line summary when it finishes" behaviour yanked the card shut while the
+// user was reading it. History entries still start collapsed (otherwise long
+// chats turn into walls of tool cards); a manual toggle is respected from then
+// on.
 
 /**
  * Header-only summary for a collapsed/expanded tool run group.
@@ -1067,13 +1153,20 @@ internal fun ToolCallRunGroup(
     if (group.tools.isEmpty()) return
     // [T-message-fork] Long-press menu state for the header branch action.
     var showGroupMenu by remember { mutableStateOf(false) }
-    // [T-android-run-group-manual] The card is collapsed by default and
-    // never auto-expands, not even while running — the header itself IS the
-    // live status (spinner + "Running N tools" / "Thinking…"), so an
-    // auto-open would only fight the user's scroll position. The user taps
-    // the header to expand, taps again to collapse; `expanded` is the single
-    // source of truth.
-    var expanded by remember(group.messageId) { mutableStateOf(false) }
+    // [fix/tool-group-auto-collapse] 之前初始值写死 false：一个 turn 里出现
+    // 第二个工具时，这一组立刻变成一行摘要——用户明明在看工具输出，它自己
+    // 收起来了。
+    //
+    // 现在的规则：
+    //  - 正在跑的组**展开**（进度就该看得见）；
+    //  - 跑完了**保持原状**，不会自动收；
+    //  - 用户手动点过之后（userTouched）不再自动展开，交给用户；
+    //  - 翻历史消息（组早已结束）默认还是折叠的，否则长对话会被工具卡片刷屏。
+    var expanded by remember(group.messageId) { mutableStateOf(isRunning) }
+    var userTouched by remember(group.messageId) { mutableStateOf(false) }
+    LaunchedEffect(group.isRunning) {
+        if (group.isRunning && !userTouched) expanded = true
+    }
     val effectiveExpanded = expanded
 
     val groupAccent = toolAccentColor("shell_execute")
@@ -1113,6 +1206,7 @@ internal fun ToolCallRunGroup(
                     )
                 }
                 .clickable {
+                    userTouched = true
                     expanded = !expanded
                 }
                 .padding(horizontal = 12.dp, vertical = 8.dp),
@@ -1318,7 +1412,10 @@ internal fun ThinkingBlock(block: AssistantBlock, isStreaming: Boolean, isLast: 
                     // opens the native full-content viewer instead of toggling
                     // the (never-shown) inline expansion.
                     if (overHardCap) showFullContent = true
-                    else expanded = !expanded
+                    else {
+                        userTouched = true
+                        expanded = !expanded
+                    }
                 },
         ) {
             if (isStreaming && block.toolStatus != ToolBlockStatus.SUCCESS) {

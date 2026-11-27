@@ -19,6 +19,12 @@ import kotlinx.coroutines.launch
 import org.json.JSONObject
 
 /**
+ * [T-agent-profiles] `role` 参数的长度上限。它进系统提示词、不进权限判定，
+ * 所以限制只为挡住"把一整份 SKILL.md 塞进参数"这种用法。
+ */
+private const val ROLE_MAX_CHARS = 2000
+
+/**
  * [T-subagent-runner] Sub-agent runtime extracted from ChatViewModel —
  * owns the whole spawn_agent lifecycle: arg validation, skill lookup,
  * config parsing, scheduler queueing, registry streaming, the model loop
@@ -104,6 +110,12 @@ class SubagentRunner(
         fun subagentCostLedger(): SubagentCostLedger? = null
 
         fun agentTools(): List<AgentToolDefinition>
+
+        /**
+         * [T-skill-permissions-snapshot] 已确认的权限行。默认 null = 没有
+         * 快照能力（测试）。生产实现读 SkillRepository。
+         */
+        fun permissionsSnapshot(skillId: String): String? = null
         fun currentProvider(): com.openminis.app.provider.LLMProvider?
         fun activeSessionId(): String
         suspend fun executeBrowserUse(argsJson: String): ToolExecutionResult
@@ -339,7 +351,75 @@ class SubagentRunner(
         groupId: String = "",
     ): ToolExecutionResult {
         val args = try { JSONObject(argsJson) } catch (_: Exception) { JSONObject() }
-        val skillName = args.optString("skill_name", "").trim()
+        // [T-agent-profiles] `agent` 是新名字（内置 profile 或 skill），
+        // `skill_name` 是旧名字。agent 优先；两个都没有 → general profile，
+        // 不再要求先写 SKILL.md。
+        val agentArg = args.optString("agent", "").trim()
+        val legacySkillArg = args.optString("skill_name", "").trim()
+        val requestedAgent = agentArg.ifBlank { legacySkillArg }
+        // 只有显式点名时才尝试解析 profile：空字符串必须落到 general，
+        // 而不是被 find("") 静默当成某个 profile。
+        val profile = if (requestedAgent.isBlank()) AgentProfiles.default() else AgentProfiles.find(requestedAgent)
+        val skillName = when {
+            profile != null -> profile.id
+            requestedAgent.isNotBlank() -> requestedAgent
+            else -> AgentProfiles.default().id
+        }
+        // [T-agent-profiles] 能力名拼错必须报错，不能静默丢弃。
+        //
+        // 静默丢弃的后果是反的：调用方想"NARROW to file_read"，打错一个字母
+        // → 请求集变成空 → `takeIf { it.isNotEmpty() }` 让它等于 null →
+        // 回落到 profile 的全量工具集。**想收窄，反而放大**，而且没有任何
+        // 提示。安全相关的失败必须响。
+        val capabilityTokens = args.optString("capabilities", "")
+            .split(',')
+            .map { it.trim().lowercase() }
+            .filter { it.isNotEmpty() }
+        val unknownCapabilities = capabilityTokens.filter { key ->
+            AgentCapability.entries.none { it.name.lowercase() == key }
+        }
+        if (unknownCapabilities.isNotEmpty()) {
+            return ToolExecutionResult(
+                "Error: unknown capability " +
+                    unknownCapabilities.joinToString(", ") { "'$it'" } +
+                    ". Valid values: " +
+                    AgentCapability.entries.joinToString(", ") { it.name.lowercase() } +
+                    ". Fix the name — nothing was spawned.",
+                false,
+                // `title` is parsed a few lines below; this error can fire
+                // before it exists.
+                toolTitle = args.optString("tool_title", "Sub-agent").ifBlank { "Sub-agent" },
+            )
+        }
+        val requestedCapabilities: Set<AgentCapability>? = capabilityTokens
+            .mapNotNull { key -> AgentCapability.entries.firstOrNull { it.name.lowercase() == key } }
+            .toSet()
+            .takeIf { it.isNotEmpty() }
+        val roleExtra = args.optString("role", "").trim().take(ROLE_MAX_CHARS)
+        // [T-agent-knowledge] 知识包：把已装 skill 的**正文**当参考资料附上，
+        // 不要求它声明 subagent: true，也不借用它的权限。名字写错要报错——
+        // 静默忽略会让调用方以为知识已加载。
+        val knowledgeNames = args.optString("knowledge", "")
+            .split(',')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+        val knowledgeBodies = knowledgeNames.mapNotNull { name ->
+            deps.findSkill(name)?.body?.takeIf { it.isNotBlank() }
+        }
+        val unknownKnowledge = knowledgeNames.filter { name ->
+            deps.findSkill(name)?.body.isNullOrBlank()
+        }
+        if (unknownKnowledge.isNotEmpty()) {
+            return ToolExecutionResult(
+                "Error: no skill named " +
+                    unknownKnowledge.joinToString(", ") { "'$it'" } +
+                    " is installed (knowledge=). Call list_agents or use " +
+                    "agent= for a runtime; knowledge= only attaches reference text.",
+                false,
+                toolTitle = args.optString("tool_title", "Sub-agent").ifBlank { "Sub-agent" },
+            )
+        }
+
         val query = args.optString("query", "").trim()
         val title = args.optString("tool_title", "Sub-agent").ifBlank { "Sub-agent" }
         // [port/upstream-subagent-progress] Opt-in progress notes. Parsed here
@@ -392,10 +472,16 @@ class SubagentRunner(
             requested = skillName,
             skillRoster = deps.subagentRoster(),
             configured = deps.configuredSubagents(),
-            skillExists = { n -> deps.findSkill(n) != null },
+            skillExists = { n -> AgentProfiles.find(n) != null || deps.findSkill(n) != null },
         )
-        val skill = delegation?.let { deps.findSkill(it.skillName) }
-            ?: deps.findSkill(skillName)
+        val resolvedSkill: SkillInfo? = if (profile != null) {
+            // 合成 SkillInfo：id = "profile:<id>"，于是并发键、registry、
+            // 审批、resume 匹配全部沿用现有逻辑，不需要给它们各开一条分支。
+            AgentProfiles.toSkillInfo(profile)
+        } else {
+            delegation?.let { deps.findSkill(it.skillName) } ?: deps.findSkill(skillName)
+        }
+        val skill = resolvedSkill
             ?: return ToolExecutionResult(
                 // Name the valid alternatives. The parent's standing
                 // instruction is "do not retry the same spawn", so a bare
@@ -405,7 +491,16 @@ class SubagentRunner(
                 SubagentRosterHint.unknownAgentMessage(skillName, deps.subagentRoster()),
                 false, toolTitle = title,
             )
-        val parsedConfig = SubagentSkill.parseSubagentConfig(skill)
+        val parsedConfig = if (profile != null) {
+            AgentProfiles.toConfig(profile)
+        } else {
+            // [T-skill-permissions-snapshot] 权限只认库里的快照：SKILL.md 在
+            // agent 可写的目录下，文件里的 allowed_tools 不再参与运行。
+            SubagentSkill.parseSubagentConfig(
+                skill,
+                permissionsSnapshot = deps.permissionsSnapshot(skill.id),
+            )
+        }
         // [feat/subagent-roster-routing] The configured roster entry's
         // reasoning-level override WINS over the skill's own `thinking:`.
         //
@@ -414,11 +509,40 @@ class SubagentRunner(
         // the author's general default for the skill. When the user has
         // said otherwise for this agent, the user's word is the more
         // specific instruction.
-        val config = delegation?.thinkingLevelOverride
+        val configWithThinking = delegation?.thinkingLevelOverride
             ?.takeIf { it.isNotBlank() }
             ?.let { parsedConfig.copy(thinkingLevel = SubagentSkill.parseThinkingLevelName(it)) }
             ?: parsedConfig
-        if (!config.isSubagent) {
+        // [T-agent-profiles] 能力求交，永远只收窄：profile 的 allowlist 是
+        // 基准，调用参数只能从中减。allowedTools == null（不限）时，请求集
+        // 本身就是一次收窄，安全。
+        val configAfterCapabilities = if (requestedCapabilities == null) {
+            configWithThinking
+        } else {
+            val requestedTools = AgentCapabilities.toolsFor(requestedCapabilities)
+            val narrowed = configWithThinking.allowedTools?.intersect(requestedTools) ?: requestedTools
+            configWithThinking.copy(allowedTools = narrowed)
+        }
+        // [T-agent-profiles] 最小权限：完全没点名 agent、也没点名能力时，把
+        // general 收窄到父这一轮**实际持有的**工具集。不然一个被关掉 shell
+        // 的会话随手 spawn 出来的子 agent 反而能跑命令——那是权限放大，不是
+        // 便利。显式点名 agent / capabilities 时不收窄：那是调用方的选择。
+        val config = if (requestedAgent.isBlank() && requestedCapabilities == null) {
+            val parentTools = runCatching {
+                deps.agentTools().map { it.name }.toSet()
+            }.getOrDefault(emptySet())
+            if (parentTools.isEmpty()) {
+                configAfterCapabilities
+            } else {
+                configAfterCapabilities.copy(
+                    allowedTools = configAfterCapabilities.allowedTools?.intersect(parentTools)
+                        ?: parentTools,
+                )
+            }
+        } else {
+            configAfterCapabilities
+        }
+        if (!config.isSubagent && profile == null) {
             return ToolExecutionResult(
                 "Error: Skill '$skillName' is not a sub-agent skill. " +
                     "Add `subagent: true` to its SKILL.md frontmatter to enable sub-agent mode." +
@@ -464,7 +588,7 @@ class SubagentRunner(
             )
         }.orEmpty()
 
-        if (!deps.isSkillEnabledForSession(skill.id)) {
+        if (profile == null && !deps.isSkillEnabledForSession(skill.id)) {
             return ToolExecutionResult(
                 "Error: Skill '$skillName' is disabled for this session" + rosterSuffix(),
                 false, toolTitle = title,
@@ -474,7 +598,17 @@ class SubagentRunner(
         // [feat/subagent-roster-routing] The mission for this run: the
         // configured roster entry's instructions when the parent named a
         // configured speciality, empty for an ordinary skill spawn.
-        val extraInstructions = delegation?.extraInstructions.orEmpty()
+        // [T-agent-profiles] One-off role text sits AFTER the roster mission:
+        // the mission says what to do, the role says who to be while doing it.
+        val knowledgeText = knowledgeBodies
+            .joinToString("\n\n")
+            .takeIf { it.isNotBlank() }
+            ?.let { "## Reference material\n\n$it" }
+        val extraInstructions = listOfNotNull(
+            delegation?.extraInstructions?.takeIf { it.isNotBlank() },
+            roleExtra.takeIf { it.isNotBlank() },
+            knowledgeText,
+        ).joinToString("\n\n")
 
         // Fail-closed capability filter + explicit allowlist (validated
         // BEFORE registration so a misconfigured skill never creates a run).
@@ -869,6 +1003,13 @@ class SubagentRunner(
             sessionId = sessionId,
             groupId = groupId,
             queued = true,
+            // [T-subagent-audit] 记录"这次跑的是哪套配置"：内置还是 skill、
+            // 最终工具集指纹、profile 版本、role 摘要。文件与快照都会变，
+            // 这三个不会。
+            agentKind = if (profile != null) "profile" else "skill",
+            toolsHash = scopeFingerprint,
+            profileVersion = profile?.version ?: 0,
+            roleSummary = roleExtra.take(120),
         )
         if (outcome.reused) {
             // [T-subagent-orchestration-fix] The deduped run still belongs to
@@ -1630,6 +1771,12 @@ class SubagentRunner(
                             maxTurns = s.maxTurns,
                             report = s.resultText,
                             artifacts = s.artifacts,
+                            // [T-subagent-audit] 一起落盘：进程重启后，
+                            // 这四个字段是唯一还能说明"那次跑的是什么"的证据。
+                            agentKind = s.agentKind,
+                            toolsHash = s.toolsHash,
+                            profileVersion = s.profileVersion,
+                            roleSummary = s.roleSummary,
                         ),
                     ),
                     Charsets.UTF_8,

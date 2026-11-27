@@ -296,6 +296,12 @@ class MinisApp : Application(), ImageLoaderFactory {
             return
         }
 
+        // [T-scheduled-tasks] 闹钟不持久化：进程被杀/重启后必须重排，
+        // 否则用户设的提醒会静默消失。读一个小 JSON，代价可以忽略。
+        runCatching {
+            com.openminis.app.data.ScheduledTaskScheduler.rescheduleAll(this)
+        }
+
         // [T-codex-fast-mode] Capture the app context + warm the Fast Mode
         // flag cache so the provider layer (no Context) can read it at
         // request-build time — including offload / title-gen calls that

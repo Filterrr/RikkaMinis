@@ -158,11 +158,41 @@ class SubagentRunRegistryTest {
     }
 
     @Test
+    fun `register records what the run actually was`() {
+        val registry = SubagentRunRegistry()
+        val run = registry.register(
+            blockId = "blk",
+            skillId = "profile:general",
+            skillName = "General",
+            query = "q",
+            title = "t",
+            maxTurns = 5,
+            agentKind = "profile",
+            toolsHash = "file_read,shell_execute|deny:",
+            profileVersion = 1,
+            roleSummary = "auditing a Rust parser",
+        )
+        // [T-subagent-audit] These four are the only record of "which config
+        // ran" after the SKILL.md / snapshot has changed underneath it.
+        assertEquals("profile", run.agentKind)
+        assertEquals("file_read,shell_execute|deny:", run.toolsHash)
+        assertEquals(1, run.profileVersion)
+        assertEquals("auditing a Rust parser", run.roleSummary)
+    }
+
+    @Test
     fun `spawn_agent definition carries run_until and registry key`() {
         val def = SubagentSkill.definition()
         assertEquals("spawn_agent", def.name)
         assertTrue(def.parameters.containsKey("run_until"))
-        assertTrue(def.required.containsAll(listOf("tool_title", "skill_name", "query")))
+        // [T-agent-profiles] `agent` is optional (omitted -> the built-in
+        // `general` profile): a delegated one-off task must not require a
+        // SKILL.md first. `skill_name` remains as a legacy alias.
+        assertTrue(def.parameters.containsKey("agent"))
+        assertTrue(def.parameters.containsKey("skill_name"))
+        assertTrue(def.required.containsAll(listOf("tool_title", "query")))
+        assertTrue("agent must stay OPTIONAL", "agent" !in def.required)
+        assertTrue("skill_name must stay OPTIONAL", "skill_name" !in def.required)
         assertEquals("subagentRunRegistry", SubagentSkill.RUN_REGISTRY_KEY)
     }
 

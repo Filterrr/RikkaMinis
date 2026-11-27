@@ -87,6 +87,12 @@ fun TerminalScreen(
     onBack: () -> Unit,
     initCommand: String? = null,
     sessionId: String? = null,
+    /**
+     * [T-terminal-tabs] true = 离开这个 composable 就停掉 PTY（单页模式，
+     * 原行为）。多标签容器传 false：切标签会重建 composable，但底层 shell
+     * 必须继续活着，由容器在真正关闭标签 / 离开页面时统一 stop。
+     */
+    manageLifecycle: Boolean = true,
 ) {
     val scope = rememberCoroutineScope()
 
@@ -114,8 +120,10 @@ fun TerminalScreen(
         }
     }
 
-    DisposableEffect(Unit) {
-        onDispose { terminalSession.stop() }
+    if (manageLifecycle) {
+        DisposableEffect(Unit) {
+            onDispose { terminalSession.stop() }
+        }
     }
 
     // Claim the broker while the fullscreen terminal is up so ChatScreen

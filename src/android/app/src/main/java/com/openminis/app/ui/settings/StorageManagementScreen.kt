@@ -423,7 +423,7 @@ fun SessionStorageDetailScreen(
         SettingsSection(header = stringResource(R.string.storage_section_media)) {
             if (mediaSize > 0) {
                 SettingsValueRow(
-                    title = "Media",
+                    title = stringResource(R.string.settings_media_section),
                     value = Formatter.formatFileSize(context, mediaSize),
                     showDivider = false,
                 )

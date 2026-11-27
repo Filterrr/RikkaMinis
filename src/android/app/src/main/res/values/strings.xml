@@ -1188,6 +1188,47 @@
 
     <!-- [T-android-trace-viewer] Agent trace viewer — the read side of the
          schema-2.0 traces the runtime writes to workspace/.traces/. -->
+    <string name="sessionlist_export_markdown">Markdown</string>
+    <string name="sessionlist_export_html">HTML page</string>
+    <string name="clipboard_suggest_label">Copied:</string>
+    <string name="clipboard_suggest_insert">Insert</string>
+    <string name="clipboard_suggest_dismiss">Not now</string>
+    <string name="tool_approval_title">This command cannot be undone</string>
+    <string name="tool_approval_body">The agent is about to run something irreversible. Read the command before allowing it.</string>
+    <string name="tool_approval_allow_once">Allow once</string>
+    <string name="tool_approval_allow_session">Allow this rule for this chat</string>
+    <string name="tool_approval_deny">Deny</string>
+    <string name="ask_user_title">The agent needs your input</string>
+    <string name="ask_user_free_text_label">Or type an answer</string>
+    <string name="ask_user_send">Answer</string>
+    <string name="ask_user_skip">Skip</string>
+    <string name="composer_voice_input">Dictate</string>
+    <string name="composer_voice_error">Speech recognition failed (%1$s)</string>
+    <string name="message_actions_open">Message actions</string>
+    <string name="message_action_copy_all">Copy the whole answer</string>
+    <string name="message_action_regenerate">Regenerate this answer</string>
+    <string name="message_action_fork_from_here">Branch from here</string>
+    <string name="message_action_read_aloud">Read aloud</string>
+    <string name="chat_menu_search_session">Search this chat</string>
+    <string name="settings_media_section">Media</string>
+    <string name="a11y_edit_skill_name">Edit name</string>
+    <string name="a11y_selected">Selected</string>
+    <string name="token_budget_warning">About %1$dk tokens used in this run (warning at %2$dk). This is a heads-up, not an error — the run keeps going.</string>
+    <string name="settings_token_budget_title">Token usage warning</string>
+    <string name="settings_token_budget_subtitle">Heads-up after about %1$dk tokens in one run</string>
+    <string name="settings_token_budget_off">Off — never warn</string>
+    <string name="settings_token_budget_option">%1$dk tokens</string>
+    <string name="settings_token_budget_footer">A notice is shown once per run when the total crosses this. It never stops the run — a long task is allowed to be long; this just makes the cost visible.</string>
+    <string name="scheduled_tasks_channel">Scheduled tasks</string>
+    <string name="scheduled_tasks_channel_desc">Reminders from tasks you scheduled</string>
+    <string name="subagent_builtin_badge">built-in</string>
+    <string name="session_search_title">Search this chat</string>
+    <string name="session_search_hint">Find text in every message…</string>
+    <string name="session_search_empty">Type to search the whole conversation, including earlier messages that are no longer loaded.</string>
+    <string name="session_search_no_result">No matches for “%1$s”</string>
+    <string name="session_search_role_user">You</string>
+    <string name="session_search_role_assistant">Assistant</string>
+    <string name="session_search_result_count">%1$d matches</string>
     <string name="chat_menu_agent_traces">Agent traces</string>
     <string name="trace_title">Agent Traces</string>
     <string name="trace_detail_title">Trace Detail</string>

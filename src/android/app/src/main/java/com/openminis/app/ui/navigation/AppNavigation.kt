@@ -343,6 +343,35 @@ fun AppNavigation(
                     restoreState = true
                 }
             }
+            is DeepLinkAction.RunPrompt -> {
+                // [T-deeplink-run] Stage the prompt through the SAME pending
+                // share channel the share-sheet uses, then land in the target
+                // chat. ChatScreen consumes it into the composer; sending
+                // stays a user action (see DeepLinkHandler.RunPrompt).
+                runCatching {
+                    com.openminis.app.share.SharedShareStore.savePendingShare(
+                        context,
+                        com.openminis.app.share.PendingShare(
+                            items = listOf(
+                                com.openminis.app.share.PendingShare.Item(
+                                    com.openminis.app.share.PendingShare.Item.Kind.INLINE_TEXT,
+                                    initialDeepLink.prompt,
+                                ),
+                            ),
+                            timestampMs = System.currentTimeMillis(),
+                        ),
+                    )
+                }
+                val target = initialDeepLink.sessionId?.takeIf { it.isNotBlank() } ?: "__new__"
+                navController.safeNavigate(Routes.chat(target)) {
+                    popUpTo(navController.graph.startDestinationId) {
+                        inclusive = true
+                        saveState = true
+                    }
+                    launchSingleTop = true
+                    restoreState = true
+                }
+            }
             is DeepLinkAction.CreateEnvironmentVariable -> {
                 DeepLinkCoordinator.setPendingEnvVarCreate(
                     initialDeepLink.key,
@@ -1439,9 +1468,10 @@ fun AppNavigation(
             val context = androidx.compose.ui.platform.LocalContext.current
             val initCommand = backStackEntry.arguments?.getString("initCommand")
             val sessionId = backStackEntry.arguments?.getString("sessionId")
-            val session = remember { TerminalSession(context.applicationContext) }
-            TerminalScreen(
-                terminalSession = session,
+            // [T-terminal-tabs] 多标签容器自己建 / 收 PTY；页面不再持有单个
+            // session（那正是"只能开一个终端"的原因）。
+            com.openminis.app.ui.terminal.TerminalTabsScreen(
+                context = context.applicationContext,
                 onBack = { navController.safePopBackStack() },
                 initCommand = initCommand,
                 sessionId = sessionId,

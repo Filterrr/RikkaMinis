@@ -56,6 +56,7 @@ import com.openminis.app.sandbox.offload.ModelStreamErrorException
 import com.openminis.app.sandbox.offload.ProviderExecutionGateway
 import com.openminis.app.R
 import com.openminis.app.data.repository.ChatRepository
+import com.openminis.app.data.repository.MessageSearchMatch
 import com.openminis.app.data.repository.MemoryRepository
 import com.openminis.app.data.repository.ProviderRepository
 import com.openminis.app.provider.ImageBudget
@@ -73,6 +74,7 @@ import com.openminis.app.terminal.MinisOpenUrlBroker
 import com.openminis.app.terminal.MinisUrlMarker
 import com.openminis.app.tools.AgentTraceRecorder
 import com.openminis.app.tools.AgentTools
+import com.openminis.app.tools.ApplyPatchTool
 import com.openminis.app.tools.FileEditTool
 import com.openminis.app.tools.FileReadTool
 import com.openminis.app.tools.FileWriteTool
@@ -174,18 +176,41 @@ class ChatViewModel(
         // default to allow — if the user walked away, that was the answer.
         const val SPAWN_APPROVAL_TIMEOUT_MS = 5L * 60L * 1000L
 
+        /** [T-tool-approval] 危险命令审批等多久。超时 = DENY。 */
+        private const val TOOL_APPROVAL_TIMEOUT_MS = 5L * 60L * 1000L
+
+        /** [T-shell-job-log-cap] 单个后台作业日志的软上限（截断不杀进程）。 */
+        private const val SHELL_JOB_LOG_MAX_BYTES = 8 * 1024 * 1024
+
 
         // ── T7-A: 观察预算默认上限（advisory 观察用，不阻断任何行为）──
         // 这些数字只用于 trace 记录当前消耗进度（budget_consume/refuse 事件），
         // 不改变生产行为；T7-C 接入 enforced 模式前由 T4-B/T10 依据真实基线校准。
-        private const val T7_OBSERVE_MAX_TURNS = 200
+        // [no-tool-call-cap] 工具调用**不设上限**：跑多少轮、调多少次工具，
+        // 由模型按任务实际情况自己决定。固定的次数上限是拍脑袋定的（128 →
+        // 512 只是把同一个问题推远），真实任务该用 5 次还是 500 次，只有当时
+        // 的模型知道。
+        //
+        // 失控保护不靠计数，靠三件事：
+        //  1. ToolLoopDetector —— 同一调用反复无进展时硬阻断（这才是"卡死"）；
+        //  2. 8 小时 wall-clock 保险丝 —— 防的是无限烧钱，不是任务规模；
+        //  3. 用户随时可以停。
+        // 轮次上限保留一个"实际上不可达"的值：它只防代码层面的死循环，
+        // 同时让最终的收尾文案仍然是人话（不是 2147483647）。
+        private const val T7_OBSERVE_MAX_TURNS = 10_000
         private const val T7_OBSERVE_MAX_PROVIDER_ATTEMPTS = 64
-        private const val T7_OBSERVE_MAX_TOOL_CALLS = 128
-        private const val T7_OBSERVE_MAX_SHELL_COMMANDS = 128
+        private const val T7_OBSERVE_MAX_TOOL_CALLS = Int.MAX_VALUE
+        private const val T7_OBSERVE_MAX_SHELL_COMMANDS = Int.MAX_VALUE
         private const val T7_OBSERVE_MAX_COMPACTION_CALLS = 8
         private const val T7_OBSERVE_MAX_CONCURRENT_TOOLS = 4
-        /** 观察 deadline：60 分钟单调时间（advisory，不阻断）。 */
-        private const val T7_OBSERVE_DEADLINE_MS = 60L * 60L * 1000L
+        /**
+         * 失控保护：8 小时单调时间。
+         *
+         * 之前是 60 分钟，注释还写着"advisory，不阻断"——但 T7-C 早就把它
+         * 变成了硬 break，于是任何跑过一个小时的任务都会**静默**停住。
+         * 这个数字现在是"防止无限烧 token 的保险丝"，不是任务预算。
+         */
+        private const val T7_OBSERVE_DEADLINE_MS = 8L * 60L * 60L * 1000L
 
         /**
          * T7-A: 把 [AgentRunPhase] 映射为 trace schema v2 的 state_transition
@@ -302,7 +327,14 @@ class ChatViewModel(
          * Resume button rather than a silently stuck "thinking" indicator.
          * Mirrors iOS AIChatViewModel.maxAgentTurns.
          */
-        private const val MAX_AGENT_TURNS = 200
+        /**
+         * [no-tool-call-cap] 循环的代码级边界，不是任务预算。
+         *
+         * 真正的收尾信号是"模型不再请求工具"或别的停止条件；这个数字只防
+         * 代码层面的死循环，取值远大于任何真实任务（10000 轮 ≈ 数天）。
+         * 同时它出现在 Resume 文案里，所以不能是 Int.MAX_VALUE。
+         */
+        private const val MAX_AGENT_TURNS = 10_000
         private const val MIN_MAX_TOKENS = 1024
         // [fix/voice-crash-observability] Generous cap on the persisted draft
         // string (see syncComposerDraft). Covers the vast majority of voice
@@ -778,6 +810,22 @@ class ChatViewModel(
     // SubagentDetailScreen. Per-VM (one chat) by design: runs belong to the
     // conversation that spawned them. Cleared with the chat.
     val subagentRunRegistry = SubagentRunRegistry()
+
+    /**
+     * [T-ask-user] 挂起式提问队列（per-VM，跟会话同生共死）。UI 渲染
+     * [AskUserQueue.requests]，用户点了之后 resolve 唤醒卡在
+     * [executeAskUserTool] 里的那一轮。
+     */
+    val askUserQueue = com.openminis.app.tools.AskUserQueue()
+
+    /**
+     * [T-tool-approval] 危险命令审批队列 + 本会话已放行的规则。
+     *
+     * 作用域是**规则**不是工具：用户点了一次"本会话允许 curl|sh"，下一次
+     * 换个命令照样会问。按工具整体放行太粗，按单条命令放行又等于没记住。
+     */
+    val toolApprovalQueue = com.openminis.app.tools.ToolApprovalQueue()
+    private val sessionApprovedRules = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     /**
      * [T-subagent-scheduler] Two-level concurrency scheduler for sub-agent
@@ -1279,6 +1327,10 @@ class ChatViewModel(
             // of delegation spend.
             override fun subagentCostLedger() = this@ChatViewModel.subagentCostLedger
             override fun agentTools() = this@ChatViewModel.agentTools
+
+            // [T-skill-permissions-snapshot] 已确认的权限行，来自数据库。
+            override fun permissionsSnapshot(skillId: String) =
+                this@ChatViewModel.skillRepository?.permissionsSnapshot(skillId)
             override fun currentProvider() = this@ChatViewModel.currentProvider
             override fun activeSessionId() = this@ChatViewModel.activeSessionId
             override suspend fun executeBrowserUse(argsJson: String) =
@@ -5969,6 +6021,25 @@ class ChatViewModel(
      * (including the assistant response), rebuild agent history, and resend.
      * Mirrors iOS's edit/retry behavior — no duplicate user messages.
      */
+    /**
+     * [T-message-actions] "Regenerate this answer".
+     *
+     * The assistant bubble knows its own id, not the user turn that produced
+     * it. Walk backwards to the nearest user message and hand off to
+     * [retryFromMessage], which already owns rollback, the DB trim and the
+     * agent-history re-sync. Doing the lookup here (instead of in the
+     * composable) keeps the ordering rule in one place: a regenerate is
+     * always "replay the user turn", never "append another answer".
+     */
+    fun regenerateAssistant(messageId: String) {
+        if (_isStreaming.value) return
+        val list = _messages.value
+        val idx = list.indexOfFirst { it.id == messageId }
+        if (idx <= 0) return
+        val userIndex = (idx - 1 downTo 0).firstOrNull { list[it].role == "user" } ?: return
+        retryFromMessage(list[userIndex].id)
+    }
+
     fun retryFromMessage(messageId: String) {
         if (_isStreaming.value) return
         _canResume.value = false
@@ -8352,6 +8423,11 @@ class ChatViewModel(
         // AIChatViewModel.didInjectEmptyToolReminderThisRun.
         var didInjectEmptyToolReminder = false
         var didRetryTruncatedTurn = false
+        // [T-token-budget-warning] 本轮 run 的累计 token（每轮请求都会重发整个
+        // 上下文，所以逐轮累加就是真实消耗，不是重复计算）。
+        var runTokensSpent = 0L
+        var tokenWarningShown = false
+        val tokenWarnAt = com.openminis.app.data.TokenBudgetPrefs.warnAt(context)
         // [T-length-wall-continue] Consecutive finish_reason="length" turns that
         // produced NO visible content and NO tool calls (output wall hit before
         // anything usable came back). First hit: continue the loop — the model
@@ -8871,6 +8947,26 @@ class ChatViewModel(
                     }
                     is LLMStreamChunk.Usage -> {
                         lastUsage = chunk.usage
+                        // [T-token-budget-warning] 一次可见的提醒，每个 run 只弹
+                        // 一次：这不是错误，长任务是合法的，只是花到这个量级
+                        // 该让用户知道。
+                        runTokensSpent += chunk.usage.inputTokens +
+                            (chunk.usage.cacheCreationInputTokens ?: 0) +
+                            chunk.usage.outputTokens
+                        if (!tokenWarningShown && tokenWarnAt > 0 && runTokensSpent >= tokenWarnAt) {
+                            tokenWarningShown = true
+                            val spent = runTokensSpent
+                            withContext(Dispatchers.Main) {
+                                appendSystemInfo(
+                                    context.getString(
+                                        R.string.token_budget_warning,
+                                        spent / 1000,
+                                        tokenWarnAt / 1000,
+                                    ),
+                                    "token_budget",
+                                )
+                            }
+                        }
                         // Update context token count for next turn's dynamicMaxTokens()
                         // and publish to _lastTurnContextTokens so the ContextPolicy
                         // gate in [checkContextBeforeSend] can see the latest pressure
@@ -10513,9 +10609,21 @@ class ChatViewModel(
                 finalizeAtTurnLimit(assistantId, accumulatedText, allToolBlocks)
             }
         } else if (t7BudgetStopReason != null) {
-            // T7-C: 预算耗尽（deadline / 计数上限）—— 显式终态，不是静默失败。
-            // 不经过 finalizeAtTurnLimit（那是 200 轮的 Resume 语义）。
-            AppLogger.warning(TAG_STREAM, "runAgentLoop EXIT — budget stop: $t7BudgetStopReason")
+            // [fix/run-stops-by-itself] 之前这里只打一行日志：循环停了、气泡停在
+            // 半截、没有任何说明，用户看到的就是"自己停了"，而且**连 Resume 都
+            // 没有**。现在给出可见原因并把这一轮标成可继续——停下来可以，但
+            // 必须让人知道为什么、以及怎么接着跑。
+            // mutable property: no smart cast survives the null check.
+            val reason = t7BudgetStopReason ?: "unknown"
+            AppLogger.warning(TAG_STREAM, "runAgentLoop EXIT — budget stop: $reason")
+            withContext(Dispatchers.Main) {
+                finalizeAtRunLimit(
+                    assistantId = assistantId,
+                    text = accumulatedText,
+                    blocks = allToolBlocks,
+                    message = budgetStopMessage(reason),
+                )
+            }
         } else {
             AppLogger.info(TAG_STREAM, "runAgentLoop EXIT (loop body ended naturally)")
         }
@@ -10589,10 +10697,54 @@ class ChatViewModel(
      * we stopped, and arms canResume so the user can continue from here.
      * Mirrors iOS AIChatViewModel.swift:4922-4929 pattern (canResume + error).
      */
+    /**
+     * [fix/run-stops-by-itself] 统一的"跑到上限"收尾：落定气泡、清掉流式状态、
+     * 给一句可见的原因、并把这一轮标成可继续。轮数上限与预算上限共用它，
+     * 只有文案不同——不然两条路径迟早漂移成两套行为。
+     */
+    private fun finalizeAtRunLimit(
+        assistantId: String,
+        text: String,
+        blocks: List<AssistantBlock>,
+        message: String,
+    ) {
+        // 轮数上限的旧入口保留原名，避免动所有调用点。
+        finalizeAtRunLimitBody(assistantId, text, blocks, message)
+    }
+
+    /** [fix/run-stops-by-itself] 预算中断的可见文案：说清原因，并给出下一步。 */
+    private fun budgetStopMessage(reason: String): String = when (reason) {
+        "deadline_reached" ->
+            "Stopped: this run reached the 8-hour safety limit. Nothing was lost — " +
+                "the messages and tool output so far are kept. Tap Resume to keep going, " +
+                "or send a new message to narrow the task."
+        "provider_attempt_limit" ->
+            "Stopped: too many failed model requests in a row. Check the provider " +
+                "(key, quota, network), then tap Resume."
+        "turn_limit" ->
+            "Stopped after $MAX_AGENT_TURNS agent turns. Tap Resume to continue."
+        else ->
+            "Stopped: the run hit its safety limit ($reason). Tap Resume to continue."
+    }
+
     private fun finalizeAtTurnLimit(
         assistantId: String,
         text: String,
         blocks: List<AssistantBlock>,
+    ) = finalizeAtRunLimitBody(
+        assistantId,
+        text,
+        blocks,
+        "Stopped after $MAX_AGENT_TURNS agent turns to prevent runaway " +
+            "tool use. The model kept calling tools without finishing — tap " +
+            "Resume to continue from here, or send a new message to start over.",
+    )
+
+    private fun finalizeAtRunLimitBody(
+        assistantId: String,
+        text: String,
+        blocks: List<AssistantBlock>,
+        message: String,
     ) {
         updateAssistantMessage(
             assistantId, text, false, blocks,
@@ -10613,11 +10765,7 @@ class ChatViewModel(
         if (_streamingById.value.containsKey(assistantId)) {
             _streamingById.value = _streamingById.value - assistantId
         }
-        setInlineError(
-            "Stopped after $MAX_AGENT_TURNS agent turns to prevent runaway " +
-            "tool use. The model kept calling tools without finishing — tap " +
-            "Resume to continue from here, or send a new message to start over.",
-        )
+        setInlineError(message)
         _canResume.value = true
     }
 
@@ -10649,6 +10797,16 @@ class ChatViewModel(
         // — they always fall through to shell_execute or the offload
         // bridge, which is now where checkPermission runs.
         val toolTitle = try { JSONObject(argsJson).optString("tool_title", name) } catch (_: Exception) { name }
+
+        // [T-tool-approval] 主 agent 的危险命令闸门。放在预算扣减和 trace
+        // 之前：被拒绝的调用不该消耗一次 tool_call 预算，也不该在 trace 里
+        // 留下"执行过"的假象（它只会在 UI 上挂一条待审批）。
+        //
+        // 只拦不可逆的那几种（见 DangerousCommandPolicy）：rm -rf /、dd 写
+        // 块设备、mkfs、curl|sh、git push --force、chmod -R 777 /、关机。
+        // 无人值守时超时 = DENY，不是放行。
+        val approvalDenied = gateDangerousToolCall(name, argsJson)
+        if (approvalDenied != null) return approvalDenied
 
         // T9: record tool call event
         val etStartMs = System.currentTimeMillis()
@@ -10698,6 +10856,11 @@ class ChatViewModel(
                 FileEditTool.NAME -> FileEditTool.execute(argsJson, activeSessionId, context).also {
                     if (it.success) maybeReloadSkillsForPath(argsJson)
                 }
+                // [T-apply-patch] Same skill-reload hook: a patch can touch
+                // SKILL.md just like file_edit can.
+                ApplyPatchTool.NAME -> ApplyPatchTool.execute(argsJson, activeSessionId, context).also {
+                    if (it.success) maybeReloadSkillsForPath(argsJson)
+                }
                 // T178: pass sessionId + context so read_image routes through
                 // resolveSessionHostPath like file_read/write/edit do — without
                 // these, the tool consults the global last-writer-wins
@@ -10711,6 +10874,24 @@ class ChatViewModel(
                 "memory_write" -> executeMemoryWriteTool(argsJson)
                 "memory_get" -> executeMemoryGetTool(argsJson)
                 "memory_rollup" -> executeMemoryRollupTool()
+                // [T-agent-status] Read-only self-inspection of this run's
+                // budget + live sub-agents. No budget consumption: it runs
+                // through the normal dispatch (so it does count as one tool
+                // call, which is honest — the call itself costs a slot).
+                "agent_status" -> executeAgentStatusTool()
+                // [T-agent-profiles] Live roster, so the model stops guessing
+                // names from a system-prompt snapshot.
+                "list_agents" -> executeListAgentsTool()
+                // [T-shell-job] Background jobs in the session's persistent
+                // shell: nohup'd children outlive the tool call, so builds and
+                // installs stop being bounded by shell_execute's 900s cap.
+                "shell_job" -> executeShellJobTool(argsJson)
+                // [T-ask-user] Blocking clarify question: the turn parks on the
+                // queue's deferred, the dialog resolves it, the answer becomes
+                // the tool result — no turn boundary, no context rebuild.
+                "ask_user" -> executeAskUserTool(argsJson)
+                // [T-scheduled-tasks] 设备级提醒：走系统闹钟，App 关掉也能响。
+                "schedule_task" -> executeScheduleTaskTool(argsJson)
                 // [T7-subagent] spawn_agent: delegate to an independent sub-agent
                 // instance running the named skill. [T-subagent-ui] pass the
                 // tool_use block id so the registry run can be linked to this
@@ -13556,6 +13737,13 @@ Environment variables:
         // point, and clears the list the dialog renders.) The queue is per-VM,
         // so the clear-style semantics match the registry above.
         subagentApprovals.denyAllOutstanding()
+        // [T-ask-user] Same rule for a parked question: a dialog nobody can
+        // see must not hold a turn. The waiter resolves null and takes the
+        // documented "no answer" path.
+        askUserQueue.cancelAllOutstanding()
+        // [T-tool-approval] A pending approval nobody can see must deny, not
+        // allow — same rule as the spawn gate.
+        toolApprovalQueue.denyAllOutstanding()
         // [T-subagent-parallel] The per-chat limiter is per-VM like the
         // registry — it dies with this VM, so no release is needed. (The
         // old process-global gate required an onCleared release to avoid
@@ -14028,6 +14216,489 @@ Environment variables:
      * detector still hashes the tool name, so identical bad calls are still
      * detected as a loop.
      */
+    /**
+     * [T-session-search] 会话内全文搜索。走持久化消息表（ChatRepository
+     * .searchMessages —— 同一份 SQL 也供 `minis-sessions-cli search` 使用），
+     * 而不是内存里那份"已加载窗口"：被 compaction / 分页甩掉的早期轮次只有
+     * 这里能翻出来。默认 50 条上限，超出部分不渲染。
+     */
+    suspend fun searchSessionMessages(
+        query: String,
+        limit: Int = 50,
+    ): List<MessageSearchMatch> {
+        val q = query.trim()
+        if (q.isEmpty() || limit <= 0) return emptyList()
+        return runCatching {
+            chatRepository.searchMessages(
+                sessionIds = listOf(sessionId),
+                keywords = listOf(q),
+                limit = limit,
+                startMs = null,
+                endMs = null,
+            )
+        }.getOrElse { e ->
+            AppLogger.warning(TAG, "session search failed: ${e.message}")
+            emptyList()
+        }
+    }
+
+    private fun executeAgentStatusTool(): ToolExecutionResult {
+        val out = StringBuilder()
+        val budget = activeRunBudget
+        if (budget == null) {
+            out.append("Budget: not attached to this run (advisory counters unavailable).\n")
+        } else {
+            val s = budget.snapshot()
+            val r = budget.remaining()
+            val minutesLeft = (r.millisRemaining / 60_000L).coerceAtLeast(0L)
+            out.append("Budget (advisory):\n")
+            out.append("  turns: ${s.turnsUsed} used, ${r.turnsRemaining} left\n")
+            out.append("  tool calls: ${s.toolCallsUsed} used, ${r.toolCallsRemaining} left\n")
+            out.append("  shell commands: ${s.shellCommandsUsed} used, ${r.shellCommandsRemaining} left\n")
+            out.append("  compactions: ${s.compactionCallsUsed} used, ${r.compactionCallsRemaining} left\n")
+            out.append("  wall clock: ~$minutesLeft min left\n")
+            val tokensUsed = s.estimatedTokensUsed
+            val tokensLeft = r.estimatedTokensRemaining
+            if (tokensUsed != null || tokensLeft != null) {
+                out.append("  est. tokens: ${tokensUsed ?: "?"} used, ${tokensLeft ?: "?"} left\n")
+            } else {
+                out.append("  est. tokens: not tracked for this run\n")
+            }
+            out.append("  expired: ${if (r.isExpired) "YES — stop starting new work" else "no"}\n")
+        }
+
+        val runs = runCatching { subagentRunRegistry.runs.value }.getOrElse { emptyList() }
+        val live = runs.filter {
+            it.status == SubagentRunRegistry.RunStatus.RUNNING ||
+                it.status == SubagentRunRegistry.RunStatus.QUEUED
+        }
+        out.append("Sub-agents: ${live.size} running/queued")
+        if (live.isEmpty()) {
+            out.append("\n")
+        } else {
+            out.append("\n")
+            for (run in live) {
+                out.append("  - ${run.title.ifBlank { run.skillName }} [${run.status}] id=${run.id}\n")
+            }
+        }
+        // Read the window's size rather than calling check(): check() records
+        // this call against the detector, which would let a status probe
+        // nudge the loop thresholds it is reporting on.
+        out.append("Loop window: ${toolLoopDetector.historySnapshot().size} recent tool calls tracked\n")
+        return ToolExecutionResult(out.toString(), true)
+    }
+
+
+    /**
+     * [T-shell-job] 后台作业：把命令扔进会话常驻的 PRoot shell 里 nohup 出去。
+     *
+     * 为什么能活过工具调用：ExecutionCoordinator 每个 session 维护一个常驻
+     * PersistentShell（不是每次 shell_execute 新建 proot），所以 nohup 的子进程
+     * 不会随这次调用结束被回收——这正是 shell_execute 900 秒硬顶之外的解法。
+     *
+     * 元数据只有两个文件：`<id>.meta` 存 pid，`<id>.log` 存合并后的 stdout+stderr。
+     * 不建数据库、不登记进程表：pid 可能被复用的极端情形下，`status` 会退化成
+     * "finished"，不会误杀别人——kill 只打 meta 里记的那个 pid。
+     */
+    private suspend fun executeShellJobTool(argsJson: String): ToolExecutionResult {
+        val args = try { JSONObject(argsJson) } catch (_: Exception) { JSONObject() }
+        val action = args.optString("action", "").trim().lowercase()
+        val jobsDir = "/var/minis/offloads/jobs"
+        val sid = activeSessionId
+        val jobIdPattern = Regex("[A-Za-z0-9._-]{1,64}")
+
+        if (action !in setOf("start", "status", "logs", "kill", "list")) {
+            return ToolExecutionResult(
+                "Error: unknown action '$action'. Use one of: start | status | logs | kill | list",
+                false,
+            )
+        }
+
+        val jobId = args.optString("job_id", "").trim()
+        if (action in setOf("status", "logs", "kill") && !jobIdPattern.matches(jobId)) {
+            return ToolExecutionResult(
+                "Error: 'job_id' is required for action=$action (and must be a plain job id)",
+                false,
+            )
+        }
+
+        // Return type inferred: CommandResult is nested in ExecutionCoordinator
+        // (ExecutionCoordinator.CommandResult), not a top-level sandbox type.
+        suspend fun run(command: String, timeoutMs: Long = 30_000L) =
+            ExecutionCoordinator.execute(sessionId = sid, command = command, timeout = timeoutMs)
+
+        return try {
+            when (action) {
+                "start" -> {
+                    val cmd = args.optString("command", "")
+                    if (cmd.isBlank()) {
+                        return ToolExecutionResult("Error: 'command' is required for action=start", false)
+                    }
+                    val id = "job-" + System.currentTimeMillis().toString(36) + "-" +
+                        (System.nanoTime() % 1000).toString().padStart(3, '0')
+                    val log = "$jobsDir/$id.log"
+                    val meta = "$jobsDir/$id.meta"
+                    // [T-shell-job-log-cap] 长任务的日志会无限长。做法是
+                    // 每 30 秒看一次大小，超过上限就 `> log` 原地截断：
+                    // 进程持的是 O_APPEND fd，截断后它继续往新末尾写——只丢
+                    // 历史，不丢后续输出，也不会像 `head -c` 那样把 job 写死
+                    // 在 SIGPIPE 上。
+                    val script = buildString {
+                        append("mkdir -p $jobsDir\n")
+                        append("nohup sh -c ${com.openminis.app.tools.ShellQuote.single(cmd)} > $log 2>&1 &\n")
+                        append("JOB_PID=\$!\n")
+                        append("echo \$JOB_PID > $meta\n")
+                        append("( while kill -0 \$JOB_PID 2>/dev/null; do sleep 30; ")
+                        append("SZ=\$(wc -c < $log 2>/dev/null || echo 0); ")
+                        append("if [ \"\${SZ:-0}\" -gt $SHELL_JOB_LOG_MAX_BYTES ]; then ")
+                        append("printf '[log truncated: exceeded %s bytes]\\n' $SHELL_JOB_LOG_MAX_BYTES > $log; ")
+                        append("fi; done ) >/dev/null 2>&1 &\n")
+                        append("sleep 0.3\n")
+                        append("echo \"job_id=$id pid=\$(cat $meta 2>/dev/null) log=$log\"\n")
+                    }
+                    val result = run(script)
+                    if (result.exitCode != 0) {
+                        ToolExecutionResult(
+                            "Error starting background job (exit ${result.exitCode}):\n${result.output}",
+                            false,
+                        )
+                    } else {
+                        ToolExecutionResult(
+                            result.output.trim() + "\n" +
+                                "The job keeps running after this call. Poll with shell_job action=status, " +
+                                "read output with action=logs, stop it with action=kill.",
+                            true,
+                        )
+                    }
+                }
+
+                "status" -> {
+                    val log = "$jobsDir/$jobId.log"
+                    val meta = "$jobsDir/$jobId.meta"
+                    val script = buildString {
+                        append("if [ -f $meta ]; then\n")
+                        append("  PID=\$(cat $meta 2>/dev/null)\n")
+                        append("  if [ -n \"\$PID\" ] && kill -0 \"\$PID\" 2>/dev/null; then\n")
+                        append("    echo \"state=running pid=\$PID\"\n")
+                        append("  else\n")
+                        append("    echo \"state=finished pid=\$PID\"\n")
+                        append("  fi\n")
+                        append("else\n")
+                        append("  echo \"state=unknown (no such job)\"\n")
+                        append("fi\n")
+                        append("echo \"log=$log\"\n")
+                        append("echo '--- last 5 lines ---'\n")
+                        append("tail -n 5 $log 2>/dev/null\n")
+                    }
+                    val result = run(script, 20_000L)
+                    ToolExecutionResult(result.output, result.exitCode == 0)
+                }
+
+                "logs" -> {
+                    val log = "$jobsDir/$jobId.log"
+                    val lines = args.optInt("lines", 80).coerceIn(1, 500)
+                    val result = run("tail -n $lines $log 2>/dev/null || echo '(no log yet)'", 20_000L)
+                    ToolExecutionResult(result.output, result.exitCode == 0)
+                }
+
+                "kill" -> {
+                    val meta = "$jobsDir/$jobId.meta"
+                    val script = buildString {
+                        append("PID=\$(cat $meta 2>/dev/null)\n")
+                        append("if [ -n \"\$PID\" ] && kill \"\$PID\" 2>/dev/null; then\n")
+                        append("  echo \"killed job=$jobId pid=\$PID\"\n")
+                        append("else\n")
+                        append("  echo \"job=$jobId not running (already finished or unknown)\"\n")
+                        append("fi\n")
+                    }
+                    val result = run(script, 20_000L)
+                    ToolExecutionResult(result.output, result.exitCode == 0)
+                }
+
+                else -> { // list
+                    val script = buildString {
+                        append("if [ -d $jobsDir ]; then\n")
+                        append("  for m in $jobsDir/*.meta; do\n")
+                        append("    [ -f \"\$m\" ] || continue\n")
+                        append("    ID=\$(basename \"\$m\" .meta)\n")
+                        append("    PID=\$(cat \"\$m\" 2>/dev/null)\n")
+                        append("    if [ -n \"\$PID\" ] && kill -0 \"\$PID\" 2>/dev/null; then ST=running; else ST=finished; fi\n")
+                        append("    echo \"\$ID \$ST pid=\$PID\"\n")
+                        append("  done\n")
+                        append("fi\n")
+                    }
+                    val result = run(script, 20_000L)
+                    val out = result.output.trim()
+                    ToolExecutionResult(out.ifBlank { "(no background jobs in this session)" }, result.exitCode == 0)
+                }
+            }
+        } catch (e: Exception) {
+            ToolExecutionResult("Error running shell_job: ${e.message}", false)
+        }
+    }
+
+    /**
+     * [T-ask-user] 把一轮"停在问题上"：注册到队列 → 等 deferred →
+     * 超时/取消一律降级成 "no answer"，绝不无限期挂死。
+     */
+    private suspend fun executeAskUserTool(argsJson: String): ToolExecutionResult {
+        val args = try { JSONObject(argsJson) } catch (_: Exception) { JSONObject() }
+        val question = args.optString("question", "").trim()
+        if (question.isEmpty()) {
+            return ToolExecutionResult("Error: 'question' is required", false)
+        }
+        val options = buildList {
+            val arr = args.optJSONArray("options")
+            if (arr != null) {
+                for (i in 0 until arr.length()) {
+                    val v = arr.optString(i, "").trim()
+                    if (v.isNotEmpty()) add(v)
+                }
+            }
+        }
+        val allowFreeText = args.optBoolean("allow_free_text", options.isEmpty())
+        val timeoutSeconds = args.optInt("timeout_seconds", 300).coerceIn(30, 1800)
+
+        val (request, deferred) = askUserQueue.submit(question, options, allowFreeText)
+        val answer = try {
+            kotlinx.coroutines.withTimeoutOrNull(timeoutSeconds * 1000L) { deferred.await() }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // Turn cancelled while parked: drop the ask so a stale dialog can't
+            // outlive the run that asked it.
+            askUserQueue.remove(request.id)
+            throw e
+        }
+        askUserQueue.remove(request.id)
+
+        if (answer == null) {
+            return ToolExecutionResult(
+                "No answer: the user did not respond within ${timeoutSeconds}s. " +
+                    "Do not ask again for the same thing — proceed with your best judgment " +
+                    "(state the assumption in your answer) or finish and ask in the reply.",
+                false,
+            )
+        }
+        val picked = request.options.getOrNull(answer.selectedIndex)
+        val text = answer.text?.trim()?.takeIf { it.isNotEmpty() }
+        val body = buildString {
+            append("User answered")
+            if (picked != null) append(": \"$picked\"")
+            if (text != null) {
+                if (picked != null) append("\nFree-text note: $text") else append(": $text")
+            }
+            if (picked == null && text == null) append(": (dismissed without an answer)")
+        }
+        return ToolExecutionResult(body, true)
+    }
+
+    /** [T-ask-user] UI 回答入口。index = -1 表示没有点选项。 */
+    fun answerAskUser(id: String, selectedIndex: Int, text: String?) {
+        askUserQueue.resolve(id, com.openminis.app.tools.AskUserAnswer(selectedIndex, text))
+    }
+
+    /** [T-ask-user] 用户直接关掉对话框：当作"没回答"，agent 走超时降级路径。 */
+    fun dismissAskUser(id: String) {
+        askUserQueue.resolve(id, com.openminis.app.tools.AskUserAnswer(-1, null))
+    }
+
+    /**
+     * [T-tool-approval] 命中高危规则时挂起等用户决定；返回 null = 放行继续。
+     * 超时（无人值守）走 DENY——安全的一侧永远是不执行。
+     */
+    private suspend fun gateDangerousToolCall(name: String, argsJson: String): ToolExecutionResult? {
+        val hit = com.openminis.app.tools.DangerousCommandPolicy.check(name, argsJson) ?: return null
+        if (hit.ruleId in sessionApprovedRules) return null
+
+        val command = runCatching {
+            JSONObject(argsJson).optString("command", "")
+        }.getOrDefault("")
+        val (request, deferred) = toolApprovalQueue.submit(name, hit.ruleId, hit.label, command)
+        val decision = try {
+            kotlinx.coroutines.withTimeoutOrNull(TOOL_APPROVAL_TIMEOUT_MS) { deferred.await() }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            toolApprovalQueue.remove(request.id)
+            throw e
+        }
+        toolApprovalQueue.remove(request.id)
+
+        return when (decision) {
+            com.openminis.app.tools.ToolApprovalDecision.ALLOW_ONCE -> null
+            com.openminis.app.tools.ToolApprovalDecision.ALLOW_SESSION -> {
+                sessionApprovedRules += hit.ruleId
+                null
+            }
+            else -> ToolExecutionResult(
+                "DENIED: the user refused this command (rule: ${hit.label}). " +
+                    "Do not retry it and do not try to work around it with a different spelling. " +
+                    "Explain what you were trying to do instead.",
+                false,
+            )
+        }
+    }
+
+    /** [T-tool-approval] UI 决定入口。 */
+    fun answerToolApproval(id: String, decision: com.openminis.app.tools.ToolApprovalDecision) {
+        toolApprovalQueue.resolve(id, decision)
+    }
+
+    /**
+     * [T-agent-profiles] 当前可派遣的 agent：内置 profile + 已安装的
+     * subagent skill。每次现算，不缓存——装了新 skill 立刻可见。
+     */
+    private fun executeListAgentsTool(): ToolExecutionResult {
+        val out = StringBuilder()
+        out.append("Built-in agents (no SKILL.md required):\n")
+        for (p in com.openminis.app.tools.AgentProfiles.ALL) {
+            out.append("  - ").append(p.id).append(" — ").append(p.description).append('\n')
+            out.append("    capabilities: ")
+                .append(p.capabilities.joinToString(", ") { it.name.lowercase() })
+                .append('\n')
+        }
+        val skills = runCatching {
+            skillRepository?.skills?.value.orEmpty().filter {
+                com.openminis.app.tools.SubagentSkill.parseSubagentConfig(it).isSubagent
+            }
+        }.getOrElse { emptyList() }
+        if (skills.isEmpty()) {
+            out.append("\nInstalled sub-agent skills: none.\n")
+        } else {
+            out.append("\nInstalled sub-agent skills (these override the profile they name):\n")
+            for (skill in skills) {
+                val cfg = com.openminis.app.tools.SubagentSkill.parseSubagentConfig(skill)
+                val tools = cfg.allowedTools?.sorted()?.joinToString(", ") ?: "all non-forbidden tools"
+                out.append("  - ").append(skill.name)
+                if (cfg.readOnly) out.append(" [read-only]")
+                out.append('\n').append("    tools: ").append(tools).append('\n')
+            }
+        }
+        return ToolExecutionResult(out.toString(), true)
+    }
+
+    /**
+     * [T-scheduled-tasks] 定时提醒的增删查。
+     *
+     * 只写数据 + 排闹钟；到点的行为在 [com.openminis.app.data.ScheduleAlarmReceiver]
+     * 里（发通知 + 深链预填）。**这里不启动任何 agent**——无人值守执行需要
+     * 一套独立的 turn 运行器，还没做，也绝不能假装做了。
+     */
+    private fun executeScheduleTaskTool(argsJson: String): ToolExecutionResult {
+        val args = try { JSONObject(argsJson) } catch (_: Exception) { JSONObject() }
+        val action = args.optString("action", "").trim().lowercase()
+        val store = com.openminis.app.data.ScheduledTaskStore
+        val scheduler = com.openminis.app.data.ScheduledTaskScheduler
+
+        return when (action) {
+            "add" -> {
+                val prompt = args.optString("prompt", "").trim()
+                if (prompt.isEmpty()) {
+                    return ToolExecutionResult("Error: 'prompt' is required for action=add", false)
+                }
+                val daily = args.optBoolean("daily", false)
+                val delayMinutes = args.optInt("delay_minutes", 0)
+                val atRaw = args.optString("at", "").trim()
+                val triggerAt = when {
+                    delayMinutes > 0 -> System.currentTimeMillis() + delayMinutes * 60_000L
+                    atRaw.isNotEmpty() -> parseScheduleAt(atRaw)
+                    else -> null
+                } ?: return ToolExecutionResult(
+                    "Error: give either 'at' (\"HH:mm\" or \"YYYY-MM-DD HH:mm\") or a positive " +
+                        "'delay_minutes'. '$atRaw' could not be parsed.",
+                    false,
+                )
+                if (triggerAt <= System.currentTimeMillis()) {
+                    return ToolExecutionResult(
+                        "Error: that time is already in the past (${formatScheduleTime(triggerAt)}). " +
+                            "For a daily reminder give the next occurrence.",
+                        false,
+                    )
+                }
+                val task = com.openminis.app.data.ScheduledTask(
+                    id = store.newId(),
+                    label = args.optString("label", "").trim().ifBlank { prompt.take(40) },
+                    prompt = prompt.take(com.openminis.app.data.ScheduledTask.MAX_PROMPT_CHARS),
+                    sessionId = args.optString("session_id", "").trim().takeIf { it.isNotEmpty() },
+                    triggerAtMillis = triggerAt,
+                    daily = daily,
+                )
+                store.upsert(context, task)
+                scheduler.schedule(context, task)
+                val exact = if (scheduler.canScheduleExact(context)) "exact" else
+                    "inexact (no exact-alarm permission — the system may delay it)"
+                ToolExecutionResult(
+                    "Scheduled '${task.label}' for ${formatScheduleTime(triggerAt)}" +
+                        (if (daily) " (repeats daily)" else "") + ". Alarm: $exact. " +
+                        "At that time a notification appears; tapping it opens a chat with the " +
+                        "prompt pre-filled. The agent does not run by itself.",
+                    true,
+                )
+            }
+
+            "list" -> {
+                val tasks = store.load(context).filter { it.enabled }.sortedBy { it.triggerAtMillis }
+                if (tasks.isEmpty()) {
+                    ToolExecutionResult("No scheduled tasks on this device.", true)
+                } else {
+                    ToolExecutionResult(
+                        tasks.joinToString("\n") { t ->
+                            "- ${t.id} · ${formatScheduleTime(t.triggerAtMillis)}" +
+                                (if (t.daily) " (daily)" else "") + " · ${t.label}"
+                        },
+                        true,
+                    )
+                }
+            }
+
+            "remove" -> {
+                val id = args.optString("task_id", "").trim()
+                if (id.isEmpty()) {
+                    return ToolExecutionResult("Error: 'task_id' is required for action=remove", false)
+                }
+                val before = store.load(context).size
+                store.remove(context, id)
+                scheduler.cancel(context, id)
+                val after = store.load(context).size
+                if (after == before) {
+                    ToolExecutionResult("No scheduled task with id '$id'.", false)
+                } else {
+                    ToolExecutionResult("Removed scheduled task '$id'.", true)
+                }
+            }
+
+            else -> ToolExecutionResult(
+                "Error: unknown action '$action'. Use add | list | remove.",
+                false,
+            )
+        }
+    }
+
+    /** [T-scheduled-tasks] "HH:mm"（今天/明天）或 "yyyy-MM-dd HH:mm"。返回 null = 解析失败。 */
+    private fun parseScheduleAt(raw: String): Long? {
+        val fmtTime = java.text.SimpleDateFormat("HH:mm", java.util.Locale.US)
+        val fmtFull = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US)
+        fmtFull.isLenient = false
+        fmtTime.isLenient = false
+        return runCatching {
+            if (raw.length <= 5) {
+                val parsed = fmtTime.parse(raw) ?: return null
+                val cal = java.util.Calendar.getInstance()
+                val src = java.util.Calendar.getInstance().apply { time = parsed }
+                cal.set(java.util.Calendar.HOUR_OF_DAY, src.get(java.util.Calendar.HOUR_OF_DAY))
+                cal.set(java.util.Calendar.MINUTE, src.get(java.util.Calendar.MINUTE))
+                cal.set(java.util.Calendar.SECOND, 0)
+                cal.set(java.util.Calendar.MILLISECOND, 0)
+                if (cal.timeInMillis <= System.currentTimeMillis()) {
+                    cal.add(java.util.Calendar.DAY_OF_YEAR, 1)
+                }
+                cal.timeInMillis
+            } else {
+                fmtFull.parse(raw)?.time
+            }
+        }.getOrNull()
+    }
+
+    private fun formatScheduleTime(epochMs: Long): String =
+        java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US).format(java.util.Date(epochMs))
+
     private fun parseToolParams(argsJson: String): Map<String, Any?> {
         if (argsJson.isBlank()) return emptyMap()
         return try {

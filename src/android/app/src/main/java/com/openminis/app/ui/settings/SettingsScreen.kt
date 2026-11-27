@@ -33,6 +33,7 @@ import androidx.compose.material.icons.outlined.FolderShared
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Palette
+import androidx.compose.material.icons.outlined.DataUsage
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.NetworkCheck
@@ -45,6 +46,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -239,6 +241,9 @@ fun SettingsScreen(
                 // lowered; it can never be raised past the scheduler's
                 // designed ceiling.
                 SubagentConcurrencySetting()
+                // [T-token-budget-warning] 花费提醒的阈值入口。之前只有常量，
+                // 用户既看不到也不知道能改。
+                TokenBudgetSetting()
             }
 
             // -- Storage --
@@ -458,6 +463,88 @@ private fun SettingsItem(
                     .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
             )
         }
+    }
+}
+
+/**
+ * [T-token-budget-warning] 一次 run 的 token 用量提醒阈值。
+ *
+ * 用几档预设而不是自由输入：这是个"大概到多少提醒一下"的粗粒度设置，
+ * 输错一个零就会变成"永远不提醒"或"每个任务都弹"。
+ */
+@Composable
+private fun TokenBudgetSetting() {
+    val context = LocalContext.current
+    var showDialog by remember { mutableStateOf(false) }
+    val current = com.openminis.app.data.TokenBudgetPrefs.warnAt(context)
+
+    SettingsItem(
+        icon = Icons.Outlined.DataUsage,
+        iconColor = Color(0xFF34C759),
+        title = stringResource(R.string.settings_token_budget_title),
+        subtitle = if (current <= 0) {
+            stringResource(R.string.settings_token_budget_off)
+        } else {
+            stringResource(R.string.settings_token_budget_subtitle, current / 1000)
+        },
+        onClick = { showDialog = true },
+        showDivider = false,
+    )
+
+    if (showDialog) {
+        val options = listOf(0, 100_000, 200_000, 500_000, 1_000_000)
+        var selected by remember { mutableStateOf(current) }
+        AlertDialog(
+            onDismissRequest = { showDialog = false },
+            title = { Text(stringResource(R.string.settings_token_budget_title)) },
+            text = {
+                Column {
+                    for (option in options) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { selected = option }
+                                .padding(vertical = 2.dp),
+                        ) {
+                            RadioButton(
+                                selected = selected == option,
+                                onClick = { selected = option },
+                            )
+                            Text(
+                                text = if (option == 0) {
+                                    stringResource(R.string.settings_token_budget_off)
+                                } else {
+                                    stringResource(R.string.settings_token_budget_option, option / 1000)
+                                },
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = stringResource(R.string.settings_token_budget_footer),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    com.openminis.app.data.TokenBudgetPrefs.setWarnAt(context, selected)
+                    // 关闭对话框会触发一次重组，current 在 composable 体内
+                    // 重新读取，副标题自然更新——不需要额外的刷新信号。
+                    showDialog = false
+                }) {
+                    Text(stringResource(R.string.common_save))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDialog = false }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            },
+        )
     }
 }
 

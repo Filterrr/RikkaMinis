@@ -10,6 +10,7 @@ import androidx.compose.material.icons.outlined.Keyboard
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Lightbulb
 import androidx.compose.material.icons.outlined.Psychology
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Terminal
@@ -56,6 +57,9 @@ object ChatActionCatalog {
         // [T-android-trace-viewer] Read side of the agent traces the runtime
         // writes each run — the "why did this run fail?" screen.
         ChatActionSpec(ChatMenuPrefs.AGENT_TRACES, R.string.chat_menu_agent_traces, Icons.Outlined.Timeline, true, false),
+        // [T-session-search] Search the whole persisted transcript of this
+        // session (not just the loaded window) and jump to a hit.
+        ChatActionSpec(ChatMenuPrefs.SEARCH_SESSION, R.string.chat_menu_search_session, Icons.Outlined.Search, true, false),
         ChatActionSpec(ChatMenuPrefs.TOKEN_USAGE, R.string.settings_token_usage, Icons.Outlined.DataUsage, false, true),
         ChatActionSpec(ChatMenuPrefs.SETTINGS, R.string.settings, Icons.Outlined.Settings, false, true),
     )

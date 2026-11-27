@@ -732,6 +732,10 @@ fun ChatScreen(
     // [bottom-toolbar-customizable] Export format picker shared by the "..." menu
     // and the history-drawer footer (replaces the old inline submenu).
     var showExportFormatSheet by remember { mutableStateOf(false) }
+    // [T-session-search] Session-scoped full-text search sheet. Unlike the
+    // top-bar input-history sheet (memory-only filter), this queries the
+    // persisted message table, so pre-compaction turns stay searchable.
+    var showSessionSearch by remember { mutableStateOf(false) }
     // [T-message-fork-polish] Pending fork anchor: set by either fork entry
     // (user bubble / tool-run group), consumed by ForkScopeSheet. Holding the
     // anchor id here (instead of launching the fork inline) lets the scope
@@ -741,6 +745,8 @@ fun ChatScreen(
     var showClearChatDialog by remember { mutableStateOf(false) }
     // [T-android-enhanced-cache] First-enable confirmation dialog visibility.
     var showEnhancedCacheDialog by remember { mutableStateOf(false) }
+
+
 
     // [T-context-exhausted-dialog] 'Context Full' prompt — surfaced directly
     // from the ViewModel (send-at-capacity stash), so the dialog renders
@@ -795,6 +801,7 @@ fun ChatScreen(
                 runCatching { inputFocusRequester.requestFocus() }
                 keyboardController?.show()
             }
+            ChatMenuPrefs.SEARCH_SESSION -> showSessionSearch = true
             ChatMenuPrefs.EXPORT -> showExportFormatSheet = true
             ChatMenuPrefs.TOKEN_USAGE -> showTokenUsageSheet = true
             ChatMenuPrefs.SETTINGS -> onOpenSettings()
@@ -2718,6 +2725,22 @@ fun ChatScreen(
                                                 )
                                             }
                                         }
+                                        ChatMenuPrefs.SEARCH_SESSION -> {
+                                            // [T-session-search] Full-text search over the
+                                            // PERSISTED transcript (not just the loaded
+                                            // window Input History filters), with a jump
+                                            // to the matching message.
+                                            DropdownMenuItem(
+                                                text = { Text(stringResource(R.string.chat_menu_search_session)) },
+                                                onClick = {
+                                                    showChatMenu = false
+                                                    dispatchChatAction(ChatMenuPrefs.SEARCH_SESSION)
+                                                },
+                                                leadingIcon = {
+                                                    Icon(Icons.Default.Search, contentDescription = null)
+                                                },
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -4169,6 +4192,37 @@ fun ChatScreen(
                                         onRevert = if (item.message.toolBlocks.any { it.kind == "info" && it.toolName == "compact" }) {
                                             { viewModel.revertCompact() }
                                         } else null,
+                                        // [T-message-actions] Header "…" menu for the
+                                        // whole answer. Copy reads messageMarkdown (the
+                                        // joined raw markdown, same string the selection
+                                        // toolbar copies) so code fences survive.
+                                        // Mutating actions keep the T119 gating used by
+                                        // the user bubble: hidden while the turn is live.
+                                        messageActions = AssistantMessageActions(
+                                            onCopyAll = {
+                                                val clipboard = context.getSystemService(
+                                                    android.content.Context.CLIPBOARD_SERVICE,
+                                                ) as android.content.ClipboardManager
+                                                clipboard.setPrimaryClip(
+                                                    android.content.ClipData.newPlainText(
+                                                        "message",
+                                                        item.messageMarkdown,
+                                                    ),
+                                                )
+                                            },
+                                            onRegenerate = if (isStreaming) null else ({
+                                                safeMutate { viewModel.regenerateAssistant(item.messageId) }
+                                            }),
+                                            onForkFromHere = if (isStreaming) null else ({
+                                                pendingForkAnchorId = item.messageId
+                                            }),
+                                            onReadAloud = {
+                                                com.openminis.app.speech.ReadAloudController.speak(
+                                                    context,
+                                                    item.messageMarkdown,
+                                                )
+                                            },
+                                        ),
                                         toolPillActions = { block ->
                                             if (block.kind != "tool_use") {
                                                 null
@@ -4662,6 +4716,28 @@ fun ChatScreen(
                     },
                 )
             }
+            // [T-ask-user] Blocking clarify question from the current run.
+            // Rendered from the VM's queue (per-VM, so it can't outlive the
+            // session that asked); answering resumes the exact turn that
+            // parked, with no new turn boundary.
+            val askUserRequests by viewModel.askUserQueue.requests.collectAsState()
+            askUserRequests.firstOrNull()?.let { ask ->
+                AskUserDialog(
+                    request = ask,
+                    onAnswer = { index, text -> viewModel.answerAskUser(ask.id, index, text) },
+                    onDismiss = { viewModel.dismissAskUser(ask.id) },
+                )
+            }
+            // [T-tool-approval] Dangerous-command gate. Sits above the ask-user
+            // dialog in priority: an unapproved irreversible command is a
+            // "stop", a question is a "wait".
+            val toolApprovalRequests by viewModel.toolApprovalQueue.requests.collectAsState()
+            toolApprovalRequests.firstOrNull()?.let { approval ->
+                ToolApprovalDialog(
+                    request = approval,
+                    onDecision = { decision -> viewModel.answerToolApproval(approval.id, decision) },
+                )
+            }
             // [T-android-enhanced-cache] One-time extra-billing confirmation
             // before the first enable. Accepting records the durable ack and
             // turns the toggle on; subsequent enables skip the dialog.
@@ -4802,6 +4878,20 @@ fun ChatScreen(
     // menu EXPORT entry and the history-drawer footer EXPORT action. The old
     // inline JSON/Plain submenu lived only in the menu; the sheet keeps the
     // format choice reachable from both entry points with one implementation.
+    if (showSessionSearch) {
+        ChatSessionSearchSheet(
+            onDismiss = { showSessionSearch = false },
+            onJump = { messageId ->
+                // Reuse the existing "jump to a message and highlight it"
+                // primitive (same path the fork lineage chip uses): the
+                // LaunchedEffect below scrolls in reversed-list space and
+                // clears the request so recomposition can't yank the user.
+                pendingFocusId = messageId
+            },
+            search = { query -> viewModel.searchSessionMessages(query) },
+        )
+    }
+
     if (showExportFormatSheet) {
         ExportFormatSheet(
             onDismiss = { showExportFormatSheet = false },
@@ -5189,6 +5279,48 @@ private fun ChatInputArea(
     val attachments by viewModel.attachments.collectAsState()
     var showMoveSheet by remember { mutableStateOf(false) }
     var showAttachMenu by remember { mutableStateOf(false) }
+    // [T-voice-input-restore] Mic came back. The engine stack
+    // (SpeechRecognitionManager + the system/provider adapters) was never
+    // removed — only the button was, when the voice-chat panel went away. This
+    // restores the plain "dictate into the composer" affordance and nothing
+    // more: no auto-send, no inline panel.
+    //
+    // Composition rule: a recognition session REPLACES the delta it produced
+    // on each partial, anchored to the composer text captured when the mic was
+    // tapped. Appending deltas instead would duplicate the growing
+    // transcription on every partial (the engine re-sends the whole hypothesis,
+    // not just the new tail).
+    val speechState by com.openminis.app.speech.SpeechRecognitionManager.state.collectAsState()
+    val speechAvailable by com.openminis.app.speech.SpeechRecognitionManager.isAvailable.collectAsState()
+    var speechBaseText by remember { mutableStateOf<String?>(null) }
+    var pendingVoiceStart by remember { mutableStateOf(false) }
+    fun beginVoiceInput() {
+        speechBaseText = viewModel.inputText.value
+        com.openminis.app.speech.SpeechRecognitionManager.startRecording(
+            onPartialOrFinal = { text, isFinal ->
+                if (text.isNotEmpty()) {
+                    viewModel.setInputText((speechBaseText ?: "") + text)
+                }
+                if (isFinal) speechBaseText = null
+            },
+            onError = { error, message ->
+                speechBaseText = null
+                android.widget.Toast.makeText(
+                    context,
+                    context.getString(R.string.composer_voice_error, error.name) +
+                        (message?.let { " ($it)" } ?: ""),
+                    android.widget.Toast.LENGTH_SHORT,
+                ).show()
+            },
+        )
+    }
+    val recordAudioPermission = rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted && pendingVoiceStart) beginVoiceInput()
+        pendingVoiceStart = false
+    }
+
     // Mirrors `inputText` for the BasicTextField but tracks selection so we
     // can position the cursor (e.g. AFTER the leading "/" when the slash
     // button inserts it) — a plain String overload would reset cursor to 0
@@ -5334,6 +5466,20 @@ private fun ChatInputArea(
                 .padding(horizontal = 12.dp)
                 .padding(top = 2.dp, bottom = 8.dp),
         ) {
+            // [T-clipboard-suggest] One-tap "insert what you just copied".
+            // Only visible when the clipboard actually holds something the
+            // user might want here (>= 4 chars, not already in the composer);
+            // never auto-sends.
+            ClipboardSuggestionChip(
+                context = context,
+                currentInput = inputText,
+                onInsert = { text ->
+                    val base = inputText
+                    viewModel.setInputText(
+                        if (base.isBlank()) text else base.trimEnd() + "\n" + text,
+                    )
+                },
+            )
             // T13 banner moved INSIDE the LazyColumn so it renders at the
             // visual end of the message list (mirrors iOS — see the
             // banner item before items() in the LazyColumn block above).
@@ -6673,8 +6819,42 @@ private fun ChatInputArea(
 
                     Spacer(modifier = Modifier.width(8.dp))
 
-                    // Voice input (mic button, language pill, inline
-                    // voice panel, read-replies TTS) removed here.
+                    // [T-voice-input-restore] Mic button. Rendered only when
+                    // the active recognizer reports itself available, so an OEM
+                    // with no speech service never sees a dead control. Tapping
+                    // while recording stops the session (the composer keeps
+                    // whatever was transcribed so far).
+                    if (speechAvailable) {
+                        val recording = speechState == com.openminis.app.speech.RecognitionState.RECORDING ||
+                            speechState == com.openminis.app.speech.RecognitionState.STARTING
+                        InputCircleButton(
+                            onClick = {
+                                if (recording) {
+                                    com.openminis.app.speech.SpeechRecognitionManager.stopRecording()
+                                    speechBaseText = null
+                                } else {
+                                    val granted = ContextCompat.checkSelfPermission(
+                                        context,
+                                        android.Manifest.permission.RECORD_AUDIO,
+                                    ) == PackageManager.PERMISSION_GRANTED
+                                    if (granted) {
+                                        beginVoiceInput()
+                                    } else {
+                                        pendingVoiceStart = true
+                                        recordAudioPermission.launch(android.Manifest.permission.RECORD_AUDIO)
+                                    }
+                                }
+                            },
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Mic,
+                                contentDescription = stringResource(R.string.composer_voice_input),
+                                tint = if (recording) ChatColors.error else ChatColors.primaryText,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                    }
 
                     // Right: 3-state Send / Enqueue / Stop button (mirrors iOS sendButton).
                     //   • streaming + hasText  → SEND (routes through viewModel.sendMessage,

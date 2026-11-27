@@ -220,6 +220,14 @@ data class BackupManifest(
      * member `manifest.mac`, which both platforms' readers prefer.
      */
     @SerialName("manifest_mac") val manifestMac: String? = null,
+    /**
+     * [T-skill-permissions-snapshot] skill id → 已确认的权限行。
+     *
+     * 不加这一项，恢复后的 `loadAll` 会用**包里那份 SKILL.md** 重建基线——
+     * 如果那文件已被改过，篡改会被当成用户确认。缺省空 map 让 iOS 写的包
+     * 和老包照常可读。
+     */
+    @SerialName("skill_permissions") val skillPermissions: Map<String, String> = emptyMap(),
 ) {
     @Serializable
     data class AppInfo(

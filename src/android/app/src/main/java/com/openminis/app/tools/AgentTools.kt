@@ -51,6 +51,10 @@ object AgentTools {
         add(FileReadTool.definition())
         add(FileWriteTool.definition())
         add(FileEditTool.definition())
+        // [T-apply-patch] Multi-file unified diff, all-or-nothing. Ten
+        // file_edit calls for a refactor means ten chances to drift and no
+        // atomicity; a patch is one validation pass over the whole change.
+        add(ApplyPatchTool.definition())
         if (supportsImageInput) {
             add(ReadImageTool.definition())
         }
@@ -66,6 +70,26 @@ object AgentTools {
         // the SAME engine the user configured (was: model-hardcoded google,
         // unreachable without a proxy in CN).
         add(webSearchDefinition(searchHintProvider))
+        // [T-agent-status] Self-inspection. The run keeps a full advisory
+        // budget (turns / tool calls / shell commands / tokens / wall clock)
+        // and the agent had no way to read it — it would burn the last of its
+        // budget on a long download and die mid-flight with no warning. This
+        // is the read side.
+        add(agentStatusDefinition())
+        // [T-shell-job] Background jobs. shell_execute hard-caps at 900s
+        // (ChatViewModel coerces the timeout), which is a ceiling on every
+        // build / install / batch job the agent can run. The session already
+        // owns a persistent PRoot shell (ExecutionCoordinator), so a nohup'd
+        // child survives the tool call returning — this exposes that.
+        add(shellJobDefinition())
+        // [T-ask-user] Blocking clarify-question. Without it the only way to
+        // ask "which of these two APIs?" was to end the turn — losing the
+        // tool state, the plan and the accumulated context, and forcing the
+        // model to re-read everything after the answer.
+        add(askUserDefinition())
+        // [T-scheduled-tasks] Reminders that fire through the system alarm,
+        // so they survive the app being closed.
+        add(scheduleTaskDefinition())
         // [T7-subagent] spawn_agent: skill = independent sub-agent instance.
         // Always exposed — the sub-agent's own tool set is filtered inside
         // SubagentSkill.buildFilteredTools (spawn_agent itself is FORBIDDEN
@@ -81,6 +105,9 @@ object AgentTools {
         add(SubagentOrchestrationTools.statusDefinition())
         // [port/upstream-subagent-steer] Course correction for a running run.
         add(SubagentOrchestrationTools.steerDefinition())
+        // [T-agent-profiles] Live roster: built-in profiles + installed
+        // sub-agent skills. Replaces the rosterHint snapshot that drifts.
+        add(AgentProfiles.definition())
         if (memoryEnabled) {
             add(memoryWriteDefinition())
             add(memoryGetDefinition())
@@ -115,6 +142,151 @@ object AgentTools {
      * every call REPLACES the whole list. The top-bar badge renders
      * pending/total; the sheet renders the full list with status icons.
      */
+    /**
+     * [T-agent-status] Cheap, read-only self check.
+     *
+     * Deliberately printed as human-readable lines rather than JSON: the model
+     * reads it, not a parser, and "12 turns left, ~4 min wall clock" is
+     * actionable in a way that `{"turnsRemaining":12}` is not.
+     */
+    /**
+     * [T-shell-job] Background-job surface.
+     *
+     * Four actions rather than four tools: the schema teaches one mental
+     * model ("start it, then poll it") and the model doesn't have to remember
+     * four names under budget pressure.
+     */
+    /**
+     * [T-ask-user] 挂起式提问。
+     *
+     * 说明里刻意写清"这一轮会停住等你"——模型如果用它来做本该自己判断的
+     * 小决定，用户会连续收到一串弹窗，比一次问完还烦。所以也给了
+     * `timeout_seconds`（无人值守时降级返回，而不是永远卡住）。
+     */
+    /**
+     * [T-scheduled-tasks] 定时提醒。
+     *
+     * 描述里明说"只发通知、不会无人值守跑 agent"——让模型别拿它当"后台
+     * 自动执行"用，否则用户会以为是任务跑了，实际只是响了一下。
+     */
+    private fun scheduleTaskDefinition(): AgentToolDefinition = AgentToolDefinition(
+        name = "schedule_task",
+        description = "Schedule a reminder on this device. action=add needs 'prompt' plus " +
+            "either 'at' (\"HH:mm\" or \"YYYY-MM-DD HH:mm\", device local time) or 'delay_minutes'. " +
+            "When it is due the phone shows a notification containing the prompt, and tapping it " +
+            "opens a chat with that prompt PRE-FILLED. It does NOT run the agent by itself — do not " +
+            "describe it to the user as automatic background work. action=list shows pending tasks; " +
+            "action=remove needs task_id.",
+        parameters = mapOf(
+            "tool_title" to AgentToolParam("string", "A concise summary (e.g. 'Remind me at 09:30')."),
+            "action" to AgentToolParam("string", "add | list | remove"),
+            "prompt" to AgentToolParam("string", "What to remind about / the text to pre-fill (<= 2000 chars)."),
+            "label" to AgentToolParam("string", "Short notification title. Defaults to the prompt."),
+            "at" to AgentToolParam("string", "\"HH:mm\" (today, or tomorrow if already past) or \"YYYY-MM-DD HH:mm\"."),
+            "delay_minutes" to AgentToolParam("integer", "Alternative to 'at': fire this many minutes from now."),
+            "daily" to AgentToolParam("boolean", "Repeat every day at that time (default: false)."),
+            "session_id" to AgentToolParam("string", "Optional chat to open; omit for a fresh draft."),
+            "task_id" to AgentToolParam("string", "Required for action=remove."),
+        ),
+        required = listOf("tool_title", "action"),
+        propertyOrdering = listOf(
+            "tool_title", "action", "prompt", "label", "at", "delay_minutes", "daily",
+            "session_id", "task_id",
+        ),
+    )
+
+    private fun askUserDefinition(): AgentToolDefinition = AgentToolDefinition(
+        name = "ask_user",
+        description = "Ask the user a question and WAIT for the answer inside the current turn. " +
+            "Use it only when a decision is genuinely ambiguous and getting it wrong would be " +
+            "expensive — not for choices you can make from the request, not for permission " +
+            "(tools have their own approval), not to confirm that you understood. " +
+            "Provide 2-6 short options when they are mutually exclusive; set allow_free_text " +
+            "when the answer is open-ended. The turn pauses until the user answers or " +
+            "timeout_seconds elapses (default 300); on timeout you get a 'no answer' result and " +
+            "must proceed with your best judgment or stop.",
+        parameters = mapOf(
+            "tool_title" to AgentToolParam(
+                "string",
+                "A concise 5-10 word summary (e.g. 'Ask which API to target').",
+            ),
+            "question" to AgentToolParam(
+                "string",
+                "The question, in the user's language. One sentence, concrete.",
+            ),
+            "options" to AgentToolParam(
+                "array",
+                "Optional 2-6 mutually exclusive short answers (each <= 80 chars). " +
+                    "Omit for an open-ended question.",
+                // Gemini's Schema validator rejects an ARRAY node without
+                // `items` (v1internal 400). Plain strings inside.
+                items = com.openminis.app.data.model.AgentToolSchema(type = "string"),
+            ),
+            "allow_free_text" to AgentToolParam(
+                "boolean",
+                "Whether the user may type an answer instead of tapping an option (default: " +
+                    "true when no options were given).",
+            ),
+            "timeout_seconds" to AgentToolParam(
+                "integer",
+                "How long to wait for an answer, 30-1800 (default 300). After this the call " +
+                    "returns 'no answer'.",
+            ),
+        ),
+        required = listOf("tool_title", "question"),
+        propertyOrdering = listOf("tool_title", "question", "options", "allow_free_text", "timeout_seconds"),
+    )
+
+    private fun shellJobDefinition(): AgentToolDefinition = AgentToolDefinition(
+        name = "shell_job",
+        description = "Run a shell command in the BACKGROUND and return immediately. Use this " +
+            "instead of shell_execute for anything that may take longer than a few minutes " +
+            "(builds, package installs, model training, bulk downloads, test suites) — " +
+            "shell_execute blocks the whole turn and hard-caps at 15 minutes. " +
+            "action=start (needs command) returns a job id; then poll action=status / action=logs, " +
+            "and action=kill to stop it. action=list shows every job of this session. " +
+            "Jobs run in the session's persistent sandbox shell and keep running after the tool " +
+            "call returns; stdout+stderr go to /var/minis/offloads/jobs/<id>.log.",
+        parameters = mapOf(
+            "tool_title" to AgentToolParam(
+                "string",
+                "A concise 5-10 word summary (e.g. 'Start gradle build in background').",
+            ),
+            "action" to AgentToolParam("string", "start | status | logs | kill | list"),
+            "command" to AgentToolParam(
+                "string",
+                "Shell command to run in the background. Required for action=start.",
+            ),
+            "job_id" to AgentToolParam(
+                "string",
+                "Job id returned by action=start. Required for status / logs / kill.",
+            ),
+            "lines" to AgentToolParam(
+                "integer",
+                "For action=logs: how many trailing log lines to return (default 80, max 500).",
+            ),
+        ),
+        required = listOf("tool_title", "action"),
+        propertyOrdering = listOf("tool_title", "action", "command", "job_id", "lines"),
+    )
+
+    private fun agentStatusDefinition(): AgentToolDefinition = AgentToolDefinition(
+        name = "agent_status",
+        description = "Report this run's own remaining execution budget: turns, tool calls, " +
+            "shell commands, estimated tokens and wall-clock time left, whether the run is " +
+            "already expired, plus how many sub-agents are still running. Read-only and cheap. " +
+            "Call it before a long multi-step task, or when you are unsure whether another " +
+            "round of work still fits.",
+        parameters = mapOf(
+            "tool_title" to AgentToolParam(
+                "string",
+                "A concise 5-10 word summary (e.g. 'Check remaining budget').",
+            ),
+        ),
+        required = listOf("tool_title"),
+        propertyOrdering = listOf("tool_title"),
+    )
+
     private fun todoWriteDefinition(): AgentToolDefinition = AgentToolDefinition(
         name = "todo_write",
         description = "Maintain a task list (todo list) for the current session. Each call REPLACES the entire list — always send the complete updated list, not a delta. Use it to: (1) show the user the plan for multi-step work, (2) track progress through complex tasks (mark items in_progress before starting, completed when done). Keep 3-7 items, each a short imperative phrase. Skip it for single-step questions. " +

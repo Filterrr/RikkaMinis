@@ -171,8 +171,15 @@ class SubagentMinutesBudgetTest {
             "max_minutes must be REQUIRED — an optional budget question is " +
                 "never asked, and the run silently falls back to the skill number",
             src.contains(
-                "required = listOf(\"tool_title\", \"skill_name\", \"query\", \"max_minutes\")",
+                "required = listOf(\"tool_title\", \"query\", \"max_minutes\")",
             ),
+        )
+        // [T-agent-profiles] The agent selector is OPTIONAL: omitting it runs
+        // the built-in `general` profile. If someone ever makes it required
+        // again, delegation goes back to needing a SKILL.md first.
+        assertTrue(
+            "agent must not be required in the spawn schema",
+            !src.contains("required = listOf(\"tool_title\", \"agent\""),
         )
         // Order-insensitive on purpose: the list grows as fields are added,
         // and a substring of the whole row breaks every time another

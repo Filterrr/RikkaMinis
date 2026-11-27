@@ -794,8 +794,9 @@ object SubagentSkill {
             "are derived from your answer (~15 s per turn). Estimate the work, " +
             "and round UP when unsure: an under-estimate kills a healthy run " +
             "mid-task as TIMED_OUT. " +
-            "The skill must be defined with `subagent: true` in its SKILL.md " +
-            "frontmatter and must already be installed and enabled. " +
+            "You can also omit `agent` entirely: the built-in `general` profile runs " +
+            "with the same tool set as you, so a one-off delegated task needs no " +
+            "SKILL.md. Installed sub-agent skills still work and override the profile. " +
             "Recursive spawn_agent is forbidden. " +
             "While the sub-agent runs, the user sees a prompt pill in the chat " +
             "and can open a second-level page that streams the sub-agent's " +
@@ -811,21 +812,58 @@ object SubagentSkill {
             "returns that existing run_id instead of creating a duplicate — " +
             "join or wait on it rather than spawning the same task again. " +
             "With run_until='detach' the call returns immediately and the " +
-            "result is collected later via join_subagents / wait_any." +
-            rosterHint,
+            "result is collected later via join_subagents / wait_any. " +
+            // [T-list-agents-on-demand] Roster moved OUT of the always-on
+            // schema: every installed skill name used to sit in this
+            // description on every turn (~150 tokens) even though a spawn
+            // rarely fails. The name list now lives in the failure path (see
+            // SubagentRosterHint.unknownAgentMessage) and behind the
+            // list_agents tool, where it is paid for only when needed.
+            "Built-ins: general | researcher | coder | reviewer | ops. " +
+            "For installed sub-agent skills call list_agents.",
         parameters = mapOf(
             "tool_title" to AgentToolParam(
                 "string",
                 "A concise 5-10 word summary of what this sub-agent should do. " +
                     "Shown to the user as the live status label.",
             ),
-            "skill_name" to AgentToolParam(
+            "agent" to AgentToolParam(
                 "string",
-                "The name (or id) of the sub-agent skill to invoke. " +
-                    "The sub-agents you can spawn are listed in this tool's " +
-                    "description — pick one of those exact names. " +
+                "Which agent to run. Either a BUILT-IN profile id — general | " +
+                    "researcher | coder | reviewer | ops — or the name/id of an " +
+                    "installed sub-agent skill. Omit for `general`. " +
                     "Do NOT invent a name: an unknown name is rejected and the " +
                     "delegation is lost for this turn.",
+            ),
+            "skill_name" to AgentToolParam(
+                "string",
+                "Legacy alias of `agent`, kept so older prompts keep working. " +
+                    "Ignored when `agent` is present.",
+            ),
+            // [T-agent-profiles] 调用方现场收窄能力，不需要先造 skill。
+            // 逗号分隔而不是 array：Gemini 对 ARRAY 节点强制要求 items，
+            // 一个纯字符串参数能少一整类 schema 事故。
+            "knowledge" to AgentToolParam(
+                "string",
+                "Optional. Comma-separated names of installed skills whose BODY should be " +
+                    "attached as reference material (they do not need subagent: true). " +
+                    "Use it to hand a built-in agent domain knowledge without giving it that " +
+                    "skill's runtime: e.g. agent=\"general\", knowledge=\"my-ssh-cheatsheet\". " +
+                    "This changes no permissions.",
+            ),
+            "capabilities" to AgentToolParam(
+                "string",
+                "Optional. Comma-separated capability names to NARROW the agent's " +
+                    "tool set, e.g. \"file_read,web_search\". Allowed values: " +
+                    "file_read, file_write, shell, browser, web_search, memory_read, " +
+                    "memory_write, self_inspect. This can only REMOVE tools — asking " +
+                    "for something the chosen agent does not have is ignored, never granted.",
+            ),
+            "role" to AgentToolParam(
+                "string",
+                "Optional one-off instruction appended to the agent's system prompt " +
+                    "(<= 2000 chars), e.g. \"You are auditing a Rust parser.\". " +
+                    "It does NOT change permissions or budget.",
             ),
             "query" to AgentToolParam(
                 "string",
@@ -957,9 +995,10 @@ object SubagentSkill {
                 enumValues = listOf("none", "frequent", "moderate"),
             ),
         ),
-        required = listOf("tool_title", "skill_name", "query", "max_minutes"),
+        required = listOf("tool_title", "query", "max_minutes"),
         propertyOrdering = listOf(
-            "tool_title", "skill_name", "query", "max_minutes", "resume_run_id",
+            "tool_title", "agent", "skill_name", "query", "max_minutes",
+            "knowledge", "capabilities", "role", "resume_run_id",
             "run_until", "model", "timeout_seconds", "progress_report",
         ),
     )
@@ -991,7 +1030,19 @@ object SubagentSkill {
      * Returns [SubagentConfig] with isSubagent=false for skills without
      * `subagent: true` in the frontmatter — existing skills are unaffected.
      */
-    fun parseSubagentConfig(skill: SkillInfo): SubagentConfig {
+    fun parseSubagentConfig(
+        skill: SkillInfo,
+        /**
+         * [T-skill-permissions-snapshot] 数据库里已确认过的权限行。
+         *
+         * 非 null 时，文件里的权限行被**丢弃**，只用这份 + 文件里的非权限行
+         * 重新拼出 frontmatter 再解析。于是 agent 用 shell 改 SKILL.md 里的
+         * `allowed_tools` 不再有任何效果——运行时不看文件的那一段。
+         *
+         * null 表示调用方没有快照能力（测试、profile 合成），保持旧行为。
+         */
+        permissionsSnapshot: String? = null,
+    ): SubagentConfig {
         // [T-subagent-fm] Prefer the preserved raw frontmatter — the
         // registry strips frontmatter from [SkillInfo.body] when skills
         // were imported before preservation existed, and pre-1.0.5 skill
@@ -1009,6 +1060,20 @@ object SubagentSkill {
             }
         if (frontmatter.isNullOrBlank()) return SubagentConfig()
 
+        // [T-skill-permissions-snapshot] 用「文件里的非权限行 + 库里的权限行」
+        // 重建一份 frontmatter。空快照 = 已确认"没有权限声明"，此时文件里
+        // 新塞进来的 `subagent: true` 也不会生效。
+        val effectiveFrontmatter = if (permissionsSnapshot == null) {
+            frontmatter
+        } else {
+            val kept = SkillWriteGuard.splitGuarded(frontmatter).first
+            when {
+                kept.isBlank() -> permissionsSnapshot
+                permissionsSnapshot.isBlank() -> kept
+                else -> kept + "\n" + permissionsSnapshot
+            }
+        }
+
         // [feat/subagent-roster-routing] A real frontmatter parser, not a
         // hand-rolled key matcher.
         //
@@ -1022,7 +1087,7 @@ object SubagentSkill {
         //
         // SubagentFrontmatter handles those, and is unit-tested on the
         // plain JVM.
-        val fm = SubagentFrontmatter.parse(frontmatter)
+        val fm = SubagentFrontmatter.parse(effectiveFrontmatter)
 
         return SubagentConfig(
             isSubagent = fm.boolean("subagent") ?: false,

@@ -68,6 +68,38 @@ enum class AgentCapability {
      * an accident of a missing line.
      */
     TASK_LIST,
+
+    /**
+     * [T-agent-status] Read this run's own remaining budget
+     * (`agent_status`).
+     *
+     * Grantable to sub-agents on purpose: a sub-agent runs against its OWN
+     * budget and hit the same blindness — it would spend its last turns on a
+     * task it could not finish. The tool is read-only and exposes nothing
+     * about the parent or its siblings, so there is no isolation cost.
+     */
+    SELF_INSPECT,
+
+    /**
+     * [T-ask-user] Park the current turn on a question to the user
+     * (`ask_user`).
+     *
+     * Exists as its own capability so the decision "can a sub-agent block on
+     * a human?" is explicit. It cannot: a child parked on a dialog holds a
+     * scheduler slot (the parent's inline wait burns its own budget), and a
+     * batch of children all asking at once turns one question into a queue.
+     * Only the main agent asks.
+     */
+    ASK_USER,
+
+    /**
+     * [T-scheduled-tasks] Schedule a reminder on the device (`schedule_task`).
+     *
+     * Parent-only, like spawning: a sub-agent arranging future wake-ups would
+     * be a second schedule nobody is watching, and the device's alarm budget
+     * is a shared resource.
+     */
+    SCHEDULE,
 }
 
 object AgentCapabilities {
@@ -83,6 +115,7 @@ object AgentCapabilities {
         "read_image" -> AgentCapability.FILE_READ
         "file_write" -> AgentCapability.FILE_WRITE
         "file_edit" -> AgentCapability.FILE_WRITE
+        "apply_patch" -> AgentCapability.FILE_WRITE
         "shell_execute" -> AgentCapability.SHELL
         "browser_use" -> AgentCapability.BROWSER
         // [T-subagent-websearch] Registered so the fail-closed filter GRANTS it
@@ -108,6 +141,16 @@ object AgentCapabilities {
         // a sibling would be a second, invisible instruction channel into a
         // run nobody asked it to manage.
         "steer_subagent" -> AgentCapability.SPAWN_AGENT
+        "agent_status" -> AgentCapability.SELF_INSPECT
+        // [T-agent-profiles] Listing agents is part of deciding to delegate,
+        // so it shares SPAWN_AGENT (never grantable to a sub-agent).
+        "list_agents" -> AgentCapability.SPAWN_AGENT
+        "ask_user" -> AgentCapability.ASK_USER
+        "schedule_task" -> AgentCapability.SCHEDULE
+        // [T-shell-job] Background jobs are still shell execution: same
+        // sandbox, same command surface, so they ride the SHELL capability
+        // rather than inventing a second grant path.
+        "shell_job" -> AgentCapability.SHELL
         else -> null
     }
 
@@ -116,6 +159,32 @@ object AgentCapabilities {
      * agent EXCEPT memory (context/memory isolation — a research sub-agent
      * must not mutate the parent's long-term memory) and recursion.
      */
+    /**
+     * [T-agent-profiles] capability → 它涵盖的工具名（反向映射）。
+     *
+     * 存在的唯一理由：内置 profile 用 capability 表达权限，而运行时的过滤
+     * 是按工具名的。这张表必须和 [capabilityOf] 一一对应——`toolsFor` 漏掉
+     * 一个工具，那个工具就对所有 profile 静默消失；多列一个，就等于绕过了
+     * capability 的语义。`AgentCapabilityRoundTripTest` 守着这两条。
+     */
+    fun toolsFor(capabilities: Set<AgentCapability>): Set<String> =
+        capabilities.flatMapTo(mutableSetOf()) { toolsOf(it) }
+
+    fun toolsOf(capability: AgentCapability): Set<String> = when (capability) {
+        AgentCapability.FILE_READ -> setOf("file_read", "read_image")
+        AgentCapability.FILE_WRITE -> setOf("file_write", "file_edit", "apply_patch")
+        AgentCapability.SHELL -> setOf("shell_execute", "shell_job")
+        AgentCapability.BROWSER -> setOf("browser_use")
+        AgentCapability.WEB_SEARCH -> setOf("web_search")
+        AgentCapability.MEMORY_READ -> setOf("memory_get")
+        AgentCapability.MEMORY_WRITE -> setOf("memory_write", "memory_rollup")
+        AgentCapability.SPAWN_AGENT -> setOf("spawn_agent")
+        AgentCapability.TASK_LIST -> setOf("todo_write")
+        AgentCapability.SELF_INSPECT -> setOf("agent_status")
+        AgentCapability.ASK_USER -> setOf("ask_user")
+        AgentCapability.SCHEDULE -> setOf("schedule_task")
+    }
+
     val SUBAGENT_BASE: Set<AgentCapability> = setOf(
         AgentCapability.FILE_READ,
         AgentCapability.FILE_WRITE,
@@ -124,6 +193,7 @@ object AgentCapabilities {
         // [T-subagent-websearch] Research sub-agents are the main consumer of
         // search; without this they fall back to hand-rolled navigation.
         AgentCapability.WEB_SEARCH,
+        AgentCapability.SELF_INSPECT,
     )
 
     /**

@@ -86,6 +86,11 @@ object FileEditTool {
                 content.replaceFirst(oldString, newString)
             }
 
+            // [T-skill-write-guard] 同 FileWriteTool：权限字段不许被 agent 改。
+            SkillWriteGuard.check(path, content, newContent)?.let {
+                return ToolExecutionResult(it, false, toolTitle = toolTitle)
+            }
+
             file.writeText(newContent)
             val replacements = if (replaceAll) count else 1
             ToolExecutionResult(

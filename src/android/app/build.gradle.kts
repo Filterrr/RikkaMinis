@@ -43,7 +43,22 @@ val ciVersionSuffix: String? = System.getenv("MINIS_VERSION_NAME_SUFFIX")
 // are distinguishable on the launcher. When unset, behavior is byte-for-byte
 // identical to the stable build (namespace stays com.openminis.app).
 val minisAppIdOverride: String? = System.getenv("MINIS_APP_ID_OVERRIDE")?.takeIf { it.isNotBlank() }
-val minisFinalAppId: String = minisAppIdOverride ?: "com.openminis.app"
+/**
+ * [T-appid-renamed] Install identity is now com.rikkaminis.app.
+ *
+ * NAMESPACE AND KOTLIN PACKAGES STAY com.openminis.app ON PURPOSE: the
+ * vendored native libraries carry static JNI names
+ * (Java_com_openminis_app_sandbox_PtyBridge_forkExec, and friends in
+ * libjieba_jni / libminis_crash_handler) and their sources are not in this
+ * tree, so they cannot be rebuilt. Renaming the namespace would turn every
+ * PTY, tokenizer and crash-handler call into UnsatisfiedLinkError at runtime.
+ *
+ * What DOES change: the applicationId, hence the install identity. That is a
+ * different app to Android — it will not upgrade an existing install, and the
+ * existing app's private data (chats, settings, API keys) does not carry over.
+ * Migrate by exporting a backup from the old build and restoring it here.
+ */
+val minisFinalAppId: String = minisAppIdOverride ?: "com.rikkaminis.app"
 val minisAppLabel: String =
     if (minisAppIdOverride != null) "RikkaMinis (Lab)" else "RikkaMinis"
 

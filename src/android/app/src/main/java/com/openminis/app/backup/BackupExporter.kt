@@ -370,6 +370,32 @@ class BackupExporter(
      * importer restores into) rather than from the repository, so it stays
      * correct when the export runs before subsystems are ready.
      */
+    /**
+     * [T-skill-permissions-snapshot] 直接读 skill 库的权限表。
+     *
+     * 不构造 SkillRepository：它的 init 会 loadAll + installBundledSkills，
+     * 在导出过程中产生副作用（可能顺手装一批内置技能）。只读打开同一个
+     * 文件即可；库不存在（从没装过技能）时静默返回空。
+     */
+    private fun readSkillPermissions(): Map<String, String> = runCatching {
+        val file = context.getDatabasePath(
+            com.openminis.app.data.repository.SkillRepository.DB_NAME,
+        )
+        if (!file.isFile) return@runCatching emptyMap()
+        val db = android.database.sqlite.SQLiteDatabase.openDatabase(
+            file.absolutePath,
+            null,
+            android.database.sqlite.SQLiteDatabase.OPEN_READONLY,
+        )
+        db.use { conn ->
+            val out = LinkedHashMap<String, String>()
+            conn.rawQuery("SELECT skill_id, snapshot FROM skill_permissions", null).use { c ->
+                while (c.moveToNext()) out[c.getString(0)] = c.getString(1)
+            }
+            out
+        }
+    }.getOrDefault(emptyMap())
+
     private fun exportSkills(trees: BackupFileTreeExporter): BackupManifest.CategoryStat {
         val root = File(context.filesDir, "minis-global/skills")
         val r = trees.export(root, "skills", BackupCategory.SKILLS)
@@ -708,6 +734,9 @@ class BackupExporter(
             // screen shows under "From" matches the file the user picked.
             deviceName = deviceName,
             backupId = backupId,
+            // [T-skill-permissions-snapshot] 权限快照一起走：恢复后运行时
+            // 只认这份（而不是包里的 SKILL.md）。
+            skillPermissions = readSkillPermissions(),
             categories = categories,
             limits = BackupManifest.Limits(
                 maxFileBytes = blobStore.maxFileBytesForManifest,
