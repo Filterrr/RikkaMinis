@@ -467,16 +467,6 @@ private fun SettingsItem(
 }
 
 /**
- * [feat/subagent-roster-routing] P2-4 — the chat-global cap on concurrent
- * sub-agent runs.
- *
- * The value is read at app start (SubagentConcurrencyPrefs.prime) and sized
- * into the chat's scheduler at init, so a change takes effect on the next
- * process start — the dialog says so, exactly like the cross-session cap
- * next to it.
- */
-@Composable
-/**
  * [T-token-budget-warning] 一次 run 的 token 用量提醒阈值。
  *
  * 用几档预设而不是自由输入：这是个"大概到多少提醒一下"的粗粒度设置，
@@ -558,6 +548,16 @@ private fun TokenBudgetSetting() {
     }
 }
 
+/**
+ * [feat/subagent-roster-routing] P2-4 — the chat-global cap on concurrent
+ * sub-agent runs.
+ *
+ * The value is read at app start (SubagentConcurrencyPrefs.prime) and sized
+ * into the chat's scheduler at init, so a change takes effect on the next
+ * process start — the dialog says so, exactly like the cross-session cap
+ * next to it.
+ */
+@Composable
 private fun SubagentConcurrencySetting() {
     val context = LocalContext.current
     var showDialog by remember { mutableStateOf(false) }
