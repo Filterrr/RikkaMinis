@@ -67,8 +67,9 @@ class ToolFoldPlannerTest {
     fun `an unfinished tool or a barrier ends the run`() {
         assertEquals("none", show("TTTRt"))
         // an unfinished tool ends the run that came before it, and the next call
-        // starts a fresh one: R T T T t folds 1-4.
-        assertEquals("1-4:3/0/0", show("RTTTt"))
+        // starts a fresh one: R T T T t folds 1-3 (range ends at the last TOOL,
+        // not at the reply that closes the run).
+        assertEquals("1-3:3/0/0", show("RTTTt"))
     }
 
     @Test
