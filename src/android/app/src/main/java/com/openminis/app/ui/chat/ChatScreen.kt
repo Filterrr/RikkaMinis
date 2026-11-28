@@ -3097,7 +3097,10 @@ fun ChatScreen(
                 // scope. The flatten still runs per token (cheap-ish; ran
                 // before too), but the rebuild stays off the main UI
                 // composable's invalidation list.
-                LaunchedEffect(messages, sessionId) {
+                // [fix/fold-toggle-no-effect] 读一次即订阅：开关一变 effect 重启，
+                // 整张列表按新的折叠规则重算（否则要切走再回来才生效）。
+                val foldToolsEnabled = com.openminis.app.ui.chat.ToolFoldSettings.enabled
+                LaunchedEffect(messages, sessionId, foldToolsEnabled) {
                     // [T-android-stream-pipeline-incremental] Frozen/live split.
                     //
                     // `messages` is CONSTANT within this effect (the effect is

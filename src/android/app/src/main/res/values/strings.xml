@@ -1214,6 +1214,8 @@
     <string name="a11y_edit_skill_name">Edit name</string>
     <string name="a11y_selected">Selected</string>
     <string name="token_budget_warning">About %1$dk tokens used in this run (warning at %2$dk). This is a heads-up, not an error — the run keeps going.</string>
+    <string name="fold_tools_summary">Ran %1$d tool calls</string>
+    <string name="fold_tools_failed">%1$d failed</string>
     <string name="appearance_fold_tools_title">Fold consecutive tool calls</string>
     <string name="settings_token_budget_title">Token usage warning</string>
     <string name="settings_token_budget_subtitle">Heads-up after about %1$dk tokens in one run</string>

@@ -703,7 +703,7 @@ internal fun mergeStreamingOverlay(
  * 未识别的类型一律当"屏障"：宁可让 run 在这里断开，也不要把不该被藏起来的
  * 东西折进去。
  */
-private fun foldInput(block: AssistantBlock): ToolFoldPlanner.Input = when (block.kind) {
+internal fun foldInput(block: AssistantBlock): ToolFoldPlanner.Input = when (block.kind) {
     "thinking" -> ToolFoldPlanner.Input.Thinking
     "text" -> ToolFoldPlanner.Input.Text(isEmpty = block.content.isBlank())
     "info" -> ToolFoldPlanner.Input.Barrier

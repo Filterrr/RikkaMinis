@@ -1,5 +1,9 @@
 package com.openminis.app.ui.chat
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+
 /**
  * [T-fold-consecutive-tools] 决定**一条助手消息内**哪一段连续工具调用折叠成
  * 一行。
@@ -28,8 +32,12 @@ package com.openminis.app.ui.chat
  * 路径，不该每次都去读盘。
  */
 internal object ToolFoldSettings {
-    @Volatile
-    var enabled: Boolean = true
+    /**
+     * Compose State 而不是普通 var：开关改了必须让聊天列表**重组并重算**
+     * flatItems，否则用户会看到"开了却没变化"——直到切走再回来。
+     * `@Volatile` 保证不了这件事，它只保证可见性，不触发任何重组。
+     */
+    var enabled by mutableStateOf(true)
 }
 
 internal object ToolFoldPlanner {

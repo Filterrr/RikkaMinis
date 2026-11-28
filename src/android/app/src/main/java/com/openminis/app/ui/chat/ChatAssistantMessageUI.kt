@@ -134,6 +134,8 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.StopCircle
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.RadioButtonChecked
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
@@ -430,6 +432,49 @@ internal data class ToolPillActions(
     val onCopyDetails: (() -> Unit)? = null,
 )
 
+/**
+ * [T-fold-consecutive-tools] 折叠态的那一行："执行了 N 个工具"。
+ *
+ * 失败数单独标出来：折起来之后如果只写"3 个工具"，用户会以为全成功了。
+ */
+@Composable
+private fun FoldedToolRunRow(
+    toolCount: Int,
+    failedCount: Int,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable { onToggle() }
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+    ) {
+        Icon(
+            imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+            contentDescription = null,
+            tint = ChatColors.tertiaryText,
+            modifier = Modifier.size(16.dp),
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(
+            text = stringResource(R.string.fold_tools_summary, toolCount),
+            fontSize = 12.sp,
+            color = ChatColors.tertiaryText,
+        )
+        if (failedCount > 0) {
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = stringResource(R.string.fold_tools_failed, failedCount),
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+    }
+}
+
 @Composable
 internal fun AssistantMessageView(
     message: ChatMessage,
@@ -467,7 +512,35 @@ internal fun AssistantMessageView(
         // rendering message.content after all tool blocks.
         val hasAnyTextBlock = message.toolBlocks.any { it.kind == "text" }
         val lastTextBlockIndex = message.toolBlocks.indexOfLast { it.kind == "text" }
+        // [T-fold-consecutive-tools] 折叠判定放在这里，因为实际渲染走的是
+        // 聚合路径（AGGREGATE_MESSAGE_ITEMS=true）——扁平路径里那套
+        // AssistantToolRunGroup 在当前配置下根本不执行。
+        val foldGroups = remember(message.id, message.isStreaming) {
+            if (message.isStreaming || !ToolFoldSettings.enabled) {
+                emptyList()
+            } else {
+                val inputs = message.toolBlocks.map { foldInput(it) }
+                val withNotes = ToolFoldPlanner.markingNotes(inputs) { idx ->
+                    ToolFoldPlanner.isSingleLine(message.toolBlocks[idx].content)
+                }
+                ToolFoldPlanner.plan(withNotes, enabled = true)
+            }
+        }
+        var foldExpanded by remember(message.id) { mutableStateOf(false) }
+
         message.toolBlocks.forEachIndexed { index, block ->
+            val foldedRun = foldGroups.firstOrNull { index in it.range }
+            if (foldedRun != null && index == foldedRun.range.first) {
+                FoldedToolRunRow(
+                    toolCount = foldedRun.toolCount,
+                    failedCount = foldedRun.failedCount,
+                    expanded = foldExpanded,
+                    onToggle = { foldExpanded = !foldExpanded },
+                )
+            }
+            // 收起时把整段成员（工具 + 夹在中间的 thinking）都跳过。
+            if (foldedRun != null && !foldExpanded) return@forEachIndexed
+
             when (block.kind) {
                 "thinking" -> {
                     // T300: same per-message thinking-level gate as the
