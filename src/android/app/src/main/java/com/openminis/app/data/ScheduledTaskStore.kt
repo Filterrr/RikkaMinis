@@ -78,7 +78,10 @@ internal object ScheduledTaskStore {
     /** 生成新 id（时间 + 随机后缀，便于人眼排序和排查）。 */
     fun newId(): String =
         "task-" + System.currentTimeMillis().toString(36) + "-" +
-            UUID.randomUUID().toString().take(4)
+            // 8 hex chars, not 4: with a 50-task cap, 16^4 gives a ~2% chance
+            // of a collision over the set — and a collision means one scheduled
+            // task silently overwrites another. 16^8 makes it negligible.
+            UUID.randomUUID().toString().take(8)
 
     // ── 纯序列化（可单测） ────────────────────────────────────────────────
 
