@@ -40,6 +40,7 @@ import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.ScreenLockPortrait
 import androidx.compose.material.icons.outlined.Shield
+import androidx.compose.material.icons.outlined.Compress
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material3.Icon
@@ -75,6 +76,8 @@ const val KEY_LAUNCH_SESSION = "launch_session"    // 0=Auto, 1=LastSession, 2=N
 const val KEY_RETURN_KEY_BEHAVIOR = "returnKeyBehavior"  // Int 0=Newline (default), 1=Send
 const val KEY_KEEP_SCREEN_AWAKE = "keepScreenAwakeDuringTasks"  // Boolean, default false
 const val KEY_TOOL_PREVIEW = "tool_preview"        // Boolean, default false
+// [T-fold-consecutive-tools] 折叠连续工具调用（默认开，与上游的"工具调用"设置对应）
+const val KEY_FOLD_TOOLS = "chat.foldConsecutiveTools"
 // Whole floating tool-status bar visibility. When false the entire
 // FloatingToolStatusBar (status text, spinner, thumbnail) is hidden and its
 // height reserve is skipped. Independent of KEY_TOOL_PREVIEW (which only
@@ -167,6 +170,7 @@ fun AppearanceScreen(
     var returnKeyBehavior by remember { mutableIntStateOf(prefs.getInt(KEY_RETURN_KEY_BEHAVIOR, 0)) }
     var keepScreenAwake by remember { mutableStateOf(prefs.getBoolean(KEY_KEEP_SCREEN_AWAKE, false)) }
     var toolPreview by remember { mutableStateOf(prefs.getBoolean(KEY_TOOL_PREVIEW, false)) }
+    var foldTools by remember { mutableStateOf(prefs.getBoolean(KEY_FOLD_TOOLS, true)) }
     var toolStatusBar by remember { mutableStateOf(prefs.getBoolean(KEY_TOOL_STATUS_BAR, true)) }
     var autoExpandThinking by remember { mutableStateOf(prefs.getBoolean(KEY_AUTO_EXPAND_THINKING, false)) }
     var showChatTitle by remember { mutableStateOf(prefs.getBoolean(KEY_SHOW_CHAT_TITLE, true)) }
@@ -190,6 +194,10 @@ fun AppearanceScreen(
                 KEY_RETURN_KEY_BEHAVIOR -> returnKeyBehavior = prefs.getInt(key, 0)
                 KEY_KEEP_SCREEN_AWAKE -> keepScreenAwake = prefs.getBoolean(key, false)
                 KEY_TOOL_PREVIEW -> toolPreview = prefs.getBoolean(key, false)
+                KEY_FOLD_TOOLS -> {
+                    foldTools = prefs.getBoolean(key, true)
+                    com.openminis.app.ui.chat.ToolFoldSettings.enabled = foldTools
+                }
                 KEY_TOOL_STATUS_BAR -> toolStatusBar = prefs.getBoolean(key, true)
                 KEY_AUTO_EXPAND_THINKING -> autoExpandThinking = prefs.getBoolean(key, false)
                 KEY_SHOW_CHAT_TITLE -> showChatTitle = prefs.getBoolean(key, true)
@@ -374,6 +382,21 @@ fun AppearanceScreen(
                 onCheckedChange = {
                     toolPreview = it
                     prefs.edit().putBoolean(KEY_TOOL_PREVIEW, it).apply()
+                },
+                showDivider = true,
+            )
+            // [T-fold-consecutive-tools] 折叠连续工具调用。
+            SettingsSwitchRow(
+                icon = Icons.Outlined.Compress,
+                iconColor = tilePurple,
+                title = stringResource(R.string.appearance_fold_tools_title),
+                checked = foldTools,
+                onCheckedChange = {
+                    foldTools = it
+                    prefs.edit().putBoolean(KEY_FOLD_TOOLS, it).apply()
+                    // 列表构建是纯函数，改开关后立刻同步进程内副本，
+                    // 下一次重建就会生效（不需要重启）。
+                    com.openminis.app.ui.chat.ToolFoldSettings.enabled = it
                 },
                 showDivider = false,
             )

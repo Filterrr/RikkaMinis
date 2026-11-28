@@ -1162,7 +1162,11 @@ internal fun ToolCallRunGroup(
     //  - 跑完了**保持原状**，不会自动收；
     //  - 用户手动点过之后（userTouched）不再自动展开，交给用户；
     //  - 翻历史消息（组早已结束）默认还是折叠的，否则长对话会被工具卡片刷屏。
-    var expanded by remember(group.messageId) { mutableStateOf(isRunning) }
+    // [T-fold-consecutive-tools] 满足折叠条件的 run 默认收起（一行摘要），
+    // 其余沿用"运行中展开"的规则。
+    var expanded by remember(group.messageId) {
+        mutableStateOf(if (group.foldedByDefault) false else isRunning)
+    }
     var userTouched by remember(group.messageId) { mutableStateOf(false) }
     LaunchedEffect(group.isRunning) {
         if (group.isRunning && !userTouched) expanded = true

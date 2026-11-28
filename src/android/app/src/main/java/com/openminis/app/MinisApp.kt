@@ -296,6 +296,14 @@ class MinisApp : Application(), ImageLoaderFactory {
             return
         }
 
+        // [T-fold-consecutive-tools] 折叠开关的进程内副本：列表构建是纯函数，
+        // 读不到 Context，只能在这里灌一次初值（默认开）。
+        runCatching {
+            val prefs = getSharedPreferences("appearance_prefs", MODE_PRIVATE)
+            com.openminis.app.ui.chat.ToolFoldSettings.enabled =
+                prefs.getBoolean("chat.foldConsecutiveTools", true)
+        }
+
         // [T-scheduled-tasks] 闹钟不持久化：进程被杀/重启后必须重排，
         // 否则用户设的提醒会静默消失。读一个小 JSON，代价可以忽略。
         runCatching {
