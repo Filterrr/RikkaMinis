@@ -1,8 +1,5 @@
 package com.openminis.app.ui.chat
 
-import com.openminis.app.ui.chat.ChatModels.AssistantBlock
-import com.openminis.app.ui.chat.ChatModels.ToolBlockStatus
-
 /**
  * [T-fold-consecutive-tools] 决定**一条助手消息内**哪一段连续工具调用折叠成
  * 一行。

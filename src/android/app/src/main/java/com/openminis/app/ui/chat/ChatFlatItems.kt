@@ -697,6 +697,27 @@ internal fun mergeStreamingOverlay(
     }
 }
 
+/**
+ * [T-fold-consecutive-tools] 把一个助手块翻译成折叠规划器的输入。
+ *
+ * 未识别的类型一律当"屏障"：宁可让 run 在这里断开，也不要把不该被藏起来的
+ * 东西折进去。
+ */
+private fun foldInput(block: AssistantBlock): ToolFoldPlanner.Input = when (block.kind) {
+    "thinking" -> ToolFoldPlanner.Input.Thinking
+    "text" -> ToolFoldPlanner.Input.Text(isEmpty = block.content.isBlank())
+    "info" -> ToolFoldPlanner.Input.Barrier
+    "tool_use" -> ToolFoldPlanner.Input.Tool(
+        when (block.toolStatus) {
+            ToolBlockStatus.SUCCESS -> ToolFoldPlanner.Outcome.SUCCEEDED
+            ToolBlockStatus.FAILED, ToolBlockStatus.TIMEOUT -> ToolFoldPlanner.Outcome.FAILED
+            ToolBlockStatus.CANCELLED -> ToolFoldPlanner.Outcome.CANCELLED
+            else -> ToolFoldPlanner.Outcome.UNFINISHED
+        },
+    )
+    else -> ToolFoldPlanner.Input.Barrier
+}
+
 internal fun buildFlatChatItems(
     messages: List<ChatMessage>,
     // [T-android-perf-logging] Optional — when supplied, emit a progress
